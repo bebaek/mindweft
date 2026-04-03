@@ -20,6 +20,10 @@ class LLMAdapter(ABC):
     def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
         raise NotImplementedError
 
+    @abstractmethod
+    def describe(self) -> dict[str, Any]:
+        raise NotImplementedError
+
 
 class MockLLMAdapter(LLMAdapter):
     """
@@ -43,9 +47,20 @@ class MockLLMAdapter(LLMAdapter):
             _, tool_name, *rest = last_user.content.split(" ", 2)
             payload = rest[0] if rest else ""
             if tool_name in tool_names:
-                return LLMResponse(tool_call=ToolCall(name=tool_name, arguments={"text": payload}))
+                return LLMResponse(
+                    tool_call=ToolCall(id=f"mock-{tool_name}-call", name=tool_name, arguments={"text": payload})
+                )
 
         return LLMResponse(content=f"Mock reply: {last_user.content}")
+
+    def describe(self) -> dict[str, Any]:
+        return {
+            "provider": "mock",
+            "model": None,
+            "base_url": None,
+            "headers": [],
+            "adapter": "MockLLMAdapter",
+        }
 
 
 class OpenAICompatibleAdapter(LLMAdapter):
@@ -92,6 +107,20 @@ class OpenAICompatibleAdapter(LLMAdapter):
                 raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}") from exc
 
         return _parse_chat_completion(response.json())
+
+    def describe(self) -> dict[str, Any]:
+        provider = "openai-compatible"
+        if "openrouter.ai" in self._base_url:
+            provider = "openrouter"
+        elif "api.openai.com" in self._base_url:
+            provider = "openai"
+        return {
+            "provider": provider,
+            "model": self._model,
+            "base_url": self._base_url,
+            "headers": sorted(self._extra_headers.keys()),
+            "adapter": "OpenAICompatibleAdapter",
+        }
 
 
 @dataclass(frozen=True)
@@ -170,8 +199,23 @@ def serialize_tool_result(result: object) -> str:
 
 def _message_to_chat_payload(message: Message) -> dict[str, Any]:
     payload: dict[str, Any] = {"role": message.role.value, "content": message.content}
-    if message.role == MessageRole.TOOL and message.tool_name:
-        payload["name"] = message.tool_name
+    if message.role == MessageRole.ASSISTANT and message.tool_call_id and message.tool_name:
+        payload["content"] = None
+        payload["tool_calls"] = [
+            {
+                "id": message.tool_call_id,
+                "type": "function",
+                "function": {
+                    "name": message.tool_name,
+                    "arguments": json.dumps(message.tool_arguments or {}, ensure_ascii=True),
+                },
+            }
+        ]
+    if message.role == MessageRole.TOOL:
+        if message.tool_call_id:
+            payload["tool_call_id"] = message.tool_call_id
+        if message.tool_name:
+            payload["name"] = message.tool_name
     return payload
 
 
@@ -189,6 +233,7 @@ def _tool_to_payload(tool: ToolSpec) -> dict[str, Any]:
 def _parse_chat_completion(payload: dict[str, Any]) -> LLMResponse:
     choices = payload.get("choices") or []
     if not choices:
+        logger.error("LLM response missing choices: %s", _truncate_json(payload))
         raise HTTPException(status_code=502, detail="LLM provider returned no choices")
 
     message = choices[0].get("message") or {}
@@ -205,15 +250,58 @@ def _parse_chat_completion(payload: dict[str, Any]) -> LLMResponse:
             parsed_arguments = arguments
         return LLMResponse(
             tool_call=ToolCall(
+                id=tool_calls[0].get("id"),
                 name=function.get("name", ""),
                 arguments=parsed_arguments,
             )
         )
 
-    content = message.get("content")
-    if isinstance(content, list):
-        text_parts = [part.get("text", "") for part in content if isinstance(part, dict)]
-        content = "".join(text_parts)
+    content = _extract_text_content(message)
     if content is None:
+        logger.error("LLM response missing message content: %s", _truncate_json(payload))
         raise HTTPException(status_code=502, detail="LLM provider returned no message content")
     return LLMResponse(content=str(content))
+
+
+def _extract_text_content(message: dict[str, Any]) -> str | None:
+    content = message.get("content")
+    if isinstance(content, str) and content:
+        return content
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                text_parts.append(text)
+                continue
+            if part.get("type") == "output_text":
+                nested_text = part.get("text")
+                if isinstance(nested_text, str) and nested_text:
+                    text_parts.append(nested_text)
+        if text_parts:
+            return "".join(text_parts)
+
+    for key in ("output_text", "refusal", "reasoning"):
+        value = message.get(key)
+        if isinstance(value, str) and value:
+            return value
+
+    if isinstance(message.get("refusal"), list):
+        text_parts = [
+            part.get("text", "")
+            for part in message["refusal"]
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        ]
+        if text_parts:
+            return "".join(text_parts)
+
+    return None
+
+
+def _truncate_json(payload: dict[str, Any], limit: int = 1200) -> str:
+    serialized = json.dumps(payload, ensure_ascii=True, default=str)
+    if len(serialized) <= limit:
+        return serialized
+    return serialized[:limit] + "...<truncated>"

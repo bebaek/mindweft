@@ -58,6 +58,21 @@ OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 env UV_CACHE_DIR=.uv-cache uv run pytest
 ```
 
+## Demo Client
+
+With the server running, you can drive it with [scripts/demo_client.py](/Users/burm/code/minigent/scripts/demo_client.py):
+
+```bash
+env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py "hello"
+env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py "/tool echo hello from tool"
+```
+
+To continue an existing thread:
+
+```bash
+env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py --thread-id <thread_id> "follow up"
+```
+
 ## Example flow
 
 ```bash

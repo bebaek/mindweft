@@ -31,6 +31,8 @@ class Message(BaseModel):
     role: MessageRole
     content: str
     tool_name: str | None = None
+    tool_call_id: str | None = None
+    tool_arguments: dict[str, Any] | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -60,6 +62,7 @@ class ToolSpec(BaseModel):
 
 
 class ToolCall(BaseModel):
+    id: str | None = None
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
 

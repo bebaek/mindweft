@@ -36,17 +36,22 @@ def test_runtime_executes_tool_and_stores_tool_message() -> None:
     assert reply == 'Tool result: {"echo": "hello from tool"}'
     assert [message.role for message in messages] == [
         MessageRole.USER,
+        MessageRole.ASSISTANT,
         MessageRole.TOOL,
         MessageRole.ASSISTANT,
     ]
     assert messages[1].tool_name == "echo"
-    assert messages[1].content == '{"echo": "hello from tool"}'
+    assert messages[1].tool_call_id == "mock-echo-call"
+    assert messages[1].tool_arguments == {"text": "hello from tool"}
+    assert messages[2].tool_name == "echo"
+    assert messages[2].tool_call_id == "mock-echo-call"
+    assert messages[2].content == '{"echo": "hello from tool"}'
 
 
 def test_runtime_marks_thread_error_when_max_iterations_exceeded() -> None:
     class LoopingLLM:
         def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
-            return LLMResponse(tool_call=ToolCall(name="echo", arguments={"text": "loop"}))
+            return LLMResponse(tool_call=ToolCall(id="loop-call", name="echo", arguments={"text": "loop"}))
 
     store = InMemoryThreadStore()
     runtime = AgentRuntime(

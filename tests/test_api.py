@@ -8,6 +8,10 @@ from app.models import MessageRole
 def test_thread_lifecycle_endpoints() -> None:
     client = TestClient(create_app(llm_adapter=MockLLMAdapter()))
 
+    config_response = client.get("/config")
+    assert config_response.status_code == 200
+    assert config_response.json()["llm"]["provider"] == "mock"
+
     create_response = client.post("/threads")
     assert create_response.status_code == 200
     thread_id = create_response.json()["thread_id"]
@@ -51,6 +55,7 @@ def test_run_endpoint_handles_tool_call_flow() -> None:
     messages = client.get(f"/threads/{thread_id}/messages").json()
     assert [message["role"] for message in messages] == [
         MessageRole.USER,
+        MessageRole.ASSISTANT,
         MessageRole.TOOL,
         MessageRole.ASSISTANT,
     ]

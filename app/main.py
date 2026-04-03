@@ -19,15 +19,23 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 def create_app(llm_adapter: LLMAdapter | None = None) -> FastAPI:
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0")
     app.state.store = InMemoryThreadStore()
+    adapter = llm_adapter or build_llm_adapter_from_env()
+    app.state.llm_adapter = adapter
     app.state.runtime = AgentRuntime(
         store=app.state.store,
-        llm_adapter=llm_adapter or build_llm_adapter_from_env(),
+        llm_adapter=adapter,
         tool_registry=build_default_tool_registry(),
     )
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/config")
+    def config(request: Request) -> dict[str, object]:
+        return {
+            "llm": request.app.state.llm_adapter.describe(),
+        }
 
     @app.post("/threads", response_model=CreateThreadResponse)
     def create_thread(request: Request) -> CreateThreadResponse:

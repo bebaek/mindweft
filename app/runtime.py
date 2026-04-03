@@ -53,6 +53,16 @@ class AgentRuntime:
         tool_call = response.tool_call
         if tool_call is None:
             return
+        self._store.append_message(
+            Message(
+                thread_id=thread_id,
+                role=MessageRole.ASSISTANT,
+                content="",
+                tool_name=tool_call.name,
+                tool_call_id=tool_call.id,
+                tool_arguments=tool_call.arguments,
+            )
+        )
         result = self._tool_registry.execute(tool_call.name, tool_call.arguments)
         self._store.append_message(
             Message(
@@ -60,5 +70,6 @@ class AgentRuntime:
                 role=MessageRole.TOOL,
                 content=serialize_tool_result(result),
                 tool_name=tool_call.name,
+                tool_call_id=tool_call.id,
             )
         )

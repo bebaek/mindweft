@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 from fastapi import HTTPException
@@ -43,6 +45,7 @@ def test_openai_compatible_adapter_returns_tool_call() -> None:
                         "message": {
                             "tool_calls": [
                                 {
+                                    "id": "call_123",
                                     "function": {
                                         "name": "echo",
                                         "arguments": '{"text":"hello from tool"}',
@@ -69,6 +72,7 @@ def test_openai_compatible_adapter_returns_tool_call() -> None:
 
     assert response.content is None
     assert response.tool_call is not None
+    assert response.tool_call.id == "call_123"
     assert response.tool_call.name == "echo"
     assert response.tool_call.arguments == {"text": "hello from tool"}
 
@@ -139,3 +143,103 @@ def test_openai_compatible_adapter_raises_for_invalid_tool_json() -> None:
             [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
             build_default_tool_registry().specs(),
         )
+
+
+def test_openai_compatible_adapter_supports_list_content_parts() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": [
+                                {"type": "output_text", "text": "Hello"},
+                                {"type": "output_text", "text": " from parts"},
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = adapter.generate(
+        [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+        build_default_tool_registry().specs(),
+    )
+
+    assert response.content == "Hello from parts"
+
+
+def test_openai_compatible_adapter_supports_output_text_field() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"output_text": "Hello from output_text"}}]},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = adapter.generate(
+        [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+        build_default_tool_registry().specs(),
+    )
+
+    assert response.content == "Hello from output_text"
+
+
+def test_openai_compatible_adapter_sends_tool_call_id_for_tool_messages() -> None:
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_payload
+        seen_payload = json.loads(request.read().decode())
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "ok"}}]},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    adapter.generate(
+        [
+            Message(thread_id="thread", role=MessageRole.USER, content="hello"),
+            Message(
+                thread_id="thread",
+                role=MessageRole.ASSISTANT,
+                content="",
+                tool_name="echo",
+                tool_call_id="call_123",
+                tool_arguments={"text": "hello"},
+            ),
+            Message(
+                thread_id="thread",
+                role=MessageRole.TOOL,
+                content='{"echo": "hello"}',
+                tool_name="echo",
+                tool_call_id="call_123",
+            ),
+        ],
+        build_default_tool_registry().specs(),
+    )
+
+    assert seen_payload["messages"][1]["tool_calls"][0]["id"] == "call_123"
+    assert seen_payload["messages"][1]["tool_calls"][0]["function"]["name"] == "echo"
+    assert seen_payload["messages"][2]["tool_call_id"] == "call_123"
