@@ -1,19 +1,27 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 
-from app.llm import MockLLMAdapter
+from app.config import load_environment
+from app.llm import LLMAdapter, build_llm_adapter_from_env
 from app.models import AddMessageRequest, CreateThreadResponse, Message, MessageRole, RunThreadResponse
 from app.runtime import AgentRuntime
 from app.store import InMemoryThreadStore
 from app.tools import build_default_tool_registry
 
-def create_app() -> FastAPI:
+
+load_environment()
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+
+def create_app(llm_adapter: LLMAdapter | None = None) -> FastAPI:
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0")
     app.state.store = InMemoryThreadStore()
     app.state.runtime = AgentRuntime(
         store=app.state.store,
-        llm_adapter=MockLLMAdapter(),
+        llm_adapter=llm_adapter or build_llm_adapter_from_env(),
         tool_registry=build_default_tool_registry(),
     )
 

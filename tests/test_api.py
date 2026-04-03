@@ -1,11 +1,12 @@
 from fastapi.testclient import TestClient
 
+from app.llm import MockLLMAdapter
 from app.main import create_app
 from app.models import MessageRole
 
 
 def test_thread_lifecycle_endpoints() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_app(llm_adapter=MockLLMAdapter()))
 
     create_response = client.post("/threads")
     assert create_response.status_code == 200
@@ -35,7 +36,7 @@ def test_thread_lifecycle_endpoints() -> None:
 
 
 def test_run_endpoint_handles_tool_call_flow() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_app(llm_adapter=MockLLMAdapter()))
     thread_id = client.post("/threads").json()["thread_id"]
 
     client.post(
