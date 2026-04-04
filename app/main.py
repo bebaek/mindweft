@@ -9,22 +9,24 @@ from app.llm import LLMAdapter, build_llm_adapter_from_env
 from app.models import AddMessageRequest, CreateThreadResponse, Message, MessageRole, RunThreadResponse
 from app.runtime import AgentRuntime
 from app.store import InMemoryThreadStore
-from app.tools import build_default_tool_registry
+from app.tools import ToolRegistry, build_tool_registry_from_env
 
 
 load_environment()
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 
-def create_app(llm_adapter: LLMAdapter | None = None) -> FastAPI:
+def create_app(llm_adapter: LLMAdapter | None = None, tool_registry: ToolRegistry | None = None) -> FastAPI:
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0")
     app.state.store = InMemoryThreadStore()
+    tool_registry = tool_registry or build_tool_registry_from_env()
     adapter = llm_adapter or build_llm_adapter_from_env()
     app.state.llm_adapter = adapter
+    app.state.tool_registry = tool_registry
     app.state.runtime = AgentRuntime(
         store=app.state.store,
         llm_adapter=adapter,
-        tool_registry=build_default_tool_registry(),
+        tool_registry=tool_registry,
     )
 
     @app.get("/health")
@@ -35,6 +37,7 @@ def create_app(llm_adapter: LLMAdapter | None = None) -> FastAPI:
     def config(request: Request) -> dict[str, object]:
         return {
             "llm": request.app.state.llm_adapter.describe(),
+            "mcp_servers": request.app.state.tool_registry.mcp_servers(),
         }
 
     @app.post("/threads", response_model=CreateThreadResponse)

@@ -6,7 +6,7 @@ from fastapi import HTTPException
 
 from app.llm import OpenAICompatibleAdapter, build_llm_adapter_from_env, load_provider_config
 from app.models import Message, MessageRole
-from app.tools import build_default_tool_registry
+from app.tools import build_local_tool_registry
 
 
 def test_openai_compatible_adapter_returns_text_response() -> None:
@@ -28,7 +28,7 @@ def test_openai_compatible_adapter_returns_text_response() -> None:
 
     response = adapter.generate(
         [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
-        build_default_tool_registry().specs(),
+        build_local_tool_registry().specs(),
     )
 
     assert response.content == "hello from provider"
@@ -67,7 +67,7 @@ def test_openai_compatible_adapter_returns_tool_call() -> None:
 
     response = adapter.generate(
         [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
-        build_default_tool_registry().specs(),
+        build_local_tool_registry().specs(),
     )
 
     assert response.content is None
@@ -141,7 +141,7 @@ def test_openai_compatible_adapter_raises_for_invalid_tool_json() -> None:
     with pytest.raises(HTTPException, match="invalid tool arguments"):
         adapter.generate(
             [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
-            build_default_tool_registry().specs(),
+            build_local_tool_registry().specs(),
         )
 
 
@@ -172,7 +172,7 @@ def test_openai_compatible_adapter_supports_list_content_parts() -> None:
 
     response = adapter.generate(
         [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
-        build_default_tool_registry().specs(),
+        build_local_tool_registry().specs(),
     )
 
     assert response.content == "Hello from parts"
@@ -194,7 +194,7 @@ def test_openai_compatible_adapter_supports_output_text_field() -> None:
 
     response = adapter.generate(
         [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
-        build_default_tool_registry().specs(),
+        build_local_tool_registry().specs(),
     )
 
     assert response.content == "Hello from output_text"
@@ -237,7 +237,7 @@ def test_openai_compatible_adapter_sends_tool_call_id_for_tool_messages() -> Non
                 tool_call_id="call_123",
             ),
         ],
-        build_default_tool_registry().specs(),
+        build_local_tool_registry().specs(),
     )
 
     assert seen_payload["messages"][1]["tool_calls"][0]["id"] == "call_123"

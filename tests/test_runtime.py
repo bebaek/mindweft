@@ -4,12 +4,12 @@ from app.llm import MockLLMAdapter
 from app.models import LLMResponse, Message, MessageRole, ThreadStatus, ToolCall
 from app.runtime import AgentRuntime
 from app.store import InMemoryThreadStore
-from app.tools import build_default_tool_registry
+from app.tools import build_local_tool_registry
 
 
 def test_runtime_returns_assistant_reply_for_plain_user_message() -> None:
     store = InMemoryThreadStore()
-    runtime = AgentRuntime(store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_default_tool_registry())
+    runtime = AgentRuntime(store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     thread = store.create_thread()
     store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello"))
 
@@ -24,7 +24,7 @@ def test_runtime_returns_assistant_reply_for_plain_user_message() -> None:
 
 def test_runtime_executes_tool_and_stores_tool_message() -> None:
     store = InMemoryThreadStore()
-    runtime = AgentRuntime(store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_default_tool_registry())
+    runtime = AgentRuntime(store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     thread = store.create_thread()
     store.append_message(
         Message(thread_id=thread.thread_id, role=MessageRole.USER, content="/tool echo hello from tool")
@@ -57,7 +57,7 @@ def test_runtime_marks_thread_error_when_max_iterations_exceeded() -> None:
     runtime = AgentRuntime(
         store=store,
         llm_adapter=LoopingLLM(),
-        tool_registry=build_default_tool_registry(),
+        tool_registry=build_local_tool_registry(),
         max_iterations=2,
     )
     thread = store.create_thread()

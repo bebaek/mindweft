@@ -10,6 +10,7 @@ Minimal AI agent runtime POC from `DESIGN.md`.
 - Pluggable tool registry
 - Replaceable LLM adapter boundary
 - OpenAI and OpenRouter support via one OpenAI-compatible adapter
+- Optional MCP tool discovery and invocation over HTTP
 - Deterministic mock adapter for local testing
 
 ## Run
@@ -51,6 +52,26 @@ Optional overrides:
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 ```
+
+## MCP Config
+
+You can attach HTTP MCP servers by setting `MINIGENT_MCP_SERVERS` to a JSON array in `.env`.
+
+Example:
+
+```dotenv
+MINIGENT_MCP_SERVERS=[{"name":"demo","url":"https://example.com/mcp","headers":{"Authorization":"Bearer token"}}]
+```
+
+Discovered MCP tools are namespaced as `<server>.<tool>`, for example `demo.echo`.
+
+Current scope:
+- `initialize`
+- `notifications/initialized`
+- `tools/list`
+- `tools/call`
+
+The service skips MCP servers that fail during startup and exposes connected servers in `/config`.
 
 ## Test
 
