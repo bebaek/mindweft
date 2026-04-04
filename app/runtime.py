@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from typing import Any
+
 from fastapi import HTTPException
 
 from app.llm import LLMAdapter, serialize_tool_result
@@ -23,12 +26,13 @@ class AgentRuntime:
 
     async def run_thread(self, thread_id: str) -> str:
         self._store.start_run(thread_id)
+        failed_tool_calls: set[str] = set()
         try:
             for _ in range(self._max_iterations):
                 messages = self._store.list_messages(thread_id)
                 response = await self._llm_adapter.generate(messages, self._tool_registry.specs())
                 if response.tool_call is not None:
-                    await self._handle_tool_call(thread_id, response)
+                    await self._handle_tool_call(thread_id, response, failed_tool_calls)
                     continue
 
                 if response.content is None:
@@ -49,10 +53,16 @@ class AgentRuntime:
         self._store.set_thread_status(thread_id, ThreadStatus.ERROR)
         raise HTTPException(status_code=500, detail="Agent exceeded maximum tool iterations")
 
-    async def _handle_tool_call(self, thread_id: str, response: LLMResponse) -> None:
+    async def _handle_tool_call(
+        self,
+        thread_id: str,
+        response: LLMResponse,
+        failed_tool_calls: set[str],
+    ) -> None:
         tool_call = response.tool_call
         if tool_call is None:
             return
+        tool_call_signature = _tool_call_signature(tool_call.name, tool_call.arguments)
         self._store.append_message(
             Message(
                 thread_id=thread_id,
@@ -63,7 +73,26 @@ class AgentRuntime:
                 tool_arguments=tool_call.arguments,
             )
         )
-        result = await self._tool_registry.execute(tool_call.name, tool_call.arguments)
+        if tool_call_signature in failed_tool_calls:
+            result = _serialize_tool_error(
+                tool_call.name,
+                HTTPException(
+                    status_code=409,
+                    detail="Repeated failed tool call blocked for identical arguments",
+                ),
+                blocked=True,
+            )
+        else:
+            try:
+                result = await self._tool_registry.execute(tool_call.name, tool_call.arguments)
+            except HTTPException as exc:
+                failed_tool_calls.add(tool_call_signature)
+                result = _serialize_tool_error(tool_call.name, exc)
+            else:
+                normalized_error = _normalize_tool_error_result(tool_call.name, result)
+                if normalized_error is not None:
+                    failed_tool_calls.add(tool_call_signature)
+                    result = normalized_error
         self._store.append_message(
             Message(
                 thread_id=thread_id,
@@ -73,3 +102,47 @@ class AgentRuntime:
                 tool_call_id=tool_call.id,
             )
         )
+
+
+def _serialize_tool_error(tool_name: str, exc: HTTPException, *, blocked: bool = False) -> dict[str, Any]:
+    error: dict[str, Any] = {
+        "tool_name": tool_name,
+        "status_code": exc.status_code,
+        "detail": exc.detail,
+    }
+    if blocked:
+        error["blocked"] = True
+    return {
+        "error": {
+            **error,
+        }
+    }
+
+
+def _tool_call_signature(tool_name: str, arguments: dict[str, Any]) -> str:
+    return f"{tool_name}:{json.dumps(arguments, ensure_ascii=True, sort_keys=True, default=str)}"
+
+
+def _normalize_tool_error_result(tool_name: str, result: object) -> dict[str, Any] | None:
+    if not isinstance(result, dict):
+        return None
+
+    error_value = result.get("error")
+    if isinstance(error_value, dict) and "tool_name" in error_value and "status_code" in error_value:
+        return result
+
+    if "error" not in result:
+        return None
+
+    status_code = result.get("status_code", result.get("status"))
+    detail = result.get("detail")
+    normalized_error: dict[str, Any] = {
+        "tool_name": tool_name,
+        "status_code": status_code if isinstance(status_code, int) else 502,
+        "detail": detail if detail is not None else error_value,
+    }
+    if error_value is not None:
+        normalized_error["message"] = error_value
+    if "documentation" in result:
+        normalized_error["documentation"] = result["documentation"]
+    return {"error": normalized_error}

@@ -1,8 +1,10 @@
 from fastapi.testclient import TestClient
 
-from app.llm import MockLLMAdapter
+from fastapi import HTTPException
+
+from app.llm import LLMAdapter, MockLLMAdapter
 from app.main import create_app
-from app.models import MessageRole
+from app.models import LLMResponse, Message, MessageRole, ToolCall
 from app.tools import build_local_tool_registry
 
 
@@ -60,3 +62,43 @@ def test_run_endpoint_handles_tool_call_flow() -> None:
         MessageRole.TOOL,
         MessageRole.ASSISTANT,
     ]
+
+
+def test_run_endpoint_returns_reply_when_tool_fails() -> None:
+    class ToolFailingLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+            if messages and messages[-1].role == MessageRole.TOOL:
+                return LLMResponse(content=f"Tool result: {messages[-1].content}")
+            return LLMResponse(
+                tool_call=ToolCall(id="call-fetch", name="fetch_url", arguments={"url": "https://example.com/missing"})
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test", "model": None, "base_url": None, "headers": [], "adapter": "ToolFailingLLM"}
+
+    class FailingRegistry:
+        def specs(self) -> list[object]:
+            return []
+
+        def mcp_servers(self) -> list[dict[str, object]]:
+            return []
+
+        async def execute(self, name: str, arguments: dict[str, object]) -> object:
+            raise HTTPException(status_code=502, detail="fetch_url failed with status 404")
+
+    client = TestClient(create_app(llm_adapter=ToolFailingLLM(), tool_registry=FailingRegistry()))  # type: ignore[arg-type]
+    thread_id = client.post("/threads").json()["thread_id"]
+
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "is austin airport open now"},
+    )
+
+    run_response = client.post(f"/threads/{thread_id}/run")
+    assert run_response.status_code == 200
+    assert run_response.json() == {
+        "reply": (
+            'Tool result: {"error": {"tool_name": "fetch_url", "status_code": 502, '
+            '"detail": "fetch_url failed with status 404"}}'
+        )
+    }
