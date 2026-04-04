@@ -73,6 +73,38 @@ Current scope:
 
 The service skips MCP servers that fail during startup and exposes connected servers in `/config`.
 
+## Observability
+
+Logging defaults to plaintext. Set `MINIGENT_LOG_FORMAT=json` for structured logs.
+
+Useful logging env vars:
+
+```bash
+MINIGENT_LOG_LEVEL=INFO
+MINIGENT_LOG_FORMAT=plaintext
+MINIGENT_LOG_PLAINTEXT_FORMAT=%(levelname)s %(name)s: %(message)s
+MINIGENT_LOG_JSON_MESSAGE_KEY=message
+MINIGENT_LOG_JSON_LEVEL_KEY=level
+MINIGENT_LOG_JSON_LOGGER_KEY=logger
+MINIGENT_LOG_JSON_TIMESTAMP_KEY=timestamp
+MINIGENT_LOG_JSON_EXCEPTION_KEY=exception
+MINIGENT_LOG_JSON_FIELDS={"service":"minigent","env":"dev"}
+MINIGENT_LOG_JSON_INCLUDE_TRACE_CONTEXT=true
+```
+
+OpenTelemetry tracing is optional:
+
+```bash
+MINIGENT_OTEL_ENABLED=true
+MINIGENT_OTEL_SERVICE_NAME=minigent
+MINIGENT_OTEL_EXPORTER=console
+MINIGENT_OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.example/v1/traces
+MINIGENT_OTEL_EXPORTER_OTLP_HEADERS={"authorization":"Bearer token"}
+MINIGENT_OTEL_EXPORTER_OTLP_TIMEOUT_SECONDS=10
+```
+
+Set `MINIGENT_OTEL_EXPORTER=none` to keep trace context active without exporting spans.
+
 ## Test
 
 ```bash

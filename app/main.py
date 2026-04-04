@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import logging
-
 from fastapi import FastAPI, Request
 
 from app.config import load_environment
@@ -13,21 +11,23 @@ from app.models import (
     MessageRole,
     RunThreadResponse,
 )
+from app.observability import configure_logging, configure_tracing
 from app.redaction import install_log_redaction
 from app.runtime import AgentRuntime
 from app.store import InMemoryThreadStore
 from app.tools import ToolRegistry, build_tool_registry_from_env
 
 load_environment()
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 # Redact secrets in third-party logs like httpx request lines before any handler formats the record.
 install_log_redaction()
+configure_logging()
 
 
 def create_app(
     llm_adapter: LLMAdapter | None = None, tool_registry: ToolRegistry | None = None
 ) -> FastAPI:
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0")
+    configure_tracing(app)
     app.state.store = InMemoryThreadStore()
     tool_registry = tool_registry or build_tool_registry_from_env()
     adapter = llm_adapter or build_llm_adapter_from_env()

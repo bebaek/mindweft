@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 import sys
 import urllib.error
 import urllib.request
@@ -23,6 +24,11 @@ def parse_args() -> argparse.Namespace:
         help="Existing thread to continue. If omitted, a new thread is created.",
     )
     parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Send W3C traceparent headers and print the trace ID for log/span correlation.",
+    )
+    parser.add_argument(
         "messages",
         nargs="+",
         help="One or more user messages to send in sequence.",
@@ -30,14 +36,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def request_json(method: str, url: str, payload: dict[str, Any] | None = None) -> Any:
+def request_json(
+    method: str,
+    url: str,
+    payload: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> Any:
     data = None
-    headers = {}
+    request_headers = dict(headers or {})
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
+        request_headers["Content-Type"] = "application/json"
 
-    request = urllib.request.Request(url, method=method, data=data, headers=headers)
+    request = urllib.request.Request(url, method=method, data=data, headers=request_headers)
     try:
         with urllib.request.urlopen(request) as response:
             raw_body = response.read().decode("utf-8")
@@ -51,17 +62,27 @@ def request_json(method: str, url: str, payload: dict[str, Any] | None = None) -
         raise SystemExit(f"{method} {url} failed: {exc.reason}") from exc
 
 
-def ensure_thread(base_url: str, thread_id: str | None) -> str:
+def ensure_thread(base_url: str, thread_id: str | None, headers: dict[str, str] | None = None) -> str:
     if thread_id:
         return thread_id
-    response = request_json("POST", f"{base_url}/threads")
+    response = request_json("POST", f"{base_url}/threads", headers=headers)
     return response["thread_id"]
+
+
+def build_trace_headers(trace_id: str | None) -> dict[str, str]:
+    if trace_id is None:
+        return {}
+    parent_id = secrets.token_hex(8)
+    return {"traceparent": f"00-{trace_id}-{parent_id}-01"}
 
 
 def main() -> int:
     args = parse_args()
     base_url = args.base_url.rstrip("/")
-    config = request_json("GET", f"{base_url}/config")
+    trace_id = secrets.token_hex(16) if args.trace else None
+    request_headers = build_trace_headers(trace_id)
+
+    config = request_json("GET", f"{base_url}/config", headers=build_trace_headers(trace_id))
     llm = config.get("llm", {}) if isinstance(config, dict) else {}
     print(
         "llm:"
@@ -69,7 +90,11 @@ def main() -> int:
         f" model={llm.get('model')}"
         f" base_url={llm.get('base_url')}"
     )
-    thread_id = ensure_thread(base_url, args.thread_id)
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+        print("trace: sent via traceparent header; look for this trace_id in JSON logs or your trace backend")
+
+    thread_id = ensure_thread(base_url, args.thread_id, headers=request_headers)
 
     print(f"thread_id={thread_id}")
     for content in args.messages:
@@ -77,12 +102,21 @@ def main() -> int:
             "POST",
             f"{base_url}/threads/{thread_id}/messages",
             {"content": content},
+            headers=request_headers,
         )
-        run_response = request_json("POST", f"{base_url}/threads/{thread_id}/run")
+        run_response = request_json(
+            "POST",
+            f"{base_url}/threads/{thread_id}/run",
+            headers=request_headers,
+        )
         print(f"user: {content}")
         print(f"assistant: {run_response['reply']}")
 
-    messages = request_json("GET", f"{base_url}/threads/{thread_id}/messages")
+    messages = request_json(
+        "GET",
+        f"{base_url}/threads/{thread_id}/messages",
+        headers=request_headers,
+    )
     print("\ntranscript:")
     for message in messages:
         role = message["role"]

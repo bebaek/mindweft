@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 _SENSITIVE_KEY_PARTS = ("token", "secret", "password", "api_key", "authorization", "key")
 _URL_PATTERN = re.compile(r"https?://[^\s\"']+")
-_LOG_REDACTION_INSTALLED = False
+_LOG_REDACTION_FACTORY: Callable[..., logging.LogRecord] | None = None
 
 
 def is_sensitive_key(key: str) -> bool:
@@ -86,9 +86,9 @@ def redact_log_record(record: logging.LogRecord) -> None:
 
 
 def install_log_redaction() -> None:
-    global _LOG_REDACTION_INSTALLED
+    global _LOG_REDACTION_FACTORY
     current_factory = logging.getLogRecordFactory()
-    if _LOG_REDACTION_INSTALLED:
+    if _LOG_REDACTION_FACTORY is not None and current_factory is _LOG_REDACTION_FACTORY:
         return
 
     def redacting_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
@@ -97,4 +97,4 @@ def install_log_redaction() -> None:
         return record
 
     logging.setLogRecordFactory(redacting_factory)
-    _LOG_REDACTION_INSTALLED = True
+    _LOG_REDACTION_FACTORY = redacting_factory
