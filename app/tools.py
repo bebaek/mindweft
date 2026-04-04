@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import logging
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -66,6 +67,17 @@ def build_local_tool_registry() -> ToolRegistry:
             "required": ["text"],
         },
         handler=echo_tool,
+    )
+
+    def current_time_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+        _ = arguments
+        return {"current_time": datetime.now(timezone.utc).isoformat()}
+
+    registry.register(
+        name="current_time",
+        description="Return the current UTC time in ISO 8601 format.",
+        input_schema={"type": "object", "properties": {}},
+        handler=current_time_tool,
     )
 
     return registry

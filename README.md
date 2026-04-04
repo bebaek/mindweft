@@ -86,6 +86,7 @@ With the server running, you can drive it with [scripts/demo_client.py](/Users/b
 ```bash
 env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py "hello"
 env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py "/tool echo hello from tool"
+env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py "/tool current_time"
 ```
 
 To continue an existing thread:
@@ -112,3 +113,7 @@ curl -X POST http://127.0.0.1:8000/threads/<thread_id>/messages \
   -d '{"content":"/tool echo hello from tool"}'
 curl -X POST http://127.0.0.1:8000/threads/<thread_id>/run
 ```
+
+Local tools currently include:
+- `echo`
+- `current_time`

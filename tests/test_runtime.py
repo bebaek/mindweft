@@ -1,4 +1,6 @@
 import asyncio
+import json
+from datetime import datetime
 
 from fastapi import HTTPException
 
@@ -48,6 +50,28 @@ def test_runtime_executes_tool_and_stores_tool_message() -> None:
     assert messages[2].tool_name == "echo"
     assert messages[2].tool_call_id == "mock-echo-call"
     assert messages[2].content == '{"echo": "hello from tool"}'
+
+
+def test_runtime_executes_current_time_tool() -> None:
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    thread = store.create_thread()
+    store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="/tool current_time"))
+
+    reply = asyncio.run(runtime.run_thread(thread.thread_id))
+
+    messages = store.list_messages(thread.thread_id)
+    assert reply.startswith('Tool result: {"current_time": "')
+    assert [message.role for message in messages] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+        MessageRole.TOOL,
+        MessageRole.ASSISTANT,
+    ]
+    assert messages[1].tool_name == "current_time"
+    assert messages[1].tool_call_id == "mock-current_time-call"
+    payload = json.loads(messages[2].content)
+    datetime.fromisoformat(payload["current_time"])
 
 
 def test_runtime_marks_thread_error_when_max_iterations_exceeded() -> None:
