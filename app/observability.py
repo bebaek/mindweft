@@ -15,10 +15,13 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SpanExporter
-from opentelemetry.sdk.trace.export import SpanExportResult
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
+    ConsoleSpanExporter,
+    SpanExporter,
+    SpanExportResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,7 @@ class LoggingSettings:
     level: str
     output_format: str
     plaintext_format: str
+    json_root_key: str | None
     json_message_key: str
     json_level_key: str
     json_logger_key: str
@@ -54,6 +58,7 @@ class JsonLogFormatter(logging.Formatter):
     def __init__(
         self,
         *,
+        root_key: str | None,
         message_key: str,
         level_key: str,
         logger_key: str,
@@ -63,6 +68,7 @@ class JsonLogFormatter(logging.Formatter):
         include_trace_context: bool,
     ) -> None:
         super().__init__()
+        self._root_key = root_key
         self._message_key = message_key
         self._level_key = level_key
         self._logger_key = logger_key
@@ -83,6 +89,8 @@ class JsonLogFormatter(logging.Formatter):
             payload[self._exception_key] = self.formatException(record.exc_info)
         if self._include_trace_context:
             payload.update(_current_trace_context())
+        if self._root_key:
+            payload = {**self._static_fields, self._root_key: payload}
         return json.dumps(payload, ensure_ascii=True, default=str)
 
 
@@ -92,6 +100,7 @@ def configure_logging() -> None:
     if settings.output_format == "json":
         formatter = {
             "()": "app.observability.JsonLogFormatter",
+            "root_key": settings.json_root_key,
             "message_key": settings.json_message_key,
             "level_key": settings.json_level_key,
             "logger_key": settings.json_logger_key,
@@ -165,6 +174,7 @@ def load_logging_settings_from_env() -> LoggingSettings:
         level=os.getenv("MINIGENT_LOG_LEVEL", "INFO").upper(),
         output_format=os.getenv("MINIGENT_LOG_FORMAT", "plaintext").lower(),
         plaintext_format=os.getenv("MINIGENT_LOG_PLAINTEXT_FORMAT", _DEFAULT_PLAINTEXT_FORMAT),
+        json_root_key=_optional_env("MINIGENT_LOG_JSON_ROOT_KEY"),
         json_message_key=os.getenv("MINIGENT_LOG_JSON_MESSAGE_KEY", "message"),
         json_level_key=os.getenv("MINIGENT_LOG_JSON_LEVEL_KEY", "level"),
         json_logger_key=os.getenv("MINIGENT_LOG_JSON_LOGGER_KEY", "logger"),
@@ -226,6 +236,14 @@ def _env_flag(name: str, *, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _optional_env(name: str) -> str | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    value = raw.strip()
+    return value or None
 
 
 def _load_json_object_env(name: str) -> dict[str, Any]:

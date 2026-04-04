@@ -13,18 +13,21 @@ from app.observability import (
 
 def test_load_logging_settings_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_LOG_FORMAT", "json")
+    monkeypatch.setenv("MINIGENT_LOG_JSON_ROOT_KEY", "log")
     monkeypatch.setenv("MINIGENT_LOG_JSON_MESSAGE_KEY", "msg")
     monkeypatch.setenv("MINIGENT_LOG_JSON_FIELDS", '{"service":"minigent","env":"test"}')
 
     settings = load_logging_settings_from_env()
 
     assert settings.output_format == "json"
+    assert settings.json_root_key == "log"
     assert settings.json_message_key == "msg"
     assert settings.json_static_fields == {"service": "minigent", "env": "test"}
 
 
 def test_json_log_formatter_uses_configured_keys() -> None:
     formatter = JsonLogFormatter(
+        root_key=None,
         message_key="msg",
         level_key="severity",
         logger_key="source",
@@ -50,6 +53,34 @@ def test_json_log_formatter_uses_configured_keys() -> None:
     assert payload["source"] == "app.test"
     assert payload["service"] == "minigent"
     assert "ts" in payload
+
+
+def test_json_log_formatter_can_nest_payload_under_root_key() -> None:
+    formatter = JsonLogFormatter(
+        root_key="log",
+        message_key="message",
+        level_key="level",
+        logger_key="logger",
+        timestamp_key="timestamp",
+        exception_key="exception",
+        static_fields={"service": "minigent"},
+        include_trace_context=False,
+    )
+    record = logging.LogRecord(
+        name="app.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="hello",
+        args=(),
+        exc_info=None,
+    )
+
+    payload = json.loads(formatter.format(record))
+
+    assert payload["service"] == "minigent"
+    assert payload["log"]["message"] == "hello"
+    assert payload["log"]["level"] == "INFO"
 
 
 def test_load_tracing_settings_from_env(monkeypatch) -> None:
