@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 class LLMAdapter(ABC):
     @abstractmethod
-    def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+    async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
         raise NotImplementedError
 
     @abstractmethod
@@ -35,7 +35,7 @@ class MockLLMAdapter(LLMAdapter):
     After a tool result is present, it turns that into the final assistant reply.
     """
 
-    def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+    async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
         if messages and messages[-1].role == MessageRole.TOOL:
             return LLMResponse(content=f"Tool result: {messages[-1].content}")
 
@@ -82,7 +82,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
         self._timeout = timeout
         self._transport = transport
 
-    def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+    async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
         tool_name_map = _build_provider_tool_name_map(tools)
         payload = {
             "model": self._model,
@@ -94,9 +94,9 @@ class OpenAICompatibleAdapter(LLMAdapter):
             "Content-Type": "application/json",
             **self._extra_headers,
         }
-        with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             try:
-                response = client.post(
+                response = await client.post(
                     f"{self._base_url}/chat/completions",
                     json=payload,
                     headers=headers,

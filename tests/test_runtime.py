@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import HTTPException
 
 from app.llm import MockLLMAdapter
@@ -13,7 +15,7 @@ def test_runtime_returns_assistant_reply_for_plain_user_message() -> None:
     thread = store.create_thread()
     store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello"))
 
-    reply = runtime.run_thread(thread.thread_id)
+    reply = asyncio.run(runtime.run_thread(thread.thread_id))
 
     assert reply == "Mock reply: hello"
     messages = store.list_messages(thread.thread_id)
@@ -30,7 +32,7 @@ def test_runtime_executes_tool_and_stores_tool_message() -> None:
         Message(thread_id=thread.thread_id, role=MessageRole.USER, content="/tool echo hello from tool")
     )
 
-    reply = runtime.run_thread(thread.thread_id)
+    reply = asyncio.run(runtime.run_thread(thread.thread_id))
 
     messages = store.list_messages(thread.thread_id)
     assert reply == 'Tool result: {"echo": "hello from tool"}'
@@ -50,7 +52,7 @@ def test_runtime_executes_tool_and_stores_tool_message() -> None:
 
 def test_runtime_marks_thread_error_when_max_iterations_exceeded() -> None:
     class LoopingLLM:
-        def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+        async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
             return LLMResponse(tool_call=ToolCall(id="loop-call", name="echo", arguments={"text": "loop"}))
 
     store = InMemoryThreadStore()
@@ -64,7 +66,7 @@ def test_runtime_marks_thread_error_when_max_iterations_exceeded() -> None:
     store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="loop"))
 
     try:
-        runtime.run_thread(thread.thread_id)
+        asyncio.run(runtime.run_thread(thread.thread_id))
     except HTTPException as exc:
         assert exc.status_code == 500
         assert exc.detail == "Agent exceeded maximum tool iterations"
@@ -72,3 +74,41 @@ def test_runtime_marks_thread_error_when_max_iterations_exceeded() -> None:
         raise AssertionError("Expected HTTPException")
 
     assert store._threads[thread.thread_id].status == ThreadStatus.ERROR
+
+
+def test_runtime_rejects_concurrent_runs_for_same_thread() -> None:
+    async def exercise() -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class BlockingLLM:
+            async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+                started.set()
+                await release.wait()
+                return LLMResponse(content="done")
+
+        store = InMemoryThreadStore()
+        runtime = AgentRuntime(
+            store=store,
+            llm_adapter=BlockingLLM(),
+            tool_registry=build_local_tool_registry(),
+        )
+        thread = store.create_thread()
+        store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello"))
+
+        first_run = asyncio.create_task(runtime.run_thread(thread.thread_id))
+        await started.wait()
+
+        with_raise: HTTPException | None = None
+        try:
+            await runtime.run_thread(thread.thread_id)
+        except HTTPException as exc:
+            with_raise = exc
+
+        release.set()
+        assert await first_run == "done"
+        assert with_raise is not None
+        assert with_raise.status_code == 409
+        assert store._threads[thread.thread_id].status == ThreadStatus.IDLE
+
+    asyncio.run(exercise())

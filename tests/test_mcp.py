@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -101,8 +102,8 @@ def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    specs = client.list_tools()
-    result = client.call_tool("echo", {"text": "hello"})
+    specs = asyncio.run(client.list_tools())
+    result = asyncio.run(client.call_tool("echo", {"text": "hello"}))
 
     assert [spec.name for spec in specs] == ["demo.echo"]
     assert result == {"echo": "hello"}
@@ -152,7 +153,7 @@ def test_mcp_http_client_supports_sse_jsonrpc_responses() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    specs = client.list_tools()
+    specs = asyncio.run(client.list_tools())
 
     assert [spec.name for spec in specs] == ["demo.search"]
     assert requests[1]["body"]["method"] == "notifications/initialized"

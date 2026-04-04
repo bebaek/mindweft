@@ -61,13 +61,13 @@ class MCPHTTPClient:
             server_version=self._server_version,
         )
 
-    def list_tools(self) -> list[ToolSpec]:
-        self._ensure_initialized()
+    async def list_tools(self) -> list[ToolSpec]:
+        await self._ensure_initialized()
         tools: list[ToolSpec] = []
         cursor: str | None = None
         while True:
             params = {"cursor": cursor} if cursor else {}
-            result = self._request("tools/list", params or None)
+            result = await self._request("tools/list", params or None)
             for tool in result.get("tools", []):
                 namespaced_name = f"{self._config.name}.{tool['name']}"
                 description = tool.get("description") or f"MCP tool {tool['name']} from {self._config.name}"
@@ -82,9 +82,9 @@ class MCPHTTPClient:
             if not cursor:
                 return tools
 
-    def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
-        self._ensure_initialized()
-        result = self._request(
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+        await self._ensure_initialized()
+        result = await self._request(
             "tools/call",
             {"name": tool_name, "arguments": arguments},
         )
@@ -99,11 +99,11 @@ class MCPHTTPClient:
             return {"content": result["content"]}
         return result
 
-    def _ensure_initialized(self) -> None:
+    async def _ensure_initialized(self) -> None:
         if self._initialized:
             return
 
-        result, headers = self._request_raw(
+        result, headers = await self._request_raw(
             "initialize",
             {
                 "protocolVersion": self._config.protocol_version,
@@ -120,7 +120,7 @@ class MCPHTTPClient:
         server_info = result.get("serverInfo") or {}
         self._server_name = server_info.get("name")
         self._server_version = server_info.get("version")
-        self._notify("notifications/initialized")
+        await self._notify("notifications/initialized")
         self._initialized = True
         logger.info(
             "MCP initialized: server=%s url=%s protocol=%s session=%s remote=%s@%s",
@@ -132,7 +132,7 @@ class MCPHTTPClient:
             self._server_version,
         )
 
-    def _notify(self, method: str, params: dict[str, Any] | None = None) -> None:
+    async def _notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         headers = self._build_headers(include_protocol=True)
         payload: dict[str, Any] = {
             "jsonrpc": "2.0",
@@ -141,8 +141,8 @@ class MCPHTTPClient:
         if params is not None:
             payload["params"] = params
 
-        with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
-            response = client.post(
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+            response = await client.post(
                 self._config.url,
                 json=payload,
                 headers=headers,
@@ -153,11 +153,11 @@ class MCPHTTPClient:
                 detail=f"MCP notification failed for server '{self._config.name}': {response.text}",
             )
 
-    def _request(self, method: str, params: dict[str, Any] | None) -> dict[str, Any]:
-        result, _ = self._request_raw(method, params, use_protocol_header=True)
+    async def _request(self, method: str, params: dict[str, Any] | None) -> dict[str, Any]:
+        result, _ = await self._request_raw(method, params, use_protocol_header=True)
         return result
 
-    def _request_raw(
+    async def _request_raw(
         self,
         method: str,
         params: dict[str, Any] | None,
@@ -174,9 +174,9 @@ class MCPHTTPClient:
         if params is not None:
             payload["params"] = params
 
-        with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             try:
-                response = client.post(
+                response = await client.post(
                     self._config.url,
                     json=payload,
                     headers=headers,

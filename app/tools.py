@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -7,7 +10,6 @@ from fastapi import HTTPException
 
 from app.mcp import MCPHTTPClient, load_mcp_server_configs_from_env
 from app.models import ToolSpec
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +34,14 @@ class ToolRegistry:
     def specs(self) -> list[ToolSpec]:
         return [tool[0] for tool in self._tools.values()]
 
-    def execute(self, name: str, arguments: dict[str, Any]) -> Any:
+    async def execute(self, name: str, arguments: dict[str, Any]) -> Any:
         tool = self._tools.get(name)
         if tool is None:
             raise HTTPException(status_code=400, detail=f"Unknown tool '{name}'")
-        return tool[1](arguments)
+        result = tool[1](arguments)
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     def set_mcp_servers(self, servers: list[dict[str, Any]]) -> None:
         self._mcp_servers = servers
@@ -62,6 +67,7 @@ def build_local_tool_registry() -> ToolRegistry:
         },
         handler=echo_tool,
     )
+
     return registry
 
 
@@ -72,7 +78,7 @@ def build_tool_registry_from_env() -> ToolRegistry:
     for config in load_mcp_server_configs_from_env():
         try:
             client = MCPHTTPClient(config)
-            specs = client.list_tools()
+            specs = asyncio.run(client.list_tools())
             for spec in specs:
                 raw_tool_name = spec.name.split(".", 1)[1]
                 registry.register(

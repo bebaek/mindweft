@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -26,10 +27,10 @@ def test_openai_compatible_adapter_returns_text_response() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    response = adapter.generate(
+    response = asyncio.run(adapter.generate(
         [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
         build_local_tool_registry().specs(),
-    )
+    ))
 
     assert response.content == "hello from provider"
     assert response.tool_call is None
@@ -65,10 +66,10 @@ def test_openai_compatible_adapter_returns_tool_call() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    response = adapter.generate(
+    response = asyncio.run(adapter.generate(
         [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
         build_local_tool_registry().specs(),
-    )
+    ))
 
     assert response.content is None
     assert response.tool_call is not None
@@ -139,10 +140,10 @@ def test_openai_compatible_adapter_raises_for_invalid_tool_json() -> None:
     )
 
     with pytest.raises(HTTPException, match="invalid tool arguments"):
-        adapter.generate(
+        asyncio.run(adapter.generate(
             [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
             build_local_tool_registry().specs(),
-        )
+        ))
 
 
 def test_openai_compatible_adapter_supports_list_content_parts() -> None:
@@ -170,10 +171,10 @@ def test_openai_compatible_adapter_supports_list_content_parts() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    response = adapter.generate(
+    response = asyncio.run(adapter.generate(
         [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
         build_local_tool_registry().specs(),
-    )
+    ))
 
     assert response.content == "Hello from parts"
 
@@ -192,10 +193,10 @@ def test_openai_compatible_adapter_supports_output_text_field() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    response = adapter.generate(
+    response = asyncio.run(adapter.generate(
         [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
         build_local_tool_registry().specs(),
-    )
+    ))
 
     assert response.content == "Hello from output_text"
 
@@ -218,7 +219,7 @@ def test_openai_compatible_adapter_sends_tool_call_id_for_tool_messages() -> Non
         transport=httpx.MockTransport(handler),
     )
 
-    adapter.generate(
+    asyncio.run(adapter.generate(
         [
             Message(thread_id="thread", role=MessageRole.USER, content="hello"),
             Message(
@@ -238,7 +239,7 @@ def test_openai_compatible_adapter_sends_tool_call_id_for_tool_messages() -> Non
             ),
         ],
         build_local_tool_registry().specs(),
-    )
+    ))
 
     assert seen_payload["messages"][1]["tool_calls"][0]["id"] == "call_123"
     assert seen_payload["messages"][1]["tool_calls"][0]["function"]["name"] == "echo"
@@ -287,10 +288,10 @@ def test_openai_compatible_adapter_sanitizes_provider_tool_names() -> None:
             input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
         )
     ]
-    response = adapter.generate(
+    response = asyncio.run(adapter.generate(
         [Message(thread_id="thread", role=MessageRole.USER, content="weather")],
         tools,
-    )
+    ))
 
     assert seen_payload["tools"][0]["function"]["name"] == "tavily_tavily_search"
     assert response.tool_call is not None

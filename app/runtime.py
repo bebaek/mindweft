@@ -21,14 +21,14 @@ class AgentRuntime:
         self._tool_registry = tool_registry
         self._max_iterations = max_iterations
 
-    def run_thread(self, thread_id: str) -> str:
-        self._store.set_thread_status(thread_id, ThreadStatus.RUNNING)
+    async def run_thread(self, thread_id: str) -> str:
+        self._store.start_run(thread_id)
         try:
             for _ in range(self._max_iterations):
                 messages = self._store.list_messages(thread_id)
-                response = self._llm_adapter.generate(messages, self._tool_registry.specs())
+                response = await self._llm_adapter.generate(messages, self._tool_registry.specs())
                 if response.tool_call is not None:
-                    self._handle_tool_call(thread_id, response)
+                    await self._handle_tool_call(thread_id, response)
                     continue
 
                 if response.content is None:
@@ -49,7 +49,7 @@ class AgentRuntime:
         self._store.set_thread_status(thread_id, ThreadStatus.ERROR)
         raise HTTPException(status_code=500, detail="Agent exceeded maximum tool iterations")
 
-    def _handle_tool_call(self, thread_id: str, response: LLMResponse) -> None:
+    async def _handle_tool_call(self, thread_id: str, response: LLMResponse) -> None:
         tool_call = response.tool_call
         if tool_call is None:
             return
@@ -63,7 +63,7 @@ class AgentRuntime:
                 tool_arguments=tool_call.arguments,
             )
         )
-        result = self._tool_registry.execute(tool_call.name, tool_call.arguments)
+        result = await self._tool_registry.execute(tool_call.name, tool_call.arguments)
         self._store.append_message(
             Message(
                 thread_id=thread_id,

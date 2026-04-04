@@ -30,37 +30,37 @@ def create_app(llm_adapter: LLMAdapter | None = None, tool_registry: ToolRegistr
     )
 
     @app.get("/health")
-    def health() -> dict[str, str]:
+    async def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.get("/config")
-    def config(request: Request) -> dict[str, object]:
+    async def config(request: Request) -> dict[str, object]:
         return {
             "llm": request.app.state.llm_adapter.describe(),
             "mcp_servers": request.app.state.tool_registry.mcp_servers(),
         }
 
     @app.post("/threads", response_model=CreateThreadResponse)
-    def create_thread(request: Request) -> CreateThreadResponse:
+    async def create_thread(request: Request) -> CreateThreadResponse:
         thread = request.app.state.store.create_thread()
         return CreateThreadResponse(thread_id=thread.thread_id)
 
     @app.post("/threads/{thread_id}/messages", response_model=Message)
-    def add_message(thread_id: str, request: AddMessageRequest, app_request: Request) -> Message:
+    async def add_message(thread_id: str, request: AddMessageRequest, app_request: Request) -> Message:
         return app_request.app.state.store.append_message(
             Message(thread_id=thread_id, role=MessageRole.USER, content=request.content)
         )
 
     @app.get("/threads/{thread_id}/messages", response_model=list[Message])
-    def get_messages(thread_id: str, request: Request) -> list[Message]:
+    async def get_messages(thread_id: str, request: Request) -> list[Message]:
         return request.app.state.store.list_messages(thread_id)
 
     @app.post("/threads/{thread_id}/run", response_model=RunThreadResponse)
-    def run_thread(thread_id: str, request: Request) -> RunThreadResponse:
-        return RunThreadResponse(reply=request.app.state.runtime.run_thread(thread_id))
+    async def run_thread(thread_id: str, request: Request) -> RunThreadResponse:
+        return RunThreadResponse(reply=await request.app.state.runtime.run_thread(thread_id))
 
     @app.delete("/threads/{thread_id}", status_code=204)
-    def delete_thread(thread_id: str, request: Request) -> None:
+    async def delete_thread(thread_id: str, request: Request) -> None:
         request.app.state.store.delete_thread(thread_id)
 
     return app
