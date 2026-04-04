@@ -116,6 +116,27 @@ def test_tool_execution_logs_error_with_redacted_arguments(caplog: pytest.LogCap
     assert "detail=fetch_url requires a url" in caplog.text
 
 
+def test_tool_execution_logs_redacted_url_query_params(caplog: pytest.LogCaptureFixture) -> None:
+    registry = build_local_tool_registry()
+
+    with caplog.at_level(logging.INFO, logger="app.tools"):
+        result = asyncio.run(
+            registry.execute(
+                "calculator",
+                {
+                    "expression": "1 + 2",
+                    "url": "https://example.com/mcp?token=secret-value&cursor=abc&api_key=other-secret",
+                },
+            )
+        )
+
+    assert result == {"expression": "1 + 2", "result": 3}
+    assert (
+        "url': 'https://example.com/mcp?token=%3Credacted%3E&cursor=abc&api_key=%3Credacted%3E'"
+        in caplog.text
+    )
+
+
 def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

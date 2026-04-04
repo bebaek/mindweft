@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from app.config import load_environment
 from app.llm import LLMAdapter, build_llm_adapter_from_env
 from app.models import AddMessageRequest, CreateThreadResponse, Message, MessageRole, RunThreadResponse
+from app.redaction import install_log_redaction
 from app.runtime import AgentRuntime
 from app.store import InMemoryThreadStore
 from app.tools import ToolRegistry, build_tool_registry_from_env
@@ -14,6 +15,8 @@ from app.tools import ToolRegistry, build_tool_registry_from_env
 
 load_environment()
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+# Redact secrets in third-party logs like httpx request lines before any handler formats the record.
+install_log_redaction()
 
 
 def create_app(llm_adapter: LLMAdapter | None = None, tool_registry: ToolRegistry | None = None) -> FastAPI:

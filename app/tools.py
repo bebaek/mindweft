@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 from app.mcp import MCPHTTPClient, load_mcp_server_configs_from_env
 from app.models import ToolSpec
+from app.redaction import sanitize_value_for_logging
 
 logger = logging.getLogger(__name__)
 
@@ -252,22 +253,7 @@ def _evaluate_calculator_node(node: ast.AST) -> float | int:
 
 
 def _sanitize_tool_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
-    return {key: _sanitize_tool_argument_value(key, value) for key, value in arguments.items()}
-
-
-def _sanitize_tool_argument_value(key: str, value: Any) -> Any:
-    lowercase_key = key.lower()
-    if any(secret_key in lowercase_key for secret_key in ("token", "secret", "password", "api_key", "authorization")):
-        return "<redacted>"
-    if isinstance(value, str):
-        if len(value) > 200:
-            return f"{value[:200]}...<truncated>"
-        return value
-    if isinstance(value, dict):
-        return {nested_key: _sanitize_tool_argument_value(nested_key, nested_value) for nested_key, nested_value in value.items()}
-    if isinstance(value, list):
-        return [_sanitize_tool_argument_value(key, item) for item in value[:20]]
-    return value
+    return {key: sanitize_value_for_logging(key, value) for key, value in arguments.items()}
 
 
 def _tool_error_detail(exc: Exception) -> str:

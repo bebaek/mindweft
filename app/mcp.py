@@ -10,6 +10,7 @@ import httpx
 from fastapi import HTTPException
 
 from app.models import ToolSpec
+from app.redaction import redact_url_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ class MCPHTTPClient:
         logger.info(
             "MCP initialized: server=%s url=%s protocol=%s session=%s remote=%s@%s",
             self._config.name,
-            self._config.url,
+            redact_url_secrets(self._config.url),
             self._negotiated_protocol_version,
             bool(self._session_id),
             self._server_name,
