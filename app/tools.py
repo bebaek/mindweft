@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import concurrent.futures
 import inspect
 import logging
 import operator
@@ -194,7 +195,7 @@ def build_tool_registry_from_env() -> ToolRegistry:
     for config in load_mcp_server_configs_from_env():
         try:
             client = MCPHTTPClient(config)
-            specs = asyncio.run(client.list_tools())
+            specs = _run_awaitable_sync(client.list_tools())
             for spec in specs:
                 raw_tool_name = spec.name.split(".", 1)[1]
                 registry.register(
@@ -273,3 +274,13 @@ def _tool_error_detail(exc: Exception) -> str:
     if isinstance(exc, HTTPException):
         return str(exc.detail)
     return str(exc)
+
+
+def _run_awaitable_sync(awaitable: Any) -> Any:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(awaitable)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, awaitable).result()

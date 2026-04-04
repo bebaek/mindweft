@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.tools import build_local_tool_registry
+from app.tools import build_tool_registry_from_env
 
 
 def test_local_registry_exposes_expected_tools() -> None:
@@ -113,3 +114,63 @@ def test_tool_execution_logs_error_with_redacted_arguments(caplog: pytest.LogCap
     assert "tool.start name=fetch_url arguments={'url': '', 'api_key': '<redacted>', 'authorization': '<redacted>'}" in caplog.text
     assert "tool.error name=fetch_url duration_ms=" in caplog.text
     assert "detail=fetch_url requires a url" in caplog.text
+
+
+def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeMCPClient:
+        def __init__(self, config: object) -> None:
+            self._config = config
+
+        async def list_tools(self) -> list[object]:
+            return [
+                type(
+                    "Spec",
+                    (),
+                    {
+                        "name": "demo.search",
+                        "description": "Search docs",
+                        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                    },
+                )()
+            ]
+
+        def server_info(self) -> object:
+            return type(
+                "ServerInfo",
+                (),
+                {
+                    "name": "demo",
+                    "url": "https://example.com/mcp",
+                    "protocol_version": "2025-11-25",
+                    "session_id": "session-123",
+                    "server_name": "demo-server",
+                    "server_version": "1.0.0",
+                },
+            )()
+
+    monkeypatch.setenv(
+        "MINIGENT_MCP_SERVERS",
+        '[{"name":"demo","url":"https://example.com/mcp","headers":{}}]',
+    )
+    monkeypatch.setattr("app.tools.MCPHTTPClient", FakeMCPClient)
+
+    async def build_registry_inside_running_loop() -> tuple[list[str], list[dict[str, object]]]:
+        registry = build_tool_registry_from_env()
+        return [spec.name for spec in registry.specs()], registry.mcp_servers()
+
+    tool_names, servers = asyncio.run(build_registry_inside_running_loop())
+
+    assert "demo.search" in tool_names
+    assert servers == [
+        {
+            "name": "demo",
+            "url": "https://example.com/mcp",
+            "protocol_version": "2025-11-25",
+            "session": True,
+            "server_name": "demo-server",
+            "server_version": "1.0.0",
+            "tool_count": 1,
+        }
+    ]
