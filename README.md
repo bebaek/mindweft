@@ -117,3 +117,6 @@ curl -X POST http://127.0.0.1:8000/threads/<thread_id>/run
 Local tools currently include:
 - `echo`
 - `current_time`
+- `fetch_url`
+- `sleep`
+- `calculator`
