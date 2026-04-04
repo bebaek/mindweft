@@ -79,6 +79,16 @@ The service skips MCP servers that fail during startup and exposes connected ser
 env UV_CACHE_DIR=.uv-cache uv run pytest
 ```
 
+## Contributing
+
+Use Conventional Commits for commit messages.
+
+Example:
+
+```text
+chore: redact secrets from MCP URL logging
+```
+
 ## Demo Client
 
 With the server running, you can drive it with [scripts/demo_client.py](/Users/burm/code/minigent/scripts/demo_client.py):
