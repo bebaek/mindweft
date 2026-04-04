@@ -6,7 +6,7 @@ from fastapi import HTTPException
 
 from app.llm import MockLLMAdapter
 from app.models import LLMResponse, Message, MessageRole, ThreadStatus, ToolCall
-from app.runtime import AgentRuntime
+from app.runtime import AgentRuntime, RUNTIME_SYSTEM_PROMPT
 from app.store import InMemoryThreadStore
 from app.tools import build_local_tool_registry
 
@@ -24,6 +24,29 @@ def test_runtime_returns_assistant_reply_for_plain_user_message() -> None:
     assert messages[-1].role == MessageRole.ASSISTANT
     assert messages[-1].content == "Mock reply: hello"
     assert store._threads[thread.thread_id].status == ThreadStatus.IDLE
+
+
+def test_runtime_sends_system_prompt_to_llm() -> None:
+    seen_messages: list[Message] = []
+
+    class InspectingLLM:
+        async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+            nonlocal seen_messages
+            seen_messages = messages
+            return LLMResponse(content="ok")
+
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(store=store, llm_adapter=InspectingLLM(), tool_registry=build_local_tool_registry())
+    thread = store.create_thread()
+    store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello"))
+
+    reply = asyncio.run(runtime.run_thread(thread.thread_id))
+
+    assert reply == "ok"
+    assert seen_messages[0].role == MessageRole.SYSTEM
+    assert seen_messages[0].content == RUNTIME_SYSTEM_PROMPT
+    assert seen_messages[1].role == MessageRole.USER
+    assert seen_messages[1].content == "hello"
 
 
 def test_runtime_executes_tool_and_stores_tool_message() -> None:

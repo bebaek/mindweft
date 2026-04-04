@@ -10,6 +10,13 @@ from app.models import LLMResponse, Message, MessageRole, ThreadStatus
 from app.store import InMemoryThreadStore
 from app.tools import ToolRegistry
 
+RUNTIME_SYSTEM_PROMPT = (
+    "Use tools when they are relevant and ground claims in tool results. "
+    "Distinguish clearly between direct verification and inference. "
+    "Do not claim a live status, current availability, or real-time confirmation unless a tool result directly confirms it. "
+    "If tool results fail, are indirect, or are insufficient, say that you could not directly verify the answer and explain what you were able to infer."
+)
+
 
 class AgentRuntime:
     def __init__(
@@ -29,7 +36,7 @@ class AgentRuntime:
         failed_tool_calls: set[str] = set()
         try:
             for _ in range(self._max_iterations):
-                messages = self._store.list_messages(thread_id)
+                messages = self._messages_for_llm(thread_id)
                 response = await self._llm_adapter.generate(messages, self._tool_registry.specs())
                 if response.tool_call is not None:
                     await self._handle_tool_call(thread_id, response, failed_tool_calls)
@@ -102,6 +109,12 @@ class AgentRuntime:
                 tool_call_id=tool_call.id,
             )
         )
+
+    def _messages_for_llm(self, thread_id: str) -> list[Message]:
+        return [
+            Message(thread_id=thread_id, role=MessageRole.SYSTEM, content=RUNTIME_SYSTEM_PROMPT),
+            *self._store.list_messages(thread_id),
+        ]
 
 
 def _serialize_tool_error(tool_name: str, exc: HTTPException, *, blocked: bool = False) -> dict[str, Any]:
