@@ -6,16 +6,20 @@ from fastapi import HTTPException
 
 from app.llm import MockLLMAdapter
 from app.models import LLMResponse, Message, MessageRole, ThreadStatus, ToolCall
-from app.runtime import AgentRuntime, RUNTIME_SYSTEM_PROMPT
+from app.runtime import RUNTIME_SYSTEM_PROMPT, AgentRuntime
 from app.store import InMemoryThreadStore
 from app.tools import build_local_tool_registry
 
 
 def test_runtime_returns_assistant_reply_for_plain_user_message() -> None:
     store = InMemoryThreadStore()
-    runtime = AgentRuntime(store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    runtime = AgentRuntime(
+        store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry()
+    )
     thread = store.create_thread()
-    store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello"))
+    store.append_message(
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello")
+    )
 
     reply = asyncio.run(runtime.run_thread(thread.thread_id))
 
@@ -36,9 +40,13 @@ def test_runtime_sends_system_prompt_to_llm() -> None:
             return LLMResponse(content="ok")
 
     store = InMemoryThreadStore()
-    runtime = AgentRuntime(store=store, llm_adapter=InspectingLLM(), tool_registry=build_local_tool_registry())
+    runtime = AgentRuntime(
+        store=store, llm_adapter=InspectingLLM(), tool_registry=build_local_tool_registry()
+    )
     thread = store.create_thread()
-    store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello"))
+    store.append_message(
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello")
+    )
 
     reply = asyncio.run(runtime.run_thread(thread.thread_id))
 
@@ -51,10 +59,14 @@ def test_runtime_sends_system_prompt_to_llm() -> None:
 
 def test_runtime_executes_tool_and_stores_tool_message() -> None:
     store = InMemoryThreadStore()
-    runtime = AgentRuntime(store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    runtime = AgentRuntime(
+        store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry()
+    )
     thread = store.create_thread()
     store.append_message(
-        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="/tool echo hello from tool")
+        Message(
+            thread_id=thread.thread_id, role=MessageRole.USER, content="/tool echo hello from tool"
+        )
     )
 
     reply = asyncio.run(runtime.run_thread(thread.thread_id))
@@ -77,9 +89,13 @@ def test_runtime_executes_tool_and_stores_tool_message() -> None:
 
 def test_runtime_executes_current_time_tool() -> None:
     store = InMemoryThreadStore()
-    runtime = AgentRuntime(store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    runtime = AgentRuntime(
+        store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry()
+    )
     thread = store.create_thread()
-    store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="/tool current_time"))
+    store.append_message(
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="/tool current_time")
+    )
 
     reply = asyncio.run(runtime.run_thread(thread.thread_id))
 
@@ -110,7 +126,11 @@ def test_runtime_stores_tool_error_and_continues() -> None:
             if messages and messages[-1].role == MessageRole.TOOL:
                 return LLMResponse(content=f"Tool result: {messages[-1].content}")
             return LLMResponse(
-                tool_call=ToolCall(id="call-fetch", name="fetch_url", arguments={"url": "https://example.com/missing"})
+                tool_call=ToolCall(
+                    id="call-fetch",
+                    name="fetch_url",
+                    arguments={"url": "https://example.com/missing"},
+                )
             )
 
     store = InMemoryThreadStore()
@@ -120,7 +140,9 @@ def test_runtime_stores_tool_error_and_continues() -> None:
         tool_registry=FailingRegistry(),  # type: ignore[arg-type]
     )
     thread = store.create_thread()
-    store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="is airport open"))
+    store.append_message(
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="is airport open")
+    )
 
     reply = asyncio.run(runtime.run_thread(thread.thread_id))
 
@@ -161,7 +183,11 @@ def test_runtime_blocks_repeated_identical_failed_tool_calls() -> None:
             if self.calls < 2:
                 self.calls += 1
                 return LLMResponse(
-                    tool_call=ToolCall(id=f"call-search-{self.calls}", name="tavily.tavily_search", arguments={"query": "aus open"})
+                    tool_call=ToolCall(
+                        id=f"call-search-{self.calls}",
+                        name="tavily.tavily_search",
+                        arguments={"query": "aus open"},
+                    )
                 )
             return LLMResponse(content=f"Tool result: {messages[-1].content}")
 
@@ -173,7 +199,9 @@ def test_runtime_blocks_repeated_identical_failed_tool_calls() -> None:
         tool_registry=registry,  # type: ignore[arg-type]
     )
     thread = store.create_thread()
-    store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="is airport open"))
+    store.append_message(
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="is airport open")
+    )
 
     reply = asyncio.run(runtime.run_thread(thread.thread_id))
 
@@ -218,7 +246,11 @@ def test_runtime_blocks_repeated_identical_error_results() -> None:
             if self.calls < 2:
                 self.calls += 1
                 return LLMResponse(
-                    tool_call=ToolCall(id=f"call-search-{self.calls}", name="tavily.tavily_search", arguments={"query": "aus open"})
+                    tool_call=ToolCall(
+                        id=f"call-search-{self.calls}",
+                        name="tavily.tavily_search",
+                        arguments={"query": "aus open"},
+                    )
                 )
             return LLMResponse(content=f"Tool result: {messages[-1].content}")
 
@@ -230,7 +262,9 @@ def test_runtime_blocks_repeated_identical_error_results() -> None:
         tool_registry=registry,  # type: ignore[arg-type]
     )
     thread = store.create_thread()
-    store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="is airport open"))
+    store.append_message(
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="is airport open")
+    )
 
     reply = asyncio.run(runtime.run_thread(thread.thread_id))
 
@@ -262,7 +296,9 @@ def test_runtime_blocks_repeated_identical_error_results() -> None:
 def test_runtime_marks_thread_error_when_max_iterations_exceeded() -> None:
     class LoopingLLM:
         async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
-            return LLMResponse(tool_call=ToolCall(id="loop-call", name="echo", arguments={"text": "loop"}))
+            return LLMResponse(
+                tool_call=ToolCall(id="loop-call", name="echo", arguments={"text": "loop"})
+            )
 
     store = InMemoryThreadStore()
     runtime = AgentRuntime(
@@ -303,7 +339,9 @@ def test_runtime_rejects_concurrent_runs_for_same_thread() -> None:
             tool_registry=build_local_tool_registry(),
         )
         thread = store.create_thread()
-        store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello"))
+        store.append_message(
+            Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello")
+        )
 
         first_run = asyncio.create_task(runtime.run_thread(thread.thread_id))
         await started.wait()

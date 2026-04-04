@@ -27,10 +27,12 @@ def test_openai_compatible_adapter_returns_text_response() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    response = asyncio.run(adapter.generate(
-        [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
-        build_local_tool_registry().specs(),
-    ))
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            build_local_tool_registry().specs(),
+        )
+    )
 
     assert response.content == "hello from provider"
     assert response.tool_call is None
@@ -50,7 +52,7 @@ def test_openai_compatible_adapter_returns_tool_call() -> None:
                                     "function": {
                                         "name": "echo",
                                         "arguments": '{"text":"hello from tool"}',
-                                    }
+                                    },
                                 }
                             ]
                         }
@@ -66,10 +68,12 @@ def test_openai_compatible_adapter_returns_tool_call() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    response = asyncio.run(adapter.generate(
-        [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
-        build_local_tool_registry().specs(),
-    ))
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            build_local_tool_registry().specs(),
+        )
+    )
 
     assert response.content is None
     assert response.tool_call is not None
@@ -78,7 +82,9 @@ def test_openai_compatible_adapter_returns_tool_call() -> None:
     assert response.tool_call.arguments == {"text": "hello from tool"}
 
 
-def test_load_provider_config_for_openrouter_includes_optional_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_provider_config_for_openrouter_includes_optional_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "router-key")
     monkeypatch.setenv("OPENROUTER_MODEL", "openai/gpt-4.1-mini")
     monkeypatch.setenv("OPENROUTER_HTTP_REFERER", "https://example.com")
@@ -140,10 +146,12 @@ def test_openai_compatible_adapter_raises_for_invalid_tool_json() -> None:
     )
 
     with pytest.raises(HTTPException, match="invalid tool arguments"):
-        asyncio.run(adapter.generate(
-            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
-            build_local_tool_registry().specs(),
-        ))
+        asyncio.run(
+            adapter.generate(
+                [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+                build_local_tool_registry().specs(),
+            )
+        )
 
 
 def test_openai_compatible_adapter_supports_list_content_parts() -> None:
@@ -171,10 +179,12 @@ def test_openai_compatible_adapter_supports_list_content_parts() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    response = asyncio.run(adapter.generate(
-        [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
-        build_local_tool_registry().specs(),
-    ))
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            build_local_tool_registry().specs(),
+        )
+    )
 
     assert response.content == "Hello from parts"
 
@@ -193,10 +203,12 @@ def test_openai_compatible_adapter_supports_output_text_field() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    response = asyncio.run(adapter.generate(
-        [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
-        build_local_tool_registry().specs(),
-    ))
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            build_local_tool_registry().specs(),
+        )
+    )
 
     assert response.content == "Hello from output_text"
 
@@ -219,27 +231,29 @@ def test_openai_compatible_adapter_sends_tool_call_id_for_tool_messages() -> Non
         transport=httpx.MockTransport(handler),
     )
 
-    asyncio.run(adapter.generate(
-        [
-            Message(thread_id="thread", role=MessageRole.USER, content="hello"),
-            Message(
-                thread_id="thread",
-                role=MessageRole.ASSISTANT,
-                content="",
-                tool_name="echo",
-                tool_call_id="call_123",
-                tool_arguments={"text": "hello"},
-            ),
-            Message(
-                thread_id="thread",
-                role=MessageRole.TOOL,
-                content='{"echo": "hello"}',
-                tool_name="echo",
-                tool_call_id="call_123",
-            ),
-        ],
-        build_local_tool_registry().specs(),
-    ))
+    asyncio.run(
+        adapter.generate(
+            [
+                Message(thread_id="thread", role=MessageRole.USER, content="hello"),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name="echo",
+                    tool_call_id="call_123",
+                    tool_arguments={"text": "hello"},
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content='{"echo": "hello"}',
+                    tool_name="echo",
+                    tool_call_id="call_123",
+                ),
+            ],
+            build_local_tool_registry().specs(),
+        )
+    )
 
     assert seen_payload["messages"][1]["tool_calls"][0]["id"] == "call_123"
     assert seen_payload["messages"][1]["tool_calls"][0]["function"]["name"] == "echo"
@@ -288,10 +302,12 @@ def test_openai_compatible_adapter_sanitizes_provider_tool_names() -> None:
             input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
         )
     ]
-    response = asyncio.run(adapter.generate(
-        [Message(thread_id="thread", role=MessageRole.USER, content="weather")],
-        tools,
-    ))
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="weather")],
+            tools,
+        )
+    )
 
     assert seen_payload["tools"][0]["function"]["name"] == "tavily_tavily_search"
     assert response.tool_call is not None

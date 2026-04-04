@@ -39,7 +39,7 @@ class MCPHTTPClient:
     def __init__(
         self,
         config: MCPServerConfig,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = 15.0,
     ) -> None:
         self._config = config
@@ -71,7 +71,9 @@ class MCPHTTPClient:
             result = await self._request("tools/list", params or None)
             for tool in result.get("tools", []):
                 namespaced_name = f"{self._config.name}.{tool['name']}"
-                description = tool.get("description") or f"MCP tool {tool['name']} from {self._config.name}"
+                description = (
+                    tool.get("description") or f"MCP tool {tool['name']} from {self._config.name}"
+                )
                 tools.append(
                     ToolSpec(
                         name=namespaced_name,
@@ -117,7 +119,9 @@ class MCPHTTPClient:
             use_protocol_header=False,
         )
         self._session_id = headers.get("MCP-Session-Id")
-        self._negotiated_protocol_version = result.get("protocolVersion", self._config.protocol_version)
+        self._negotiated_protocol_version = result.get(
+            "protocolVersion", self._config.protocol_version
+        )
         server_info = result.get("serverInfo") or {}
         self._server_name = server_info.get("name")
         self._server_version = server_info.get("version")
@@ -272,12 +276,16 @@ def load_mcp_server_configs_from_env() -> list[MCPServerConfig]:
     return configs
 
 
-def _parse_sse_jsonrpc_response(stream_text: str, *, request_id: int, server_name: str) -> dict[str, Any]:
+def _parse_sse_jsonrpc_response(
+    stream_text: str, *, request_id: int, server_name: str
+) -> dict[str, Any]:
     for event_data in _iter_sse_data_messages(stream_text):
         try:
             payload = json.loads(event_data)
         except json.JSONDecodeError:
-            logger.debug("Ignoring non-JSON SSE event from MCP server '%s': %s", server_name, event_data)
+            logger.debug(
+                "Ignoring non-JSON SSE event from MCP server '%s': %s", server_name, event_data
+            )
             continue
         if not isinstance(payload, dict):
             continue

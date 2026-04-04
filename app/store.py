@@ -49,7 +49,9 @@ class InMemoryThreadStore:
         with self._lock:
             thread = self._require_thread(thread_id)
             if thread.status == ThreadStatus.RUNNING:
-                raise HTTPException(status_code=409, detail=f"Thread '{thread_id}' is already running")
+                raise HTTPException(
+                    status_code=409, detail=f"Thread '{thread_id}' is already running"
+                )
             thread.status = ThreadStatus.RUNNING
             thread.updated_at = utc_now()
             return thread

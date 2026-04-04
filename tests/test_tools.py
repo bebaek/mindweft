@@ -6,8 +6,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from app.tools import build_local_tool_registry
-from app.tools import build_tool_registry_from_env
+from app.tools import build_local_tool_registry, build_tool_registry_from_env
 
 
 def test_local_registry_exposes_expected_tools() -> None:
@@ -78,7 +77,9 @@ def test_fetch_url_tool_returns_response_text(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
     registry = build_local_tool_registry()
 
-    result = asyncio.run(registry.execute("fetch_url", {"url": "https://example.com", "timeout_seconds": 2.5}))
+    result = asyncio.run(
+        registry.execute("fetch_url", {"url": "https://example.com", "timeout_seconds": 2.5})
+    )
 
     assert result == {
         "url": "https://example.com",
@@ -99,7 +100,9 @@ def test_tool_execution_logs_start_and_success(caplog: pytest.LogCaptureFixture)
     assert "tool.ok name=calculator duration_ms=" in caplog.text
 
 
-def test_tool_execution_logs_error_with_redacted_arguments(caplog: pytest.LogCaptureFixture) -> None:
+def test_tool_execution_logs_error_with_redacted_arguments(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     registry = build_local_tool_registry()
 
     with caplog.at_level(logging.INFO, logger="app.tools"):
@@ -111,7 +114,10 @@ def test_tool_execution_logs_error_with_redacted_arguments(caplog: pytest.LogCap
                 )
             )
 
-    assert "tool.start name=fetch_url arguments={'url': '', 'api_key': '<redacted>', 'authorization': '<redacted>'}" in caplog.text
+    assert (
+        "tool.start name=fetch_url arguments={'url': '', 'api_key': '<redacted>', 'authorization': '<redacted>'}"
+        in caplog.text
+    )
     assert "tool.error name=fetch_url duration_ms=" in caplog.text
     assert "detail=fetch_url requires a url" in caplog.text
 
@@ -152,7 +158,10 @@ def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(
                     {
                         "name": "demo.search",
                         "description": "Search docs",
-                        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                        },
                     },
                 )()
             ]

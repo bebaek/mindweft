@@ -79,9 +79,31 @@ The service skips MCP servers that fail during startup and exposes connected ser
 env UV_CACHE_DIR=.uv-cache uv run pytest
 ```
 
+## Development
+
+Lint:
+
+```bash
+env UV_CACHE_DIR=.uv-cache uv run ruff check .
+```
+
+Format:
+
+```bash
+env UV_CACHE_DIR=.uv-cache uv run ruff format .
+```
+
+Type check:
+
+```bash
+env UV_CACHE_DIR=.uv-cache uv run pyright
+```
+
 ## Contributing
 
 Use Conventional Commits for commit messages.
+
+Use Ruff for linting and formatting. Bugbear checks run through Ruff's `B` ruleset. Use Pyright for type checking in `app/`.
 
 Example:
 

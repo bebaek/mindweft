@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import ast
+import asyncio
 import concurrent.futures
 import inspect
 import logging
@@ -126,7 +126,9 @@ def build_local_tool_registry() -> ToolRegistry:
                 response = await client.get(url)
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=502, detail=f"fetch_url failed with status {exc.response.status_code}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"fetch_url failed with status {exc.response.status_code}"
+            ) from exc
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=f"fetch_url request failed: {exc}") from exc
         content_type = response.headers.get("content-type", "")
@@ -203,7 +205,9 @@ def build_tool_registry_from_env() -> ToolRegistry:
                     name=spec.name,
                     description=spec.description,
                     input_schema=spec.input_schema,
-                    handler=lambda arguments, c=client, tool_name=raw_tool_name: c.call_tool(tool_name, arguments),
+                    handler=lambda arguments, c=client, tool_name=raw_tool_name: c.call_tool(
+                        tool_name, arguments
+                    ),
                 )
             server_info = client.server_info()
             mcp_servers.append(

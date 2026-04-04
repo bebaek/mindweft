@@ -129,7 +129,7 @@ def test_mcp_http_client_supports_sse_jsonrpc_responses() -> None:
                 200,
                 headers={"content-type": "text/event-stream", "MCP-Session-Id": "session-sse"},
                 text=(
-                    'event: message\n'
+                    "event: message\n"
                     'data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","serverInfo":{"name":"demo-server","version":"1.0.0"},"capabilities":{"tools":{}}}}\n\n'
                 ),
             )
@@ -140,8 +140,8 @@ def test_mcp_http_client_supports_sse_jsonrpc_responses() -> None:
                 200,
                 headers={"content-type": "text/event-stream"},
                 text=(
-                    ': keepalive\n\n'
-                    'event: message\n'
+                    ": keepalive\n\n"
+                    "event: message\n"
                     'data: {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"search","description":"Search docs","inputSchema":{"type":"object","properties":{"query":{"type":"string"}}}}]}}\n\n'
                 ),
             )
@@ -207,12 +207,18 @@ def test_mcp_http_client_logs_redacted_url(caplog) -> None:
     assert "secret-value" not in caplog.text
 
 
-def test_redacting_log_filter_redacts_httpx_style_log_messages(caplog: pytest.LogCaptureFixture) -> None:
+def test_redacting_log_filter_redacts_httpx_style_log_messages(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     logger = logging.getLogger("httpx.test")
     logger.addFilter(RedactingLogFilter())
 
     with caplog.at_level(logging.INFO, logger="httpx.test"):
-        logger.info("HTTP Request: %s %s", "POST", "https://mcp.tavily.com/mcp?tavilyApiKey=tvly-dev-secret&x=1")
+        logger.info(
+            "HTTP Request: %s %s",
+            "POST",
+            "https://mcp.tavily.com/mcp?tavilyApiKey=tvly-dev-secret&x=1",
+        )
 
     assert "tavilyApiKey=%3Credacted%3E" in caplog.text
     assert "tvly-dev-secret" not in caplog.text
@@ -232,7 +238,10 @@ def test_install_log_redaction_redacts_new_log_records() -> None:
             None,
         )
 
-        assert record.getMessage() == "HTTP Request: POST https://mcp.tavily.com/mcp?tavilyApiKey=%3Credacted%3E&x=1"
+        assert (
+            record.getMessage()
+            == "HTTP Request: POST https://mcp.tavily.com/mcp?tavilyApiKey=%3Credacted%3E&x=1"
+        )
     finally:
         logging.setLogRecordFactory(original_factory)
 
@@ -247,7 +256,13 @@ def test_install_log_redaction_redacts_httpx_url_objects() -> None:
             __file__,
             1,
             'HTTP Request: %s %s "%s %d %s"',
-            ("POST", httpx.URL("https://mcp.tavily.com/mcp?tavilyApiKey=tvly-dev-secret&x=1"), "HTTP/1.1", 200, "OK"),
+            (
+                "POST",
+                httpx.URL("https://mcp.tavily.com/mcp?tavilyApiKey=tvly-dev-secret&x=1"),
+                "HTTP/1.1",
+                200,
+                "OK",
+            ),
             None,
         )
 

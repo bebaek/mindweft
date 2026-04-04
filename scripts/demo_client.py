@@ -9,7 +9,9 @@ from typing import Any
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Drive a running Minigent server from the command line.")
+    parser = argparse.ArgumentParser(
+        description="Drive a running Minigent server from the command line."
+    )
     parser.add_argument(
         "--base-url",
         default="http://127.0.0.1:8000",

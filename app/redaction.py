@@ -7,6 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 _SENSITIVE_KEY_PARTS = ("token", "secret", "password", "api_key", "authorization", "key")
 _URL_PATTERN = re.compile(r"https?://[^\s\"']+")
+_LOG_REDACTION_INSTALLED = False
 
 
 def is_sensitive_key(key: str) -> bool:
@@ -50,7 +51,10 @@ def sanitize_value_for_logging(key: str, value: Any) -> Any:
     if _looks_like_url_value(value):
         return redact_urls_in_text(str(value))
     if isinstance(value, dict):
-        return {nested_key: sanitize_value_for_logging(nested_key, nested_value) for nested_key, nested_value in value.items()}
+        return {
+            nested_key: sanitize_value_for_logging(nested_key, nested_value)
+            for nested_key, nested_value in value.items()
+        }
     if isinstance(value, list):
         return [sanitize_value_for_logging(key, item) for item in value[:20]]
     return value
@@ -74,14 +78,17 @@ def redact_log_record(record: logging.LogRecord) -> None:
     if isinstance(record.msg, str):
         record.msg = redact_urls_in_text(record.msg)
     if isinstance(record.args, dict):
-        record.args = {key: sanitize_value_for_logging(key, value) for key, value in record.args.items()}
+        record.args = {
+            key: sanitize_value_for_logging(key, value) for key, value in record.args.items()
+        }
     elif isinstance(record.args, tuple):
         record.args = tuple(sanitize_value_for_logging("", value) for value in record.args)
 
 
 def install_log_redaction() -> None:
+    global _LOG_REDACTION_INSTALLED
     current_factory = logging.getLogRecordFactory()
-    if getattr(current_factory, "_minigent_redacting_factory", False):
+    if _LOG_REDACTION_INSTALLED:
         return
 
     def redacting_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
@@ -89,5 +96,5 @@ def install_log_redaction() -> None:
         redact_log_record(record)
         return record
 
-    setattr(redacting_factory, "_minigent_redacting_factory", True)
     logging.setLogRecordFactory(redacting_factory)
+    _LOG_REDACTION_INSTALLED = True

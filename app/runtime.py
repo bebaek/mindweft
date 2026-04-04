@@ -43,10 +43,14 @@ class AgentRuntime:
                     continue
 
                 if response.content is None:
-                    raise HTTPException(status_code=500, detail="LLM returned neither content nor tool call")
+                    raise HTTPException(
+                        status_code=500, detail="LLM returned neither content nor tool call"
+                    )
 
                 self._store.append_message(
-                    Message(thread_id=thread_id, role=MessageRole.ASSISTANT, content=response.content)
+                    Message(
+                        thread_id=thread_id, role=MessageRole.ASSISTANT, content=response.content
+                    )
                 )
                 self._store.set_thread_status(thread_id, ThreadStatus.IDLE)
                 return response.content
@@ -117,7 +121,9 @@ class AgentRuntime:
         ]
 
 
-def _serialize_tool_error(tool_name: str, exc: HTTPException, *, blocked: bool = False) -> dict[str, Any]:
+def _serialize_tool_error(
+    tool_name: str, exc: HTTPException, *, blocked: bool = False
+) -> dict[str, Any]:
     error: dict[str, Any] = {
         "tool_name": tool_name,
         "status_code": exc.status_code,
@@ -141,7 +147,11 @@ def _normalize_tool_error_result(tool_name: str, result: object) -> dict[str, An
         return None
 
     error_value = result.get("error")
-    if isinstance(error_value, dict) and "tool_name" in error_value and "status_code" in error_value:
+    if (
+        isinstance(error_value, dict)
+        and "tool_name" in error_value
+        and "status_code" in error_value
+    ):
         return result
 
     if "error" not in result:

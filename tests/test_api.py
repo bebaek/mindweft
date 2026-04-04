@@ -1,6 +1,5 @@
-from fastapi.testclient import TestClient
-
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from app.llm import LLMAdapter, MockLLMAdapter
 from app.main import create_app
@@ -9,7 +8,9 @@ from app.tools import build_local_tool_registry
 
 
 def test_thread_lifecycle_endpoints() -> None:
-    client = TestClient(create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry()))
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
 
     config_response = client.get("/config")
     assert config_response.status_code == 200
@@ -43,7 +44,9 @@ def test_thread_lifecycle_endpoints() -> None:
 
 
 def test_run_endpoint_handles_tool_call_flow() -> None:
-    client = TestClient(create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry()))
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
     thread_id = client.post("/threads").json()["thread_id"]
 
     client.post(
@@ -70,11 +73,21 @@ def test_run_endpoint_returns_reply_when_tool_fails() -> None:
             if messages and messages[-1].role == MessageRole.TOOL:
                 return LLMResponse(content=f"Tool result: {messages[-1].content}")
             return LLMResponse(
-                tool_call=ToolCall(id="call-fetch", name="fetch_url", arguments={"url": "https://example.com/missing"})
+                tool_call=ToolCall(
+                    id="call-fetch",
+                    name="fetch_url",
+                    arguments={"url": "https://example.com/missing"},
+                )
             )
 
         def describe(self) -> dict[str, object]:
-            return {"provider": "test", "model": None, "base_url": None, "headers": [], "adapter": "ToolFailingLLM"}
+            return {
+                "provider": "test",
+                "model": None,
+                "base_url": None,
+                "headers": [],
+                "adapter": "ToolFailingLLM",
+            }
 
     class FailingRegistry:
         def specs(self) -> list[object]:

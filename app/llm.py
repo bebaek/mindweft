@@ -39,7 +39,9 @@ class MockLLMAdapter(LLMAdapter):
         if messages and messages[-1].role == MessageRole.TOOL:
             return LLMResponse(content=f"Tool result: {messages[-1].content}")
 
-        last_user = next((message for message in reversed(messages) if message.role == MessageRole.USER), None)
+        last_user = next(
+            (message for message in reversed(messages) if message.role == MessageRole.USER), None
+        )
         if last_user is None:
             return LLMResponse(content="No user message found.")
 
@@ -49,7 +51,9 @@ class MockLLMAdapter(LLMAdapter):
             payload = rest[0] if rest else ""
             if tool_name in tool_names:
                 return LLMResponse(
-                    tool_call=ToolCall(id=f"mock-{tool_name}-call", name=tool_name, arguments={"text": payload})
+                    tool_call=ToolCall(
+                        id=f"mock-{tool_name}-call", name=tool_name, arguments={"text": payload}
+                    )
                 )
 
         return LLMResponse(content=f"Mock reply: {last_user.content}")
@@ -73,7 +77,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
         model: str,
         extra_headers: dict[str, str] | None = None,
         timeout: float = 30.0,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
@@ -104,7 +108,9 @@ class OpenAICompatibleAdapter(LLMAdapter):
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 detail = exc.response.text or str(exc)
-                raise HTTPException(status_code=502, detail=f"LLM provider error: {detail}") from exc
+                raise HTTPException(
+                    status_code=502, detail=f"LLM provider error: {detail}"
+                ) from exc
             except httpx.HTTPError as exc:
                 raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}") from exc
         return _parse_chat_completion(response.json(), tool_name_map)
@@ -175,7 +181,9 @@ def load_provider_config(provider: str) -> ProviderConfig:
         model = os.getenv("OPENROUTER_MODEL", "openai/gpt-5.4-mini")
         base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
         if not api_key:
-            raise RuntimeError("OPENROUTER_API_KEY is required when MINIGENT_LLM_PROVIDER=openrouter")
+            raise RuntimeError(
+                "OPENROUTER_API_KEY is required when MINIGENT_LLM_PROVIDER=openrouter"
+            )
         extra_headers: dict[str, str] = {}
         site_url = os.getenv("OPENROUTER_HTTP_REFERER")
         app_name = os.getenv("OPENROUTER_APP_NAME")
@@ -207,7 +215,9 @@ def _message_to_chat_payload(message: Message, tool_name_map: dict[str, str]) ->
                 "id": message.tool_call_id,
                 "type": "function",
                 "function": {
-                    "name": tool_name_map.get(message.tool_name, _sanitize_tool_name(message.tool_name)),
+                    "name": tool_name_map.get(
+                        message.tool_name, _sanitize_tool_name(message.tool_name)
+                    ),
                     "arguments": json.dumps(message.tool_arguments or {}, ensure_ascii=True),
                 },
             }
@@ -244,7 +254,9 @@ def _parse_chat_completion(payload: dict[str, Any], tool_name_map: dict[str, str
             try:
                 parsed_arguments = json.loads(arguments)
             except json.JSONDecodeError as exc:
-                raise HTTPException(status_code=502, detail="LLM returned invalid tool arguments") from exc
+                raise HTTPException(
+                    status_code=502, detail="LLM returned invalid tool arguments"
+                ) from exc
         else:
             parsed_arguments = arguments
         return LLMResponse(
