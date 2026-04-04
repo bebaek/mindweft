@@ -111,3 +111,49 @@ def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
     assert requests[2]["headers"]["mcp-session-id"] == "session-123"
     assert requests[2]["headers"]["mcp-protocol-version"] == "2025-11-25"
     assert requests[3]["body"]["method"] == "tools/call"
+
+
+def test_mcp_http_client_supports_sse_jsonrpc_responses() -> None:
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read().decode())
+        requests.append({"headers": dict(request.headers), "body": body})
+        method = body["method"]
+        if method == "initialize":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream", "MCP-Session-Id": "session-sse"},
+                text=(
+                    'event: message\n'
+                    'data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","serverInfo":{"name":"demo-server","version":"1.0.0"},"capabilities":{"tools":{}}}}\n\n'
+                ),
+            )
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        if method == "tools/list":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=(
+                    ': keepalive\n\n'
+                    'event: message\n'
+                    'data: {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"search","description":"Search docs","inputSchema":{"type":"object","properties":{"query":{"type":"string"}}}}]}}\n\n'
+                ),
+            )
+        raise AssertionError(f"Unexpected method {method}")
+
+    client = MCPHTTPClient(
+        config=MCPServerConfig(
+            name="demo",
+            url="https://example.com/mcp",
+            headers={},
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    specs = client.list_tools()
+
+    assert [spec.name for spec in specs] == ["demo.search"]
+    assert requests[1]["body"]["method"] == "notifications/initialized"
+    assert requests[2]["headers"]["mcp-session-id"] == "session-sse"

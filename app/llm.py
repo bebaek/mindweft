@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -82,10 +83,11 @@ class OpenAICompatibleAdapter(LLMAdapter):
         self._transport = transport
 
     def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+        tool_name_map = _build_provider_tool_name_map(tools)
         payload = {
             "model": self._model,
-            "messages": [_message_to_chat_payload(message) for message in messages],
-            "tools": [_tool_to_payload(tool) for tool in tools],
+            "messages": [_message_to_chat_payload(message, tool_name_map) for message in messages],
+            "tools": [_tool_to_payload(tool, tool_name_map) for tool in tools],
         }
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -105,8 +107,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
                 raise HTTPException(status_code=502, detail=f"LLM provider error: {detail}") from exc
             except httpx.HTTPError as exc:
                 raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}") from exc
-
-        return _parse_chat_completion(response.json())
+        return _parse_chat_completion(response.json(), tool_name_map)
 
     def describe(self) -> dict[str, Any]:
         provider = "openai-compatible"
@@ -197,7 +198,7 @@ def serialize_tool_result(result: object) -> str:
     return json.dumps(result, ensure_ascii=True, default=str)
 
 
-def _message_to_chat_payload(message: Message) -> dict[str, Any]:
+def _message_to_chat_payload(message: Message, tool_name_map: dict[str, str]) -> dict[str, Any]:
     payload: dict[str, Any] = {"role": message.role.value, "content": message.content}
     if message.role == MessageRole.ASSISTANT and message.tool_call_id and message.tool_name:
         payload["content"] = None
@@ -206,7 +207,7 @@ def _message_to_chat_payload(message: Message) -> dict[str, Any]:
                 "id": message.tool_call_id,
                 "type": "function",
                 "function": {
-                    "name": message.tool_name,
+                    "name": tool_name_map.get(message.tool_name, _sanitize_tool_name(message.tool_name)),
                     "arguments": json.dumps(message.tool_arguments or {}, ensure_ascii=True),
                 },
             }
@@ -214,23 +215,21 @@ def _message_to_chat_payload(message: Message) -> dict[str, Any]:
     if message.role == MessageRole.TOOL:
         if message.tool_call_id:
             payload["tool_call_id"] = message.tool_call_id
-        if message.tool_name:
-            payload["name"] = message.tool_name
     return payload
 
 
-def _tool_to_payload(tool: ToolSpec) -> dict[str, Any]:
+def _tool_to_payload(tool: ToolSpec, tool_name_map: dict[str, str]) -> dict[str, Any]:
     return {
         "type": "function",
         "function": {
-            "name": tool.name,
+            "name": tool_name_map[tool.name],
             "description": tool.description,
             "parameters": tool.input_schema,
         },
     }
 
 
-def _parse_chat_completion(payload: dict[str, Any]) -> LLMResponse:
+def _parse_chat_completion(payload: dict[str, Any], tool_name_map: dict[str, str]) -> LLMResponse:
     choices = payload.get("choices") or []
     if not choices:
         logger.error("LLM response missing choices: %s", _truncate_json(payload))
@@ -251,7 +250,7 @@ def _parse_chat_completion(payload: dict[str, Any]) -> LLMResponse:
         return LLMResponse(
             tool_call=ToolCall(
                 id=tool_calls[0].get("id"),
-                name=function.get("name", ""),
+                name=_resolve_internal_tool_name(function.get("name", ""), tool_name_map),
                 arguments=parsed_arguments,
             )
         )
@@ -305,3 +304,30 @@ def _truncate_json(payload: dict[str, Any], limit: int = 1200) -> str:
     if len(serialized) <= limit:
         return serialized
     return serialized[:limit] + "...<truncated>"
+
+
+def _build_provider_tool_name_map(tools: list[ToolSpec]) -> dict[str, str]:
+    provider_names: dict[str, str] = {}
+    used_provider_names: set[str] = set()
+    for tool in tools:
+        base_name = _sanitize_tool_name(tool.name)
+        provider_name = base_name
+        suffix = 2
+        while provider_name in used_provider_names:
+            provider_name = f"{base_name}_{suffix}"
+            suffix += 1
+        provider_names[tool.name] = provider_name
+        used_provider_names.add(provider_name)
+    return provider_names
+
+
+def _sanitize_tool_name(name: str) -> str:
+    sanitized = re.sub(r"[^a-zA-Z0-9_-]+", "_", name).strip("_")
+    return sanitized or "tool"
+
+
+def _resolve_internal_tool_name(provider_name: str, tool_name_map: dict[str, str]) -> str:
+    for internal_name, mapped_name in tool_name_map.items():
+        if mapped_name == provider_name:
+            return internal_name
+    return provider_name

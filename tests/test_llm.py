@@ -5,7 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.llm import OpenAICompatibleAdapter, build_llm_adapter_from_env, load_provider_config
-from app.models import Message, MessageRole
+from app.models import Message, MessageRole, ToolSpec
 from app.tools import build_local_tool_registry
 
 
@@ -243,3 +243,55 @@ def test_openai_compatible_adapter_sends_tool_call_id_for_tool_messages() -> Non
     assert seen_payload["messages"][1]["tool_calls"][0]["id"] == "call_123"
     assert seen_payload["messages"][1]["tool_calls"][0]["function"]["name"] == "echo"
     assert seen_payload["messages"][2]["tool_call_id"] == "call_123"
+    assert "name" not in seen_payload["messages"][2]
+
+
+def test_openai_compatible_adapter_sanitizes_provider_tool_names() -> None:
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_payload
+        seen_payload = json.loads(request.read().decode())
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call_456",
+                                    "function": {
+                                        "name": "tavily_tavily_search",
+                                        "arguments": '{"query":"weather"}',
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    tools = [
+        ToolSpec(
+            name="tavily.tavily_search",
+            description="Search the web",
+            input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+        )
+    ]
+    response = adapter.generate(
+        [Message(thread_id="thread", role=MessageRole.USER, content="weather")],
+        tools,
+    )
+
+    assert seen_payload["tools"][0]["function"]["name"] == "tavily_tavily_search"
+    assert response.tool_call is not None
+    assert response.tool_call.name == "tavily.tavily_search"

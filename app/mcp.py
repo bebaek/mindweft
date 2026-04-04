@@ -193,12 +193,20 @@ class MCPHTTPClient:
                     detail=f"MCP server '{self._config.name}' request failed: {exc}",
                 ) from exc
 
-        if "application/json" not in response.headers.get("content-type", ""):
+        content_type = response.headers.get("content-type", "")
+        if "application/json" in content_type:
+            body = response.json()
+        elif "text/event-stream" in content_type:
+            body = _parse_sse_jsonrpc_response(
+                response.text,
+                request_id=self._request_id,
+                server_name=self._config.name,
+            )
+        else:
             raise HTTPException(
                 status_code=502,
-                detail=f"MCP server '{self._config.name}' returned unsupported content type '{response.headers.get('content-type')}'",
+                detail=f"MCP server '{self._config.name}' returned unsupported content type '{content_type}'",
             )
-        body = response.json()
         if "error" in body:
             raise HTTPException(
                 status_code=502,
@@ -261,3 +269,39 @@ def load_mcp_server_configs_from_env() -> list[MCPServerConfig]:
             )
         )
     return configs
+
+
+def _parse_sse_jsonrpc_response(stream_text: str, *, request_id: int, server_name: str) -> dict[str, Any]:
+    for event_data in _iter_sse_data_messages(stream_text):
+        try:
+            payload = json.loads(event_data)
+        except json.JSONDecodeError:
+            logger.debug("Ignoring non-JSON SSE event from MCP server '%s': %s", server_name, event_data)
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("id") == request_id:
+            return payload
+    raise HTTPException(
+        status_code=502,
+        detail=f"MCP server '{server_name}' returned no matching JSON-RPC response in event stream",
+    )
+
+
+def _iter_sse_data_messages(stream_text: str) -> list[str]:
+    messages: list[str] = []
+    data_lines: list[str] = []
+    for raw_line in stream_text.splitlines():
+        line = raw_line.rstrip("\r")
+        if not line:
+            if data_lines:
+                messages.append("\n".join(data_lines))
+                data_lines = []
+            continue
+        if line.startswith(":"):
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+    if data_lines:
+        messages.append("\n".join(data_lines))
+    return messages
