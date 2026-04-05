@@ -15,6 +15,7 @@ from app.execution import (
     StoreBackedTenantExecutionResolver,
     TenantExecutionResolver,
     build_execution_resolver_from_env,
+    get_skill_config,
     resolve_tenant_config_source,
     TENANT_CONFIG_SOURCE_ENV_ONLY,
     TENANT_CONFIG_SOURCE_STORE,
@@ -23,6 +24,7 @@ from app.execution import (
 from app.llm import LLMAdapter, build_llm_adapter_from_env
 from app.models import (
     AddMessageRequest,
+    CreateThreadRequest,
     CreateThreadResponse,
     Message,
     MessageRole,
@@ -116,9 +118,17 @@ def create_app(
 
     @app.post("/threads", response_model=CreateThreadResponse)
     async def create_thread(
-        request: Request, principal: Principal = Depends(require_principal)
+        request: Request,
+        body: CreateThreadRequest | None = None,
+        principal: Principal = Depends(require_principal),
     ) -> CreateThreadResponse:
-        thread = request.app.state.store.create_thread(principal.tenant_id)
+        skill_name = body.skill_name if body is not None else None
+        execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
+        if skill_name is not None:
+            get_skill_config(execution.config, skill_name)
+        elif execution.config.skills.default_skill is not None:
+            skill_name = execution.config.skills.default_skill
+        thread = request.app.state.store.create_thread(principal.tenant_id, skill_name=skill_name)
         return CreateThreadResponse(thread_id=thread.thread_id)
 
     @app.post("/threads/{thread_id}/messages", response_model=Message)

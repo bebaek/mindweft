@@ -385,17 +385,119 @@ def test_tenant_execution_config_rejects_missing_tenant_config(
     )
     client = TestClient(create_app())
 
-    thread_id = client.post("/threads", headers=OTHER_TENANT_HEADERS).json()["thread_id"]
+    create_response = client.post("/threads", headers=OTHER_TENANT_HEADERS)
+
+    assert create_response.status_code == 403
+    assert create_response.json()["detail"] == "Tenant 'tenant-2' has no execution configuration"
+
+
+def test_create_thread_can_select_skill_and_skill_narrows_runtime_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "tools": {"allowed_local_tools": ["echo", "calculator"]},
+                    "skills": {
+                        "items": [
+                            {
+                                "name": "math",
+                                "system_prompt": "Prefer exact arithmetic.",
+                                "allowed_local_tools": ["calculator"],
+                            }
+                        ]
+                    },
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+
+    create_response = client.post("/threads", json={"skill_name": "math"}, headers=AUTH_HEADERS)
+    assert create_response.status_code == 200
+    thread_id = create_response.json()["thread_id"]
+
     client.post(
         f"/threads/{thread_id}/messages",
-        json={"content": "hello"},
-        headers=OTHER_TENANT_HEADERS,
+        json={"content": "/tool echo hello from restricted skill"},
+        headers=AUTH_HEADERS,
     )
 
-    run_response = client.post(f"/threads/{thread_id}/run", headers=OTHER_TENANT_HEADERS)
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
 
-    assert run_response.status_code == 403
-    assert run_response.json()["detail"] == "Tenant 'tenant-2' has no execution configuration"
+    assert run_response.status_code == 200
+    assert run_response.json() == {"reply": "Mock reply: /tool echo hello from restricted skill"}
+
+
+def test_create_thread_uses_default_skill_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "tools": {"allowed_local_tools": ["echo", "calculator"]},
+                    "skills": {
+                        "default_skill": "math",
+                        "items": [
+                            {
+                                "name": "math",
+                                "system_prompt": "Prefer exact arithmetic.",
+                                "allowed_local_tools": ["calculator"],
+                            }
+                        ],
+                    },
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "/tool echo hello from default skill"},
+        headers=AUTH_HEADERS,
+    )
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert run_response.status_code == 200
+    assert run_response.json() == {"reply": "Mock reply: /tool echo hello from default skill"}
+
+
+def test_create_thread_rejects_unknown_skill(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "tools": {"allowed_local_tools": ["echo"]},
+                    "skills": {
+                        "items": [
+                            {
+                                "name": "support",
+                                "system_prompt": "Answer concisely.",
+                                "allowed_local_tools": ["echo"],
+                            }
+                        ]
+                    },
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+
+    response = client.post("/threads", json={"skill_name": "missing"}, headers=AUTH_HEADERS)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unknown skill 'missing' for tenant 'tenant-1'"
 
 
 def test_admin_api_requires_admin_access(tmp_path: Path) -> None:
@@ -607,17 +709,10 @@ def test_store_mode_fails_closed_without_tenant_config(tmp_path: Path) -> None:
         create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store")
     )
 
-    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
-    client.post(
-        f"/threads/{thread_id}/messages",
-        json={"content": "hello"},
-        headers=AUTH_HEADERS,
-    )
+    create_response = client.post("/threads", headers=AUTH_HEADERS)
 
-    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
-
-    assert run_response.status_code == 403
-    assert run_response.json()["detail"] == "Tenant 'tenant-1' has no execution configuration"
+    assert create_response.status_code == 403
+    assert create_response.json()["detail"] == "Tenant 'tenant-1' has no execution configuration"
 
 
 def test_store_mode_requires_encryption_key_when_using_env_admin_store(

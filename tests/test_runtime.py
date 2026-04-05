@@ -4,6 +4,11 @@ from datetime import datetime
 
 from fastapi import HTTPException
 
+from app.execution import (
+    InMemoryTenantExecutionResolver,
+    TenantExecutionContext,
+    parse_tenant_execution_config,
+)
 from app.llm import MockLLMAdapter
 from app.models import LLMResponse, Message, MessageRole, Principal, ThreadStatus, ToolCall
 from app.runtime import RUNTIME_SYSTEM_PROMPT, AgentRuntime
@@ -441,3 +446,99 @@ def test_runtime_hides_cross_tenant_thread_access() -> None:
         assert exc.detail == f"Thread '{thread.thread_id}' not found"
     else:  # pragma: no cover - assertion guard
         raise AssertionError("Expected HTTPException")
+
+
+def test_runtime_appends_skill_prompt_to_system_prompt() -> None:
+    seen_messages: list[Message] = []
+    config = parse_tenant_execution_config(
+        PRINCIPAL.tenant_id,
+        {
+            "llm": {"provider": "mock"},
+            "tools": {"allowed_local_tools": ["echo"]},
+            "skills": {
+                "items": [
+                    {
+                        "name": "support",
+                        "system_prompt": "Answer as a concise support agent.",
+                        "allowed_local_tools": ["echo"],
+                    }
+                ]
+            },
+        },
+    )
+
+    class InspectingLLM:
+        async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+            nonlocal seen_messages
+            seen_messages = messages
+            return LLMResponse(content="ok")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    store = InMemoryThreadStore()
+    resolver = InMemoryTenantExecutionResolver(
+        {PRINCIPAL.tenant_id: config},
+        default_context=None,
+    )
+    resolver._contexts[PRINCIPAL.tenant_id] = TenantExecutionContext(
+        llm_adapter=InspectingLLM(),
+        tool_registry=build_local_tool_registry(allowed_tools=["echo"]),
+        config=config,
+    )
+    runtime = AgentRuntime(store=store, execution_resolver=resolver)
+    thread = store.create_thread(PRINCIPAL.tenant_id, skill_name="support")
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="hello",
+            created_by=PRINCIPAL.user_id,
+        ),
+    )
+
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert reply == "ok"
+    assert seen_messages[0].content == (
+        f"{RUNTIME_SYSTEM_PROMPT}\n\nAnswer as a concise support agent."
+    )
+
+
+def test_runtime_skill_can_narrow_tools_for_thread() -> None:
+    config = parse_tenant_execution_config(
+        PRINCIPAL.tenant_id,
+        {
+            "llm": {"provider": "mock"},
+            "tools": {"allowed_local_tools": ["echo", "calculator"]},
+            "skills": {
+                "items": [
+                    {
+                        "name": "math",
+                        "system_prompt": "Prefer exact arithmetic.",
+                        "allowed_local_tools": ["calculator"],
+                    }
+                ]
+            },
+        },
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        execution_resolver=InMemoryTenantExecutionResolver({PRINCIPAL.tenant_id: config}),
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id, skill_name="math")
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="/tool echo blocked by skill",
+            created_by=PRINCIPAL.user_id,
+        ),
+    )
+
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert reply == "Mock reply: /tool echo blocked by skill"

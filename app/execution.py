@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from app.admin_store import SQLiteTenantConfigStore
 from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter, build_llm_adapter_from_env
 from app.mcp import MCPServerConfig
-from app.tools import ToolRegistry, build_tool_registry, build_tool_registry_from_env
+from app.tools import LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry, build_tool_registry_from_env
 
 TENANT_EXECUTION_CONFIGS_ENV = "MINIGENT_TENANT_EXECUTION_CONFIGS"
 TENANT_CONFIG_SOURCE_ENV = "MINIGENT_TENANT_CONFIG_SOURCE"
@@ -42,6 +42,22 @@ class TenantExecutionConfig:
     tenant_id: str
     llm: TenantLLMConfig = field(default_factory=TenantLLMConfig)
     tools: TenantToolConfig = field(default_factory=TenantToolConfig)
+    skills: "TenantSkillsConfig" = field(default_factory=lambda: TenantSkillsConfig())
+
+
+@dataclass(frozen=True)
+class TenantSkillConfig:
+    name: str
+    system_prompt: str
+    description: str | None = None
+    allowed_local_tools: list[str] | None = None
+    mcp_server_names: list[str] | None = None
+
+
+@dataclass(frozen=True)
+class TenantSkillsConfig:
+    default_skill: str | None = None
+    items: list[TenantSkillConfig] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -275,15 +291,21 @@ def parse_tenant_execution_config(
 ) -> TenantExecutionConfig:
     llm_payload = payload.get("llm") or {}
     tools_payload = payload.get("tools") or {}
+    skills_payload = payload.get("skills") or {}
     if not isinstance(llm_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' llm config must be an object")
     if not isinstance(tools_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' tools config must be an object")
+    if not isinstance(skills_payload, dict):
+        raise RuntimeError(f"Tenant '{tenant_id}' skills config must be an object")
+
+    tool_config = _parse_tenant_tool_config(tenant_id, tools_payload)
 
     return TenantExecutionConfig(
         tenant_id=tenant_id,
         llm=_parse_tenant_llm_config(tenant_id, llm_payload),
-        tools=_parse_tenant_tool_config(tenant_id, tools_payload),
+        tools=tool_config,
+        skills=_parse_tenant_skills_config(tenant_id, skills_payload, tool_config),
     )
 
 
@@ -330,6 +352,82 @@ def _parse_tenant_tool_config(tenant_id: str, payload: dict[str, Any]) -> Tenant
         allowed_local_tools=allowed_local_tools,
         mcp_servers=[_parse_mcp_server_config(tenant_id, entry) for entry in mcp_servers_raw],
     )
+
+
+def _parse_tenant_skills_config(
+    tenant_id: str,
+    payload: dict[str, Any],
+    tool_config: TenantToolConfig,
+) -> TenantSkillsConfig:
+    default_skill = _optional_str(payload.get("default_skill") or payload.get("defaultSkill"))
+    items_raw = payload.get("items") or []
+    if not isinstance(items_raw, list):
+        raise RuntimeError(f"Tenant '{tenant_id}' skills.items must be an array")
+
+    allowed_local_tools = (
+        set(tool_config.allowed_local_tools) if tool_config.allowed_local_tools is not None else None
+    )
+    configured_mcp_server_names = {server.name for server in tool_config.mcp_servers}
+    seen_names: set[str] = set()
+    items: list[TenantSkillConfig] = []
+    for entry in items_raw:
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"Tenant '{tenant_id}' skills.items entries must be objects")
+        name = _required_non_empty_str(tenant_id, entry.get("name"), "skills.items[].name")
+        if name in seen_names:
+            raise RuntimeError(f"Tenant '{tenant_id}' skill '{name}' is defined more than once")
+        seen_names.add(name)
+        system_prompt = _required_non_empty_str(
+            tenant_id,
+            entry.get("system_prompt") or entry.get("systemPrompt"),
+            f"skill '{name}' system_prompt",
+        )
+        skill_allowed_local_tools = _optional_str_list(
+            tenant_id,
+            entry.get("allowed_local_tools") or entry.get("allowedLocalTools"),
+            f"skill '{name}' allowed_local_tools",
+        )
+        if skill_allowed_local_tools is not None:
+            unknown_tools = sorted(set(skill_allowed_local_tools) - LOCAL_TOOL_NAMES)
+            if unknown_tools:
+                raise RuntimeError(
+                    f"Tenant '{tenant_id}' skill '{name}' references unknown local tools: "
+                    + ", ".join(unknown_tools)
+                )
+            if allowed_local_tools is not None:
+                disallowed_tools = sorted(set(skill_allowed_local_tools) - allowed_local_tools)
+                if disallowed_tools:
+                    raise RuntimeError(
+                        f"Tenant '{tenant_id}' skill '{name}' local tools must be a subset of tenant tools: "
+                        + ", ".join(disallowed_tools)
+                    )
+        mcp_server_names = _optional_str_list(
+            tenant_id,
+            entry.get("mcp_server_names") or entry.get("mcpServerNames"),
+            f"skill '{name}' mcp_server_names",
+        )
+        if mcp_server_names is not None:
+            unknown_servers = sorted(set(mcp_server_names) - configured_mcp_server_names)
+            if unknown_servers:
+                raise RuntimeError(
+                    f"Tenant '{tenant_id}' skill '{name}' references unknown MCP servers: "
+                    + ", ".join(unknown_servers)
+                )
+        items.append(
+            TenantSkillConfig(
+                name=name,
+                description=_optional_str(entry.get("description")),
+                system_prompt=system_prompt,
+                allowed_local_tools=skill_allowed_local_tools,
+                mcp_server_names=mcp_server_names,
+            )
+        )
+
+    if default_skill is not None and default_skill not in seen_names:
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' skills.default_skill must reference a configured skill"
+        )
+    return TenantSkillsConfig(default_skill=default_skill, items=items)
 
 
 def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
@@ -387,6 +485,63 @@ def _optional_str(value: object) -> str | None:
         raise RuntimeError("Expected string value")
     stripped = value.strip()
     return stripped or None
+
+
+def _required_non_empty_str(tenant_id: str, value: object, label: str) -> str:
+    try:
+        parsed = _optional_str(value)
+    except RuntimeError as exc:
+        raise RuntimeError(f"Tenant '{tenant_id}' {label} must be a string") from exc
+    if parsed is None:
+        raise RuntimeError(f"Tenant '{tenant_id}' {label} must be a non-empty string")
+    return parsed
+
+
+def _optional_str_list(tenant_id: str, value: object, label: str) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise RuntimeError(f"Tenant '{tenant_id}' {label} must be an array of strings")
+    return list(value)
+
+
+def get_skill_config(
+    config: TenantExecutionConfig,
+    skill_name: str | None = None,
+) -> TenantSkillConfig | None:
+    resolved_skill_name = skill_name or config.skills.default_skill
+    if resolved_skill_name is None:
+        return None
+    for skill in config.skills.items:
+        if skill.name == resolved_skill_name:
+            return skill
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unknown skill '{resolved_skill_name}' for tenant '{config.tenant_id}'",
+    )
+
+
+def build_tool_registry_for_skill(
+    config: TenantExecutionConfig,
+    skill_name: str | None = None,
+) -> ToolRegistry:
+    skill = get_skill_config(config, skill_name)
+    allowed_local_tools = config.tools.allowed_local_tools
+    # Skills only narrow tenant permissions for a thread. They never expand the
+    # tenant-level local tool or MCP server allowlists.
+    if skill is not None and skill.allowed_local_tools is not None:
+        if allowed_local_tools is None:
+            allowed_local_tools = list(skill.allowed_local_tools)
+        else:
+            allowed_local_tools = sorted(set(allowed_local_tools) & set(skill.allowed_local_tools))
+    mcp_servers = config.tools.mcp_servers
+    if skill is not None and skill.mcp_server_names is not None:
+        allowed_mcp_server_names = set(skill.mcp_server_names)
+        mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
+    return build_tool_registry(
+        mcp_server_configs=mcp_servers,
+        allowed_local_tools=allowed_local_tools,
+    )
 
 
 def redact_tenant_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:

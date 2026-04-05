@@ -155,4 +155,17 @@ def _serialize_config_payload(config: TenantExecutionConfig) -> dict[str, Any]:
                 for server in config.tools.mcp_servers
             ],
         },
+        "skills": {
+            "default_skill": config.skills.default_skill,
+            "items": [
+                {
+                    "name": skill.name,
+                    "description": skill.description,
+                    "system_prompt": skill.system_prompt,
+                    "allowed_local_tools": skill.allowed_local_tools,
+                    "mcp_server_names": skill.mcp_server_names,
+                }
+                for skill in config.skills.items
+            ],
+        },
     }

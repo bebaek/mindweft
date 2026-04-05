@@ -13,9 +13,9 @@ class InMemoryThreadStore:
         self._messages: dict[str, list[Message]] = {}
         self._lock = Lock()
 
-    def create_thread(self, tenant_id: str) -> Thread:
+    def create_thread(self, tenant_id: str, *, skill_name: str | None = None) -> Thread:
         with self._lock:
-            thread = Thread(tenant_id=tenant_id)
+            thread = Thread(tenant_id=tenant_id, skill_name=skill_name)
             self._threads[thread.thread_id] = thread
             self._messages[thread.thread_id] = []
             return thread
@@ -44,6 +44,10 @@ class InMemoryThreadStore:
             thread.status = status
             thread.updated_at = utc_now()
             return thread
+
+    def get_thread(self, tenant_id: str, thread_id: str) -> Thread:
+        with self._lock:
+            return self._require_thread(tenant_id, thread_id)
 
     def start_run(self, tenant_id: str, thread_id: str) -> Thread:
         with self._lock:

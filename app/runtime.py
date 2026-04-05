@@ -5,7 +5,12 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from app.execution import FixedTenantExecutionResolver, TenantExecutionResolver
+from app.execution import (
+    FixedTenantExecutionResolver,
+    TenantExecutionResolver,
+    build_tool_registry_for_skill,
+    get_skill_config,
+)
 from app.llm import LLMAdapter, serialize_tool_result
 from app.models import LLMResponse, Message, MessageRole, Principal, ThreadStatus
 from app.store import InMemoryThreadStore
@@ -43,11 +48,18 @@ class AgentRuntime:
         self._store.start_run(principal.tenant_id, thread_id)
         failed_tool_calls: set[str] = set()
         execution = self._execution_resolver.resolve(principal.tenant_id)
+        thread = self._store.get_thread(principal.tenant_id, thread_id)
+        skill = get_skill_config(execution.config, thread.skill_name)
+        tool_registry = (
+            build_tool_registry_for_skill(execution.config, thread.skill_name)
+            if skill is not None
+            else execution.tool_registry
+        )
         try:
             for _ in range(self._max_iterations):
-                messages = self._messages_for_llm(principal, thread_id)
+                messages = self._messages_for_llm(principal, thread_id, skill_prompt=skill.system_prompt if skill else None)
                 response = await execution.llm_adapter.generate(
-                    messages, execution.tool_registry.specs()
+                    messages, tool_registry.specs()
                 )
                 if response.tool_call is not None:
                     await self._handle_tool_call(
@@ -55,7 +67,7 @@ class AgentRuntime:
                         thread_id,
                         response,
                         failed_tool_calls,
-                        tool_registry=execution.tool_registry,
+                        tool_registry=tool_registry,
                     )
                     continue
 
@@ -137,9 +149,18 @@ class AgentRuntime:
             )
         )
 
-    def _messages_for_llm(self, principal: Principal, thread_id: str) -> list[Message]:
+    def _messages_for_llm(
+        self,
+        principal: Principal,
+        thread_id: str,
+        *,
+        skill_prompt: str | None = None,
+    ) -> list[Message]:
+        system_prompt = RUNTIME_SYSTEM_PROMPT
+        if skill_prompt:
+            system_prompt = f"{system_prompt}\n\n{skill_prompt}"
         return [
-            Message(thread_id=thread_id, role=MessageRole.SYSTEM, content=RUNTIME_SYSTEM_PROMPT),
+            Message(thread_id=thread_id, role=MessageRole.SYSTEM, content=system_prompt),
             *self._store.list_messages(principal.tenant_id, thread_id),
         ]
 

@@ -290,6 +290,60 @@ To continue an existing thread:
 env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py --thread-id <thread_id> "follow up"
 ```
 
+To create a thread with a specific skill:
+
+```bash
+env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py --skill-name math "/tool echo blocked by skill"
+```
+
+## Skills Demo
+
+Skills are execution overlays, not independent permission grants. Tenant tool config defines the
+maximum available tools and MCP servers. When a thread activates a skill, the runtime narrows the
+effective tool and MCP access to the intersection of the tenant configuration and the skill
+allowlists. Skills can reduce access for a thread, but they cannot expand access beyond the tenant
+configuration.
+
+Use this tenant config with the mock adapter to demo default and explicit skills:
+
+```dotenv
+MINIGENT_AUTH_MODE=dev-headers
+MINIGENT_TENANT_EXECUTION_CONFIGS={
+  "demo-tenant":{
+    "llm":{"provider":"mock"},
+    "tools":{"allowed_local_tools":["echo","calculator","current_time"]},
+    "skills":{
+      "default_skill":"support",
+      "items":[
+        {
+          "name":"support",
+          "system_prompt":"Answer as a concise support agent.",
+          "allowed_local_tools":["echo","current_time"]
+        },
+        {
+          "name":"math",
+          "system_prompt":"Prefer exact arithmetic over estimation.",
+          "allowed_local_tools":["calculator"]
+        }
+      ]
+    }
+  }
+}
+```
+
+With the server running:
+
+```bash
+env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py --tenant-id demo-tenant "/tool echo hello from support"
+env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py --tenant-id demo-tenant --skill-name math "/tool echo blocked by skill"
+env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py --tenant-id demo-tenant --skill-name missing "hello"
+```
+
+Expected results:
+- Default `support` skill allows `echo`, so the reply includes a tool result.
+- `math` narrows tool access, so `/tool echo ...` falls back to a plain mock reply.
+- Unknown skills are rejected during thread creation with `400`.
+
 ## Example flow
 
 ```bash

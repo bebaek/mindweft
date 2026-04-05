@@ -24,6 +24,11 @@ def parse_args() -> argparse.Namespace:
         help="Existing thread to continue. If omitted, a new thread is created.",
     )
     parser.add_argument(
+        "--skill-name",
+        default=None,
+        help="Skill to apply when creating a new thread.",
+    )
+    parser.add_argument(
         "--user-id",
         default="demo-user",
         help="Authenticated user ID sent as trusted headers when --api-token is not used.",
@@ -82,10 +87,17 @@ def request_json(
         raise SystemExit(f"{method} {url} failed: {exc.reason}") from exc
 
 
-def ensure_thread(base_url: str, thread_id: str | None, headers: dict[str, str] | None = None) -> str:
+def ensure_thread(
+    base_url: str,
+    thread_id: str | None,
+    *,
+    skill_name: str | None = None,
+    headers: dict[str, str] | None = None,
+) -> str:
     if thread_id:
         return thread_id
-    response = request_json("POST", f"{base_url}/threads", headers=headers)
+    payload = {"skill_name": skill_name} if skill_name is not None else None
+    response = request_json("POST", f"{base_url}/threads", payload=payload, headers=headers)
     return response["thread_id"]
 
 
@@ -137,9 +149,16 @@ def main() -> int:
             f"principal: user_id={args.user_id} tenant_id={args.tenant_id} admin={'true' if args.admin else 'false'}"
         )
 
-    thread_id = ensure_thread(base_url, args.thread_id, headers=request_headers)
+    thread_id = ensure_thread(
+        base_url,
+        args.thread_id,
+        skill_name=args.skill_name,
+        headers=request_headers,
+    )
 
     print(f"thread_id={thread_id}")
+    if args.skill_name is not None:
+        print(f"skill_name={args.skill_name}")
     for content in args.messages:
         request_json(
             "POST",

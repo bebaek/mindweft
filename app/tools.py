@@ -20,6 +20,8 @@ from app.redaction import sanitize_value_for_logging
 
 logger = logging.getLogger(__name__)
 
+LOCAL_TOOL_NAMES = {"echo", "current_time", "fetch_url", "sleep", "calculator"}
+
 _CALCULATOR_BINARY_OPERATORS: dict[type[ast.operator], Callable[[float, float], float]] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
