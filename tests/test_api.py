@@ -16,6 +16,9 @@ OTHER_TENANT_HEADERS = {
     "X-Minigent-Tenant-Id": "tenant-2",
 }
 
+TOKEN_HEADERS = {"Authorization": "Bearer token-1"}
+OTHER_TOKEN_HEADERS = {"Authorization": "Bearer token-2"}
+
 
 def test_thread_lifecycle_endpoints() -> None:
     client = TestClient(
@@ -151,3 +154,61 @@ def test_thread_endpoints_hide_cross_tenant_access() -> None:
     response = client.get(f"/threads/{thread_id}/messages", headers=OTHER_TENANT_HEADERS)
 
     assert response.status_code == 404
+
+
+def test_thread_endpoints_accept_bearer_token_auth(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_AUTH_TOKENS",
+        (
+            '{"token-1":{"user_id":"user-1","tenant_id":"tenant-1"},'
+            '"token-2":{"user_id":"user-2","tenant_id":"tenant-2"}}'
+        ),
+    )
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    create_response = client.post("/threads", headers=TOKEN_HEADERS)
+    assert create_response.status_code == 200
+    thread_id = create_response.json()["thread_id"]
+
+    add_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "hello with token"},
+        headers=TOKEN_HEADERS,
+    )
+    assert add_response.status_code == 200
+    assert add_response.json()["created_by"] == "user-1"
+
+    cross_tenant = client.get(f"/threads/{thread_id}/messages", headers=OTHER_TOKEN_HEADERS)
+    assert cross_tenant.status_code == 404
+
+
+def test_thread_endpoints_require_bearer_token_when_tokens_are_configured(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_AUTH_TOKENS",
+        '{"token-1":{"user_id":"user-1","tenant_id":"tenant-1"}}',
+    )
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    response = client.post("/threads", headers=AUTH_HEADERS)
+
+    assert response.status_code == 401
+    assert "Missing bearer token" in response.json()["detail"]
+
+
+def test_thread_endpoints_reject_invalid_bearer_token(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_AUTH_TOKENS",
+        '{"token-1":{"user_id":"user-1","tenant_id":"tenant-1"}}',
+    )
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    response = client.post("/threads", headers={"Authorization": "Bearer bad-token"})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid bearer token"

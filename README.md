@@ -26,7 +26,19 @@ You can put provider settings in a local `.env` file. Start from [.env.example](
 
 ## Authentication
 
-Phase 1 multi-user support uses trusted request headers to resolve the caller principal:
+Phase 2 multi-user support prefers bearer-token auth using `MINIGENT_AUTH_TOKENS`, a JSON object that maps bearer tokens to principals:
+
+```dotenv
+MINIGENT_AUTH_TOKENS={"dev-token":{"user_id":"demo-user","tenant_id":"demo-tenant","is_admin":false}}
+```
+
+Send that token with:
+
+```bash
+Authorization: Bearer dev-token
+```
+
+If `MINIGENT_AUTH_TOKENS` is not configured, the service falls back to trusted development headers:
 
 ```bash
 X-Minigent-User-Id: user-123
@@ -34,7 +46,7 @@ X-Minigent-Tenant-Id: tenant-abc
 X-Minigent-Admin: false
 ```
 
-All thread lifecycle endpoints require `X-Minigent-User-Id` and `X-Minigent-Tenant-Id`. Threads are isolated by `tenant_id`, and cross-tenant access returns `404`.
+When bearer tokens are configured, thread lifecycle endpoints require `Authorization: Bearer <token>`. Threads are isolated by `tenant_id`, and cross-tenant access returns `404`.
 
 ## Provider Config
 
@@ -176,29 +188,24 @@ env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py --thread-id <thr
 
 ```bash
 curl -X POST http://127.0.0.1:8000/threads \
-  -H 'X-Minigent-User-Id: user-123' \
-  -H 'X-Minigent-Tenant-Id: tenant-abc'
+  -H 'Authorization: Bearer dev-token'
 curl -X POST http://127.0.0.1:8000/threads/<thread_id>/messages \
-  -H 'X-Minigent-User-Id: user-123' \
-  -H 'X-Minigent-Tenant-Id: tenant-abc' \
+  -H 'Authorization: Bearer dev-token' \
   -H 'content-type: application/json' \
   -d '{"content":"hello"}'
 curl -X POST http://127.0.0.1:8000/threads/<thread_id>/run \
-  -H 'X-Minigent-User-Id: user-123' \
-  -H 'X-Minigent-Tenant-Id: tenant-abc'
+  -H 'Authorization: Bearer dev-token'
 ```
 
 To force a tool call through the mock adapter:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/threads/<thread_id>/messages \
-  -H 'X-Minigent-User-Id: user-123' \
-  -H 'X-Minigent-Tenant-Id: tenant-abc' \
+  -H 'Authorization: Bearer dev-token' \
   -H 'content-type: application/json' \
   -d '{"content":"/tool echo hello from tool"}'
 curl -X POST http://127.0.0.1:8000/threads/<thread_id>/run \
-  -H 'X-Minigent-User-Id: user-123' \
-  -H 'X-Minigent-Tenant-Id: tenant-abc'
+  -H 'Authorization: Bearer dev-token'
 ```
 
 Local tools currently include:

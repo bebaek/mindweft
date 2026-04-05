@@ -26,17 +26,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--user-id",
         default="demo-user",
-        help="Authenticated user ID sent to the API.",
+        help="Authenticated user ID sent as trusted headers when --api-token is not used.",
     )
     parser.add_argument(
         "--tenant-id",
         default="demo-tenant",
-        help="Authenticated tenant ID sent to the API.",
+        help="Authenticated tenant ID sent as trusted headers when --api-token is not used.",
     )
     parser.add_argument(
         "--admin",
         action="store_true",
-        help="Mark the request principal as an admin.",
+        help="Mark the trusted-header principal as an admin when --api-token is not used.",
+    )
+    parser.add_argument(
+        "--api-token",
+        default=None,
+        help="Bearer token sent via Authorization header. Prefer this when MINIGENT_AUTH_TOKENS is configured.",
     )
     parser.add_argument(
         "--trace",
@@ -99,13 +104,19 @@ def build_principal_headers(user_id: str, tenant_id: str, is_admin: bool) -> dic
     }
 
 
+def build_auth_headers(args: argparse.Namespace) -> dict[str, str]:
+    if args.api_token:
+        return {"Authorization": f"Bearer {args.api_token}"}
+    return build_principal_headers(args.user_id, args.tenant_id, args.admin)
+
+
 def main() -> int:
     args = parse_args()
     base_url = args.base_url.rstrip("/")
     trace_id = secrets.token_hex(16) if args.trace else None
     request_headers = {
         **build_trace_headers(trace_id),
-        **build_principal_headers(args.user_id, args.tenant_id, args.admin),
+        **build_auth_headers(args),
     }
 
     config = request_json("GET", f"{base_url}/config", headers=build_trace_headers(trace_id))
@@ -119,9 +130,12 @@ def main() -> int:
     if trace_id is not None:
         print(f"trace_id={trace_id}")
         print("trace: sent via traceparent header; look for this trace_id in JSON logs or your trace backend")
-    print(
-        f"principal: user_id={args.user_id} tenant_id={args.tenant_id} admin={'true' if args.admin else 'false'}"
-    )
+    if args.api_token:
+        print("principal: bearer token auth")
+    else:
+        print(
+            f"principal: user_id={args.user_id} tenant_id={args.tenant_id} admin={'true' if args.admin else 'false'}"
+        )
 
     thread_id = ensure_thread(base_url, args.thread_id, headers=request_headers)
 
