@@ -1,6 +1,14 @@
+import json
+from datetime import datetime, timedelta, timezone
+
+import jwt
+import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from jwt.algorithms import RSAAlgorithm
 
+from app import auth as auth_module
 from app.llm import LLMAdapter, MockLLMAdapter
 from app.main import create_app
 from app.models import LLMResponse, Message, MessageRole, ToolCall
@@ -18,6 +26,17 @@ OTHER_TENANT_HEADERS = {
 
 TOKEN_HEADERS = {"Authorization": "Bearer token-1"}
 OTHER_TOKEN_HEADERS = {"Authorization": "Bearer token-2"}
+
+
+def _jwt_claims(*, issuer: str = "https://issuer.example", audience: str = "minigent-api") -> dict[str, object]:
+    return {
+        "sub": "jwt-user",
+        "tenant_id": "jwt-tenant",
+        "is_admin": True,
+        "iss": issuer,
+        "aud": audience,
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+    }
 
 
 def test_thread_lifecycle_endpoints() -> None:
@@ -158,6 +177,10 @@ def test_thread_endpoints_hide_cross_tenant_access() -> None:
 
 def test_thread_endpoints_accept_bearer_token_auth(monkeypatch) -> None:
     monkeypatch.setenv(
+        "MINIGENT_AUTH_MODE",
+        "static-tokens",
+    )
+    monkeypatch.setenv(
         "MINIGENT_AUTH_TOKENS",
         (
             '{"token-1":{"user_id":"user-1","tenant_id":"tenant-1"},'
@@ -186,6 +209,10 @@ def test_thread_endpoints_accept_bearer_token_auth(monkeypatch) -> None:
 
 def test_thread_endpoints_require_bearer_token_when_tokens_are_configured(monkeypatch) -> None:
     monkeypatch.setenv(
+        "MINIGENT_AUTH_MODE",
+        "static-tokens",
+    )
+    monkeypatch.setenv(
         "MINIGENT_AUTH_TOKENS",
         '{"token-1":{"user_id":"user-1","tenant_id":"tenant-1"}}',
     )
@@ -201,6 +228,10 @@ def test_thread_endpoints_require_bearer_token_when_tokens_are_configured(monkey
 
 def test_thread_endpoints_reject_invalid_bearer_token(monkeypatch) -> None:
     monkeypatch.setenv(
+        "MINIGENT_AUTH_MODE",
+        "static-tokens",
+    )
+    monkeypatch.setenv(
         "MINIGENT_AUTH_TOKENS",
         '{"token-1":{"user_id":"user-1","tenant_id":"tenant-1"}}',
     )
@@ -212,3 +243,77 @@ def test_thread_endpoints_reject_invalid_bearer_token(monkeypatch) -> None:
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid bearer token"
+
+
+def test_thread_endpoints_accept_hs256_jwt(monkeypatch: pytest.MonkeyPatch) -> None:
+    shared_secret = "test-secret-0123456789abcdefghijklmnopqrstuvwxyz"
+    monkeypatch.setenv("MINIGENT_AUTH_MODE", "jwt")
+    monkeypatch.setenv("MINIGENT_JWT_ALGORITHMS", '["HS256"]')
+    monkeypatch.setenv("MINIGENT_JWT_SHARED_SECRET", shared_secret)
+    monkeypatch.setenv("MINIGENT_JWT_ISSUER", "https://issuer.example")
+    monkeypatch.setenv("MINIGENT_JWT_AUDIENCE", "minigent-api")
+
+    token = jwt.encode(_jwt_claims(), shared_secret, algorithm="HS256")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    create_response = client.post("/threads", headers={"Authorization": f"Bearer {token}"})
+
+    assert create_response.status_code == 200
+
+
+def test_thread_endpoints_reject_jwt_with_wrong_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
+    shared_secret = "test-secret-0123456789abcdefghijklmnopqrstuvwxyz"
+    monkeypatch.setenv("MINIGENT_AUTH_MODE", "jwt")
+    monkeypatch.setenv("MINIGENT_JWT_ALGORITHMS", '["HS256"]')
+    monkeypatch.setenv("MINIGENT_JWT_SHARED_SECRET", shared_secret)
+    monkeypatch.setenv("MINIGENT_JWT_ISSUER", "https://issuer.example")
+    monkeypatch.setenv("MINIGENT_JWT_AUDIENCE", "minigent-api")
+
+    token = jwt.encode(
+        _jwt_claims(issuer="https://other-issuer.example"),
+        shared_secret,
+        algorithm="HS256",
+    )
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    response = client.post("/threads", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 401
+    assert "Invalid JWT" in response.json()["detail"]
+
+
+def test_thread_endpoints_accept_rs256_jwt_via_jwks(monkeypatch: pytest.MonkeyPatch) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_key = private_key.public_key()
+    jwk = json.loads(RSAAlgorithm.to_jwk(public_key))
+    jwk["kid"] = "test-key"
+
+    async def fake_fetch_jwks_document(url: str) -> dict[str, object]:
+        assert url == "https://issuer.example/.well-known/jwks.json"
+        return {"keys": [jwk]}
+
+    monkeypatch.setenv("MINIGENT_AUTH_MODE", "jwt")
+    monkeypatch.setenv("MINIGENT_JWT_ALGORITHMS", '["RS256"]')
+    monkeypatch.setenv("MINIGENT_JWT_JWKS_URL", "https://issuer.example/.well-known/jwks.json")
+    monkeypatch.setenv("MINIGENT_JWT_ISSUER", "https://issuer.example")
+    monkeypatch.setenv("MINIGENT_JWT_AUDIENCE", "minigent-api")
+    monkeypatch.setattr(auth_module, "_fetch_jwks_document", fake_fetch_jwks_document)
+    auth_module._JWKS_CACHE.clear()
+
+    token = jwt.encode(
+        _jwt_claims(),
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "test-key"},
+    )
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    create_response = client.post("/threads", headers={"Authorization": f"Bearer {token}"})
+
+    assert create_response.status_code == 200

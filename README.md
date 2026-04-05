@@ -26,9 +26,48 @@ You can put provider settings in a local `.env` file. Start from [.env.example](
 
 ## Authentication
 
-Phase 2 multi-user support prefers bearer-token auth using `MINIGENT_AUTH_TOKENS`, a JSON object that maps bearer tokens to principals:
+Authentication is controlled by `MINIGENT_AUTH_MODE`:
+
+- `dev-headers`: trust `X-Minigent-*` headers for local development
+- `static-tokens`: resolve bearer tokens from `MINIGENT_AUTH_TOKENS`
+- `jwt`: verify bearer JWTs and map claims into a `Principal`
+
+### JWT Mode
+
+Production-oriented mode uses JWT verification:
 
 ```dotenv
+MINIGENT_AUTH_MODE=jwt
+MINIGENT_JWT_ISSUER=https://issuer.example
+MINIGENT_JWT_AUDIENCE=minigent-api
+MINIGENT_JWT_ALGORITHMS=["RS256"]
+MINIGENT_JWT_JWKS_URL=https://issuer.example/.well-known/jwks.json
+```
+
+For local JWT testing you can use `HS256`:
+
+```dotenv
+MINIGENT_AUTH_MODE=jwt
+MINIGENT_JWT_ISSUER=minigent-dev
+MINIGENT_JWT_AUDIENCE=minigent-api
+MINIGENT_JWT_ALGORITHMS=["HS256"]
+MINIGENT_JWT_SHARED_SECRET=replace-with-a-long-dev-secret
+```
+
+JWT claim mapping defaults to:
+
+```text
+sub -> user_id
+tenant_id -> tenant_id
+is_admin -> is_admin
+```
+
+### Static Token Mode
+
+Static bearer-token auth is still available for simple environments:
+
+```dotenv
+MINIGENT_AUTH_MODE=static-tokens
 MINIGENT_AUTH_TOKENS={"dev-token":{"user_id":"demo-user","tenant_id":"demo-tenant","is_admin":false}}
 ```
 
@@ -38,15 +77,18 @@ Send that token with:
 Authorization: Bearer dev-token
 ```
 
-If `MINIGENT_AUTH_TOKENS` is not configured, the service falls back to trusted development headers:
+### Development Header Mode
+
+For local development without token verification:
 
 ```bash
+MINIGENT_AUTH_MODE=dev-headers
 X-Minigent-User-Id: user-123
 X-Minigent-Tenant-Id: tenant-abc
 X-Minigent-Admin: false
 ```
 
-When bearer tokens are configured, thread lifecycle endpoints require `Authorization: Bearer <token>`. Threads are isolated by `tenant_id`, and cross-tenant access returns `404`.
+Thread lifecycle endpoints require the auth material for the active mode. Threads are isolated by `tenant_id`, and cross-tenant access returns `404`.
 
 ## Provider Config
 
