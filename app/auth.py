@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 import jwt
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 from jwt import InvalidTokenError, PyJWK
 
 from app.models import Principal
@@ -74,6 +74,14 @@ async def require_principal(
         f"Unsupported {AUTH_MODE_ENV} '{settings.mode}'. Expected "
         f"'{AUTH_MODE_DEV_HEADERS}', '{AUTH_MODE_STATIC_TOKENS}', or '{AUTH_MODE_JWT}'."
     )
+
+
+async def require_admin_principal(
+    principal: Principal = Depends(require_principal),
+) -> Principal:
+    if not principal.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return principal
 
 
 def _parse_bool_header(value: str | None) -> bool:

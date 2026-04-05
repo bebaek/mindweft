@@ -120,6 +120,33 @@ Supported fields:
 
 If `MINIGENT_TENANT_EXECUTION_CONFIGS` is unset, Minigent falls back to one global execution config from the existing process env. If it is set, tenants without an explicit config and without a `*` default entry are rejected at run time.
 
+## Admin API
+
+The admin API is an optional control plane for tenant execution config backed by SQLite.
+
+Enable it with:
+
+```dotenv
+MINIGENT_ADMIN_DB_PATH=.data/minigent-admin.db
+```
+
+Admin endpoints:
+
+- `GET /admin/tenants`
+- `GET /admin/tenants/{tenant_id}/execution-config`
+- `PUT /admin/tenants/{tenant_id}/execution-config`
+- `DELETE /admin/tenants/{tenant_id}/execution-config`
+
+Admin access requires an authenticated principal with `is_admin=true`. In `dev-headers` mode that means:
+
+```bash
+X-Minigent-User-Id: admin-user
+X-Minigent-Tenant-Id: admin-tenant
+X-Minigent-Admin: true
+```
+
+Secrets such as LLM API keys and MCP headers are accepted on writes but redacted in read responses. Updating or deleting a tenant config invalidates the in-process execution cache for that tenant so new runs pick up the change immediately.
+
 ## Provider Config
 
 `mock` remains the default, so the service starts without credentials.

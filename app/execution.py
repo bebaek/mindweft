@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from app.admin_store import SQLiteTenantConfigStore
 from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter, build_llm_adapter_from_env
 from app.mcp import MCPServerConfig
 from app.tools import ToolRegistry, build_tool_registry, build_tool_registry_from_env
@@ -52,6 +53,9 @@ class TenantExecutionResolver:
 
     def describe(self, tenant_id: str | None = None) -> dict[str, object]:
         raise NotImplementedError
+
+    def invalidate(self, tenant_id: str) -> None:
+        _ = tenant_id
 
 
 class FixedTenantExecutionResolver(TenantExecutionResolver):
@@ -146,6 +150,69 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
             ),
         }
 
+    def invalidate(self, tenant_id: str) -> None:
+        with self._lock:
+            self._contexts.pop(tenant_id, None)
+
+
+class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
+    def __init__(
+        self,
+        store: SQLiteTenantConfigStore,
+        *,
+        fallback_resolver: TenantExecutionResolver | None = None,
+    ) -> None:
+        self._store = store
+        self._fallback_resolver = fallback_resolver
+        self._contexts: dict[str, TenantExecutionContext] = {}
+        self._lock = Lock()
+
+    def resolve(self, tenant_id: str) -> TenantExecutionContext:
+        with self._lock:
+            context = self._contexts.get(tenant_id)
+            if context is not None:
+                return context
+
+            payload = self._store.get_raw_config(tenant_id)
+            if payload is None:
+                if self._fallback_resolver is not None:
+                    return self._fallback_resolver.resolve(tenant_id)
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Tenant '{tenant_id}' has no execution configuration",
+                )
+
+            config = parse_tenant_execution_config(tenant_id, payload)
+            context = TenantExecutionContext(
+                llm_adapter=_build_llm_adapter(config.llm),
+                tool_registry=build_tool_registry(
+                    mcp_server_configs=config.tools.mcp_servers,
+                    allowed_local_tools=config.tools.allowed_local_tools,
+                ),
+                config=config,
+            )
+            self._contexts[tenant_id] = context
+            return context
+
+    def describe(self, tenant_id: str | None = None) -> dict[str, object]:
+        if tenant_id is not None:
+            context = self.resolve(tenant_id)
+            return {
+                "tenant_id": tenant_id,
+                "llm": context.llm_adapter.describe(),
+                "mcp_servers": context.tool_registry.mcp_servers(),
+                "local_tools": sorted(
+                    spec.name for spec in context.tool_registry.specs() if "." not in spec.name
+                ),
+            }
+        if self._fallback_resolver is not None:
+            return self._fallback_resolver.describe()
+        return {"tenant_id": None, "llm": None, "mcp_servers": [], "local_tools": []}
+
+    def invalidate(self, tenant_id: str) -> None:
+        with self._lock:
+            self._contexts.pop(tenant_id, None)
+
 
 def build_execution_resolver_from_env() -> TenantExecutionResolver:
     raw = os.getenv(TENANT_EXECUTION_CONFIGS_ENV, "").strip()
@@ -172,11 +239,11 @@ def build_execution_resolver_from_env() -> TenantExecutionResolver:
             raise RuntimeError(
                 f"{TENANT_EXECUTION_CONFIGS_ENV} values must be objects with llm/tools config"
             )
-        tenant_configs[tenant_id] = _parse_tenant_execution_config(tenant_id, value)
+        tenant_configs[tenant_id] = parse_tenant_execution_config(tenant_id, value)
     return InMemoryTenantExecutionResolver(tenant_configs)
 
 
-def _parse_tenant_execution_config(
+def parse_tenant_execution_config(
     tenant_id: str, payload: dict[str, Any]
 ) -> TenantExecutionConfig:
     llm_payload = payload.get("llm") or {}
@@ -293,3 +360,22 @@ def _optional_str(value: object) -> str | None:
         raise RuntimeError("Expected string value")
     stripped = value.strip()
     return stripped or None
+
+
+def redact_tenant_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    redacted = json.loads(json.dumps(payload))
+    llm = redacted.get("llm")
+    if isinstance(llm, dict) and llm.get("api_key"):
+        llm["api_key"] = "<redacted>"
+        llm["has_api_key"] = True
+    tools = redacted.get("tools")
+    if isinstance(tools, dict):
+        mcp_servers = tools.get("mcp_servers") or tools.get("mcpServers")
+        if isinstance(mcp_servers, list):
+            for server in mcp_servers:
+                if isinstance(server, dict):
+                    headers = server.get("headers")
+                    if isinstance(headers, dict):
+                        server["headers"] = {key: "<redacted>" for key in headers}
+                        server["has_headers"] = bool(headers)
+    return redacted

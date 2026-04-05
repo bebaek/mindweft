@@ -1,6 +1,8 @@
 import json
 from datetime import datetime, timedelta, timezone
 
+from pathlib import Path
+
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -22,6 +24,11 @@ AUTH_HEADERS = {
 OTHER_TENANT_HEADERS = {
     "X-Minigent-User-Id": "user-2",
     "X-Minigent-Tenant-Id": "tenant-2",
+}
+ADMIN_HEADERS = {
+    "X-Minigent-User-Id": "admin-user",
+    "X-Minigent-Tenant-Id": "admin-tenant",
+    "X-Minigent-Admin": "true",
 }
 
 TOKEN_HEADERS = {"Authorization": "Bearer token-1"}
@@ -389,3 +396,122 @@ def test_tenant_execution_config_rejects_missing_tenant_config(
 
     assert run_response.status_code == 403
     assert run_response.json()["detail"] == "Tenant 'tenant-2' has no execution configuration"
+
+
+def test_admin_api_requires_admin_access(tmp_path: Path) -> None:
+    client = TestClient(create_app(admin_store=_sqlite_store(tmp_path)))
+
+    response = client.get("/admin/tenants", headers=AUTH_HEADERS)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin access required"
+
+
+def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(admin_store=_sqlite_store(tmp_path)))
+    payload = {
+        "config": {
+            "llm": {
+                "provider": "mock",
+                "api_key": "secret-key",
+            },
+            "tools": {
+                "allowed_local_tools": ["echo"],
+                "mcp_servers": [
+                    {
+                        "name": "demo",
+                        "url": "https://example.com/mcp",
+                        "headers": {"Authorization": "Bearer token"},
+                    }
+                ],
+            },
+        }
+    }
+
+    put_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        json=payload,
+        headers=ADMIN_HEADERS,
+    )
+
+    assert put_response.status_code == 200
+    assert put_response.json()["config"]["llm"]["api_key"] == "<redacted>"
+    assert put_response.json()["config"]["llm"]["has_api_key"] is True
+    assert (
+        put_response.json()["config"]["tools"]["mcp_servers"][0]["headers"]["Authorization"]
+        == "<redacted>"
+    )
+
+    list_response = client.get("/admin/tenants", headers=ADMIN_HEADERS)
+    assert list_response.status_code == 200
+    assert list_response.json()["tenants"] == ["tenant-1"]
+
+    get_response = client.get(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+    )
+    assert get_response.status_code == 200
+    assert get_response.json()["config"]["llm"]["api_key"] == "<redacted>"
+
+
+def test_admin_api_updates_runtime_after_config_change(tmp_path: Path) -> None:
+    client = TestClient(create_app(admin_store=_sqlite_store(tmp_path)))
+
+    first_config = {
+        "config": {
+            "llm": {"provider": "mock"},
+            "tools": {"allowed_local_tools": ["echo"]},
+        }
+    }
+    second_config = {
+        "config": {
+            "llm": {"provider": "mock"},
+            "tools": {"allowed_local_tools": ["current_time"]},
+        }
+    }
+
+    client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        json=first_config,
+        headers=ADMIN_HEADERS,
+    )
+
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "/tool echo hello before update"},
+        headers=AUTH_HEADERS,
+    )
+    first_run = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    assert first_run.status_code == 200
+    assert first_run.json() == {"reply": 'Tool result: {"echo": "hello before update"}'}
+
+    client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        json=second_config,
+        headers=ADMIN_HEADERS,
+    )
+
+    next_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{next_thread_id}/messages",
+        json={"content": "/tool echo hello after update"},
+        headers=AUTH_HEADERS,
+    )
+    second_run = client.post(f"/threads/{next_thread_id}/run", headers=AUTH_HEADERS)
+    assert second_run.status_code == 200
+    assert second_run.json() == {"reply": "Mock reply: /tool echo hello after update"}
+
+    delete_response = client.delete(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+    )
+    assert delete_response.status_code == 204
+
+
+def _sqlite_store(tmp_path: Path):
+    from app.admin_store import SQLiteTenantConfigStore
+
+    return SQLiteTenantConfigStore(str(tmp_path / "tenant-configs.db"))

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from fastapi import Depends, FastAPI, Request
 
+from app.admin_api import admin_store_path_from_env, build_admin_router
+from app.admin_store import SQLiteTenantConfigStore
 from app.auth import require_principal
 from app.config import load_environment
 from app.execution import (
     FixedTenantExecutionResolver,
+    StoreBackedTenantExecutionResolver,
     TenantExecutionResolver,
     build_execution_resolver_from_env,
 )
@@ -34,22 +37,36 @@ def create_app(
     llm_adapter: LLMAdapter | None = None,
     tool_registry: ToolRegistry | None = None,
     execution_resolver: TenantExecutionResolver | None = None,
+    admin_store: SQLiteTenantConfigStore | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0")
     configure_tracing(app)
     app.state.store = InMemoryThreadStore()
+    if admin_store is None:
+        admin_db_path = admin_store_path_from_env()
+        if admin_db_path is not None:
+            admin_store = SQLiteTenantConfigStore(admin_db_path)
+    app.state.admin_store = admin_store
     if execution_resolver is None:
         if llm_adapter is not None or tool_registry is not None:
             adapter = llm_adapter or build_llm_adapter_from_env()
             registry = tool_registry or build_tool_registry_from_env()
             execution_resolver = FixedTenantExecutionResolver(adapter, registry)
         else:
-            execution_resolver = build_execution_resolver_from_env()
+            fallback_resolver = build_execution_resolver_from_env()
+            if admin_store is not None:
+                execution_resolver = StoreBackedTenantExecutionResolver(
+                    admin_store,
+                    fallback_resolver=fallback_resolver,
+                )
+            else:
+                execution_resolver = fallback_resolver
     app.state.execution_resolver = execution_resolver
     app.state.runtime = AgentRuntime(
         store=app.state.store,
         execution_resolver=execution_resolver,
     )
+    app.include_router(build_admin_router())
 
     @app.get("/health")
     async def health() -> dict[str, str]:
