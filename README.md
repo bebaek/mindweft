@@ -134,6 +134,7 @@ Enable it with:
 
 ```dotenv
 MINIGENT_ADMIN_DB_PATH=.data/minigent-admin.db
+MINIGENT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
 ```
 
 Admin endpoints:
@@ -151,7 +152,7 @@ X-Minigent-Tenant-Id: admin-tenant
 X-Minigent-Admin: true
 ```
 
-Secrets such as LLM API keys and MCP headers are accepted on writes but redacted in read responses. Updating or deleting a tenant config invalidates the in-process execution cache for that tenant so new runs pick up the change immediately.
+Secrets such as LLM API keys and MCP headers are accepted on writes but redacted in read responses. If `MINIGENT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`, `MINIGENT_ADMIN_ENCRYPTION_KEY` is required and those secrets are encrypted before being written to SQLite. Updating or deleting a tenant config invalidates the in-process execution cache for that tenant so new runs pick up the change immediately.
 
 ## Provider Config
 

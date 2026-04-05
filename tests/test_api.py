@@ -517,6 +517,57 @@ def test_admin_api_updates_runtime_after_config_change(tmp_path: Path) -> None:
     assert delete_response.status_code == 204
 
 
+def test_admin_store_encrypts_secrets_at_rest(tmp_path: Path) -> None:
+    db_path = tmp_path / "tenant-configs.db"
+    client = TestClient(
+        create_app(
+            admin_store=_sqlite_store(tmp_path, encryption_key="test-admin-encryption-key"),
+            tenant_config_source="store",
+        )
+    )
+
+    response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        json={
+            "config": {
+                "llm": {"provider": "mock", "api_key": "super-secret"},
+                "tools": {
+                    "mcp_servers": [
+                        {
+                            "name": "demo",
+                            "url": "https://example.com/mcp",
+                            "headers": {"Authorization": "Bearer secret-token"},
+                        }
+                    ]
+                },
+            }
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+
+    import sqlite3
+
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT config_json FROM tenant_execution_configs WHERE tenant_id = ?",
+            ("tenant-1",),
+        ).fetchone()
+
+    assert row is not None
+    stored_json = str(row[0])
+    assert "super-secret" not in stored_json
+    assert "secret-token" not in stored_json
+
+    get_response = client.get(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+    )
+    assert get_response.status_code == 200
+    assert get_response.json()["config"]["llm"]["api_key"] == "<redacted>"
+
+
 def test_store_with_defaults_uses_store_default_before_failing(
     tmp_path: Path,
 ) -> None:
@@ -569,7 +620,30 @@ def test_store_mode_fails_closed_without_tenant_config(tmp_path: Path) -> None:
     assert run_response.json()["detail"] == "Tenant 'tenant-1' has no execution configuration"
 
 
-def _sqlite_store(tmp_path: Path):
+def test_store_mode_requires_encryption_key_when_using_env_admin_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MINIGENT_ADMIN_DB_PATH", str(tmp_path / "tenant-configs.db"))
+    monkeypatch.delenv("MINIGENT_ADMIN_ENCRYPTION_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="MINIGENT_ADMIN_ENCRYPTION_KEY"):
+        create_app(tenant_config_source="store")
+
+
+def test_store_with_defaults_requires_encryption_key_when_using_env_admin_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MINIGENT_ADMIN_DB_PATH", str(tmp_path / "tenant-configs.db"))
+    monkeypatch.delenv("MINIGENT_ADMIN_ENCRYPTION_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="MINIGENT_ADMIN_ENCRYPTION_KEY"):
+        create_app(tenant_config_source="store-with-defaults")
+
+
+def _sqlite_store(tmp_path: Path, *, encryption_key: str | None = None):
     from app.admin_store import SQLiteTenantConfigStore
 
-    return SQLiteTenantConfigStore(str(tmp_path / "tenant-configs.db"))
+    return SQLiteTenantConfigStore(
+        str(tmp_path / "tenant-configs.db"),
+        encryption_key=encryption_key,
+    )

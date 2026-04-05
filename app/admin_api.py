@@ -16,6 +16,7 @@ from app.execution import (
 from app.models import Principal
 
 ADMIN_DB_PATH_ENV = "MINIGENT_ADMIN_DB_PATH"
+ADMIN_ENCRYPTION_KEY_ENV = "MINIGENT_ADMIN_ENCRYPTION_KEY"
 
 
 class AdminTenantListResponse(BaseModel):
@@ -105,6 +106,14 @@ def build_admin_router() -> APIRouter:
 
 def admin_store_path_from_env() -> str | None:
     value = os.getenv(ADMIN_DB_PATH_ENV)
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def admin_encryption_key_from_env() -> str | None:
+    value = os.getenv(ADMIN_ENCRYPTION_KEY_ENV)
     if value is None:
         return None
     stripped = value.strip()

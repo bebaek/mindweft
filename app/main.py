@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from fastapi import Depends, FastAPI, Request
 
-from app.admin_api import admin_store_path_from_env, build_admin_router
+from app.admin_api import (
+    admin_encryption_key_from_env,
+    admin_store_path_from_env,
+    build_admin_router,
+)
 from app.admin_store import SQLiteTenantConfigStore
 from app.auth import require_principal
 from app.config import load_environment
@@ -47,10 +51,14 @@ def create_app(
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0")
     configure_tracing(app)
     app.state.store = InMemoryThreadStore()
+    admin_encryption_key = admin_encryption_key_from_env()
     if admin_store is None:
         admin_db_path = admin_store_path_from_env()
         if admin_db_path is not None:
-            admin_store = SQLiteTenantConfigStore(admin_db_path)
+            admin_store = SQLiteTenantConfigStore(
+                admin_db_path,
+                encryption_key=admin_encryption_key,
+            )
     app.state.admin_store = admin_store
     if execution_resolver is None:
         if llm_adapter is not None or tool_registry is not None:
@@ -68,11 +76,21 @@ def create_app(
                         "MINIGENT_ADMIN_DB_PATH or admin_store is required when "
                         "MINIGENT_TENANT_CONFIG_SOURCE=store"
                     )
+                if admin_encryption_key is None and admin_store_path_from_env() is not None:
+                    raise RuntimeError(
+                        "MINIGENT_ADMIN_ENCRYPTION_KEY is required when "
+                        "MINIGENT_TENANT_CONFIG_SOURCE=store"
+                    )
                 execution_resolver = StoreBackedTenantExecutionResolver(admin_store)
             elif config_source == TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS:
                 if admin_store is None:
                     raise RuntimeError(
                         "MINIGENT_ADMIN_DB_PATH or admin_store is required when "
+                        "MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults"
+                    )
+                if admin_encryption_key is None and admin_store_path_from_env() is not None:
+                    raise RuntimeError(
+                        "MINIGENT_ADMIN_ENCRYPTION_KEY is required when "
                         "MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults"
                     )
                 execution_resolver = StoreBackedTenantExecutionResolver(

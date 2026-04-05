@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 from pathlib import Path
 from threading import Lock
+from typing import TypeGuard
 from typing import Any
+
+from cryptography.fernet import Fernet, InvalidToken
+
+SECRET_WRAPPER_KEY = "__secret__"
 
 
 class SQLiteTenantConfigStore:
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, *, encryption_key: str | None = None) -> None:
         self._db_path = Path(db_path)
         self._lock = Lock()
+        self._fernet = _build_fernet(encryption_key)
         self._initialize()
 
     def list_tenants(self) -> list[str]:
@@ -31,12 +38,14 @@ class SQLiteTenantConfigStore:
         payload = json.loads(str(row[0]))
         if not isinstance(payload, dict):
             raise RuntimeError(f"Stored config for tenant '{tenant_id}' is invalid")
-        return payload
+        return _decrypt_payload(payload, self._fernet)
 
     def upsert_raw_config(self, tenant_id: str, payload: dict[str, Any]) -> None:
-        # TODO: Encrypt secret fields before persisting. LLM API keys and MCP headers are
-        # currently stored in plaintext inside config_json and only redacted in API responses.
-        serialized = json.dumps(payload, ensure_ascii=True, sort_keys=True)
+        serialized = json.dumps(
+            _encrypt_payload(payload, self._fernet),
+            ensure_ascii=True,
+            sort_keys=True,
+        )
         with self._lock:
             with self._connect() as connection:
                 connection.execute(
@@ -80,3 +89,96 @@ class SQLiteTenantConfigStore:
         connection = sqlite3.connect(self._db_path)
         connection.row_factory = sqlite3.Row
         return connection
+
+
+def _build_fernet(encryption_key: str | None) -> Fernet | None:
+    if encryption_key is None:
+        return None
+    raw_key = encryption_key.strip()
+    if not raw_key:
+        return None
+    try:
+        return Fernet(raw_key.encode("ascii"))
+    except Exception:
+        try:
+            derived = base64.urlsafe_b64encode(raw_key.encode("utf-8").ljust(32, b"\0")[:32])
+            return Fernet(derived)
+        except Exception as exc:
+            raise RuntimeError("Invalid admin encryption key") from exc
+
+
+def _encrypt_payload(payload: dict[str, Any], fernet: Fernet | None) -> dict[str, Any]:
+    cloned = json.loads(json.dumps(payload))
+    if fernet is None:
+        return cloned
+
+    llm = cloned.get("llm")
+    if isinstance(llm, dict):
+        _encrypt_secret_field(llm, "api_key", fernet)
+        _encrypt_secret_field(llm, "extra_headers", fernet)
+        _encrypt_secret_field(llm, "extraHeaders", fernet)
+
+    tools = cloned.get("tools")
+    if isinstance(tools, dict):
+        mcp_servers = tools.get("mcp_servers") or tools.get("mcpServers")
+        if isinstance(mcp_servers, list):
+            for server in mcp_servers:
+                if isinstance(server, dict):
+                    _encrypt_secret_field(server, "headers", fernet)
+    return cloned
+
+
+def _decrypt_payload(payload: dict[str, Any], fernet: Fernet | None) -> dict[str, Any]:
+    cloned = json.loads(json.dumps(payload))
+    if fernet is None:
+        return cloned
+
+    llm = cloned.get("llm")
+    if isinstance(llm, dict):
+        _decrypt_secret_field(llm, "api_key", fernet)
+        _decrypt_secret_field(llm, "extra_headers", fernet)
+        _decrypt_secret_field(llm, "extraHeaders", fernet)
+
+    tools = cloned.get("tools")
+    if isinstance(tools, dict):
+        mcp_servers = tools.get("mcp_servers") or tools.get("mcpServers")
+        if isinstance(mcp_servers, list):
+            for server in mcp_servers:
+                if isinstance(server, dict):
+                    _decrypt_secret_field(server, "headers", fernet)
+    return cloned
+
+
+def _encrypt_secret_field(container: dict[str, Any], key: str, fernet: Fernet) -> None:
+    value = container.get(key)
+    if value is None or _is_wrapped_secret(value):
+        return
+    serialized = json.dumps(value, ensure_ascii=True, sort_keys=True).encode("utf-8")
+    container[key] = {SECRET_WRAPPER_KEY: fernet.encrypt(serialized).decode("ascii")}
+
+
+def _decrypt_secret_field(container: dict[str, Any], key: str, fernet: Fernet) -> None:
+    value = container.get(key)
+    wrapped = _as_wrapped_secret(value)
+    if wrapped is None:
+        return
+    token = wrapped[SECRET_WRAPPER_KEY]
+    try:
+        decrypted = fernet.decrypt(str(token).encode("ascii"))
+    except InvalidToken as exc:
+        raise RuntimeError("Unable to decrypt stored admin secret") from exc
+    container[key] = json.loads(decrypted.decode("utf-8"))
+
+
+def _is_wrapped_secret(value: object) -> TypeGuard[dict[str, str]]:
+    return _as_wrapped_secret(value) is not None
+
+
+def _as_wrapped_secret(value: object) -> dict[str, str] | None:
+    if (
+        isinstance(value, dict)
+        and set(value) == {SECRET_WRAPPER_KEY}
+        and isinstance(value[SECRET_WRAPPER_KEY], str)
+    ):
+        return {SECRET_WRAPPER_KEY: value[SECRET_WRAPPER_KEY]}
+    return None
