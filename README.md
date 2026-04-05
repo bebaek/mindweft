@@ -24,6 +24,18 @@ env UV_CACHE_DIR=.uv-cache uv run uvicorn app.main:app --reload
 
 You can put provider settings in a local `.env` file. Start from [.env.example](/Users/burm/code/minigent/.env.example).
 
+## Authentication
+
+Phase 1 multi-user support uses trusted request headers to resolve the caller principal:
+
+```bash
+X-Minigent-User-Id: user-123
+X-Minigent-Tenant-Id: tenant-abc
+X-Minigent-Admin: false
+```
+
+All thread lifecycle endpoints require `X-Minigent-User-Id` and `X-Minigent-Tenant-Id`. Threads are isolated by `tenant_id`, and cross-tenant access returns `404`.
+
 ## Provider Config
 
 `mock` remains the default, so the service starts without credentials.
@@ -163,20 +175,30 @@ env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py --thread-id <thr
 ## Example flow
 
 ```bash
-curl -X POST http://127.0.0.1:8000/threads
+curl -X POST http://127.0.0.1:8000/threads \
+  -H 'X-Minigent-User-Id: user-123' \
+  -H 'X-Minigent-Tenant-Id: tenant-abc'
 curl -X POST http://127.0.0.1:8000/threads/<thread_id>/messages \
+  -H 'X-Minigent-User-Id: user-123' \
+  -H 'X-Minigent-Tenant-Id: tenant-abc' \
   -H 'content-type: application/json' \
   -d '{"content":"hello"}'
-curl -X POST http://127.0.0.1:8000/threads/<thread_id>/run
+curl -X POST http://127.0.0.1:8000/threads/<thread_id>/run \
+  -H 'X-Minigent-User-Id: user-123' \
+  -H 'X-Minigent-Tenant-Id: tenant-abc'
 ```
 
 To force a tool call through the mock adapter:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/threads/<thread_id>/messages \
+  -H 'X-Minigent-User-Id: user-123' \
+  -H 'X-Minigent-Tenant-Id: tenant-abc' \
   -H 'content-type: application/json' \
   -d '{"content":"/tool echo hello from tool"}'
-curl -X POST http://127.0.0.1:8000/threads/<thread_id>/run
+curl -X POST http://127.0.0.1:8000/threads/<thread_id>/run \
+  -H 'X-Minigent-User-Id: user-123' \
+  -H 'X-Minigent-Tenant-Id: tenant-abc'
 ```
 
 Local tools currently include:

@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.llm import LLMAdapter, serialize_tool_result
-from app.models import LLMResponse, Message, MessageRole, ThreadStatus
+from app.models import LLMResponse, Message, MessageRole, Principal, ThreadStatus
 from app.store import InMemoryThreadStore
 from app.tools import ToolRegistry
 
@@ -31,15 +31,15 @@ class AgentRuntime:
         self._tool_registry = tool_registry
         self._max_iterations = max_iterations
 
-    async def run_thread(self, thread_id: str) -> str:
-        self._store.start_run(thread_id)
+    async def run_thread(self, principal: Principal, thread_id: str) -> str:
+        self._store.start_run(principal.tenant_id, thread_id)
         failed_tool_calls: set[str] = set()
         try:
             for _ in range(self._max_iterations):
-                messages = self._messages_for_llm(thread_id)
+                messages = self._messages_for_llm(principal, thread_id)
                 response = await self._llm_adapter.generate(messages, self._tool_registry.specs())
                 if response.tool_call is not None:
-                    await self._handle_tool_call(thread_id, response, failed_tool_calls)
+                    await self._handle_tool_call(principal, thread_id, response, failed_tool_calls)
                     continue
 
                 if response.content is None:
@@ -48,24 +48,26 @@ class AgentRuntime:
                     )
 
                 self._store.append_message(
+                    principal.tenant_id,
                     Message(
                         thread_id=thread_id, role=MessageRole.ASSISTANT, content=response.content
                     )
                 )
-                self._store.set_thread_status(thread_id, ThreadStatus.IDLE)
+                self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
                 return response.content
         except HTTPException:
-            self._store.set_thread_status(thread_id, ThreadStatus.ERROR)
+            self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.ERROR)
             raise
         except Exception as exc:  # pragma: no cover - defensive boundary
-            self._store.set_thread_status(thread_id, ThreadStatus.ERROR)
+            self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.ERROR)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        self._store.set_thread_status(thread_id, ThreadStatus.ERROR)
+        self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.ERROR)
         raise HTTPException(status_code=500, detail="Agent exceeded maximum tool iterations")
 
     async def _handle_tool_call(
         self,
+        principal: Principal,
         thread_id: str,
         response: LLMResponse,
         failed_tool_calls: set[str],
@@ -75,6 +77,7 @@ class AgentRuntime:
             return
         tool_call_signature = _tool_call_signature(tool_call.name, tool_call.arguments)
         self._store.append_message(
+            principal.tenant_id,
             Message(
                 thread_id=thread_id,
                 role=MessageRole.ASSISTANT,
@@ -105,6 +108,7 @@ class AgentRuntime:
                     failed_tool_calls.add(tool_call_signature)
                     result = normalized_error
         self._store.append_message(
+            principal.tenant_id,
             Message(
                 thread_id=thread_id,
                 role=MessageRole.TOOL,
@@ -114,10 +118,10 @@ class AgentRuntime:
             )
         )
 
-    def _messages_for_llm(self, thread_id: str) -> list[Message]:
+    def _messages_for_llm(self, principal: Principal, thread_id: str) -> list[Message]:
         return [
             Message(thread_id=thread_id, role=MessageRole.SYSTEM, content=RUNTIME_SYSTEM_PROMPT),
-            *self._store.list_messages(thread_id),
+            *self._store.list_messages(principal.tenant_id, thread_id),
         ]
 
 

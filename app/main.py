@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 
+from app.auth import require_principal
 from app.config import load_environment
 from app.llm import LLMAdapter, build_llm_adapter_from_env
 from app.models import (
@@ -9,6 +10,7 @@ from app.models import (
     CreateThreadResponse,
     Message,
     MessageRole,
+    Principal,
     RunThreadResponse,
 )
 from app.observability import configure_logging, configure_tracing
@@ -51,29 +53,54 @@ def create_app(
         }
 
     @app.post("/threads", response_model=CreateThreadResponse)
-    async def create_thread(request: Request) -> CreateThreadResponse:
-        thread = request.app.state.store.create_thread()
+    async def create_thread(
+        request: Request, principal: Principal = Depends(require_principal)
+    ) -> CreateThreadResponse:
+        thread = request.app.state.store.create_thread(principal.tenant_id)
         return CreateThreadResponse(thread_id=thread.thread_id)
 
     @app.post("/threads/{thread_id}/messages", response_model=Message)
     async def add_message(
-        thread_id: str, request: AddMessageRequest, app_request: Request
+        thread_id: str,
+        request: AddMessageRequest,
+        app_request: Request,
+        principal: Principal = Depends(require_principal),
     ) -> Message:
         return app_request.app.state.store.append_message(
-            Message(thread_id=thread_id, role=MessageRole.USER, content=request.content)
+            principal.tenant_id,
+            Message(
+                thread_id=thread_id,
+                role=MessageRole.USER,
+                content=request.content,
+                created_by=principal.user_id,
+            ),
         )
 
     @app.get("/threads/{thread_id}/messages", response_model=list[Message])
-    async def get_messages(thread_id: str, request: Request) -> list[Message]:
-        return request.app.state.store.list_messages(thread_id)
+    async def get_messages(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_principal),
+    ) -> list[Message]:
+        return request.app.state.store.list_messages(principal.tenant_id, thread_id)
 
     @app.post("/threads/{thread_id}/run", response_model=RunThreadResponse)
-    async def run_thread(thread_id: str, request: Request) -> RunThreadResponse:
-        return RunThreadResponse(reply=await request.app.state.runtime.run_thread(thread_id))
+    async def run_thread(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_principal),
+    ) -> RunThreadResponse:
+        return RunThreadResponse(
+            reply=await request.app.state.runtime.run_thread(principal, thread_id)
+        )
 
     @app.delete("/threads/{thread_id}", status_code=204)
-    async def delete_thread(thread_id: str, request: Request) -> None:
-        request.app.state.store.delete_thread(thread_id)
+    async def delete_thread(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_principal),
+    ) -> None:
+        request.app.state.store.delete_thread(principal.tenant_id, thread_id)
 
     return app
 

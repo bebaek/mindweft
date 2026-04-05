@@ -30,6 +30,7 @@ class Message(BaseModel):
     thread_id: str
     role: MessageRole
     content: str
+    created_by: str | None = None
     tool_name: str | None = None
     tool_call_id: str | None = None
     tool_arguments: dict[str, Any] | None = None
@@ -38,9 +39,16 @@ class Message(BaseModel):
 
 class Thread(BaseModel):
     thread_id: str = Field(default_factory=lambda: str(uuid4()))
+    tenant_id: str
     status: ThreadStatus = ThreadStatus.IDLE
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class Principal(BaseModel):
+    user_id: str
+    tenant_id: str
+    is_admin: bool = False
 
 
 class CreateThreadResponse(BaseModel):

@@ -24,6 +24,21 @@ def parse_args() -> argparse.Namespace:
         help="Existing thread to continue. If omitted, a new thread is created.",
     )
     parser.add_argument(
+        "--user-id",
+        default="demo-user",
+        help="Authenticated user ID sent to the API.",
+    )
+    parser.add_argument(
+        "--tenant-id",
+        default="demo-tenant",
+        help="Authenticated tenant ID sent to the API.",
+    )
+    parser.add_argument(
+        "--admin",
+        action="store_true",
+        help="Mark the request principal as an admin.",
+    )
+    parser.add_argument(
         "--trace",
         action="store_true",
         help="Send W3C traceparent headers and print the trace ID for log/span correlation.",
@@ -76,11 +91,22 @@ def build_trace_headers(trace_id: str | None) -> dict[str, str]:
     return {"traceparent": f"00-{trace_id}-{parent_id}-01"}
 
 
+def build_principal_headers(user_id: str, tenant_id: str, is_admin: bool) -> dict[str, str]:
+    return {
+        "X-Minigent-User-Id": user_id,
+        "X-Minigent-Tenant-Id": tenant_id,
+        "X-Minigent-Admin": "true" if is_admin else "false",
+    }
+
+
 def main() -> int:
     args = parse_args()
     base_url = args.base_url.rstrip("/")
     trace_id = secrets.token_hex(16) if args.trace else None
-    request_headers = build_trace_headers(trace_id)
+    request_headers = {
+        **build_trace_headers(trace_id),
+        **build_principal_headers(args.user_id, args.tenant_id, args.admin),
+    }
 
     config = request_json("GET", f"{base_url}/config", headers=build_trace_headers(trace_id))
     llm = config.get("llm", {}) if isinstance(config, dict) else {}
@@ -93,6 +119,9 @@ def main() -> int:
     if trace_id is not None:
         print(f"trace_id={trace_id}")
         print("trace: sent via traceparent header; look for this trace_id in JSON logs or your trace backend")
+    print(
+        f"principal: user_id={args.user_id} tenant_id={args.tenant_id} admin={'true' if args.admin else 'false'}"
+    )
 
     thread_id = ensure_thread(base_url, args.thread_id, headers=request_headers)
 

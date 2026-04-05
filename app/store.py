@@ -13,41 +13,41 @@ class InMemoryThreadStore:
         self._messages: dict[str, list[Message]] = {}
         self._lock = Lock()
 
-    def create_thread(self) -> Thread:
+    def create_thread(self, tenant_id: str) -> Thread:
         with self._lock:
-            thread = Thread()
+            thread = Thread(tenant_id=tenant_id)
             self._threads[thread.thread_id] = thread
             self._messages[thread.thread_id] = []
             return thread
 
-    def delete_thread(self, thread_id: str) -> None:
+    def delete_thread(self, tenant_id: str, thread_id: str) -> None:
         with self._lock:
-            self._require_thread(thread_id)
+            self._require_thread(tenant_id, thread_id)
             del self._threads[thread_id]
             del self._messages[thread_id]
 
-    def list_messages(self, thread_id: str) -> list[Message]:
+    def list_messages(self, tenant_id: str, thread_id: str) -> list[Message]:
         with self._lock:
-            self._require_thread(thread_id)
+            self._require_thread(tenant_id, thread_id)
             return list(self._messages[thread_id])
 
-    def append_message(self, message: Message) -> Message:
+    def append_message(self, tenant_id: str, message: Message) -> Message:
         with self._lock:
-            thread = self._require_thread(message.thread_id)
+            thread = self._require_thread(tenant_id, message.thread_id)
             self._messages[message.thread_id].append(message)
             thread.updated_at = utc_now()
             return message
 
-    def set_thread_status(self, thread_id: str, status: ThreadStatus) -> Thread:
+    def set_thread_status(self, tenant_id: str, thread_id: str, status: ThreadStatus) -> Thread:
         with self._lock:
-            thread = self._require_thread(thread_id)
+            thread = self._require_thread(tenant_id, thread_id)
             thread.status = status
             thread.updated_at = utc_now()
             return thread
 
-    def start_run(self, thread_id: str) -> Thread:
+    def start_run(self, tenant_id: str, thread_id: str) -> Thread:
         with self._lock:
-            thread = self._require_thread(thread_id)
+            thread = self._require_thread(tenant_id, thread_id)
             if thread.status == ThreadStatus.RUNNING:
                 raise HTTPException(
                     status_code=409, detail=f"Thread '{thread_id}' is already running"
@@ -56,8 +56,8 @@ class InMemoryThreadStore:
             thread.updated_at = utc_now()
             return thread
 
-    def _require_thread(self, thread_id: str) -> Thread:
+    def _require_thread(self, tenant_id: str, thread_id: str) -> Thread:
         thread = self._threads.get(thread_id)
-        if thread is None:
+        if thread is None or thread.tenant_id != tenant_id:
             raise HTTPException(status_code=404, detail=f"Thread '{thread_id}' not found")
         return thread

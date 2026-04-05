@@ -5,10 +5,13 @@ from datetime import datetime
 from fastapi import HTTPException
 
 from app.llm import MockLLMAdapter
-from app.models import LLMResponse, Message, MessageRole, ThreadStatus, ToolCall
+from app.models import LLMResponse, Message, MessageRole, Principal, ThreadStatus, ToolCall
 from app.runtime import RUNTIME_SYSTEM_PROMPT, AgentRuntime
 from app.store import InMemoryThreadStore
 from app.tools import build_local_tool_registry
+
+PRINCIPAL = Principal(user_id="user-1", tenant_id="tenant-1")
+OTHER_PRINCIPAL = Principal(user_id="user-2", tenant_id="tenant-2")
 
 
 def test_runtime_returns_assistant_reply_for_plain_user_message() -> None:
@@ -16,15 +19,21 @@ def test_runtime_returns_assistant_reply_for_plain_user_message() -> None:
     runtime = AgentRuntime(
         store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry()
     )
-    thread = store.create_thread()
+    thread = store.create_thread(PRINCIPAL.tenant_id)
     store.append_message(
-        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello")
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="hello",
+            created_by=PRINCIPAL.user_id,
+        ),
     )
 
-    reply = asyncio.run(runtime.run_thread(thread.thread_id))
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert reply == "Mock reply: hello"
-    messages = store.list_messages(thread.thread_id)
+    messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
     assert messages[-1].role == MessageRole.ASSISTANT
     assert messages[-1].content == "Mock reply: hello"
     assert store._threads[thread.thread_id].status == ThreadStatus.IDLE
@@ -43,12 +52,18 @@ def test_runtime_sends_system_prompt_to_llm() -> None:
     runtime = AgentRuntime(
         store=store, llm_adapter=InspectingLLM(), tool_registry=build_local_tool_registry()
     )
-    thread = store.create_thread()
+    thread = store.create_thread(PRINCIPAL.tenant_id)
     store.append_message(
-        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello")
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="hello",
+            created_by=PRINCIPAL.user_id,
+        ),
     )
 
-    reply = asyncio.run(runtime.run_thread(thread.thread_id))
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert reply == "ok"
     assert seen_messages[0].role == MessageRole.SYSTEM
@@ -62,16 +77,20 @@ def test_runtime_executes_tool_and_stores_tool_message() -> None:
     runtime = AgentRuntime(
         store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry()
     )
-    thread = store.create_thread()
+    thread = store.create_thread(PRINCIPAL.tenant_id)
     store.append_message(
+        PRINCIPAL.tenant_id,
         Message(
-            thread_id=thread.thread_id, role=MessageRole.USER, content="/tool echo hello from tool"
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="/tool echo hello from tool",
+            created_by=PRINCIPAL.user_id,
         )
     )
 
-    reply = asyncio.run(runtime.run_thread(thread.thread_id))
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
-    messages = store.list_messages(thread.thread_id)
+    messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
     assert reply == 'Tool result: {"echo": "hello from tool"}'
     assert [message.role for message in messages] == [
         MessageRole.USER,
@@ -92,14 +111,20 @@ def test_runtime_executes_current_time_tool() -> None:
     runtime = AgentRuntime(
         store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry()
     )
-    thread = store.create_thread()
+    thread = store.create_thread(PRINCIPAL.tenant_id)
     store.append_message(
-        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="/tool current_time")
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="/tool current_time",
+            created_by=PRINCIPAL.user_id,
+        ),
     )
 
-    reply = asyncio.run(runtime.run_thread(thread.thread_id))
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
-    messages = store.list_messages(thread.thread_id)
+    messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
     assert reply.startswith('Tool result: {"current_time": "')
     assert [message.role for message in messages] == [
         MessageRole.USER,
@@ -139,14 +164,20 @@ def test_runtime_stores_tool_error_and_continues() -> None:
         llm_adapter=ToolThenReplyLLM(),
         tool_registry=FailingRegistry(),  # type: ignore[arg-type]
     )
-    thread = store.create_thread()
+    thread = store.create_thread(PRINCIPAL.tenant_id)
     store.append_message(
-        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="is airport open")
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="is airport open",
+            created_by=PRINCIPAL.user_id,
+        ),
     )
 
-    reply = asyncio.run(runtime.run_thread(thread.thread_id))
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
-    messages = store.list_messages(thread.thread_id)
+    messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
     assert reply == (
         'Tool result: {"error": {"tool_name": "fetch_url", "status_code": 502, '
         '"detail": "fetch_url failed with status 404"}}'
@@ -198,14 +229,20 @@ def test_runtime_blocks_repeated_identical_failed_tool_calls() -> None:
         llm_adapter=RepeatFailingToolThenReplyLLM(),
         tool_registry=registry,  # type: ignore[arg-type]
     )
-    thread = store.create_thread()
+    thread = store.create_thread(PRINCIPAL.tenant_id)
     store.append_message(
-        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="is airport open")
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="is airport open",
+            created_by=PRINCIPAL.user_id,
+        ),
     )
 
-    reply = asyncio.run(runtime.run_thread(thread.thread_id))
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
-    messages = store.list_messages(thread.thread_id)
+    messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
     assert registry.calls == 1
     assert reply == (
         'Tool result: {"error": {"tool_name": "tavily.tavily_search", "status_code": 409, '
@@ -261,14 +298,20 @@ def test_runtime_blocks_repeated_identical_error_results() -> None:
         llm_adapter=RepeatErrorResultToolThenReplyLLM(),
         tool_registry=registry,  # type: ignore[arg-type]
     )
-    thread = store.create_thread()
+    thread = store.create_thread(PRINCIPAL.tenant_id)
     store.append_message(
-        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="is airport open")
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="is airport open",
+            created_by=PRINCIPAL.user_id,
+        ),
     )
 
-    reply = asyncio.run(runtime.run_thread(thread.thread_id))
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
-    messages = store.list_messages(thread.thread_id)
+    messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
     assert registry.calls == 1
     assert reply == (
         'Tool result: {"error": {"tool_name": "tavily.tavily_search", "status_code": 409, '
@@ -307,11 +350,19 @@ def test_runtime_marks_thread_error_when_max_iterations_exceeded() -> None:
         tool_registry=build_local_tool_registry(),
         max_iterations=2,
     )
-    thread = store.create_thread()
-    store.append_message(Message(thread_id=thread.thread_id, role=MessageRole.USER, content="loop"))
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="loop",
+            created_by=PRINCIPAL.user_id,
+        ),
+    )
 
     try:
-        asyncio.run(runtime.run_thread(thread.thread_id))
+        asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
     except HTTPException as exc:
         assert exc.status_code == 500
         assert exc.detail == "Agent exceeded maximum tool iterations"
@@ -338,17 +389,23 @@ def test_runtime_rejects_concurrent_runs_for_same_thread() -> None:
             llm_adapter=BlockingLLM(),
             tool_registry=build_local_tool_registry(),
         )
-        thread = store.create_thread()
+        thread = store.create_thread(PRINCIPAL.tenant_id)
         store.append_message(
-            Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello")
+            PRINCIPAL.tenant_id,
+            Message(
+                thread_id=thread.thread_id,
+                role=MessageRole.USER,
+                content="hello",
+                created_by=PRINCIPAL.user_id,
+            ),
         )
 
-        first_run = asyncio.create_task(runtime.run_thread(thread.thread_id))
+        first_run = asyncio.create_task(runtime.run_thread(PRINCIPAL, thread.thread_id))
         await started.wait()
 
         with_raise: HTTPException | None = None
         try:
-            await runtime.run_thread(thread.thread_id)
+            await runtime.run_thread(PRINCIPAL, thread.thread_id)
         except HTTPException as exc:
             with_raise = exc
 
@@ -359,3 +416,28 @@ def test_runtime_rejects_concurrent_runs_for_same_thread() -> None:
         assert store._threads[thread.thread_id].status == ThreadStatus.IDLE
 
     asyncio.run(exercise())
+
+
+def test_runtime_hides_cross_tenant_thread_access() -> None:
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry()
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="hello",
+            created_by=PRINCIPAL.user_id,
+        ),
+    )
+
+    try:
+        asyncio.run(runtime.run_thread(OTHER_PRINCIPAL, thread.thread_id))
+    except HTTPException as exc:
+        assert exc.status_code == 404
+        assert exc.detail == f"Thread '{thread.thread_id}' not found"
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("Expected HTTPException")
