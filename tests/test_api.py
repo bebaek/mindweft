@@ -399,7 +399,9 @@ def test_tenant_execution_config_rejects_missing_tenant_config(
 
 
 def test_admin_api_requires_admin_access(tmp_path: Path) -> None:
-    client = TestClient(create_app(admin_store=_sqlite_store(tmp_path)))
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store")
+    )
 
     response = client.get("/admin/tenants", headers=AUTH_HEADERS)
 
@@ -410,7 +412,9 @@ def test_admin_api_requires_admin_access(tmp_path: Path) -> None:
 def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
     tmp_path: Path,
 ) -> None:
-    client = TestClient(create_app(admin_store=_sqlite_store(tmp_path)))
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store")
+    )
     payload = {
         "config": {
             "llm": {
@@ -457,7 +461,9 @@ def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
 
 
 def test_admin_api_updates_runtime_after_config_change(tmp_path: Path) -> None:
-    client = TestClient(create_app(admin_store=_sqlite_store(tmp_path)))
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store")
+    )
 
     first_config = {
         "config": {
@@ -509,6 +515,58 @@ def test_admin_api_updates_runtime_after_config_change(tmp_path: Path) -> None:
         headers=ADMIN_HEADERS,
     )
     assert delete_response.status_code == 204
+
+
+def test_store_with_defaults_uses_store_default_before_failing(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_app(
+            admin_store=_sqlite_store(tmp_path),
+            tenant_config_source="store-with-defaults",
+        )
+    )
+    default_config = {
+        "config": {
+            "llm": {"provider": "mock"},
+            "tools": {"allowed_local_tools": ["echo"]},
+        }
+    }
+    client.put(
+        "/admin/tenants/*/execution-config",
+        json=default_config,
+        headers=ADMIN_HEADERS,
+    )
+
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "/tool echo hello from default"},
+        headers=AUTH_HEADERS,
+    )
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert run_response.status_code == 200
+    assert run_response.json() == {"reply": 'Tool result: {"echo": "hello from default"}'}
+
+
+def test_store_mode_fails_closed_without_tenant_config(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store")
+    )
+
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "hello"},
+        headers=AUTH_HEADERS,
+    )
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert run_response.status_code == 403
+    assert run_response.json()["detail"] == "Tenant 'tenant-1' has no execution configuration"
 
 
 def _sqlite_store(tmp_path: Path):

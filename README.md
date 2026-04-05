@@ -92,6 +92,12 @@ Thread lifecycle endpoints require the auth material for the active mode. Thread
 
 ## Tenant Execution Config
 
+The runtime config source is controlled by `MINIGENT_TENANT_CONFIG_SOURCE`:
+
+- `env`: use only env-based execution config
+- `store`: use only the admin SQLite store and fail closed when a tenant has no config
+- `store-with-defaults`: use the admin store first, then fall back to env/default resolver
+
 Execution resources can be scoped per tenant with `MINIGENT_TENANT_EXECUTION_CONFIGS`:
 
 ```dotenv
@@ -118,7 +124,7 @@ Supported fields:
 - `tools.allowed_local_tools`: local tool allowlist
 - `tools.mcp_servers`: per-tenant MCP server definitions
 
-If `MINIGENT_TENANT_EXECUTION_CONFIGS` is unset, Minigent falls back to one global execution config from the existing process env. If it is set, tenants without an explicit config and without a `*` default entry are rejected at run time.
+In `store-with-defaults`, a `*` tenant record in the admin store acts as a default profile before env fallback is considered.
 
 ## Admin API
 

@@ -11,6 +11,10 @@ from app.execution import (
     StoreBackedTenantExecutionResolver,
     TenantExecutionResolver,
     build_execution_resolver_from_env,
+    resolve_tenant_config_source,
+    TENANT_CONFIG_SOURCE_ENV_ONLY,
+    TENANT_CONFIG_SOURCE_STORE,
+    TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS,
 )
 from app.llm import LLMAdapter, build_llm_adapter_from_env
 from app.models import (
@@ -38,6 +42,7 @@ def create_app(
     tool_registry: ToolRegistry | None = None,
     execution_resolver: TenantExecutionResolver | None = None,
     admin_store: SQLiteTenantConfigStore | None = None,
+    tenant_config_source: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0")
     configure_tracing(app)
@@ -53,14 +58,29 @@ def create_app(
             registry = tool_registry or build_tool_registry_from_env()
             execution_resolver = FixedTenantExecutionResolver(adapter, registry)
         else:
+            config_source = resolve_tenant_config_source(tenant_config_source)
             fallback_resolver = build_execution_resolver_from_env()
-            if admin_store is not None:
+            if config_source == TENANT_CONFIG_SOURCE_ENV_ONLY:
+                execution_resolver = fallback_resolver
+            elif config_source == TENANT_CONFIG_SOURCE_STORE:
+                if admin_store is None:
+                    raise RuntimeError(
+                        "MINIGENT_ADMIN_DB_PATH or admin_store is required when "
+                        "MINIGENT_TENANT_CONFIG_SOURCE=store"
+                    )
+                execution_resolver = StoreBackedTenantExecutionResolver(admin_store)
+            elif config_source == TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS:
+                if admin_store is None:
+                    raise RuntimeError(
+                        "MINIGENT_ADMIN_DB_PATH or admin_store is required when "
+                        "MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults"
+                    )
                 execution_resolver = StoreBackedTenantExecutionResolver(
                     admin_store,
                     fallback_resolver=fallback_resolver,
                 )
             else:
-                execution_resolver = fallback_resolver
+                raise RuntimeError(f"Unhandled tenant config source '{config_source}'")
     app.state.execution_resolver = execution_resolver
     app.state.runtime = AgentRuntime(
         store=app.state.store,

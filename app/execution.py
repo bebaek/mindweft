@@ -14,7 +14,11 @@ from app.mcp import MCPServerConfig
 from app.tools import ToolRegistry, build_tool_registry, build_tool_registry_from_env
 
 TENANT_EXECUTION_CONFIGS_ENV = "MINIGENT_TENANT_EXECUTION_CONFIGS"
+TENANT_CONFIG_SOURCE_ENV = "MINIGENT_TENANT_CONFIG_SOURCE"
 DEFAULT_TENANT_KEY = "*"
+TENANT_CONFIG_SOURCE_ENV_ONLY = "env"
+TENANT_CONFIG_SOURCE_STORE = "store"
+TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS = "store-with-defaults"
 
 
 @dataclass(frozen=True)
@@ -175,6 +179,8 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
 
             payload = self._store.get_raw_config(tenant_id)
             if payload is None:
+                payload = self._store.get_raw_config(DEFAULT_TENANT_KEY)
+            if payload is None:
                 if self._fallback_resolver is not None:
                     return self._fallback_resolver.resolve(tenant_id)
                 raise HTTPException(
@@ -241,6 +247,27 @@ def build_execution_resolver_from_env() -> TenantExecutionResolver:
             )
         tenant_configs[tenant_id] = parse_tenant_execution_config(tenant_id, value)
     return InMemoryTenantExecutionResolver(tenant_configs)
+
+
+def resolve_tenant_config_source(
+    explicit_source: str | None = None,
+) -> str:
+    raw = explicit_source if explicit_source is not None else os.getenv(
+        TENANT_CONFIG_SOURCE_ENV,
+        TENANT_CONFIG_SOURCE_ENV_ONLY,
+    )
+    source = raw.strip().lower()
+    if source in {
+        TENANT_CONFIG_SOURCE_ENV_ONLY,
+        TENANT_CONFIG_SOURCE_STORE,
+        TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS,
+    }:
+        return source
+    raise RuntimeError(
+        f"Unsupported {TENANT_CONFIG_SOURCE_ENV} '{raw}'. Expected "
+        f"'{TENANT_CONFIG_SOURCE_ENV_ONLY}', '{TENANT_CONFIG_SOURCE_STORE}', "
+        f"or '{TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS}'."
+    )
 
 
 def parse_tenant_execution_config(
