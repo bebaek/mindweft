@@ -142,6 +142,7 @@ Admin endpoints:
 - `GET /admin/tenants`
 - `GET /admin/tenants/{tenant_id}/execution-config`
 - `PUT /admin/tenants/{tenant_id}/execution-config`
+- `POST /admin/tenants/{tenant_id}/execution-config/validate`
 - `DELETE /admin/tenants/{tenant_id}/execution-config`
 
 Admin access requires an authenticated principal with `is_admin=true`. In `dev-headers` mode that means:
@@ -153,6 +154,8 @@ X-Minigent-Admin: true
 ```
 
 Secrets such as LLM API keys and MCP headers are accepted on writes but redacted in read responses. If `MINIGENT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`, `MINIGENT_ADMIN_ENCRYPTION_KEY` is required and those secrets are encrypted before being written to SQLite. Updating or deleting a tenant config invalidates the in-process execution cache for that tenant so new runs pick up the change immediately.
+
+`POST /admin/tenants/{tenant_id}/execution-config/validate` accepts the same payload shape as `PUT` and returns a structured preflight report covering config shape, LLM wiring, local tool policy, and MCP connectivity without persisting the config.
 
 ## Provider Config
 

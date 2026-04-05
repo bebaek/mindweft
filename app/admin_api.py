@@ -12,6 +12,7 @@ from app.execution import (
     TenantExecutionResolver,
     parse_tenant_execution_config,
     redact_tenant_execution_payload,
+    validate_tenant_execution_config,
 )
 from app.models import Principal
 
@@ -30,6 +31,42 @@ class AdminTenantExecutionConfigResponse(BaseModel):
 
 class AdminTenantExecutionConfigRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdminMCPServerValidationResponse(BaseModel):
+    name: str
+    url: str
+    ok: bool
+    error: str | None = None
+    tool_count: int = 0
+    protocol_version: str | None = None
+    session: bool = False
+    server_name: str | None = None
+    server_version: str | None = None
+
+
+class AdminValidationSectionResponse(BaseModel):
+    ok: bool
+    errors: list[str] = Field(default_factory=list)
+
+
+class AdminLLMValidationResponse(AdminValidationSectionResponse):
+    provider: str | None = None
+    model: str | None = None
+    base_url: str | None = None
+
+
+class AdminToolsValidationResponse(AdminValidationSectionResponse):
+    local_tools: list[str] = Field(default_factory=list)
+    unknown_local_tools: list[str] = Field(default_factory=list)
+    mcp_servers: list[AdminMCPServerValidationResponse] = Field(default_factory=list)
+
+
+class AdminTenantExecutionConfigValidationResponse(BaseModel):
+    valid: bool
+    config_shape: AdminValidationSectionResponse
+    llm: AdminLLMValidationResponse
+    tools: AdminToolsValidationResponse
 
 
 def build_admin_router() -> APIRouter:
@@ -85,6 +122,19 @@ def build_admin_router() -> APIRouter:
             tenant_id=tenant_id,
             config=redact_tenant_execution_payload(payload),
         )
+
+    @router.post(
+        "/tenants/{tenant_id}/execution-config/validate",
+        response_model=AdminTenantExecutionConfigValidationResponse,
+    )
+    async def validate_tenant_execution_config_route(
+        tenant_id: str,
+        request: AdminTenantExecutionConfigRequest,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantExecutionConfigValidationResponse:
+        _ = admin
+        report = await validate_tenant_execution_config(tenant_id, request.config)
+        return AdminTenantExecutionConfigValidationResponse.model_validate(report.to_dict())
 
     @router.delete("/tenants/{tenant_id}/execution-config", status_code=204)
     async def delete_tenant_execution_config(

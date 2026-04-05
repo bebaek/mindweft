@@ -13,6 +13,7 @@ from jwt.algorithms import RSAAlgorithm
 from app import auth as auth_module
 from app.llm import LLMAdapter, MockLLMAdapter
 from app.main import create_app
+from app.mcp import MCPServerInfo
 from app.models import LLMResponse, Message, MessageRole, ToolCall
 from app.tools import build_local_tool_registry
 
@@ -509,6 +510,160 @@ def test_admin_api_requires_admin_access(tmp_path: Path) -> None:
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Admin access required"
+
+
+def test_admin_api_validates_tenant_execution_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class FakeMCPClient:
+        def __init__(self, config, transport=None, timeout=15.0) -> None:
+            _ = transport
+            _ = timeout
+            self._config = config
+
+        async def list_tools(self) -> list[object]:
+            return [type("Spec", (), {"name": "demo.echo"})()]
+
+        def server_info(self) -> MCPServerInfo:
+            return MCPServerInfo(
+                name=self._config.name,
+                url=self._config.url,
+                protocol_version=self._config.protocol_version,
+                session_id="session-123",
+                server_name="demo-server",
+                server_version="1.2.3",
+            )
+
+    monkeypatch.setattr("app.execution.MCPHTTPClient", FakeMCPClient)
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store")
+    )
+
+    response = client.post(
+        "/admin/tenants/tenant-1/execution-config/validate",
+        json={
+            "config": {
+                "llm": {
+                    "provider": "openai-compatible",
+                    "base_url": "https://example.com/v1",
+                    "model": "gpt-test",
+                    "api_key": "secret-key",
+                },
+                "tools": {
+                    "allowed_local_tools": ["echo"],
+                    "mcp_servers": [
+                        {
+                            "name": "demo",
+                            "url": "https://example.com/mcp",
+                            "headers": {"Authorization": "Bearer token"},
+                        }
+                    ],
+                },
+            }
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "valid": True,
+        "config_shape": {"ok": True, "errors": []},
+        "llm": {
+            "ok": True,
+            "provider": "openai-compatible",
+            "model": "gpt-test",
+            "base_url": "https://example.com/v1",
+            "errors": [],
+        },
+        "tools": {
+            "ok": True,
+            "errors": [],
+            "local_tools": ["echo"],
+            "unknown_local_tools": [],
+            "mcp_servers": [
+                {
+                    "name": "demo",
+                    "url": "https://example.com/mcp",
+                    "ok": True,
+                    "error": None,
+                    "tool_count": 1,
+                    "protocol_version": "2025-11-25",
+                    "session": True,
+                    "server_name": "demo-server",
+                    "server_version": "1.2.3",
+                }
+            ],
+        },
+    }
+
+    get_response = client.get(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+    )
+    assert get_response.status_code == 404
+
+
+def test_admin_api_validation_reports_tool_policy_and_mcp_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FailingMCPClient:
+        def __init__(self, config, transport=None, timeout=15.0) -> None:
+            _ = transport
+            _ = timeout
+            self._config = config
+
+        async def list_tools(self) -> list[object]:
+            raise HTTPException(
+                status_code=502,
+                detail=f"MCP server '{self._config.name}' request failed: boom",
+            )
+
+    monkeypatch.setattr("app.execution.MCPHTTPClient", FailingMCPClient)
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store")
+    )
+
+    response = client.post(
+        "/admin/tenants/tenant-1/execution-config/validate",
+        json={
+            "config": {
+                "llm": {
+                    "provider": "openai",
+                    "model": "gpt-test",
+                },
+                "tools": {
+                    "allowed_local_tools": ["echo", "does_not_exist"],
+                    "mcp_servers": [
+                        {
+                            "name": "demo",
+                            "url": "https://example.com/mcp",
+                            "headers": {},
+                        }
+                    ],
+                },
+            }
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is False
+    assert body["config_shape"]["ok"] is False
+    assert body["config_shape"]["errors"] == [
+        "Tenant 'tenant-1' allowed_local_tools references unknown local tools: does_not_exist"
+    ]
+    assert body["llm"] == {
+        "ok": False,
+        "provider": "openai",
+        "model": "gpt-test",
+        "base_url": "https://api.openai.com/v1",
+        "errors": ["Tenant LLM provider 'openai' requires api_key"],
+    }
+    assert body["tools"]["ok"] is False
+    assert body["tools"]["unknown_local_tools"] == ["does_not_exist"]
+    assert body["tools"]["errors"] == ["MCP server 'demo' request failed: boom"]
+    assert body["tools"]["mcp_servers"][0]["ok"] is False
+    assert body["tools"]["mcp_servers"][0]["error"] == "MCP server 'demo' request failed: boom"
 
 
 def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(

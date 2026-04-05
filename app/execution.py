@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 from app.admin_store import SQLiteTenantConfigStore
 from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter, build_llm_adapter_from_env
-from app.mcp import MCPServerConfig
+from app.mcp import MCPHTTPClient, MCPServerConfig
 from app.tools import LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry, build_tool_registry_from_env
 
 TENANT_EXECUTION_CONFIGS_ENV = "MINIGENT_TENANT_EXECUTION_CONFIGS"
@@ -65,6 +65,22 @@ class TenantExecutionContext:
     llm_adapter: LLMAdapter
     tool_registry: ToolRegistry
     config: TenantExecutionConfig
+
+
+@dataclass(frozen=True)
+class TenantExecutionValidationReport:
+    valid: bool
+    config_shape: dict[str, Any]
+    llm: dict[str, Any]
+    tools: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "valid": self.valid,
+            "config_shape": self.config_shape,
+            "llm": self.llm,
+            "tools": self.tools,
+        }
 
 
 class TenantExecutionResolver:
@@ -309,6 +325,54 @@ def parse_tenant_execution_config(
     )
 
 
+async def validate_tenant_execution_config(
+    tenant_id: str,
+    payload: dict[str, Any],
+) -> TenantExecutionValidationReport:
+    tool_errors = _validate_local_tool_policy(tenant_id, payload)
+    config_errors: list[str] = []
+    config: TenantExecutionConfig | None = None
+    try:
+        config = parse_tenant_execution_config(tenant_id, payload)
+    except RuntimeError as exc:
+        config_errors.append(str(exc))
+
+    config_shape = {
+        "ok": not config_errors and not tool_errors,
+        "errors": [*config_errors, *tool_errors],
+    }
+    if config is None:
+        llm = {
+            "ok": False,
+            "provider": None,
+            "model": None,
+            "base_url": None,
+            "errors": ["Validation skipped until config shape issues are fixed."],
+        }
+        tools = {
+            "ok": False,
+            "errors": ["Validation skipped until config shape issues are fixed."],
+            "local_tools": [],
+            "unknown_local_tools": sorted(_extract_unknown_local_tools(payload)),
+            "mcp_servers": [],
+        }
+        return TenantExecutionValidationReport(
+            valid=False,
+            config_shape=config_shape,
+            llm=llm,
+            tools=tools,
+        )
+
+    llm = _validate_llm_config(config)
+    tools = await _validate_tool_config(config)
+    return TenantExecutionValidationReport(
+        valid=config_shape["ok"] and llm["ok"] and tools["ok"],
+        config_shape=config_shape,
+        llm=llm,
+        tools=tools,
+    )
+
+
 def _parse_tenant_llm_config(tenant_id: str, payload: dict[str, Any]) -> TenantLLMConfig:
     provider = str(payload.get("provider", "mock")).strip().lower()
     extra_headers = payload.get("extra_headers") or payload.get("extraHeaders") or {}
@@ -503,6 +567,114 @@ def _optional_str_list(tenant_id: str, value: object, label: str) -> list[str] |
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise RuntimeError(f"Tenant '{tenant_id}' {label} must be an array of strings")
     return list(value)
+
+
+def _validate_local_tool_policy(tenant_id: str, payload: dict[str, Any]) -> list[str]:
+    tools_payload = payload.get("tools") or {}
+    if not isinstance(tools_payload, dict):
+        return []
+    allowed_local_tools_raw = tools_payload.get("allowed_local_tools", tools_payload.get("allowedLocalTools"))
+    if allowed_local_tools_raw is None:
+        return []
+    if not isinstance(allowed_local_tools_raw, list) or not all(
+        isinstance(item, str) for item in allowed_local_tools_raw
+    ):
+        return []
+    unknown_tools = sorted(set(allowed_local_tools_raw) - LOCAL_TOOL_NAMES)
+    if not unknown_tools:
+        return []
+    return [
+        f"Tenant '{tenant_id}' allowed_local_tools references unknown local tools: "
+        + ", ".join(unknown_tools)
+    ]
+
+
+def _extract_unknown_local_tools(payload: dict[str, Any]) -> set[str]:
+    tools_payload = payload.get("tools") or {}
+    if not isinstance(tools_payload, dict):
+        return set()
+    allowed_local_tools_raw = tools_payload.get("allowed_local_tools", tools_payload.get("allowedLocalTools"))
+    if not isinstance(allowed_local_tools_raw, list):
+        return set()
+    return {tool for tool in allowed_local_tools_raw if isinstance(tool, str) and tool not in LOCAL_TOOL_NAMES}
+
+
+def _validate_llm_config(config: TenantExecutionConfig) -> dict[str, Any]:
+    errors: list[str] = []
+    try:
+        adapter = _build_llm_adapter(config.llm)
+    except RuntimeError as exc:
+        errors.append(str(exc))
+        adapter = None
+
+    if adapter is not None:
+        adapter_details = adapter.describe()
+        provider = adapter_details.get("provider")
+        base_url = adapter_details.get("base_url")
+        model = adapter_details.get("model")
+    else:
+        provider = config.llm.provider
+        base_url = config.llm.base_url or (
+            _default_base_url_for_provider(config.llm.provider)
+            if config.llm.provider in {"openai", "openrouter", "openai-compatible"}
+            else None
+        )
+        model = config.llm.model
+    return {
+        "ok": not errors,
+        "provider": provider,
+        "model": model,
+        "base_url": base_url,
+        "errors": errors,
+    }
+
+
+async def _validate_tool_config(config: TenantExecutionConfig) -> dict[str, Any]:
+    local_tools = sorted(config.tools.allowed_local_tools or list(LOCAL_TOOL_NAMES))
+    unknown_local_tools = sorted(
+        tool for tool in (config.tools.allowed_local_tools or []) if tool not in LOCAL_TOOL_NAMES
+    )
+    mcp_server_reports: list[dict[str, Any]] = []
+    for server in config.tools.mcp_servers:
+        mcp_server_reports.append(await _validate_mcp_server(server))
+    tool_errors = [report["error"] for report in mcp_server_reports if report["error"]]
+    return {
+        "ok": not tool_errors and not unknown_local_tools,
+        "errors": tool_errors,
+        "local_tools": local_tools,
+        "unknown_local_tools": unknown_local_tools,
+        "mcp_servers": mcp_server_reports,
+    }
+
+
+async def _validate_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
+    client = MCPHTTPClient(server)
+    try:
+        specs = await client.list_tools()
+        info = client.server_info()
+        return {
+            "name": info.name,
+            "url": info.url,
+            "ok": True,
+            "error": None,
+            "tool_count": len(specs),
+            "protocol_version": info.protocol_version,
+            "session": bool(info.session_id),
+            "server_name": info.server_name,
+            "server_version": info.server_version,
+        }
+    except HTTPException as exc:
+        return {
+            "name": server.name,
+            "url": server.url,
+            "ok": False,
+            "error": str(exc.detail),
+            "tool_count": 0,
+            "protocol_version": server.protocol_version,
+            "session": False,
+            "server_name": None,
+            "server_version": None,
+        }
 
 
 def get_skill_config(
