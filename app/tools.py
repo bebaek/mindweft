@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 from fastapi import HTTPException
 
-from app.mcp import MCPHTTPClient, load_mcp_server_configs_from_env
+from app.mcp import MCPHTTPClient, MCPServerConfig, load_mcp_server_configs_from_env
 from app.models import ToolSpec
 from app.redaction import sanitize_value_for_logging
 
@@ -87,14 +87,31 @@ class ToolRegistry:
         return list(self._mcp_servers)
 
 
-def build_local_tool_registry() -> ToolRegistry:
+def build_local_tool_registry(allowed_tools: list[str] | None = None) -> ToolRegistry:
     registry = ToolRegistry()
+    allowed_tool_set = set(allowed_tools) if allowed_tools is not None else None
+
+    def register_local_tool(
+        *,
+        name: str,
+        description: str,
+        input_schema: dict[str, Any],
+        handler: Callable[[dict[str, Any]], Any],
+    ) -> None:
+        if allowed_tool_set is not None and name not in allowed_tool_set:
+            return
+        registry.register(
+            name=name,
+            description=description,
+            input_schema=input_schema,
+            handler=handler,
+        )
 
     def echo_tool(arguments: dict[str, Any]) -> dict[str, Any]:
         text = str(arguments.get("text", ""))
         return {"echo": text}
 
-    registry.register(
+    register_local_tool(
         name="echo",
         description="Return the provided text. Useful for verifying tool invocation.",
         input_schema={
@@ -109,7 +126,7 @@ def build_local_tool_registry() -> ToolRegistry:
         _ = arguments
         return {"current_time": datetime.now(timezone.utc).isoformat()}
 
-    registry.register(
+    register_local_tool(
         name="current_time",
         description="Return the current UTC time in ISO 8601 format.",
         input_schema={"type": "object", "properties": {}},
@@ -139,7 +156,7 @@ def build_local_tool_registry() -> ToolRegistry:
             "text": response.text,
         }
 
-    registry.register(
+    register_local_tool(
         name="fetch_url",
         description="Fetch a URL and return its response text with basic metadata.",
         input_schema={
@@ -160,7 +177,7 @@ def build_local_tool_registry() -> ToolRegistry:
         await asyncio.sleep(seconds)
         return {"slept_seconds": seconds}
 
-    registry.register(
+    register_local_tool(
         name="sleep",
         description="Pause execution for the requested number of seconds.",
         input_schema={
@@ -177,7 +194,7 @@ def build_local_tool_registry() -> ToolRegistry:
             raise HTTPException(status_code=400, detail="calculator requires an expression")
         return {"expression": expression, "result": _evaluate_calculator_expression(expression)}
 
-    registry.register(
+    register_local_tool(
         name="calculator",
         description="Evaluate a basic arithmetic expression safely.",
         input_schema={
@@ -192,10 +209,18 @@ def build_local_tool_registry() -> ToolRegistry:
 
 
 def build_tool_registry_from_env() -> ToolRegistry:
-    registry = build_local_tool_registry()
+    return build_tool_registry(mcp_server_configs=load_mcp_server_configs_from_env())
+
+
+def build_tool_registry(
+    *,
+    mcp_server_configs: list[MCPServerConfig] | None = None,
+    allowed_local_tools: list[str] | None = None,
+) -> ToolRegistry:
+    registry = build_local_tool_registry(allowed_tools=allowed_local_tools)
 
     mcp_servers: list[dict[str, Any]] = []
-    for config in load_mcp_server_configs_from_env():
+    for config in mcp_server_configs or []:
         try:
             client = MCPHTTPClient(config)
             specs = _run_awaitable_sync(client.list_tools())

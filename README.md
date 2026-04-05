@@ -90,6 +90,36 @@ X-Minigent-Admin: false
 
 Thread lifecycle endpoints require the auth material for the active mode. Threads are isolated by `tenant_id`, and cross-tenant access returns `404`.
 
+## Tenant Execution Config
+
+Execution resources can be scoped per tenant with `MINIGENT_TENANT_EXECUTION_CONFIGS`:
+
+```dotenv
+MINIGENT_TENANT_EXECUTION_CONFIGS={
+  "tenant-1":{
+    "llm":{"provider":"mock"},
+    "tools":{"allowed_local_tools":["echo","current_time"]}
+  },
+  "tenant-2":{
+    "llm":{
+      "provider":"openai",
+      "model":"gpt-5.4-mini",
+      "api_key":"tenant-2-key"
+    },
+    "tools":{"allowed_local_tools":["calculator"]}
+  }
+}
+```
+
+Supported fields:
+
+- `llm.provider`: `mock`, `openai`, `openrouter`, or `openai-compatible`
+- `llm.model`, `llm.base_url`, `llm.api_key`, `llm.extra_headers`, `llm.timeout`
+- `tools.allowed_local_tools`: local tool allowlist
+- `tools.mcp_servers`: per-tenant MCP server definitions
+
+If `MINIGENT_TENANT_EXECUTION_CONFIGS` is unset, Minigent falls back to one global execution config from the existing process env. If it is set, tenants without an explicit config and without a `*` default entry are rejected at run time.
+
 ## Provider Config
 
 `mock` remains the default, so the service starts without credentials.

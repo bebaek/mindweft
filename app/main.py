@@ -4,6 +4,11 @@ from fastapi import Depends, FastAPI, Request
 
 from app.auth import require_principal
 from app.config import load_environment
+from app.execution import (
+    FixedTenantExecutionResolver,
+    TenantExecutionResolver,
+    build_execution_resolver_from_env,
+)
 from app.llm import LLMAdapter, build_llm_adapter_from_env
 from app.models import (
     AddMessageRequest,
@@ -26,19 +31,24 @@ configure_logging()
 
 
 def create_app(
-    llm_adapter: LLMAdapter | None = None, tool_registry: ToolRegistry | None = None
+    llm_adapter: LLMAdapter | None = None,
+    tool_registry: ToolRegistry | None = None,
+    execution_resolver: TenantExecutionResolver | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0")
     configure_tracing(app)
     app.state.store = InMemoryThreadStore()
-    tool_registry = tool_registry or build_tool_registry_from_env()
-    adapter = llm_adapter or build_llm_adapter_from_env()
-    app.state.llm_adapter = adapter
-    app.state.tool_registry = tool_registry
+    if execution_resolver is None:
+        if llm_adapter is not None or tool_registry is not None:
+            adapter = llm_adapter or build_llm_adapter_from_env()
+            registry = tool_registry or build_tool_registry_from_env()
+            execution_resolver = FixedTenantExecutionResolver(adapter, registry)
+        else:
+            execution_resolver = build_execution_resolver_from_env()
+    app.state.execution_resolver = execution_resolver
     app.state.runtime = AgentRuntime(
         store=app.state.store,
-        llm_adapter=adapter,
-        tool_registry=tool_registry,
+        execution_resolver=execution_resolver,
     )
 
     @app.get("/health")
@@ -47,10 +57,7 @@ def create_app(
 
     @app.get("/config")
     async def config(request: Request) -> dict[str, object]:
-        return {
-            "llm": request.app.state.llm_adapter.describe(),
-            "mcp_servers": request.app.state.tool_registry.mcp_servers(),
-        }
+        return request.app.state.execution_resolver.describe()
 
     @app.post("/threads", response_model=CreateThreadResponse)
     async def create_thread(

@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from app.execution import FixedTenantExecutionResolver, TenantExecutionResolver
 from app.llm import LLMAdapter, serialize_tool_result
 from app.models import LLMResponse, Message, MessageRole, Principal, ThreadStatus
 from app.store import InMemoryThreadStore
@@ -22,24 +23,40 @@ class AgentRuntime:
     def __init__(
         self,
         store: InMemoryThreadStore,
-        llm_adapter: LLMAdapter,
-        tool_registry: ToolRegistry,
+        execution_resolver: TenantExecutionResolver | None = None,
+        llm_adapter: LLMAdapter | None = None,
+        tool_registry: ToolRegistry | None = None,
         max_iterations: int = 8,
     ) -> None:
         self._store = store
-        self._llm_adapter = llm_adapter
-        self._tool_registry = tool_registry
+        if execution_resolver is not None:
+            self._execution_resolver = execution_resolver
+        elif llm_adapter is not None and tool_registry is not None:
+            self._execution_resolver = FixedTenantExecutionResolver(llm_adapter, tool_registry)
+        else:
+            raise ValueError(
+                "AgentRuntime requires execution_resolver or both llm_adapter and tool_registry"
+            )
         self._max_iterations = max_iterations
 
     async def run_thread(self, principal: Principal, thread_id: str) -> str:
         self._store.start_run(principal.tenant_id, thread_id)
         failed_tool_calls: set[str] = set()
+        execution = self._execution_resolver.resolve(principal.tenant_id)
         try:
             for _ in range(self._max_iterations):
                 messages = self._messages_for_llm(principal, thread_id)
-                response = await self._llm_adapter.generate(messages, self._tool_registry.specs())
+                response = await execution.llm_adapter.generate(
+                    messages, execution.tool_registry.specs()
+                )
                 if response.tool_call is not None:
-                    await self._handle_tool_call(principal, thread_id, response, failed_tool_calls)
+                    await self._handle_tool_call(
+                        principal,
+                        thread_id,
+                        response,
+                        failed_tool_calls,
+                        tool_registry=execution.tool_registry,
+                    )
                     continue
 
                 if response.content is None:
@@ -71,6 +88,8 @@ class AgentRuntime:
         thread_id: str,
         response: LLMResponse,
         failed_tool_calls: set[str],
+        *,
+        tool_registry: ToolRegistry,
     ) -> None:
         tool_call = response.tool_call
         if tool_call is None:
@@ -98,7 +117,7 @@ class AgentRuntime:
             )
         else:
             try:
-                result = await self._tool_registry.execute(tool_call.name, tool_call.arguments)
+                result = await tool_registry.execute(tool_call.name, tool_call.arguments)
             except HTTPException as exc:
                 failed_tool_calls.add(tool_call_signature)
                 result = _serialize_tool_error(tool_call.name, exc)

@@ -6,7 +6,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from app.tools import build_local_tool_registry, build_tool_registry_from_env
+from app.tools import build_local_tool_registry, build_tool_registry, build_tool_registry_from_env
 
 
 def test_local_registry_exposes_expected_tools() -> None:
@@ -141,6 +141,14 @@ def test_tool_execution_logs_redacted_url_query_params(caplog: pytest.LogCapture
         "url': 'https://example.com/mcp?token=%3Credacted%3E&cursor=abc&api_key=%3Credacted%3E'"
         in caplog.text
     )
+
+
+def test_build_tool_registry_can_limit_local_tools() -> None:
+    registry = build_tool_registry(allowed_local_tools=["echo", "current_time"])
+
+    specs = {spec.name for spec in registry.specs()}
+
+    assert specs == {"echo", "current_time"}
 
 
 def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(

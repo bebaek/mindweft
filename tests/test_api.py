@@ -317,3 +317,75 @@ def test_thread_endpoints_accept_rs256_jwt_via_jwks(monkeypatch: pytest.MonkeyPa
     create_response = client.post("/threads", headers={"Authorization": f"Bearer {token}"})
 
     assert create_response.status_code == 200
+
+
+def test_tenant_execution_config_limits_tools_per_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "tools": {"allowed_local_tools": ["echo"]},
+                },
+                "tenant-2": {
+                    "llm": {"provider": "mock"},
+                    "tools": {"allowed_local_tools": ["current_time"]},
+                },
+            }
+        ),
+    )
+    client = TestClient(create_app())
+
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "/tool echo hello from tenant one"},
+        headers=AUTH_HEADERS,
+    )
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert run_response.status_code == 200
+    assert run_response.json() == {"reply": 'Tool result: {"echo": "hello from tenant one"}'}
+
+    other_thread_id = client.post("/threads", headers=OTHER_TENANT_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{other_thread_id}/messages",
+        json={"content": "/tool echo hello from tenant two"},
+        headers=OTHER_TENANT_HEADERS,
+    )
+
+    other_run = client.post(f"/threads/{other_thread_id}/run", headers=OTHER_TENANT_HEADERS)
+
+    assert other_run.status_code == 200
+    assert other_run.json() == {"reply": "Mock reply: /tool echo hello from tenant two"}
+
+
+def test_tenant_execution_config_rejects_missing_tenant_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "tools": {"allowed_local_tools": ["echo"]},
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+
+    thread_id = client.post("/threads", headers=OTHER_TENANT_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "hello"},
+        headers=OTHER_TENANT_HEADERS,
+    )
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=OTHER_TENANT_HEADERS)
+
+    assert run_response.status_code == 403
+    assert run_response.json()["detail"] == "Tenant 'tenant-2' has no execution configuration"
