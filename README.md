@@ -18,8 +18,8 @@ Minimal AI agent runtime POC from `DESIGN.md`.
 ```bash
 uv venv
 source .venv/bin/activate
-env UV_CACHE_DIR=.uv-cache uv sync --dev
-env UV_CACHE_DIR=.uv-cache uv run uvicorn app.main:app --reload
+uv sync --dev
+uv run uvicorn app.main:app --reload
 ```
 
 You can put provider settings in a local `.env` file. Start from [.env.example](/Users/burm/code/minigent/.env.example).
@@ -252,7 +252,7 @@ Set `MINIGENT_OTEL_EXPORTER=none` to keep trace context active without exporting
 ## Test
 
 ```bash
-env UV_CACHE_DIR=.uv-cache uv run pytest
+uv run pytest
 ```
 
 ## Development
@@ -260,19 +260,19 @@ env UV_CACHE_DIR=.uv-cache uv run pytest
 Lint:
 
 ```bash
-env UV_CACHE_DIR=.uv-cache uv run ruff check .
+uv run ruff check .
 ```
 
 Format:
 
 ```bash
-env UV_CACHE_DIR=.uv-cache uv run ruff format .
+uv run ruff format .
 ```
 
 Type check:
 
 ```bash
-env UV_CACHE_DIR=.uv-cache uv run pyright
+uv run basedpyright
 ```
 
 ## Contributing
@@ -292,21 +292,21 @@ chore: redact secrets from MCP URL logging
 With the server running, you can drive it with [scripts/demo_client.py](/Users/burm/code/minigent/scripts/demo_client.py):
 
 ```bash
-env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py "hello"
-env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py "/tool echo hello from tool"
-env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py "/tool current_time"
+uv run python scripts/demo_client.py "hello"
+uv run python scripts/demo_client.py "/tool echo hello from tool"
+uv run python scripts/demo_client.py "/tool current_time"
 ```
 
 To continue an existing thread:
 
 ```bash
-env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py --thread-id <thread_id> "follow up"
+uv run python scripts/demo_client.py --thread-id <thread_id> "follow up"
 ```
 
 To create a thread with a specific skill:
 
 ```bash
-env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py --skill-name math "/tool echo blocked by skill"
+uv run python scripts/demo_client.py --skill-name math "/tool echo blocked by skill"
 ```
 
 ## Skills Demo
@@ -347,9 +347,9 @@ MINIGENT_TENANT_EXECUTION_CONFIGS={
 With the server running:
 
 ```bash
-env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py --tenant-id demo-tenant "/tool echo hello from support"
-env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py --tenant-id demo-tenant --skill-name math "/tool echo blocked by skill"
-env UV_CACHE_DIR=.uv-cache uv run python scripts/demo_client.py --tenant-id demo-tenant --skill-name missing "hello"
+uv run python scripts/demo_client.py --tenant-id demo-tenant "/tool echo hello from support"
+uv run python scripts/demo_client.py --tenant-id demo-tenant --skill-name math "/tool echo blocked by skill"
+uv run python scripts/demo_client.py --tenant-id demo-tenant --skill-name missing "hello"
 ```
 
 Expected results:

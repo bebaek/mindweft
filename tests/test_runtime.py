@@ -9,8 +9,8 @@ from app.execution import (
     TenantExecutionContext,
     parse_tenant_execution_config,
 )
-from app.llm import MockLLMAdapter
-from app.models import LLMResponse, Message, MessageRole, Principal, ThreadStatus, ToolCall
+from app.llm import LLMAdapter, MockLLMAdapter
+from app.models import LLMResponse, Message, MessageRole, Principal, ThreadStatus, ToolCall, ToolSpec
 from app.runtime import RUNTIME_SYSTEM_PROMPT, AgentRuntime
 from app.store import InMemoryThreadStore
 from app.tools import build_local_tool_registry
@@ -47,11 +47,14 @@ def test_runtime_returns_assistant_reply_for_plain_user_message() -> None:
 def test_runtime_sends_system_prompt_to_llm() -> None:
     seen_messages: list[Message] = []
 
-    class InspectingLLM:
-        async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+    class InspectingLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
             nonlocal seen_messages
             seen_messages = messages
             return LLMResponse(content="ok")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
 
     store = InMemoryThreadStore()
     runtime = AgentRuntime(
@@ -151,8 +154,8 @@ def test_runtime_stores_tool_error_and_continues() -> None:
         async def execute(self, name: str, arguments: dict[str, object]) -> object:
             raise HTTPException(status_code=502, detail="fetch_url failed with status 404")
 
-    class ToolThenReplyLLM:
-        async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+    class ToolThenReplyLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
             if messages and messages[-1].role == MessageRole.TOOL:
                 return LLMResponse(content=f"Tool result: {messages[-1].content}")
             return LLMResponse(
@@ -162,6 +165,9 @@ def test_runtime_stores_tool_error_and_continues() -> None:
                     arguments={"url": "https://example.com/missing"},
                 )
             )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
 
     store = InMemoryThreadStore()
     runtime = AgentRuntime(
@@ -211,11 +217,11 @@ def test_runtime_blocks_repeated_identical_failed_tool_calls() -> None:
             self.calls += 1
             raise HTTPException(status_code=429, detail="Search failed")
 
-    class RepeatFailingToolThenReplyLLM:
+    class RepeatFailingToolThenReplyLLM(LLMAdapter):
         def __init__(self) -> None:
             self.calls = 0
 
-        async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
             if self.calls < 2:
                 self.calls += 1
                 return LLMResponse(
@@ -226,6 +232,9 @@ def test_runtime_blocks_repeated_identical_failed_tool_calls() -> None:
                     )
                 )
             return LLMResponse(content=f"Tool result: {messages[-1].content}")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
 
     store = InMemoryThreadStore()
     registry = CountingFailingRegistry()
@@ -280,11 +289,11 @@ def test_runtime_blocks_repeated_identical_error_results() -> None:
                 "documentation": "https://docs.tavily.com/documentation/api-reference/endpoint/search",
             }
 
-    class RepeatErrorResultToolThenReplyLLM:
+    class RepeatErrorResultToolThenReplyLLM(LLMAdapter):
         def __init__(self) -> None:
             self.calls = 0
 
-        async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
             if self.calls < 2:
                 self.calls += 1
                 return LLMResponse(
@@ -295,6 +304,9 @@ def test_runtime_blocks_repeated_identical_error_results() -> None:
                     )
                 )
             return LLMResponse(content=f"Tool result: {messages[-1].content}")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
 
     store = InMemoryThreadStore()
     registry = CountingErrorResultRegistry()
@@ -342,11 +354,14 @@ def test_runtime_blocks_repeated_identical_error_results() -> None:
 
 
 def test_runtime_marks_thread_error_when_max_iterations_exceeded() -> None:
-    class LoopingLLM:
-        async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+    class LoopingLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
             return LLMResponse(
                 tool_call=ToolCall(id="loop-call", name="echo", arguments={"text": "loop"})
             )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
 
     store = InMemoryThreadStore()
     runtime = AgentRuntime(
@@ -382,11 +397,14 @@ def test_runtime_rejects_concurrent_runs_for_same_thread() -> None:
         started = asyncio.Event()
         release = asyncio.Event()
 
-        class BlockingLLM:
-            async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+        class BlockingLLM(LLMAdapter):
+            async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
                 started.set()
                 await release.wait()
                 return LLMResponse(content="done")
+
+            def describe(self) -> dict[str, object]:
+                return {"provider": "test"}
 
         store = InMemoryThreadStore()
         runtime = AgentRuntime(
@@ -467,8 +485,8 @@ def test_runtime_appends_skill_prompt_to_system_prompt() -> None:
         },
     )
 
-    class InspectingLLM:
-        async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+    class InspectingLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
             nonlocal seen_messages
             seen_messages = messages
             return LLMResponse(content="ok")

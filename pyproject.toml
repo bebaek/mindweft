@@ -23,7 +23,7 @@ minirag = [
 
 [dependency-groups]
 dev = [
-  "pyright>=1.1.0,<2.0",
+  "basedpyright>=1.20.0",
   "pytest>=8.0,<9.0",
   "ruff>=0.11,<1.0",
 ]
@@ -56,7 +56,7 @@ quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
 
-[tool.pyright]
+[tool.basedpyright]
 include = ["app"]
 typeCheckingMode = "standard"
 pythonVersion = "3.11"
