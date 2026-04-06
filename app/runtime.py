@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from typing import Any
 
@@ -14,7 +15,7 @@ from app.execution import (
 from app.llm import LLMAdapter, serialize_tool_result
 from app.models import LLMResponse, Message, MessageRole, Principal, ThreadStatus
 from app.store import InMemoryThreadStore
-from app.tools import ToolRegistry
+from app.tools import ToolExecutionContext, ToolRegistry
 
 RUNTIME_SYSTEM_PROMPT = (
     "Use tools when they are relevant and ground claims in tool results. "
@@ -129,7 +130,18 @@ class AgentRuntime:
             )
         else:
             try:
-                result = await tool_registry.execute(tool_call.name, tool_call.arguments)
+                execute_signature = inspect.signature(tool_registry.execute)
+                if "context" in execute_signature.parameters:
+                    result = await tool_registry.execute(
+                        tool_call.name,
+                        tool_call.arguments,
+                        context=ToolExecutionContext(
+                            tenant_id=principal.tenant_id,
+                            thread_id=thread_id,
+                        ),
+                    )
+                else:
+                    result = await tool_registry.execute(tool_call.name, tool_call.arguments)
             except HTTPException as exc:
                 failed_tool_calls.add(tool_call_signature)
                 result = _serialize_tool_error(tool_call.name, exc)

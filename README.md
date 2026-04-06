@@ -124,6 +124,16 @@ Supported fields:
 - `tools.allowed_local_tools`: local tool allowlist
 - `tools.mcp_servers`: per-tenant MCP server definitions
 
+The local tool `retrieve_knowledge` is available when Minigent is run with the `minirag`
+extra installed and `MINIGENT_MINIRAG_DB_PATH` set to a SQLite database created by
+`minirag ingest`.
+
+For local development with `uv`, install it with:
+
+```bash
+uv sync --extra minirag
+```
+
 In `store-with-defaults`, a `*` tenant record in the admin store acts as a default profile before env fallback is considered.
 
 ## Admin API

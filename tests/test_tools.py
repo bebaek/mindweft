@@ -6,7 +6,13 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from app.tools import build_local_tool_registry, build_tool_registry, build_tool_registry_from_env
+from app.tools import (
+    MINIGENT_MINIRAG_DB_PATH_ENV,
+    ToolExecutionContext,
+    build_local_tool_registry,
+    build_tool_registry,
+    build_tool_registry_from_env,
+)
 
 
 def test_local_registry_exposes_expected_tools() -> None:
@@ -18,6 +24,7 @@ def test_local_registry_exposes_expected_tools() -> None:
     assert "fetch_url" in specs
     assert "sleep" in specs
     assert "calculator" in specs
+    assert "retrieve_knowledge" in specs
     assert specs["current_time"].description == "Return the current UTC time in ISO 8601 format."
 
 
@@ -149,6 +156,44 @@ def test_build_tool_registry_can_limit_local_tools() -> None:
     specs = {spec.name for spec in registry.specs()}
 
     assert specs == {"echo", "current_time"}
+
+
+def test_retrieve_knowledge_tool_uses_tenant_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_execute(arguments: dict[str, object], context: ToolExecutionContext | None) -> dict[str, object]:
+        captured["arguments"] = arguments
+        captured["context"] = context
+        return {"chunks": [{"chunk_id": "chk_1"}]}
+
+    monkeypatch.setattr("app.tools._execute_retrieve_knowledge", fake_execute)
+    registry = build_local_tool_registry()
+
+    result = asyncio.run(
+        registry.execute(
+            "retrieve_knowledge",
+            {"query": "token refresh", "top_k": 3},
+            context=ToolExecutionContext(tenant_id="tenant-1", thread_id="thread-1"),
+        )
+    )
+
+    assert result == {"chunks": [{"chunk_id": "chk_1"}]}
+    assert captured["arguments"] == {"query": "token refresh", "top_k": 3}
+    assert captured["context"] == ToolExecutionContext(tenant_id="tenant-1", thread_id="thread-1")
+
+
+def test_retrieve_knowledge_requires_minirag_db_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(MINIGENT_MINIRAG_DB_PATH_ENV, raising=False)
+    registry = build_local_tool_registry()
+
+    with pytest.raises(HTTPException, match=MINIGENT_MINIRAG_DB_PATH_ENV):
+        asyncio.run(
+            registry.execute(
+                "retrieve_knowledge",
+                {"query": "token refresh"},
+                context=ToolExecutionContext(tenant_id="tenant-1"),
+            )
+        )
 
 
 def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(

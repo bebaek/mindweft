@@ -3,11 +3,14 @@ from __future__ import annotations
 import ast
 import asyncio
 import concurrent.futures
+import importlib
 import inspect
 import logging
 import operator
+import os
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,7 +23,15 @@ from app.redaction import sanitize_value_for_logging
 
 logger = logging.getLogger(__name__)
 
-LOCAL_TOOL_NAMES = {"echo", "current_time", "fetch_url", "sleep", "calculator"}
+MINIGENT_MINIRAG_DB_PATH_ENV = "MINIGENT_MINIRAG_DB_PATH"
+LOCAL_TOOL_NAMES = {
+    "echo",
+    "current_time",
+    "fetch_url",
+    "sleep",
+    "calculator",
+    "retrieve_knowledge",
+}
 
 _CALCULATOR_BINARY_OPERATORS: dict[type[ast.operator], Callable[[float, float], float]] = {
     ast.Add: operator.add,
@@ -37,9 +48,21 @@ _CALCULATOR_UNARY_OPERATORS: dict[type[ast.unaryop], Callable[[float], float]] =
 }
 
 
+@dataclass(frozen=True)
+class ToolExecutionContext:
+    tenant_id: str | None = None
+    thread_id: str | None = None
+
+
 class ToolRegistry:
     def __init__(self) -> None:
-        self._tools: dict[str, tuple[ToolSpec, Callable[[dict[str, Any]], Any]]] = {}
+        self._tools: dict[
+            str,
+            tuple[
+                ToolSpec,
+                Callable[[dict[str, Any], ToolExecutionContext | None], Any],
+            ],
+        ] = {}
         self._mcp_servers: list[dict[str, Any]] = []
 
     def register(
@@ -47,7 +70,7 @@ class ToolRegistry:
         name: str,
         description: str,
         input_schema: dict[str, Any],
-        handler: Callable[[dict[str, Any]], Any],
+        handler: Callable[[dict[str, Any], ToolExecutionContext | None], Any],
     ) -> None:
         self._tools[name] = (
             ToolSpec(name=name, description=description, input_schema=input_schema),
@@ -57,7 +80,13 @@ class ToolRegistry:
     def specs(self) -> list[ToolSpec]:
         return [tool[0] for tool in self._tools.values()]
 
-    async def execute(self, name: str, arguments: dict[str, Any]) -> Any:
+    async def execute(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        context: ToolExecutionContext | None = None,
+    ) -> Any:
         tool = self._tools.get(name)
         if tool is None:
             raise HTTPException(status_code=400, detail=f"Unknown tool '{name}'")
@@ -65,7 +94,7 @@ class ToolRegistry:
         started_at = time.perf_counter()
         logger.info("tool.start name=%s arguments=%s", name, sanitized_arguments)
         try:
-            result = tool[1](arguments)
+            result = tool[1](arguments, context)
             if inspect.isawaitable(result):
                 result = await result
         except Exception as exc:
@@ -98,7 +127,7 @@ def build_local_tool_registry(allowed_tools: list[str] | None = None) -> ToolReg
         name: str,
         description: str,
         input_schema: dict[str, Any],
-        handler: Callable[[dict[str, Any]], Any],
+        handler: Callable[[dict[str, Any], ToolExecutionContext | None], Any],
     ) -> None:
         if allowed_tool_set is not None and name not in allowed_tool_set:
             return
@@ -109,7 +138,10 @@ def build_local_tool_registry(allowed_tools: list[str] | None = None) -> ToolReg
             handler=handler,
         )
 
-    def echo_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+    def echo_tool(
+        arguments: dict[str, Any], context: ToolExecutionContext | None = None
+    ) -> dict[str, Any]:
+        _ = context
         text = str(arguments.get("text", ""))
         return {"echo": text}
 
@@ -124,8 +156,10 @@ def build_local_tool_registry(allowed_tools: list[str] | None = None) -> ToolReg
         handler=echo_tool,
     )
 
-    def current_time_tool(arguments: dict[str, Any]) -> dict[str, Any]:
-        _ = arguments
+    def current_time_tool(
+        arguments: dict[str, Any], context: ToolExecutionContext | None = None
+    ) -> dict[str, Any]:
+        _ = arguments, context
         return {"current_time": datetime.now(timezone.utc).isoformat()}
 
     register_local_tool(
@@ -135,7 +169,10 @@ def build_local_tool_registry(allowed_tools: list[str] | None = None) -> ToolReg
         handler=current_time_tool,
     )
 
-    async def fetch_url_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+    async def fetch_url_tool(
+        arguments: dict[str, Any], context: ToolExecutionContext | None = None
+    ) -> dict[str, Any]:
+        _ = context
         url = str(arguments.get("url", "")).strip()
         timeout = float(arguments.get("timeout_seconds", 10.0))
         if not url:
@@ -172,7 +209,10 @@ def build_local_tool_registry(allowed_tools: list[str] | None = None) -> ToolReg
         handler=fetch_url_tool,
     )
 
-    async def sleep_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+    async def sleep_tool(
+        arguments: dict[str, Any], context: ToolExecutionContext | None = None
+    ) -> dict[str, Any]:
+        _ = context
         seconds = float(arguments.get("seconds", 0))
         if seconds < 0:
             raise HTTPException(status_code=400, detail="sleep requires seconds >= 0")
@@ -190,7 +230,10 @@ def build_local_tool_registry(allowed_tools: list[str] | None = None) -> ToolReg
         handler=sleep_tool,
     )
 
-    def calculator_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+    def calculator_tool(
+        arguments: dict[str, Any], context: ToolExecutionContext | None = None
+    ) -> dict[str, Any]:
+        _ = context
         expression = str(arguments.get("expression", "")).strip()
         if not expression:
             raise HTTPException(status_code=400, detail="calculator requires an expression")
@@ -205,6 +248,25 @@ def build_local_tool_registry(allowed_tools: list[str] | None = None) -> ToolReg
             "required": ["expression"],
         },
         handler=calculator_tool,
+    )
+
+    def retrieve_knowledge_tool(
+        arguments: dict[str, Any], context: ToolExecutionContext | None = None
+    ) -> dict[str, Any]:
+        return _execute_retrieve_knowledge(arguments, context)
+
+    register_local_tool(
+        name="retrieve_knowledge",
+        description="Search tenant-scoped ingested knowledge and return matching chunks.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
+            },
+            "required": ["query"],
+        },
+        handler=retrieve_knowledge_tool,
     )
 
     return registry
@@ -232,7 +294,7 @@ def build_tool_registry(
                     name=spec.name,
                     description=spec.description,
                     input_schema=spec.input_schema,
-                    handler=lambda arguments, c=client, tool_name=raw_tool_name: c.call_tool(
+                    handler=lambda arguments, context=None, c=client, tool_name=raw_tool_name: c.call_tool(
                         tool_name, arguments
                     ),
                 )
@@ -281,6 +343,44 @@ def _evaluate_calculator_node(node: ast.AST) -> float | int:
             raise HTTPException(status_code=400, detail="calculator operator is not supported")
         return operator_fn(_evaluate_calculator_node(node.operand))
     raise HTTPException(status_code=400, detail="calculator expression contains unsupported syntax")
+
+
+def _execute_retrieve_knowledge(
+    arguments: dict[str, Any], context: ToolExecutionContext | None
+) -> dict[str, Any]:
+    query = str(arguments.get("query", "")).strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="retrieve_knowledge requires a query")
+
+    top_k = arguments.get("top_k", 8)
+    if not isinstance(top_k, int):
+        raise HTTPException(status_code=400, detail="retrieve_knowledge top_k must be an integer")
+    if top_k <= 0:
+        raise HTTPException(status_code=400, detail="retrieve_knowledge top_k must be >= 1")
+
+    if context is None or not context.tenant_id:
+        raise HTTPException(status_code=500, detail="retrieve_knowledge requires tenant context")
+
+    db_path = os.getenv(MINIGENT_MINIRAG_DB_PATH_ENV, "").strip()
+    if not db_path:
+        raise HTTPException(
+            status_code=503,
+            detail=f"retrieve_knowledge requires {MINIGENT_MINIRAG_DB_PATH_ENV} to be configured",
+        )
+
+    try:
+        minirag_retrieve = importlib.import_module("minirag.retrieve")
+        minirag_tool = importlib.import_module("minirag.tool")
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="retrieve_knowledge requires the minirag package to be installed",
+        ) from exc
+
+    MiniRAG = minirag_retrieve.MiniRAG
+    retrieve_knowledge = minirag_tool.retrieve_knowledge
+    rag = MiniRAG(db_path=db_path)
+    return retrieve_knowledge(rag, query=query, tenant_id=context.tenant_id, top_k=top_k)
 
 
 def _sanitize_tool_arguments(arguments: dict[str, Any]) -> dict[str, Any]:

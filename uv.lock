@@ -402,6 +402,11 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
+[package.optional-dependencies]
+minirag = [
+    { name = "minirag" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "pyright" },
@@ -413,6 +418,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1.0" },
     { name = "httpx", specifier = ">=0.28,<1.0" },
+    { name = "minirag", marker = "extra == 'minirag'", directory = "../minirag" },
     { name = "opentelemetry-api", specifier = ">=1.33,<2.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.33,<2.0" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.54b0,<1.0" },
@@ -422,12 +428,27 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0,<2.0" },
     { name = "uvicorn", specifier = ">=0.30,<1.0" },
 ]
+provides-extras = ["minirag"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "pyright", specifier = ">=1.1.0,<2.0" },
     { name = "pytest", specifier = ">=8.0,<9.0" },
     { name = "ruff", specifier = ">=0.11,<1.0" },
+]
+
+[[package]]
+name = "minirag"
+version = "0.1.0"
+source = { directory = "../minirag" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "basedpyright", specifier = ">=1.20.0" },
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "ruff", specifier = ">=0.11.0" },
 ]
 
 [[package]]
