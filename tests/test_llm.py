@@ -5,7 +5,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from app.llm import OpenAICompatibleAdapter, build_llm_adapter_from_env, load_provider_config
+from app.llm import MockLLMAdapter, OpenAICompatibleAdapter, build_llm_adapter_from_env, load_provider_config
 from app.models import Message, MessageRole, ToolSpec
 from app.tools import build_local_tool_registry
 
@@ -36,6 +36,50 @@ def test_openai_compatible_adapter_returns_text_response() -> None:
 
     assert response.content == "hello from provider"
     assert response.tool_call is None
+
+
+def test_mock_llm_adapter_supports_json_tool_arguments() -> None:
+    adapter = MockLLMAdapter()
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.USER,
+                    content='/tool retrieve_knowledge {"query":"token refresh","top_k":3}',
+                )
+            ],
+            build_local_tool_registry().specs(),
+        )
+    )
+
+    assert response.content is None
+    assert response.tool_call is not None
+    assert response.tool_call.name == "retrieve_knowledge"
+    assert response.tool_call.arguments == {"query": "token refresh", "top_k": 3}
+
+
+def test_mock_llm_adapter_maps_plain_retrieve_knowledge_payload_to_query() -> None:
+    adapter = MockLLMAdapter()
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.USER,
+                    content="/tool retrieve_knowledge token refresh",
+                )
+            ],
+            build_local_tool_registry().specs(),
+        )
+    )
+
+    assert response.content is None
+    assert response.tool_call is not None
+    assert response.tool_call.name == "retrieve_knowledge"
+    assert response.tool_call.arguments == {"query": "token refresh"}
 
 
 def test_openai_compatible_adapter_returns_tool_call() -> None:

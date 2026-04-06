@@ -52,7 +52,9 @@ class MockLLMAdapter(LLMAdapter):
             if tool_name in tool_names:
                 return LLMResponse(
                     tool_call=ToolCall(
-                        id=f"mock-{tool_name}-call", name=tool_name, arguments={"text": payload}
+                        id=f"mock-{tool_name}-call",
+                        name=tool_name,
+                        arguments=_parse_mock_tool_arguments(tool_name, payload),
                     )
                 )
 
@@ -204,6 +206,23 @@ def load_provider_config(provider: str) -> ProviderConfig:
 
 def serialize_tool_result(result: object) -> str:
     return json.dumps(result, ensure_ascii=True, default=str)
+
+
+def _parse_mock_tool_arguments(tool_name: str, payload: str) -> dict[str, Any]:
+    stripped = payload.strip()
+    if not stripped:
+        return {}
+    if stripped.startswith("{"):
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="mock tool payload is invalid JSON") from exc
+        if not isinstance(parsed, dict):
+            raise HTTPException(status_code=400, detail="mock tool payload must be a JSON object")
+        return parsed
+    if tool_name == "retrieve_knowledge":
+        return {"query": stripped}
+    return {"text": stripped}
 
 
 def _message_to_chat_payload(message: Message, tool_name_map: dict[str, str]) -> dict[str, Any]:
