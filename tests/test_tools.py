@@ -1,13 +1,16 @@
 import asyncio
 import logging
 from datetime import datetime
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi import HTTPException
 
 from app.tools import (
+    MINIGENT_MINIRAG_BACKEND_ENV,
     MINIGENT_MINIRAG_DB_PATH_ENV,
+    MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV,
     ToolExecutionContext,
     build_local_tool_registry,
     build_tool_registry,
@@ -194,6 +197,69 @@ def test_retrieve_knowledge_requires_minirag_db_path(monkeypatch: pytest.MonkeyP
                 context=ToolExecutionContext(tenant_id="tenant-1"),
             )
         )
+
+
+def test_retrieve_knowledge_uses_backend_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeMiniRAG:
+        def __init__(self, *, db_path: str, backend: object) -> None:
+            self.db_path = db_path
+            self.backend = backend
+
+    captured: dict[str, object] = {}
+
+    def fake_build_backend(
+        name: object, *, embedding_provider_name: str | None = None
+    ) -> object:
+        captured["backend_name"] = name
+        captured["embedding_provider_name"] = embedding_provider_name
+        return {"backend_name": name, "embedding_provider_name": embedding_provider_name}
+
+    def fake_retrieve_knowledge(
+        rag: object,
+        *,
+        query: str,
+        tenant_id: str,
+        top_k: int,
+    ) -> dict[str, object]:
+        captured["rag"] = rag
+        captured["query"] = query
+        captured["tenant_id"] = tenant_id
+        captured["top_k"] = top_k
+        return {"chunks": []}
+
+    fake_retrieve_module = SimpleNamespace(
+        MiniRAG=FakeMiniRAG,
+        build_backend=fake_build_backend,
+    )
+    fake_tool_module = SimpleNamespace(retrieve_knowledge=fake_retrieve_knowledge)
+
+    def fake_import_module(name: str) -> object:
+        if name == "minirag.retrieve":
+            return fake_retrieve_module
+        if name == "minirag.tool":
+            return fake_tool_module
+        raise ImportError(name)
+
+    monkeypatch.setenv(MINIGENT_MINIRAG_DB_PATH_ENV, "/tmp/minirag.db")
+    monkeypatch.setenv(MINIGENT_MINIRAG_BACKEND_ENV, "dense")
+    monkeypatch.setenv(MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV, "hash")
+    monkeypatch.setattr("app.tools.importlib.import_module", fake_import_module)
+
+    registry = build_local_tool_registry()
+    result = asyncio.run(
+        registry.execute(
+            "retrieve_knowledge",
+            {"query": "token refresh", "top_k": 3},
+            context=ToolExecutionContext(tenant_id="tenant-1"),
+        )
+    )
+
+    assert result == {"chunks": []}
+    assert captured["backend_name"] == "dense"
+    assert captured["embedding_provider_name"] == "hash"
+    assert captured["query"] == "token refresh"
+    assert captured["tenant_id"] == "tenant-1"
+    assert captured["top_k"] == 3
 
 
 def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(

@@ -128,6 +128,11 @@ The local tool `retrieve_knowledge` is available when Minigent is run with the `
 extra installed and `MINIGENT_MINIRAG_DB_PATH` set to a SQLite database created by
 `minirag ingest`.
 
+Optional retrieval tuning env vars:
+
+- `MINIGENT_MINIRAG_BACKEND`: `lexical` or `dense`
+- `MINIGENT_MINIRAG_EMBEDDING_PROVIDER`: `hash`, `openai`, or `openrouter`
+
 For local development with `uv`, install it with:
 
 ```bash

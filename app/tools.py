@@ -24,6 +24,8 @@ from app.redaction import sanitize_value_for_logging
 logger = logging.getLogger(__name__)
 
 MINIGENT_MINIRAG_DB_PATH_ENV = "MINIGENT_MINIRAG_DB_PATH"
+MINIGENT_MINIRAG_BACKEND_ENV = "MINIGENT_MINIRAG_BACKEND"
+MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV = "MINIGENT_MINIRAG_EMBEDDING_PROVIDER"
 LOCAL_TOOL_NAMES = {
     "echo",
     "current_time",
@@ -378,8 +380,17 @@ def _execute_retrieve_knowledge(
         ) from exc
 
     MiniRAG = minirag_retrieve.MiniRAG
+    build_backend = minirag_retrieve.build_backend
     retrieve_knowledge = minirag_tool.retrieve_knowledge
-    rag = MiniRAG(db_path=db_path)
+    backend_name = os.getenv(MINIGENT_MINIRAG_BACKEND_ENV, "lexical").strip().lower()
+    embedding_provider_name = os.getenv(MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV, "").strip() or None
+    rag = MiniRAG(
+        db_path=db_path,
+        backend=build_backend(
+            backend_name,
+            embedding_provider_name=embedding_provider_name,
+        ),
+    )
     return retrieve_knowledge(rag, query=query, tenant_id=context.tenant_id, top_k=top_k)
 
 

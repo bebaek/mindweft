@@ -453,8 +453,16 @@ dev = [
 name = "minirag"
 version = "0.1.0"
 source = { directory = "../minirag" }
+dependencies = [
+    { name = "httpx" },
+    { name = "python-dotenv" },
+]
 
 [package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [
