@@ -130,7 +130,7 @@ extra installed and `MINIGENT_MINIRAG_DB_PATH` set to a SQLite database created 
 
 Optional retrieval tuning env vars:
 
-- `MINIGENT_MINIRAG_BACKEND`: `lexical` or `dense`
+- `MINIGENT_MINIRAG_BACKEND`: `lexical`, `dense`, or `hybrid`
 - `MINIGENT_MINIRAG_EMBEDDING_PROVIDER`: `hash`, `openai`, or `openrouter`
 
 For local development with `uv`, install it with:
@@ -138,6 +138,10 @@ For local development with `uv`, install it with:
 ```bash
 uv sync --extra minirag
 ```
+
+Because `minirag` is wired in via a local path source during development, rerun
+`uv sync --extra minirag` in Minigent after changing the sibling `minirag` repo so the
+runtime environment picks up the updated package build.
 
 In `store-with-defaults`, a `*` tenant record in the admin store acts as a default profile before env fallback is considered.
 

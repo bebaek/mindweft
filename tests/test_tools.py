@@ -199,7 +199,18 @@ def test_retrieve_knowledge_requires_minirag_db_path(monkeypatch: pytest.MonkeyP
         )
 
 
-def test_retrieve_knowledge_uses_backend_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("backend_name", "embedding_provider_name"),
+    [
+        ("dense", "hash"),
+        ("hybrid", "openrouter"),
+    ],
+)
+def test_retrieve_knowledge_uses_backend_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_name: str,
+    embedding_provider_name: str,
+) -> None:
     class FakeMiniRAG:
         def __init__(self, *, db_path: str, backend: object) -> None:
             self.db_path = db_path
@@ -241,8 +252,8 @@ def test_retrieve_knowledge_uses_backend_configuration(monkeypatch: pytest.Monke
         raise ImportError(name)
 
     monkeypatch.setenv(MINIGENT_MINIRAG_DB_PATH_ENV, "/tmp/minirag.db")
-    monkeypatch.setenv(MINIGENT_MINIRAG_BACKEND_ENV, "dense")
-    monkeypatch.setenv(MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV, "hash")
+    monkeypatch.setenv(MINIGENT_MINIRAG_BACKEND_ENV, backend_name)
+    monkeypatch.setenv(MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV, embedding_provider_name)
     monkeypatch.setattr("app.tools.importlib.import_module", fake_import_module)
 
     registry = build_local_tool_registry()
@@ -255,8 +266,8 @@ def test_retrieve_knowledge_uses_backend_configuration(monkeypatch: pytest.Monke
     )
 
     assert result == {"chunks": []}
-    assert captured["backend_name"] == "dense"
-    assert captured["embedding_provider_name"] == "hash"
+    assert captured["backend_name"] == backend_name
+    assert captured["embedding_provider_name"] == embedding_provider_name
     assert captured["query"] == "token refresh"
     assert captured["tenant_id"] == "tenant-1"
     assert captured["top_k"] == 3
