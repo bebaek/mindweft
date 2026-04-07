@@ -128,6 +128,13 @@ The local tool `retrieve_knowledge` is available when Minigent is run with the `
 extra installed and `MINIGENT_MINIRAG_DB_PATH` set to a SQLite database created by
 `minirag ingest`.
 
+Recommended setup today:
+
+- `MINIGENT_MINIRAG_BACKEND=hybrid`
+- `MINIGENT_MINIRAG_EMBEDDING_PROVIDER=openrouter`
+
+That matches the current best-performing `minirag` configuration on the bundled benchmark.
+
 Optional retrieval tuning env vars:
 
 - `MINIGENT_MINIRAG_BACKEND`: `lexical`, `dense`, or `hybrid`
@@ -137,6 +144,14 @@ For local development with `uv`, install it with:
 
 ```bash
 uv sync --extra minirag
+```
+
+Example:
+
+```bash
+export MINIGENT_MINIRAG_BACKEND=hybrid
+export MINIGENT_MINIRAG_EMBEDDING_PROVIDER=openrouter
+export OPENROUTER_API_KEY=...
 ```
 
 Because `minirag` is wired in via a local path source during development, rerun
