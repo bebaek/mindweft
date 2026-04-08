@@ -11,6 +11,8 @@ from app.tools import (
     MINIGENT_MINIRAG_BACKEND_ENV,
     MINIGENT_MINIRAG_DB_PATH_ENV,
     MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV,
+    MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV,
+    MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV,
     ToolExecutionContext,
     build_local_tool_registry,
     build_tool_registry,
@@ -200,16 +202,18 @@ def test_retrieve_knowledge_requires_minirag_db_path(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.parametrize(
-    ("backend_name", "embedding_provider_name"),
+    ("backend_name", "embedding_provider_name", "lexical_weight", "dense_weight"),
     [
-        ("dense", "hash"),
-        ("hybrid", "openrouter"),
+        ("dense", "hash", None, None),
+        ("hybrid", "openrouter", "0.05", "0.95"),
     ],
 )
 def test_retrieve_knowledge_uses_backend_configuration(
     monkeypatch: pytest.MonkeyPatch,
     backend_name: str,
     embedding_provider_name: str,
+    lexical_weight: str | None,
+    dense_weight: str | None,
 ) -> None:
     class FakeMiniRAG:
         def __init__(self, *, db_path: str, backend: object) -> None:
@@ -219,11 +223,22 @@ def test_retrieve_knowledge_uses_backend_configuration(
     captured: dict[str, object] = {}
 
     def fake_build_backend(
-        name: object, *, embedding_provider_name: str | None = None
+        name: object,
+        *,
+        embedding_provider_name: str | None = None,
+        hybrid_lexical_weight: float | None = None,
+        hybrid_dense_weight: float | None = None,
     ) -> object:
         captured["backend_name"] = name
         captured["embedding_provider_name"] = embedding_provider_name
-        return {"backend_name": name, "embedding_provider_name": embedding_provider_name}
+        captured["hybrid_lexical_weight"] = hybrid_lexical_weight
+        captured["hybrid_dense_weight"] = hybrid_dense_weight
+        return {
+            "backend_name": name,
+            "embedding_provider_name": embedding_provider_name,
+            "hybrid_lexical_weight": hybrid_lexical_weight,
+            "hybrid_dense_weight": hybrid_dense_weight,
+        }
 
     def fake_retrieve_knowledge(
         rag: object,
@@ -254,6 +269,14 @@ def test_retrieve_knowledge_uses_backend_configuration(
     monkeypatch.setenv(MINIGENT_MINIRAG_DB_PATH_ENV, "/tmp/minirag.db")
     monkeypatch.setenv(MINIGENT_MINIRAG_BACKEND_ENV, backend_name)
     monkeypatch.setenv(MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV, embedding_provider_name)
+    if lexical_weight is not None:
+        monkeypatch.setenv(MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV, lexical_weight)
+    else:
+        monkeypatch.delenv(MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV, raising=False)
+    if dense_weight is not None:
+        monkeypatch.setenv(MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV, dense_weight)
+    else:
+        monkeypatch.delenv(MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV, raising=False)
     monkeypatch.setattr("app.tools.importlib.import_module", fake_import_module)
 
     registry = build_local_tool_registry()
@@ -268,6 +291,12 @@ def test_retrieve_knowledge_uses_backend_configuration(
     assert result == {"chunks": []}
     assert captured["backend_name"] == backend_name
     assert captured["embedding_provider_name"] == embedding_provider_name
+    assert captured["hybrid_lexical_weight"] == (
+        float(lexical_weight) if lexical_weight is not None else None
+    )
+    assert captured["hybrid_dense_weight"] == (
+        float(dense_weight) if dense_weight is not None else None
+    )
     assert captured["query"] == "token refresh"
     assert captured["tenant_id"] == "tenant-1"
     assert captured["top_k"] == 3

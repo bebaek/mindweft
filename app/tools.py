@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 MINIGENT_MINIRAG_DB_PATH_ENV = "MINIGENT_MINIRAG_DB_PATH"
 MINIGENT_MINIRAG_BACKEND_ENV = "MINIGENT_MINIRAG_BACKEND"
 MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV = "MINIGENT_MINIRAG_EMBEDDING_PROVIDER"
+MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV = "MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT"
+MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV = "MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT"
 LOCAL_TOOL_NAMES = {
     "echo",
     "current_time",
@@ -384,11 +386,27 @@ def _execute_retrieve_knowledge(
     retrieve_knowledge = minirag_tool.retrieve_knowledge
     backend_name = os.getenv(MINIGENT_MINIRAG_BACKEND_ENV, "lexical").strip().lower()
     embedding_provider_name = os.getenv(MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV, "").strip() or None
+    hybrid_lexical_weight_raw = (
+        os.getenv(MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV, "").strip() or None
+    )
+    hybrid_dense_weight_raw = (
+        os.getenv(MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV, "").strip() or None
+    )
     rag = MiniRAG(
         db_path=db_path,
         backend=build_backend(
             backend_name,
             embedding_provider_name=embedding_provider_name,
+            hybrid_lexical_weight=(
+                float(hybrid_lexical_weight_raw)
+                if hybrid_lexical_weight_raw is not None
+                else None
+            ),
+            hybrid_dense_weight=(
+                float(hybrid_dense_weight_raw)
+                if hybrid_dense_weight_raw is not None
+                else None
+            ),
         ),
     )
     return retrieve_knowledge(rag, query=query, tenant_id=context.tenant_id, top_k=top_k)

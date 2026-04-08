@@ -130,15 +130,17 @@ extra installed and `MINIGENT_MINIRAG_DB_PATH` set to a SQLite database created 
 
 Recommended setup today:
 
-- `MINIGENT_MINIRAG_BACKEND=hybrid`
+- `MINIGENT_MINIRAG_BACKEND=dense`
 - `MINIGENT_MINIRAG_EMBEDDING_PROVIDER=openrouter`
 
-That matches the current best-performing `minirag` configuration on the bundled benchmark.
+That matches the current best-performing `minirag` configuration on the FIQA external slices run so far.
 
 Optional retrieval tuning env vars:
 
 - `MINIGENT_MINIRAG_BACKEND`: `lexical`, `dense`, or `hybrid`
 - `MINIGENT_MINIRAG_EMBEDDING_PROVIDER`: `hash`, `openai`, or `openrouter`
+- `MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT`: optional lexical score weight for `hybrid`
+- `MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT`: optional dense score weight for `hybrid`
 
 For local development with `uv`, install it with:
 
@@ -149,9 +151,18 @@ uv sync --extra minirag
 Example:
 
 ```bash
-export MINIGENT_MINIRAG_BACKEND=hybrid
+export MINIGENT_MINIRAG_BACKEND=dense
 export MINIGENT_MINIRAG_EMBEDDING_PROVIDER=openrouter
 export OPENROUTER_API_KEY=...
+```
+
+If you want to tune `hybrid` explicitly:
+
+```bash
+export MINIGENT_MINIRAG_BACKEND=hybrid
+export MINIGENT_MINIRAG_EMBEDDING_PROVIDER=openrouter
+export MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT=0.05
+export MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT=0.95
 ```
 
 Because `minirag` is wired in via a local path source during development, rerun
