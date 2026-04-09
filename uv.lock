@@ -461,8 +461,10 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.0" },
+    { name = "ir-datasets", marker = "extra == 'benchmark'", specifier = ">=0.5.10" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
 ]
+provides-extras = ["benchmark"]
 
 [package.metadata.requires-dev]
 dev = [
