@@ -22,6 +22,14 @@ uv sync --dev
 uv run uvicorn app.main:app --reload
 ```
 
+For the simplest client flow against a running server, use the packaged CLI:
+
+```bash
+uv run minigent chat "hello"
+uv run minigent chat --thread <thread-id> "continue"
+uv run minigent threads show <thread-id>
+```
+
 You can put provider settings in a local `.env` file. Start from [.env.example](/Users/burm/code/minigent/.env.example).
 
 ## Authentication
