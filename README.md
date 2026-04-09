@@ -27,6 +27,7 @@ For the simplest client flow against a running server, use the packaged CLI:
 ```bash
 uv run minigent chat "hello"
 uv run minigent chat --thread <thread-id> "continue"
+uv run minigent chat --resume-last "continue"
 uv run minigent threads show <thread-id>
 ```
 

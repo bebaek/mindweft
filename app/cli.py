@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import secrets
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Sequence
+
+
+STATE_DIR_NAME = ".minigent"
+STATE_FILE_NAME = "cli-state.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -51,7 +57,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     chat_parser = subparsers.add_parser("chat", help="Send a user message and print the assistant reply.")
     chat_parser.add_argument("message", help="User message content to send.")
-    chat_parser.add_argument("--thread", default=None, help="Existing thread ID to continue.")
+    chat_target_group = chat_parser.add_mutually_exclusive_group()
+    chat_target_group.add_argument("--thread", default=None, help="Existing thread ID to continue.")
+    chat_target_group.add_argument(
+        "--resume-last",
+        action="store_true",
+        help="Resume the last locally remembered thread for this server and principal.",
+    )
     chat_parser.add_argument("--skill", default=None, help="Skill to apply when creating a new thread.")
     chat_parser.add_argument(
         "--print-thread-id",
@@ -134,6 +146,70 @@ def build_auth_headers(args: argparse.Namespace) -> dict[str, str]:
     return build_principal_headers(args.user_id, args.tenant_id, args.admin)
 
 
+def state_file_path() -> Path:
+    return Path.home() / STATE_DIR_NAME / STATE_FILE_NAME
+
+
+def load_state() -> dict[str, Any]:
+    path = state_file_path()
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def save_state(state: dict[str, Any]) -> None:
+    path = state_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def principal_key(args: argparse.Namespace) -> str:
+    if args.api_token:
+        token_fingerprint = hashlib.sha256(args.api_token.encode("utf-8")).hexdigest()[:16]
+        return f"bearer:{token_fingerprint}"
+    return f"dev:{args.user_id}:{args.tenant_id}:{str(args.admin).lower()}"
+
+
+def state_scope_key(base_url: str, args: argparse.Namespace) -> str:
+    return f"{base_url}|{principal_key(args)}"
+
+
+def remember_thread(base_url: str, args: argparse.Namespace, thread_id: str) -> None:
+    state = load_state()
+    recent_threads = state.setdefault("recent_threads", {})
+    if not isinstance(recent_threads, dict):
+        recent_threads = {}
+        state["recent_threads"] = recent_threads
+    recent_threads[state_scope_key(base_url, args)] = thread_id
+    save_state(state)
+
+
+def load_remembered_thread(base_url: str, args: argparse.Namespace) -> str:
+    state = load_state()
+    recent_threads = state.get("recent_threads", {})
+    if not isinstance(recent_threads, dict):
+        raise SystemExit("No saved thread history is available for this CLI.")
+    thread_id = recent_threads.get(state_scope_key(base_url, args))
+    if not isinstance(thread_id, str) or not thread_id:
+        raise SystemExit("No remembered thread for this server and principal. Start a chat first.")
+    return thread_id
+
+
+def forget_thread(base_url: str, args: argparse.Namespace, thread_id: str) -> None:
+    state = load_state()
+    recent_threads = state.get("recent_threads", {})
+    if not isinstance(recent_threads, dict):
+        return
+    scope_key = state_scope_key(base_url, args)
+    if recent_threads.get(scope_key) != thread_id:
+        return
+    del recent_threads[scope_key]
+    save_state(state)
+
+
 def ensure_thread(
     args: argparse.Namespace,
     base_url: str,
@@ -141,6 +217,8 @@ def ensure_thread(
 ) -> tuple[str, bool]:
     if args.thread:
         return args.thread, False
+    if args.resume_last:
+        return load_remembered_thread(base_url, args), False
     payload = {"skill_name": args.skill} if args.skill is not None else None
     response = request_json("POST", f"{base_url}/threads", payload=payload, headers=headers)
     return response["thread_id"], True
@@ -167,6 +245,7 @@ def run_chat(args: argparse.Namespace, base_url: str, headers: dict[str, str], t
     )
     run_response = request_json("POST", f"{base_url}/threads/{thread_id}/run", headers=headers)
     reply = run_response["reply"]
+    remember_thread(base_url, args, thread_id)
 
     if args.json:
         output: dict[str, Any] = {
@@ -201,6 +280,7 @@ def run_threads_create(
 ) -> int:
     payload = {"skill_name": args.skill} if args.skill is not None else None
     response = request_json("POST", f"{base_url}/threads", payload=payload, headers=headers)
+    remember_thread(base_url, args, response["thread_id"])
     if args.json:
         output: dict[str, Any] = {"thread_id": response["thread_id"]}
         if trace_id is not None:
@@ -234,6 +314,7 @@ def run_threads_delete(
     args: argparse.Namespace, base_url: str, headers: dict[str, str], trace_id: str | None
 ) -> int:
     request_json("DELETE", f"{base_url}/threads/{args.thread_id}", headers=headers)
+    forget_thread(base_url, args, args.thread_id)
     if args.json:
         output: dict[str, Any] = {"deleted": True, "thread_id": args.thread_id}
         if trace_id is not None:

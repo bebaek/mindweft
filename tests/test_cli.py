@@ -1,12 +1,20 @@
 import json
+from pathlib import Path
 
 import pytest
 
 from app import cli
 
 
+@pytest.fixture
+def isolated_cli_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "state_file_path", lambda: tmp_path / "cli-state.json")
+
+
 def test_chat_creates_thread_and_prints_reply(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    isolated_cli_state: None,
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None, dict[str, str] | None]] = []
 
@@ -67,7 +75,9 @@ def test_chat_creates_thread_and_prints_reply(
 
 
 def test_chat_json_can_include_transcript(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    isolated_cli_state: None,
 ) -> None:
     def fake_request_json(
         method: str,
@@ -107,7 +117,9 @@ def test_chat_json_can_include_transcript(
 
 
 def test_threads_show_formats_tool_messages(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    isolated_cli_state: None,
 ) -> None:
     def fake_request_json(
         method: str,
@@ -140,7 +152,9 @@ def test_threads_show_formats_tool_messages(
 
 
 def test_threads_delete_json_reports_deleted(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    isolated_cli_state: None,
 ) -> None:
     def fake_request_json(
         method: str,
@@ -163,7 +177,9 @@ def test_threads_delete_json_reports_deleted(
 
 
 def test_health_uses_bearer_token_auth(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    isolated_cli_state: None,
 ) -> None:
     captured_headers: dict[str, str] | None = None
 
@@ -188,3 +204,95 @@ def test_health_uses_bearer_token_auth(
     assert exit_code == 0
     assert capsys.readouterr().out == "ok\n"
     assert captured_headers == {"Authorization": "Bearer secret-token"}
+
+
+def test_chat_resume_last_uses_locally_remembered_thread(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    isolated_cli_state: None,
+) -> None:
+    cli.save_state(
+        {
+            "recent_threads": {
+                "http://127.0.0.1:8000|dev:demo-user:demo-tenant:false": "thread-remembered"
+            }
+        }
+    )
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_request_json(
+        method: str,
+        url: str,
+        *,
+        payload: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> object:
+        del headers
+        calls.append((method, url, payload))
+        if method == "POST" and url.endswith("/messages"):
+            return {"id": "message-1"}
+        if method == "POST" and url.endswith("/run"):
+            return {"reply": "continued"}
+        raise AssertionError(f"Unexpected request: {method} {url}")
+
+    monkeypatch.setattr(cli, "request_json", fake_request_json)
+
+    exit_code = cli.main(["chat", "--resume-last", "continue"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "continued\n"
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:8000/threads/thread-remembered/messages",
+            {"content": "continue"},
+        ),
+        (
+            "POST",
+            "http://127.0.0.1:8000/threads/thread-remembered/run",
+            None,
+        ),
+    ]
+
+
+def test_chat_resume_last_errors_without_saved_thread(
+    capsys: pytest.CaptureFixture[str], isolated_cli_state: None
+) -> None:
+    with pytest.raises(SystemExit, match="No remembered thread for this server and principal"):
+        cli.main(["chat", "--resume-last", "continue"])
+
+    assert capsys.readouterr().out == ""
+
+
+def test_threads_delete_clears_saved_last_thread(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    isolated_cli_state: None,
+) -> None:
+    cli.save_state(
+        {
+            "recent_threads": {
+                "http://127.0.0.1:8000|dev:demo-user:demo-tenant:false": "thread-123"
+            }
+        }
+    )
+
+    def fake_request_json(
+        method: str,
+        url: str,
+        *,
+        payload: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> object:
+        del payload, headers
+        assert method == "DELETE"
+        assert url == "http://127.0.0.1:8000/threads/thread-123"
+        return None
+
+    monkeypatch.setattr(cli, "request_json", fake_request_json)
+
+    exit_code = cli.main(["threads", "delete", "thread-123"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "thread-123\n"
+    assert cli.load_state() == {"recent_threads": {}}
