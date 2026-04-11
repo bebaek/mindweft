@@ -44,12 +44,14 @@ There is also a separate voice-daemon client entrypoint:
 uv run minigent-voice-daemon --wake-phrase "hey minigent"
 ```
 
-The daemon currently supports two backends:
+The daemon currently supports three backends:
 
 - `stdin`: text-driven wake phrase loop for cheap end-to-end testing
 - `manual-audio`: press Enter to activate the microphone, record until silence using
   Silero VAD, transcribe the utterance with OpenAI or OpenRouter speech-to-text, then send the text
   into Minigent and print the assistant reply
+- `passive-audio`: continuously listen for a wake word, keep a short pre-roll audio
+  buffer, then record until silence and transcribe through the same speech pipeline
 
 Examples:
 
@@ -93,20 +95,90 @@ For `openrouter`, choose a model that supports audio input. `openai/gpt-audio` i
 starting point. The OpenAI-native transcription model ID `gpt-4o-mini-transcribe` is
 for OpenAI's `/audio/transcriptions` API and is not a valid OpenRouter model ID.
 
+Passive wake-word example:
+
+```bash
+PICOVOICE_ACCESS_KEY=...
+MINIGENT_VOICE_KEYWORD_PATH=/absolute/path/to/hey-minigent.ppn
+uv run minigent-voice-daemon --backend passive-audio
+```
+
+Free `openwakeword` example:
+
+```bash
+MINIGENT_VOICE_WAKEWORD_PROVIDER=openwakeword
+MINIGENT_VOICE_OWW_MODEL=okay_nabu
+uv run minigent-voice-daemon --backend passive-audio
+```
+
+`passive-audio` keeps the microphone open, feeds chunks into the configured wake-word detector, and after the
+wake word fires it prepends a short pre-roll buffer before recording the utterance to
+reduce clipped first words.
+
+Passive mode can also delay very briefly after wake detection before opening the fresh
+recording stream, then add a small amount of leading and trailing silence before STT.
+Those controls help make passive captures look more like the known-good manual capture
+path when audio-capable chat models are sensitive to tightly cropped speech.
+
+If you need to inspect captured audio, set `MINIGENT_VOICE_DEBUG_CAPTURE_PATH` or pass
+`--debug-capture-path`. The daemon will print capture metadata and write the last WAV
+capture there before transcription. That is useful for comparing `manual-audio` and
+`passive-audio` artifacts.
+
+If you need to inspect the OpenRouter STT request/response payloads, set
+`MINIGENT_VOICE_STT_DEBUG_PATH` or pass `--stt-debug-path`. The daemon and replay tool
+will write debug artifacts such as `request.json` and `response.json` there.
+
+When STT returns a bad assistant-style answer instead of a transcript, the daemon now
+logs the failure, ignores that capture, and returns to idle instead of crashing.
+
+If you want to experiment with audio level differences before STT, the replay tool also
+supports `--gain`, `--normalize-peak`, `--pad-leading-ms`, and `--pad-trailing-ms`. That
+is useful when comparing quieter passive captures against louder manual captures, or when
+you want to approximate the passive daemon's STT padding against a saved WAV.
+
+To replay a prerecorded capture through the STT adapters without involving the microphone
+loop, use:
+
+```bash
+uv run python scripts/replay_stt.py /tmp/minigent-last-capture-manual.wav --metadata-only
+uv run python scripts/replay_stt.py /tmp/minigent-last-capture-passive.wav --provider openrouter --stt-debug-path /tmp/minigent-stt-debug
+uv run python scripts/replay_stt.py /tmp/minigent-last-capture-passive.wav --provider openrouter --normalize-peak
+uv run python scripts/replay_stt.py /tmp/minigent-last-capture-passive.wav --provider openrouter --pad-leading-ms 250 --pad-trailing-ms 500
+```
+
+That is useful for comparing the exact passive/manual artifacts against the same STT
+provider.
+
+The current wake-word providers are:
+
+- `porcupine`: stronger out-of-the-box wake-word path, requires `PICOVOICE_ACCESS_KEY`
+- `openwakeword`: free local alternative using built-in `pyopen-wakeword` models such as `okay_nabu`
+
 Daemon-related env vars:
 
 - `MINIGENT_BASE_URL`
 - `MINIGENT_VOICE_WAKE_PHRASE`
 - `MINIGENT_VOICE_STT_PROVIDER`
+- `MINIGENT_VOICE_WAKEWORD_PROVIDER`
 - `MINIGENT_VOICE_SKILL`
 - `MINIGENT_VOICE_THREAD_ID`
 - `MINIGENT_VOICE_AUDIO_DEVICE`
+- `MINIGENT_VOICE_DEBUG_CAPTURE_PATH`
+- `MINIGENT_VOICE_STT_DEBUG_PATH`
 - `MINIGENT_VOICE_AUDIO_SAMPLE_RATE`
 - `MINIGENT_VOICE_AUDIO_BLOCK_SIZE`
 - `MINIGENT_VOICE_END_SILENCE_MS`
 - `MINIGENT_VOICE_MAX_RECORD_SECONDS`
+- `MINIGENT_VOICE_POST_WAKE_SETTLE_MS`
+- `MINIGENT_VOICE_WAKEWORD_PREROLL_MS`
+- `MINIGENT_VOICE_STT_PAD_LEADING_MS`
+- `MINIGENT_VOICE_STT_PAD_TRAILING_MS`
 - `MINIGENT_VOICE_VAD_THRESHOLD`
 - `MINIGENT_VOICE_STT_MODEL`
+- `MINIGENT_VOICE_KEYWORD_PATH`
+- `MINIGENT_VOICE_OWW_MODEL`
+- `MINIGENT_VOICE_OWW_THRESHOLD`
 - `MINIGENT_VOICE_API_TOKEN`
 - `MINIGENT_VOICE_USER_ID`
 - `MINIGENT_VOICE_TENANT_ID`
@@ -117,6 +189,7 @@ Daemon-related env vars:
 - `OPENROUTER_BASE_URL`
 - `OPENROUTER_HTTP_REFERER`
 - `OPENROUTER_APP_NAME`
+- `PICOVOICE_ACCESS_KEY`
 
 You can put provider settings in a local `.env` file. Start from [.env.example](/Users/burm/code/minigent/.env.example).
 

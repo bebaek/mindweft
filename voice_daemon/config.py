@@ -26,13 +26,25 @@ class VoiceDaemonConfig:
     base_url: str
     wake_phrase: str
     stt_provider: str = "openai"
+    wakeword_provider: str = "porcupine"
     skill_name: str | None = None
     thread_id: str | None = None
     audio_device: str | None = None
+    debug_capture_path: str | None = None
+    stt_debug_path: str | None = None
+    stt_gain: float = 1.0
+    stt_normalize_peak: bool = False
+    stt_normalize_target_peak: float = 0.8
     audio_sample_rate: int = 16_000
     audio_block_size: int = 512
     speech_silence_ms: int = 800
     speech_max_seconds: float = 15.0
+    wakeword_cooldown_ms: int = 1500
+    post_wake_speech_timeout_ms: int = 2500
+    post_wake_settle_ms: int = 250
+    wakeword_preroll_ms: int = 750
+    stt_pad_leading_ms: int = 250
+    stt_pad_trailing_ms: int = 500
     vad_threshold: float = 0.5
     stt_model: str = "gpt-4o-mini-transcribe"
     openai_api_key: str | None = None
@@ -41,6 +53,10 @@ class VoiceDaemonConfig:
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_http_referer: str | None = None
     openrouter_app_name: str | None = None
+    picovoice_access_key: str | None = None
+    porcupine_keyword_path: str | None = None
+    openwakeword_model: str = "okay_nabu"
+    openwakeword_threshold: float = 0.5
     principal: PrincipalConfig = PrincipalConfig(user_id="demo-user", tenant_id="demo-tenant")
 
     @classmethod
@@ -49,13 +65,31 @@ class VoiceDaemonConfig:
             base_url=os.getenv("MINIGENT_BASE_URL", "http://127.0.0.1:8000").rstrip("/"),
             wake_phrase=os.getenv("MINIGENT_VOICE_WAKE_PHRASE", "hey minigent").strip(),
             stt_provider=os.getenv("MINIGENT_VOICE_STT_PROVIDER", "openai").strip().lower(),
+            wakeword_provider=os.getenv(
+                "MINIGENT_VOICE_WAKEWORD_PROVIDER", "porcupine"
+            ).strip().lower(),
             skill_name=_clean_optional(os.getenv("MINIGENT_VOICE_SKILL")),
             thread_id=_clean_optional(os.getenv("MINIGENT_VOICE_THREAD_ID")),
             audio_device=_clean_optional(os.getenv("MINIGENT_VOICE_AUDIO_DEVICE")),
+            debug_capture_path=_clean_optional(os.getenv("MINIGENT_VOICE_DEBUG_CAPTURE_PATH")),
+            stt_debug_path=_clean_optional(os.getenv("MINIGENT_VOICE_STT_DEBUG_PATH")),
+            stt_gain=_float_from_env("MINIGENT_VOICE_STT_GAIN", 1.0),
+            stt_normalize_peak=_bool_from_env("MINIGENT_VOICE_STT_NORMALIZE_PEAK", False),
+            stt_normalize_target_peak=_float_from_env(
+                "MINIGENT_VOICE_STT_NORMALIZE_TARGET_PEAK", 0.8
+            ),
             audio_sample_rate=_int_from_env("MINIGENT_VOICE_AUDIO_SAMPLE_RATE", 16_000),
             audio_block_size=_int_from_env("MINIGENT_VOICE_AUDIO_BLOCK_SIZE", 512),
             speech_silence_ms=_int_from_env("MINIGENT_VOICE_END_SILENCE_MS", 800),
             speech_max_seconds=_float_from_env("MINIGENT_VOICE_MAX_RECORD_SECONDS", 15.0),
+            wakeword_cooldown_ms=_int_from_env("MINIGENT_VOICE_WAKEWORD_COOLDOWN_MS", 1500),
+            post_wake_speech_timeout_ms=_int_from_env(
+                "MINIGENT_VOICE_POST_WAKE_SPEECH_TIMEOUT_MS", 2500
+            ),
+            post_wake_settle_ms=_int_from_env("MINIGENT_VOICE_POST_WAKE_SETTLE_MS", 250),
+            wakeword_preroll_ms=_int_from_env("MINIGENT_VOICE_WAKEWORD_PREROLL_MS", 750),
+            stt_pad_leading_ms=_int_from_env("MINIGENT_VOICE_STT_PAD_LEADING_MS", 250),
+            stt_pad_trailing_ms=_int_from_env("MINIGENT_VOICE_STT_PAD_TRAILING_MS", 500),
             vad_threshold=_float_from_env("MINIGENT_VOICE_VAD_THRESHOLD", 0.5),
             stt_model=os.getenv(
                 "MINIGENT_VOICE_STT_MODEL",
@@ -69,6 +103,10 @@ class VoiceDaemonConfig:
             ).rstrip("/"),
             openrouter_http_referer=_clean_optional(os.getenv("OPENROUTER_HTTP_REFERER")),
             openrouter_app_name=_clean_optional(os.getenv("OPENROUTER_APP_NAME")),
+            picovoice_access_key=_clean_optional(os.getenv("PICOVOICE_ACCESS_KEY")),
+            porcupine_keyword_path=_clean_optional(os.getenv("MINIGENT_VOICE_KEYWORD_PATH")),
+            openwakeword_model=os.getenv("MINIGENT_VOICE_OWW_MODEL", "okay_nabu").strip(),
+            openwakeword_threshold=_float_from_env("MINIGENT_VOICE_OWW_THRESHOLD", 0.5),
             principal=PrincipalConfig(
                 user_id=os.getenv("MINIGENT_VOICE_USER_ID", "demo-user"),
                 tenant_id=os.getenv("MINIGENT_VOICE_TENANT_ID", "demo-tenant"),
@@ -97,6 +135,13 @@ def _float_from_env(name: str, default: float) -> float:
     if value is None:
         return default
     return float(value)
+
+
+def _bool_from_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _default_stt_model(provider: str) -> str:

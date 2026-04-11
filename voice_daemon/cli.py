@@ -4,14 +4,18 @@ import argparse
 import sys
 
 from app.config import load_environment
-from voice_daemon.audio import AudioCaptureConfig, MicrophoneRecorder
+from voice_daemon.audio import AudioCaptureConfig, MicrophoneRecorder, open_microphone_stream
 from voice_daemon.backends.manual_audio import ManualAudioActivationSource
+from voice_daemon.backends.passive_audio import PassiveAudioActivationSource
 from voice_daemon.backends.stdin_loop import ConsoleSpeechOutput, StdinActivationSource
 from voice_daemon.config import VoiceDaemonConfig
+from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
 from voice_daemon.minigent_client import MinigentClient
+from voice_daemon.ring_buffer import AudioRingBuffer
 from voice_daemon.service import VoiceDaemon
 from voice_daemon.stt import SpeechProviderConfig, build_transcription_adapter
 from voice_daemon.vad import SileroVoiceActivityDetector
+from voice_daemon.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,9 +24,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--backend",
-        choices=("stdin", "manual-audio"),
+        choices=("stdin", "manual-audio", "passive-audio"),
         default="stdin",
-        help="Activation backend. `stdin` keeps the text wake-phrase scaffold, `manual-audio` uses the microphone after manual activation.",
+        help="Activation backend. `stdin` keeps the text wake-phrase scaffold, `manual-audio` uses the microphone after manual activation, and `passive-audio` adds continuous wake-word listening.",
     )
     parser.add_argument(
         "--base-url",
@@ -64,13 +68,39 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--audio-device",
         default=None,
-        help="Optional sounddevice input device name or index for manual-audio mode.",
+        help="Optional sounddevice input device name or index for audio backends.",
+    )
+    parser.add_argument(
+        "--debug-capture-path",
+        default=None,
+        help="Optional path to write the last captured WAV for debugging manual/passive audio backends.",
+    )
+    parser.add_argument(
+        "--stt-debug-path",
+        default=None,
+        help="Optional directory to write STT request/response debug artifacts.",
     )
     parser.add_argument(
         "--stt-provider",
         choices=("openai", "openrouter"),
         default=None,
-        help="Speech-to-text provider for manual-audio mode. Defaults to MINIGENT_VOICE_STT_PROVIDER.",
+        help="Speech-to-text provider for audio backends. Defaults to MINIGENT_VOICE_STT_PROVIDER.",
+    )
+    parser.add_argument(
+        "--wakeword-provider",
+        choices=("porcupine", "openwakeword"),
+        default=None,
+        help="Wake-word provider for passive-audio mode. Defaults to MINIGENT_VOICE_WAKEWORD_PROVIDER.",
+    )
+    parser.add_argument(
+        "--keyword-path",
+        default=None,
+        help="Path to the Porcupine keyword model file for passive-audio mode.",
+    )
+    parser.add_argument(
+        "--oww-model",
+        default=None,
+        help="Built-in pyopen-wakeword model name for passive-audio mode, such as `okay_nabu`.",
     )
     return parser
 
@@ -89,13 +119,22 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
         base_url=(args.base_url or env_config.base_url).rstrip("/"),
         wake_phrase=(args.wake_phrase or env_config.wake_phrase).strip(),
         stt_provider=args.stt_provider or env_config.stt_provider,
+        wakeword_provider=args.wakeword_provider or env_config.wakeword_provider,
         skill_name=args.skill or env_config.skill_name,
         thread_id=args.thread_id or env_config.thread_id,
         audio_device=args.audio_device or env_config.audio_device,
+        debug_capture_path=args.debug_capture_path or env_config.debug_capture_path,
+        stt_debug_path=args.stt_debug_path or env_config.stt_debug_path,
         audio_sample_rate=env_config.audio_sample_rate,
         audio_block_size=env_config.audio_block_size,
         speech_silence_ms=env_config.speech_silence_ms,
         speech_max_seconds=env_config.speech_max_seconds,
+        wakeword_cooldown_ms=env_config.wakeword_cooldown_ms,
+        post_wake_speech_timeout_ms=env_config.post_wake_speech_timeout_ms,
+        post_wake_settle_ms=env_config.post_wake_settle_ms,
+        wakeword_preroll_ms=env_config.wakeword_preroll_ms,
+        stt_pad_leading_ms=env_config.stt_pad_leading_ms,
+        stt_pad_trailing_ms=env_config.stt_pad_trailing_ms,
         vad_threshold=env_config.vad_threshold,
         stt_model=env_config.stt_model,
         openai_api_key=env_config.openai_api_key,
@@ -104,6 +143,10 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
         openrouter_base_url=env_config.openrouter_base_url,
         openrouter_http_referer=env_config.openrouter_http_referer,
         openrouter_app_name=env_config.openrouter_app_name,
+        picovoice_access_key=env_config.picovoice_access_key,
+        porcupine_keyword_path=args.keyword_path or env_config.porcupine_keyword_path,
+        openwakeword_model=args.oww_model or env_config.openwakeword_model,
+        openwakeword_threshold=env_config.openwakeword_threshold,
         principal=principal,
     )
 
@@ -137,19 +180,70 @@ def build_activation_source(backend: str, config: VoiceDaemonConfig):
         return ManualAudioActivationSource(
             input_stream=sys.stdin,
             output_stream=sys.stdout,
-            recorder=MicrophoneRecorder(
-                AudioCaptureConfig(
-                    sample_rate=config.audio_sample_rate,
-                    block_size=config.audio_block_size,
-                    max_record_seconds=config.speech_max_seconds,
-                    end_silence_ms=config.speech_silence_ms,
-                    device=config.audio_device,
-                ),
-                detector=SileroVoiceActivityDetector(threshold=config.vad_threshold),
-            ),
+            recorder=build_microphone_recorder(config),
             transcriber=build_transcription_adapter(build_speech_provider_config(config)),
+            capture_debugger=build_capture_debugger(config),
+        )
+    if backend == "passive-audio":
+        wake_detector = build_wake_word_detector(config)
+        recorder = build_microphone_recorder(config)
+        stream_context = open_microphone_stream(
+            AudioCaptureConfig(
+                sample_rate=config.audio_sample_rate,
+                block_size=wake_detector.frame_length,
+                max_record_seconds=config.speech_max_seconds,
+                end_silence_ms=config.speech_silence_ms,
+                device=config.audio_device,
+            )
+        )
+        return PassiveAudioActivationSource(
+            output_stream=sys.stdout,
+            stream=stream_context.__enter__(),
+            recorder=recorder,
+            transcriber=build_transcription_adapter(build_speech_provider_config(config)),
+            wake_detector=wake_detector,
+            preroll_buffer=AudioRingBuffer(
+                max_bytes=max(
+                    1,
+                    int(
+                        config.audio_sample_rate
+                        * 2
+                        * config.wakeword_preroll_ms
+                        / 1000.0
+                    ),
+                )
+            ),
+            capture_debugger=build_capture_debugger(config),
+            post_wake_speech_timeout_ms=config.post_wake_speech_timeout_ms,
+            post_wake_settle_ms=config.post_wake_settle_ms,
+            wakeword_cooldown_ms=config.wakeword_cooldown_ms,
+            stt_pad_leading_ms=config.stt_pad_leading_ms,
+            stt_pad_trailing_ms=config.stt_pad_trailing_ms,
+            stream_context=stream_context,
         )
     raise ValueError(f"Unsupported backend '{backend}'")
+
+
+def build_microphone_recorder(config: VoiceDaemonConfig) -> MicrophoneRecorder:
+    return MicrophoneRecorder(
+        AudioCaptureConfig(
+            sample_rate=config.audio_sample_rate,
+            block_size=config.audio_block_size,
+            max_record_seconds=config.speech_max_seconds,
+            end_silence_ms=config.speech_silence_ms,
+            device=config.audio_device,
+        ),
+        detector=SileroVoiceActivityDetector(threshold=config.vad_threshold),
+    )
+
+
+def build_capture_debugger(config: VoiceDaemonConfig) -> CaptureDebugger | None:
+    if not config.debug_capture_path:
+        return None
+    return CaptureDebugger(
+        CaptureDebugConfig(capture_path=config.debug_capture_path),
+        output_stream=sys.stdout,
+    )
 
 
 def build_speech_provider_config(config: VoiceDaemonConfig) -> SpeechProviderConfig:
@@ -165,6 +259,7 @@ def build_speech_provider_config(config: VoiceDaemonConfig) -> SpeechProviderCon
             model=config.stt_model,
             api_key=config.openai_api_key,
             base_url=config.openai_base_url,
+            debug_path=config.stt_debug_path,
         )
     if provider == "openrouter":
         if not config.openrouter_api_key:
@@ -179,10 +274,36 @@ def build_speech_provider_config(config: VoiceDaemonConfig) -> SpeechProviderCon
             base_url=config.openrouter_base_url,
             app_name=config.openrouter_app_name,
             http_referer=config.openrouter_http_referer,
+            debug_path=config.stt_debug_path,
         )
     raise SystemExit(
         f"Unsupported MINIGENT_VOICE_STT_PROVIDER '{config.stt_provider}'. "
         "Choose 'openai' or 'openrouter'."
+    )
+
+
+def build_wake_word_detector(config: VoiceDaemonConfig):
+    if config.wakeword_provider == "porcupine":
+        if not config.picovoice_access_key:
+            raise SystemExit(
+                "PICOVOICE_ACCESS_KEY is required for passive-audio mode with Porcupine."
+            )
+        if not config.porcupine_keyword_path:
+            raise SystemExit(
+                "MINIGENT_VOICE_KEYWORD_PATH is required for passive-audio mode with Porcupine."
+            )
+        return PorcupineWakeWordDetector(
+            access_key=config.picovoice_access_key,
+            keyword_path=config.porcupine_keyword_path,
+        )
+    if config.wakeword_provider == "openwakeword":
+        return OpenWakeWordDetector(
+            model_name=config.openwakeword_model,
+            threshold=config.openwakeword_threshold,
+        )
+    raise SystemExit(
+        f"Unsupported MINIGENT_VOICE_WAKEWORD_PROVIDER '{config.wakeword_provider}'. "
+        "Choose 'porcupine' or 'openwakeword'."
     )
 
 

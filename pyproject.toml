@@ -26,6 +26,8 @@ minirag = [
 ]
 voice = [
   "numpy>=2,<3",
+  "pvporcupine>=3.0,<4.0",
+  "pyopen-wakeword>=1.1.0,<2.0",
   "silero-vad>=6.2.1,<7.0",
   "sounddevice>=0.5.5,<0.6",
 ]

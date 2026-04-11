@@ -4,8 +4,9 @@ from dataclasses import dataclass
 from typing import TextIO
 
 from voice_daemon.audio import MicrophoneRecorder
+from voice_daemon.debug import CaptureDebugger
 from voice_daemon.service import Activation
-from voice_daemon.stt import SpeechToTextAdapter
+from voice_daemon.stt import SpeechToTextAdapter, SpeechToTextError
 
 
 @dataclass
@@ -14,6 +15,7 @@ class ManualAudioActivationSource:
     output_stream: TextIO
     recorder: MicrophoneRecorder
     transcriber: SpeechToTextAdapter
+    capture_debugger: CaptureDebugger | None = None
 
     def wait_for_activation(self, wake_phrase: str) -> Activation:
         del wake_phrase
@@ -32,7 +34,14 @@ class ManualAudioActivationSource:
             f"[transcribing] captured {audio.duration_seconds:.2f}s of audio\n"
         )
         self.output_stream.flush()
-        transcript = self.transcriber.transcribe(audio).strip()
+        if self.capture_debugger is not None:
+            self.capture_debugger.log_capture(audio, source="manual-audio")
+        try:
+            transcript = self.transcriber.transcribe(audio).strip()
+        except SpeechToTextError as exc:
+            self.output_stream.write(f"[idle] transcription failed, ignoring capture: {exc}\n")
+            self.output_stream.flush()
+            return ""
         if transcript:
             self.output_stream.write(f"[transcript] {transcript}\n")
             self.output_stream.flush()

@@ -595,6 +595,8 @@ minirag = [
 ]
 voice = [
     { name = "numpy" },
+    { name = "pvporcupine" },
+    { name = "pyopen-wakeword" },
     { name = "silero-vad" },
     { name = "sounddevice" },
 ]
@@ -617,7 +619,9 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.54b0,<1.0" },
     { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.54b0,<1.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.33,<2.0" },
+    { name = "pvporcupine", marker = "extra == 'voice'", specifier = ">=3.0,<4.0" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3.0" },
+    { name = "pyopen-wakeword", marker = "extra == 'voice'", specifier = ">=1.1.0,<2.0" },
     { name = "python-dotenv", specifier = ">=1.0,<2.0" },
     { name = "silero-vad", marker = "extra == 'voice'", specifier = ">=6.2.1,<7.0" },
     { name = "sounddevice", marker = "extra == 'voice'", specifier = ">=0.5.5,<0.6" },
@@ -1106,6 +1110,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pvporcupine"
+version = "3.0.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/ac/14c64255c08db0b80315ccc940943fad5fea03f0006b09b45f0b83ced08d/pvporcupine-3.0.5.tar.gz", hash = "sha256:48f92ab10a904b811e69afb18175d2bd4857ccec8be094f42449961a80fa2af1", size = 2535302, upload-time = "2025-02-05T18:37:33.808Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/9e/4716d4737a4a6a3de306c97f3cd6040e66ef23ad8b6b8fca80190dbcc3ad/pvporcupine-3.0.5-py3-none-any.whl", hash = "sha256:b80b31a38b1a622e492e19683f60efdcddd1662204830fcad50df90f01723356", size = 2544202, upload-time = "2025-02-05T18:37:30.898Z" },
+]
+
+[[package]]
 name = "pycparser"
 version = "3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1247,6 +1260,21 @@ wheels = [
 [package.optional-dependencies]
 crypto = [
     { name = "cryptography" },
+]
+
+[[package]]
+name = "pyopen-wakeword"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/52/3e/37c8601f87173acfed77a3133c69eb350d2563f41174d70129ff51e6b297/pyopen_wakeword-1.1.0.tar.gz", hash = "sha256:080c0bda64d9aa4dd254413ba6fa417bd090c566c0610ebbb571d81f27851602", size = 7122877, upload-time = "2025-10-28T15:04:53.091Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1f/0a/45c9c7c1405f13e632d694ed1fac48e8c9f1421eed930a8cb1afc5eda17e/pyopen_wakeword-1.1.0-py3-none-macosx_15_0_universal2.whl", hash = "sha256:81f31adc31ba9e85b5c83f1b16f571f630ad867710f111443ecf42523f73fe08", size = 6746161, upload-time = "2025-10-28T15:04:45.586Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/74/746a3b3f81e2c1c69fc736c9e630f983797e413f7f58c1eac59d66d6687d/pyopen_wakeword-1.1.0-py3-none-manylinux_2_35_aarch64.whl", hash = "sha256:32a865123ebcc270ce6408b675456c3aecd8a6f0ddfe6311680616c9c01f990a", size = 6628214, upload-time = "2025-10-28T15:04:47.55Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/d7/228edc51d9b35b9d46cf685509e79144262ffd8756a49243a27da3302059/pyopen_wakeword-1.1.0-py3-none-manylinux_2_35_x86_64.whl", hash = "sha256:754347a59de2b3d378a0cbc404a8b41164036e74fa1c185f88056974e4bfb6b4", size = 7132152, upload-time = "2025-10-28T15:04:49.042Z" },
+    { url = "https://files.pythonhosted.org/packages/69/d1/d788a1edf7c200b73c3a8b0cc73ebd8b1013e352222fb8521415dbb7e2c8/pyopen_wakeword-1.1.0-py3-none-win_amd64.whl", hash = "sha256:93c4ba03b434fb4130282a254000e58e29cf3dc49b610ce7e998abc785a27a90", size = 6997274, upload-time = "2025-10-28T15:04:51.182Z" },
 ]
 
 [[package]]

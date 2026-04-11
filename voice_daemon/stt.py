@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
@@ -26,6 +28,7 @@ class SpeechProviderConfig:
     timeout_seconds: float = 60.0
     app_name: str | None = None
     http_referer: str | None = None
+    debug_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,7 @@ class OpenRouterTranscriptionConfig:
     timeout_seconds: float = 60.0
     app_name: str | None = None
     http_referer: str | None = None
+    debug_path: str | None = None
 
 
 class OpenRouterTranscriptionAdapter:
@@ -123,12 +127,27 @@ class OpenRouterTranscriptionAdapter:
             headers["HTTP-Referer"] = self._config.http_referer
         if self._config.app_name:
             headers["X-Title"] = self._config.app_name
+        self._write_debug_artifact(
+            "request.json",
+            {
+                "url": f"{self._config.base_url.rstrip('/')}/chat/completions",
+                "headers": _redact_headers(headers),
+                "payload": payload,
+            },
+        )
         try:
             response = httpx.post(
                 f"{self._config.base_url.rstrip('/')}/chat/completions",
                 json=payload,
                 headers=headers,
                 timeout=self._config.timeout_seconds,
+            )
+            self._write_debug_artifact(
+                "response.json",
+                {
+                    "status_code": response.status_code,
+                    "body": _safe_json_or_text(response),
+                },
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -140,7 +159,15 @@ class OpenRouterTranscriptionAdapter:
         text = _parse_openrouter_transcription_response(response.json())
         if not text:
             raise SpeechToTextError("OpenRouter transcription response did not include text")
+        _raise_for_invalid_transcript(text)
         return text.strip()
+
+    def _write_debug_artifact(self, filename: str, payload: dict[str, Any]) -> None:
+        if not self._config.debug_path:
+            return
+        path = Path(self._config.debug_path)
+        path.mkdir(parents=True, exist_ok=True)
+        (path / filename).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def build_transcription_adapter(config: SpeechProviderConfig) -> SpeechToTextAdapter:
@@ -163,6 +190,7 @@ def build_transcription_adapter(config: SpeechProviderConfig) -> SpeechToTextAda
                 timeout_seconds=config.timeout_seconds,
                 app_name=config.app_name,
                 http_referer=config.http_referer,
+                debug_path=config.debug_path,
             )
         )
     raise SpeechToTextError(f"Unsupported speech provider '{config.provider}'")
@@ -205,3 +233,39 @@ def _extract_transcript_from_string(content: str) -> str:
     if isinstance(parsed, dict) and isinstance(parsed.get("transcript"), str):
         return parsed["transcript"]
     return stripped
+
+
+def _safe_json_or_text(response: httpx.Response) -> Any:
+    try:
+        return response.json()
+    except Exception:
+        return response.text
+
+
+def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
+    redacted = dict(headers)
+    if "Authorization" in redacted:
+        redacted["Authorization"] = "Bearer ***"
+    return redacted
+
+
+def _raise_for_invalid_transcript(text: str) -> None:
+    lowered = text.strip().lower()
+    suspicious_phrases = (
+        "please provide the audio",
+        "upload the audio",
+        "upload the audio file",
+        "unable to process audio",
+        "cannot process audio",
+        "can't process audio",
+        "i'm sorry",
+        "i can’t assist with that",
+        "i can't assist with that",
+        "audio attachment",
+        "play the audio aloud",
+        "if you upload the audio",
+    )
+    if any(phrase in lowered for phrase in suspicious_phrases):
+        raise SpeechToTextError(
+            "STT provider returned assistant-style text instead of a transcript"
+        )
