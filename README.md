@@ -103,6 +103,9 @@ MINIGENT_VOICE_KEYWORD_PATH=/absolute/path/to/hey-minigent.ppn
 uv run minigent-voice-daemon --backend passive-audio
 ```
 
+Press `Ctrl-C` to stop the daemon cleanly. It will print `[idle] shutting down` and
+exit without dumping a traceback from the audio backend.
+
 Free `openwakeword` example:
 
 ```bash

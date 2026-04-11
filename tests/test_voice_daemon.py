@@ -30,6 +30,7 @@ from voice_daemon.stt import (
     build_transcription_adapter,
 )
 from voice_daemon.cli import build_speech_provider_config, build_wake_word_detector
+import voice_daemon.cli as voice_cli
 from voice_daemon.service import Activation, VoiceDaemon
 
 
@@ -543,6 +544,99 @@ def test_passive_audio_activation_source_ignores_stt_error() -> None:
 
     assert transcript == ""
     assert "[idle] transcription failed, ignoring capture:" in output_stream.getvalue()
+
+
+def test_passive_audio_activation_source_close_is_idempotent() -> None:
+    class FakeStream:
+        def read(self, frames: int) -> tuple[bytes, bool]:
+            del frames
+            return b"", False
+
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeWakeDetector:
+        frame_length = 4
+        sample_rate = 16000
+        label = "openwakeword:okay_nabu"
+
+        def reset(self) -> None:
+            return None
+
+        def process_chunk(self, chunk: bytes) -> bool:
+            del chunk
+            return False
+
+    class FakeContext:
+        def __init__(self) -> None:
+            self.exit_calls = 0
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            del exc_type, exc, tb
+            self.exit_calls += 1
+
+    output_stream = StringIO()
+    stream_context = FakeContext()
+    source = PassiveAudioActivationSource(
+        output_stream=output_stream,
+        stream=FakeStream(),
+        recorder=object(),  # type: ignore[arg-type]
+        transcriber=object(),  # type: ignore[arg-type]
+        wake_detector=FakeWakeDetector(),
+        preroll_buffer=AudioRingBuffer(max_bytes=32),
+        stream_context=stream_context,
+    )
+
+    source.close()
+    source.close()
+
+    assert stream_context.exit_calls == 1
+
+
+def test_voice_daemon_cli_handles_keyboard_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class FakeActivationSource:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    class FakeVoiceDaemon:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+
+        def run_forever(self) -> None:
+            raise KeyboardInterrupt
+
+        def run_once(self) -> str:
+            raise AssertionError("run_once should not be called")
+
+    activation_source = FakeActivationSource()
+    monkeypatch.setattr(voice_cli, "load_environment", lambda: None)
+    monkeypatch.setattr(
+        voice_cli,
+        "build_config",
+        lambda args: VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+    )
+    monkeypatch.setattr(voice_cli, "build_activation_source", lambda backend, config: activation_source)
+    monkeypatch.setattr(voice_cli, "MinigentClient", lambda config: object())
+    monkeypatch.setattr(voice_cli, "ConsoleSpeechOutput", lambda output_stream: object())
+    monkeypatch.setattr(voice_cli, "VoiceDaemon", FakeVoiceDaemon)
+
+    exit_code = voice_cli.main(["--backend", "stdin"])
+
+    assert exit_code == 130
+    assert capsys.readouterr().out == "[idle] shutting down\n"
+    assert activation_source.close_calls == 1
 
 
 def test_audio_ring_buffer_keeps_recent_audio_only() -> None:

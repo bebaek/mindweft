@@ -37,6 +37,7 @@ class PassiveAudioActivationSource:
     stt_pad_leading_ms: int = 250
     stt_pad_trailing_ms: int = 500
     _cooldown_until: float = 0.0
+    _closed: bool = False
 
     def wait_for_activation(self, wake_phrase: str) -> Activation:
         self.output_stream.write(
@@ -89,9 +90,18 @@ class PassiveAudioActivationSource:
         self._cooldown_until = time.monotonic() + (self.wakeword_cooldown_ms / 1000.0)
         return transcript
 
+    def close(self) -> None:
+        if self._closed or self.stream_context is None:
+            self._closed = True
+            return
+        try:
+            self.stream_context.__exit__(None, None, None)
+        finally:
+            self.stream_context = None
+            self._closed = True
+
     def __del__(self) -> None:
-        if self.stream_context is not None:
-            try:
-                self.stream_context.__exit__(None, None, None)
-            except Exception:
-                return None
+        try:
+            self.close()
+        except Exception:
+            return None

@@ -163,11 +163,20 @@ def main(argv: list[str] | None = None) -> int:
         minigent_client=MinigentClient(config),
         speech_output=ConsoleSpeechOutput(output_stream=sys.stdout),
     )
-    if args.once:
-        daemon.run_once()
+    try:
+        if args.once:
+            daemon.run_once()
+            return 0
+        daemon.run_forever()
         return 0
-    daemon.run_forever()
-    return 0
+    except KeyboardInterrupt:
+        sys.stdout.write("[idle] shutting down\n")
+        sys.stdout.flush()
+        return 130
+    finally:
+        close = getattr(activation_source, "close", None)
+        if callable(close):
+            close()
 
 
 def build_activation_source(backend: str, config: VoiceDaemonConfig):
