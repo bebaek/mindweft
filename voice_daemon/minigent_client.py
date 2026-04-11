@@ -11,10 +11,11 @@ from voice_daemon.config import VoiceDaemonConfig
 class MinigentClient:
     def __init__(self, config: VoiceDaemonConfig) -> None:
         self._config = config
+        self._thread_id = config.thread_id
 
     def ensure_thread(self) -> str:
-        if self._config.thread_id:
-            return self._config.thread_id
+        if self._thread_id:
+            return self._thread_id
         payload = {"skill_name": self._config.skill_name} if self._config.skill_name else None
         response = self.request_json(
             "POST",
@@ -22,7 +23,7 @@ class MinigentClient:
             payload=payload,
         )
         thread_id = response["thread_id"]
-        object.__setattr__(self._config, "thread_id", thread_id)
+        self._thread_id = thread_id
         return thread_id
 
     def send_user_message(self, content: str) -> dict[str, Any]:

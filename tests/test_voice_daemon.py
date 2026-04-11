@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from io import StringIO
 
+import pytest
+
+from voice_daemon.audio import AudioCaptureConfig, RecordedAudio, pcm16le_to_floats
+from voice_daemon.backends.manual_audio import ManualAudioActivationSource
 from voice_daemon.backends.stdin_loop import ConsoleSpeechOutput, StdinActivationSource
 from voice_daemon.config import PrincipalConfig, VoiceDaemonConfig
+from voice_daemon.stt import OpenAITranscriptionAdapter, OpenAITranscriptionConfig, SpeechToTextError
 from voice_daemon.service import Activation, VoiceDaemon
 
 
@@ -129,10 +134,19 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_PHRASE", "computer")
     monkeypatch.setenv("MINIGENT_VOICE_SKILL", "support")
     monkeypatch.setenv("MINIGENT_VOICE_THREAD_ID", "thread-123")
+    monkeypatch.setenv("MINIGENT_VOICE_AUDIO_DEVICE", "Built-in Mic")
+    monkeypatch.setenv("MINIGENT_VOICE_AUDIO_SAMPLE_RATE", "22050")
+    monkeypatch.setenv("MINIGENT_VOICE_AUDIO_BLOCK_SIZE", "1024")
+    monkeypatch.setenv("MINIGENT_VOICE_END_SILENCE_MS", "600")
+    monkeypatch.setenv("MINIGENT_VOICE_MAX_RECORD_SECONDS", "9.5")
+    monkeypatch.setenv("MINIGENT_VOICE_VAD_THRESHOLD", "0.65")
+    monkeypatch.setenv("MINIGENT_VOICE_STT_MODEL", "gpt-4o-transcribe")
     monkeypatch.setenv("MINIGENT_VOICE_USER_ID", "voice-user")
     monkeypatch.setenv("MINIGENT_VOICE_TENANT_ID", "voice-tenant")
     monkeypatch.setenv("MINIGENT_VOICE_ADMIN", "true")
     monkeypatch.setenv("MINIGENT_VOICE_API_TOKEN", "voice-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.example.com/v1/")
 
     config = VoiceDaemonConfig.from_env()
 
@@ -141,6 +155,15 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
         wake_phrase="computer",
         skill_name="support",
         thread_id="thread-123",
+        audio_device="Built-in Mic",
+        audio_sample_rate=22050,
+        audio_block_size=1024,
+        speech_silence_ms=600,
+        speech_max_seconds=9.5,
+        vad_threshold=0.65,
+        stt_model="gpt-4o-transcribe",
+        openai_api_key="openai-key",
+        openai_base_url="https://api.example.com/v1",
         principal=PrincipalConfig(
             user_id="voice-user",
             tenant_id="voice-tenant",
@@ -148,3 +171,118 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
             api_token="voice-token",
         ),
     )
+
+
+def test_recorded_audio_to_wav_bytes_round_trips_header() -> None:
+    audio = RecordedAudio(
+        pcm_bytes=b"\x00\x00\xff\x7f",
+        sample_rate=16_000,
+        channels=1,
+        sample_width_bytes=2,
+    )
+
+    wav_bytes = audio.to_wav_bytes()
+
+    assert wav_bytes[:4] == b"RIFF"
+    assert wav_bytes[8:12] == b"WAVE"
+    assert audio.duration_seconds == 0.000125
+
+
+def test_pcm16le_to_floats_normalizes_samples() -> None:
+    assert pcm16le_to_floats(b"\x00\x80\x00\x00\xff\x7f") == [-1.0, 0.0, 32767 / 32768]
+
+
+def test_manual_audio_activation_source_records_and_transcribes() -> None:
+    class FakeRecorder:
+        def record_until_silence(self) -> RecordedAudio:
+            return RecordedAudio(
+                pcm_bytes=b"\x00\x00" * 3200,
+                sample_rate=16_000,
+                channels=1,
+                sample_width_bytes=2,
+            )
+
+    class FakeTranscriber:
+        def transcribe(self, audio: RecordedAudio) -> str:
+            assert audio.sample_rate == 16_000
+            return "hello from microphone"
+
+    output_stream = StringIO()
+    source = ManualAudioActivationSource(
+        input_stream=StringIO("\n"),
+        output_stream=output_stream,
+        recorder=FakeRecorder(),
+        transcriber=FakeTranscriber(),
+    )
+
+    activation = source.wait_for_activation("ignored")
+    transcript = source.capture_utterance()
+
+    assert activation == Activation()
+    assert transcript == "hello from microphone"
+    assert "[transcribing] captured 0.20s of audio" in output_stream.getvalue()
+    assert "[transcript] hello from microphone" in output_stream.getvalue()
+
+
+def test_openai_transcription_adapter_returns_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            return {"text": " transcribed text "}
+
+    def fake_post(url: str, *, files: object, headers: object, timeout: object) -> FakeResponse:
+        captured["url"] = url
+        captured["files"] = files
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr("voice_daemon.stt.httpx.post", fake_post)
+    adapter = OpenAITranscriptionAdapter(
+        OpenAITranscriptionConfig(
+            api_key="openai-key",
+            model="gpt-4o-mini-transcribe",
+            base_url="https://api.openai.com/v1",
+            timeout_seconds=30.0,
+        )
+    )
+
+    text = adapter.transcribe(
+        RecordedAudio(
+            pcm_bytes=b"\x00\x00\xff\x7f",
+            sample_rate=16_000,
+            channels=1,
+            sample_width_bytes=2,
+        )
+    )
+
+    assert text == "transcribed text"
+    assert captured["url"] == "https://api.openai.com/v1/audio/transcriptions"
+    assert captured["headers"] == {"Authorization": "Bearer openai-key"}
+    assert captured["timeout"] == 30.0
+
+
+def test_openai_transcription_adapter_requires_text_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"unexpected": "payload"}
+
+    monkeypatch.setattr("voice_daemon.stt.httpx.post", lambda *_, **__: FakeResponse())
+    adapter = OpenAITranscriptionAdapter(OpenAITranscriptionConfig(api_key="openai-key"))
+
+    with pytest.raises(SpeechToTextError, match="did not include text"):
+        adapter.transcribe(
+            RecordedAudio(
+                pcm_bytes=b"\x00\x00",
+                sample_rate=16_000,
+                channels=1,
+                sample_width_bytes=2,
+            )
+        )

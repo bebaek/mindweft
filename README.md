@@ -22,6 +22,13 @@ uv sync --dev
 uv run uvicorn app.main:app --reload
 ```
 
+For the voice daemon with microphone capture, VAD, and transcription support, install the
+optional voice dependencies as well:
+
+```bash
+uv sync --dev --extra voice
+```
+
 For the simplest client flow against a running server, use the packaged CLI:
 
 ```bash
@@ -31,17 +38,18 @@ uv run minigent chat --resume-last "continue"
 uv run minigent threads show <thread-id>
 ```
 
-There is also an initial voice-daemon scaffold packaged as a separate client entrypoint:
+There is also a separate voice-daemon client entrypoint:
 
 ```bash
 uv run minigent-voice-daemon --wake-phrase "hey minigent"
 ```
 
-The current scaffold is intentionally text-driven: it runs an always-on foreground loop,
-waits for lines that start with the wake phrase, sends the recognized utterance to the
-Minigent HTTP API, and prints the assistant reply. This keeps the daemon boundary,
-thread handling, and auth flow in place while the real microphone, wake-word, STT, and
-TTS backends are added.
+The daemon currently supports two backends:
+
+- `stdin`: text-driven wake phrase loop for cheap end-to-end testing
+- `manual-audio`: press Enter to activate the microphone, record until silence using
+  Silero VAD, transcribe the utterance with OpenAI speech-to-text, then send the text
+  into Minigent and print the assistant reply
 
 Examples:
 
@@ -56,16 +64,36 @@ hey minigent
 show me the transcript
 ```
 
+Manual audio example:
+
+```bash
+OPENAI_API_KEY=...
+uv run minigent-voice-daemon --backend manual-audio --once
+```
+
+In `manual-audio` mode, press Enter to start recording. The daemon stops recording after
+trailing silence or `MINIGENT_VOICE_MAX_RECORD_SECONDS`, transcribes the utterance, and
+then sends the transcript through the normal Minigent thread/run flow.
+
 Daemon-related env vars:
 
 - `MINIGENT_BASE_URL`
 - `MINIGENT_VOICE_WAKE_PHRASE`
 - `MINIGENT_VOICE_SKILL`
 - `MINIGENT_VOICE_THREAD_ID`
+- `MINIGENT_VOICE_AUDIO_DEVICE`
+- `MINIGENT_VOICE_AUDIO_SAMPLE_RATE`
+- `MINIGENT_VOICE_AUDIO_BLOCK_SIZE`
+- `MINIGENT_VOICE_END_SILENCE_MS`
+- `MINIGENT_VOICE_MAX_RECORD_SECONDS`
+- `MINIGENT_VOICE_VAD_THRESHOLD`
+- `MINIGENT_VOICE_STT_MODEL`
 - `MINIGENT_VOICE_API_TOKEN`
 - `MINIGENT_VOICE_USER_ID`
 - `MINIGENT_VOICE_TENANT_ID`
 - `MINIGENT_VOICE_ADMIN`
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
 
 You can put provider settings in a local `.env` file. Start from [.env.example](/Users/burm/code/minigent/.env.example).
 

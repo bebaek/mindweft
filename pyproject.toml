@@ -24,6 +24,10 @@ minigent-voice-daemon = "voice_daemon.cli:main"
 minirag = [
   "minirag",
 ]
+voice = [
+  "silero-vad>=6.2.1,<7.0",
+  "sounddevice>=0.5.5,<0.6",
+]
 
 [dependency-groups]
 dev = [
