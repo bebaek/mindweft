@@ -25,6 +25,7 @@ minirag = [
   "minirag",
 ]
 voice = [
+  "faster-whisper>=1.1,<2.0",
   "numpy>=2,<3",
   "pvporcupine>=3.0,<4.0",
   "pyopen-wakeword>=1.1.0,<2.0",
