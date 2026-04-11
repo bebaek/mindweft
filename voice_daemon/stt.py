@@ -264,6 +264,11 @@ def _raise_for_invalid_transcript(text: str) -> None:
         "audio attachment",
         "play the audio aloud",
         "if you upload the audio",
+        "don't have an audio attached",
+        "do not have an audio attached",
+        "no audio attached",
+        "uploading it again",
+        "once it's available",
     )
     if any(phrase in lowered for phrase in suspicious_phrases):
         raise SpeechToTextError(

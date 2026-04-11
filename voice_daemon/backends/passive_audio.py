@@ -65,7 +65,12 @@ class PassiveAudioActivationSource:
         self.output_stream.flush()
         if self.post_wake_settle_ms > 0:
             time.sleep(self.post_wake_settle_ms / 1000.0)
-        audio = self.recorder.record_until_silence()
+        audio = self.recorder.record_after_speech(self.post_wake_speech_timeout_ms)
+        if audio is None:
+            self.output_stream.write("[idle] no speech after wake word, ignoring activation\n")
+            self.output_stream.flush()
+            self._cooldown_until = time.monotonic() + (self.wakeword_cooldown_ms / 1000.0)
+            return ""
         audio = pad_with_silence(
             audio,
             leading_ms=self.stt_pad_leading_ms,

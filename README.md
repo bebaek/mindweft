@@ -123,6 +123,10 @@ recording stream, then add a small amount of leading and trailing silence before
 Those controls help make passive captures look more like the known-good manual capture
 path when audio-capable chat models are sensitive to tightly cropped speech.
 
+If no speech arrives within `MINIGENT_VOICE_POST_WAKE_SPEECH_TIMEOUT_MS` after the wake
+word, passive mode ignores that activation and returns to idle without sending audio to
+STT.
+
 If you need to inspect captured audio, set `MINIGENT_VOICE_DEBUG_CAPTURE_PATH` or pass
 `--debug-capture-path`. The daemon will print capture metadata and write the last WAV
 capture there before transcription. That is useful for comparing `manual-audio` and

@@ -7,6 +7,7 @@ import pytest
 
 from voice_daemon.audio import (
     AudioCaptureConfig,
+    MicrophoneRecorder,
     RecordedAudio,
     apply_gain,
     split_pcm_chunk,
@@ -307,6 +308,68 @@ def test_pad_with_silence_adds_expected_duration() -> None:
     assert padded.pcm_bytes[-16_000:] == b"\x00" * 16_000
 
 
+def test_record_after_speech_from_stream_includes_preroll() -> None:
+    class FakeDetector:
+        def __init__(self) -> None:
+            self.reset_calls = 0
+
+        def reset(self) -> None:
+            self.reset_calls += 1
+
+        def is_speech(self, samples: list[float], sample_rate: int) -> bool:
+            del sample_rate
+            return any(abs(sample) > 0.0 for sample in samples)
+
+    class FakeStream:
+        def __init__(self) -> None:
+            self.chunks = iter(
+                [
+                    b"\x00\x00\x00\x00",
+                    b"\x01\x00\x01\x00",
+                    b"\x02\x00\x02\x00",
+                    b"\x00\x00\x00\x00",
+                    b"\x00\x00\x00\x00",
+                ]
+            )
+
+        def read(self, frames: int) -> tuple[bytes, bool]:
+            del frames
+            try:
+                return next(self.chunks), False
+            except StopIteration:
+                return b"", False
+
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    recorder = MicrophoneRecorder(
+        AudioCaptureConfig(
+            sample_rate=16_000,
+            channels=1,
+            sample_width_bytes=2,
+            block_size=2,
+            max_record_seconds=1.0,
+            end_silence_ms=0,
+        ),
+        detector=FakeDetector(),
+    )
+
+    audio = recorder.record_after_speech_from_stream(
+        FakeStream(),
+        timeout_ms=100,
+        preroll_ms=1,
+    )
+
+    assert audio is not None
+    assert audio.pcm_bytes.startswith(b"\x00\x00\x00\x00\x01\x00\x01\x00")
+
+
 def test_pcm16le_to_floats_normalizes_samples() -> None:
     assert pcm16le_to_floats(b"\x00\x80\x00\x00\xff\x7f") == [-1.0, 0.0, 32767 / 32768]
 
@@ -438,9 +501,12 @@ def test_passive_audio_activation_source_records_on_fresh_stream() -> None:
     class FakeRecorder:
         def __init__(self) -> None:
             self.record_calls = 0
+            self.timeout_ms: int | None = None
 
-        def record_until_silence(self) -> RecordedAudio:
+        def record_after_speech(self, timeout_ms: int, *, preroll_ms: int = 250) -> RecordedAudio | None:
             self.record_calls += 1
+            self.timeout_ms = timeout_ms
+            self.preroll_ms = preroll_ms
             return RecordedAudio(
                 pcm_bytes=b"\x03\x00" * 8,
                 sample_rate=16_000,
@@ -479,9 +545,75 @@ def test_passive_audio_activation_source_records_on_fresh_stream() -> None:
     assert activation == Activation()
     assert transcript == "wake word request"
     assert recorder.record_calls == 1
+    assert recorder.timeout_ms == 100
+    assert recorder.preroll_ms == 250
     assert source.wake_detector.reset_calls == 1
     assert "openwakeword:okay_nabu" in output_stream.getvalue()
     assert "[listening] wake word detected" in output_stream.getvalue()
+
+
+def test_passive_audio_activation_source_ignores_wake_without_followup_speech() -> None:
+    class FakeStream:
+        def read(self, frames: int) -> tuple[bytes, bool]:
+            del frames
+            return b"\x00\x00" * 4, False
+
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeWakeDetector:
+        frame_length = 4
+        sample_rate = 16000
+        label = "openwakeword:okay_nabu"
+
+        def reset(self) -> None:
+            return None
+
+        def process_chunk(self, chunk: bytes) -> bool:
+            del chunk
+            return False
+
+    class FakeRecorder:
+        def __init__(self) -> None:
+            self.timeout_ms: int | None = None
+
+        def record_after_speech(self, timeout_ms: int, *, preroll_ms: int = 250) -> RecordedAudio | None:
+            self.timeout_ms = timeout_ms
+            self.preroll_ms = preroll_ms
+            return None
+
+    class FakeTranscriber:
+        def transcribe(self, audio: RecordedAudio) -> str:
+            raise AssertionError(f"unexpected transcription for {audio}")
+
+    output_stream = StringIO()
+    recorder = FakeRecorder()
+    source = PassiveAudioActivationSource(
+        output_stream=output_stream,
+        stream=FakeStream(),
+        recorder=recorder,
+        transcriber=FakeTranscriber(),
+        wake_detector=FakeWakeDetector(),
+        preroll_buffer=AudioRingBuffer(max_bytes=32),
+        post_wake_speech_timeout_ms=250,
+        post_wake_settle_ms=0,
+        wakeword_cooldown_ms=100,
+        stt_pad_leading_ms=0,
+        stt_pad_trailing_ms=0,
+    )
+
+    transcript = source.capture_utterance()
+
+    assert transcript == ""
+    assert recorder.timeout_ms == 250
+    assert recorder.preroll_ms == 250
+    assert "[idle] no speech after wake word, ignoring activation" in output_stream.getvalue()
 
 
 def test_passive_audio_activation_source_ignores_stt_error() -> None:
@@ -512,7 +644,9 @@ def test_passive_audio_activation_source_ignores_stt_error() -> None:
             return False
 
     class FakeRecorder:
-        def record_until_silence(self) -> RecordedAudio:
+        def record_after_speech(self, timeout_ms: int, *, preroll_ms: int = 250) -> RecordedAudio | None:
+            del timeout_ms
+            del preroll_ms
             return RecordedAudio(
                 pcm_bytes=b"\x03\x00" * 8,
                 sample_rate=16_000,
@@ -803,6 +937,49 @@ def test_openrouter_transcription_adapter_rejects_assistant_style_text(monkeypat
                     {
                         "message": {
                             "content": "Please provide the audio file and I will transcribe it."
+                        }
+                    }
+                ]
+            }
+
+    monkeypatch.setattr("voice_daemon.stt.httpx.post", lambda *_, **__: FakeResponse())
+    adapter = OpenRouterTranscriptionAdapter(
+        OpenRouterTranscriptionConfig(
+            api_key="openrouter-key",
+            model="openai/gpt-audio",
+        )
+    )
+
+    with pytest.raises(SpeechToTextError, match="assistant-style text"):
+        adapter.transcribe(
+            RecordedAudio(
+                pcm_bytes=b"\x00\x00\xff\x7f",
+                sample_rate=16_000,
+                channels=1,
+                sample_width_bytes=2,
+            )
+        )
+
+
+def test_openrouter_transcription_adapter_rejects_missing_attachment_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        text = ""
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "I currently don't have an audio attached. Could you please try "
+                                "uploading it again?"
+                            )
                         }
                     }
                 ]

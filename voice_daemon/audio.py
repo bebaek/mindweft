@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from voice_daemon.ring_buffer import AudioRingBuffer
+
 
 class AudioDependencyError(RuntimeError):
     """Raised when optional voice audio dependencies are unavailable."""
@@ -107,6 +109,14 @@ class MicrophoneRecorder:
         with open_microphone_stream(self._config) as stream:
             return self.record_until_silence_from_stream(stream)
 
+    def record_after_speech(self, timeout_ms: int, *, preroll_ms: int = 250) -> RecordedAudio | None:
+        with open_microphone_stream(self._config) as stream:
+            return self.record_after_speech_from_stream(
+                stream,
+                timeout_ms=timeout_ms,
+                preroll_ms=preroll_ms,
+            )
+
     @property
     def block_size(self) -> int:
         return self._config.block_size
@@ -167,6 +177,40 @@ class MicrophoneRecorder:
             channels=self._config.channels,
             sample_width_bytes=self._config.sample_width_bytes,
         )
+
+    def record_after_speech_from_stream(
+        self,
+        stream: RawAudioInputStream,
+        *,
+        timeout_ms: int,
+        preroll_ms: int = 250,
+    ) -> RecordedAudio | None:
+        if timeout_ms <= 0:
+            return self.record_until_silence_from_stream(stream)
+        self._detector.reset()
+        preroll_buffer = AudioRingBuffer(
+            max_bytes=max(
+                0,
+                int(
+                    self._config.sample_rate
+                    * self._config.channels
+                    * self._config.sample_width_bytes
+                    * (max(preroll_ms, 0) / 1000.0)
+                ),
+            )
+        )
+        deadline = time.monotonic() + (timeout_ms / 1000.0)
+        while time.monotonic() < deadline:
+            chunk = read_chunk(stream, self._config.block_size)
+            if not chunk:
+                continue
+            preroll_buffer.append(chunk)
+            if self.chunk_has_speech(chunk):
+                return self.record_until_silence_from_stream(
+                    stream,
+                    initial_chunks=preroll_buffer.snapshot(),
+                )
+        return None
 
 
 def pcm16le_to_floats(chunk: bytes) -> list[float]:
