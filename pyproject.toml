@@ -25,6 +25,7 @@ minirag = [
   "minirag",
 ]
 voice = [
+  "numpy>=2,<3",
   "silero-vad>=6.2.1,<7.0",
   "sounddevice>=0.5.5,<0.6",
 ]

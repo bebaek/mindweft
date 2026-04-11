@@ -48,7 +48,7 @@ The daemon currently supports two backends:
 
 - `stdin`: text-driven wake phrase loop for cheap end-to-end testing
 - `manual-audio`: press Enter to activate the microphone, record until silence using
-  Silero VAD, transcribe the utterance with OpenAI speech-to-text, then send the text
+  Silero VAD, transcribe the utterance with OpenAI or OpenRouter speech-to-text, then send the text
   into Minigent and print the assistant reply
 
 Examples:
@@ -71,14 +71,33 @@ OPENAI_API_KEY=...
 uv run minigent-voice-daemon --backend manual-audio --once
 ```
 
+Using OpenRouter for transcription:
+
+```bash
+OPENROUTER_API_KEY=...
+MINIGENT_VOICE_STT_PROVIDER=openrouter
+MINIGENT_VOICE_STT_MODEL=openai/gpt-audio
+uv run minigent-voice-daemon --backend manual-audio --once
+```
+
 In `manual-audio` mode, press Enter to start recording. The daemon stops recording after
 trailing silence or `MINIGENT_VOICE_MAX_RECORD_SECONDS`, transcribes the utterance, and
 then sends the transcript through the normal Minigent thread/run flow.
+
+The current speech-to-text providers are:
+
+- `openai`: uses the `/audio/transcriptions` API
+- `openrouter`: uses `/chat/completions` with `input_audio`
+
+For `openrouter`, choose a model that supports audio input. `openai/gpt-audio` is a good
+starting point. The OpenAI-native transcription model ID `gpt-4o-mini-transcribe` is
+for OpenAI's `/audio/transcriptions` API and is not a valid OpenRouter model ID.
 
 Daemon-related env vars:
 
 - `MINIGENT_BASE_URL`
 - `MINIGENT_VOICE_WAKE_PHRASE`
+- `MINIGENT_VOICE_STT_PROVIDER`
 - `MINIGENT_VOICE_SKILL`
 - `MINIGENT_VOICE_THREAD_ID`
 - `MINIGENT_VOICE_AUDIO_DEVICE`
@@ -94,6 +113,10 @@ Daemon-related env vars:
 - `MINIGENT_VOICE_ADMIN`
 - `OPENAI_API_KEY`
 - `OPENAI_BASE_URL`
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_BASE_URL`
+- `OPENROUTER_HTTP_REFERER`
+- `OPENROUTER_APP_NAME`
 
 You can put provider settings in a local `.env` file. Start from [.env.example](/Users/burm/code/minigent/.env.example).
 

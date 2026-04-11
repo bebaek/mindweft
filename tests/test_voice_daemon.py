@@ -8,7 +8,15 @@ from voice_daemon.audio import AudioCaptureConfig, RecordedAudio, pcm16le_to_flo
 from voice_daemon.backends.manual_audio import ManualAudioActivationSource
 from voice_daemon.backends.stdin_loop import ConsoleSpeechOutput, StdinActivationSource
 from voice_daemon.config import PrincipalConfig, VoiceDaemonConfig
-from voice_daemon.stt import OpenAITranscriptionAdapter, OpenAITranscriptionConfig, SpeechToTextError
+from voice_daemon.stt import (
+    OpenAITranscriptionAdapter,
+    OpenAITranscriptionConfig,
+    OpenRouterTranscriptionAdapter,
+    OpenRouterTranscriptionConfig,
+    SpeechToTextError,
+    build_transcription_adapter,
+)
+from voice_daemon.cli import build_speech_provider_config
 from voice_daemon.service import Activation, VoiceDaemon
 
 
@@ -132,6 +140,7 @@ def test_principal_config_prefers_bearer_token() -> None:
 def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_BASE_URL", "http://127.0.0.1:9000/")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_PHRASE", "computer")
+    monkeypatch.setenv("MINIGENT_VOICE_STT_PROVIDER", "openrouter")
     monkeypatch.setenv("MINIGENT_VOICE_SKILL", "support")
     monkeypatch.setenv("MINIGENT_VOICE_THREAD_ID", "thread-123")
     monkeypatch.setenv("MINIGENT_VOICE_AUDIO_DEVICE", "Built-in Mic")
@@ -140,19 +149,24 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_VOICE_END_SILENCE_MS", "600")
     monkeypatch.setenv("MINIGENT_VOICE_MAX_RECORD_SECONDS", "9.5")
     monkeypatch.setenv("MINIGENT_VOICE_VAD_THRESHOLD", "0.65")
-    monkeypatch.setenv("MINIGENT_VOICE_STT_MODEL", "gpt-4o-transcribe")
+    monkeypatch.setenv("MINIGENT_VOICE_STT_MODEL", "openai/gpt-audio")
     monkeypatch.setenv("MINIGENT_VOICE_USER_ID", "voice-user")
     monkeypatch.setenv("MINIGENT_VOICE_TENANT_ID", "voice-tenant")
     monkeypatch.setenv("MINIGENT_VOICE_ADMIN", "true")
     monkeypatch.setenv("MINIGENT_VOICE_API_TOKEN", "voice-token")
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://api.example.com/v1/")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setenv("OPENROUTER_BASE_URL", "https://openrouter.example/api/v1/")
+    monkeypatch.setenv("OPENROUTER_HTTP_REFERER", "https://minigent.example")
+    monkeypatch.setenv("OPENROUTER_APP_NAME", "minigent")
 
     config = VoiceDaemonConfig.from_env()
 
     assert config == VoiceDaemonConfig(
         base_url="http://127.0.0.1:9000",
         wake_phrase="computer",
+        stt_provider="openrouter",
         skill_name="support",
         thread_id="thread-123",
         audio_device="Built-in Mic",
@@ -161,9 +175,13 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
         speech_silence_ms=600,
         speech_max_seconds=9.5,
         vad_threshold=0.65,
-        stt_model="gpt-4o-transcribe",
+        stt_model="openai/gpt-audio",
         openai_api_key="openai-key",
         openai_base_url="https://api.example.com/v1",
+        openrouter_api_key="openrouter-key",
+        openrouter_base_url="https://openrouter.example/api/v1",
+        openrouter_http_referer="https://minigent.example",
+        openrouter_app_name="minigent",
         principal=PrincipalConfig(
             user_id="voice-user",
             tenant_id="voice-tenant",
@@ -286,3 +304,109 @@ def test_openai_transcription_adapter_requires_text_response(monkeypatch: pytest
                 sample_width_bytes=2,
             )
         )
+
+
+def test_openrouter_transcription_adapter_returns_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        text = ""
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"transcript":"hello from openrouter"}'
+                        }
+                    }
+                ]
+            }
+
+    def fake_post(url: str, *, json: object, headers: object, timeout: object) -> FakeResponse:
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr("voice_daemon.stt.httpx.post", fake_post)
+    adapter = OpenRouterTranscriptionAdapter(
+        OpenRouterTranscriptionConfig(
+            api_key="openrouter-key",
+            model="openai/gpt-audio",
+            base_url="https://openrouter.ai/api/v1",
+            timeout_seconds=45.0,
+            app_name="minigent",
+            http_referer="https://minigent.example",
+        )
+    )
+
+    text = adapter.transcribe(
+        RecordedAudio(
+            pcm_bytes=b"\x00\x00\xff\x7f",
+            sample_rate=16_000,
+            channels=1,
+            sample_width_bytes=2,
+        )
+    )
+
+    assert text == "hello from openrouter"
+    assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
+    assert captured["timeout"] == 45.0
+    assert captured["headers"] == {
+        "Authorization": "Bearer openrouter-key",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://minigent.example",
+        "X-Title": "minigent",
+    }
+    payload = captured["json"]
+    assert isinstance(payload, dict)
+    messages = payload["messages"]
+    assert isinstance(messages, list)
+    assert "response_format" not in payload
+    assert messages[0]["role"] == "system"
+    assert "verbatim transcript text" in messages[0]["content"]
+    assert messages[1]["content"][1]["input_audio"]["format"] == "wav"
+
+
+def test_build_transcription_adapter_supports_both_providers() -> None:
+    assert isinstance(
+        build_transcription_adapter(
+            build_speech_provider_config(
+                VoiceDaemonConfig(
+                    base_url="http://127.0.0.1:8000",
+                    wake_phrase="hey minigent",
+                    stt_provider="openai",
+                    openai_api_key="openai-key",
+                )
+            )
+        ),
+        OpenAITranscriptionAdapter,
+    )
+    assert isinstance(
+        build_transcription_adapter(
+            build_speech_provider_config(
+                VoiceDaemonConfig(
+                    base_url="http://127.0.0.1:8000",
+                    wake_phrase="hey minigent",
+                    stt_provider="openrouter",
+                    stt_model="openai/gpt-audio",
+                    openrouter_api_key="openrouter-key",
+                )
+            )
+        ),
+        OpenRouterTranscriptionAdapter,
+    )
+
+
+def test_voice_daemon_config_defaults_openrouter_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MINIGENT_VOICE_STT_MODEL", raising=False)
+    monkeypatch.setenv("MINIGENT_VOICE_STT_PROVIDER", "openrouter")
+
+    config = VoiceDaemonConfig.from_env()
+
+    assert config.stt_model == "openai/gpt-audio"

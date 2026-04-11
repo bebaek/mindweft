@@ -10,7 +10,7 @@ from voice_daemon.backends.stdin_loop import ConsoleSpeechOutput, StdinActivatio
 from voice_daemon.config import VoiceDaemonConfig
 from voice_daemon.minigent_client import MinigentClient
 from voice_daemon.service import VoiceDaemon
-from voice_daemon.stt import OpenAITranscriptionAdapter, OpenAITranscriptionConfig
+from voice_daemon.stt import SpeechProviderConfig, build_transcription_adapter
 from voice_daemon.vad import SileroVoiceActivityDetector
 
 
@@ -66,6 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional sounddevice input device name or index for manual-audio mode.",
     )
+    parser.add_argument(
+        "--stt-provider",
+        choices=("openai", "openrouter"),
+        default=None,
+        help="Speech-to-text provider for manual-audio mode. Defaults to MINIGENT_VOICE_STT_PROVIDER.",
+    )
     return parser
 
 
@@ -82,6 +88,7 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
     return VoiceDaemonConfig(
         base_url=(args.base_url or env_config.base_url).rstrip("/"),
         wake_phrase=(args.wake_phrase or env_config.wake_phrase).strip(),
+        stt_provider=args.stt_provider or env_config.stt_provider,
         skill_name=args.skill or env_config.skill_name,
         thread_id=args.thread_id or env_config.thread_id,
         audio_device=args.audio_device or env_config.audio_device,
@@ -93,6 +100,10 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
         stt_model=env_config.stt_model,
         openai_api_key=env_config.openai_api_key,
         openai_base_url=env_config.openai_base_url,
+        openrouter_api_key=env_config.openrouter_api_key,
+        openrouter_base_url=env_config.openrouter_base_url,
+        openrouter_http_referer=env_config.openrouter_http_referer,
+        openrouter_app_name=env_config.openrouter_app_name,
         principal=principal,
     )
 
@@ -123,11 +134,6 @@ def build_activation_source(backend: str, config: VoiceDaemonConfig):
             output_stream=sys.stdout,
         )
     if backend == "manual-audio":
-        if not config.openai_api_key:
-            raise SystemExit(
-                "OPENAI_API_KEY is required for manual-audio transcription. "
-                "Install voice deps with `uv sync --extra voice`."
-            )
         return ManualAudioActivationSource(
             input_stream=sys.stdin,
             output_stream=sys.stdout,
@@ -141,15 +147,43 @@ def build_activation_source(backend: str, config: VoiceDaemonConfig):
                 ),
                 detector=SileroVoiceActivityDetector(threshold=config.vad_threshold),
             ),
-            transcriber=OpenAITranscriptionAdapter(
-                OpenAITranscriptionConfig(
-                    api_key=config.openai_api_key,
-                    model=config.stt_model,
-                    base_url=config.openai_base_url,
-                )
-            ),
+            transcriber=build_transcription_adapter(build_speech_provider_config(config)),
         )
     raise ValueError(f"Unsupported backend '{backend}'")
+
+
+def build_speech_provider_config(config: VoiceDaemonConfig) -> SpeechProviderConfig:
+    provider = config.stt_provider.lower()
+    if provider == "openai":
+        if not config.openai_api_key:
+            raise SystemExit(
+                "OPENAI_API_KEY is required when MINIGENT_VOICE_STT_PROVIDER=openai. "
+                "Install voice deps with `uv sync --extra voice`."
+            )
+        return SpeechProviderConfig(
+            provider=provider,
+            model=config.stt_model,
+            api_key=config.openai_api_key,
+            base_url=config.openai_base_url,
+        )
+    if provider == "openrouter":
+        if not config.openrouter_api_key:
+            raise SystemExit(
+                "OPENROUTER_API_KEY is required when MINIGENT_VOICE_STT_PROVIDER=openrouter. "
+                "Install voice deps with `uv sync --extra voice`."
+            )
+        return SpeechProviderConfig(
+            provider=provider,
+            model=config.stt_model,
+            api_key=config.openrouter_api_key,
+            base_url=config.openrouter_base_url,
+            app_name=config.openrouter_app_name,
+            http_referer=config.openrouter_http_referer,
+        )
+    raise SystemExit(
+        f"Unsupported MINIGENT_VOICE_STT_PROVIDER '{config.stt_provider}'. "
+        "Choose 'openai' or 'openrouter'."
+    )
 
 
 if __name__ == "__main__":
