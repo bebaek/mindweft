@@ -44,6 +44,15 @@ There is also a separate voice-daemon client entrypoint:
 uv run minigent-voice-daemon --wake-phrase "hey minigent"
 ```
 
+By default, assistant replies are printed to the terminal. You can also enable local TTS
+on macOS with:
+
+```bash
+MINIGENT_VOICE_TTS_PROVIDER=say
+MINIGENT_VOICE_TTS_VOICE=Samantha
+uv run minigent-voice-daemon --backend manual-audio --once
+```
+
 The daemon currently supports three backends:
 
 - `stdin`: text-driven wake phrase loop for cheap end-to-end testing
@@ -172,6 +181,8 @@ Daemon-related env vars:
 - `MINIGENT_BASE_URL`
 - `MINIGENT_VOICE_WAKE_PHRASE`
 - `MINIGENT_VOICE_STT_PROVIDER`
+- `MINIGENT_VOICE_TTS_PROVIDER`
+- `MINIGENT_VOICE_TTS_VOICE`
 - `MINIGENT_VOICE_WAKEWORD_PROVIDER`
 - `MINIGENT_VOICE_SKILL`
 - `MINIGENT_VOICE_THREAD_ID`

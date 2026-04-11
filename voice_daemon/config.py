@@ -26,6 +26,8 @@ class VoiceDaemonConfig:
     base_url: str
     wake_phrase: str
     stt_provider: str = "openai"
+    tts_provider: str = "console"
+    tts_voice: str | None = None
     wakeword_provider: str = "porcupine"
     skill_name: str | None = None
     thread_id: str | None = None
@@ -65,6 +67,8 @@ class VoiceDaemonConfig:
             base_url=os.getenv("MINIGENT_BASE_URL", "http://127.0.0.1:8000").rstrip("/"),
             wake_phrase=os.getenv("MINIGENT_VOICE_WAKE_PHRASE", "hey minigent").strip(),
             stt_provider=os.getenv("MINIGENT_VOICE_STT_PROVIDER", "openai").strip().lower(),
+            tts_provider=os.getenv("MINIGENT_VOICE_TTS_PROVIDER", "console").strip().lower(),
+            tts_voice=_clean_optional(os.getenv("MINIGENT_VOICE_TTS_VOICE")),
             wakeword_provider=os.getenv(
                 "MINIGENT_VOICE_WAKEWORD_PROVIDER", "porcupine"
             ).strip().lower(),

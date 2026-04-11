@@ -7,12 +7,13 @@ from app.config import load_environment
 from voice_daemon.audio import AudioCaptureConfig, MicrophoneRecorder, open_microphone_stream
 from voice_daemon.backends.manual_audio import ManualAudioActivationSource
 from voice_daemon.backends.passive_audio import PassiveAudioActivationSource
-from voice_daemon.backends.stdin_loop import ConsoleSpeechOutput, StdinActivationSource
+from voice_daemon.backends.stdin_loop import StdinActivationSource
 from voice_daemon.config import VoiceDaemonConfig
 from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
 from voice_daemon.minigent_client import MinigentClient
 from voice_daemon.ring_buffer import AudioRingBuffer
 from voice_daemon.service import VoiceDaemon
+from voice_daemon.speech import ConsoleSpeechOutput, MacOsSaySpeechOutput
 from voice_daemon.stt import SpeechProviderConfig, build_transcription_adapter
 from voice_daemon.vad import SileroVoiceActivityDetector
 from voice_daemon.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
@@ -87,6 +88,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Speech-to-text provider for audio backends. Defaults to MINIGENT_VOICE_STT_PROVIDER.",
     )
     parser.add_argument(
+        "--tts-provider",
+        choices=("console", "say"),
+        default=None,
+        help="Speech output provider. Defaults to MINIGENT_VOICE_TTS_PROVIDER.",
+    )
+    parser.add_argument(
+        "--tts-voice",
+        default=None,
+        help="Optional voice name for the selected TTS provider. For `say`, this is the macOS voice passed to `say -v`.",
+    )
+    parser.add_argument(
         "--wakeword-provider",
         choices=("porcupine", "openwakeword"),
         default=None,
@@ -119,6 +131,8 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
         base_url=(args.base_url or env_config.base_url).rstrip("/"),
         wake_phrase=(args.wake_phrase or env_config.wake_phrase).strip(),
         stt_provider=args.stt_provider or env_config.stt_provider,
+        tts_provider=args.tts_provider or env_config.tts_provider,
+        tts_voice=args.tts_voice or env_config.tts_voice,
         wakeword_provider=args.wakeword_provider or env_config.wakeword_provider,
         skill_name=args.skill or env_config.skill_name,
         thread_id=args.thread_id or env_config.thread_id,
@@ -161,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
         wake_phrase=config.wake_phrase,
         activation_source=activation_source,
         minigent_client=MinigentClient(config),
-        speech_output=ConsoleSpeechOutput(output_stream=sys.stdout),
+        speech_output=build_speech_output(config),
     )
     try:
         if args.once:
@@ -252,6 +266,18 @@ def build_capture_debugger(config: VoiceDaemonConfig) -> CaptureDebugger | None:
     return CaptureDebugger(
         CaptureDebugConfig(capture_path=config.debug_capture_path),
         output_stream=sys.stdout,
+    )
+
+
+def build_speech_output(config: VoiceDaemonConfig):
+    provider = config.tts_provider.lower()
+    if provider == "console":
+        return ConsoleSpeechOutput(output_stream=sys.stdout)
+    if provider == "say":
+        return MacOsSaySpeechOutput(output_stream=sys.stdout, voice=config.tts_voice)
+    raise SystemExit(
+        f"Unsupported MINIGENT_VOICE_TTS_PROVIDER '{config.tts_provider}'. "
+        "Choose 'console' or 'say'."
     )
 
 

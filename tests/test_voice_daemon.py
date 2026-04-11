@@ -18,10 +18,11 @@ from voice_daemon.audio import (
 )
 from voice_daemon.backends.manual_audio import ManualAudioActivationSource
 from voice_daemon.backends.passive_audio import PassiveAudioActivationSource
-from voice_daemon.backends.stdin_loop import ConsoleSpeechOutput, StdinActivationSource
+from voice_daemon.backends.stdin_loop import StdinActivationSource
 from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
 from voice_daemon.config import PrincipalConfig, VoiceDaemonConfig
 from voice_daemon.ring_buffer import AudioRingBuffer
+from voice_daemon.speech import ConsoleSpeechOutput, MacOsSaySpeechOutput
 from voice_daemon.stt import (
     OpenAITranscriptionAdapter,
     OpenAITranscriptionConfig,
@@ -30,7 +31,7 @@ from voice_daemon.stt import (
     SpeechToTextError,
     build_transcription_adapter,
 )
-from voice_daemon.cli import build_speech_provider_config, build_wake_word_detector
+from voice_daemon.cli import build_speech_output, build_speech_provider_config, build_wake_word_detector
 import voice_daemon.cli as voice_cli
 from voice_daemon.service import Activation, VoiceDaemon
 
@@ -141,6 +142,44 @@ def test_console_speech_output_prints_reply() -> None:
     assert output_stream.getvalue() == "[assistant] done\n"
 
 
+def test_macos_say_speech_output_prints_and_speaks(monkeypatch: pytest.MonkeyPatch) -> None:
+    output_stream = StringIO()
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], check: bool) -> None:
+        captured["command"] = command
+        captured["check"] = check
+
+    monkeypatch.setattr("voice_daemon.speech.subprocess.run", fake_run)
+
+    MacOsSaySpeechOutput(output_stream=output_stream, voice="Samantha").speak("done")
+
+    assert output_stream.getvalue() == "[assistant] done\n"
+    assert captured == {"command": ["say", "-v", "Samantha", "done"], "check": True}
+
+
+def test_build_speech_output_supports_console_and_say() -> None:
+    console = build_speech_output(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            tts_provider="console",
+        )
+    )
+    say = build_speech_output(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            tts_provider="say",
+            tts_voice="Samantha",
+        )
+    )
+
+    assert isinstance(console, ConsoleSpeechOutput)
+    assert isinstance(say, MacOsSaySpeechOutput)
+    assert say.voice == "Samantha"
+
+
 def test_principal_config_prefers_bearer_token() -> None:
     principal = PrincipalConfig(
         user_id="user-1",
@@ -156,6 +195,8 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_BASE_URL", "http://127.0.0.1:9000/")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_PHRASE", "computer")
     monkeypatch.setenv("MINIGENT_VOICE_STT_PROVIDER", "openrouter")
+    monkeypatch.setenv("MINIGENT_VOICE_TTS_PROVIDER", "say")
+    monkeypatch.setenv("MINIGENT_VOICE_TTS_VOICE", "Samantha")
     monkeypatch.setenv("MINIGENT_VOICE_WAKEWORD_PROVIDER", "porcupine")
     monkeypatch.setenv("MINIGENT_VOICE_SKILL", "support")
     monkeypatch.setenv("MINIGENT_VOICE_THREAD_ID", "thread-123")
@@ -193,6 +234,8 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
         base_url="http://127.0.0.1:9000",
         wake_phrase="computer",
         stt_provider="openrouter",
+        tts_provider="say",
+        tts_voice="Samantha",
         wakeword_provider="porcupine",
         skill_name="support",
         thread_id="thread-123",
@@ -763,7 +806,7 @@ def test_voice_daemon_cli_handles_keyboard_interrupt(
     )
     monkeypatch.setattr(voice_cli, "build_activation_source", lambda backend, config: activation_source)
     monkeypatch.setattr(voice_cli, "MinigentClient", lambda config: object())
-    monkeypatch.setattr(voice_cli, "ConsoleSpeechOutput", lambda output_stream: object())
+    monkeypatch.setattr(voice_cli, "build_speech_output", lambda config: object())
     monkeypatch.setattr(voice_cli, "VoiceDaemon", FakeVoiceDaemon)
 
     exit_code = voice_cli.main(["--backend", "stdin"])

@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TextIO
 
-from voice_daemon.service import Activation, SpeechOutput
+from voice_daemon.service import Activation
+from voice_daemon.speech import ConsoleSpeechOutput
 
 
 @dataclass
@@ -35,12 +36,3 @@ class StdinActivationSource:
         if line == "":
             raise SystemExit(0)
         return line.strip()
-
-
-@dataclass
-class ConsoleSpeechOutput(SpeechOutput):
-    output_stream: TextIO
-
-    def speak(self, text: str) -> None:
-        self.output_stream.write(f"[assistant] {text}\n")
-        self.output_stream.flush()
