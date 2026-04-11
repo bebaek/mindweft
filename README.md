@@ -96,6 +96,17 @@ MINIGENT_VOICE_STT_MODEL=openai/gpt-audio
 uv run minigent-voice-daemon --backend manual-audio --once
 ```
 
+Using local faster-whisper transcription:
+
+```bash
+MINIGENT_VOICE_STT_PROVIDER=faster-whisper
+MINIGENT_VOICE_STT_MODEL=base
+MINIGENT_VOICE_STT_DEVICE=cpu
+MINIGENT_VOICE_STT_COMPUTE_TYPE=int8
+MINIGENT_VOICE_STT_LANGUAGE=en
+uv run minigent-voice-daemon --backend manual-audio --once
+```
+
 In `manual-audio` mode, press Enter to start recording. The daemon stops recording after
 trailing silence or `MINIGENT_VOICE_MAX_RECORD_SECONDS`, transcribes the utterance, and
 then sends the transcript through the normal Minigent thread/run flow.
@@ -104,10 +115,16 @@ The current speech-to-text providers are:
 
 - `openai`: uses the `/audio/transcriptions` API
 - `openrouter`: uses `/chat/completions` with `input_audio`
+- `faster-whisper`: runs a local Whisper-family transcription model
 
 For `openrouter`, choose a model that supports audio input. `openai/gpt-audio` is a good
 starting point. The OpenAI-native transcription model ID `gpt-4o-mini-transcribe` is
 for OpenAI's `/audio/transcriptions` API and is not a valid OpenRouter model ID.
+
+For `faster-whisper`, `base` is a sensible starting point for command-style speech on a
+laptop. `MINIGENT_VOICE_STT_DEVICE=cpu` and `MINIGENT_VOICE_STT_COMPUTE_TYPE=int8` are
+good conservative defaults. For short English voice commands, set
+`MINIGENT_VOICE_STT_LANGUAGE=en` instead of relying on auto-detection.
 
 Passive wake-word example:
 
@@ -181,6 +198,9 @@ Daemon-related env vars:
 - `MINIGENT_BASE_URL`
 - `MINIGENT_VOICE_WAKE_PHRASE`
 - `MINIGENT_VOICE_STT_PROVIDER`
+- `MINIGENT_VOICE_STT_DEVICE`
+- `MINIGENT_VOICE_STT_COMPUTE_TYPE`
+- `MINIGENT_VOICE_STT_LANGUAGE`
 - `MINIGENT_VOICE_TTS_PROVIDER`
 - `MINIGENT_VOICE_TTS_VOICE`
 - `MINIGENT_VOICE_WAKEWORD_PROVIDER`

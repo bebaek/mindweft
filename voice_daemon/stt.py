@@ -23,12 +23,15 @@ class SpeechToTextAdapter(Protocol):
 class SpeechProviderConfig:
     provider: str
     model: str
-    api_key: str
-    base_url: str
+    api_key: str | None = None
+    base_url: str | None = None
     timeout_seconds: float = 60.0
     app_name: str | None = None
     http_referer: str | None = None
     debug_path: str | None = None
+    device: str | None = None
+    compute_type: str | None = None
+    language: str | None = None
 
 
 @dataclass(frozen=True)
@@ -170,6 +173,41 @@ class OpenRouterTranscriptionAdapter:
         (path / filename).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
+@dataclass(frozen=True)
+class FasterWhisperTranscriptionConfig:
+    model: str = "base"
+    device: str = "cpu"
+    compute_type: str = "int8"
+    language: str | None = None
+
+
+class FasterWhisperTranscriptionAdapter:
+    def __init__(self, config: FasterWhisperTranscriptionConfig) -> None:
+        self._config = config
+        self._model = _load_faster_whisper_model(
+            config.model,
+            device=config.device,
+            compute_type=config.compute_type,
+        )
+
+    def transcribe(self, audio: RecordedAudio) -> str:
+        audio_samples = _recorded_audio_to_float32_mono(audio)
+        try:
+            segments, _ = self._model.transcribe(
+                audio_samples,
+                beam_size=5,
+                task="transcribe",
+                vad_filter=False,
+                language=self._config.language,
+            )
+        except Exception as exc:
+            raise SpeechToTextError(f"faster-whisper transcription failed: {exc}") from exc
+        text = "".join(segment.text for segment in segments).strip()
+        if not text:
+            raise SpeechToTextError("faster-whisper transcription response did not include text")
+        return text
+
+
 def build_transcription_adapter(config: SpeechProviderConfig) -> SpeechToTextAdapter:
     provider = config.provider.lower()
     if provider == "openai":
@@ -193,7 +231,39 @@ def build_transcription_adapter(config: SpeechProviderConfig) -> SpeechToTextAda
                 debug_path=config.debug_path,
             )
         )
+    if provider == "faster-whisper":
+        return FasterWhisperTranscriptionAdapter(
+            FasterWhisperTranscriptionConfig(
+                model=config.model,
+                device=config.device or "cpu",
+                compute_type=config.compute_type or "int8",
+                language=config.language,
+            )
+        )
     raise SpeechToTextError(f"Unsupported speech provider '{config.provider}'")
+
+
+def _load_faster_whisper_model(model: str, *, device: str, compute_type: str):
+    try:
+        from faster_whisper import WhisperModel  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise SpeechToTextError(
+            "faster-whisper is required for local transcription. Install with `uv sync --extra voice`."
+        ) from exc
+    return WhisperModel(model, device=device, compute_type=compute_type)
+
+
+def _recorded_audio_to_float32_mono(audio: RecordedAudio):
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise SpeechToTextError(
+            "numpy is required for local transcription. Install with `uv sync --extra voice`."
+        ) from exc
+    samples = np.frombuffer(audio.pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+    if audio.channels > 1:
+        samples = samples.reshape(-1, audio.channels).mean(axis=1)
+    return samples
 
 
 def _parse_openrouter_transcription_response(payload: Any) -> str:

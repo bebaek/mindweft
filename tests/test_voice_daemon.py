@@ -24,6 +24,8 @@ from voice_daemon.config import PrincipalConfig, VoiceDaemonConfig
 from voice_daemon.ring_buffer import AudioRingBuffer
 from voice_daemon.speech import ConsoleSpeechOutput, MacOsSaySpeechOutput
 from voice_daemon.stt import (
+    FasterWhisperTranscriptionAdapter,
+    FasterWhisperTranscriptionConfig,
     OpenAITranscriptionAdapter,
     OpenAITranscriptionConfig,
     OpenRouterTranscriptionAdapter,
@@ -195,6 +197,9 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_BASE_URL", "http://127.0.0.1:9000/")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_PHRASE", "computer")
     monkeypatch.setenv("MINIGENT_VOICE_STT_PROVIDER", "openrouter")
+    monkeypatch.setenv("MINIGENT_VOICE_STT_DEVICE", "cpu")
+    monkeypatch.setenv("MINIGENT_VOICE_STT_COMPUTE_TYPE", "int8")
+    monkeypatch.setenv("MINIGENT_VOICE_STT_LANGUAGE", "en")
     monkeypatch.setenv("MINIGENT_VOICE_TTS_PROVIDER", "say")
     monkeypatch.setenv("MINIGENT_VOICE_TTS_VOICE", "Samantha")
     monkeypatch.setenv("MINIGENT_VOICE_WAKEWORD_PROVIDER", "porcupine")
@@ -234,6 +239,9 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
         base_url="http://127.0.0.1:9000",
         wake_phrase="computer",
         stt_provider="openrouter",
+        stt_device="cpu",
+        stt_compute_type="int8",
+        stt_language="en",
         tts_provider="say",
         tts_voice="Samantha",
         wakeword_provider="porcupine",
@@ -1047,7 +1055,50 @@ def test_openrouter_transcription_adapter_rejects_missing_attachment_reply(
         )
 
 
-def test_build_transcription_adapter_supports_both_providers() -> None:
+def test_faster_whisper_transcription_adapter_returns_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeSegment:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class FakeModel:
+        def __init__(self, model: str, *, device: str, compute_type: str) -> None:
+            self.model = model
+            self.device = device
+            self.compute_type = compute_type
+
+        def transcribe(self, audio_samples, **kwargs):
+            assert len(audio_samples) == 2
+            assert kwargs["task"] == "transcribe"
+            assert kwargs["language"] == "en"
+            return iter([FakeSegment("hello "), FakeSegment("world")]), object()
+
+    monkeypatch.setattr("voice_daemon.stt._load_faster_whisper_model", FakeModel)
+    adapter = FasterWhisperTranscriptionAdapter(
+        FasterWhisperTranscriptionConfig(
+            model="base",
+            device="cpu",
+            compute_type="int8",
+            language="en",
+        )
+    )
+
+    text = adapter.transcribe(
+        RecordedAudio(
+            pcm_bytes=b"\x00\x00\xff\x7f",
+            sample_rate=16_000,
+            channels=1,
+            sample_width_bytes=2,
+        )
+    )
+
+    assert text == "hello world"
+
+
+def test_build_transcription_adapter_supports_all_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "voice_daemon.stt._load_faster_whisper_model",
+        lambda model, *, device, compute_type: object(),
+    )
     assert isinstance(
         build_transcription_adapter(
             build_speech_provider_config(
@@ -1075,6 +1126,22 @@ def test_build_transcription_adapter_supports_both_providers() -> None:
         ),
         OpenRouterTranscriptionAdapter,
     )
+    assert isinstance(
+        build_transcription_adapter(
+            build_speech_provider_config(
+                VoiceDaemonConfig(
+                    base_url="http://127.0.0.1:8000",
+                    wake_phrase="hey minigent",
+                    stt_provider="faster-whisper",
+                    stt_model="base",
+                    stt_device="cpu",
+                    stt_compute_type="int8",
+                    stt_language="en",
+                )
+            )
+        ),
+        FasterWhisperTranscriptionAdapter,
+    )
 
 
 def test_voice_daemon_config_defaults_openrouter_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1084,6 +1151,15 @@ def test_voice_daemon_config_defaults_openrouter_model(monkeypatch: pytest.Monke
     config = VoiceDaemonConfig.from_env()
 
     assert config.stt_model == "openai/gpt-audio"
+
+
+def test_voice_daemon_config_defaults_faster_whisper_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MINIGENT_VOICE_STT_MODEL", raising=False)
+    monkeypatch.setenv("MINIGENT_VOICE_STT_PROVIDER", "faster-whisper")
+
+    config = VoiceDaemonConfig.from_env()
+
+    assert config.stt_model == "base"
 
 
 def test_build_wake_word_detector_requires_access_key_and_keyword_path() -> None:

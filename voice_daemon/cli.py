@@ -83,9 +83,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--stt-provider",
-        choices=("openai", "openrouter"),
+        choices=("openai", "openrouter", "faster-whisper"),
         default=None,
         help="Speech-to-text provider for audio backends. Defaults to MINIGENT_VOICE_STT_PROVIDER.",
+    )
+    parser.add_argument(
+        "--stt-device",
+        default=None,
+        help="Optional STT device override, for example `cpu` or `cuda`. Used by local providers such as faster-whisper.",
+    )
+    parser.add_argument(
+        "--stt-compute-type",
+        default=None,
+        help="Optional STT compute type override such as `int8` or `float16`. Used by local providers such as faster-whisper.",
+    )
+    parser.add_argument(
+        "--stt-language",
+        default=None,
+        help="Optional STT language hint such as `en`. When unset, providers use their default language detection behavior.",
     )
     parser.add_argument(
         "--tts-provider",
@@ -131,6 +146,9 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
         base_url=(args.base_url or env_config.base_url).rstrip("/"),
         wake_phrase=(args.wake_phrase or env_config.wake_phrase).strip(),
         stt_provider=args.stt_provider or env_config.stt_provider,
+        stt_device=args.stt_device or env_config.stt_device,
+        stt_compute_type=args.stt_compute_type or env_config.stt_compute_type,
+        stt_language=args.stt_language or env_config.stt_language,
         tts_provider=args.tts_provider or env_config.tts_provider,
         tts_voice=args.tts_voice or env_config.tts_voice,
         wakeword_provider=args.wakeword_provider or env_config.wakeword_provider,
@@ -311,9 +329,18 @@ def build_speech_provider_config(config: VoiceDaemonConfig) -> SpeechProviderCon
             http_referer=config.openrouter_http_referer,
             debug_path=config.stt_debug_path,
         )
+    if provider == "faster-whisper":
+        return SpeechProviderConfig(
+            provider=provider,
+            model=config.stt_model,
+            device=config.stt_device,
+            compute_type=config.stt_compute_type,
+            language=config.stt_language,
+            debug_path=config.stt_debug_path,
+        )
     raise SystemExit(
         f"Unsupported MINIGENT_VOICE_STT_PROVIDER '{config.stt_provider}'. "
-        "Choose 'openai' or 'openrouter'."
+        "Choose 'openai', 'openrouter', or 'faster-whisper'."
     )
 
 

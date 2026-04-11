@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("wav_path", help="Path to a mono 16-bit PCM WAV file.")
     parser.add_argument(
         "--provider",
-        choices=("openai", "openrouter"),
+        choices=("openai", "openrouter", "faster-whisper"),
         default=os.getenv("MINIGENT_VOICE_STT_PROVIDER", "openai"),
         help="Speech-to-text provider to use.",
     )
@@ -130,6 +130,15 @@ def build_provider_config(provider: str, model: str | None, stt_debug_path: str 
             base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/"),
             app_name=os.getenv("OPENROUTER_APP_NAME"),
             http_referer=os.getenv("OPENROUTER_HTTP_REFERER"),
+            debug_path=stt_debug_path,
+        )
+    if normalized == "faster-whisper":
+        return SpeechProviderConfig(
+            provider="faster-whisper",
+            model=model or os.getenv("MINIGENT_VOICE_STT_MODEL", "base"),
+            device=os.getenv("MINIGENT_VOICE_STT_DEVICE"),
+            compute_type=os.getenv("MINIGENT_VOICE_STT_COMPUTE_TYPE"),
+            language=os.getenv("MINIGENT_VOICE_STT_LANGUAGE"),
             debug_path=stt_debug_path,
         )
     raise SystemExit(f"Unsupported provider '{provider}'")
