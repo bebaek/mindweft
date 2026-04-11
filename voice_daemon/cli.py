@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--wake-phrase",
         default=None,
-        help="Wake phrase that activates the daemon. Defaults to MINIGENT_VOICE_WAKE_PHRASE.",
+        help="Text wake phrase for the stdin backend. Passive-audio uses the configured wake-word provider/model instead.",
     )
     parser.add_argument(
         "--skill",

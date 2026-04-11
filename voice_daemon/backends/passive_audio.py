@@ -40,9 +40,9 @@ class PassiveAudioActivationSource:
     _closed: bool = False
 
     def wait_for_activation(self, wake_phrase: str) -> Activation:
+        del wake_phrase
         self.output_stream.write(
-            f"[idle] passive listening with {self.wake_detector.label} "
-            f"(configured wake phrase '{wake_phrase}')\n"
+            f"[idle] passive listening for wake word {self.wake_detector.label}\n"
         )
         self.output_stream.flush()
         while True:

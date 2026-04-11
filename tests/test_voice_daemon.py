@@ -548,7 +548,7 @@ def test_passive_audio_activation_source_records_on_fresh_stream() -> None:
     assert recorder.timeout_ms == 100
     assert recorder.preroll_ms == 250
     assert source.wake_detector.reset_calls == 1
-    assert "openwakeword:okay_nabu" in output_stream.getvalue()
+    assert "[idle] passive listening for wake word openwakeword:okay_nabu" in output_stream.getvalue()
     assert "[listening] wake word detected" in output_stream.getvalue()
 
 

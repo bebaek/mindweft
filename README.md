@@ -53,6 +53,11 @@ The daemon currently supports three backends:
 - `passive-audio`: continuously listen for a wake word, keep a short pre-roll audio
   buffer, then record until silence and transcribe through the same speech pipeline
 
+`MINIGENT_VOICE_WAKE_PHRASE` is the text trigger for the `stdin` backend. In
+`passive-audio`, the actual wake trigger comes from the configured wake-word provider:
+`MINIGENT_VOICE_KEYWORD_PATH` for Porcupine or `MINIGENT_VOICE_OWW_MODEL` for
+openWakeWord.
+
 Examples:
 
 ```bash
