@@ -31,6 +31,42 @@ uv run minigent chat --resume-last "continue"
 uv run minigent threads show <thread-id>
 ```
 
+There is also an initial voice-daemon scaffold packaged as a separate client entrypoint:
+
+```bash
+uv run minigent-voice-daemon --wake-phrase "hey minigent"
+```
+
+The current scaffold is intentionally text-driven: it runs an always-on foreground loop,
+waits for lines that start with the wake phrase, sends the recognized utterance to the
+Minigent HTTP API, and prints the assistant reply. This keeps the daemon boundary,
+thread handling, and auth flow in place while the real microphone, wake-word, STT, and
+TTS backends are added.
+
+Examples:
+
+```bash
+uv run minigent-voice-daemon --wake-phrase "hey minigent"
+# ignored
+hello there
+# activates and uses the rest of the line as the utterance
+hey minigent summarize the latest thread
+# or activate first, then provide the utterance on the next line
+hey minigent
+show me the transcript
+```
+
+Daemon-related env vars:
+
+- `MINIGENT_BASE_URL`
+- `MINIGENT_VOICE_WAKE_PHRASE`
+- `MINIGENT_VOICE_SKILL`
+- `MINIGENT_VOICE_THREAD_ID`
+- `MINIGENT_VOICE_API_TOKEN`
+- `MINIGENT_VOICE_USER_ID`
+- `MINIGENT_VOICE_TENANT_ID`
+- `MINIGENT_VOICE_ADMIN`
+
 You can put provider settings in a local `.env` file. Start from [.env.example](/Users/burm/code/minigent/.env.example).
 
 ## Authentication
