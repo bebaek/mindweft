@@ -80,6 +80,121 @@ def test_runtime_sends_system_prompt_to_llm() -> None:
     assert seen_messages[1].content == "hello"
 
 
+def test_runtime_summarizes_older_messages_and_keeps_recent_tail_verbatim() -> None:
+    seen_messages: list[Message] = []
+
+    class InspectingLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            nonlocal seen_messages
+            seen_messages = messages
+            return LLMResponse(content="ok")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=InspectingLLM(),
+        tool_registry=build_local_tool_registry(),
+        recent_message_limit=4,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    for index in range(6):
+        store.append_message(
+            PRINCIPAL.tenant_id,
+            Message(
+                thread_id=thread.thread_id,
+                role=MessageRole.USER,
+                content=f"user-{index}",
+                created_by=PRINCIPAL.user_id,
+            ),
+        )
+        store.append_message(
+            PRINCIPAL.tenant_id,
+            Message(
+                thread_id=thread.thread_id,
+                role=MessageRole.ASSISTANT,
+                content=f"assistant-{index}",
+            ),
+        )
+
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert reply == "ok"
+    assert seen_messages[0].role == MessageRole.SYSTEM
+    assert seen_messages[1].role == MessageRole.SYSTEM
+    assert seen_messages[1].content.startswith("Thread summary:\nUser: user-0\nAssistant: assistant-0")
+    assert [message.content for message in seen_messages[2:]] == [
+        "user-4",
+        "assistant-4",
+        "user-5",
+        "assistant-5",
+    ]
+    context = store.get_thread_context(PRINCIPAL.tenant_id, thread.thread_id)
+    assert context.summarized_message_count == 8
+    assert "user-3" in context.summary
+    assert "assistant-3" in context.summary
+
+
+def test_runtime_uses_prompt_budget_to_compact_more_than_default_tail() -> None:
+    seen_messages: list[Message] = []
+
+    class InspectingLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            nonlocal seen_messages
+            seen_messages = messages
+            return LLMResponse(content="ok")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=InspectingLLM(),
+        tool_registry=build_local_tool_registry(),
+        recent_message_limit=8,
+        min_recent_message_limit=2,
+        target_prompt_tokens=80,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    long_text = "x" * 160
+    for index in range(5):
+        store.append_message(
+            PRINCIPAL.tenant_id,
+            Message(
+                thread_id=thread.thread_id,
+                role=MessageRole.USER,
+                content=f"user-{index} {long_text}",
+                created_by=PRINCIPAL.user_id,
+            ),
+        )
+        store.append_message(
+            PRINCIPAL.tenant_id,
+            Message(
+                thread_id=thread.thread_id,
+                role=MessageRole.ASSISTANT,
+                content=f"assistant-{index} {long_text}",
+            ),
+        )
+
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert reply == "ok"
+    assert seen_messages[1].role == MessageRole.SYSTEM
+    tail_contents = [message.content for message in seen_messages[2:]]
+    assert len(tail_contents) < 8
+    assert tail_contents[-2:] == [
+        f"user-4 {long_text}",
+        f"assistant-4 {long_text}",
+    ]
+    context = store.get_thread_context(PRINCIPAL.tenant_id, thread.thread_id)
+    assert context.summarized_message_count > 2
+    assert "user-3" in context.summary
+    assert "user-0" in context.summary
+
+
 def test_runtime_executes_tool_and_stores_tool_message() -> None:
     store = InMemoryThreadStore()
     runtime = AgentRuntime(

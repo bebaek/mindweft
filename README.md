@@ -6,6 +6,7 @@ Minimal AI agent runtime POC from `DESIGN.md`.
 
 - FastAPI service
 - In-memory thread/message store
+- In-memory thread context compaction with rolling summary + token-budgeted recent-message tail
 - Simple agent execution loop
 - Pluggable tool registry
 - Replaceable LLM adapter boundary

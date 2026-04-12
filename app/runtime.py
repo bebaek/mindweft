@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import textwrap
 from typing import Any
 
 from fastapi import HTTPException
@@ -13,7 +14,7 @@ from app.execution import (
     get_skill_config,
 )
 from app.llm import LLMAdapter, serialize_tool_result
-from app.models import LLMResponse, Message, MessageRole, Principal, ThreadStatus
+from app.models import LLMResponse, Message, MessageRole, Principal, ThreadContext, ThreadStatus
 from app.store import InMemoryThreadStore
 from app.tools import ToolExecutionContext, ToolRegistry
 
@@ -33,6 +34,10 @@ class AgentRuntime:
         llm_adapter: LLMAdapter | None = None,
         tool_registry: ToolRegistry | None = None,
         max_iterations: int = 8,
+        recent_message_limit: int = 8,
+        min_recent_message_limit: int = 4,
+        max_summary_chars: int = 4000,
+        target_prompt_tokens: int = 3000,
     ) -> None:
         self._store = store
         if execution_resolver is not None:
@@ -44,6 +49,12 @@ class AgentRuntime:
                 "AgentRuntime requires execution_resolver or both llm_adapter and tool_registry"
             )
         self._max_iterations = max_iterations
+        self._recent_message_limit = max(1, recent_message_limit)
+        self._min_recent_message_limit = min(
+            self._recent_message_limit, max(1, min_recent_message_limit)
+        )
+        self._max_summary_chars = max(256, max_summary_chars)
+        self._target_prompt_tokens = max(256, target_prompt_tokens)
 
     async def run_thread(self, principal: Principal, thread_id: str) -> str:
         self._store.start_run(principal.tenant_id, thread_id)
@@ -168,13 +179,62 @@ class AgentRuntime:
         *,
         skill_prompt: str | None = None,
     ) -> list[Message]:
+        context = self._refresh_thread_context(principal, thread_id)
         system_prompt = RUNTIME_SYSTEM_PROMPT
         if skill_prompt:
             system_prompt = f"{system_prompt}\n\n{skill_prompt}"
-        return [
+        prompt_messages = [
             Message(thread_id=thread_id, role=MessageRole.SYSTEM, content=system_prompt),
-            *self._store.list_messages(principal.tenant_id, thread_id),
         ]
+        if context.summary:
+            prompt_messages.append(
+                Message(
+                    thread_id=thread_id,
+                    role=MessageRole.SYSTEM,
+                    content=f"Thread summary:\n{context.summary}",
+                )
+            )
+        prompt_messages.extend(
+            self._store.list_messages(principal.tenant_id, thread_id)[
+                context.summarized_message_count :
+            ]
+        )
+        return prompt_messages
+
+    def _refresh_thread_context(self, principal: Principal, thread_id: str) -> ThreadContext:
+        messages = self._store.list_messages(principal.tenant_id, thread_id)
+        context = self._store.get_thread_context(principal.tenant_id, thread_id)
+        summarize_upto = self._compute_summarize_upto(messages, context)
+        if summarize_upto <= context.summarized_message_count:
+            return context
+
+        new_summary = _merge_summaries(
+            context.summary,
+            _summarize_messages(messages[context.summarized_message_count:summarize_upto]),
+            max_chars=self._max_summary_chars,
+        )
+        return self._store.update_thread_context(
+            principal.tenant_id,
+            thread_id,
+            summary=new_summary,
+            summarized_message_count=summarize_upto,
+        )
+
+    def _compute_summarize_upto(self, messages: list[Message], context: ThreadContext) -> int:
+        max_summarize_upto = max(0, len(messages) - self._min_recent_message_limit)
+        default_summarize_upto = max(0, len(messages) - self._recent_message_limit)
+        summarize_upto = max(context.summarized_message_count, default_summarize_upto)
+        if summarize_upto >= max_summarize_upto:
+            return summarize_upto
+
+        estimated_tokens = _estimate_prompt_tokens(
+            messages[summarize_upto:],
+            summary=context.summary,
+        )
+        while estimated_tokens > self._target_prompt_tokens and summarize_upto < max_summarize_upto:
+            estimated_tokens -= _estimate_message_tokens(messages[summarize_upto])
+            summarize_upto += 1
+        return summarize_upto
 
 
 def _serialize_tool_error(
@@ -225,3 +285,101 @@ def _normalize_tool_error_result(tool_name: str, result: object) -> dict[str, An
     if "documentation" in result:
         normalized_error["documentation"] = result["documentation"]
     return {"error": normalized_error}
+
+
+def _summarize_messages(messages: list[Message]) -> str:
+    lines: list[str] = []
+    for message in messages:
+        line = _summarize_message(message)
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _summarize_message(message: Message) -> str:
+    role_labels = {
+        MessageRole.USER: "User",
+        MessageRole.ASSISTANT: "Assistant",
+        MessageRole.TOOL: "Tool",
+        MessageRole.SYSTEM: "System",
+    }
+    if message.role == MessageRole.ASSISTANT and message.tool_name and message.tool_call_id:
+        arguments = json.dumps(message.tool_arguments or {}, ensure_ascii=True, sort_keys=True)
+        return _clamp_summary_line(
+            f"Assistant requested tool {message.tool_name} with arguments {arguments}."
+        )
+    if message.role == MessageRole.TOOL and message.tool_name:
+        return _clamp_summary_line(
+            f"Tool {message.tool_name} returned {_normalize_summary_text(message.content)}."
+        )
+    return _clamp_summary_line(
+        f"{role_labels.get(message.role, message.role.value.title())}: "
+        f"{_normalize_summary_text(message.content)}"
+    )
+
+
+def _normalize_summary_text(content: str) -> str:
+    normalized = " ".join(content.split())
+    if not normalized:
+        return "[empty]"
+    return normalized
+
+
+def _clamp_summary_line(line: str, *, width: int = 280) -> str:
+    if len(line) <= width:
+        return line
+    return f"{line[: width - 3].rstrip()}..."
+
+
+def _merge_summaries(existing: str, new_chunk: str, *, max_chars: int) -> str:
+    if not new_chunk:
+        return existing
+    merged = new_chunk if not existing else f"{existing}\n{new_chunk}"
+    if len(merged) <= max_chars:
+        return merged
+
+    lines = merged.splitlines()
+    trimmed: list[str] = []
+    total = len("... [older summarized context omitted]")
+    for line in reversed(lines):
+        added = len(line) + (1 if trimmed else 0)
+        if total + added > max_chars:
+            break
+        trimmed.append(line)
+        total += added
+    trimmed.reverse()
+    body = "\n".join(trimmed)
+    if not body:
+        return "... [older summarized context omitted]"
+    return textwrap.dedent(
+        f"""\
+        ... [older summarized context omitted]
+        {body}
+        """
+    ).strip()
+
+
+def _estimate_prompt_tokens(messages: list[Message], *, summary: str = "") -> int:
+    total = _estimate_text_tokens(RUNTIME_SYSTEM_PROMPT)
+    if summary:
+        total += _estimate_text_tokens(f"Thread summary:\n{summary}")
+    for message in messages:
+        total += _estimate_message_tokens(message)
+    return total
+
+
+def _estimate_message_tokens(message: Message) -> int:
+    total = _estimate_text_tokens(message.content)
+    if message.tool_name:
+        total += _estimate_text_tokens(message.tool_name)
+    if message.tool_arguments:
+        total += _estimate_text_tokens(
+            json.dumps(message.tool_arguments, ensure_ascii=True, sort_keys=True)
+        )
+    return total + 6
+
+
+def _estimate_text_tokens(text: str) -> int:
+    if not text:
+        return 1
+    return max(1, (len(text) + 3) // 4)

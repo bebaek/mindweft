@@ -4,12 +4,13 @@ from threading import Lock
 
 from fastapi import HTTPException
 
-from app.models import Message, Thread, ThreadStatus, utc_now
+from app.models import Message, Thread, ThreadContext, ThreadStatus, utc_now
 
 
 class InMemoryThreadStore:
     def __init__(self) -> None:
         self._threads: dict[str, Thread] = {}
+        self._contexts: dict[str, ThreadContext] = {}
         self._messages: dict[str, list[Message]] = {}
         self._lock = Lock()
 
@@ -17,6 +18,7 @@ class InMemoryThreadStore:
         with self._lock:
             thread = Thread(tenant_id=tenant_id, skill_name=skill_name)
             self._threads[thread.thread_id] = thread
+            self._contexts[thread.thread_id] = ThreadContext(thread_id=thread.thread_id)
             self._messages[thread.thread_id] = []
             return thread
 
@@ -24,6 +26,7 @@ class InMemoryThreadStore:
         with self._lock:
             self._require_thread(tenant_id, thread_id)
             del self._threads[thread_id]
+            del self._contexts[thread_id]
             del self._messages[thread_id]
 
     def list_messages(self, tenant_id: str, thread_id: str) -> list[Message]:
@@ -48,6 +51,28 @@ class InMemoryThreadStore:
     def get_thread(self, tenant_id: str, thread_id: str) -> Thread:
         with self._lock:
             return self._require_thread(tenant_id, thread_id)
+
+    def get_thread_context(self, tenant_id: str, thread_id: str) -> ThreadContext:
+        with self._lock:
+            self._require_thread(tenant_id, thread_id)
+            return self._contexts[thread_id].model_copy(deep=True)
+
+    def update_thread_context(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        summary: str,
+        summarized_message_count: int,
+    ) -> ThreadContext:
+        with self._lock:
+            thread = self._require_thread(tenant_id, thread_id)
+            context = self._contexts[thread_id]
+            context.summary = summary
+            context.summarized_message_count = summarized_message_count
+            context.updated_at = utc_now()
+            thread.updated_at = utc_now()
+            return context.model_copy(deep=True)
 
     def start_run(self, tenant_id: str, thread_id: str) -> Thread:
         with self._lock:

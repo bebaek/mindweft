@@ -46,6 +46,13 @@ class Thread(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class ThreadContext(BaseModel):
+    thread_id: str
+    summary: str = ""
+    summarized_message_count: int = 0
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class Principal(BaseModel):
     user_id: str
     tenant_id: str
