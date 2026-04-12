@@ -51,11 +51,13 @@ class VoiceDaemon:
         activation_source: ActivationSource,
         minigent_client: MinigentClient,
         speech_output: SpeechOutput,
+        activation_feedback: Callable[[], None] | None = None,
     ) -> None:
         self._wake_phrase = wake_phrase
         self._activation_source = activation_source
         self._minigent_client = minigent_client
         self._speech_output = speech_output
+        self._activation_feedback = activation_feedback
         self.state = DaemonState.IDLE
 
     def run_forever(self) -> None:
@@ -68,6 +70,8 @@ class VoiceDaemon:
         reply = ""
         while True:
             self.state = DaemonState.LISTENING
+            if activation.transcript_hint is None and self._activation_feedback is not None:
+                self._activation_feedback()
             utterance = activation.transcript_hint or self._activation_source.capture_utterance()
             if not utterance.strip():
                 self.state = DaemonState.IDLE

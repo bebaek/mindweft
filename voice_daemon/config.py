@@ -25,6 +25,7 @@ class PrincipalConfig:
 class VoiceDaemonConfig:
     base_url: str
     wake_phrase: str
+    wake_acknowledgement: str | None = None
     stt_provider: str = "openai"
     stt_device: str | None = None
     stt_compute_type: str | None = None
@@ -72,6 +73,7 @@ class VoiceDaemonConfig:
         return cls(
             base_url=os.getenv("MINIGENT_BASE_URL", "http://127.0.0.1:8000").rstrip("/"),
             wake_phrase=os.getenv("MINIGENT_VOICE_WAKE_PHRASE", "hey minigent").strip(),
+            wake_acknowledgement=_clean_optional(os.getenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT")),
             stt_provider=os.getenv("MINIGENT_VOICE_STT_PROVIDER", "openai").strip().lower(),
             stt_device=_clean_optional(os.getenv("MINIGENT_VOICE_STT_DEVICE")),
             stt_compute_type=_clean_optional(os.getenv("MINIGENT_VOICE_STT_COMPUTE_TYPE")),

@@ -188,6 +188,11 @@ recording stream, then add a small amount of leading and trailing silence before
 Those controls help make passive captures look more like the known-good manual capture
 path when audio-capable chat models are sensitive to tightly cropped speech.
 
+You can also configure an optional wake acknowledgement before recording starts. Set
+`MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT=bell` for a short alert sound on macOS, with a
+terminal bell fallback elsewhere, or set it to plain text such as `ready` to speak a
+short cue through the configured TTS provider.
+
 If no speech arrives within `MINIGENT_VOICE_POST_WAKE_SPEECH_TIMEOUT_MS` after the wake
 word, passive mode ignores that activation and returns to idle without sending audio to
 STT.

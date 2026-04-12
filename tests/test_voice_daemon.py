@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import wave
 from io import StringIO
+from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -137,6 +139,45 @@ def test_voice_daemon_captures_utterance_after_activation() -> None:
     assert activation_source.capture_calls == 1
     assert minigent_client.messages == ["continue"]
     assert speech_output.spoken == ["continued"]
+
+
+def test_voice_daemon_emits_activation_feedback_before_capture() -> None:
+    activation_source = FakeActivationSource(Activation(), utterance="continue")
+    minigent_client = FakeMinigentClient(reply="continued")
+    speech_output = FakeSpeechOutput()
+    feedback_calls: list[str] = []
+    daemon = VoiceDaemon(
+        wake_phrase="hey minigent",
+        activation_source=activation_source,
+        minigent_client=minigent_client,
+        speech_output=speech_output,
+        activation_feedback=lambda: feedback_calls.append("ack"),
+    )
+
+    reply = daemon.run_once()
+
+    assert reply == "continued"
+    assert feedback_calls == ["ack"]
+    assert minigent_client.messages == ["continue"]
+
+
+def test_voice_daemon_skips_activation_feedback_for_transcript_hint() -> None:
+    activation_source = FakeActivationSource(Activation(transcript_hint="continue"))
+    minigent_client = FakeMinigentClient(reply="continued")
+    speech_output = FakeSpeechOutput()
+    feedback_calls: list[str] = []
+    daemon = VoiceDaemon(
+        wake_phrase="hey minigent",
+        activation_source=activation_source,
+        minigent_client=minigent_client,
+        speech_output=speech_output,
+        activation_feedback=lambda: feedback_calls.append("ack"),
+    )
+
+    reply = daemon.run_once()
+
+    assert reply == "continued"
+    assert feedback_calls == []
 
 
 def test_voice_daemon_supports_barge_in() -> None:
@@ -366,6 +407,74 @@ def test_build_speech_output_supports_console_say_and_piper() -> None:
     assert piper.speaker == 5
 
 
+def test_build_activation_feedback_prefers_system_sound_for_bell(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_popen(command, stdout, stderr):
+        captured["command"] = command
+        captured["stdout"] = stdout
+        captured["stderr"] = stderr
+
+        class FakeProcess:
+            returncode = 0
+
+        return FakeProcess()
+
+    monkeypatch.setattr("voice_daemon.cli.shutil.which", lambda name: "/usr/bin/afplay")
+    monkeypatch.setattr(
+        "voice_daemon.cli._resolve_wake_acknowledgement_sound",
+        lambda: Path("/System/Library/Sounds/Glass.aiff"),
+    )
+    monkeypatch.setattr("voice_daemon.cli.subprocess.Popen", fake_popen)
+
+    bell = voice_cli.build_activation_feedback(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            wake_acknowledgement="bell",
+        ),
+        FakeSpeechOutput(),
+    )
+    assert bell is not None
+    bell()
+    assert capsys.readouterr().out == ""
+    assert captured["command"] == ["/usr/bin/afplay", "/System/Library/Sounds/Glass.aiff"]
+    assert captured["stdout"] is subprocess.DEVNULL
+    assert captured["stderr"] is subprocess.DEVNULL
+
+
+def test_build_activation_feedback_falls_back_to_terminal_bell(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.setattr("voice_daemon.cli.shutil.which", lambda name: None)
+    monkeypatch.setattr("voice_daemon.cli._resolve_wake_acknowledgement_sound", lambda: None)
+
+    bell = voice_cli.build_activation_feedback(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            wake_acknowledgement="bell",
+        ),
+        FakeSpeechOutput(),
+    )
+    assert bell is not None
+    bell()
+    assert capsys.readouterr().out == "\a"
+
+    speech_output = FakeSpeechOutput()
+    spoken = voice_cli.build_activation_feedback(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            wake_acknowledgement="ready",
+        ),
+        speech_output,
+    )
+    assert spoken is not None
+    spoken()
+    assert speech_output.spoken == ["ready"]
+
+
 def test_sanitize_text_for_tts_strips_common_markdown() -> None:
     text = "# Heading\n- **bold** item with [link](https://example.com) and `code`"
 
@@ -522,6 +631,7 @@ def test_principal_config_prefers_bearer_token() -> None:
 def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_BASE_URL", "http://127.0.0.1:9000/")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_PHRASE", "computer")
+    monkeypatch.setenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT", "bell")
     monkeypatch.setenv("MINIGENT_VOICE_STT_PROVIDER", "openrouter")
     monkeypatch.setenv("MINIGENT_VOICE_STT_DEVICE", "cpu")
     monkeypatch.setenv("MINIGENT_VOICE_STT_COMPUTE_TYPE", "int8")
@@ -567,6 +677,7 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
     assert config == VoiceDaemonConfig(
         base_url="http://127.0.0.1:9000",
         wake_phrase="computer",
+        wake_acknowledgement="bell",
         stt_provider="openrouter",
         stt_device="cpu",
         stt_compute_type="int8",

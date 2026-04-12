@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import shutil
+import subprocess
 import sys
+from pathlib import Path
+from typing import Callable
 
 from app.config import load_environment
 from voice_daemon.audio import AudioCaptureConfig, MicrophoneRecorder, open_microphone_stream
@@ -38,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--wake-phrase",
         default=None,
         help="Text wake phrase for the stdin backend. Passive-audio uses the configured wake-word provider/model instead.",
+    )
+    parser.add_argument(
+        "--wake-acknowledgement",
+        default=None,
+        help="Optional cue to emit after activation before recording. Use `bell` for a terminal bell or plain text for a spoken acknowledgement.",
     )
     parser.add_argument(
         "--skill",
@@ -161,6 +170,7 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
     return VoiceDaemonConfig(
         base_url=(args.base_url or env_config.base_url).rstrip("/"),
         wake_phrase=(args.wake_phrase or env_config.wake_phrase).strip(),
+        wake_acknowledgement=args.wake_acknowledgement or env_config.wake_acknowledgement,
         stt_provider=args.stt_provider or env_config.stt_provider,
         stt_device=args.stt_device or env_config.stt_device,
         stt_compute_type=args.stt_compute_type or env_config.stt_compute_type,
@@ -208,11 +218,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     config = build_config(args)
     activation_source = build_activation_source(args.backend, config)
+    speech_output = build_speech_output(config)
     daemon = VoiceDaemon(
         wake_phrase=config.wake_phrase,
         activation_source=activation_source,
         minigent_client=MinigentClient(config),
-        speech_output=build_speech_output(config),
+        speech_output=speech_output,
+        activation_feedback=build_activation_feedback(config, speech_output),
     )
     try:
         if args.once:
@@ -328,6 +340,43 @@ def build_speech_output(config: VoiceDaemonConfig):
         f"Unsupported MINIGENT_VOICE_TTS_PROVIDER '{config.tts_provider}'. "
         "Choose 'console', 'say', or 'piper'."
     )
+
+
+def build_activation_feedback(
+    config: VoiceDaemonConfig,
+    speech_output,
+) -> Callable[[], None] | None:
+    acknowledgement = config.wake_acknowledgement
+    if not acknowledgement:
+        return None
+    if acknowledgement.lower() == "bell":
+        return _emit_terminal_bell
+    return lambda: speech_output.speak(acknowledgement)
+
+
+def _emit_terminal_bell() -> None:
+    sound_path = _resolve_wake_acknowledgement_sound()
+    if sound_path is not None:
+        afplay = shutil.which("afplay")
+        if afplay:
+            try:
+                subprocess.Popen(
+                    [afplay, str(sound_path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+            except OSError:
+                pass
+    sys.stdout.write("\a")
+    sys.stdout.flush()
+
+
+def _resolve_wake_acknowledgement_sound() -> Path | None:
+    candidate = Path("/System/Library/Sounds/Glass.aiff")
+    if candidate.exists():
+        return candidate
+    return None
 
 
 def build_speech_provider_config(config: VoiceDaemonConfig) -> SpeechProviderConfig:
