@@ -29,7 +29,12 @@ from voice_daemon.config import PrincipalConfig, VoiceDaemonConfig
 from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
 from voice_daemon.ring_buffer import AudioRingBuffer
 from voice_daemon.service import Activation, VoiceDaemon
-from voice_daemon.speech import ConsoleSpeechOutput, MacOsSaySpeechOutput, PiperSpeechOutput
+from voice_daemon.speech import (
+    ConsoleSpeechOutput,
+    MacOsSaySpeechOutput,
+    PiperSpeechOutput,
+    _sanitize_text_for_tts,
+)
 from voice_daemon.stt import (
     FasterWhisperTranscriptionAdapter,
     FasterWhisperTranscriptionConfig,
@@ -248,9 +253,9 @@ def test_macos_say_speech_output_prints_and_speaks(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr("voice_daemon.speech.subprocess.Popen", fake_popen)
 
-    MacOsSaySpeechOutput(output_stream=output_stream, voice="Samantha").speak("done")
+    MacOsSaySpeechOutput(output_stream=output_stream, voice="Samantha").speak("*done*")
 
-    assert output_stream.getvalue() == "[assistant] done\n"
+    assert output_stream.getvalue() == "[assistant] *done*\n"
     assert captured == {"command": ["say", "-v", "Samantha", "done"], "text": True}
 
 
@@ -304,10 +309,10 @@ def test_piper_speech_output_prints_and_plays(monkeypatch: pytest.MonkeyPatch, t
     )
 
     PiperSpeechOutput(output_stream=output_stream, model=str(tmp_path / "voice.onnx"), speaker=3).speak(
-        "done"
+        "*done*"
     )
 
-    assert output_stream.getvalue() == "[assistant] done\n"
+    assert output_stream.getvalue() == "[assistant] *done*\n"
     assert captured["command"][:4] == [
         "piper",
         "--model",
@@ -359,6 +364,12 @@ def test_build_speech_output_supports_console_say_and_piper() -> None:
     assert isinstance(piper, PiperSpeechOutput)
     assert piper.model == "/tmp/en_US-lessac-medium.onnx"
     assert piper.speaker == 5
+
+
+def test_sanitize_text_for_tts_strips_common_markdown() -> None:
+    text = "# Heading\n- **bold** item with [link](https://example.com) and `code`"
+
+    assert _sanitize_text_for_tts(text) == "Heading bold item with link and code"
 
 
 def test_macos_say_speech_output_can_be_interrupted(monkeypatch: pytest.MonkeyPatch) -> None:

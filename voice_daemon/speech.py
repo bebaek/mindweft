@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -52,10 +53,11 @@ class MacOsSaySpeechOutput(SpeechOutput):
     def start(self, text: str) -> None:
         self.output_stream.write(f"[assistant] {text}\n")
         self.output_stream.flush()
+        spoken_text = _sanitize_text_for_tts(text)
         command = ["say"]
         if self.voice:
             command.extend(["-v", self.voice])
-        command.append(text)
+        command.append(spoken_text)
         try:
             self._interrupted = False
             self._process = subprocess.Popen(command, text=True)
@@ -102,7 +104,7 @@ class PiperSpeechOutput(SpeechOutput):
     def start(self, text: str) -> None:
         self.output_stream.write(f"[assistant] {text}\n")
         self.output_stream.flush()
-        audio = self._synthesize(text)
+        audio = self._synthesize(_sanitize_text_for_tts(text))
         sounddevice = _load_sounddevice_for_output()
         samples = _recorded_audio_to_numpy(audio)
         try:
@@ -184,6 +186,21 @@ def _load_sounddevice_for_output():
             "sounddevice is required for Piper audio playback. Install with `uv sync --extra voice`."
         ) from exc
     return sounddevice
+
+
+def _sanitize_text_for_tts(text: str) -> str:
+    sanitized = text
+    sanitized = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", sanitized)
+    sanitized = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", sanitized)
+    sanitized = re.sub(r"`([^`]*)`", r"\1", sanitized)
+    sanitized = re.sub(r"(^|\s)[*_]{1,3}([^*_]+?)[*_]{1,3}(?=\s|$)", r"\1\2", sanitized)
+    sanitized = re.sub(r"(^|\n)\s{0,3}#{1,6}\s*", r"\1", sanitized)
+    sanitized = re.sub(r"(^|\n)\s{0,3}>\s?", r"\1", sanitized)
+    sanitized = re.sub(r"(^|\n)\s*[-+*]\s+", r"\1", sanitized)
+    sanitized = re.sub(r"(^|\n)\s*\d+\.\s+", r"\1", sanitized)
+    sanitized = re.sub(r"[*_~#>|]", "", sanitized)
+    sanitized = re.sub(r"\s+", " ", sanitized)
+    return sanitized.strip()
 
 
 def _recorded_audio_to_numpy(audio):

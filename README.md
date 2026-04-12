@@ -57,6 +57,10 @@ With `MINIGENT_VOICE_TTS_PROVIDER=say`, passive mode also supports wake-word bar
 saying the wake word again while the assistant is speaking will stop `say` and switch
 back to listening.
 
+When local TTS is enabled, the daemon strips common Markdown formatting such as `*`, `` ` ``,
+headers, and Markdown links before feeding text to the speech engine, while still printing
+the original assistant reply to the terminal.
+
 For higher-quality local TTS on macOS or Linux, install the voice extra and configure
 Piper with a model path or model name:
 
