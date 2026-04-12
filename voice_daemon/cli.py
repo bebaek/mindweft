@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import platform
 import shutil
 import subprocess
 import sys
@@ -171,6 +172,7 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
         base_url=(args.base_url or env_config.base_url).rstrip("/"),
         wake_phrase=(args.wake_phrase or env_config.wake_phrase).strip(),
         wake_acknowledgement=args.wake_acknowledgement or env_config.wake_acknowledgement,
+        wake_acknowledgement_sound=env_config.wake_acknowledgement_sound,
         stt_provider=args.stt_provider or env_config.stt_provider,
         stt_device=args.stt_device or env_config.stt_device,
         stt_compute_type=args.stt_compute_type or env_config.stt_compute_type,
@@ -356,26 +358,63 @@ def build_activation_feedback(
 
 def _emit_terminal_bell() -> None:
     sound_path = _resolve_wake_acknowledgement_sound()
-    if sound_path is not None:
-        afplay = shutil.which("afplay")
-        if afplay:
-            try:
-                subprocess.Popen(
-                    [afplay, str(sound_path)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                return
-            except OSError:
-                pass
+    player_command = _resolve_wake_acknowledgement_player(sound_path)
+    if sound_path is not None and player_command is not None:
+        try:
+            subprocess.Popen(
+                player_command + [str(sound_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+        except OSError:
+            pass
     sys.stdout.write("\a")
     sys.stdout.flush()
 
 
 def _resolve_wake_acknowledgement_sound() -> Path | None:
-    candidate = Path("/System/Library/Sounds/Glass.aiff")
-    if candidate.exists():
-        return candidate
+    configured = VoiceDaemonConfig.from_env().wake_acknowledgement_sound
+    if configured:
+        candidate = Path(configured).expanduser()
+        if candidate.exists():
+            return candidate
+    for candidate in _default_wake_acknowledgement_sounds():
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _default_wake_acknowledgement_sounds() -> list[Path]:
+    system = platform.system()
+    if system == "Darwin":
+        return [Path("/System/Library/Sounds/Glass.aiff")]
+    if system == "Linux":
+        return [
+            Path("/usr/share/sounds/freedesktop/stereo/complete.oga"),
+            Path("/usr/share/sounds/freedesktop/stereo/bell.oga"),
+            Path("/usr/share/sounds/sound-icons/glass-water-1.wav"),
+        ]
+    return []
+
+
+def _resolve_wake_acknowledgement_player(sound_path: Path | None) -> list[str] | None:
+    if sound_path is None:
+        return None
+    system = platform.system()
+    if system == "Darwin":
+        afplay = shutil.which("afplay")
+        if afplay:
+            return [afplay]
+        return None
+    if system == "Linux":
+        for player in ("paplay", "aplay", "play", "ffplay"):
+            resolved = shutil.which(player)
+            if not resolved:
+                continue
+            if player == "ffplay":
+                return [resolved, "-nodisp", "-autoexit", "-loglevel", "quiet"]
+            return [resolved]
     return None
 
 

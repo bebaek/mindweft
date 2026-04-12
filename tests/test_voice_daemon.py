@@ -422,10 +422,10 @@ def test_build_activation_feedback_prefers_system_sound_for_bell(
 
         return FakeProcess()
 
-    monkeypatch.setattr("voice_daemon.cli.shutil.which", lambda name: "/usr/bin/afplay")
+    monkeypatch.setattr("voice_daemon.cli._resolve_wake_acknowledgement_sound", lambda: Path("/tmp/glass.aiff"))
     monkeypatch.setattr(
-        "voice_daemon.cli._resolve_wake_acknowledgement_sound",
-        lambda: Path("/System/Library/Sounds/Glass.aiff"),
+        "voice_daemon.cli._resolve_wake_acknowledgement_player",
+        lambda sound_path: ["/usr/bin/afplay"] if sound_path == Path("/tmp/glass.aiff") else None,
     )
     monkeypatch.setattr("voice_daemon.cli.subprocess.Popen", fake_popen)
 
@@ -440,14 +440,14 @@ def test_build_activation_feedback_prefers_system_sound_for_bell(
     assert bell is not None
     bell()
     assert capsys.readouterr().out == ""
-    assert captured["command"] == ["/usr/bin/afplay", "/System/Library/Sounds/Glass.aiff"]
+    assert captured["command"] == ["/usr/bin/afplay", "/tmp/glass.aiff"]
     assert captured["stdout"] is subprocess.DEVNULL
     assert captured["stderr"] is subprocess.DEVNULL
 
 
 def test_build_activation_feedback_falls_back_to_terminal_bell(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
-    monkeypatch.setattr("voice_daemon.cli.shutil.which", lambda name: None)
     monkeypatch.setattr("voice_daemon.cli._resolve_wake_acknowledgement_sound", lambda: None)
+    monkeypatch.setattr("voice_daemon.cli._resolve_wake_acknowledgement_player", lambda sound_path: None)
 
     bell = voice_cli.build_activation_feedback(
         VoiceDaemonConfig(
@@ -473,6 +473,49 @@ def test_build_activation_feedback_falls_back_to_terminal_bell(monkeypatch: pyte
     assert spoken is not None
     spoken()
     assert speech_output.spoken == ["ready"]
+
+
+def test_resolve_wake_acknowledgement_sound_prefers_configured_path(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    sound_path = tmp_path / "wake.wav"
+    sound_path.write_bytes(b"sound")
+    monkeypatch.setenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND", str(sound_path))
+    monkeypatch.setattr("voice_daemon.cli._default_wake_acknowledgement_sounds", lambda: [])
+
+    assert voice_cli._resolve_wake_acknowledgement_sound() == sound_path
+
+
+def test_default_wake_acknowledgement_sounds_supports_macos_and_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("voice_daemon.cli.platform.system", lambda: "Darwin")
+    assert voice_cli._default_wake_acknowledgement_sounds() == [
+        Path("/System/Library/Sounds/Glass.aiff")
+    ]
+
+    monkeypatch.setattr("voice_daemon.cli.platform.system", lambda: "Linux")
+    assert voice_cli._default_wake_acknowledgement_sounds() == [
+        Path("/usr/share/sounds/freedesktop/stereo/complete.oga"),
+        Path("/usr/share/sounds/freedesktop/stereo/bell.oga"),
+        Path("/usr/share/sounds/sound-icons/glass-water-1.wav"),
+    ]
+
+
+def test_resolve_wake_acknowledgement_player_supports_macos_and_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("voice_daemon.cli.platform.system", lambda: "Darwin")
+    monkeypatch.setattr(
+        "voice_daemon.cli.shutil.which",
+        lambda name: "/usr/bin/afplay" if name == "afplay" else None,
+    )
+    assert voice_cli._resolve_wake_acknowledgement_player(Path("/tmp/test.aiff")) == [
+        "/usr/bin/afplay"
+    ]
+
+    monkeypatch.setattr("voice_daemon.cli.platform.system", lambda: "Linux")
+    monkeypatch.setattr(
+        "voice_daemon.cli.shutil.which",
+        lambda name: "/usr/bin/paplay" if name == "paplay" else None,
+    )
+    assert voice_cli._resolve_wake_acknowledgement_player(Path("/tmp/test.oga")) == [
+        "/usr/bin/paplay"
+    ]
 
 
 def test_sanitize_text_for_tts_strips_common_markdown() -> None:
