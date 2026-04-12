@@ -1,6 +1,6 @@
 # Agent Instructions
 
-Read [README.md](/Users/burm/code/minigent/README.md) before making changes.
+Read [README.md](README.md) before making changes.
 
 `README.md` contains project-level conventions that must be followed, including:
 - commit message format,
