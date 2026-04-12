@@ -70,9 +70,25 @@ class FakeActivationSource:
 class FakeSpeechOutput:
     def __init__(self) -> None:
         self.spoken: list[str] = []
+        self._speaking = False
 
     def speak(self, text: str) -> None:
+        self.start(text)
+        self.wait()
+
+    def start(self, text: str) -> None:
+        self._speaking = True
         self.spoken.append(text)
+        self._speaking = False
+
+    def stop(self) -> None:
+        self._speaking = False
+
+    def is_speaking(self) -> bool:
+        return self._speaking
+
+    def wait(self) -> None:
+        self._speaking = False
 
 
 def test_voice_daemon_uses_transcript_hint_without_capture() -> None:
@@ -114,6 +130,69 @@ def test_voice_daemon_captures_utterance_after_activation() -> None:
     assert speech_output.spoken == ["continued"]
 
 
+def test_voice_daemon_supports_barge_in() -> None:
+    class FakeBargeInActivationSource:
+        def __init__(self) -> None:
+            self.capture_calls = 0
+            self.barge_in_calls = 0
+
+        def wait_for_activation(self, wake_phrase: str) -> Activation:
+            assert wake_phrase == "hey minigent"
+            return Activation(transcript_hint="first request")
+
+        def capture_utterance(self) -> str:
+            self.capture_calls += 1
+            if self.capture_calls == 1:
+                return "second request"
+            return ""
+
+        def wait_for_barge_in(self, wake_phrase: str, should_continue) -> Activation | None:
+            assert wake_phrase == "hey minigent"
+            self.barge_in_calls += 1
+            if self.barge_in_calls == 1 and should_continue():
+                return Activation()
+            return None
+
+    class FakeInterruptibleSpeechOutput(FakeSpeechOutput):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started: list[str] = []
+            self.stops = 0
+            self.waits = 0
+
+        def start(self, text: str) -> None:
+            self._speaking = True
+            self.started.append(text)
+
+        def stop(self) -> None:
+            self.stops += 1
+            self._speaking = False
+
+        def wait(self) -> None:
+            self.waits += 1
+            self._speaking = False
+
+    activation_source = FakeBargeInActivationSource()
+    minigent_client = FakeMinigentClient(reply="first reply")
+    speech_output = FakeInterruptibleSpeechOutput()
+    daemon = VoiceDaemon(
+        wake_phrase="hey minigent",
+        activation_source=activation_source,
+        minigent_client=minigent_client,
+        speech_output=speech_output,
+    )
+    replies = iter(["first reply", "second reply"])
+    minigent_client.run_thread = lambda: next(replies)
+
+    reply = daemon.run_once()
+
+    assert reply == "second reply"
+    assert minigent_client.messages == ["first request", "second request"]
+    assert speech_output.started == ["first reply", "second reply"]
+    assert speech_output.stops == 1
+    assert speech_output.waits == 2
+
+
 def test_stdin_activation_source_waits_for_wake_phrase() -> None:
     input_stream = StringIO("hello there\nhey minigent summarize this\n")
     output_stream = StringIO()
@@ -148,16 +227,27 @@ def test_macos_say_speech_output_prints_and_speaks(monkeypatch: pytest.MonkeyPat
     output_stream = StringIO()
     captured: dict[str, object] = {}
 
-    def fake_run(command: list[str], check: bool) -> None:
-        captured["command"] = command
-        captured["check"] = check
+    class FakeProcess:
+        def poll(self) -> int | None:
+            return 0
 
-    monkeypatch.setattr("voice_daemon.speech.subprocess.run", fake_run)
+        def wait(self) -> int:
+            return 0
+
+        def terminate(self) -> None:
+            return None
+
+    def fake_popen(command: list[str], text: bool) -> FakeProcess:
+        captured["command"] = command
+        captured["text"] = text
+        return FakeProcess()
+
+    monkeypatch.setattr("voice_daemon.speech.subprocess.Popen", fake_popen)
 
     MacOsSaySpeechOutput(output_stream=output_stream, voice="Samantha").speak("done")
 
     assert output_stream.getvalue() == "[assistant] done\n"
-    assert captured == {"command": ["say", "-v", "Samantha", "done"], "check": True}
+    assert captured == {"command": ["say", "-v", "Samantha", "done"], "text": True}
 
 
 def test_build_speech_output_supports_console_and_say() -> None:
@@ -180,6 +270,37 @@ def test_build_speech_output_supports_console_and_say() -> None:
     assert isinstance(console, ConsoleSpeechOutput)
     assert isinstance(say, MacOsSaySpeechOutput)
     assert say.voice == "Samantha"
+
+
+def test_macos_say_speech_output_can_be_interrupted(monkeypatch: pytest.MonkeyPatch) -> None:
+    output_stream = StringIO()
+    terminated = {"value": False}
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.running = True
+
+        def poll(self) -> int | None:
+            return None if self.running else -15
+
+        def wait(self) -> int:
+            self.running = False
+            return -15
+
+        def terminate(self) -> None:
+            terminated["value"] = True
+            self.running = False
+
+    monkeypatch.setattr("voice_daemon.speech.subprocess.Popen", lambda command, text: FakeProcess())
+    speech = MacOsSaySpeechOutput(output_stream=output_stream, voice="Samantha")
+
+    speech.start("done")
+    assert speech.is_speaking()
+    speech.stop()
+    speech.wait()
+
+    assert terminated["value"] is True
+    assert not speech.is_speaking()
 
 
 def test_principal_config_prefers_bearer_token() -> None:
@@ -601,6 +722,61 @@ def test_passive_audio_activation_source_records_on_fresh_stream() -> None:
     assert source.wake_detector.reset_calls == 1
     assert "[idle] passive listening for wake word openwakeword:okay_nabu" in output_stream.getvalue()
     assert "[listening] wake word detected" in output_stream.getvalue()
+
+
+def test_passive_audio_activation_source_detects_barge_in() -> None:
+    class FakeStream:
+        def __init__(self) -> None:
+            self.chunks = iter([b"\x00\x00" * 4, b"\x01\x00" * 4])
+
+        def read(self, frames: int) -> tuple[bytes, bool]:
+            del frames
+            try:
+                return next(self.chunks), False
+            except StopIteration:
+                return b"", False
+
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeWakeDetector:
+        frame_length = 4
+        sample_rate = 16000
+        label = "openwakeword:okay_nabu"
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.reset_calls = 0
+
+        def reset(self) -> None:
+            self.reset_calls += 1
+
+        def process_chunk(self, chunk: bytes) -> bool:
+            del chunk
+            self.calls += 1
+            return self.calls >= 2
+
+    output_stream = StringIO()
+    source = PassiveAudioActivationSource(
+        output_stream=output_stream,
+        stream=FakeStream(),
+        recorder=object(),  # type: ignore[arg-type]
+        transcriber=object(),  # type: ignore[arg-type]
+        wake_detector=FakeWakeDetector(),
+        preroll_buffer=AudioRingBuffer(max_bytes=32),
+    )
+
+    activation = source.wait_for_barge_in("ignored", lambda: True)
+
+    assert activation == Activation()
+    assert source.wake_detector.reset_calls == 1
+    assert "[listening] wake word detected, interrupting speech" in output_stream.getvalue()
 
 
 def test_passive_audio_activation_source_ignores_wake_without_followup_speech() -> None:

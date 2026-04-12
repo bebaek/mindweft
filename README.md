@@ -53,6 +53,10 @@ MINIGENT_VOICE_TTS_VOICE=Samantha
 uv run minigent-voice-daemon --backend manual-audio --once
 ```
 
+With `MINIGENT_VOICE_TTS_PROVIDER=say`, passive mode also supports wake-word barge-in:
+saying the wake word again while the assistant is speaking will stop `say` and switch
+back to listening.
+
 The daemon currently supports three backends:
 
 - `stdin`: text-driven wake phrase loop for cheap end-to-end testing

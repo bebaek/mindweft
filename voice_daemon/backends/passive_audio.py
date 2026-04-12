@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Protocol, TextIO
+from typing import Callable, Protocol, TextIO
 
 from voice_daemon.audio import (
     MicrophoneRecorder,
@@ -57,6 +57,25 @@ class PassiveAudioActivationSource:
                 self.preroll_buffer = AudioRingBuffer(max_bytes=self.preroll_buffer.max_bytes)
                 self._cooldown_until = time.monotonic() + (self.wakeword_cooldown_ms / 1000.0)
                 return Activation()
+
+    def wait_for_barge_in(
+        self,
+        wake_phrase: str,
+        should_continue: Callable[[], bool],
+    ) -> Activation | None:
+        del wake_phrase
+        while should_continue():
+            chunk = read_chunk(self.stream, self.wake_detector.frame_length)
+            if not chunk:
+                continue
+            self.preroll_buffer.append(chunk)
+            if self.wake_detector.process_chunk(chunk):
+                self.wake_detector.reset()
+                self.preroll_buffer = AudioRingBuffer(max_bytes=self.preroll_buffer.max_bytes)
+                self.output_stream.write("[listening] wake word detected, interrupting speech\n")
+                self.output_stream.flush()
+                return Activation()
+        return None
 
     def capture_utterance(self) -> str:
         self.output_stream.write(
