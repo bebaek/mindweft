@@ -13,7 +13,7 @@ from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
 from voice_daemon.minigent_client import MinigentClient
 from voice_daemon.ring_buffer import AudioRingBuffer
 from voice_daemon.service import VoiceDaemon
-from voice_daemon.speech import ConsoleSpeechOutput, MacOsSaySpeechOutput
+from voice_daemon.speech import ConsoleSpeechOutput, MacOsSaySpeechOutput, PiperSpeechOutput
 from voice_daemon.stt import SpeechProviderConfig, build_transcription_adapter
 from voice_daemon.vad import SileroVoiceActivityDetector
 from voice_daemon.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
@@ -104,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--tts-provider",
-        choices=("console", "say"),
+        choices=("console", "say", "piper"),
         default=None,
         help="Speech output provider. Defaults to MINIGENT_VOICE_TTS_PROVIDER.",
     )
@@ -112,6 +112,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--tts-voice",
         default=None,
         help="Optional voice name for the selected TTS provider. For `say`, this is the macOS voice passed to `say -v`.",
+    )
+    parser.add_argument(
+        "--tts-model",
+        default=None,
+        help="Optional Piper model name or .onnx path when --tts-provider=piper. Defaults to MINIGENT_VOICE_TTS_MODEL.",
+    )
+    parser.add_argument(
+        "--tts-model-dir",
+        default=None,
+        help="Optional directory for cached Piper voice models when --tts-provider=piper. Defaults to MINIGENT_VOICE_TTS_MODEL_DIR or ~/.cache/minigent/piper.",
+    )
+    parser.add_argument(
+        "--tts-speaker",
+        default=None,
+        type=int,
+        help="Optional speaker ID for multi-speaker Piper models. Defaults to MINIGENT_VOICE_TTS_SPEAKER.",
     )
     parser.add_argument(
         "--wakeword-provider",
@@ -151,6 +167,9 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
         stt_language=args.stt_language or env_config.stt_language,
         tts_provider=args.tts_provider or env_config.tts_provider,
         tts_voice=args.tts_voice or env_config.tts_voice,
+        tts_model=args.tts_model or env_config.tts_model,
+        tts_model_dir=args.tts_model_dir or env_config.tts_model_dir,
+        tts_speaker=args.tts_speaker if args.tts_speaker is not None else env_config.tts_speaker,
         wakeword_provider=args.wakeword_provider or env_config.wakeword_provider,
         skill_name=args.skill or env_config.skill_name,
         thread_id=args.thread_id or env_config.thread_id,
@@ -293,9 +312,21 @@ def build_speech_output(config: VoiceDaemonConfig):
         return ConsoleSpeechOutput(output_stream=sys.stdout)
     if provider == "say":
         return MacOsSaySpeechOutput(output_stream=sys.stdout, voice=config.tts_voice)
+    if provider == "piper":
+        if not config.tts_model:
+            raise SystemExit(
+                "MINIGENT_VOICE_TTS_MODEL is required when MINIGENT_VOICE_TTS_PROVIDER=piper. "
+                "Install voice deps with `uv sync --extra voice`."
+            )
+        return PiperSpeechOutput(
+            output_stream=sys.stdout,
+            model=config.tts_model,
+            model_dir=config.tts_model_dir,
+            speaker=config.tts_speaker,
+        )
     raise SystemExit(
         f"Unsupported MINIGENT_VOICE_TTS_PROVIDER '{config.tts_provider}'. "
-        "Choose 'console' or 'say'."
+        "Choose 'console', 'say', or 'piper'."
     )
 
 

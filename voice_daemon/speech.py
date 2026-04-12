@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import threading
 from dataclasses import dataclass, field
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import TextIO
 
+from voice_daemon.audio import AudioDependencyError, load_recorded_audio_from_wav
 from voice_daemon.service import SpeechOutput
 
 
@@ -77,3 +83,179 @@ class MacOsSaySpeechOutput(SpeechOutput):
             return
         if return_code != 0:
             raise RuntimeError(f"`say` failed with exit code {return_code}")
+
+
+@dataclass
+class PiperSpeechOutput(SpeechOutput):
+    output_stream: TextIO
+    model: str
+    model_dir: str | None = None
+    speaker: int | None = None
+    _playback_thread: threading.Thread | None = field(default=None, init=False)
+    _interrupted: bool = field(default=False, init=False)
+    _playback_error: BaseException | None = field(default=None, init=False)
+
+    def speak(self, text: str) -> None:
+        self.start(text)
+        self.wait()
+
+    def start(self, text: str) -> None:
+        self.output_stream.write(f"[assistant] {text}\n")
+        self.output_stream.flush()
+        audio = self._synthesize(text)
+        sounddevice = _load_sounddevice_for_output()
+        samples = _recorded_audio_to_numpy(audio)
+        try:
+            sounddevice.play(samples, samplerate=audio.sample_rate, blocking=False)
+        except Exception as exc:
+            raise RuntimeError(f"Piper playback failed: {exc}") from exc
+        self._interrupted = False
+        self._playback_error = None
+        self._playback_thread = threading.Thread(
+            target=self._wait_for_playback,
+            args=(sounddevice,),
+            daemon=True,
+        )
+        self._playback_thread.start()
+
+    def stop(self) -> None:
+        if not self.is_speaking():
+            return
+        self._interrupted = True
+        sounddevice = _load_sounddevice_for_output()
+        sounddevice.stop()
+
+    def is_speaking(self) -> bool:
+        return self._playback_thread is not None and self._playback_thread.is_alive()
+
+    def wait(self) -> None:
+        if self._playback_thread is None:
+            return
+        self._playback_thread.join()
+        self._playback_thread = None
+        interrupted = self._interrupted
+        self._interrupted = False
+        playback_error = self._playback_error
+        self._playback_error = None
+        if interrupted:
+            return
+        if playback_error is not None:
+            raise RuntimeError(f"Piper playback failed: {playback_error}") from playback_error
+
+    def _synthesize(self, text: str):
+        with NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+            output_path = Path(temp_file.name)
+        try:
+            piper_executable = _resolve_piper_executable()
+            model_path = _resolve_piper_model_path(self.model, self.model_dir)
+            command = [piper_executable, "--model", str(model_path), "--output_file", str(output_path)]
+            if self.speaker is not None:
+                command.extend(["--speaker", str(self.speaker)])
+            result = subprocess.run(
+                command,
+                input=text,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                if detail:
+                    raise RuntimeError(f"Piper synthesis failed: {detail}")
+                raise RuntimeError(f"Piper synthesis failed with exit code {result.returncode}")
+            return load_recorded_audio_from_wav(output_path)
+        except FileNotFoundError as exc:
+            raise RuntimeError("`piper` is not available on this system") from exc
+        finally:
+            output_path.unlink(missing_ok=True)
+
+    def _wait_for_playback(self, sounddevice) -> None:
+        try:
+            sounddevice.wait()
+        except Exception as exc:
+            self._playback_error = exc
+
+
+def _load_sounddevice_for_output():
+    try:
+        import sounddevice  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise AudioDependencyError(
+            "sounddevice is required for Piper audio playback. Install with `uv sync --extra voice`."
+        ) from exc
+    return sounddevice
+
+
+def _recorded_audio_to_numpy(audio):
+    try:
+        import numpy as np  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise AudioDependencyError(
+            "numpy is required for Piper audio playback. Install with `uv sync --extra voice`."
+        ) from exc
+    samples = np.frombuffer(audio.pcm_bytes, dtype=np.int16)
+    if audio.channels > 1:
+        return samples.reshape(-1, audio.channels)
+    return samples
+
+
+def _resolve_piper_executable() -> str:
+    resolved = shutil.which("piper")
+    if resolved:
+        return resolved
+
+    for directory in os.environ.get("PATH", "").split(":"):
+        if not directory:
+            continue
+        candidate = os.path.join(directory, "piper")
+        if os.path.exists(candidate):
+            raise RuntimeError(
+                f"`piper` exists at {candidate!r} but is not executable. "
+                "Fix its permissions or remove it from PATH."
+            )
+
+    raise RuntimeError(
+        "`piper` is not available on PATH. Install voice deps with `uv sync --dev --extra voice` "
+        "and confirm the Piper CLI is installed."
+    )
+
+
+def _resolve_piper_model_path(model: str, model_dir: str | None) -> Path:
+    candidate = Path(model).expanduser()
+    if candidate.exists():
+        return candidate
+    if candidate.suffix == ".onnx":
+        raise RuntimeError(f"Piper model path does not exist: {candidate}")
+
+    download_dir = _default_piper_model_dir(model_dir)
+    model_path = download_dir / f"{model}.onnx"
+    if model_path.exists():
+        return model_path
+
+    try:
+        from piper.download_voices import download_voice  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError(
+            "Piper voice download support is unavailable. Install `piper-tts` with "
+            "`uv sync --dev --extra voice`."
+        ) from exc
+
+    download_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        download_voice(model, download_dir)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Unable to resolve Piper voice '{model}'. Provide a .onnx path or download failed: {exc}"
+        ) from exc
+
+    if not model_path.exists():
+        raise RuntimeError(
+            f"Piper voice '{model}' did not produce the expected model file at {model_path}"
+        )
+    return model_path
+
+
+def _default_piper_model_dir(model_dir: str | None) -> Path:
+    if model_dir:
+        return Path(model_dir).expanduser()
+    return Path.home() / ".cache" / "minigent" / "piper"

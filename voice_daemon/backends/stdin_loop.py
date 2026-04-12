@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import TextIO
 
 from voice_daemon.service import Activation
-from voice_daemon.speech import ConsoleSpeechOutput
 
 
 @dataclass

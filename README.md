@@ -57,6 +57,32 @@ With `MINIGENT_VOICE_TTS_PROVIDER=say`, passive mode also supports wake-word bar
 saying the wake word again while the assistant is speaking will stop `say` and switch
 back to listening.
 
+For higher-quality local TTS on macOS or Linux, install the voice extra and configure
+Piper with a model path or model name:
+
+```bash
+MINIGENT_VOICE_TTS_PROVIDER=piper
+MINIGENT_VOICE_TTS_MODEL=en_US-lessac-medium
+uv run minigent-voice-daemon --backend manual-audio --once
+```
+
+For multi-speaker Piper models, also set `MINIGENT_VOICE_TTS_SPEAKER`:
+
+```bash
+MINIGENT_VOICE_TTS_PROVIDER=piper
+MINIGENT_VOICE_TTS_MODEL=/absolute/path/to/voice.onnx
+MINIGENT_VOICE_TTS_SPEAKER=0
+uv run minigent-voice-daemon --backend manual-audio --once
+```
+
+`piper-tts` ships as part of `uv sync --dev --extra voice`. When
+`MINIGENT_VOICE_TTS_MODEL` is a bare voice name like `en_US-lessac-medium`, the daemon
+downloads the `.onnx` and `.onnx.json` files on first use into
+`~/.cache/minigent/piper` by default. Override that cache directory with
+`MINIGENT_VOICE_TTS_MODEL_DIR` or `--tts-model-dir`. Piper playback uses the same local
+PortAudio stack as microphone capture through `sounddevice`, so you do not need a
+separate `afplay`/`aplay` integration in the daemon.
+
 The daemon currently supports three backends:
 
 - `stdin`: text-driven wake phrase loop for cheap end-to-end testing
@@ -207,6 +233,9 @@ Daemon-related env vars:
 - `MINIGENT_VOICE_STT_LANGUAGE`
 - `MINIGENT_VOICE_TTS_PROVIDER`
 - `MINIGENT_VOICE_TTS_VOICE`
+- `MINIGENT_VOICE_TTS_MODEL`
+- `MINIGENT_VOICE_TTS_MODEL_DIR`
+- `MINIGENT_VOICE_TTS_SPEAKER`
 - `MINIGENT_VOICE_WAKEWORD_PROVIDER`
 - `MINIGENT_VOICE_SKILL`
 - `MINIGENT_VOICE_THREAD_ID`

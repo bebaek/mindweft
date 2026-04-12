@@ -69,8 +69,14 @@ class OpenWakeWordDetector:
 
     def __post_init__(self) -> None:
         try:
-            from pyopen_wakeword import Model, OpenWakeWord, OpenWakeWordFeatures  # type: ignore[import-not-found]
-            from pyopen_wakeword.openwakeword import SAMPLES_PER_CHUNK  # type: ignore[import-not-found]
+            from pyopen_wakeword import (  # type: ignore[import-not-found]
+                Model,
+                OpenWakeWord,
+                OpenWakeWordFeatures,
+            )
+            from pyopen_wakeword.openwakeword import (
+                SAMPLES_PER_CHUNK,  # type: ignore[import-not-found]
+            )
         except ImportError as exc:
             raise WakeWordDependencyError(
                 "pyopen-wakeword is required for the openwakeword provider. Install with `uv sync --extra voice`."

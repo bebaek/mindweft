@@ -1,28 +1,35 @@
 from __future__ import annotations
 
-from io import StringIO
 import wave
+from io import StringIO
 
 import pytest
 
+import voice_daemon.cli as voice_cli
 from voice_daemon.audio import (
     AudioCaptureConfig,
     MicrophoneRecorder,
     RecordedAudio,
     apply_gain,
-    split_pcm_chunk,
     load_recorded_audio_from_wav,
     normalize_peak,
     pad_with_silence,
     pcm16le_to_floats,
+    split_pcm_chunk,
 )
 from voice_daemon.backends.manual_audio import ManualAudioActivationSource
 from voice_daemon.backends.passive_audio import PassiveAudioActivationSource
 from voice_daemon.backends.stdin_loop import StdinActivationSource
-from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
+from voice_daemon.cli import (
+    build_speech_output,
+    build_speech_provider_config,
+    build_wake_word_detector,
+)
 from voice_daemon.config import PrincipalConfig, VoiceDaemonConfig
+from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
 from voice_daemon.ring_buffer import AudioRingBuffer
-from voice_daemon.speech import ConsoleSpeechOutput, MacOsSaySpeechOutput
+from voice_daemon.service import Activation, VoiceDaemon
+from voice_daemon.speech import ConsoleSpeechOutput, MacOsSaySpeechOutput, PiperSpeechOutput
 from voice_daemon.stt import (
     FasterWhisperTranscriptionAdapter,
     FasterWhisperTranscriptionConfig,
@@ -33,9 +40,6 @@ from voice_daemon.stt import (
     SpeechToTextError,
     build_transcription_adapter,
 )
-from voice_daemon.cli import build_speech_output, build_speech_provider_config, build_wake_word_detector
-import voice_daemon.cli as voice_cli
-from voice_daemon.service import Activation, VoiceDaemon
 
 
 class FakeMinigentClient:
@@ -250,7 +254,80 @@ def test_macos_say_speech_output_prints_and_speaks(monkeypatch: pytest.MonkeyPat
     assert captured == {"command": ["say", "-v", "Samantha", "done"], "text": True}
 
 
-def test_build_speech_output_supports_console_and_say() -> None:
+def test_piper_speech_output_prints_and_plays(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    output_stream = StringIO()
+    captured: dict[str, object] = {}
+
+    def fake_run(command, input, text, capture_output, check):
+        captured["command"] = command
+        captured["input"] = input
+        captured["text"] = text
+        captured["capture_output"] = capture_output
+        captured["check"] = check
+        output_path = command[command.index("--output_file") + 1]
+        with wave.open(output_path, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(22050)
+            wav_file.writeframes(b"\x01\x00\x02\x00")
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return Result()
+
+    class FakeSoundDevice:
+        def __init__(self) -> None:
+            self.play_calls: list[tuple[object, int, bool]] = []
+            self.wait_calls = 0
+            self.stop_calls = 0
+
+        def play(self, samples, samplerate: int, blocking: bool) -> None:
+            self.play_calls.append((samples.copy(), samplerate, blocking))
+
+        def wait(self) -> None:
+            self.wait_calls += 1
+
+        def stop(self) -> None:
+            self.stop_calls += 1
+
+    sounddevice = FakeSoundDevice()
+
+    monkeypatch.setattr("voice_daemon.speech.subprocess.run", fake_run)
+    monkeypatch.setattr("voice_daemon.speech._resolve_piper_executable", lambda: "piper")
+    monkeypatch.setattr("voice_daemon.speech._load_sounddevice_for_output", lambda: sounddevice)
+    monkeypatch.setattr(
+        "voice_daemon.speech._resolve_piper_model_path",
+        lambda model, model_dir: tmp_path / "voice.onnx",
+    )
+
+    PiperSpeechOutput(output_stream=output_stream, model=str(tmp_path / "voice.onnx"), speaker=3).speak(
+        "done"
+    )
+
+    assert output_stream.getvalue() == "[assistant] done\n"
+    assert captured["command"][:4] == [
+        "piper",
+        "--model",
+        str(tmp_path / "voice.onnx"),
+        "--output_file",
+    ]
+    assert captured["command"][-2:] == ["--speaker", "3"]
+    assert captured["input"] == "done"
+    assert captured["text"] is True
+    assert captured["capture_output"] is True
+    assert captured["check"] is False
+    assert sounddevice.wait_calls == 1
+    assert sounddevice.stop_calls == 0
+    samples, sample_rate, blocking = sounddevice.play_calls[0]
+    assert sample_rate == 22050
+    assert blocking is False
+    assert list(samples) == [1, 2]
+
+
+def test_build_speech_output_supports_console_say_and_piper() -> None:
     console = build_speech_output(
         VoiceDaemonConfig(
             base_url="http://127.0.0.1:8000",
@@ -266,10 +343,22 @@ def test_build_speech_output_supports_console_and_say() -> None:
             tts_voice="Samantha",
         )
     )
+    piper = build_speech_output(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            tts_provider="piper",
+            tts_model="/tmp/en_US-lessac-medium.onnx",
+            tts_speaker=5,
+        )
+    )
 
     assert isinstance(console, ConsoleSpeechOutput)
     assert isinstance(say, MacOsSaySpeechOutput)
     assert say.voice == "Samantha"
+    assert isinstance(piper, PiperSpeechOutput)
+    assert piper.model == "/tmp/en_US-lessac-medium.onnx"
+    assert piper.speaker == 5
 
 
 def test_macos_say_speech_output_can_be_interrupted(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -303,6 +392,111 @@ def test_macos_say_speech_output_can_be_interrupted(monkeypatch: pytest.MonkeyPa
     assert not speech.is_speaking()
 
 
+def test_piper_speech_output_can_be_interrupted(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    output_stream = StringIO()
+
+    def fake_run(command, input, text, capture_output, check):
+        output_path = command[command.index("--output_file") + 1]
+        with wave.open(output_path, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(b"\x00\x00\x01\x00")
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return Result()
+
+    class FakeSoundDevice:
+        def __init__(self) -> None:
+            import threading
+
+            self._stopped = threading.Event()
+            self.stop_calls = 0
+
+        def play(self, samples, samplerate: int, blocking: bool) -> None:
+            return None
+
+        def wait(self) -> None:
+            self._stopped.wait(timeout=1)
+
+        def stop(self) -> None:
+            self.stop_calls += 1
+            self._stopped.set()
+
+    sounddevice = FakeSoundDevice()
+
+    monkeypatch.setattr("voice_daemon.speech.subprocess.run", fake_run)
+    monkeypatch.setattr("voice_daemon.speech._resolve_piper_executable", lambda: "piper")
+    monkeypatch.setattr("voice_daemon.speech._load_sounddevice_for_output", lambda: sounddevice)
+    monkeypatch.setattr(
+        "voice_daemon.speech._resolve_piper_model_path",
+        lambda model, model_dir: tmp_path / "voice.onnx",
+    )
+
+    speech = PiperSpeechOutput(output_stream=output_stream, model=str(tmp_path / "voice.onnx"))
+    speech.start("done")
+    assert speech.is_speaking()
+    speech.stop()
+    speech.wait()
+
+    assert sounddevice.stop_calls == 1
+    assert not speech.is_speaking()
+
+
+def test_piper_speech_output_reports_missing_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    output_stream = StringIO()
+
+    monkeypatch.setattr("voice_daemon.speech.shutil.which", lambda name: None)
+    monkeypatch.setattr("voice_daemon.speech.os.environ", {"PATH": "/tmp/does-not-exist"})
+
+    speech = PiperSpeechOutput(output_stream=output_stream, model="/tmp/voice.onnx")
+
+    with pytest.raises(RuntimeError, match="not available on PATH"):
+        speech.start("done")
+
+
+def test_resolve_piper_model_path_uses_existing_onnx_path(tmp_path) -> None:
+    from voice_daemon.speech import _resolve_piper_model_path
+
+    model_path = tmp_path / "voice.onnx"
+    model_path.write_bytes(b"model")
+
+    assert _resolve_piper_model_path(str(model_path), None) == model_path
+
+
+def test_resolve_piper_model_path_downloads_named_voice(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from voice_daemon import speech as speech_module
+
+    downloaded: dict[str, object] = {}
+
+    def fake_download_voice(voice: str, download_dir) -> None:
+        downloaded["voice"] = voice
+        downloaded["download_dir"] = download_dir
+        (download_dir / f"{voice}.onnx").write_bytes(b"model")
+        (download_dir / f"{voice}.onnx.json").write_text("{}", encoding="utf-8")
+
+    class FakeDownloadVoices:
+        @staticmethod
+        def download_voice(voice: str, download_dir) -> None:
+            fake_download_voice(voice, download_dir)
+
+    monkeypatch.setattr(
+        "pathlib.Path.home",
+        lambda: tmp_path,
+    )
+    monkeypatch.setattr("piper.download_voices.download_voice", FakeDownloadVoices.download_voice)
+
+    model_path = speech_module._resolve_piper_model_path("en_US-lessac-medium", None)
+
+    assert model_path == tmp_path / ".cache" / "minigent" / "piper" / "en_US-lessac-medium.onnx"
+    assert downloaded["voice"] == "en_US-lessac-medium"
+    assert downloaded["download_dir"] == tmp_path / ".cache" / "minigent" / "piper"
+
+
 def test_principal_config_prefers_bearer_token() -> None:
     principal = PrincipalConfig(
         user_id="user-1",
@@ -323,6 +517,9 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_VOICE_STT_LANGUAGE", "en")
     monkeypatch.setenv("MINIGENT_VOICE_TTS_PROVIDER", "say")
     monkeypatch.setenv("MINIGENT_VOICE_TTS_VOICE", "Samantha")
+    monkeypatch.setenv("MINIGENT_VOICE_TTS_MODEL", "/tmp/en_US-lessac-medium.onnx")
+    monkeypatch.setenv("MINIGENT_VOICE_TTS_MODEL_DIR", "/tmp/minigent-piper")
+    monkeypatch.setenv("MINIGENT_VOICE_TTS_SPEAKER", "7")
     monkeypatch.setenv("MINIGENT_VOICE_WAKEWORD_PROVIDER", "porcupine")
     monkeypatch.setenv("MINIGENT_VOICE_SKILL", "support")
     monkeypatch.setenv("MINIGENT_VOICE_THREAD_ID", "thread-123")
@@ -365,6 +562,9 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
         stt_language="en",
         tts_provider="say",
         tts_voice="Samantha",
+        tts_model="/tmp/en_US-lessac-medium.onnx",
+        tts_model_dir="/tmp/minigent-piper",
+        tts_speaker=7,
         wakeword_provider="porcupine",
         skill_name="support",
         thread_id="thread-123",
