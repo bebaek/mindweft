@@ -30,7 +30,7 @@ from voice_daemon.cli import (
 from voice_daemon.config import PrincipalConfig, VoiceDaemonConfig
 from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
 from voice_daemon.ring_buffer import AudioRingBuffer
-from voice_daemon.service import Activation, VoiceDaemon
+from voice_daemon.service import Activation, DaemonState, VoiceDaemon
 from voice_daemon.speech import (
     ConsoleSpeechOutput,
     MacOsSaySpeechOutput,
@@ -68,6 +68,8 @@ class FakeActivationSource:
         self.utterance = utterance
         self.wait_calls: list[str] = []
         self.capture_calls = 0
+        self.follow_up_timeout_ms: list[int] = []
+        self.follow_up_utterance: str | None = None
 
     def wait_for_activation(self, wake_phrase: str) -> Activation:
         self.wait_calls.append(wake_phrase)
@@ -76,6 +78,12 @@ class FakeActivationSource:
     def capture_utterance(self) -> str:
         self.capture_calls += 1
         return self.utterance
+
+    def capture_follow_up_utterance(self, timeout_ms: int) -> str | None:
+        self.follow_up_timeout_ms.append(timeout_ms)
+        utterance = self.follow_up_utterance
+        self.follow_up_utterance = None
+        return utterance
 
 
 class FakeSpeechOutput:
@@ -241,6 +249,49 @@ def test_voice_daemon_supports_barge_in() -> None:
     assert speech_output.started == ["first reply", "second reply"]
     assert speech_output.stops == 1
     assert speech_output.waits == 2
+
+
+def test_voice_daemon_uses_follow_up_window_without_wake_word() -> None:
+    activation_source = FakeActivationSource(Activation(), utterance="first request")
+    activation_source.follow_up_utterance = "second request"
+    minigent_client = FakeMinigentClient(reply="first reply")
+    speech_output = FakeSpeechOutput()
+    daemon = VoiceDaemon(
+        wake_phrase="hey minigent",
+        activation_source=activation_source,
+        minigent_client=minigent_client,
+        speech_output=speech_output,
+        follow_up_timeout_ms=6000,
+    )
+    replies = iter(["first reply", "second reply"])
+    minigent_client.run_thread = lambda: next(replies)
+
+    reply = daemon.run_once()
+
+    assert reply == "second reply"
+    assert activation_source.wait_calls == ["hey minigent"]
+    assert activation_source.follow_up_timeout_ms == [6000, 6000]
+    assert minigent_client.messages == ["first request", "second request"]
+
+
+def test_voice_daemon_returns_to_idle_when_follow_up_window_expires() -> None:
+    activation_source = FakeActivationSource(Activation(), utterance="first request")
+    activation_source.follow_up_utterance = None
+    minigent_client = FakeMinigentClient(reply="first reply")
+    speech_output = FakeSpeechOutput()
+    daemon = VoiceDaemon(
+        wake_phrase="hey minigent",
+        activation_source=activation_source,
+        minigent_client=minigent_client,
+        speech_output=speech_output,
+        follow_up_timeout_ms=4000,
+    )
+
+    reply = daemon.run_once()
+
+    assert reply == "first reply"
+    assert daemon.state == DaemonState.IDLE
+    assert activation_source.follow_up_timeout_ms == [4000]
 
 
 def test_stdin_activation_source_waits_for_wake_phrase() -> None:
@@ -521,7 +572,13 @@ def test_resolve_wake_acknowledgement_player_supports_macos_and_linux(monkeypatc
 def test_sanitize_text_for_tts_strips_common_markdown() -> None:
     text = "# Heading\n- **bold** item with [link](https://example.com) and `code`"
 
-    assert _sanitize_text_for_tts(text) == "Heading bold item with link and code"
+    assert _sanitize_text_for_tts(text) == "Heading. bold item with link and code."
+
+
+def test_sanitize_text_for_tts_preserves_boundary_around_headers() -> None:
+    text = "Before\n## Details\nAfter"
+
+    assert _sanitize_text_for_tts(text) == "Before Details. After"
 
 
 def test_macos_say_speech_output_can_be_interrupted(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -675,6 +732,7 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_BASE_URL", "http://127.0.0.1:9000/")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_PHRASE", "computer")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT", "bell")
+    monkeypatch.setenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND", "/tmp/wake.wav")
     monkeypatch.setenv("MINIGENT_VOICE_STT_PROVIDER", "openrouter")
     monkeypatch.setenv("MINIGENT_VOICE_STT_DEVICE", "cpu")
     monkeypatch.setenv("MINIGENT_VOICE_STT_COMPUTE_TYPE", "int8")
@@ -721,6 +779,7 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
         base_url="http://127.0.0.1:9000",
         wake_phrase="computer",
         wake_acknowledgement="bell",
+        wake_acknowledgement_sound="/tmp/wake.wav",
         stt_provider="openrouter",
         stt_device="cpu",
         stt_compute_type="int8",
@@ -742,6 +801,7 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
         speech_max_seconds=9.5,
         wakeword_cooldown_ms=1500,
         post_wake_speech_timeout_ms=2500,
+        follow_up_timeout_ms=0,
         post_wake_settle_ms=300,
         wakeword_preroll_ms=1200,
         stt_pad_leading_ms=200,
@@ -972,6 +1032,17 @@ def test_manual_audio_activation_source_ignores_stt_error() -> None:
     assert "[idle] transcription failed, ignoring capture:" in output_stream.getvalue()
 
 
+def test_manual_audio_activation_source_does_not_support_follow_up_window() -> None:
+    source = ManualAudioActivationSource(
+        input_stream=StringIO("\n"),
+        output_stream=StringIO(),
+        recorder=object(),  # type: ignore[arg-type]
+        transcriber=object(),  # type: ignore[arg-type]
+    )
+
+    assert source.capture_follow_up_utterance(5000) is None
+
+
 def test_capture_debugger_logs_and_writes_capture(tmp_path) -> None:
     output_stream = StringIO()
     capture_path = tmp_path / "last-capture.wav"
@@ -1087,6 +1158,119 @@ def test_passive_audio_activation_source_records_on_fresh_stream() -> None:
     assert source.wake_detector.reset_calls == 1
     assert "[idle] passive listening for wake word openwakeword:okay_nabu" in output_stream.getvalue()
     assert "[listening] wake word detected" in output_stream.getvalue()
+
+
+def test_passive_audio_activation_source_captures_follow_up_without_wake_word() -> None:
+    class FakeStream:
+        def read(self, frames: int) -> tuple[bytes, bool]:
+            del frames
+            return b"", False
+
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeWakeDetector:
+        frame_length = 4
+        sample_rate = 16000
+        label = "openwakeword:okay_nabu"
+
+        def reset(self) -> None:
+            return None
+
+        def process_chunk(self, chunk: bytes) -> bool:
+            del chunk
+            return False
+
+    class FakeRecorder:
+        def __init__(self) -> None:
+            self.timeout_ms: int | None = None
+
+        def record_after_speech(self, timeout_ms: int, *, preroll_ms: int = 250) -> RecordedAudio | None:
+            self.timeout_ms = timeout_ms
+            self.preroll_ms = preroll_ms
+            return RecordedAudio(
+                pcm_bytes=b"\x03\x00" * 8,
+                sample_rate=16_000,
+                channels=1,
+                sample_width_bytes=2,
+            )
+
+    class FakeTranscriber:
+        def transcribe(self, audio: RecordedAudio) -> str:
+            del audio
+            return "follow up request"
+
+    output_stream = StringIO()
+    recorder = FakeRecorder()
+    source = PassiveAudioActivationSource(
+        output_stream=output_stream,
+        stream=FakeStream(),
+        recorder=recorder,
+        transcriber=FakeTranscriber(),
+        wake_detector=FakeWakeDetector(),
+        preroll_buffer=AudioRingBuffer(max_bytes=32),
+        post_wake_settle_ms=0,
+    )
+
+    transcript = source.capture_follow_up_utterance(5000)
+
+    assert transcript == "follow up request"
+    assert recorder.timeout_ms == 5000
+    assert "[follow-up] listening for a follow-up without the wake word" in output_stream.getvalue()
+
+
+def test_passive_audio_activation_source_follow_up_window_expires() -> None:
+    class FakeStream:
+        def read(self, frames: int) -> tuple[bytes, bool]:
+            del frames
+            return b"", False
+
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeWakeDetector:
+        frame_length = 4
+        sample_rate = 16000
+        label = "openwakeword:okay_nabu"
+
+        def reset(self) -> None:
+            return None
+
+        def process_chunk(self, chunk: bytes) -> bool:
+            del chunk
+            return False
+
+    class FakeRecorder:
+        def record_after_speech(self, timeout_ms: int, *, preroll_ms: int = 250) -> RecordedAudio | None:
+            del timeout_ms, preroll_ms
+            return None
+
+    output_stream = StringIO()
+    source = PassiveAudioActivationSource(
+        output_stream=output_stream,
+        stream=FakeStream(),
+        recorder=FakeRecorder(),
+        transcriber=object(),  # type: ignore[arg-type]
+        wake_detector=FakeWakeDetector(),
+        preroll_buffer=AudioRingBuffer(max_bytes=32),
+    )
+
+    transcript = source.capture_follow_up_utterance(3000)
+
+    assert transcript is None
+    assert "[idle] follow-up window expired, returning to wake-word mode" in output_stream.getvalue()
 
 
 def test_passive_audio_activation_source_detects_barge_in() -> None:

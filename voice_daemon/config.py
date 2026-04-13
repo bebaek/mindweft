@@ -51,6 +51,7 @@ class VoiceDaemonConfig:
     speech_max_seconds: float = 15.0
     wakeword_cooldown_ms: int = 1500
     post_wake_speech_timeout_ms: int = 2500
+    follow_up_timeout_ms: int = 0
     post_wake_settle_ms: int = 250
     wakeword_preroll_ms: int = 750
     stt_pad_leading_ms: int = 250
@@ -108,6 +109,7 @@ class VoiceDaemonConfig:
             post_wake_speech_timeout_ms=_int_from_env(
                 "MINIGENT_VOICE_POST_WAKE_SPEECH_TIMEOUT_MS", 2500
             ),
+            follow_up_timeout_ms=_int_from_env("MINIGENT_VOICE_FOLLOW_UP_TIMEOUT_MS", 0),
             post_wake_settle_ms=_int_from_env("MINIGENT_VOICE_POST_WAKE_SETTLE_MS", 250),
             wakeword_preroll_ms=_int_from_env("MINIGENT_VOICE_WAKEWORD_PREROLL_MS", 750),
             stt_pad_leading_ms=_int_from_env("MINIGENT_VOICE_STT_PAD_LEADING_MS", 250),

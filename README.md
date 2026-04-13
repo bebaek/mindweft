@@ -59,8 +59,10 @@ saying the wake word again while the assistant is speaking will stop `say` and s
 back to listening.
 
 When local TTS is enabled, the daemon strips common Markdown formatting such as `*`, `` ` ``,
-headers, and Markdown links before feeding text to the speech engine, while still printing
-the original assistant reply to the terminal.
+headers, lists, and Markdown links before feeding text to the speech engine, while still
+printing the original assistant reply to the terminal. Structural Markdown like headers
+and list items is converted into short sentence boundaries so TTS does not run them into
+surrounding text.
 
 For higher-quality local TTS on macOS or Linux, install the voice extra and configure
 Piper with a model path or model name:
@@ -200,6 +202,11 @@ If no speech arrives within `MINIGENT_VOICE_POST_WAKE_SPEECH_TIMEOUT_MS` after t
 word, passive mode ignores that activation and returns to idle without sending audio to
 STT.
 
+To make short back-and-forth follow-ups feel more natural, set
+`MINIGENT_VOICE_FOLLOW_UP_TIMEOUT_MS` to keep listening briefly after the assistant
+finishes speaking. During that window, `passive-audio` accepts one follow-up utterance
+without requiring the wake word, then returns to normal wake-word mode after silence.
+
 If you need to inspect captured audio, set `MINIGENT_VOICE_DEBUG_CAPTURE_PATH` or pass
 `--debug-capture-path`. The daemon will print capture metadata and write the last WAV
 capture there before transcription. That is useful for comparing `manual-audio` and
@@ -239,6 +246,8 @@ Daemon-related env vars:
 
 - `MINIGENT_BASE_URL`
 - `MINIGENT_VOICE_WAKE_PHRASE`
+- `MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT`
+- `MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND`
 - `MINIGENT_VOICE_STT_PROVIDER`
 - `MINIGENT_VOICE_STT_DEVICE`
 - `MINIGENT_VOICE_STT_COMPUTE_TYPE`
@@ -258,6 +267,7 @@ Daemon-related env vars:
 - `MINIGENT_VOICE_AUDIO_BLOCK_SIZE`
 - `MINIGENT_VOICE_END_SILENCE_MS`
 - `MINIGENT_VOICE_MAX_RECORD_SECONDS`
+- `MINIGENT_VOICE_FOLLOW_UP_TIMEOUT_MS`
 - `MINIGENT_VOICE_POST_WAKE_SETTLE_MS`
 - `MINIGENT_VOICE_WAKEWORD_PREROLL_MS`
 - `MINIGENT_VOICE_STT_PAD_LEADING_MS`

@@ -92,6 +92,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional directory to write STT request/response debug artifacts.",
     )
     parser.add_argument(
+        "--follow-up-timeout-ms",
+        default=None,
+        type=int,
+        help="Optional follow-up listening window after assistant speech. In passive-audio mode, speech during this window does not require the wake word.",
+    )
+    parser.add_argument(
         "--stt-provider",
         choices=("openai", "openrouter", "faster-whisper"),
         default=None,
@@ -194,6 +200,11 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
         speech_max_seconds=env_config.speech_max_seconds,
         wakeword_cooldown_ms=env_config.wakeword_cooldown_ms,
         post_wake_speech_timeout_ms=env_config.post_wake_speech_timeout_ms,
+        follow_up_timeout_ms=(
+            args.follow_up_timeout_ms
+            if args.follow_up_timeout_ms is not None
+            else env_config.follow_up_timeout_ms
+        ),
         post_wake_settle_ms=env_config.post_wake_settle_ms,
         wakeword_preroll_ms=env_config.wakeword_preroll_ms,
         stt_pad_leading_ms=env_config.stt_pad_leading_ms,
@@ -227,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
         minigent_client=MinigentClient(config),
         speech_output=speech_output,
         activation_feedback=build_activation_feedback(config, speech_output),
+        follow_up_timeout_ms=config.follow_up_timeout_ms,
     )
     try:
         if args.once:

@@ -90,6 +90,19 @@ class PassiveAudioActivationSource:
             self.output_stream.flush()
             self._cooldown_until = time.monotonic() + (self.wakeword_cooldown_ms / 1000.0)
             return ""
+        return self._transcribe_recorded_audio(audio, source="passive-audio")
+
+    def capture_follow_up_utterance(self, timeout_ms: int) -> str | None:
+        self.output_stream.write("[follow-up] listening for a follow-up without the wake word\n")
+        self.output_stream.flush()
+        audio = self.recorder.record_after_speech(timeout_ms)
+        if audio is None:
+            self.output_stream.write("[idle] follow-up window expired, returning to wake-word mode\n")
+            self.output_stream.flush()
+            return None
+        return self._transcribe_recorded_audio(audio, source="passive-audio-follow-up")
+
+    def _transcribe_recorded_audio(self, audio, *, source: str) -> str:
         audio = pad_with_silence(
             audio,
             leading_ms=self.stt_pad_leading_ms,
@@ -100,7 +113,7 @@ class PassiveAudioActivationSource:
         )
         self.output_stream.flush()
         if self.capture_debugger is not None:
-            self.capture_debugger.log_capture(audio, source="passive-audio")
+            self.capture_debugger.log_capture(audio, source=source)
         try:
             transcript = self.transcriber.transcribe(audio).strip()
         except SpeechToTextError as exc:

@@ -30,12 +30,19 @@ class ManualAudioActivationSource:
         self.output_stream.write("[listening] recording from microphone until silence\n")
         self.output_stream.flush()
         audio = self.recorder.record_until_silence()
+        return self._transcribe_audio(audio, source="manual-audio")
+
+    def capture_follow_up_utterance(self, timeout_ms: int) -> str | None:
+        del timeout_ms
+        return None
+
+    def _transcribe_audio(self, audio, *, source: str) -> str:
         self.output_stream.write(
             f"[transcribing] captured {audio.duration_seconds:.2f}s of audio\n"
         )
         self.output_stream.flush()
         if self.capture_debugger is not None:
-            self.capture_debugger.log_capture(audio, source="manual-audio")
+            self.capture_debugger.log_capture(audio, source=source)
         try:
             transcript = self.transcriber.transcribe(audio).strip()
         except SpeechToTextError as exc:
