@@ -271,6 +271,15 @@ def test_thread_endpoints_accept_hs256_jwt(monkeypatch: pytest.MonkeyPatch) -> N
     assert create_response.status_code == 200
 
 
+def test_create_app_fails_fast_for_jwt_without_key_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_AUTH_MODE", "jwt")
+    monkeypatch.delenv("MINIGENT_JWT_SHARED_SECRET", raising=False)
+    monkeypatch.delenv("MINIGENT_JWT_JWKS_URL", raising=False)
+
+    with pytest.raises(RuntimeError, match="MINIGENT_JWT_JWKS_URL is required"):
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+
+
 def test_thread_endpoints_reject_jwt_with_wrong_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
     shared_secret = "test-secret-0123456789abcdefghijklmnopqrstuvwxyz"
     monkeypatch.setenv("MINIGENT_AUTH_MODE", "jwt")

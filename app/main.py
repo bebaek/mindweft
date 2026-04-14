@@ -8,7 +8,7 @@ from app.admin_api import (
     build_admin_router,
 )
 from app.admin_store import SQLiteTenantConfigStore
-from app.auth import require_principal
+from app.auth import require_principal, validate_auth_settings
 from app.config import load_environment
 from app.execution import (
     FixedTenantExecutionResolver,
@@ -50,6 +50,7 @@ def create_app(
     admin_store: SQLiteTenantConfigStore | None = None,
     tenant_config_source: str | None = None,
 ) -> FastAPI:
+    validate_auth_settings()
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0")
     configure_tracing(app)
     app.state.store = InMemoryThreadStore()

@@ -23,6 +23,69 @@ uv sync --dev
 uv run uvicorn app.main:app --reload
 ```
 
+## Docker Compose Deployment
+
+This repo now includes a production-oriented [`Dockerfile`](/Users/burm/code/minigent/Dockerfile)
+and [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) for running Minigent on a remote
+host that already manages apps with Docker Compose.
+
+The current runtime has two important persistence boundaries:
+
+- Thread state and message history are stored in memory, so restarting the container loses
+  active threads.
+- The optional admin control plane can persist tenant execution config in SQLite when
+  `MINIGENT_ADMIN_DB_PATH` points at a mounted volume.
+
+That means the current safe deployment shape is a single Minigent container behind your
+existing reverse proxy.
+
+Start from [.env.example](/Users/burm/code/minigent/.env.example), then set at least:
+
+```dotenv
+MINIGENT_AUTH_MODE=jwt
+MINIGENT_LLM_PROVIDER=openai
+OPENAI_API_KEY=...
+MINIGENT_LOG_FORMAT=json
+```
+
+Bring the service up with:
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+If you keep multiple deployment env files, point Compose at the one you want both for
+variable interpolation and for the container environment itself:
+
+```bash
+MINIGENT_ENV_FILE=.env.docker docker compose --env-file .env.docker up -d
+```
+
+[`compose.yaml`](/Users/burm/code/minigent/compose.yaml) uses whatever auth mode you set
+in `.env`; it does not override `MINIGENT_AUTH_MODE`. For local voice-daemon testing,
+`static-tokens` is the easiest path. For remote exposure, prefer `jwt` and include the
+required JWT verification settings in `.env`.
+
+By default, [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) binds the API to
+`127.0.0.1:8000` so a same-host reverse proxy can publish it safely. If you need direct
+network exposure, change the port mapping deliberately instead of binding to all
+interfaces by default.
+
+The container exposes `GET /health` for Compose health checks.
+
+If you want the optional admin SQLite control plane, add these settings to `.env` and
+mount `/data` in Compose:
+
+```dotenv
+MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults
+MINIGENT_ADMIN_DB_PATH=/data/minigent-admin.db
+MINIGENT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
+```
+
+When `MINIGENT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`,
+`MINIGENT_ADMIN_ENCRYPTION_KEY` is mandatory.
+
 For the voice daemon with microphone capture, VAD, and transcription support, install the
 optional voice dependencies as well:
 
@@ -310,6 +373,11 @@ MINIGENT_JWT_AUDIENCE=minigent-api
 MINIGENT_JWT_ALGORITHMS=["RS256"]
 MINIGENT_JWT_JWKS_URL=https://issuer.example/.well-known/jwks.json
 ```
+
+If `MINIGENT_AUTH_MODE=jwt` is set without either `MINIGENT_JWT_SHARED_SECRET` for HMAC
+algorithms or `MINIGENT_JWT_JWKS_URL` for asymmetric algorithms, the server now fails at
+startup with a configuration error instead of returning `500 Internal Server Error` from
+authenticated endpoints.
 
 For local JWT testing you can use `HS256`:
 

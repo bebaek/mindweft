@@ -51,13 +51,33 @@ class AuthSettings:
     jwt_jwks_cache_seconds: int
 
 
+def validate_auth_settings() -> AuthSettings:
+    settings = _load_auth_settings()
+    if settings.mode == AUTH_MODE_STATIC_TOKENS and not settings.static_tokens:
+        raise RuntimeError(f"{AUTH_TOKENS_ENV} is required when {AUTH_MODE_ENV}=static-tokens")
+    if settings.mode == AUTH_MODE_JWT:
+        algorithms = {algorithm.upper() for algorithm in settings.jwt_algorithms}
+        if any(algorithm.startswith("HS") for algorithm in algorithms):
+            if not settings.jwt_shared_secret:
+                raise RuntimeError(
+                    f"{JWT_SHARED_SECRET_ENV} is required for HMAC JWT algorithms in "
+                    f"{AUTH_MODE_ENV}=jwt"
+                )
+        elif not settings.jwt_jwks_url:
+            raise RuntimeError(
+                f"{JWT_JWKS_URL_ENV} is required for asymmetric JWT algorithms in "
+                f"{AUTH_MODE_ENV}=jwt"
+            )
+    return settings
+
+
 async def require_principal(
     authorization: str | None = Header(default=None),
     x_minigent_user_id: str | None = Header(default=None),
     x_minigent_tenant_id: str | None = Header(default=None),
     x_minigent_admin: str | None = Header(default=None),
 ) -> Principal:
-    settings = _load_auth_settings()
+    settings = validate_auth_settings()
 
     if settings.mode == AUTH_MODE_DEV_HEADERS:
         return _principal_from_headers(

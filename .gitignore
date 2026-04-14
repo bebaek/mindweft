@@ -1,4 +1,7 @@
 .env
+.env.*
+!.env.*.template
+.data/
 .venv/
 .uv-cache/
 __pycache__/
