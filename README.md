@@ -62,6 +62,19 @@ variable interpolation and for the container environment itself:
 MINIGENT_ENV_FILE=.env.docker docker compose --env-file .env.docker up -d
 ```
 
+For the Dockerized setup used in this repo, prefer the wrapper script instead of typing
+that command each time:
+
+```bash
+./scripts/docker-up.sh
+```
+
+Pass any extra `docker compose up` flags through to the script:
+
+```bash
+./scripts/docker-up.sh --build
+```
+
 [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) uses whatever auth mode you set
 in `.env`; it does not override `MINIGENT_AUTH_MODE`. For local voice-daemon testing,
 `static-tokens` is the easiest path. For remote exposure, prefer `jwt` and include the
@@ -231,6 +244,18 @@ Passive wake-word example:
 ```bash
 PICOVOICE_ACCESS_KEY=...
 MINIGENT_VOICE_KEYWORD_PATH=/absolute/path/to/hey-minigent.ppn
+uv run minigent-voice-daemon --backend passive-audio
+```
+
+If you keep the daemon settings in `.env.voice.docker`, use the wrapper script:
+
+```bash
+./scripts/voice-daemon-docker.sh
+```
+
+It exports `.env.voice.docker` into the process environment, then runs:
+
+```bash
 uv run minigent-voice-daemon --backend passive-audio
 ```
 
