@@ -55,6 +55,29 @@ docker compose build
 docker compose up -d
 ```
 
+[`compose.yaml`](/Users/burm/code/minigent/compose.yaml) now reads the image name from
+`MINIGENT_IMAGE` and falls back to a local `minigent:latest` tag. Set it in your
+deployment environment before using a published image:
+
+```dotenv
+MINIGENT_IMAGE=ghcr.io/<your-github-user-or-org>/minigent:latest
+```
+
+If you want the host to run a published private image instead of building locally, log in
+to GHCR first and then pull the image explicitly:
+
+```bash
+docker login ghcr.io
+docker compose pull
+docker compose up -d
+```
+
+You can still force a local rebuild from source at any time:
+
+```bash
+docker compose up -d --build
+```
+
 If you keep multiple deployment env files, point Compose at the one you want both for
 variable interpolation and for the container environment itself:
 
@@ -74,6 +97,46 @@ Pass any extra `docker compose up` flags through to the script:
 ```bash
 ./scripts/docker-up.sh --build
 ```
+
+## Private GHCR Image Publish
+
+You can publish Minigent to a private GHCR package even if this source repo is not hosted
+on GitHub. GHCR only needs a GitHub user or organization namespace plus a token that can
+write packages.
+
+Log in with a GitHub personal access token that can push packages:
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
+```
+
+Then publish an image with the helper script in this repo:
+
+```bash
+IMAGE_NAMESPACE=<github-user-or-org> \
+IMAGE_TAG=latest \
+./scripts/docker-build-push.sh
+```
+
+Useful overrides:
+
+```bash
+IMAGE_NAMESPACE=<github-user-or-org> \
+IMAGE_TAG=sha-$(git rev-parse --short HEAD) \
+PLATFORMS=linux/amd64,linux/arm64 \
+./scripts/docker-build-push.sh
+```
+
+The script reads these environment variables:
+
+- `IMAGE_NAMESPACE` (required): GitHub user or organization that owns the package
+- `IMAGE_NAME` (default `minigent`): package/image name
+- `IMAGE_TAG` (default `latest`): image tag to push
+- `PLATFORMS` (default `linux/amd64`): comma-separated buildx target platforms
+- `REGISTRY` (default `ghcr.io`): registry hostname
+
+For remote deployments, set `MINIGENT_IMAGE` in the deployment env file to the published
+tag you want to run, then use `docker compose pull` followed by `docker compose up -d`.
 
 [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) uses whatever auth mode you set
 in `.env`; it does not override `MINIGENT_AUTH_MODE`. For local voice-daemon testing,

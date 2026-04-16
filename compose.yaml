@@ -1,8 +1,8 @@
 services:
   minigent:
+    image: ${MINIGENT_IMAGE:-minigent:latest}
     build:
       context: .
-    image: minigent:latest
     restart: unless-stopped
     env_file:
       - ${MINIGENT_ENV_FILE:-.env}
