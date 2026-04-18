@@ -10,7 +10,15 @@ from app.execution import (
     parse_tenant_execution_config,
 )
 from app.llm import LLMAdapter, MockLLMAdapter
-from app.models import LLMResponse, Message, MessageRole, Principal, ThreadStatus, ToolCall, ToolSpec
+from app.models import (
+    LLMResponse,
+    Message,
+    MessageRole,
+    Principal,
+    ThreadStatus,
+    ToolCall,
+    ToolSpec,
+)
 from app.runtime import RUNTIME_SYSTEM_PROMPT, AgentRuntime
 from app.store import InMemoryThreadStore
 from app.tools import build_local_tool_registry

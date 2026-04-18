@@ -5,7 +5,12 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from app.llm import MockLLMAdapter, OpenAICompatibleAdapter, build_llm_adapter_from_env, load_provider_config
+from app.llm import (
+    MockLLMAdapter,
+    OpenAICompatibleAdapter,
+    build_llm_adapter_from_env,
+    load_provider_config,
+)
 from app.models import Message, MessageRole, ToolSpec
 from app.tools import build_local_tool_registry
 

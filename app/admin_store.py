@@ -5,8 +5,7 @@ import json
 import sqlite3
 from pathlib import Path
 from threading import Lock
-from typing import TypeGuard
-from typing import Any
+from typing import Any, TypeGuard
 
 from cryptography.fernet import Fernet, InvalidToken
 

@@ -10,7 +10,6 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Sequence
 
-
 STATE_DIR_NAME = ".minigent"
 STATE_FILE_NAME = "cli-state.json"
 
