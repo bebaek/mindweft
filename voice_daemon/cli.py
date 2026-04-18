@@ -15,6 +15,7 @@ from voice_daemon.backends.passive_audio import PassiveAudioActivationSource
 from voice_daemon.backends.stdin_loop import StdinActivationSource
 from voice_daemon.config import VoiceDaemonConfig
 from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
+from voice_daemon.ducking import MacOsAmbientVolumeDucker
 from voice_daemon.minigent_client import MinigentClient
 from voice_daemon.ring_buffer import AudioRingBuffer
 from voice_daemon.service import VoiceDaemon
@@ -90,6 +91,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--stt-debug-path",
         default=None,
         help="Optional directory to write STT request/response debug artifacts.",
+    )
+    parser.add_argument(
+        "--ducking-mode",
+        choices=("off", "input-only"),
+        default=None,
+        help="Optional ambient audio ducking mode. `input-only` lowers macOS output volume while the daemon is actively listening after activation.",
+    )
+    parser.add_argument(
+        "--ducked-output-volume",
+        default=None,
+        type=bounded_output_volume,
+        help="Optional macOS system output volume to use while ducking, from 0 to 100.",
     )
     parser.add_argument(
         "--follow-up-timeout-ms",
@@ -194,6 +207,12 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
         audio_device=args.audio_device or env_config.audio_device,
         debug_capture_path=args.debug_capture_path or env_config.debug_capture_path,
         stt_debug_path=args.stt_debug_path or env_config.stt_debug_path,
+        ducking_mode=args.ducking_mode or env_config.ducking_mode,
+        ducked_output_volume=(
+            args.ducked_output_volume
+            if args.ducked_output_volume is not None
+            else env_config.ducked_output_volume
+        ),
         audio_sample_rate=env_config.audio_sample_rate,
         audio_block_size=env_config.audio_block_size,
         speech_silence_ms=env_config.speech_silence_ms,
@@ -239,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
         speech_output=speech_output,
         activation_feedback=build_activation_feedback(config, speech_output),
         follow_up_timeout_ms=config.follow_up_timeout_ms,
+        ambient_volume_controller=build_ambient_volume_controller(config),
     )
     try:
         if args.once:
@@ -251,6 +271,9 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.flush()
         return 130
     finally:
+        close_daemon = getattr(daemon, "close", None)
+        if callable(close_daemon):
+            close_daemon()
         close = getattr(activation_source, "close", None)
         if callable(close):
             close()
@@ -332,6 +355,26 @@ def build_capture_debugger(config: VoiceDaemonConfig) -> CaptureDebugger | None:
     )
 
 
+def build_ambient_volume_controller(config: VoiceDaemonConfig):
+    if config.ducking_mode == "off":
+        return None
+    if config.ducking_mode != "input-only":
+        raise SystemExit(
+            f"Unsupported MINIGENT_VOICE_DUCKING_MODE '{config.ducking_mode}'. "
+            "Choose 'off' or 'input-only'."
+        )
+    try:
+        MacOsAmbientVolumeDucker.validate_platform()
+    except RuntimeError as exc:
+        sys.stdout.write(f"[warning] ambient audio ducking disabled: {exc}\n")
+        sys.stdout.flush()
+        return None
+    return MacOsAmbientVolumeDucker(
+        ducked_output_volume=config.ducked_output_volume,
+        output_stream=sys.stdout,
+    )
+
+
 def build_speech_output(config: VoiceDaemonConfig):
     provider = config.tts_provider.lower()
     if provider == "console":
@@ -366,6 +409,13 @@ def build_activation_feedback(
     if acknowledgement.lower() == "bell":
         return _emit_terminal_bell
     return lambda: speech_output.speak(acknowledgement)
+
+
+def bounded_output_volume(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0 or parsed > 100:
+        raise argparse.ArgumentTypeError("ducked output volume must be between 0 and 100")
+    return parsed
 
 
 def _emit_terminal_bell() -> None:

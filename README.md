@@ -385,6 +385,20 @@ To make short back-and-forth follow-ups feel more natural, set
 finishes speaking. During that window, `passive-audio` accepts one follow-up utterance
 without requiring the wake word, then returns to normal wake-word mode after silence.
 
+On macOS, you can also lower ambient system output only while the daemon is actively
+capturing an utterance or listening during that follow-up window:
+
+```bash
+MINIGENT_VOICE_DUCKING_MODE=input-only
+MINIGENT_VOICE_DUCKED_OUTPUT_VOLUME=20
+minigent-voice-daemon --backend passive-audio
+```
+
+This is system-wide ducking, not per-app mixing. The daemon does not duck during idle
+wake-word monitoring, thinking, or assistant speech. That keeps built-in TTS at your
+normal output level, but it also means this feature does not literally duck every other
+app while leaving the daemon isolated on the same output device.
+
 If you need to inspect captured audio, set `MINIGENT_VOICE_DEBUG_CAPTURE_PATH` or pass
 `--debug-capture-path`. The daemon will print capture metadata and write the last WAV
 capture there before transcription. That is useful for comparing `manual-audio` and
@@ -441,6 +455,8 @@ Daemon-related env vars:
 - `MINIGENT_VOICE_AUDIO_DEVICE`
 - `MINIGENT_VOICE_DEBUG_CAPTURE_PATH`
 - `MINIGENT_VOICE_STT_DEBUG_PATH`
+- `MINIGENT_VOICE_DUCKING_MODE`
+- `MINIGENT_VOICE_DUCKED_OUTPUT_VOLUME`
 - `MINIGENT_VOICE_AUDIO_SAMPLE_RATE`
 - `MINIGENT_VOICE_AUDIO_BLOCK_SIZE`
 - `MINIGENT_VOICE_END_SILENCE_MS`

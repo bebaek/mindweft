@@ -42,6 +42,8 @@ class VoiceDaemonConfig:
     audio_device: str | None = None
     debug_capture_path: str | None = None
     stt_debug_path: str | None = None
+    ducking_mode: str = "off"
+    ducked_output_volume: int = 20
     stt_gain: float = 1.0
     stt_normalize_peak: bool = False
     stt_normalize_target_peak: float = 0.8
@@ -96,6 +98,10 @@ class VoiceDaemonConfig:
             audio_device=_clean_optional(os.getenv("MINIGENT_VOICE_AUDIO_DEVICE")),
             debug_capture_path=_clean_optional(os.getenv("MINIGENT_VOICE_DEBUG_CAPTURE_PATH")),
             stt_debug_path=_clean_optional(os.getenv("MINIGENT_VOICE_STT_DEBUG_PATH")),
+            ducking_mode=os.getenv("MINIGENT_VOICE_DUCKING_MODE", "off").strip().lower(),
+            ducked_output_volume=_bounded_int_from_env(
+                "MINIGENT_VOICE_DUCKED_OUTPUT_VOLUME", 20, minimum=0, maximum=100
+            ),
             stt_gain=_float_from_env("MINIGENT_VOICE_STT_GAIN", 1.0),
             stt_normalize_peak=_bool_from_env("MINIGENT_VOICE_STT_NORMALIZE_PEAK", False),
             stt_normalize_target_peak=_float_from_env(
@@ -176,6 +182,13 @@ def _bool_from_env(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _bounded_int_from_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    value = _int_from_env(name, default)
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
 
 
 def _default_stt_model(provider: str) -> str:

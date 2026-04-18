@@ -46,6 +46,12 @@ class SpeechOutput(Protocol):
     def wait(self) -> None: ...
 
 
+class AmbientVolumeController(Protocol):
+    def sync_state(self, state: DaemonState) -> None: ...
+
+    def close(self) -> None: ...
+
+
 class VoiceDaemon:
     def __init__(
         self,
@@ -56,6 +62,7 @@ class VoiceDaemon:
         speech_output: SpeechOutput,
         activation_feedback: Callable[[], None] | None = None,
         follow_up_timeout_ms: int = 0,
+        ambient_volume_controller: AmbientVolumeController | None = None,
     ) -> None:
         self._wake_phrase = wake_phrase
         self._activation_source = activation_source
@@ -63,33 +70,37 @@ class VoiceDaemon:
         self._speech_output = speech_output
         self._activation_feedback = activation_feedback
         self._follow_up_timeout_ms = max(follow_up_timeout_ms, 0)
+        self._ambient_volume_controller = ambient_volume_controller
         self.state = DaemonState.IDLE
 
     def run_forever(self) -> None:
-        while True:
-            self.run_once()
+        try:
+            while True:
+                self.run_once()
+        finally:
+            self.close()
 
     def run_once(self) -> str:
-        self.state = DaemonState.IDLE
+        self._set_state(DaemonState.IDLE)
         activation = self._activation_source.wait_for_activation(self._wake_phrase)
         reply = ""
         while True:
-            self.state = DaemonState.LISTENING
+            self._set_state(DaemonState.LISTENING)
             if activation.transcript_hint is None and self._activation_feedback is not None:
                 self._activation_feedback()
             utterance = activation.transcript_hint or self._activation_source.capture_utterance()
             if not utterance.strip():
-                self.state = DaemonState.IDLE
+                self._set_state(DaemonState.IDLE)
                 return reply
-            self.state = DaemonState.THINKING
+            self._set_state(DaemonState.THINKING)
             self._minigent_client.send_user_message(utterance)
             reply = self._minigent_client.run_thread()
-            self.state = DaemonState.SPEAKING
+            self._set_state(DaemonState.SPEAKING)
             activation = self._speak_with_optional_barge_in(reply)
             if activation is None:
                 activation = self._capture_follow_up_activation()
             if activation is None:
-                self.state = DaemonState.IDLE
+                self._set_state(DaemonState.IDLE)
                 return reply
 
     def _speak_with_optional_barge_in(self, reply: str) -> Activation | None:
@@ -110,8 +121,17 @@ class VoiceDaemon:
         capture_follow_up = getattr(self._activation_source, "capture_follow_up_utterance", None)
         if not callable(capture_follow_up):
             return None
-        self.state = DaemonState.FOLLOW_UP_LISTENING
+        self._set_state(DaemonState.FOLLOW_UP_LISTENING)
         utterance = capture_follow_up(self._follow_up_timeout_ms)
         if utterance is None or not utterance.strip():
             return None
         return Activation(transcript_hint=utterance)
+
+    def _set_state(self, state: DaemonState) -> None:
+        self.state = state
+        if self._ambient_volume_controller is not None:
+            self._ambient_volume_controller.sync_state(state)
+
+    def close(self) -> None:
+        if self._ambient_volume_controller is not None:
+            self._ambient_volume_controller.close()

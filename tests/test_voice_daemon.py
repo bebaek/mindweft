@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import argparse
+import subprocess
 import wave
 from io import StringIO
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -23,12 +24,17 @@ from voice_daemon.backends.manual_audio import ManualAudioActivationSource
 from voice_daemon.backends.passive_audio import PassiveAudioActivationSource
 from voice_daemon.backends.stdin_loop import StdinActivationSource
 from voice_daemon.cli import (
+    bounded_output_volume,
+    build_ambient_volume_controller,
+    build_config,
+    build_parser,
     build_speech_output,
     build_speech_provider_config,
     build_wake_word_detector,
 )
 from voice_daemon.config import PrincipalConfig, VoiceDaemonConfig
 from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
+from voice_daemon.ducking import MacOsAmbientVolumeDucker, should_duck_for_state
 from voice_daemon.ring_buffer import AudioRingBuffer
 from voice_daemon.service import Activation, DaemonState, VoiceDaemon
 from voice_daemon.speech import (
@@ -108,6 +114,18 @@ class FakeSpeechOutput:
 
     def wait(self) -> None:
         self._speaking = False
+
+
+class FakeAmbientVolumeController:
+    def __init__(self) -> None:
+        self.states: list[DaemonState] = []
+        self.close_calls = 0
+
+    def sync_state(self, state: DaemonState) -> None:
+        self.states.append(state)
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 def test_voice_daemon_uses_transcript_hint_without_capture() -> None:
@@ -294,6 +312,49 @@ def test_voice_daemon_returns_to_idle_when_follow_up_window_expires() -> None:
     assert activation_source.follow_up_timeout_ms == [4000]
 
 
+def test_voice_daemon_updates_ambient_volume_for_listening_states() -> None:
+    activation_source = FakeActivationSource(Activation(), utterance="first request")
+    activation_source.follow_up_utterance = None
+    minigent_client = FakeMinigentClient(reply="first reply")
+    speech_output = FakeSpeechOutput()
+    ambient_volume = FakeAmbientVolumeController()
+    daemon = VoiceDaemon(
+        wake_phrase="hey minigent",
+        activation_source=activation_source,
+        minigent_client=minigent_client,
+        speech_output=speech_output,
+        follow_up_timeout_ms=4000,
+        ambient_volume_controller=ambient_volume,
+    )
+
+    reply = daemon.run_once()
+
+    assert reply == "first reply"
+    assert ambient_volume.states == [
+        DaemonState.IDLE,
+        DaemonState.LISTENING,
+        DaemonState.THINKING,
+        DaemonState.SPEAKING,
+        DaemonState.FOLLOW_UP_LISTENING,
+        DaemonState.IDLE,
+    ]
+
+
+def test_voice_daemon_closes_ambient_volume_controller() -> None:
+    ambient_volume = FakeAmbientVolumeController()
+    daemon = VoiceDaemon(
+        wake_phrase="hey minigent",
+        activation_source=FakeActivationSource(Activation()),
+        minigent_client=FakeMinigentClient(reply=""),
+        speech_output=FakeSpeechOutput(),
+        ambient_volume_controller=ambient_volume,
+    )
+
+    daemon.close()
+
+    assert ambient_volume.close_calls == 1
+
+
 def test_stdin_activation_source_waits_for_wake_phrase() -> None:
     input_stream = StringIO("hello there\nhey minigent summarize this\n")
     output_stream = StringIO()
@@ -456,6 +517,52 @@ def test_build_speech_output_supports_console_say_and_piper() -> None:
     assert isinstance(piper, PiperSpeechOutput)
     assert piper.model == "/tmp/en_US-lessac-medium.onnx"
     assert piper.speaker == 5
+
+
+def test_build_ambient_volume_controller_supports_off_and_input_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert (
+        build_ambient_volume_controller(
+            VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+        )
+        is None
+    )
+    monkeypatch.setattr(
+        "voice_daemon.cli.MacOsAmbientVolumeDucker.validate_platform", lambda: None
+    )
+
+    controller = build_ambient_volume_controller(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            ducking_mode="input-only",
+            ducked_output_volume=15,
+        )
+    )
+
+    assert isinstance(controller, MacOsAmbientVolumeDucker)
+    assert controller.ducked_output_volume == 15
+
+
+def test_build_ambient_volume_controller_warns_and_continues_when_unsupported(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.setattr(
+        "voice_daemon.cli.MacOsAmbientVolumeDucker.validate_platform",
+        lambda: (_ for _ in ()).throw(RuntimeError("ambient audio ducking is currently supported only on macOS")),
+    )
+
+    controller = build_ambient_volume_controller(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            ducking_mode="input-only",
+        )
+    )
+
+    assert controller is None
+    assert "ambient audio ducking disabled" in capsys.readouterr().out
 
 
 def test_build_activation_feedback_prefers_system_sound_for_bell(
@@ -769,10 +876,13 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_VOICE_AUDIO_DEVICE", "Built-in Mic")
     monkeypatch.setenv("MINIGENT_VOICE_DEBUG_CAPTURE_PATH", "/tmp/minigent-last-capture.wav")
     monkeypatch.setenv("MINIGENT_VOICE_STT_DEBUG_PATH", "/tmp/minigent-stt-debug")
+    monkeypatch.setenv("MINIGENT_VOICE_DUCKING_MODE", "input-only")
+    monkeypatch.setenv("MINIGENT_VOICE_DUCKED_OUTPUT_VOLUME", "18")
     monkeypatch.setenv("MINIGENT_VOICE_AUDIO_SAMPLE_RATE", "22050")
     monkeypatch.setenv("MINIGENT_VOICE_AUDIO_BLOCK_SIZE", "1024")
     monkeypatch.setenv("MINIGENT_VOICE_END_SILENCE_MS", "600")
     monkeypatch.setenv("MINIGENT_VOICE_MAX_RECORD_SECONDS", "9.5")
+    monkeypatch.setenv("MINIGENT_VOICE_FOLLOW_UP_TIMEOUT_MS", "0")
     monkeypatch.setenv("MINIGENT_VOICE_POST_WAKE_SETTLE_MS", "300")
     monkeypatch.setenv("MINIGENT_VOICE_WAKEWORD_PREROLL_MS", "1200")
     monkeypatch.setenv("MINIGENT_VOICE_STT_PAD_LEADING_MS", "200")
@@ -816,6 +926,8 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
         audio_device="Built-in Mic",
         debug_capture_path="/tmp/minigent-last-capture.wav",
         stt_debug_path="/tmp/minigent-stt-debug",
+        ducking_mode="input-only",
+        ducked_output_volume=18,
         audio_sample_rate=22050,
         audio_block_size=1024,
         speech_silence_ms=600,
@@ -846,6 +958,119 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
             api_token="voice-token",
         ),
     )
+
+
+def test_build_config_prefers_cli_ducking_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_VOICE_DUCKING_MODE", "off")
+    monkeypatch.setenv("MINIGENT_VOICE_DUCKED_OUTPUT_VOLUME", "20")
+
+    args = build_parser().parse_args(
+        ["--ducking-mode", "input-only", "--ducked-output-volume", "12"]
+    )
+    config = build_config(args)
+
+    assert config.ducking_mode == "input-only"
+    assert config.ducked_output_volume == 12
+
+
+def test_bounded_output_volume_rejects_out_of_range_values() -> None:
+    assert bounded_output_volume("0") == 0
+    assert bounded_output_volume("100") == 100
+    with pytest.raises(argparse.ArgumentTypeError):
+        bounded_output_volume("-1")
+    with pytest.raises(argparse.ArgumentTypeError):
+        bounded_output_volume("101")
+
+
+def test_should_duck_for_state_only_covers_input_states() -> None:
+    assert should_duck_for_state(DaemonState.LISTENING) is True
+    assert should_duck_for_state(DaemonState.FOLLOW_UP_LISTENING) is True
+    assert should_duck_for_state(DaemonState.IDLE) is False
+    assert should_duck_for_state(DaemonState.THINKING) is False
+    assert should_duck_for_state(DaemonState.SPEAKING) is False
+
+
+def test_macos_ambient_volume_ducker_reads_sets_and_restores(monkeypatch: pytest.MonkeyPatch) -> None:
+    output_stream = StringIO()
+    commands: list[list[str]] = []
+
+    class Result:
+        def __init__(self, stdout: str = "", returncode: int = 0) -> None:
+            self.stdout = stdout
+            self.stderr = ""
+            self.returncode = returncode
+
+    def fake_run(command, text, capture_output, check):
+        commands.append(command)
+        if "output volume of (get volume settings)" in command[-1]:
+            return Result(stdout="42\n")
+        return Result()
+
+    monkeypatch.setattr("voice_daemon.ducking.subprocess.run", fake_run)
+
+    ducker = MacOsAmbientVolumeDucker(ducked_output_volume=15, output_stream=output_stream)
+    ducker.sync_state(DaemonState.LISTENING)
+    ducker.sync_state(DaemonState.FOLLOW_UP_LISTENING)
+    ducker.sync_state(DaemonState.THINKING)
+
+    assert commands == [
+        ["osascript", "-e", "output volume of (get volume settings)"],
+        ["osascript", "-e", "set volume output volume 15"],
+        ["osascript", "-e", "set volume output volume 42"],
+    ]
+    assert output_stream.getvalue() == ""
+
+
+def test_macos_ambient_volume_ducker_close_without_ducking_is_noop() -> None:
+    output_stream = StringIO()
+    ducker = MacOsAmbientVolumeDucker(ducked_output_volume=15, output_stream=output_stream)
+
+    ducker.close()
+
+    assert output_stream.getvalue() == ""
+
+
+def test_macos_ambient_volume_ducker_restores_on_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    output_stream = StringIO()
+    commands: list[list[str]] = []
+
+    class Result:
+        def __init__(self, stdout: str = "", returncode: int = 0) -> None:
+            self.stdout = stdout
+            self.stderr = ""
+            self.returncode = returncode
+
+    def fake_run(command, text, capture_output, check):
+        commands.append(command)
+        if "output volume of (get volume settings)" in command[-1]:
+            return Result(stdout="35\n")
+        return Result()
+
+    monkeypatch.setattr("voice_daemon.ducking.subprocess.run", fake_run)
+
+    ducker = MacOsAmbientVolumeDucker(ducked_output_volume=10, output_stream=output_stream)
+    ducker.sync_state(DaemonState.LISTENING)
+    ducker.close()
+
+    assert commands[-1] == ["osascript", "-e", "set volume output volume 35"]
+
+
+def test_macos_ambient_volume_ducker_warns_once_and_disables_after_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+
+    def fake_run(command, text, capture_output, check):
+        raise OSError("osascript missing")
+
+    monkeypatch.setattr("voice_daemon.ducking.subprocess.run", fake_run)
+
+    ducker = MacOsAmbientVolumeDucker(ducked_output_volume=10, output_stream=output_stream)
+    ducker.sync_state(DaemonState.LISTENING)
+    ducker.sync_state(DaemonState.FOLLOW_UP_LISTENING)
+    ducker.close()
+
+    assert output_stream.getvalue().count("ambient audio ducking disabled") == 1
 
 
 def test_recorded_audio_to_wav_bytes_round_trips_header() -> None:
