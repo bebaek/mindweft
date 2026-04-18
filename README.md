@@ -187,6 +187,9 @@ The script installs Linux audio/build prerequisites, installs the package with t
 `voice` extra, writes `.env.voice` if it does not already exist, checks ALSA devices,
 and can install a `systemd --user` service. Edit `.env.voice` with the Minigent API URL,
 voice API token, and STT/TTS provider keys before starting passive audio in production.
+The generated env file enables a bell-style wake acknowledgement with
+`MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT=bell`; add that setting manually if you already
+had an env file before running the installer.
 
 If the script adds your user to the `audio` group, log out and back in before starting
 the daemon. Existing SSH sessions do not gain new group memberships automatically. You

@@ -453,9 +453,10 @@ def _default_wake_acknowledgement_sounds() -> list[Path]:
         return [Path("/System/Library/Sounds/Glass.aiff")]
     if system == "Linux":
         return [
+            Path("/usr/share/sounds/alsa/Front_Center.wav"),
+            Path("/usr/share/sounds/sound-icons/glass-water-1.wav"),
             Path("/usr/share/sounds/freedesktop/stereo/complete.oga"),
             Path("/usr/share/sounds/freedesktop/stereo/bell.oga"),
-            Path("/usr/share/sounds/sound-icons/glass-water-1.wav"),
         ]
     return []
 
@@ -470,7 +471,14 @@ def _resolve_wake_acknowledgement_player(sound_path: Path | None) -> list[str] |
             return [afplay]
         return None
     if system == "Linux":
-        for player in ("paplay", "aplay", "play", "ffplay"):
+        suffix = sound_path.suffix.lower()
+        if suffix in {".oga", ".ogg", ".opus", ".mp3"}:
+            players = ("paplay", "play", "ffplay")
+        elif suffix in {".wav", ".wave"}:
+            players = ("paplay", "aplay", "play", "ffplay")
+        else:
+            players = ("paplay", "play", "ffplay")
+        for player in players:
             resolved = shutil.which(player)
             if not resolved:
                 continue

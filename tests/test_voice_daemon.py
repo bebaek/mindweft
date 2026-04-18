@@ -650,9 +650,10 @@ def test_default_wake_acknowledgement_sounds_supports_macos_and_linux(monkeypatc
 
     monkeypatch.setattr("voice_daemon.cli.platform.system", lambda: "Linux")
     assert voice_cli._default_wake_acknowledgement_sounds() == [
+        Path("/usr/share/sounds/alsa/Front_Center.wav"),
+        Path("/usr/share/sounds/sound-icons/glass-water-1.wav"),
         Path("/usr/share/sounds/freedesktop/stereo/complete.oga"),
         Path("/usr/share/sounds/freedesktop/stereo/bell.oga"),
-        Path("/usr/share/sounds/sound-icons/glass-water-1.wav"),
     ]
 
 
@@ -673,6 +674,15 @@ def test_resolve_wake_acknowledgement_player_supports_macos_and_linux(monkeypatc
     )
     assert voice_cli._resolve_wake_acknowledgement_player(Path("/tmp/test.oga")) == [
         "/usr/bin/paplay"
+    ]
+
+    monkeypatch.setattr(
+        "voice_daemon.cli.shutil.which",
+        lambda name: "/usr/bin/aplay" if name == "aplay" else None,
+    )
+    assert voice_cli._resolve_wake_acknowledgement_player(Path("/tmp/test.oga")) is None
+    assert voice_cli._resolve_wake_acknowledgement_player(Path("/tmp/test.wav")) == [
+        "/usr/bin/aplay"
     ]
 
 
