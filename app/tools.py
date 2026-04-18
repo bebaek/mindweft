@@ -18,6 +18,7 @@ import httpx
 from fastapi import HTTPException
 
 from app.mcp import MCPHTTPClient, MCPServerConfig, load_mcp_server_configs_from_env
+from app.mcp_manager import MCPRegistrySnapshot
 from app.models import ToolSpec
 from app.redaction import sanitize_value_for_logging
 
@@ -283,11 +284,29 @@ def build_tool_registry_from_env() -> ToolRegistry:
 def build_tool_registry(
     *,
     mcp_server_configs: list[MCPServerConfig] | None = None,
+    mcp_snapshot: MCPRegistrySnapshot | None = None,
     allowed_local_tools: list[str] | None = None,
 ) -> ToolRegistry:
     registry = build_local_tool_registry(allowed_tools=allowed_local_tools)
 
     mcp_servers: list[dict[str, Any]] = []
+    if mcp_snapshot is not None:
+        for state in mcp_snapshot.servers:
+            if state.status == "connected" and state.client is not None:
+                for spec in state.tools:
+                    raw_tool_name = spec.name.split(".", 1)[1]
+                    registry.register(
+                        name=spec.name,
+                        description=spec.description,
+                        input_schema=spec.input_schema,
+                        handler=lambda arguments, context=None, c=state.client, tool_name=raw_tool_name: c.call_tool(
+                            tool_name, arguments
+                        ),
+                    )
+            mcp_servers.append(state.public_dict())
+        registry.set_mcp_servers(mcp_servers)
+        return registry
+
     for config in mcp_server_configs or []:
         try:
             client = MCPHTTPClient(config)
@@ -312,10 +331,29 @@ def build_tool_registry(
                     "server_name": server_info.server_name,
                     "server_version": server_info.server_version,
                     "tool_count": len(specs),
+                    "status": "connected",
+                    "last_error": None,
+                    "last_checked_at": None,
+                    "next_retry_at": None,
                 }
             )
         except Exception as exc:
-            logger.warning("Skipping MCP server '%s': %s", config.name, exc)
+            logger.warning("MCP server '%s' unavailable during discovery: %s", config.name, exc)
+            mcp_servers.append(
+                {
+                    "name": config.name,
+                    "url": config.url,
+                    "protocol_version": config.protocol_version,
+                    "session": False,
+                    "server_name": None,
+                    "server_version": None,
+                    "tool_count": 0,
+                    "status": "unavailable",
+                    "last_error": _tool_error_detail(exc),
+                    "last_checked_at": None,
+                    "next_retry_at": None,
+                }
+            )
     registry.set_mcp_servers(mcp_servers)
     return registry
 

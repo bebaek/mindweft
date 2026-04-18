@@ -715,7 +715,10 @@ Current scope:
 - `tools/list`
 - `tools/call`
 
-The service skips MCP servers that fail during startup and exposes connected servers in `/config`.
+The service retains MCP servers that fail discovery, reports them as `unavailable` in
+`/config`, and retries them in the background with exponential backoff. When a retry
+succeeds, the discovered tools become available to future runs and `/config` reports the
+server as `connected`.
 
 ## Observability
 

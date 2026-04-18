@@ -10,8 +10,9 @@ from fastapi import HTTPException
 
 from app.admin_store import SQLiteTenantConfigStore
 from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter, build_llm_adapter_from_env
-from app.mcp import MCPHTTPClient, MCPServerConfig
-from app.tools import LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry, build_tool_registry_from_env
+from app.mcp import MCPHTTPClient, MCPServerConfig, load_mcp_server_configs_from_env
+from app.mcp_manager import MCPServerManager
+from app.tools import LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry
 
 TENANT_EXECUTION_CONFIGS_ENV = "MINIGENT_TENANT_EXECUTION_CONFIGS"
 TENANT_CONFIG_SOURCE_ENV = "MINIGENT_TENANT_CONFIG_SOURCE"
@@ -65,6 +66,8 @@ class TenantExecutionContext:
     llm_adapter: LLMAdapter
     tool_registry: ToolRegistry
     config: TenantExecutionConfig
+    mcp_generation: int = 0
+    mcp_manager: MCPServerManager | None = None
 
 
 @dataclass(frozen=True)
@@ -95,19 +98,32 @@ class TenantExecutionResolver:
 
 
 class FixedTenantExecutionResolver(TenantExecutionResolver):
-    def __init__(self, llm_adapter: LLMAdapter, tool_registry: ToolRegistry) -> None:
+    def __init__(
+        self,
+        llm_adapter: LLMAdapter,
+        tool_registry: ToolRegistry,
+        *,
+        config: TenantExecutionConfig | None = None,
+        mcp_manager: MCPServerManager | None = None,
+        mcp_generation: int = 0,
+    ) -> None:
+        self._mcp_manager = mcp_manager
         self._context = TenantExecutionContext(
             llm_adapter=llm_adapter,
             tool_registry=tool_registry,
-            config=TenantExecutionConfig(tenant_id=DEFAULT_TENANT_KEY),
+            config=config or TenantExecutionConfig(tenant_id=DEFAULT_TENANT_KEY),
+            mcp_generation=mcp_generation,
+            mcp_manager=mcp_manager,
         )
 
     def resolve(self, tenant_id: str) -> TenantExecutionContext:
         _ = tenant_id
+        self._refresh_context_if_needed()
         return self._context
 
     def describe(self, tenant_id: str | None = None) -> dict[str, object]:
         _ = tenant_id
+        self._refresh_context_if_needed()
         return {
             "tenant_id": DEFAULT_TENANT_KEY,
             "llm": self._context.llm_adapter.describe(),
@@ -117,6 +133,23 @@ class FixedTenantExecutionResolver(TenantExecutionResolver):
             ),
         }
 
+    def _refresh_context_if_needed(self) -> None:
+        if self._mcp_manager is None or not self._context.config.tools.mcp_servers:
+            return
+        registry, generation = _build_registry_for_config(
+            self._context.config,
+            mcp_manager=self._mcp_manager,
+        )
+        if generation == self._context.mcp_generation:
+            return
+        self._context = TenantExecutionContext(
+            llm_adapter=self._context.llm_adapter,
+            tool_registry=registry,
+            config=self._context.config,
+            mcp_generation=generation,
+            mcp_manager=self._mcp_manager,
+        )
+
 
 class InMemoryTenantExecutionResolver(TenantExecutionResolver):
     def __init__(
@@ -124,9 +157,11 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
         tenant_configs: dict[str, TenantExecutionConfig],
         *,
         default_context: TenantExecutionContext | None = None,
+        mcp_manager: MCPServerManager | None = None,
     ) -> None:
         self._tenant_configs = dict(tenant_configs)
         self._default_context = default_context
+        self._mcp_manager = mcp_manager
         self._contexts: dict[str, TenantExecutionContext] = {}
         self._lock = Lock()
 
@@ -134,6 +169,8 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
         with self._lock:
             context = self._contexts.get(tenant_id)
             if context is not None:
+                if self._refresh_context_if_needed(tenant_id, context):
+                    return self._contexts[tenant_id]
                 return context
 
             config = self._tenant_configs.get(tenant_id)
@@ -147,13 +184,16 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
                     detail=f"Tenant '{tenant_id}' has no execution configuration",
                 )
 
+            registry, generation = _build_registry_for_config(
+                config,
+                mcp_manager=self._mcp_manager,
+            )
             context = TenantExecutionContext(
                 llm_adapter=_build_llm_adapter(config.llm),
-                tool_registry=build_tool_registry(
-                    mcp_server_configs=config.tools.mcp_servers,
-                    allowed_local_tools=config.tools.allowed_local_tools,
-                ),
+                tool_registry=registry,
                 config=config,
+                mcp_generation=generation,
+                mcp_manager=self._mcp_manager,
             )
             self._contexts[tenant_id] = context
             return context
@@ -190,6 +230,24 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
         with self._lock:
             self._contexts.pop(tenant_id, None)
 
+    def _refresh_context_if_needed(self, tenant_id: str, context: TenantExecutionContext) -> bool:
+        if self._mcp_manager is None or not context.config.tools.mcp_servers:
+            return False
+        registry, generation = _build_registry_for_config(
+            context.config,
+            mcp_manager=self._mcp_manager,
+        )
+        if generation == context.mcp_generation:
+            return False
+        self._contexts[tenant_id] = TenantExecutionContext(
+            llm_adapter=context.llm_adapter,
+            tool_registry=registry,
+            config=context.config,
+            mcp_generation=generation,
+            mcp_manager=self._mcp_manager,
+        )
+        return True
+
 
 class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
     def __init__(
@@ -197,9 +255,11 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
         store: SQLiteTenantConfigStore,
         *,
         fallback_resolver: TenantExecutionResolver | None = None,
+        mcp_manager: MCPServerManager | None = None,
     ) -> None:
         self._store = store
         self._fallback_resolver = fallback_resolver
+        self._mcp_manager = mcp_manager
         self._contexts: dict[str, TenantExecutionContext] = {}
         self._lock = Lock()
 
@@ -207,6 +267,8 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
         with self._lock:
             context = self._contexts.get(tenant_id)
             if context is not None:
+                if self._refresh_context_if_needed(tenant_id, context):
+                    return self._contexts[tenant_id]
                 return context
 
             payload = self._store.get_raw_config(tenant_id)
@@ -221,13 +283,16 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
                 )
 
             config = parse_tenant_execution_config(tenant_id, payload)
+            registry, generation = _build_registry_for_config(
+                config,
+                mcp_manager=self._mcp_manager,
+            )
             context = TenantExecutionContext(
                 llm_adapter=_build_llm_adapter(config.llm),
-                tool_registry=build_tool_registry(
-                    mcp_server_configs=config.tools.mcp_servers,
-                    allowed_local_tools=config.tools.allowed_local_tools,
-                ),
+                tool_registry=registry,
                 config=config,
+                mcp_generation=generation,
+                mcp_manager=self._mcp_manager,
             )
             self._contexts[tenant_id] = context
             return context
@@ -251,13 +316,66 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
         with self._lock:
             self._contexts.pop(tenant_id, None)
 
+    def _refresh_context_if_needed(self, tenant_id: str, context: TenantExecutionContext) -> bool:
+        if self._mcp_manager is None or not context.config.tools.mcp_servers:
+            return False
+        registry, generation = _build_registry_for_config(
+            context.config,
+            mcp_manager=self._mcp_manager,
+        )
+        if generation == context.mcp_generation:
+            return False
+        self._contexts[tenant_id] = TenantExecutionContext(
+            llm_adapter=context.llm_adapter,
+            tool_registry=registry,
+            config=context.config,
+            mcp_generation=generation,
+            mcp_manager=self._mcp_manager,
+        )
+        return True
 
-def build_execution_resolver_from_env() -> TenantExecutionResolver:
+
+def _build_registry_for_config(
+    config: TenantExecutionConfig,
+    *,
+    mcp_manager: MCPServerManager | None,
+) -> tuple[ToolRegistry, int]:
+    if mcp_manager is None:
+        return (
+            build_tool_registry(
+                mcp_server_configs=config.tools.mcp_servers,
+                allowed_local_tools=config.tools.allowed_local_tools,
+            ),
+            0,
+        )
+    snapshot = mcp_manager.snapshot(config.tools.mcp_servers)
+    return (
+        build_tool_registry(
+            mcp_snapshot=snapshot,
+            allowed_local_tools=config.tools.allowed_local_tools,
+        ),
+        snapshot.generation,
+    )
+
+
+def build_execution_resolver_from_env(
+    *,
+    mcp_manager: MCPServerManager | None = None,
+) -> TenantExecutionResolver:
     raw = os.getenv(TENANT_EXECUTION_CONFIGS_ENV, "").strip()
     if not raw:
+        mcp_server_configs = load_mcp_server_configs_from_env()
+        config = TenantExecutionConfig(
+            tenant_id=DEFAULT_TENANT_KEY,
+            tools=TenantToolConfig(mcp_servers=mcp_server_configs),
+        )
+        registry, generation = _build_registry_for_config(config, mcp_manager=mcp_manager)
         return FixedTenantExecutionResolver(
             llm_adapter=build_llm_adapter_from_env(),
-            tool_registry=build_tool_registry_from_env(),
+            tool_registry=registry,
+            config=config,
+            mcp_manager=mcp_manager,
+            mcp_generation=generation,
         )
 
     try:
@@ -278,7 +396,7 @@ def build_execution_resolver_from_env() -> TenantExecutionResolver:
                 f"{TENANT_EXECUTION_CONFIGS_ENV} values must be objects with llm/tools config"
             )
         tenant_configs[tenant_id] = parse_tenant_execution_config(tenant_id, value)
-    return InMemoryTenantExecutionResolver(tenant_configs)
+    return InMemoryTenantExecutionResolver(tenant_configs, mcp_manager=mcp_manager)
 
 
 def resolve_tenant_config_source(
@@ -696,6 +814,8 @@ def get_skill_config(
 def build_tool_registry_for_skill(
     config: TenantExecutionConfig,
     skill_name: str | None = None,
+    *,
+    mcp_manager: MCPServerManager | None = None,
 ) -> ToolRegistry:
     skill = get_skill_config(config, skill_name)
     allowed_local_tools = config.tools.allowed_local_tools
@@ -710,10 +830,16 @@ def build_tool_registry_for_skill(
     if skill is not None and skill.mcp_server_names is not None:
         allowed_mcp_server_names = set(skill.mcp_server_names)
         mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
-    return build_tool_registry(
-        mcp_server_configs=mcp_servers,
-        allowed_local_tools=allowed_local_tools,
+    skill_config = TenantExecutionConfig(
+        tenant_id=config.tenant_id,
+        llm=config.llm,
+        tools=TenantToolConfig(
+            allowed_local_tools=allowed_local_tools,
+            mcp_servers=mcp_servers,
+        ),
+        skills=config.skills,
     )
+    return _build_registry_for_config(skill_config, mcp_manager=mcp_manager)[0]
 
 
 def redact_tenant_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:

@@ -63,7 +63,11 @@ class AgentRuntime:
         thread = self._store.get_thread(principal.tenant_id, thread_id)
         skill = get_skill_config(execution.config, thread.skill_name)
         tool_registry = (
-            build_tool_registry_for_skill(execution.config, thread.skill_name)
+            build_tool_registry_for_skill(
+                execution.config,
+                thread.skill_name,
+                mcp_manager=execution.mcp_manager,
+            )
             if skill is not None
             else execution.tool_registry
         )

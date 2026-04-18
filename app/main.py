@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, Request
 
 from app.admin_api import (
@@ -11,17 +13,18 @@ from app.admin_store import SQLiteTenantConfigStore
 from app.auth import require_principal, validate_auth_settings
 from app.config import load_environment
 from app.execution import (
+    TENANT_CONFIG_SOURCE_ENV_ONLY,
+    TENANT_CONFIG_SOURCE_STORE,
+    TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS,
     FixedTenantExecutionResolver,
     StoreBackedTenantExecutionResolver,
     TenantExecutionResolver,
     build_execution_resolver_from_env,
     get_skill_config,
     resolve_tenant_config_source,
-    TENANT_CONFIG_SOURCE_ENV_ONLY,
-    TENANT_CONFIG_SOURCE_STORE,
-    TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS,
 )
 from app.llm import LLMAdapter, build_llm_adapter_from_env
+from app.mcp_manager import MCPServerManager
 from app.models import (
     AddMessageRequest,
     CreateThreadRequest,
@@ -51,9 +54,23 @@ def create_app(
     tenant_config_source: str | None = None,
 ) -> FastAPI:
     validate_auth_settings()
-    app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0")
+    mcp_manager = MCPServerManager() if execution_resolver is None and tool_registry is None else None
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        _ = app
+        if mcp_manager is not None:
+            await mcp_manager.start()
+        try:
+            yield
+        finally:
+            if mcp_manager is not None:
+                await mcp_manager.stop()
+
+    app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0", lifespan=lifespan)
     configure_tracing(app)
     app.state.store = InMemoryThreadStore()
+    app.state.mcp_manager = mcp_manager
     admin_encryption_key = admin_encryption_key_from_env()
     if admin_store is None:
         admin_db_path = admin_store_path_from_env()
@@ -70,7 +87,7 @@ def create_app(
             execution_resolver = FixedTenantExecutionResolver(adapter, registry)
         else:
             config_source = resolve_tenant_config_source(tenant_config_source)
-            fallback_resolver = build_execution_resolver_from_env()
+            fallback_resolver = build_execution_resolver_from_env(mcp_manager=mcp_manager)
             if config_source == TENANT_CONFIG_SOURCE_ENV_ONLY:
                 execution_resolver = fallback_resolver
             elif config_source == TENANT_CONFIG_SOURCE_STORE:
@@ -84,7 +101,10 @@ def create_app(
                         "MINIGENT_ADMIN_ENCRYPTION_KEY is required when "
                         "MINIGENT_TENANT_CONFIG_SOURCE=store"
                     )
-                execution_resolver = StoreBackedTenantExecutionResolver(admin_store)
+                execution_resolver = StoreBackedTenantExecutionResolver(
+                    admin_store,
+                    mcp_manager=mcp_manager,
+                )
             elif config_source == TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS:
                 if admin_store is None:
                     raise RuntimeError(
@@ -99,6 +119,7 @@ def create_app(
                 execution_resolver = StoreBackedTenantExecutionResolver(
                     admin_store,
                     fallback_resolver=fallback_resolver,
+                    mcp_manager=mcp_manager,
                 )
             else:
                 raise RuntimeError(f"Unhandled tenant config source '{config_source}'")

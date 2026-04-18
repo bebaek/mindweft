@@ -7,6 +7,9 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from app.mcp import MCPServerConfig, MCPServerInfo
+from app.mcp_manager import MCPServerManager
+from app.models import ToolSpec
 from app.tools import (
     MINIGENT_MINIRAG_BACKEND_ENV,
     MINIGENT_MINIRAG_DB_PATH_ENV,
@@ -361,5 +364,60 @@ def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(
             "server_name": "demo-server",
             "server_version": "1.0.0",
             "tool_count": 1,
+            "status": "connected",
+            "last_error": None,
+            "last_checked_at": None,
+            "next_retry_at": None,
         }
     ]
+
+
+def test_mcp_manager_retains_unavailable_server_and_recovers() -> None:
+    config = MCPServerConfig(name="demo", url="https://example.com/mcp", headers={})
+    attempts = 0
+
+    class FakeMCPClient:
+        def __init__(self, config: MCPServerConfig) -> None:
+            self._config = config
+
+        async def list_tools(self) -> list[ToolSpec]:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise HTTPException(status_code=502, detail="temporary outage")
+            return [
+                ToolSpec(
+                    name="demo.search",
+                    description="Search docs",
+                    input_schema={"type": "object"},
+                )
+            ]
+
+        async def call_tool(self, tool_name: str, arguments: dict[str, object]) -> object:
+            return {"tool_name": tool_name, "arguments": arguments}
+
+        def server_info(self) -> MCPServerInfo:
+            return MCPServerInfo(
+                name="demo",
+                url="https://example.com/mcp",
+                protocol_version="2025-11-25",
+                session_id="session-123",
+                server_name="demo-server",
+                server_version="1.0.0",
+            )
+
+    manager = MCPServerManager(client_factory=FakeMCPClient)
+
+    first_snapshot = manager.snapshot([config])
+    first_registry = build_tool_registry(mcp_snapshot=first_snapshot)
+
+    assert [server["status"] for server in first_registry.mcp_servers()] == ["unavailable"]
+    assert first_registry.mcp_servers()[0]["last_error"] == "temporary outage"
+    assert "demo.search" not in {spec.name for spec in first_registry.specs()}
+
+    asyncio.run(manager.refresh([config], force=True))
+    second_snapshot = manager.snapshot([config])
+    second_registry = build_tool_registry(mcp_snapshot=second_snapshot)
+
+    assert [server["status"] for server in second_registry.mcp_servers()] == ["connected"]
+    assert "demo.search" in {spec.name for spec in second_registry.specs()}
