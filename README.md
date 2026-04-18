@@ -174,6 +174,53 @@ That installs an isolated tool environment and links the console scripts into uv
 bin directory. If the bin directory is not already on your `PATH`, run `uv tool dir
 --bin` to find it.
 
+For a remote Linux host that owns the microphone and speaker, use the installer script
+over SSH:
+
+```bash
+ssh <user>@<host>
+cd /path/to/minigent
+./scripts/install-voice-daemon-linux.sh --systemd-user
+```
+
+The script installs Linux audio/build prerequisites, installs the package with the
+`voice` extra, writes `.env.voice` if it does not already exist, checks ALSA devices,
+and can install a `systemd --user` service. Edit `.env.voice` with the Minigent API URL,
+voice API token, and STT/TTS provider keys before starting passive audio in production.
+
+If the script adds your user to the `audio` group, log out and back in before starting
+the daemon. Existing SSH sessions do not gain new group memberships automatically. You
+can inspect the host first without installing anything:
+
+```bash
+./scripts/install-voice-daemon-linux.sh --check-only
+```
+
+After editing `.env.voice`, run smoke tests in this order:
+
+```bash
+./scripts/run-voice-daemon-linux.sh --backend stdin
+./scripts/run-voice-daemon-linux.sh --backend manual-audio --once
+```
+
+If you installed the user service, manage it with:
+
+```bash
+systemctl --user start minigent-voice-daemon
+journalctl --user -u minigent-voice-daemon -f
+```
+
+Use `--enable-linger` with the installer when the user service should continue running
+after the SSH user logs out:
+
+```bash
+./scripts/install-voice-daemon-linux.sh --systemd-user --enable-linger
+```
+
+If the remote host is only running the Minigent API and does not have the microphone,
+run the voice daemon on the local machine with audio hardware and point
+`MINIGENT_BASE_URL` at the remote API instead.
+
 If you want the installed tool to track your local checkout while you edit this repo, use
 an editable tool install instead:
 
