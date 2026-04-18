@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from app.observability import (
     JsonLogFormatter,
+    SuccessfulHealthcheckAccessFilter,
     configure_tracing,
     load_logging_settings_from_env,
     load_tracing_settings_from_env,
@@ -81,6 +82,48 @@ def test_json_log_formatter_can_nest_payload_under_root_key() -> None:
     assert payload["service"] == "minigent"
     assert payload["log"]["message"] == "hello"
     assert payload["log"]["level"] == "INFO"
+
+
+def test_successful_healthcheck_access_filter_suppresses_2xx_health_logs() -> None:
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1:12345", "GET", "/health", "1.1", 200),
+        exc_info=None,
+    )
+
+    assert SuccessfulHealthcheckAccessFilter().filter(record) is False
+
+
+def test_successful_healthcheck_access_filter_keeps_health_failures() -> None:
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1:12345", "GET", "/health", "1.1", 500),
+        exc_info=None,
+    )
+
+    assert SuccessfulHealthcheckAccessFilter().filter(record) is True
+
+
+def test_successful_healthcheck_access_filter_keeps_regular_requests() -> None:
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1:12345", "GET", "/threads", "1.1", 200),
+        exc_info=None,
+    )
+
+    assert SuccessfulHealthcheckAccessFilter().filter(record) is True
 
 
 def test_load_tracing_settings_from_env(monkeypatch) -> None:

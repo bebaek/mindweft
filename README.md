@@ -737,6 +737,10 @@ MINIGENT_LOG_JSON_FIELDS={"service":"minigent","env":"dev"}
 MINIGENT_LOG_JSON_INCLUDE_TRACE_CONTEXT=true
 ```
 
+Successful Uvicorn access logs for `GET /health` are suppressed by default so Compose
+health checks do not flood normal logs. Non-2xx health responses are still logged, and
+the endpoint remains available for health probes and `minigent health`.
+
 OpenTelemetry tracing is optional:
 
 ```bash

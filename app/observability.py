@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI
 from opentelemetry import trace
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_PLAINTEXT_FORMAT = "%(levelname)s %(name)s: %(message)s"
 _TRACING_INITIALIZED = False
+_HEALTHCHECK_PATHS = frozenset({"/health"})
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,11 @@ class JsonLogFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=True, default=str)
 
 
+class SuccessfulHealthcheckAccessFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not _is_successful_healthcheck_access_log(record)
+
+
 def configure_logging() -> None:
     settings = load_logging_settings_from_env()
     formatter: dict[str, Any]
@@ -117,6 +124,11 @@ def configure_logging() -> None:
             "version": 1,
             "disable_existing_loggers": False,
             "formatters": {"default": formatter},
+            "filters": {
+                "successful_healthcheck_access": {
+                    "()": "app.observability.SuccessfulHealthcheckAccessFilter",
+                },
+            },
             "handlers": {
                 "default": {
                     "class": "logging.StreamHandler",
@@ -139,6 +151,7 @@ def configure_logging() -> None:
                     "level": settings.level,
                     "handlers": ["default"],
                     "propagate": False,
+                    "filters": ["successful_healthcheck_access"],
                 },
             },
         }
@@ -229,6 +242,31 @@ def _current_trace_context() -> dict[str, str]:
         "trace_id": f"{span_context.trace_id:032x}",
         "span_id": f"{span_context.span_id:016x}",
     }
+
+
+def _is_successful_healthcheck_access_log(record: logging.LogRecord) -> bool:
+    if record.name != "uvicorn.access":
+        return False
+    if not isinstance(record.args, tuple) or len(record.args) < 5:
+        return False
+
+    path = _healthcheck_log_path(record.args[2])
+    if path not in _HEALTHCHECK_PATHS:
+        return False
+
+    try:
+        status_code = int(record.args[4])
+    except (TypeError, ValueError):
+        return False
+    return 200 <= status_code < 300
+
+
+def _healthcheck_log_path(raw_path: object) -> str:
+    if isinstance(raw_path, bytes):
+        raw_path = raw_path.decode("ascii", errors="ignore")
+    if not isinstance(raw_path, str):
+        return ""
+    return urlsplit(raw_path).path
 
 
 def _env_flag(name: str, *, default: bool) -> bool:
