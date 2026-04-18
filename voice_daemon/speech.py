@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -244,6 +245,20 @@ def _resolve_piper_executable() -> str:
     resolved = shutil.which("piper")
     if resolved:
         return resolved
+
+    interpreter_dir = Path(sys.executable).absolute().parent
+    local_candidates = [interpreter_dir / "piper"]
+    if os.name == "nt":
+        local_candidates.append(interpreter_dir / "piper.exe")
+
+    for candidate in local_candidates:
+        if candidate.is_file():
+            if os.access(candidate, os.X_OK):
+                return str(candidate)
+            raise RuntimeError(
+                f"`piper` exists at {str(candidate)!r} but is not executable. "
+                "Fix its permissions or remove it from PATH."
+            )
 
     for directory in os.environ.get("PATH", "").split(":"):
         if not directory:

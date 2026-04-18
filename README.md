@@ -162,8 +162,34 @@ MINIGENT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
 When `MINIGENT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`,
 `MINIGENT_ADMIN_ENCRYPTION_KEY` is mandatory.
 
-For the voice daemon with microphone capture, VAD, and transcription support, install the
-optional voice dependencies as well:
+For the voice daemon as a normal CLI app, install the package with the `voice` extra so
+the `minigent-voice-daemon` command is available on your `PATH`:
+
+```bash
+uv tool install '.[voice]'
+minigent-voice-daemon --wake-phrase "hey minigent"
+```
+
+That installs an isolated tool environment and links the console scripts into uv's tool
+bin directory. If the bin directory is not already on your `PATH`, run `uv tool dir
+--bin` to find it.
+
+If you want the installed tool to track your local checkout while you edit this repo, use
+an editable tool install instead:
+
+```bash
+uv tool install --editable '.[voice]'
+```
+
+Use `--reinstall` with either form when you want uv to recreate the tool environment:
+
+```bash
+uv tool install --reinstall '.[voice]'
+uv tool install --reinstall --editable '.[voice]'
+```
+
+If you are developing inside this repo instead, sync the optional voice dependencies into
+the project virtualenv:
 
 ```bash
 uv sync --dev --extra voice
@@ -178,19 +204,20 @@ uv run minigent chat --resume-last "continue"
 uv run minigent threads show <thread-id>
 ```
 
-There is also a separate voice-daemon client entrypoint:
+The repo also exposes the same voice-daemon entrypoint through `uv run`:
 
 ```bash
 uv run minigent-voice-daemon --wake-phrase "hey minigent"
 ```
 
-By default, assistant replies are printed to the terminal. You can also enable local TTS
-on macOS with:
+By default, assistant replies are printed to the terminal. The examples below use the
+installed `minigent-voice-daemon` command; inside the repo you can replace it with
+`uv run minigent-voice-daemon`. You can also enable local TTS on macOS with:
 
 ```bash
 MINIGENT_VOICE_TTS_PROVIDER=say
 MINIGENT_VOICE_TTS_VOICE=Samantha
-uv run minigent-voice-daemon --backend manual-audio --once
+minigent-voice-daemon --backend manual-audio --once
 ```
 
 With `MINIGENT_VOICE_TTS_PROVIDER=say`, passive mode also supports wake-word barge-in:
@@ -209,7 +236,7 @@ Piper with a model path or model name:
 ```bash
 MINIGENT_VOICE_TTS_PROVIDER=piper
 MINIGENT_VOICE_TTS_MODEL=en_US-lessac-medium
-uv run minigent-voice-daemon --backend manual-audio --once
+minigent-voice-daemon --backend manual-audio --once
 ```
 
 For multi-speaker Piper models, also set `MINIGENT_VOICE_TTS_SPEAKER`:
@@ -218,10 +245,10 @@ For multi-speaker Piper models, also set `MINIGENT_VOICE_TTS_SPEAKER`:
 MINIGENT_VOICE_TTS_PROVIDER=piper
 MINIGENT_VOICE_TTS_MODEL=/absolute/path/to/voice.onnx
 MINIGENT_VOICE_TTS_SPEAKER=0
-uv run minigent-voice-daemon --backend manual-audio --once
+minigent-voice-daemon --backend manual-audio --once
 ```
 
-`piper-tts` ships as part of `uv sync --dev --extra voice`. When
+`piper-tts` ships as part of the `voice` extra. When
 `MINIGENT_VOICE_TTS_MODEL` is a bare voice name like `en_US-lessac-medium`, the daemon
 downloads the `.onnx` and `.onnx.json` files on first use into
 `~/.cache/minigent/piper` by default. Override that cache directory with
@@ -246,7 +273,7 @@ openWakeWord.
 Examples:
 
 ```bash
-uv run minigent-voice-daemon --wake-phrase "hey minigent"
+minigent-voice-daemon --wake-phrase "hey minigent"
 # ignored
 hello there
 # activates and uses the rest of the line as the utterance
@@ -260,7 +287,7 @@ Manual audio example:
 
 ```bash
 OPENAI_API_KEY=...
-uv run minigent-voice-daemon --backend manual-audio --once
+minigent-voice-daemon --backend manual-audio --once
 ```
 
 Using OpenRouter for transcription:
@@ -269,7 +296,7 @@ Using OpenRouter for transcription:
 OPENROUTER_API_KEY=...
 MINIGENT_VOICE_STT_PROVIDER=openrouter
 MINIGENT_VOICE_STT_MODEL=openai/gpt-audio
-uv run minigent-voice-daemon --backend manual-audio --once
+minigent-voice-daemon --backend manual-audio --once
 ```
 
 Using local faster-whisper transcription:
@@ -280,7 +307,7 @@ MINIGENT_VOICE_STT_MODEL=base
 MINIGENT_VOICE_STT_DEVICE=cpu
 MINIGENT_VOICE_STT_COMPUTE_TYPE=int8
 MINIGENT_VOICE_STT_LANGUAGE=en
-uv run minigent-voice-daemon --backend manual-audio --once
+minigent-voice-daemon --backend manual-audio --once
 ```
 
 In `manual-audio` mode, press Enter to start recording. The daemon stops recording after
@@ -307,7 +334,7 @@ Passive wake-word example:
 ```bash
 PICOVOICE_ACCESS_KEY=...
 MINIGENT_VOICE_KEYWORD_PATH=/absolute/path/to/hey-minigent.ppn
-uv run minigent-voice-daemon --backend passive-audio
+minigent-voice-daemon --backend passive-audio
 ```
 
 If you keep the daemon settings in `.env.voice.docker`, use the wrapper script:
@@ -319,7 +346,7 @@ If you keep the daemon settings in `.env.voice.docker`, use the wrapper script:
 It exports `.env.voice.docker` into the process environment, then runs:
 
 ```bash
-uv run minigent-voice-daemon --backend passive-audio
+minigent-voice-daemon --backend passive-audio
 ```
 
 Press `Ctrl-C` to stop the daemon cleanly. It will print `[idle] shutting down` and
@@ -330,7 +357,7 @@ Free `openwakeword` example:
 ```bash
 MINIGENT_VOICE_WAKEWORD_PROVIDER=openwakeword
 MINIGENT_VOICE_OWW_MODEL=okay_nabu
-uv run minigent-voice-daemon --backend passive-audio
+minigent-voice-daemon --backend passive-audio
 ```
 
 `passive-audio` keeps the microphone open, feeds chunks into the configured wake-word detector, and after the

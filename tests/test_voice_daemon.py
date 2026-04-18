@@ -672,11 +672,32 @@ def test_piper_speech_output_reports_missing_cli(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr("voice_daemon.speech.shutil.which", lambda name: None)
     monkeypatch.setattr("voice_daemon.speech.os.environ", {"PATH": "/tmp/does-not-exist"})
+    monkeypatch.setattr("voice_daemon.speech.sys.executable", "/tmp/does-not-exist/python")
 
     speech = PiperSpeechOutput(output_stream=output_stream, model="/tmp/voice.onnx")
 
     with pytest.raises(RuntimeError, match="not available on PATH"):
         speech.start("done")
+
+
+def test_resolve_piper_executable_finds_sibling_of_active_python(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from voice_daemon.speech import _resolve_piper_executable
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python_path = bin_dir / "python"
+    python_path.write_text("", encoding="utf-8")
+    piper_path = bin_dir / "piper"
+    piper_path.write_text("#!/bin/sh\n", encoding="utf-8")
+    piper_path.chmod(0o755)
+
+    monkeypatch.setattr("voice_daemon.speech.shutil.which", lambda name: None)
+    monkeypatch.setattr("voice_daemon.speech.os.environ", {"PATH": "/tmp/does-not-exist"})
+    monkeypatch.setattr("voice_daemon.speech.sys.executable", str(python_path))
+
+    assert _resolve_piper_executable() == str(piper_path)
 
 
 def test_resolve_piper_model_path_uses_existing_onnx_path(tmp_path) -> None:
