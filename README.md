@@ -426,6 +426,16 @@ to plain text such as `ready` to speak a short cue through the configured TTS pr
 To force a specific sound file, set `MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND` to a
 local audio file path.
 
+You can also configure an optional cue after microphone capture ends and before STT
+processing starts:
+
+```bash
+MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT=bell
+```
+
+Use `MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT_SOUND` to force a different sound
+file for that end-of-capture cue.
+
 If no speech arrives within `MINIGENT_VOICE_POST_WAKE_SPEECH_TIMEOUT_MS` after the wake
 word, passive mode ignores that activation and returns to idle without sending audio to
 STT.
@@ -490,6 +500,8 @@ Daemon-related env vars:
 - `MINIGENT_VOICE_WAKE_PHRASE`
 - `MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT`
 - `MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND`
+- `MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT`
+- `MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT_SOUND`
 - `MINIGENT_VOICE_STT_PROVIDER`
 - `MINIGENT_VOICE_STT_DEVICE`
 - `MINIGENT_VOICE_STT_COMPUTE_TYPE`

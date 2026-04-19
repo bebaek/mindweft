@@ -5,6 +5,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -49,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--wake-acknowledgement",
         default=None,
         help="Optional cue to emit after activation before recording. Use `bell` for a terminal bell or plain text for a spoken acknowledgement.",
+    )
+    parser.add_argument(
+        "--capture-ended-acknowledgement",
+        default=None,
+        help="Optional cue to emit after microphone capture ends before processing. Use `bell` for a short sound or plain text for a spoken acknowledgement.",
     )
     parser.add_argument(
         "--skill",
@@ -192,6 +198,10 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
         wake_phrase=(args.wake_phrase or env_config.wake_phrase).strip(),
         wake_acknowledgement=args.wake_acknowledgement or env_config.wake_acknowledgement,
         wake_acknowledgement_sound=env_config.wake_acknowledgement_sound,
+        capture_ended_acknowledgement=(
+            args.capture_ended_acknowledgement or env_config.capture_ended_acknowledgement
+        ),
+        capture_ended_acknowledgement_sound=env_config.capture_ended_acknowledgement_sound,
         stt_provider=args.stt_provider or env_config.stt_provider,
         stt_device=args.stt_device or env_config.stt_device,
         stt_compute_type=args.stt_compute_type or env_config.stt_compute_type,
@@ -249,16 +259,40 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     config = build_config(args)
-    activation_source = build_activation_source(args.backend, config)
     speech_output = build_speech_output(config)
+    ambient_volume_controller = build_ambient_volume_controller(config)
+    activation_feedback = wrap_feedback_with_ambient_restore(
+        build_acknowledgement_feedback(
+            config.wake_acknowledgement,
+            config.wake_acknowledgement_sound,
+            speech_output,
+            async_bell=args.backend == "passive-audio",
+        ),
+        ambient_volume_controller,
+        reduck_delay_seconds=0.5 if args.backend == "passive-audio" else 0.0,
+    )
+    capture_ended_feedback = wrap_feedback_with_ambient_restore(
+        build_acknowledgement_feedback(
+            config.capture_ended_acknowledgement,
+            config.capture_ended_acknowledgement_sound,
+            speech_output,
+        ),
+        ambient_volume_controller,
+    )
+    activation_source = build_activation_source(
+        args.backend,
+        config,
+        activation_feedback=activation_feedback,
+        capture_ended_feedback=capture_ended_feedback,
+    )
     daemon = VoiceDaemon(
         wake_phrase=config.wake_phrase,
         activation_source=activation_source,
         minigent_client=MinigentClient(config),
         speech_output=speech_output,
-        activation_feedback=build_activation_feedback(config, speech_output),
+        activation_feedback=None if args.backend == "passive-audio" else activation_feedback,
         follow_up_timeout_ms=config.follow_up_timeout_ms,
-        ambient_volume_controller=build_ambient_volume_controller(config),
+        ambient_volume_controller=ambient_volume_controller,
     )
     try:
         if args.once:
@@ -279,7 +313,13 @@ def main(argv: list[str] | None = None) -> int:
             close()
 
 
-def build_activation_source(backend: str, config: VoiceDaemonConfig):
+def build_activation_source(
+    backend: str,
+    config: VoiceDaemonConfig,
+    *,
+    activation_feedback: Callable[[], None] | None = None,
+    capture_ended_feedback: Callable[[], None] | None = None,
+):
     if backend == "stdin":
         return StdinActivationSource(
             input_stream=sys.stdin,
@@ -292,6 +332,7 @@ def build_activation_source(backend: str, config: VoiceDaemonConfig):
             recorder=build_microphone_recorder(config),
             transcriber=build_transcription_adapter(build_speech_provider_config(config)),
             capture_debugger=build_capture_debugger(config),
+            capture_ended_feedback=capture_ended_feedback,
         )
     if backend == "passive-audio":
         wake_detector = build_wake_word_detector(config)
@@ -322,7 +363,9 @@ def build_activation_source(backend: str, config: VoiceDaemonConfig):
                     ),
                 )
             ),
+            activation_feedback=activation_feedback,
             capture_debugger=build_capture_debugger(config),
+            capture_ended_feedback=capture_ended_feedback,
             post_wake_speech_timeout_ms=config.post_wake_speech_timeout_ms,
             post_wake_settle_ms=config.post_wake_settle_ms,
             wakeword_cooldown_ms=config.wakeword_cooldown_ms,
@@ -403,12 +446,41 @@ def build_activation_feedback(
     config: VoiceDaemonConfig,
     speech_output,
 ) -> Callable[[], None] | None:
-    acknowledgement = config.wake_acknowledgement
+    return build_acknowledgement_feedback(
+        config.wake_acknowledgement,
+        config.wake_acknowledgement_sound,
+        speech_output,
+    )
+
+
+def build_acknowledgement_feedback(
+    acknowledgement: str | None,
+    sound_path: str | None,
+    speech_output,
+    *,
+    async_bell: bool = False,
+) -> Callable[[], None] | None:
     if not acknowledgement:
         return None
     if acknowledgement.lower() == "bell":
-        return _emit_terminal_bell
+        if async_bell:
+            return lambda: _emit_terminal_bell_async(sound_path)
+        return lambda: _emit_terminal_bell(sound_path)
     return lambda: speech_output.speak(acknowledgement)
+
+
+def wrap_feedback_with_ambient_restore(
+    feedback: Callable[[], None] | None,
+    ambient_volume_controller,
+    *,
+    reduck_delay_seconds: float = 0.0,
+) -> Callable[[], None] | None:
+    if feedback is None:
+        return None
+    temporarily_restore = getattr(ambient_volume_controller, "temporarily_restore", None)
+    if not callable(temporarily_restore):
+        return feedback
+    return lambda: temporarily_restore(feedback, reduck_delay_seconds=reduck_delay_seconds)
 
 
 def bounded_output_volume(value: str) -> int:
@@ -418,25 +490,58 @@ def bounded_output_volume(value: str) -> int:
     return parsed
 
 
-def _emit_terminal_bell() -> None:
-    sound_path = _resolve_wake_acknowledgement_sound()
-    player_command = _resolve_wake_acknowledgement_player(sound_path)
-    if sound_path is not None and player_command is not None:
-        try:
-            subprocess.Popen(
-                player_command + [str(sound_path)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return
-        except OSError:
-            pass
+def _emit_terminal_bell(configured_sound_path: str | None = None) -> None:
+    sound_path = _resolve_acknowledgement_sound(configured_sound_path)
+    if sound_path is not None:
+        for player_command in _resolve_acknowledgement_players(sound_path):
+            command = player_command + [str(sound_path)]
+            try:
+                result = subprocess.run(
+                    command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=3,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                sys.stdout.write(
+                    f"[warning] acknowledgement player failed: {command[0]}: {exc}\n"
+                )
+                sys.stdout.flush()
+                continue
+            if result.returncode == 0:
+                return
+            detail = result.stderr.strip()
+            if detail:
+                sys.stdout.write(
+                    f"[warning] acknowledgement player failed: {command[0]}: {detail}\n"
+                )
+            else:
+                sys.stdout.write(
+                    f"[warning] acknowledgement player failed: {command[0]} exited {result.returncode}\n"
+                )
+            sys.stdout.flush()
+        sys.stdout.write(f"[warning] no acknowledgement player could play {sound_path}\n")
+        sys.stdout.flush()
     sys.stdout.write("\a")
     sys.stdout.flush()
 
 
+def _emit_terminal_bell_async(configured_sound_path: str | None = None) -> None:
+    threading.Thread(
+        target=_emit_terminal_bell,
+        args=(configured_sound_path,),
+        daemon=True,
+    ).start()
+
+
 def _resolve_wake_acknowledgement_sound() -> Path | None:
-    configured = VoiceDaemonConfig.from_env().wake_acknowledgement_sound
+    return _resolve_acknowledgement_sound(VoiceDaemonConfig.from_env().wake_acknowledgement_sound)
+
+
+def _resolve_acknowledgement_sound(configured_sound_path: str | None) -> Path | None:
+    configured = configured_sound_path
     if configured:
         candidate = Path(configured).expanduser()
         if candidate.exists():
@@ -462,30 +567,44 @@ def _default_wake_acknowledgement_sounds() -> list[Path]:
 
 
 def _resolve_wake_acknowledgement_player(sound_path: Path | None) -> list[str] | None:
-    if sound_path is None:
+    return _resolve_acknowledgement_player(sound_path)
+
+
+def _resolve_acknowledgement_player(sound_path: Path | None) -> list[str] | None:
+    players = _resolve_acknowledgement_players(sound_path)
+    if not players:
         return None
+    return players[0]
+
+
+def _resolve_acknowledgement_players(sound_path: Path | None) -> list[list[str]]:
+    if sound_path is None:
+        return []
     system = platform.system()
     if system == "Darwin":
         afplay = shutil.which("afplay")
         if afplay:
-            return [afplay]
-        return None
+            return [[afplay]]
+        return []
     if system == "Linux":
         suffix = sound_path.suffix.lower()
         if suffix in {".oga", ".ogg", ".opus", ".mp3"}:
             players = ("paplay", "play", "ffplay")
         elif suffix in {".wav", ".wave"}:
-            players = ("paplay", "aplay", "play", "ffplay")
+            players = ("aplay", "paplay", "play", "ffplay")
         else:
             players = ("paplay", "play", "ffplay")
+        commands: list[list[str]] = []
         for player in players:
             resolved = shutil.which(player)
             if not resolved:
                 continue
             if player == "ffplay":
-                return [resolved, "-nodisp", "-autoexit", "-loglevel", "quiet"]
-            return [resolved]
-    return None
+                commands.append([resolved, "-nodisp", "-autoexit", "-loglevel", "quiet"])
+            else:
+                commands.append([resolved])
+        return commands
+    return []
 
 
 def build_speech_provider_config(config: VoiceDaemonConfig) -> SpeechProviderConfig:

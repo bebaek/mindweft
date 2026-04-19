@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import platform
 import subprocess
+import threading
+import time
 from dataclasses import dataclass, field
-from typing import TextIO
+from typing import Callable, TextIO
 
 from voice_daemon.service import DaemonState
 
@@ -20,25 +22,63 @@ class MacOsAmbientVolumeDucker:
     _ducked: bool = field(default=False, init=False)
     _disabled: bool = field(default=False, init=False)
     _warned: bool = field(default=False, init=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def sync_state(self, state: DaemonState) -> None:
-        if self._disabled:
-            return
-        try:
-            if should_duck_for_state(state):
-                self._duck()
+        with self._lock:
+            if self._disabled:
                 return
-            self._restore()
-        except Exception as exc:
-            self._disable(exc)
+            try:
+                if should_duck_for_state(state):
+                    self._duck()
+                    return
+                self._restore()
+            except Exception as exc:
+                self._disable(exc)
 
     def close(self) -> None:
-        if self._disabled:
-            return
-        try:
-            self._restore()
-        except Exception as exc:
-            self._disable(exc)
+        with self._lock:
+            if self._disabled:
+                return
+            try:
+                self._restore()
+            except Exception as exc:
+                self._disable(exc)
+
+    def temporarily_restore(
+        self,
+        callback: Callable[[], None],
+        *,
+        reduck_delay_seconds: float = 0.0,
+    ) -> None:
+        should_reduck = False
+        with self._lock:
+            if self._disabled or not self._ducked:
+                pass
+            else:
+                try:
+                    self._restore()
+                    should_reduck = True
+                except Exception as exc:
+                    self._disable(exc)
+        callback()
+        if should_reduck:
+            threading.Thread(
+                target=self._duck_in_background,
+                args=(max(reduck_delay_seconds, 0.0),),
+                daemon=True,
+            ).start()
+
+    def _duck_in_background(self, delay_seconds: float = 0.0) -> None:
+        if delay_seconds > 0:
+            time.sleep(delay_seconds)
+        with self._lock:
+            if self._disabled:
+                return
+            try:
+                self._duck()
+            except Exception as exc:
+                self._disable(exc)
 
     def _duck(self) -> None:
         if self._ducked:

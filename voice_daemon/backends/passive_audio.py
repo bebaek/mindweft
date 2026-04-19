@@ -29,7 +29,9 @@ class PassiveAudioActivationSource:
     transcriber: SpeechToTextAdapter
     wake_detector: WakeWordDetector
     preroll_buffer: AudioRingBuffer
+    activation_feedback: Callable[[], None] | None = None
     capture_debugger: CaptureDebugger | None = None
+    capture_ended_feedback: Callable[[], None] | None = None
     stream_context: StreamContext | None = None
     post_wake_speech_timeout_ms: int = 2500
     post_wake_settle_ms: int = 250
@@ -79,17 +81,26 @@ class PassiveAudioActivationSource:
 
     def capture_utterance(self) -> str:
         self.output_stream.write(
-            "[listening] wake word detected, recording on a fresh microphone stream until silence\n"
+            "[listening] wake word detected, recording until silence\n"
         )
         self.output_stream.flush()
         if self.post_wake_settle_ms > 0:
             time.sleep(self.post_wake_settle_ms / 1000.0)
-        audio = self.recorder.record_after_speech(self.post_wake_speech_timeout_ms)
+        if self.activation_feedback is not None:
+            self.activation_feedback()
+        audio = self.recorder.record_after_speech_from_stream(
+            self.stream,
+            timeout_ms=self.post_wake_speech_timeout_ms,
+        )
         if audio is None:
             self.output_stream.write("[idle] no speech after wake word, ignoring activation\n")
             self.output_stream.flush()
             self._cooldown_until = time.monotonic() + (self.wakeword_cooldown_ms / 1000.0)
             return ""
+        self.output_stream.write("[listening] capture ended\n")
+        self.output_stream.flush()
+        if self.capture_ended_feedback is not None:
+            self.capture_ended_feedback()
         return self._transcribe_recorded_audio(audio, source="passive-audio")
 
     def capture_follow_up_utterance(self, timeout_ms: int) -> str | None:
@@ -97,9 +108,17 @@ class PassiveAudioActivationSource:
         self.output_stream.flush()
         audio = self.recorder.record_after_speech(timeout_ms)
         if audio is None:
+            self.output_stream.write("[follow-up] capture ended\n")
+            self.output_stream.flush()
+            if self.capture_ended_feedback is not None:
+                self.capture_ended_feedback()
             self.output_stream.write("[idle] follow-up window expired, returning to wake-word mode\n")
             self.output_stream.flush()
             return None
+        self.output_stream.write("[follow-up] capture ended\n")
+        self.output_stream.flush()
+        if self.capture_ended_feedback is not None:
+            self.capture_ended_feedback()
         return self._transcribe_recorded_audio(audio, source="passive-audio-follow-up")
 
     def _transcribe_recorded_audio(self, audio, *, source: str) -> str:

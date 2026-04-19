@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TextIO
+from typing import Callable, TextIO
 
 from voice_daemon.audio import MicrophoneRecorder
 from voice_daemon.debug import CaptureDebugger
@@ -16,6 +16,7 @@ class ManualAudioActivationSource:
     recorder: MicrophoneRecorder
     transcriber: SpeechToTextAdapter
     capture_debugger: CaptureDebugger | None = None
+    capture_ended_feedback: Callable[[], None] | None = None
 
     def wait_for_activation(self, wake_phrase: str) -> Activation:
         del wake_phrase
@@ -30,6 +31,10 @@ class ManualAudioActivationSource:
         self.output_stream.write("[listening] recording from microphone until silence\n")
         self.output_stream.flush()
         audio = self.recorder.record_until_silence()
+        self.output_stream.write("[listening] capture ended\n")
+        self.output_stream.flush()
+        if self.capture_ended_feedback is not None:
+            self.capture_ended_feedback()
         return self._transcribe_audio(audio, source="manual-audio")
 
     def capture_follow_up_utterance(self, timeout_ms: int) -> str | None:

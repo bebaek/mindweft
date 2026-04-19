@@ -27,6 +27,8 @@ class VoiceDaemonConfig:
     wake_phrase: str
     wake_acknowledgement: str | None = None
     wake_acknowledgement_sound: str | None = None
+    capture_ended_acknowledgement: str | None = None
+    capture_ended_acknowledgement_sound: str | None = None
     stt_provider: str = "openai"
     stt_device: str | None = None
     stt_compute_type: str | None = None
@@ -80,6 +82,12 @@ class VoiceDaemonConfig:
             wake_acknowledgement=_clean_optional(os.getenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT")),
             wake_acknowledgement_sound=_clean_optional(
                 os.getenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND")
+            ),
+            capture_ended_acknowledgement=_clean_optional(
+                os.getenv("MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT")
+            ),
+            capture_ended_acknowledgement_sound=_clean_optional(
+                os.getenv("MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT_SOUND")
             ),
             stt_provider=os.getenv("MINIGENT_VOICE_STT_PROVIDER", "openai").strip().lower(),
             stt_device=_clean_optional(os.getenv("MINIGENT_VOICE_STT_DEVICE")),

@@ -570,22 +570,29 @@ def test_build_activation_feedback_prefers_system_sound_for_bell(
 ) -> None:
     captured: dict[str, object] = {}
 
-    def fake_popen(command, stdout, stderr):
+    def fake_run(command, stdout, stderr, text, timeout, check):
         captured["command"] = command
         captured["stdout"] = stdout
         captured["stderr"] = stderr
+        captured["text"] = text
+        captured["timeout"] = timeout
+        captured["check"] = check
 
-        class FakeProcess:
+        class FakeResult:
             returncode = 0
+            stderr = ""
 
-        return FakeProcess()
+        return FakeResult()
 
-    monkeypatch.setattr("voice_daemon.cli._resolve_wake_acknowledgement_sound", lambda: Path("/tmp/glass.aiff"))
     monkeypatch.setattr(
-        "voice_daemon.cli._resolve_wake_acknowledgement_player",
-        lambda sound_path: ["/usr/bin/afplay"] if sound_path == Path("/tmp/glass.aiff") else None,
+        "voice_daemon.cli._resolve_acknowledgement_sound",
+        lambda configured_sound_path: Path("/tmp/glass.aiff"),
     )
-    monkeypatch.setattr("voice_daemon.cli.subprocess.Popen", fake_popen)
+    monkeypatch.setattr(
+        "voice_daemon.cli._resolve_acknowledgement_players",
+        lambda sound_path: [["/usr/bin/afplay"]] if sound_path == Path("/tmp/glass.aiff") else [],
+    )
+    monkeypatch.setattr("voice_daemon.cli.subprocess.run", fake_run)
 
     bell = voice_cli.build_activation_feedback(
         VoiceDaemonConfig(
@@ -600,12 +607,18 @@ def test_build_activation_feedback_prefers_system_sound_for_bell(
     assert capsys.readouterr().out == ""
     assert captured["command"] == ["/usr/bin/afplay", "/tmp/glass.aiff"]
     assert captured["stdout"] is subprocess.DEVNULL
-    assert captured["stderr"] is subprocess.DEVNULL
+    assert captured["stderr"] is subprocess.PIPE
+    assert captured["text"] is True
+    assert captured["timeout"] == 3
+    assert captured["check"] is False
 
 
 def test_build_activation_feedback_falls_back_to_terminal_bell(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
-    monkeypatch.setattr("voice_daemon.cli._resolve_wake_acknowledgement_sound", lambda: None)
-    monkeypatch.setattr("voice_daemon.cli._resolve_wake_acknowledgement_player", lambda sound_path: None)
+    monkeypatch.setattr(
+        "voice_daemon.cli._resolve_acknowledgement_sound",
+        lambda configured_sound_path: None,
+    )
+    monkeypatch.setattr("voice_daemon.cli._resolve_acknowledgement_players", lambda sound_path: [])
 
     bell = voice_cli.build_activation_feedback(
         VoiceDaemonConfig(
@@ -631,6 +644,77 @@ def test_build_activation_feedback_falls_back_to_terminal_bell(monkeypatch: pyte
     assert spoken is not None
     spoken()
     assert speech_output.spoken == ["ready"]
+
+
+def test_build_activation_feedback_tries_next_player_after_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, stdout, stderr, text, timeout, check):
+        del stdout, stderr, text, timeout, check
+        calls.append(command)
+
+        class FakeResult:
+            def __init__(self, returncode: int, stderr: str) -> None:
+                self.returncode = returncode
+                self.stderr = stderr
+
+        if command[0] == "/usr/bin/paplay":
+            return FakeResult(1, "connection refused")
+        return FakeResult(0, "")
+
+    monkeypatch.setattr(
+        "voice_daemon.cli._resolve_acknowledgement_sound",
+        lambda configured_sound_path: Path("/tmp/wake.wav"),
+    )
+    monkeypatch.setattr(
+        "voice_daemon.cli._resolve_acknowledgement_players",
+        lambda sound_path: [["/usr/bin/paplay"], ["/usr/bin/aplay"]],
+    )
+    monkeypatch.setattr("voice_daemon.cli.subprocess.run", fake_run)
+
+    bell = voice_cli.build_activation_feedback(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            wake_acknowledgement="bell",
+        ),
+        FakeSpeechOutput(),
+    )
+    assert bell is not None
+    bell()
+
+    assert calls == [["/usr/bin/paplay", "/tmp/wake.wav"], ["/usr/bin/aplay", "/tmp/wake.wav"]]
+    assert "acknowledgement player failed" in capsys.readouterr().out
+
+
+def test_build_acknowledgement_feedback_can_emit_bell_async(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: list[tuple[object, tuple[object, ...]]] = []
+
+    class FakeThread:
+        def __init__(self, target, args=(), daemon: bool = False) -> None:
+            assert daemon is True
+            self.target = target
+            self.args = args
+
+        def start(self) -> None:
+            started.append((self.target, self.args))
+
+    monkeypatch.setattr("voice_daemon.cli.threading.Thread", FakeThread)
+
+    bell = voice_cli.build_acknowledgement_feedback(
+        "bell",
+        "/tmp/wake.aiff",
+        FakeSpeechOutput(),
+        async_bell=True,
+    )
+    assert bell is not None
+    bell()
+
+    assert started == [(voice_cli._emit_terminal_bell, ("/tmp/wake.aiff",))]
 
 
 def test_resolve_wake_acknowledgement_sound_prefers_configured_path(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -683,6 +767,15 @@ def test_resolve_wake_acknowledgement_player_supports_macos_and_linux(monkeypatc
     assert voice_cli._resolve_wake_acknowledgement_player(Path("/tmp/test.oga")) is None
     assert voice_cli._resolve_wake_acknowledgement_player(Path("/tmp/test.wav")) == [
         "/usr/bin/aplay"
+    ]
+
+    monkeypatch.setattr(
+        "voice_daemon.cli.shutil.which",
+        lambda name: f"/usr/bin/{name}" if name in {"aplay", "paplay"} else None,
+    )
+    assert voice_cli._resolve_acknowledgement_players(Path("/tmp/test.wav")) == [
+        ["/usr/bin/aplay"],
+        ["/usr/bin/paplay"],
     ]
 
 
@@ -871,6 +964,8 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_PHRASE", "computer")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT", "bell")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND", "/tmp/wake.wav")
+    monkeypatch.setenv("MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT", "done")
+    monkeypatch.setenv("MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT_SOUND", "/tmp/done.wav")
     monkeypatch.setenv("MINIGENT_VOICE_STT_PROVIDER", "openrouter")
     monkeypatch.setenv("MINIGENT_VOICE_STT_DEVICE", "cpu")
     monkeypatch.setenv("MINIGENT_VOICE_STT_COMPUTE_TYPE", "int8")
@@ -921,6 +1016,8 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
         wake_phrase="computer",
         wake_acknowledgement="bell",
         wake_acknowledgement_sound="/tmp/wake.wav",
+        capture_ended_acknowledgement="done",
+        capture_ended_acknowledgement_sound="/tmp/done.wav",
         stt_provider="openrouter",
         stt_device="cpu",
         stt_compute_type="int8",
@@ -981,6 +1078,38 @@ def test_build_config_prefers_cli_ducking_overrides(monkeypatch: pytest.MonkeyPa
 
     assert config.ducking_mode == "input-only"
     assert config.ducked_output_volume == 12
+
+
+def test_build_config_prefers_cli_capture_ended_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT", "bell")
+
+    args = build_parser().parse_args(["--capture-ended-acknowledgement", "done"])
+    config = build_config(args)
+
+    assert config.capture_ended_acknowledgement == "done"
+
+
+def test_wrap_feedback_with_ambient_restore_uses_controller_hook() -> None:
+    events: list[str] = []
+
+    class FakeAmbientController:
+        def temporarily_restore(self, callback, *, reduck_delay_seconds: float = 0.0) -> None:
+            events.append(f"delay:{reduck_delay_seconds}")
+            events.append("restore")
+            callback()
+            events.append("duck")
+
+    feedback = voice_cli.wrap_feedback_with_ambient_restore(
+        lambda: events.append("bell"),
+        FakeAmbientController(),
+        reduck_delay_seconds=0.5,
+    )
+
+    assert feedback is not None
+    feedback()
+    assert events == ["delay:0.5", "restore", "bell", "duck"]
 
 
 def test_bounded_output_volume_rejects_out_of_range_values() -> None:
@@ -1063,6 +1192,61 @@ def test_macos_ambient_volume_ducker_restores_on_close(monkeypatch: pytest.Monke
     ducker.close()
 
     assert commands[-1] == ["osascript", "-e", "set volume output volume 35"]
+
+
+def test_macos_ambient_volume_ducker_temporarily_restores_for_feedback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+    commands: list[list[str]] = []
+    events: list[str] = []
+    background_targets = []
+
+    class Result:
+        def __init__(self, stdout: str = "", returncode: int = 0) -> None:
+            self.stdout = stdout
+            self.stderr = ""
+            self.returncode = returncode
+
+    def fake_run(command, text, capture_output, check):
+        commands.append(command)
+        if "output volume of (get volume settings)" in command[-1]:
+            return Result(stdout="55\n")
+        return Result()
+
+    class FakeThread:
+        def __init__(self, target, args=(), daemon: bool = False) -> None:
+            assert daemon is True
+            self.target = target
+            self.args = args
+
+        def start(self) -> None:
+            background_targets.append((self.target, self.args))
+
+    monkeypatch.setattr("voice_daemon.ducking.subprocess.run", fake_run)
+    monkeypatch.setattr("voice_daemon.ducking.threading.Thread", FakeThread)
+
+    ducker = MacOsAmbientVolumeDucker(ducked_output_volume=10, output_stream=output_stream)
+    ducker.sync_state(DaemonState.LISTENING)
+    ducker.temporarily_restore(lambda: events.append("bell"))
+
+    assert events == ["bell"]
+    assert commands == [
+        ["osascript", "-e", "output volume of (get volume settings)"],
+        ["osascript", "-e", "set volume output volume 10"],
+        ["osascript", "-e", "set volume output volume 55"],
+    ]
+    assert len(background_targets) == 1
+
+    background_targets[0][0](*background_targets[0][1])
+
+    assert commands == [
+        ["osascript", "-e", "output volume of (get volume settings)"],
+        ["osascript", "-e", "set volume output volume 10"],
+        ["osascript", "-e", "set volume output volume 55"],
+        ["osascript", "-e", "output volume of (get volume settings)"],
+        ["osascript", "-e", "set volume output volume 10"],
+    ]
 
 
 def test_macos_ambient_volume_ducker_warns_once_and_disables_after_failure(
@@ -1228,8 +1412,11 @@ def test_pcm16le_to_floats_normalizes_samples() -> None:
 
 
 def test_manual_audio_activation_source_records_and_transcribes() -> None:
+    events: list[str] = []
+
     class FakeRecorder:
         def record_until_silence(self) -> RecordedAudio:
+            events.append("record")
             return RecordedAudio(
                 pcm_bytes=b"\x00\x00" * 3200,
                 sample_rate=16_000,
@@ -1239,6 +1426,7 @@ def test_manual_audio_activation_source_records_and_transcribes() -> None:
 
     class FakeTranscriber:
         def transcribe(self, audio: RecordedAudio) -> str:
+            events.append("transcribe")
             assert audio.sample_rate == 16_000
             return "hello from microphone"
 
@@ -1248,6 +1436,7 @@ def test_manual_audio_activation_source_records_and_transcribes() -> None:
         output_stream=output_stream,
         recorder=FakeRecorder(),
         transcriber=FakeTranscriber(),
+        capture_ended_feedback=lambda: events.append("capture-ended"),
     )
 
     activation = source.wait_for_activation("ignored")
@@ -1255,6 +1444,8 @@ def test_manual_audio_activation_source_records_and_transcribes() -> None:
 
     assert activation == Activation()
     assert transcript == "hello from microphone"
+    assert events == ["record", "capture-ended", "transcribe"]
+    assert "[listening] capture ended" in output_stream.getvalue()
     assert "[transcribing] captured 0.20s of audio" in output_stream.getvalue()
     assert "[transcript] hello from microphone" in output_stream.getvalue()
 
@@ -1325,7 +1516,9 @@ def test_capture_debugger_logs_and_writes_capture(tmp_path) -> None:
     assert capture_path.read_bytes()[:4] == b"RIFF"
 
 
-def test_passive_audio_activation_source_records_on_fresh_stream() -> None:
+def test_passive_audio_activation_source_records_on_existing_stream() -> None:
+    events: list[str] = []
+
     class FakeStream:
         def __init__(self) -> None:
             self.chunks = iter([b"\x00\x00" * 4, b"\x01\x00" * 4])
@@ -1366,9 +1559,18 @@ def test_passive_audio_activation_source_records_on_fresh_stream() -> None:
         def __init__(self) -> None:
             self.record_calls = 0
             self.timeout_ms: int | None = None
+            self.stream: object | None = None
 
-        def record_after_speech(self, timeout_ms: int, *, preroll_ms: int = 250) -> RecordedAudio | None:
+        def record_after_speech_from_stream(
+            self,
+            stream,
+            *,
+            timeout_ms: int,
+            preroll_ms: int = 250,
+        ) -> RecordedAudio | None:
+            events.append("record")
             self.record_calls += 1
+            self.stream = stream
             self.timeout_ms = timeout_ms
             self.preroll_ms = preroll_ms
             return RecordedAudio(
@@ -1380,6 +1582,7 @@ def test_passive_audio_activation_source_records_on_fresh_stream() -> None:
 
     class FakeTranscriber:
         def transcribe(self, audio: RecordedAudio) -> str:
+            events.append("transcribe")
             leading_bytes = 16_000 // 2
             trailing_bytes = 16_000
             assert audio.pcm_bytes[:leading_bytes] == (b"\x00" * leading_bytes)
@@ -1389,13 +1592,16 @@ def test_passive_audio_activation_source_records_on_fresh_stream() -> None:
 
     output_stream = StringIO()
     recorder = FakeRecorder()
+    stream = FakeStream()
     source = PassiveAudioActivationSource(
         output_stream=output_stream,
-        stream=FakeStream(),
+        stream=stream,
         recorder=recorder,
         transcriber=FakeTranscriber(),
         wake_detector=FakeWakeDetector(),
         preroll_buffer=AudioRingBuffer(max_bytes=32),
+        activation_feedback=lambda: events.append("wake"),
+        capture_ended_feedback=lambda: events.append("capture-ended"),
         post_wake_speech_timeout_ms=100,
         post_wake_settle_ms=0,
         wakeword_cooldown_ms=100,
@@ -1408,7 +1614,10 @@ def test_passive_audio_activation_source_records_on_fresh_stream() -> None:
 
     assert activation == Activation()
     assert transcript == "wake word request"
+    assert events == ["wake", "record", "capture-ended", "transcribe"]
+    assert "[listening] capture ended" in output_stream.getvalue()
     assert recorder.record_calls == 1
+    assert recorder.stream is stream
     assert recorder.timeout_ms == 100
     assert recorder.preroll_ms == 250
     assert source.wake_detector.reset_calls == 1
@@ -1416,7 +1625,84 @@ def test_passive_audio_activation_source_records_on_fresh_stream() -> None:
     assert "[listening] wake word detected" in output_stream.getvalue()
 
 
+def test_passive_audio_activation_source_settles_before_wake_feedback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeStream:
+        def read(self, frames: int) -> tuple[bytes, bool]:
+            del frames
+            return b"", False
+
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeWakeDetector:
+        frame_length = 4
+        sample_rate = 16000
+        label = "openwakeword:okay_nabu"
+
+        def reset(self) -> None:
+            return None
+
+        def process_chunk(self, chunk: bytes) -> bool:
+            del chunk
+            return False
+
+    class FakeRecorder:
+        def record_after_speech_from_stream(
+            self,
+            stream,
+            *,
+            timeout_ms: int,
+            preroll_ms: int = 250,
+        ) -> RecordedAudio | None:
+            del stream, timeout_ms, preroll_ms
+            events.append("record")
+            return RecordedAudio(
+                pcm_bytes=b"\x03\x00" * 8,
+                sample_rate=16_000,
+                channels=1,
+                sample_width_bytes=2,
+            )
+
+    class FakeTranscriber:
+        def transcribe(self, audio: RecordedAudio) -> str:
+            del audio
+            events.append("transcribe")
+            return "wake word request"
+
+    monkeypatch.setattr("voice_daemon.backends.passive_audio.time.sleep", lambda seconds: events.append(f"sleep:{seconds}"))
+
+    source = PassiveAudioActivationSource(
+        output_stream=StringIO(),
+        stream=FakeStream(),
+        recorder=FakeRecorder(),
+        transcriber=FakeTranscriber(),
+        wake_detector=FakeWakeDetector(),
+        preroll_buffer=AudioRingBuffer(max_bytes=32),
+        activation_feedback=lambda: events.append("wake"),
+        post_wake_settle_ms=250,
+        stt_pad_leading_ms=0,
+        stt_pad_trailing_ms=0,
+    )
+
+    transcript = source.capture_utterance()
+
+    assert transcript == "wake word request"
+    assert events == ["sleep:0.25", "wake", "record", "transcribe"]
+
+
 def test_passive_audio_activation_source_captures_follow_up_without_wake_word() -> None:
+    events: list[str] = []
+
     class FakeStream:
         def read(self, frames: int) -> tuple[bytes, bool]:
             del frames
@@ -1448,6 +1734,7 @@ def test_passive_audio_activation_source_captures_follow_up_without_wake_word() 
             self.timeout_ms: int | None = None
 
         def record_after_speech(self, timeout_ms: int, *, preroll_ms: int = 250) -> RecordedAudio | None:
+            events.append("record")
             self.timeout_ms = timeout_ms
             self.preroll_ms = preroll_ms
             return RecordedAudio(
@@ -1459,6 +1746,7 @@ def test_passive_audio_activation_source_captures_follow_up_without_wake_word() 
 
     class FakeTranscriber:
         def transcribe(self, audio: RecordedAudio) -> str:
+            events.append("transcribe")
             del audio
             return "follow up request"
 
@@ -1471,12 +1759,15 @@ def test_passive_audio_activation_source_captures_follow_up_without_wake_word() 
         transcriber=FakeTranscriber(),
         wake_detector=FakeWakeDetector(),
         preroll_buffer=AudioRingBuffer(max_bytes=32),
+        capture_ended_feedback=lambda: events.append("capture-ended"),
         post_wake_settle_ms=0,
     )
 
     transcript = source.capture_follow_up_utterance(5000)
 
     assert transcript == "follow up request"
+    assert events == ["record", "capture-ended", "transcribe"]
+    assert "[follow-up] capture ended" in output_stream.getvalue()
     assert recorder.timeout_ms == 5000
     assert "[follow-up] listening for a follow-up without the wake word" in output_stream.getvalue()
 
@@ -1514,6 +1805,7 @@ def test_passive_audio_activation_source_follow_up_window_expires() -> None:
             return None
 
     output_stream = StringIO()
+    feedback_calls: list[str] = []
     source = PassiveAudioActivationSource(
         output_stream=output_stream,
         stream=FakeStream(),
@@ -1521,11 +1813,14 @@ def test_passive_audio_activation_source_follow_up_window_expires() -> None:
         transcriber=object(),  # type: ignore[arg-type]
         wake_detector=FakeWakeDetector(),
         preroll_buffer=AudioRingBuffer(max_bytes=32),
+        capture_ended_feedback=lambda: feedback_calls.append("capture-ended"),
     )
 
     transcript = source.capture_follow_up_utterance(3000)
 
     assert transcript is None
+    assert feedback_calls == ["capture-ended"]
+    assert "[follow-up] capture ended" in output_stream.getvalue()
     assert "[idle] follow-up window expired, returning to wake-word mode" in output_stream.getvalue()
 
 
@@ -1614,8 +1909,16 @@ def test_passive_audio_activation_source_ignores_wake_without_followup_speech() 
     class FakeRecorder:
         def __init__(self) -> None:
             self.timeout_ms: int | None = None
+            self.stream: object | None = None
 
-        def record_after_speech(self, timeout_ms: int, *, preroll_ms: int = 250) -> RecordedAudio | None:
+        def record_after_speech_from_stream(
+            self,
+            stream,
+            *,
+            timeout_ms: int,
+            preroll_ms: int = 250,
+        ) -> RecordedAudio | None:
+            self.stream = stream
             self.timeout_ms = timeout_ms
             self.preroll_ms = preroll_ms
             return None
@@ -1626,13 +1929,16 @@ def test_passive_audio_activation_source_ignores_wake_without_followup_speech() 
 
     output_stream = StringIO()
     recorder = FakeRecorder()
+    feedback_calls: list[str] = []
+    stream = FakeStream()
     source = PassiveAudioActivationSource(
         output_stream=output_stream,
-        stream=FakeStream(),
+        stream=stream,
         recorder=recorder,
         transcriber=FakeTranscriber(),
         wake_detector=FakeWakeDetector(),
         preroll_buffer=AudioRingBuffer(max_bytes=32),
+        capture_ended_feedback=lambda: feedback_calls.append("capture-ended"),
         post_wake_speech_timeout_ms=250,
         post_wake_settle_ms=0,
         wakeword_cooldown_ms=100,
@@ -1643,6 +1949,8 @@ def test_passive_audio_activation_source_ignores_wake_without_followup_speech() 
     transcript = source.capture_utterance()
 
     assert transcript == ""
+    assert feedback_calls == []
+    assert recorder.stream is stream
     assert recorder.timeout_ms == 250
     assert recorder.preroll_ms == 250
     assert "[idle] no speech after wake word, ignoring activation" in output_stream.getvalue()
@@ -1676,7 +1984,14 @@ def test_passive_audio_activation_source_ignores_stt_error() -> None:
             return False
 
     class FakeRecorder:
-        def record_after_speech(self, timeout_ms: int, *, preroll_ms: int = 250) -> RecordedAudio | None:
+        def record_after_speech_from_stream(
+            self,
+            stream,
+            *,
+            timeout_ms: int,
+            preroll_ms: int = 250,
+        ) -> RecordedAudio | None:
+            del stream
             del timeout_ms
             del preroll_ms
             return RecordedAudio(
@@ -1793,7 +2108,11 @@ def test_voice_daemon_cli_handles_keyboard_interrupt(
         "build_config",
         lambda args: VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
     )
-    monkeypatch.setattr(voice_cli, "build_activation_source", lambda backend, config: activation_source)
+    monkeypatch.setattr(
+        voice_cli,
+        "build_activation_source",
+        lambda backend, config, **kwargs: activation_source,
+    )
     monkeypatch.setattr(voice_cli, "MinigentClient", lambda config: object())
     monkeypatch.setattr(voice_cli, "build_speech_output", lambda config: object())
     monkeypatch.setattr(voice_cli, "VoiceDaemon", FakeVoiceDaemon)
