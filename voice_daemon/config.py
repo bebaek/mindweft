@@ -38,6 +38,8 @@ class VoiceDaemonConfig:
     tts_model: str | None = None
     tts_model_dir: str | None = None
     tts_speaker: int | None = None
+    tts_length_scale: float | None = None
+    tts_sentence_silence: float | None = 0.35
     wakeword_provider: str = "porcupine"
     skill_name: str | None = None
     thread_id: str | None = None
@@ -98,6 +100,8 @@ class VoiceDaemonConfig:
             tts_model=_clean_optional(os.getenv("MINIGENT_VOICE_TTS_MODEL")),
             tts_model_dir=_clean_optional(os.getenv("MINIGENT_VOICE_TTS_MODEL_DIR")),
             tts_speaker=_optional_int_from_env("MINIGENT_VOICE_TTS_SPEAKER"),
+            tts_length_scale=_optional_float_from_env("MINIGENT_VOICE_TTS_LENGTH_SCALE"),
+            tts_sentence_silence=_float_from_env("MINIGENT_VOICE_TTS_SENTENCE_SILENCE", 0.35),
             wakeword_provider=os.getenv(
                 "MINIGENT_VOICE_WAKEWORD_PROVIDER", "porcupine"
             ).strip().lower(),
@@ -183,6 +187,16 @@ def _optional_int_from_env(name: str) -> int | None:
     if not stripped:
         return None
     return int(stripped)
+
+
+def _optional_float_from_env(name: str) -> float | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return float(stripped)
 
 
 def _bool_from_env(name: str, default: bool) -> bool:

@@ -94,6 +94,8 @@ class PiperSpeechOutput(SpeechOutput):
     model: str
     model_dir: str | None = None
     speaker: int | None = None
+    length_scale: float | None = None
+    sentence_silence: float | None = None
     _playback_thread: threading.Thread | None = field(default=None, init=False)
     _interrupted: bool = field(default=False, init=False)
     _playback_error: BaseException | None = field(default=None, init=False)
@@ -154,6 +156,10 @@ class PiperSpeechOutput(SpeechOutput):
             command = [piper_executable, "--model", str(model_path), "--output_file", str(output_path)]
             if self.speaker is not None:
                 command.extend(["--speaker", str(self.speaker)])
+            if self.length_scale is not None:
+                command.extend(["--length-scale", str(self.length_scale)])
+            if self.sentence_silence is not None:
+                command.extend(["--sentence-silence", str(self.sentence_silence)])
             result = subprocess.run(
                 command,
                 input=text,

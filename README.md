@@ -306,6 +306,20 @@ downloads the `.onnx` and `.onnx.json` files on first use into
 PortAudio stack as microphone capture through `sounddevice`, so you do not need a
 separate `afplay`/`aplay` integration in the daemon.
 
+Piper uses `MINIGENT_VOICE_TTS_SENTENCE_SILENCE=0.35` by default so Markdown lists and
+headers get an audible pause after they are converted into sentence boundaries. Increase
+it if bullets still sound too continuous, or set it to `0` to disable the extra pause.
+If the voice itself sounds too fast, set `MINIGENT_VOICE_TTS_LENGTH_SCALE` above `1.0`;
+for example:
+
+```bash
+MINIGENT_VOICE_TTS_PROVIDER=piper
+MINIGENT_VOICE_TTS_MODEL=en_US-lessac-medium
+MINIGENT_VOICE_TTS_SENTENCE_SILENCE=0.55
+MINIGENT_VOICE_TTS_LENGTH_SCALE=1.15
+minigent-voice-daemon --backend manual-audio --once
+```
+
 The daemon currently supports three backends:
 
 - `stdin`: text-driven wake phrase loop for cheap end-to-end testing
@@ -511,6 +525,8 @@ Daemon-related env vars:
 - `MINIGENT_VOICE_TTS_MODEL`
 - `MINIGENT_VOICE_TTS_MODEL_DIR`
 - `MINIGENT_VOICE_TTS_SPEAKER`
+- `MINIGENT_VOICE_TTS_LENGTH_SCALE`
+- `MINIGENT_VOICE_TTS_SENTENCE_SILENCE`
 - `MINIGENT_VOICE_WAKEWORD_PROVIDER`
 - `MINIGENT_VOICE_SKILL`
 - `MINIGENT_VOICE_THREAD_ID`

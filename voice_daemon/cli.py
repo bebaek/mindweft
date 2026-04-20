@@ -165,6 +165,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional speaker ID for multi-speaker Piper models. Defaults to MINIGENT_VOICE_TTS_SPEAKER.",
     )
     parser.add_argument(
+        "--tts-length-scale",
+        default=None,
+        type=float,
+        help="Optional Piper length scale. Values greater than 1.0 slow speech down. Defaults to MINIGENT_VOICE_TTS_LENGTH_SCALE.",
+    )
+    parser.add_argument(
+        "--tts-sentence-silence",
+        default=None,
+        type=float,
+        help="Optional Piper silence in seconds between detected sentences. Defaults to MINIGENT_VOICE_TTS_SENTENCE_SILENCE.",
+    )
+    parser.add_argument(
         "--wakeword-provider",
         choices=("porcupine", "openwakeword"),
         default=None,
@@ -211,6 +223,16 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
         tts_model=args.tts_model or env_config.tts_model,
         tts_model_dir=args.tts_model_dir or env_config.tts_model_dir,
         tts_speaker=args.tts_speaker if args.tts_speaker is not None else env_config.tts_speaker,
+        tts_length_scale=(
+            args.tts_length_scale
+            if args.tts_length_scale is not None
+            else env_config.tts_length_scale
+        ),
+        tts_sentence_silence=(
+            args.tts_sentence_silence
+            if args.tts_sentence_silence is not None
+            else env_config.tts_sentence_silence
+        ),
         wakeword_provider=args.wakeword_provider or env_config.wakeword_provider,
         skill_name=args.skill or env_config.skill_name,
         thread_id=args.thread_id or env_config.thread_id,
@@ -435,6 +457,8 @@ def build_speech_output(config: VoiceDaemonConfig):
             model=config.tts_model,
             model_dir=config.tts_model_dir,
             speaker=config.tts_speaker,
+            length_scale=config.tts_length_scale,
+            sentence_silence=config.tts_sentence_silence,
         )
     raise SystemExit(
         f"Unsupported MINIGENT_VOICE_TTS_PROVIDER '{config.tts_provider}'. "

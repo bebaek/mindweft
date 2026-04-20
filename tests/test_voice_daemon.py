@@ -461,9 +461,13 @@ def test_piper_speech_output_prints_and_plays(monkeypatch: pytest.MonkeyPatch, t
         lambda model, model_dir: tmp_path / "voice.onnx",
     )
 
-    PiperSpeechOutput(output_stream=output_stream, model=str(tmp_path / "voice.onnx"), speaker=3).speak(
-        "*done*"
-    )
+    PiperSpeechOutput(
+        output_stream=output_stream,
+        model=str(tmp_path / "voice.onnx"),
+        speaker=3,
+        length_scale=1.15,
+        sentence_silence=0.45,
+    ).speak("*done*")
 
     assert output_stream.getvalue() == "[assistant] *done*\n"
     assert captured["command"][:4] == [
@@ -472,7 +476,12 @@ def test_piper_speech_output_prints_and_plays(monkeypatch: pytest.MonkeyPatch, t
         str(tmp_path / "voice.onnx"),
         "--output_file",
     ]
-    assert captured["command"][-2:] == ["--speaker", "3"]
+    assert "--speaker" in captured["command"]
+    assert captured["command"][captured["command"].index("--speaker") + 1] == "3"
+    assert "--length-scale" in captured["command"]
+    assert captured["command"][captured["command"].index("--length-scale") + 1] == "1.15"
+    assert "--sentence-silence" in captured["command"]
+    assert captured["command"][captured["command"].index("--sentence-silence") + 1] == "0.45"
     assert captured["input"] == "done"
     assert captured["text"] is True
     assert captured["capture_output"] is True
@@ -508,6 +517,8 @@ def test_build_speech_output_supports_console_say_and_piper() -> None:
             tts_provider="piper",
             tts_model="/tmp/en_US-lessac-medium.onnx",
             tts_speaker=5,
+            tts_length_scale=1.1,
+            tts_sentence_silence=0.5,
         )
     )
 
@@ -517,6 +528,8 @@ def test_build_speech_output_supports_console_say_and_piper() -> None:
     assert isinstance(piper, PiperSpeechOutput)
     assert piper.model == "/tmp/en_US-lessac-medium.onnx"
     assert piper.speaker == 5
+    assert piper.length_scale == 1.1
+    assert piper.sentence_silence == 0.5
 
 
 def test_build_ambient_volume_controller_supports_off_and_input_only(
@@ -975,6 +988,8 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_VOICE_TTS_MODEL", "/tmp/en_US-lessac-medium.onnx")
     monkeypatch.setenv("MINIGENT_VOICE_TTS_MODEL_DIR", "/tmp/minigent-piper")
     monkeypatch.setenv("MINIGENT_VOICE_TTS_SPEAKER", "7")
+    monkeypatch.setenv("MINIGENT_VOICE_TTS_LENGTH_SCALE", "1.2")
+    monkeypatch.setenv("MINIGENT_VOICE_TTS_SENTENCE_SILENCE", "0.6")
     monkeypatch.setenv("MINIGENT_VOICE_WAKEWORD_PROVIDER", "porcupine")
     monkeypatch.setenv("MINIGENT_VOICE_SKILL", "support")
     monkeypatch.setenv("MINIGENT_VOICE_THREAD_ID", "thread-123")
@@ -1027,6 +1042,8 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
         tts_model="/tmp/en_US-lessac-medium.onnx",
         tts_model_dir="/tmp/minigent-piper",
         tts_speaker=7,
+        tts_length_scale=1.2,
+        tts_sentence_silence=0.6,
         wakeword_provider="porcupine",
         skill_name="support",
         thread_id="thread-123",
@@ -1078,6 +1095,19 @@ def test_build_config_prefers_cli_ducking_overrides(monkeypatch: pytest.MonkeyPa
 
     assert config.ducking_mode == "input-only"
     assert config.ducked_output_volume == 12
+
+
+def test_build_config_prefers_cli_piper_pacing_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_VOICE_TTS_LENGTH_SCALE", "1.1")
+    monkeypatch.setenv("MINIGENT_VOICE_TTS_SENTENCE_SILENCE", "0.4")
+
+    args = build_parser().parse_args(
+        ["--tts-length-scale", "1.25", "--tts-sentence-silence", "0.7"]
+    )
+    config = build_config(args)
+
+    assert config.tts_length_scale == 1.25
+    assert config.tts_sentence_silence == 0.7
 
 
 def test_build_config_prefers_cli_capture_ended_acknowledgement(
