@@ -39,7 +39,7 @@ The current runtime has two important persistence boundaries:
 That means the current safe deployment shape is a single Minigent container behind your
 existing reverse proxy.
 
-Start from [.env.example](/Users/burm/code/minigent/.env.example), then set at least:
+Start from [.env.template](/Users/burm/code/minigent/.env.template), then set at least:
 
 ```dotenv
 MINIGENT_AUTH_MODE=jwt
@@ -561,7 +561,7 @@ Daemon-related env vars:
 - `OPENROUTER_APP_NAME`
 - `PICOVOICE_ACCESS_KEY`
 
-You can put provider settings in a local `.env` file. Start from [.env.example](/Users/burm/code/minigent/.env.example).
+You can put provider settings in a local `.env` file. Start from [.env.template](/Users/burm/code/minigent/.env.template).
 
 ## Authentication
 
@@ -902,6 +902,11 @@ maximum available tools and MCP servers. When a thread activates a skill, the ru
 effective tool and MCP access to the intersection of the tenant configuration and the skill
 allowlists. Skills can reduce access for a thread, but they cannot expand access beyond the tenant
 configuration.
+
+Skills are also the supported way to customize the system prompt. The runtime always keeps its
+built-in tool-use and verification instructions, then appends the selected skill's
+`system_prompt`. In other words, a skill prompt is an overlay, not a full replacement for the
+runtime prompt, and `POST /threads` does not accept a raw `system_prompt` override.
 
 Use this tenant config with the mock adapter to demo default and explicit skills:
 

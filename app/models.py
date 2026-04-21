@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def utc_now() -> datetime:
@@ -64,6 +64,7 @@ class CreateThreadResponse(BaseModel):
 
 
 class CreateThreadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     skill_name: str | None = None
 
 
