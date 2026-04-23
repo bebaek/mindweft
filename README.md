@@ -347,17 +347,23 @@ hey minigent
 show me the transcript
 ```
 
-If the daemon should consistently send coarse client location with each utterance, set
-`MINIGENT_VOICE_LOCATION`. The daemon prepends it to the prompt text it sends to
-Minigent; the server treats that as ordinary user content and does not validate or infer
-location on its own.
+If the daemon should consistently send client-owned prompt context with each utterance,
+set `MINIGENT_VOICE_PROMPT_PREAMBLE`. The daemon prepends it to the prompt text it sends
+to Minigent; the server treats that as ordinary user content and does not validate or
+infer anything on its own.
 
 Example:
 
 ```bash
-MINIGENT_VOICE_LOCATION='Austin, TX, US; timezone=America/Chicago' \
+MINIGENT_VOICE_PROMPT_PREAMBLE='timezone=America/Chicago
+note=prefer local context' \
 minigent-voice-daemon --backend manual-audio --once
 ```
+
+For coarse location specifically, `MINIGENT_VOICE_LOCATION` remains available as a
+compatibility convenience. When `MINIGENT_VOICE_PROMPT_PREAMBLE` is unset, the daemon
+converts `MINIGENT_VOICE_LOCATION` into client context automatically. If both are set,
+`MINIGENT_VOICE_PROMPT_PREAMBLE` wins.
 
 For prompt-level diagnostics, set `MINIGENT_VOICE_DEBUG_SHOW_PROMPT=true`. The daemon
 will print the exact outbound user message after any location prefix is added and before
@@ -528,6 +534,7 @@ Daemon-related env vars:
 
 - `MINIGENT_BASE_URL`
 - `MINIGENT_VOICE_WAKE_PHRASE`
+- `MINIGENT_VOICE_PROMPT_PREAMBLE`
 - `MINIGENT_VOICE_LOCATION`
 - `MINIGENT_VOICE_DEBUG_SHOW_PROMPT`
 - `MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT`

@@ -208,6 +208,7 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
     return VoiceDaemonConfig(
         base_url=(args.base_url or env_config.base_url).rstrip("/"),
         wake_phrase=(args.wake_phrase or env_config.wake_phrase).strip(),
+        prompt_preamble=env_config.prompt_preamble,
         location=env_config.location,
         debug_show_prompt=env_config.debug_show_prompt,
         wake_acknowledgement=args.wake_acknowledgement or env_config.wake_acknowledgement,

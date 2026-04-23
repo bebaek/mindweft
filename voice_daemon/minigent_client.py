@@ -76,12 +76,20 @@ class MinigentClient:
             raise RuntimeError(f"{method} {url} failed: {exc.reason}") from exc
 
     def _format_user_message(self, content: str) -> str:
-        if not self._config.location:
+        preamble = self._resolved_prompt_preamble()
+        if preamble is None:
             return content
-        return f"Context: location={self._config.location}\n\n{content}"
+        return f"Client context:\n{preamble}\n\n{content}"
 
     def _maybe_log_prompt(self, content: str) -> None:
         if not self._config.debug_show_prompt:
             return
         self._output_stream.write(f"[prompt]\n{content}\n")
         self._output_stream.flush()
+
+    def _resolved_prompt_preamble(self) -> str | None:
+        if self._config.prompt_preamble:
+            return self._config.prompt_preamble
+        if self._config.location:
+            return f"location={self._config.location}"
+        return None

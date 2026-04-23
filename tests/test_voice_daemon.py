@@ -977,6 +977,7 @@ def test_principal_config_prefers_bearer_token() -> None:
 def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_BASE_URL", "http://127.0.0.1:9000/")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_PHRASE", "computer")
+    monkeypatch.setenv("MINIGENT_VOICE_PROMPT_PREAMBLE", "timezone=America/Chicago")
     monkeypatch.setenv("MINIGENT_VOICE_LOCATION", "Austin, TX, US; timezone=America/Chicago")
     monkeypatch.setenv("MINIGENT_VOICE_DEBUG_SHOW_PROMPT", "true")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT", "bell")
@@ -1033,6 +1034,7 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
     assert config == VoiceDaemonConfig(
         base_url="http://127.0.0.1:9000",
         wake_phrase="computer",
+        prompt_preamble="timezone=America/Chicago",
         location="Austin, TX, US; timezone=America/Chicago",
         debug_show_prompt=True,
         wake_acknowledgement="bell",
@@ -1151,7 +1153,7 @@ def test_minigent_client_sends_raw_message_when_location_is_unset(
     ]
 
 
-def test_minigent_client_prepends_location_context_when_configured(
+def test_minigent_client_uses_location_as_compatibility_preamble_when_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen_payloads: list[dict[str, object]] = []
@@ -1191,8 +1193,59 @@ def test_minigent_client_prepends_location_context_when_configured(
     assert seen_payloads == [
         {
             "content": (
-                "Context: location=Austin, TX, US; timezone=America/Chicago\n\n"
+                "Client context:\n"
+                "location=Austin, TX, US; timezone=America/Chicago\n\n"
                 "find coffee nearby"
+            )
+        }
+    ]
+
+
+def test_minigent_client_prefers_explicit_prompt_preamble_over_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_payloads: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    def fake_urlopen(request: object) -> FakeResponse:
+        payload = json.loads(request.data.decode("utf-8")) if request.data else None
+        seen_payloads.append(payload)
+        return FakeResponse({"id": "message-1"})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    client = MinigentClient(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            prompt_preamble="timezone=America/Chicago\nnote=prefer local context",
+            location="Austin, TX, US; timezone=America/Chicago",
+            thread_id="thread-123",
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        )
+    )
+
+    client.send_user_message("What's my location?")
+
+    assert seen_payloads == [
+        {
+            "content": (
+                "Client context:\n"
+                "timezone=America/Chicago\n"
+                "note=prefer local context\n\n"
+                "What's my location?"
             )
         }
     ]
@@ -1241,14 +1294,16 @@ def test_minigent_client_can_log_full_prompt_for_diagnostics(
     assert seen_payloads == [
         {
             "content": (
-                "Context: location=Austin, TX, US; timezone=America/Chicago\n\n"
+                "Client context:\n"
+                "location=Austin, TX, US; timezone=America/Chicago\n\n"
                 "What's my location?"
             )
         }
     ]
     assert output_stream.getvalue() == (
         "[prompt]\n"
-        "Context: location=Austin, TX, US; timezone=America/Chicago\n\n"
+        "Client context:\n"
+        "location=Austin, TX, US; timezone=America/Chicago\n\n"
         "What's my location?\n"
     )
 

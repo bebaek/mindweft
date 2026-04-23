@@ -25,6 +25,7 @@ class PrincipalConfig:
 class VoiceDaemonConfig:
     base_url: str
     wake_phrase: str
+    prompt_preamble: str | None = None
     location: str | None = None
     debug_show_prompt: bool = False
     wake_acknowledgement: str | None = None
@@ -83,6 +84,7 @@ class VoiceDaemonConfig:
         return cls(
             base_url=os.getenv("MINIGENT_BASE_URL", "http://127.0.0.1:8000").rstrip("/"),
             wake_phrase=os.getenv("MINIGENT_VOICE_WAKE_PHRASE", "hey minigent").strip(),
+            prompt_preamble=_clean_optional(os.getenv("MINIGENT_VOICE_PROMPT_PREAMBLE")),
             location=_clean_optional(os.getenv("MINIGENT_VOICE_LOCATION")),
             debug_show_prompt=_bool_from_env("MINIGENT_VOICE_DEBUG_SHOW_PROMPT", False),
             wake_acknowledgement=_clean_optional(os.getenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT")),
