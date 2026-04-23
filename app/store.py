@@ -14,9 +14,22 @@ class InMemoryThreadStore:
         self._messages: dict[str, list[Message]] = {}
         self._lock = Lock()
 
-    def create_thread(self, tenant_id: str, *, skill_name: str | None = None) -> Thread:
+    def create_thread(
+        self,
+        tenant_id: str,
+        *,
+        skill_name: str | None = None,
+        skill_names: list[str] | None = None,
+        capability_profile: str | None = None,
+    ) -> Thread:
         with self._lock:
-            thread = Thread(tenant_id=tenant_id, skill_name=skill_name)
+            normalized_skill_names = list(skill_names) if skill_names is not None else None
+            thread = Thread(
+                tenant_id=tenant_id,
+                skill_name=skill_name,
+                skill_names=normalized_skill_names,
+                capability_profile=capability_profile,
+            )
             self._threads[thread.thread_id] = thread
             self._contexts[thread.thread_id] = ThreadContext(thread_id=thread.thread_id)
             self._messages[thread.thread_id] = []

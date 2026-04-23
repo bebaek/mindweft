@@ -10,8 +10,10 @@ from fastapi import HTTPException
 from app.execution import (
     FixedTenantExecutionResolver,
     TenantExecutionResolver,
+    build_tool_registry_for_capability_profile,
     build_tool_registry_for_skill,
-    get_skill_config,
+    get_capability_profile,
+    get_skill_configs,
 )
 from app.llm import LLMAdapter, serialize_tool_result
 from app.models import LLMResponse, Message, MessageRole, Principal, ThreadContext, ThreadStatus
@@ -61,19 +63,35 @@ class AgentRuntime:
         failed_tool_calls: set[str] = set()
         execution = self._execution_resolver.resolve(principal.tenant_id)
         thread = self._store.get_thread(principal.tenant_id, thread_id)
-        skill = get_skill_config(execution.config, thread.skill_name)
-        tool_registry = (
-            build_tool_registry_for_skill(
+        skill_names = thread.skill_names
+        if skill_names is None and thread.skill_name is not None:
+            skill_names = [thread.skill_name]
+        skills = get_skill_configs(execution.config, skill_names)
+        capability_profile = get_capability_profile(execution.config, thread.capability_profile)
+        if capability_profile is not None:
+            tool_registry = build_tool_registry_for_capability_profile(
                 execution.config,
-                thread.skill_name,
+                thread.capability_profile,
                 mcp_manager=execution.mcp_manager,
             )
-            if skill is not None
-            else execution.tool_registry
-        )
+        elif len(skills) == 1 and (
+            skills[0].allowed_local_tools is not None or skills[0].mcp_server_names is not None
+        ):
+            tool_registry = build_tool_registry_for_skill(
+                execution.config,
+                skills[0].name,
+                mcp_manager=execution.mcp_manager,
+            )
+        else:
+            tool_registry = execution.tool_registry
         try:
             for _ in range(self._max_iterations):
-                messages = self._messages_for_llm(principal, thread_id, skill_prompt=skill.system_prompt if skill else None)
+                messages = self._messages_for_llm(
+                    principal,
+                    thread_id,
+                    skill_prompts=[skill.system_prompt for skill in skills],
+                    skill_names=[skill.name for skill in skills],
+                )
                 response = await execution.llm_adapter.generate(
                     messages, tool_registry.specs()
                 )
@@ -181,12 +199,21 @@ class AgentRuntime:
         principal: Principal,
         thread_id: str,
         *,
-        skill_prompt: str | None = None,
+        skill_prompts: list[str] | None = None,
+        skill_names: list[str] | None = None,
     ) -> list[Message]:
         context = self._refresh_thread_context(principal, thread_id)
         system_prompt = RUNTIME_SYSTEM_PROMPT
-        if skill_prompt:
-            system_prompt = f"{system_prompt}\n\n{skill_prompt}"
+        if skill_prompts:
+            sections: list[str] = [system_prompt]
+            for index, prompt in enumerate(skill_prompts):
+                label = (
+                    skill_names[index]
+                    if skill_names is not None and index < len(skill_names)
+                    else f"skill-{index + 1}"
+                )
+                sections.append(f"[Skill: {label}]\n{prompt}")
+            system_prompt = "\n\n".join(sections)
         prompt_messages = [
             Message(thread_id=thread_id, role=MessageRole.SYSTEM, content=system_prompt),
         ]

@@ -218,4 +218,16 @@ def _serialize_config_payload(config: TenantExecutionConfig) -> dict[str, Any]:
                 for skill in config.skills.items
             ],
         },
+        "capability_profiles": {
+            "default_profile": config.capability_profiles.default_profile,
+            "items": [
+                {
+                    "name": profile.name,
+                    "description": profile.description,
+                    "allowed_local_tools": profile.allowed_local_tools,
+                    "mcp_server_names": profile.mcp_server_names,
+                }
+                for profile in config.capability_profiles.items
+            ],
+        },
     }

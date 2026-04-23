@@ -441,6 +441,56 @@ def test_create_thread_can_select_skill_and_skill_narrows_runtime_tools(
     assert run_response.json() == {"reply": "Mock reply: /tool echo hello from restricted skill"}
 
 
+def test_create_thread_can_select_skill_names_and_capability_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "tools": {"allowed_local_tools": ["echo", "calculator"]},
+                    "skills": {
+                        "items": [
+                            {"name": "support", "system_prompt": "Answer concisely."},
+                            {"name": "math-style", "system_prompt": "Prefer exact arithmetic."},
+                        ]
+                    },
+                    "capability_profiles": {
+                        "items": [
+                            {
+                                "name": "math",
+                                "allowed_local_tools": ["calculator"],
+                            }
+                        ]
+                    },
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+
+    create_response = client.post(
+        "/threads",
+        json={"skill_names": ["support", "math-style"], "capability_profile": "math"},
+        headers=AUTH_HEADERS,
+    )
+    assert create_response.status_code == 200
+    thread_id = create_response.json()["thread_id"]
+
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "/tool echo hello from restricted profile"},
+        headers=AUTH_HEADERS,
+    )
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert run_response.status_code == 200
+    assert run_response.json() == {"reply": "Mock reply: /tool echo hello from restricted profile"}
+
+
 def test_create_thread_uses_default_skill_when_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -507,6 +557,79 @@ def test_create_thread_rejects_unknown_skill(monkeypatch: pytest.MonkeyPatch) ->
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Unknown skill 'missing' for tenant 'tenant-1'"
+
+
+def test_create_thread_rejects_unknown_capability_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "capability_profiles": {
+                        "items": [{"name": "safe", "allowed_local_tools": ["echo"]}]
+                    },
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/threads",
+        json={"capability_profile": "missing"},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Unknown capability profile 'missing' for tenant 'tenant-1'"
+    )
+
+
+def test_create_thread_rejects_duplicate_skill_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "skills": {
+                        "items": [{"name": "support", "system_prompt": "Answer concisely."}]
+                    },
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/threads",
+        json={"skill_names": ["support", "support"]},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Duplicate skill_names are not allowed: support"
+
+
+def test_create_thread_rejects_skill_name_and_skill_names_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps({"tenant-1": {"llm": {"provider": "mock"}}}),
+    )
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/threads",
+        json={"skill_name": "support", "skill_names": ["support"]},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Provide either skill_name or skill_names, not both"
 
 
 def test_create_thread_rejects_raw_system_prompt_override() -> None:

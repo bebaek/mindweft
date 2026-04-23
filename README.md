@@ -667,6 +667,11 @@ Supported fields:
 - `llm.model`, `llm.base_url`, `llm.api_key`, `llm.extra_headers`, `llm.timeout`
 - `tools.allowed_local_tools`: local tool allowlist
 - `tools.mcp_servers`: per-tenant MCP server definitions
+- `skills.default_skill`, `skills.items`: available prompt-overlay skills
+- `capability_profiles.default_profile`, `capability_profiles.items`: explicit tool/MCP narrowing profiles
+
+For a developer-oriented example that combines multiple skills with explicit capability profiles,
+see the commented block in [.env.template](/Users/burm/code/minigent/.env.template).
 
 The local tool `retrieve_knowledge` is available when Minigent is run with the `minirag`
 extra installed and `MINIGENT_MINIRAG_DB_PATH` set to a SQLite database created by
@@ -895,20 +900,33 @@ To create a thread with a specific skill:
 uv run python scripts/demo_client.py --skill-name math "/tool echo blocked by skill"
 ```
 
+To create a thread with multiple prompt-overlay skills plus an explicit capability profile:
+
+```bash
+uv run python scripts/demo_client.py \
+  --skill-names home-assistant-operator concise \
+  --capability-profile home-assistant \
+  "turn off the kitchen lights that are still on"
+```
+
 ## Skills Demo
 
-Skills are execution overlays, not independent permission grants. Tenant tool config defines the
-maximum available tools and MCP servers. When a thread activates a skill, the runtime narrows the
-effective tool and MCP access to the intersection of the tenant configuration and the skill
-allowlists. Skills can reduce access for a thread, but they cannot expand access beyond the tenant
-configuration.
+Skills are execution overlays. They primarily customize the system prompt. Capability profiles
+control the effective local-tool and MCP-server surface for a thread.
 
-Skills are also the supported way to customize the system prompt. The runtime always keeps its
-built-in tool-use and verification instructions, then appends the selected skill's
-`system_prompt`. In other words, a skill prompt is an overlay, not a full replacement for the
-runtime prompt, and `POST /threads` does not accept a raw `system_prompt` override.
+Tenant tool config still defines the maximum available tools and MCP servers. A capability profile
+can narrow access for a thread, but it cannot expand access beyond the tenant configuration.
 
-Use this tenant config with the mock adapter to demo default and explicit skills:
+For backward compatibility, Minigent still honors legacy skill-level `allowed_local_tools` and
+`mcp_server_names` when a thread selects exactly one such skill and no explicit capability profile
+is set. New configs should prefer prompt-only skills plus `capability_profiles`.
+
+The runtime always keeps its built-in tool-use and verification instructions, then appends the
+selected skill prompts in order. In other words, skill prompts are overlays, not full replacements
+for the runtime prompt, and `POST /threads` does not accept a raw `system_prompt` override.
+
+Use this tenant config with the mock adapter to demo default and explicit skills plus capability
+profiles:
 
 ```dotenv
 MINIGENT_AUTH_MODE=dev-headers
@@ -921,12 +939,27 @@ MINIGENT_TENANT_EXECUTION_CONFIGS={
       "items":[
         {
           "name":"support",
-          "system_prompt":"Answer as a concise support agent.",
+          "system_prompt":"Answer as a concise support agent."
+        },
+        {
+          "name":"math",
+          "system_prompt":"Prefer exact arithmetic over estimation."
+        },
+        {
+          "name":"safe-actions",
+          "system_prompt":"Require explicit confirmation before high-risk actions."
+        }
+      ]
+    },
+    "capability_profiles":{
+      "default_profile":"support",
+      "items":[
+        {
+          "name":"support",
           "allowed_local_tools":["echo","current_time"]
         },
         {
           "name":"math",
-          "system_prompt":"Prefer exact arithmetic over estimation.",
           "allowed_local_tools":["calculator"]
         }
       ]
@@ -939,14 +972,72 @@ With the server running:
 
 ```bash
 uv run python scripts/demo_client.py --tenant-id demo-tenant "/tool echo hello from support"
-uv run python scripts/demo_client.py --tenant-id demo-tenant --skill-name math "/tool echo blocked by skill"
+uv run python scripts/demo_client.py --tenant-id demo-tenant --skill-name math --capability-profile math "/tool echo blocked by profile"
+uv run python scripts/demo_client.py --tenant-id demo-tenant --skill-names support safe-actions "hello"
 uv run python scripts/demo_client.py --tenant-id demo-tenant --skill-name missing "hello"
 ```
 
 Expected results:
-- Default `support` skill allows `echo`, so the reply includes a tool result.
-- `math` narrows tool access, so `/tool echo ...` falls back to a plain mock reply.
+- Default `support` capability profile allows `echo`, so the reply includes a tool result.
+- `math` capability profile narrows tool access, so `/tool echo ...` falls back to a plain mock reply.
+- `support` plus `safe-actions` stacks both prompt overlays in order.
 - Unknown skills are rejected during thread creation with `400`.
+
+For a Home Assistant deployment, use a prompt-overlay skill with a dedicated capability profile to
+append Home Assistant-specific operating guidance while narrowing the thread to the Home Assistant
+MCP server:
+
+```dotenv
+MINIGENT_TENANT_EXECUTION_CONFIGS={
+  "demo-tenant":{
+    "llm":{"provider":"openai","model":"gpt-4.1-mini","api_key":"..."},
+    "tools":{
+      "allowed_local_tools":["current_time"],
+      "mcp_servers":[
+        {"name":"home-assistant","url":"https://ha.example/api/mcp","headers":{"Authorization":"Bearer ..."}},
+        {"name":"docs","url":"https://docs.example/mcp","headers":{"Authorization":"Bearer ..."}}
+      ]
+    },
+    "skills":{
+      "items":[
+        {
+          "name":"home-assistant",
+          "description":"Use Home Assistant safely and precisely.",
+          "system_prompt":"You are operating against a Home Assistant MCP server. Discover entities before acting, prefer exact entity IDs once resolved, inspect current state before mutation, avoid broad toggles when a specific end state is known, and require explicit user confirmation before security-sensitive actions like unlocking doors, opening garage doors, or disabling alarms."
+        },
+        {
+          "name":"concise",
+          "system_prompt":"Respond concisely."
+        }
+      ]
+    },
+    "capability_profiles":{
+      "items":[
+        {
+          "name":"home-assistant",
+          "allowed_local_tools":["current_time"],
+          "mcp_server_names":["home-assistant"]
+        }
+      ]
+    }
+  }
+}
+```
+
+That setup does two things:
+
+- `home-assistant` capability profile narrows MCP access for the thread to `home-assistant`
+- `home-assistant` skill appends a Home Assistant-specific prompt overlay with entity-resolution and safety rules
+
+Example:
+
+```bash
+uv run python scripts/demo_client.py \
+  --tenant-id demo-tenant \
+  --skill-names home-assistant concise \
+  --capability-profile home-assistant \
+  "turn off the kitchen lights that are still on"
+```
 
 ## Example flow
 

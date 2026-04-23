@@ -29,6 +29,17 @@ def parse_args() -> argparse.Namespace:
         help="Skill to apply when creating a new thread.",
     )
     parser.add_argument(
+        "--skill-names",
+        nargs="+",
+        default=None,
+        help="Ordered list of prompt-overlay skills to apply when creating a new thread.",
+    )
+    parser.add_argument(
+        "--capability-profile",
+        default=None,
+        help="Capability profile to apply when creating a new thread.",
+    )
+    parser.add_argument(
         "--user-id",
         default="demo-user",
         help="Authenticated user ID sent as trusted headers when --api-token is not used.",
@@ -92,11 +103,21 @@ def ensure_thread(
     thread_id: str | None,
     *,
     skill_name: str | None = None,
+    skill_names: list[str] | None = None,
+    capability_profile: str | None = None,
     headers: dict[str, str] | None = None,
 ) -> str:
     if thread_id:
         return thread_id
-    payload = {"skill_name": skill_name} if skill_name is not None else None
+    if skill_name is not None and skill_names is not None:
+        raise SystemExit("Provide either --skill-name or --skill-names, not both.")
+    payload: dict[str, Any] = {}
+    if skill_name is not None:
+        payload["skill_name"] = skill_name
+    if skill_names is not None:
+        payload["skill_names"] = skill_names
+    if capability_profile is not None:
+        payload["capability_profile"] = capability_profile
     response = request_json("POST", f"{base_url}/threads", payload=payload, headers=headers)
     return response["thread_id"]
 
@@ -153,12 +174,18 @@ def main() -> int:
         base_url,
         args.thread_id,
         skill_name=args.skill_name,
+        skill_names=args.skill_names,
+        capability_profile=args.capability_profile,
         headers=request_headers,
     )
 
     print(f"thread_id={thread_id}")
     if args.skill_name is not None:
         print(f"skill_name={args.skill_name}")
+    if args.skill_names is not None:
+        print(f"skill_names={json.dumps(args.skill_names)}")
+    if args.capability_profile is not None:
+        print(f"capability_profile={args.capability_profile}")
     for content in args.messages:
         request_json(
             "POST",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 
 from app.admin_api import (
     admin_encryption_key_from_env,
@@ -20,6 +20,8 @@ from app.execution import (
     StoreBackedTenantExecutionResolver,
     TenantExecutionResolver,
     build_execution_resolver_from_env,
+    get_capability_profile,
+    get_skill_configs,
     get_skill_config,
     resolve_tenant_config_source,
 )
@@ -145,12 +147,36 @@ def create_app(
         principal: Principal = Depends(require_principal),
     ) -> CreateThreadResponse:
         skill_name = body.skill_name if body is not None else None
+        skill_names = body.skill_names if body is not None else None
+        capability_profile = body.capability_profile if body is not None else None
         execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
-        if skill_name is not None:
+        if skill_name is not None and skill_names is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide either skill_name or skill_names, not both",
+            )
+        if skill_names is not None:
+            duplicates = sorted({name for name in skill_names if skill_names.count(name) > 1})
+            if duplicates:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Duplicate skill_names are not allowed: " + ", ".join(duplicates),
+                )
+            get_skill_configs(execution.config, skill_names)
+        elif skill_name is not None:
             get_skill_config(execution.config, skill_name)
+            skill_names = [skill_name]
         elif execution.config.skills.default_skill is not None:
+            skill_names = [execution.config.skills.default_skill]
             skill_name = execution.config.skills.default_skill
-        thread = request.app.state.store.create_thread(principal.tenant_id, skill_name=skill_name)
+        if capability_profile is not None:
+            get_capability_profile(execution.config, capability_profile)
+        thread = request.app.state.store.create_thread(
+            principal.tenant_id,
+            skill_name=skill_name,
+            skill_names=skill_names,
+            capability_profile=capability_profile,
+        )
         return CreateThreadResponse(thread_id=thread.thread_id)
 
     @app.post("/threads/{thread_id}/messages", response_model=Message)

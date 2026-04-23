@@ -41,6 +41,8 @@ class Thread(BaseModel):
     thread_id: str = Field(default_factory=lambda: str(uuid4()))
     tenant_id: str
     skill_name: str | None = None
+    skill_names: list[str] | None = None
+    capability_profile: str | None = None
     status: ThreadStatus = ThreadStatus.IDLE
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -66,6 +68,8 @@ class CreateThreadResponse(BaseModel):
 class CreateThreadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     skill_name: str | None = None
+    skill_names: list[str] | None = None
+    capability_profile: str | None = None
 
 
 class AddMessageRequest(BaseModel):

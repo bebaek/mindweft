@@ -7,9 +7,12 @@ from fastapi import HTTPException
 from app.execution import (
     InMemoryTenantExecutionResolver,
     TenantExecutionContext,
+    build_tool_registry_for_capability_profile,
+    build_tool_registry_for_skill,
     parse_tenant_execution_config,
 )
 from app.llm import LLMAdapter, MockLLMAdapter
+from app.mcp import MCPServerConfig, MCPServerInfo
 from app.models import (
     LLMResponse,
     Message,
@@ -643,7 +646,72 @@ def test_runtime_appends_skill_prompt_to_system_prompt() -> None:
 
     assert reply == "ok"
     assert seen_messages[0].content == (
-        f"{RUNTIME_SYSTEM_PROMPT}\n\nAnswer as a concise support agent."
+        f"{RUNTIME_SYSTEM_PROMPT}\n\n[Skill: support]\nAnswer as a concise support agent."
+    )
+
+
+def test_runtime_appends_multiple_skill_prompts_in_order() -> None:
+    seen_messages: list[Message] = []
+    config = parse_tenant_execution_config(
+        PRINCIPAL.tenant_id,
+        {
+            "llm": {"provider": "mock"},
+            "skills": {
+                "items": [
+                    {
+                        "name": "support",
+                        "system_prompt": "Answer as a concise support agent.",
+                    },
+                    {
+                        "name": "safe-actions",
+                        "system_prompt": "Require confirmation before risky actions.",
+                    },
+                ]
+            },
+        },
+    )
+
+    class InspectingLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            nonlocal seen_messages
+            seen_messages = messages
+            return LLMResponse(content="ok")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    store = InMemoryThreadStore()
+    resolver = InMemoryTenantExecutionResolver(
+        {PRINCIPAL.tenant_id: config},
+        default_context=None,
+    )
+    resolver._contexts[PRINCIPAL.tenant_id] = TenantExecutionContext(
+        llm_adapter=InspectingLLM(),
+        tool_registry=build_local_tool_registry(),
+        config=config,
+    )
+    runtime = AgentRuntime(store=store, execution_resolver=resolver)
+    thread = store.create_thread(
+        PRINCIPAL.tenant_id,
+        skill_names=["support", "safe-actions"],
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="hello",
+            created_by=PRINCIPAL.user_id,
+        ),
+    )
+
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert reply == "ok"
+    assert seen_messages[0].content == (
+        f"{RUNTIME_SYSTEM_PROMPT}\n\n"
+        "[Skill: support]\nAnswer as a concise support agent.\n\n"
+        "[Skill: safe-actions]\nRequire confirmation before risky actions."
     )
 
 
@@ -683,3 +751,157 @@ def test_runtime_skill_can_narrow_tools_for_thread() -> None:
     reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert reply == "Mock reply: /tool echo blocked by skill"
+
+
+def test_build_tool_registry_for_skill_can_narrow_mcp_servers(monkeypatch) -> None:
+    class FakeMCPClient:
+        def __init__(self, config: MCPServerConfig) -> None:
+            self._config = config
+
+        async def list_tools(self) -> list[ToolSpec]:
+            return [
+                ToolSpec(
+                    name=f"{self._config.name}.ping",
+                    description=f"Ping {self._config.name}",
+                    input_schema={"type": "object"},
+                )
+            ]
+
+        async def call_tool(self, tool_name: str, arguments: dict[str, object]) -> object:
+            return {"server": self._config.name, "tool_name": tool_name, "arguments": arguments}
+
+        def server_info(self) -> MCPServerInfo:
+            return MCPServerInfo(
+                name=self._config.name,
+                url=self._config.url,
+                protocol_version=self._config.protocol_version,
+                session_id="session-123",
+                server_name=f"{self._config.name}-server",
+                server_version="1.0.0",
+            )
+
+    monkeypatch.setattr("app.tools.MCPHTTPClient", FakeMCPClient)
+
+    config = parse_tenant_execution_config(
+        PRINCIPAL.tenant_id,
+        {
+            "llm": {"provider": "mock"},
+            "tools": {
+                "allowed_local_tools": ["current_time"],
+                "mcp_servers": [
+                    {"name": "home-assistant", "url": "https://ha.example/mcp", "headers": {}},
+                    {"name": "docs", "url": "https://docs.example/mcp", "headers": {}},
+                ]
+            },
+            "skills": {
+                "items": [
+                    {
+                        "name": "home-assistant",
+                        "system_prompt": "Use Home Assistant safely.",
+                        "allowed_local_tools": ["current_time"],
+                        "mcp_server_names": ["home-assistant"],
+                    }
+                ]
+            },
+        },
+    )
+
+    registry = build_tool_registry_for_skill(config, "home-assistant")
+
+    assert {spec.name for spec in registry.specs()} == {"current_time", "home-assistant.ping"}
+    assert [server["name"] for server in registry.mcp_servers()] == ["home-assistant"]
+
+
+def test_runtime_capability_profile_can_narrow_tools_for_thread() -> None:
+    config = parse_tenant_execution_config(
+        PRINCIPAL.tenant_id,
+        {
+            "llm": {"provider": "mock"},
+            "tools": {"allowed_local_tools": ["echo", "calculator"]},
+            "capability_profiles": {
+                "items": [
+                    {
+                        "name": "math",
+                        "allowed_local_tools": ["calculator"],
+                    }
+                ]
+            },
+        },
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        execution_resolver=InMemoryTenantExecutionResolver({PRINCIPAL.tenant_id: config}),
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id, capability_profile="math")
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="/tool echo blocked by capability profile",
+            created_by=PRINCIPAL.user_id,
+        ),
+    )
+
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert reply == "Mock reply: /tool echo blocked by capability profile"
+
+
+def test_build_tool_registry_for_capability_profile_can_narrow_mcp_servers(monkeypatch) -> None:
+    class FakeMCPClient:
+        def __init__(self, config: MCPServerConfig) -> None:
+            self._config = config
+
+        async def list_tools(self) -> list[ToolSpec]:
+            return [
+                ToolSpec(
+                    name=f"{self._config.name}.ping",
+                    description=f"Ping {self._config.name}",
+                    input_schema={"type": "object"},
+                )
+            ]
+
+        async def call_tool(self, tool_name: str, arguments: dict[str, object]) -> object:
+            return {"server": self._config.name, "tool_name": tool_name, "arguments": arguments}
+
+        def server_info(self) -> MCPServerInfo:
+            return MCPServerInfo(
+                name=self._config.name,
+                url=self._config.url,
+                protocol_version=self._config.protocol_version,
+                session_id="session-123",
+                server_name=f"{self._config.name}-server",
+                server_version="1.0.0",
+            )
+
+    monkeypatch.setattr("app.tools.MCPHTTPClient", FakeMCPClient)
+
+    config = parse_tenant_execution_config(
+        PRINCIPAL.tenant_id,
+        {
+            "llm": {"provider": "mock"},
+            "tools": {
+                "allowed_local_tools": ["current_time"],
+                "mcp_servers": [
+                    {"name": "home-assistant", "url": "https://ha.example/mcp", "headers": {}},
+                    {"name": "docs", "url": "https://docs.example/mcp", "headers": {}},
+                ]
+            },
+            "capability_profiles": {
+                "items": [
+                    {
+                        "name": "home-assistant",
+                        "allowed_local_tools": ["current_time"],
+                        "mcp_server_names": ["home-assistant"],
+                    }
+                ]
+            },
+        },
+    )
+
+    registry = build_tool_registry_for_capability_profile(config, "home-assistant")
+
+    assert {spec.name for spec in registry.specs()} == {"current_time", "home-assistant.ping"}
+    assert [server["name"] for server in registry.mcp_servers()] == ["home-assistant"]

@@ -65,6 +65,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     chat_parser.add_argument("--skill", default=None, help="Skill to apply when creating a new thread.")
     chat_parser.add_argument(
+        "--skills",
+        nargs="+",
+        default=None,
+        help="Ordered list of prompt-overlay skills to apply when creating a new thread.",
+    )
+    chat_parser.add_argument(
+        "--capability-profile",
+        default=None,
+        help="Capability profile to apply when creating a new thread.",
+    )
+    chat_parser.add_argument(
         "--print-thread-id",
         action="store_true",
         help="Print the thread ID before the reply in text mode.",
@@ -83,6 +94,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--skill",
         default=None,
         help="Skill to apply when creating the thread.",
+    )
+    threads_create_parser.add_argument(
+        "--skills",
+        nargs="+",
+        default=None,
+        help="Ordered list of prompt-overlay skills to apply when creating the thread.",
+    )
+    threads_create_parser.add_argument(
+        "--capability-profile",
+        default=None,
+        help="Capability profile to apply when creating the thread.",
     )
 
     threads_show_parser = threads_subparsers.add_parser("show", help="Show thread messages.")
@@ -218,7 +240,7 @@ def ensure_thread(
         return args.thread, False
     if args.resume_last:
         return load_remembered_thread(base_url, args), False
-    payload = {"skill_name": args.skill} if args.skill is not None else None
+    payload = _build_thread_create_payload(args.skill, args.skills, args.capability_profile)
     response = request_json("POST", f"{base_url}/threads", payload=payload, headers=headers)
     return response["thread_id"], True
 
@@ -277,7 +299,7 @@ def run_chat(args: argparse.Namespace, base_url: str, headers: dict[str, str], t
 def run_threads_create(
     args: argparse.Namespace, base_url: str, headers: dict[str, str], trace_id: str | None
 ) -> int:
-    payload = {"skill_name": args.skill} if args.skill is not None else None
+    payload = _build_thread_create_payload(args.skill, args.skills, args.capability_profile)
     response = request_json("POST", f"{base_url}/threads", payload=payload, headers=headers)
     remember_thread(base_url, args, response["thread_id"])
     if args.json:
@@ -290,6 +312,23 @@ def run_threads_create(
         print(f"trace_id={trace_id}")
     print(response["thread_id"])
     return 0
+
+
+def _build_thread_create_payload(
+    skill: str | None,
+    skills: list[str] | None,
+    capability_profile: str | None,
+) -> dict[str, Any] | None:
+    if skill is not None and skills is not None:
+        raise SystemExit("Provide either --skill or --skills, not both.")
+    payload: dict[str, Any] = {}
+    if skill is not None:
+        payload["skill_name"] = skill
+    if skills is not None:
+        payload["skill_names"] = skills
+    if capability_profile is not None:
+        payload["capability_profile"] = capability_profile
+    return payload or None
 
 
 def run_threads_show(

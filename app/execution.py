@@ -44,6 +44,9 @@ class TenantExecutionConfig:
     llm: TenantLLMConfig = field(default_factory=TenantLLMConfig)
     tools: TenantToolConfig = field(default_factory=TenantToolConfig)
     skills: "TenantSkillsConfig" = field(default_factory=lambda: TenantSkillsConfig())
+    capability_profiles: "TenantCapabilityProfilesConfig" = field(
+        default_factory=lambda: TenantCapabilityProfilesConfig()
+    )
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,20 @@ class TenantSkillConfig:
 class TenantSkillsConfig:
     default_skill: str | None = None
     items: list[TenantSkillConfig] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class TenantCapabilityProfileConfig:
+    name: str
+    description: str | None = None
+    allowed_local_tools: list[str] | None = None
+    mcp_server_names: list[str] | None = None
+
+
+@dataclass(frozen=True)
+class TenantCapabilityProfilesConfig:
+    default_profile: str | None = None
+    items: list[TenantCapabilityProfileConfig] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -426,12 +443,17 @@ def parse_tenant_execution_config(
     llm_payload = payload.get("llm") or {}
     tools_payload = payload.get("tools") or {}
     skills_payload = payload.get("skills") or {}
+    capability_profiles_payload = payload.get("capability_profiles") or payload.get(
+        "capabilityProfiles"
+    ) or {}
     if not isinstance(llm_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' llm config must be an object")
     if not isinstance(tools_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' tools config must be an object")
     if not isinstance(skills_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' skills config must be an object")
+    if not isinstance(capability_profiles_payload, dict):
+        raise RuntimeError(f"Tenant '{tenant_id}' capability_profiles config must be an object")
 
     tool_config = _parse_tenant_tool_config(tenant_id, tools_payload)
 
@@ -440,6 +462,9 @@ def parse_tenant_execution_config(
         llm=_parse_tenant_llm_config(tenant_id, llm_payload),
         tools=tool_config,
         skills=_parse_tenant_skills_config(tenant_id, skills_payload, tool_config),
+        capability_profiles=_parse_tenant_capability_profiles_config(
+            tenant_id, capability_profiles_payload, tool_config
+        ),
     )
 
 
@@ -610,6 +635,81 @@ def _parse_tenant_skills_config(
             f"Tenant '{tenant_id}' skills.default_skill must reference a configured skill"
         )
     return TenantSkillsConfig(default_skill=default_skill, items=items)
+
+
+def _parse_tenant_capability_profiles_config(
+    tenant_id: str,
+    payload: dict[str, Any],
+    tool_config: TenantToolConfig,
+) -> TenantCapabilityProfilesConfig:
+    default_profile = _optional_str(payload.get("default_profile") or payload.get("defaultProfile"))
+    items_raw = payload.get("items") or []
+    if not isinstance(items_raw, list):
+        raise RuntimeError(f"Tenant '{tenant_id}' capability_profiles.items must be an array")
+
+    allowed_local_tools = (
+        set(tool_config.allowed_local_tools) if tool_config.allowed_local_tools is not None else None
+    )
+    configured_mcp_server_names = {server.name for server in tool_config.mcp_servers}
+    seen_names: set[str] = set()
+    items: list[TenantCapabilityProfileConfig] = []
+    for entry in items_raw:
+        if not isinstance(entry, dict):
+            raise RuntimeError(
+                f"Tenant '{tenant_id}' capability_profiles.items entries must be objects"
+            )
+        name = _required_non_empty_str(
+            tenant_id, entry.get("name"), "capability_profiles.items[].name"
+        )
+        if name in seen_names:
+            raise RuntimeError(
+                f"Tenant '{tenant_id}' capability profile '{name}' is defined more than once"
+            )
+        seen_names.add(name)
+        profile_allowed_local_tools = _optional_str_list(
+            tenant_id,
+            entry.get("allowed_local_tools") or entry.get("allowedLocalTools"),
+            f"capability profile '{name}' allowed_local_tools",
+        )
+        if profile_allowed_local_tools is not None:
+            unknown_tools = sorted(set(profile_allowed_local_tools) - LOCAL_TOOL_NAMES)
+            if unknown_tools:
+                raise RuntimeError(
+                    f"Tenant '{tenant_id}' capability profile '{name}' references unknown local tools: "
+                    + ", ".join(unknown_tools)
+                )
+            if allowed_local_tools is not None:
+                disallowed_tools = sorted(set(profile_allowed_local_tools) - allowed_local_tools)
+                if disallowed_tools:
+                    raise RuntimeError(
+                        f"Tenant '{tenant_id}' capability profile '{name}' local tools must be a subset of tenant tools: "
+                        + ", ".join(disallowed_tools)
+                    )
+        mcp_server_names = _optional_str_list(
+            tenant_id,
+            entry.get("mcp_server_names") or entry.get("mcpServerNames"),
+            f"capability profile '{name}' mcp_server_names",
+        )
+        if mcp_server_names is not None:
+            unknown_servers = sorted(set(mcp_server_names) - configured_mcp_server_names)
+            if unknown_servers:
+                raise RuntimeError(
+                    f"Tenant '{tenant_id}' capability profile '{name}' references unknown MCP servers: "
+                    + ", ".join(unknown_servers)
+                )
+        items.append(
+            TenantCapabilityProfileConfig(
+                name=name,
+                description=_optional_str(entry.get("description")),
+                allowed_local_tools=profile_allowed_local_tools,
+                mcp_server_names=mcp_server_names,
+            )
+        )
+    if default_profile is not None and default_profile not in seen_names:
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' capability_profiles.default_profile must reference a configured capability profile"
+        )
+    return TenantCapabilityProfilesConfig(default_profile=default_profile, items=items)
 
 
 def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
@@ -811,6 +911,40 @@ def get_skill_config(
     )
 
 
+def get_skill_configs(
+    config: TenantExecutionConfig,
+    skill_names: list[str] | None = None,
+) -> list[TenantSkillConfig]:
+    resolved_skill_names = skill_names
+    if resolved_skill_names is None:
+        if config.skills.default_skill is None:
+            return []
+        resolved_skill_names = [config.skills.default_skill]
+    resolved: list[TenantSkillConfig] = []
+    for name in resolved_skill_names:
+        resolved.append(get_skill_config(config, name))
+    return resolved
+
+
+def get_capability_profile(
+    config: TenantExecutionConfig,
+    profile_name: str | None = None,
+) -> TenantCapabilityProfileConfig | None:
+    resolved_profile_name = profile_name or config.capability_profiles.default_profile
+    if resolved_profile_name is None:
+        return None
+    for profile in config.capability_profiles.items:
+        if profile.name == resolved_profile_name:
+            return profile
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Unknown capability profile '{resolved_profile_name}' "
+            f"for tenant '{config.tenant_id}'"
+        ),
+    )
+
+
 def build_tool_registry_for_skill(
     config: TenantExecutionConfig,
     skill_name: str | None = None,
@@ -840,6 +974,40 @@ def build_tool_registry_for_skill(
         skills=config.skills,
     )
     return _build_registry_for_config(skill_config, mcp_manager=mcp_manager)[0]
+
+
+def build_tool_registry_for_capability_profile(
+    config: TenantExecutionConfig,
+    capability_profile: str | None = None,
+    *,
+    mcp_manager: MCPServerManager | None = None,
+) -> ToolRegistry:
+    profile = get_capability_profile(config, capability_profile)
+    if profile is None:
+        return _build_registry_for_config(config, mcp_manager=mcp_manager)[0]
+
+    allowed_local_tools = config.tools.allowed_local_tools
+    if profile.allowed_local_tools is not None:
+        if allowed_local_tools is None:
+            allowed_local_tools = list(profile.allowed_local_tools)
+        else:
+            allowed_local_tools = sorted(set(allowed_local_tools) & set(profile.allowed_local_tools))
+    mcp_servers = config.tools.mcp_servers
+    if profile.mcp_server_names is not None:
+        allowed_mcp_server_names = set(profile.mcp_server_names)
+        mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
+
+    profile_config = TenantExecutionConfig(
+        tenant_id=config.tenant_id,
+        llm=config.llm,
+        tools=TenantToolConfig(
+            allowed_local_tools=allowed_local_tools,
+            mcp_servers=mcp_servers,
+        ),
+        skills=config.skills,
+        capability_profiles=config.capability_profiles,
+    )
+    return _build_registry_for_config(profile_config, mcp_manager=mcp_manager)[0]
 
 
 def redact_tenant_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:
