@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import wave
 from io import StringIO
@@ -35,6 +36,7 @@ from voice_daemon.cli import (
 from voice_daemon.config import PrincipalConfig, VoiceDaemonConfig
 from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
 from voice_daemon.ducking import MacOsAmbientVolumeDucker, should_duck_for_state
+from voice_daemon.minigent_client import MinigentClient
 from voice_daemon.ring_buffer import AudioRingBuffer
 from voice_daemon.service import Activation, DaemonState, VoiceDaemon
 from voice_daemon.speech import (
@@ -975,6 +977,8 @@ def test_principal_config_prefers_bearer_token() -> None:
 def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_BASE_URL", "http://127.0.0.1:9000/")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_PHRASE", "computer")
+    monkeypatch.setenv("MINIGENT_VOICE_LOCATION", "Austin, TX, US; timezone=America/Chicago")
+    monkeypatch.setenv("MINIGENT_VOICE_DEBUG_SHOW_PROMPT", "true")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT", "bell")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND", "/tmp/wake.wav")
     monkeypatch.setenv("MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT", "done")
@@ -1029,6 +1033,8 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
     assert config == VoiceDaemonConfig(
         base_url="http://127.0.0.1:9000",
         wake_phrase="computer",
+        location="Austin, TX, US; timezone=America/Chicago",
+        debug_show_prompt=True,
         wake_acknowledgement="bell",
         wake_acknowledgement_sound="/tmp/wake.wav",
         capture_ended_acknowledgement="done",
@@ -1081,6 +1087,169 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
             is_admin=True,
             api_token="voice-token",
         ),
+    )
+
+
+def test_minigent_client_sends_raw_message_when_location_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    def fake_urlopen(request: object) -> FakeResponse:
+        payload = json.loads(request.data.decode("utf-8")) if request.data else None
+        requests.append(
+            {
+                "method": request.get_method(),
+                "url": request.full_url,
+                "payload": payload,
+                "headers": dict(request.header_items()),
+            }
+        )
+        if request.full_url.endswith("/threads/thread-123/messages"):
+            return FakeResponse({"id": "message-1"})
+        raise AssertionError(f"unexpected url {request.full_url}")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    client = MinigentClient(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            thread_id="thread-123",
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        )
+    )
+
+    response = client.send_user_message("what time is it")
+
+    assert response == {"id": "message-1"}
+    assert requests == [
+        {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/threads/thread-123/messages",
+            "payload": {"content": "what time is it"},
+            "headers": {
+                "X-minigent-user-id": "user-1",
+                "X-minigent-tenant-id": "tenant-1",
+                "X-minigent-admin": "false",
+                "Content-type": "application/json",
+            },
+        }
+    ]
+
+
+def test_minigent_client_prepends_location_context_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_payloads: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    def fake_urlopen(request: object) -> FakeResponse:
+        payload = json.loads(request.data.decode("utf-8")) if request.data else None
+        seen_payloads.append(payload)
+        return FakeResponse({"id": "message-1"})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    client = MinigentClient(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            location="Austin, TX, US; timezone=America/Chicago",
+            thread_id="thread-123",
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        )
+    )
+
+    client.send_user_message("find coffee nearby")
+
+    assert seen_payloads == [
+        {
+            "content": (
+                "Context: location=Austin, TX, US; timezone=America/Chicago\n\n"
+                "find coffee nearby"
+            )
+        }
+    ]
+
+
+def test_minigent_client_can_log_full_prompt_for_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_payloads: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    def fake_urlopen(request: object) -> FakeResponse:
+        payload = json.loads(request.data.decode("utf-8")) if request.data else None
+        seen_payloads.append(payload)
+        return FakeResponse({"id": "message-1"})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    output_stream = StringIO()
+
+    client = MinigentClient(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            location="Austin, TX, US; timezone=America/Chicago",
+            debug_show_prompt=True,
+            thread_id="thread-123",
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        ),
+        output_stream=output_stream,
+    )
+
+    client.send_user_message("What's my location?")
+
+    assert seen_payloads == [
+        {
+            "content": (
+                "Context: location=Austin, TX, US; timezone=America/Chicago\n\n"
+                "What's my location?"
+            )
+        }
+    ]
+    assert output_stream.getvalue() == (
+        "[prompt]\n"
+        "Context: location=Austin, TX, US; timezone=America/Chicago\n\n"
+        "What's my location?\n"
     )
 
 

@@ -208,6 +208,8 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
     return VoiceDaemonConfig(
         base_url=(args.base_url or env_config.base_url).rstrip("/"),
         wake_phrase=(args.wake_phrase or env_config.wake_phrase).strip(),
+        location=env_config.location,
+        debug_show_prompt=env_config.debug_show_prompt,
         wake_acknowledgement=args.wake_acknowledgement or env_config.wake_acknowledgement,
         wake_acknowledgement_sound=env_config.wake_acknowledgement_sound,
         capture_ended_acknowledgement=(
@@ -310,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
     daemon = VoiceDaemon(
         wake_phrase=config.wake_phrase,
         activation_source=activation_source,
-        minigent_client=MinigentClient(config),
+        minigent_client=MinigentClient(config, output_stream=sys.stdout),
         speech_output=speech_output,
         activation_feedback=None if args.backend == "passive-audio" else activation_feedback,
         follow_up_timeout_ms=config.follow_up_timeout_ms,

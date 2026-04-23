@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import json
+import sys
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, TextIO
 
 from voice_daemon.config import VoiceDaemonConfig
 
 
 class MinigentClient:
-    def __init__(self, config: VoiceDaemonConfig) -> None:
+    def __init__(self, config: VoiceDaemonConfig, output_stream: TextIO | None = None) -> None:
         self._config = config
         self._thread_id = config.thread_id
+        self._output_stream = output_stream or sys.stdout
 
     def ensure_thread(self) -> str:
         if self._thread_id:
@@ -28,10 +30,12 @@ class MinigentClient:
 
     def send_user_message(self, content: str) -> dict[str, Any]:
         thread_id = self.ensure_thread()
+        formatted_content = self._format_user_message(content)
+        self._maybe_log_prompt(formatted_content)
         return self.request_json(
             "POST",
             f"{self._config.base_url}/threads/{thread_id}/messages",
-            payload={"content": content},
+            payload={"content": formatted_content},
         )
 
     def run_thread(self) -> str:
@@ -70,3 +74,14 @@ class MinigentClient:
             raise RuntimeError(f"{method} {url} failed: {exc.code} {body}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"{method} {url} failed: {exc.reason}") from exc
+
+    def _format_user_message(self, content: str) -> str:
+        if not self._config.location:
+            return content
+        return f"Context: location={self._config.location}\n\n{content}"
+
+    def _maybe_log_prompt(self, content: str) -> None:
+        if not self._config.debug_show_prompt:
+            return
+        self._output_stream.write(f"[prompt]\n{content}\n")
+        self._output_stream.flush()
