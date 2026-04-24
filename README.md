@@ -278,7 +278,8 @@ When local TTS is enabled, the daemon strips common Markdown formatting such as 
 headers, lists, and Markdown links before feeding text to the speech engine, while still
 printing the original assistant reply to the terminal. Structural Markdown like headers
 and list items is converted into short sentence boundaries so TTS does not run them into
-surrounding text.
+surrounding text. That includes `-`/`*` bullets, task-list checkboxes, and ordered lists
+written as either `1.` or `1)`.
 
 For higher-quality local TTS on macOS or Linux, install the voice extra and configure
 Piper with a model path or model name:

@@ -197,27 +197,23 @@ def _load_sounddevice_for_output():
 
 def _sanitize_text_for_tts(text: str) -> str:
     sanitized = text.replace("\r\n", "\n").replace("\r", "\n")
-    sanitized = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", sanitized)
-    sanitized = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", sanitized)
-    sanitized = re.sub(r"`([^`]*)`", r"\1", sanitized)
-    sanitized = re.sub(r"(^|\s)[*_]{1,3}([^*_]+?)[*_]{1,3}(?=\s|$)", r"\1\2", sanitized)
 
     parts: list[str] = []
     for raw_line in sanitized.split("\n"):
         line = raw_line.strip()
         if not line:
             continue
-        if match := re.match(r"#{1,6}\s+(.+)", line):
-            parts.append(_ensure_tts_sentence(match.group(1)))
-            continue
         line = re.sub(r"^>\s?", "", line)
-        if match := re.match(r"[-+*]\s+(.+)", line):
-            parts.append(_ensure_tts_sentence(match.group(1)))
+        if match := re.match(r"#{1,6}\s+(.+)", line):
+            parts.append(_ensure_tts_sentence(_strip_inline_markdown(match.group(1)), capitalize=True))
             continue
-        if match := re.match(r"\d+\.\s+(.+)", line):
-            parts.append(_ensure_tts_sentence(match.group(1)))
+        if match := re.match(r"[-+*]\s+(?:\[[ xX]\]\s+)?(.+)", line):
+            parts.append(_ensure_tts_sentence(_strip_inline_markdown(match.group(1)), capitalize=True))
             continue
-        parts.append(line)
+        if match := re.match(r"\d+[.)]\s+(?:\[[ xX]\]\s+)?(.+)", line):
+            parts.append(_ensure_tts_sentence(_strip_inline_markdown(match.group(1)), capitalize=True))
+            continue
+        parts.append(_strip_inline_markdown(line))
 
     sanitized = " ".join(parts)
     sanitized = re.sub(r"[*_~#>|]", "", sanitized)
@@ -225,13 +221,30 @@ def _sanitize_text_for_tts(text: str) -> str:
     return sanitized.strip()
 
 
-def _ensure_tts_sentence(text: str) -> str:
+def _ensure_tts_sentence(text: str, *, capitalize: bool = False) -> str:
     stripped = text.strip()
     if not stripped:
         return ""
+    if capitalize:
+        stripped = _capitalize_tts_sentence(stripped)
     if stripped[-1] in ".!?;:":
         return stripped
     return f"{stripped}."
+
+
+def _capitalize_tts_sentence(text: str) -> str:
+    for index, char in enumerate(text):
+        if char.isalpha():
+            return f"{text[:index]}{char.upper()}{text[index + 1:]}"
+    return text
+
+
+def _strip_inline_markdown(text: str) -> str:
+    stripped = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
+    stripped = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", stripped)
+    stripped = re.sub(r"`([^`]*)`", r"\1", stripped)
+    stripped = re.sub(r"(^|\s)[*_]{1,3}([^*_]+?)[*_]{1,3}(?=\s|$)", r"\1\2", stripped)
+    return stripped.strip()
 
 
 def _recorded_audio_to_numpy(audio):

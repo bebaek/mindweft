@@ -797,13 +797,40 @@ def test_resolve_wake_acknowledgement_player_supports_macos_and_linux(monkeypatc
 def test_sanitize_text_for_tts_strips_common_markdown() -> None:
     text = "# Heading\n- **bold** item with [link](https://example.com) and `code`"
 
-    assert _sanitize_text_for_tts(text) == "Heading. bold item with link and code."
+    assert _sanitize_text_for_tts(text) == "Heading. Bold item with link and code."
 
 
 def test_sanitize_text_for_tts_preserves_boundary_around_headers() -> None:
     text = "Before\n## Details\nAfter"
 
     assert _sanitize_text_for_tts(text) == "Before Details. After"
+
+
+def test_sanitize_text_for_tts_adds_boundaries_for_common_markdown_lists() -> None:
+    text = "* first item\n* second item\n1) third item\n2) fourth item"
+
+    assert _sanitize_text_for_tts(text) == "First item. Second item. Third item. Fourth item."
+
+
+def test_sanitize_text_for_tts_strips_task_list_markers() -> None:
+    text = "- [x] shipped\n- [ ] pending"
+
+    assert _sanitize_text_for_tts(text) == "Shipped. Pending."
+
+
+def test_sanitize_text_for_tts_promotes_short_list_items_to_sentences() -> None:
+    text = (
+        "- flights\n"
+        "- hotel / Airbnb\n"
+        "- itinerary\n"
+        "- airport\n"
+        "- trip / travel\n"
+        "- city names or countries"
+    )
+
+    assert _sanitize_text_for_tts(text) == (
+        "Flights. Hotel / Airbnb. Itinerary. Airport. Trip / travel. City names or countries."
+    )
 
 
 def test_macos_say_speech_output_can_be_interrupted(monkeypatch: pytest.MonkeyPatch) -> None:
