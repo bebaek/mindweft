@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -97,6 +98,8 @@ class PiperSpeechOutput(SpeechOutput):
     length_scale: float | None = None
     sentence_silence: float | None = None
     _playback_thread: threading.Thread | None = field(default=None, init=False)
+    _playback_process: subprocess.Popen[bytes] | None = field(default=None, init=False)
+    _playback_path: Path | None = field(default=None, init=False)
     _interrupted: bool = field(default=False, init=False)
     _playback_error: BaseException | None = field(default=None, init=False)
 
@@ -107,6 +110,13 @@ class PiperSpeechOutput(SpeechOutput):
     def start(self, text: str) -> None:
         self.output_stream.write(f"[assistant] {text}\n")
         self.output_stream.flush()
+        self._interrupted = False
+        self._playback_error = None
+        self._playback_process = None
+        self._playback_path = None
+        if self._can_use_native_macos_playback():
+            self._start_macos_playback(_sanitize_text_for_tts(text))
+            return
         audio = self._synthesize(_sanitize_text_for_tts(text))
         sounddevice = _load_sounddevice_for_output()
         samples = _recorded_audio_to_numpy(audio)
@@ -114,8 +124,6 @@ class PiperSpeechOutput(SpeechOutput):
             sounddevice.play(samples, samplerate=audio.sample_rate, blocking=False)
         except Exception as exc:
             raise RuntimeError(f"Piper playback failed: {exc}") from exc
-        self._interrupted = False
-        self._playback_error = None
         self._playback_thread = threading.Thread(
             target=self._wait_for_playback,
             args=(sounddevice,),
@@ -127,13 +135,32 @@ class PiperSpeechOutput(SpeechOutput):
         if not self.is_speaking():
             return
         self._interrupted = True
+        if self._playback_process is not None:
+            self._playback_process.terminate()
+            return
         sounddevice = _load_sounddevice_for_output()
         sounddevice.stop()
 
     def is_speaking(self) -> bool:
+        if self._playback_process is not None:
+            return self._playback_process.poll() is None
         return self._playback_thread is not None and self._playback_thread.is_alive()
 
     def wait(self) -> None:
+        if self._playback_process is not None:
+            return_code = self._playback_process.wait()
+            interrupted = self._interrupted
+            self._playback_process = None
+            playback_path = self._playback_path
+            self._playback_path = None
+            self._interrupted = False
+            if playback_path is not None:
+                playback_path.unlink(missing_ok=True)
+            if interrupted:
+                return
+            if return_code != 0:
+                raise RuntimeError(f"Piper playback failed with exit code {return_code}")
+            return
         if self._playback_thread is None:
             return
         self._playback_thread.join()
@@ -177,6 +204,43 @@ class PiperSpeechOutput(SpeechOutput):
             raise RuntimeError("`piper` is not available on this system") from exc
         finally:
             output_path.unlink(missing_ok=True)
+
+    def _start_macos_playback(self, text: str) -> None:
+        with NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+            output_path = Path(temp_file.name)
+        try:
+            piper_executable = _resolve_piper_executable()
+            model_path = _resolve_piper_model_path(self.model, self.model_dir)
+            command = [piper_executable, "--model", str(model_path), "--output_file", str(output_path)]
+            if self.speaker is not None:
+                command.extend(["--speaker", str(self.speaker)])
+            if self.length_scale is not None:
+                command.extend(["--length-scale", str(self.length_scale)])
+            if self.sentence_silence is not None:
+                command.extend(["--sentence-silence", str(self.sentence_silence)])
+            result = subprocess.run(
+                command,
+                input=text,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                if detail:
+                    raise RuntimeError(f"Piper synthesis failed: {detail}")
+                raise RuntimeError(f"Piper synthesis failed with exit code {result.returncode}")
+            afplay = shutil.which("afplay")
+            if not afplay:
+                raise RuntimeError("`afplay` is not available on this system")
+            self._playback_path = output_path
+            self._playback_process = subprocess.Popen([afplay, str(output_path)])
+        except Exception:
+            output_path.unlink(missing_ok=True)
+            raise
+
+    def _can_use_native_macos_playback(self) -> bool:
+        return platform.system() == "Darwin" and shutil.which("afplay") is not None
 
     def _wait_for_playback(self, sounddevice) -> None:
         try:

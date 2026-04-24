@@ -314,6 +314,34 @@ def test_voice_daemon_returns_to_idle_when_follow_up_window_expires() -> None:
     assert activation_source.follow_up_timeout_ms == [4000]
 
 
+def test_voice_daemon_recovers_from_backend_error() -> None:
+    class FailingMinigentClient(FakeMinigentClient):
+        def run_thread(self) -> str:
+            raise RuntimeError(
+                'POST http://127.0.0.1:8000/threads/thread-1/run failed: 502 {"detail":"LLM provider returned no message content"}'
+            )
+
+    activation_source = FakeActivationSource(Activation(), utterance="okay")
+    minigent_client = FailingMinigentClient(reply="")
+    speech_output = FakeSpeechOutput()
+    output_stream = StringIO()
+    daemon = VoiceDaemon(
+        wake_phrase="hey minigent",
+        activation_source=activation_source,
+        minigent_client=minigent_client,
+        speech_output=speech_output,
+        output_stream=output_stream,
+    )
+
+    reply = daemon.run_once()
+
+    assert reply == ""
+    assert daemon.state == DaemonState.IDLE
+    assert minigent_client.messages == ["okay"]
+    assert speech_output.spoken == ["I hit an upstream error."]
+    assert "[idle] request failed, returning to wake-word mode:" in output_stream.getvalue()
+
+
 def test_voice_daemon_updates_ambient_volume_for_listening_states() -> None:
     activation_source = FakeActivationSource(Activation(), utterance="first request")
     activation_source.follow_up_utterance = None
@@ -455,6 +483,7 @@ def test_piper_speech_output_prints_and_plays(monkeypatch: pytest.MonkeyPatch, t
 
     sounddevice = FakeSoundDevice()
 
+    monkeypatch.setattr("voice_daemon.speech.platform.system", lambda: "Linux")
     monkeypatch.setattr("voice_daemon.speech.subprocess.run", fake_run)
     monkeypatch.setattr("voice_daemon.speech._resolve_piper_executable", lambda: "piper")
     monkeypatch.setattr("voice_daemon.speech._load_sounddevice_for_output", lambda: sounddevice)
@@ -901,6 +930,7 @@ def test_piper_speech_output_can_be_interrupted(monkeypatch: pytest.MonkeyPatch,
 
     sounddevice = FakeSoundDevice()
 
+    monkeypatch.setattr("voice_daemon.speech.platform.system", lambda: "Linux")
     monkeypatch.setattr("voice_daemon.speech.subprocess.run", fake_run)
     monkeypatch.setattr("voice_daemon.speech._resolve_piper_executable", lambda: "piper")
     monkeypatch.setattr("voice_daemon.speech._load_sounddevice_for_output", lambda: sounddevice)
@@ -916,6 +946,126 @@ def test_piper_speech_output_can_be_interrupted(monkeypatch: pytest.MonkeyPatch,
     speech.wait()
 
     assert sounddevice.stop_calls == 1
+    assert not speech.is_speaking()
+
+
+def test_piper_speech_output_uses_afplay_on_macos(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    output_stream = StringIO()
+    commands: list[list[str]] = []
+
+    def fake_run(command, input, text, capture_output, check):
+        output_path = Path(command[command.index("--output_file") + 1])
+        with wave.open(str(output_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(b"\x00\x00\x01\x00")
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return Result()
+
+    class FakeProcess:
+        def __init__(self, command: list[str]) -> None:
+            self.command = command
+            self.running = True
+
+        def poll(self) -> int | None:
+            return None if self.running else 0
+
+        def wait(self) -> int:
+            self.running = False
+            return 0
+
+        def terminate(self) -> None:
+            self.running = False
+
+    def fake_popen(command: list[str]):
+        commands.append(command)
+        return FakeProcess(command)
+
+    monkeypatch.setattr("voice_daemon.speech.platform.system", lambda: "Darwin")
+    monkeypatch.setattr(
+        "voice_daemon.speech.shutil.which",
+        lambda name: "/usr/bin/afplay" if name == "afplay" else None,
+    )
+    monkeypatch.setattr("voice_daemon.speech.subprocess.run", fake_run)
+    monkeypatch.setattr("voice_daemon.speech.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("voice_daemon.speech._resolve_piper_executable", lambda: "piper")
+    monkeypatch.setattr(
+        "voice_daemon.speech._resolve_piper_model_path",
+        lambda model, model_dir: tmp_path / "voice.onnx",
+    )
+
+    PiperSpeechOutput(output_stream=output_stream, model=str(tmp_path / "voice.onnx")).speak("done")
+
+    assert commands
+    assert commands[0][0] == "/usr/bin/afplay"
+    assert output_stream.getvalue() == "[assistant] done\n"
+
+
+def test_piper_speech_output_can_be_interrupted_on_macos(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    output_stream = StringIO()
+    terminated = {"value": False}
+
+    def fake_run(command, input, text, capture_output, check):
+        output_path = Path(command[command.index("--output_file") + 1])
+        with wave.open(str(output_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(b"\x00\x00\x01\x00")
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return Result()
+
+    class FakeProcess:
+        def __init__(self, command: list[str]) -> None:
+            self.command = command
+            self.running = True
+
+        def poll(self) -> int | None:
+            return None if self.running else 0
+
+        def wait(self) -> int:
+            self.running = False
+            return 0
+
+        def terminate(self) -> None:
+            terminated["value"] = True
+            self.running = False
+
+    monkeypatch.setattr("voice_daemon.speech.platform.system", lambda: "Darwin")
+    monkeypatch.setattr(
+        "voice_daemon.speech.shutil.which",
+        lambda name: "/usr/bin/afplay" if name == "afplay" else None,
+    )
+    monkeypatch.setattr("voice_daemon.speech.subprocess.run", fake_run)
+    monkeypatch.setattr("voice_daemon.speech.subprocess.Popen", FakeProcess)
+    monkeypatch.setattr("voice_daemon.speech._resolve_piper_executable", lambda: "piper")
+    monkeypatch.setattr(
+        "voice_daemon.speech._resolve_piper_model_path",
+        lambda model, model_dir: tmp_path / "voice.onnx",
+    )
+
+    speech = PiperSpeechOutput(output_stream=output_stream, model=str(tmp_path / "voice.onnx"))
+    speech.start("done")
+    assert speech.is_speaking()
+    speech.stop()
+    speech.wait()
+
+    assert terminated["value"] is True
     assert not speech.is_speaking()
 
 
@@ -2306,6 +2456,91 @@ def test_passive_audio_activation_source_ignores_stt_error() -> None:
 
     assert transcript == ""
     assert "[idle] transcription failed, ignoring capture:" in output_stream.getvalue()
+
+
+def test_passive_audio_activation_source_retries_after_empty_wake_capture() -> None:
+    class FakeStream:
+        def read(self, frames: int) -> tuple[bytes, bool]:
+            del frames
+            return b"", False
+
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeWakeDetector:
+        frame_length = 4
+        sample_rate = 16000
+        label = "openwakeword:okay_nabu"
+
+        def reset(self) -> None:
+            return None
+
+        def process_chunk(self, chunk: bytes) -> bool:
+            del chunk
+            return False
+
+    class FakeRecorder:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def record_after_speech_from_stream(
+            self,
+            stream,
+            *,
+            timeout_ms: int,
+            preroll_ms: int = 250,
+        ) -> RecordedAudio | None:
+            del stream, timeout_ms, preroll_ms
+            self.calls += 1
+            sample = b"\x03\x00" if self.calls == 1 else b"\x04\x00"
+            return RecordedAudio(
+                pcm_bytes=sample * 8,
+                sample_rate=16_000,
+                channels=1,
+                sample_width_bytes=2,
+            )
+
+    class FakeTranscriber:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def transcribe(self, audio: RecordedAudio) -> str:
+            del audio
+            self.calls += 1
+            if self.calls == 1:
+                raise SpeechToTextError("faster-whisper transcription response did not include text")
+            return "actual request"
+
+    output_stream = StringIO()
+    source = PassiveAudioActivationSource(
+        output_stream=output_stream,
+        stream=FakeStream(),
+        recorder=FakeRecorder(),
+        transcriber=FakeTranscriber(),
+        wake_detector=FakeWakeDetector(),
+        preroll_buffer=AudioRingBuffer(max_bytes=32),
+        post_wake_speech_timeout_ms=100,
+        post_wake_settle_ms=0,
+        wakeword_cooldown_ms=100,
+        stt_pad_leading_ms=0,
+        stt_pad_trailing_ms=0,
+    )
+
+    transcript = source.capture_utterance()
+
+    assert transcript == "actual request"
+    assert "[idle] transcription failed, ignoring capture:" in output_stream.getvalue()
+    assert (
+        "[follow-up] initial wake capture was empty, listening briefly without the wake word"
+        in output_stream.getvalue()
+    )
+    assert "[transcript] actual request" in output_stream.getvalue()
 
 
 def test_passive_audio_activation_source_close_is_idempotent() -> None:

@@ -303,9 +303,14 @@ minigent-voice-daemon --backend manual-audio --once
 `MINIGENT_VOICE_TTS_MODEL` is a bare voice name like `en_US-lessac-medium`, the daemon
 downloads the `.onnx` and `.onnx.json` files on first use into
 `~/.cache/minigent/piper` by default. Override that cache directory with
-`MINIGENT_VOICE_TTS_MODEL_DIR` or `--tts-model-dir`. Piper playback uses the same local
-PortAudio stack as microphone capture through `sounddevice`, so you do not need a
-separate `afplay`/`aplay` integration in the daemon.
+`MINIGENT_VOICE_TTS_MODEL_DIR` or `--tts-model-dir`. On macOS, Piper synthesis now plays
+back through the native `afplay` command so wake-word barge-in does not fight the live
+microphone PortAudio stream. On other platforms, Piper playback continues to use
+`sounddevice`.
+
+If the Minigent API or upstream LLM returns a transient error during a voice turn, the
+daemon logs the failure, optionally speaks a short local error message, and returns to
+idle instead of exiting the process.
 
 Piper uses `MINIGENT_VOICE_TTS_SENTENCE_SILENCE=0.35` by default so Markdown lists and
 headers get an audible pause after they are converted into sentence boundaries. Increase

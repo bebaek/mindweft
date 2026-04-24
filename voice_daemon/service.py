@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Protocol
+from typing import Callable, Protocol, TextIO
 
 from voice_daemon.minigent_client import MinigentClient
 
@@ -63,6 +64,7 @@ class VoiceDaemon:
         activation_feedback: Callable[[], None] | None = None,
         follow_up_timeout_ms: int = 0,
         ambient_volume_controller: AmbientVolumeController | None = None,
+        output_stream: TextIO | None = None,
     ) -> None:
         self._wake_phrase = wake_phrase
         self._activation_source = activation_source
@@ -71,6 +73,7 @@ class VoiceDaemon:
         self._activation_feedback = activation_feedback
         self._follow_up_timeout_ms = max(follow_up_timeout_ms, 0)
         self._ambient_volume_controller = ambient_volume_controller
+        self._output_stream = output_stream or sys.stdout
         self.state = DaemonState.IDLE
 
     def run_forever(self) -> None:
@@ -93,8 +96,13 @@ class VoiceDaemon:
                 self._set_state(DaemonState.IDLE)
                 return reply
             self._set_state(DaemonState.THINKING)
-            self._minigent_client.send_user_message(utterance)
-            reply = self._minigent_client.run_thread()
+            try:
+                self._minigent_client.send_user_message(utterance)
+                reply = self._minigent_client.run_thread()
+            except RuntimeError as exc:
+                self._handle_backend_error(exc)
+                self._set_state(DaemonState.IDLE)
+                return reply
             self._set_state(DaemonState.SPEAKING)
             activation = self._speak_with_optional_barge_in(reply)
             if activation is None:
@@ -102,6 +110,14 @@ class VoiceDaemon:
             if activation is None:
                 self._set_state(DaemonState.IDLE)
                 return reply
+
+    def _handle_backend_error(self, exc: RuntimeError) -> None:
+        self._output_stream.write(f"[idle] request failed, returning to wake-word mode: {exc}\n")
+        self._output_stream.flush()
+        try:
+            self._speech_output.speak("I hit an upstream error.")
+        except Exception:
+            return
 
     def _speak_with_optional_barge_in(self, reply: str) -> Activation | None:
         self._speech_output.start(reply)
