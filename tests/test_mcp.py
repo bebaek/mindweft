@@ -207,6 +207,114 @@ def test_mcp_http_client_logs_redacted_url(caplog) -> None:
     assert "secret-value" not in caplog.text
 
 
+def test_mcp_http_client_reinitializes_and_retries_once_on_invalid_session() -> None:
+    requests: list[dict[str, object]] = []
+    session_ids = iter(["session-1", "session-2"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read().decode())
+        requests.append({"headers": dict(request.headers), "body": body})
+        method = body["method"]
+        session_id = request.headers.get("mcp-session-id")
+        if method == "initialize":
+            return httpx.Response(
+                200,
+                headers={
+                    "content-type": "application/json",
+                    "MCP-Session-Id": next(session_ids),
+                },
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "protocolVersion": "2025-11-25",
+                        "serverInfo": {"name": "demo-server", "version": "1.2.3"},
+                        "capabilities": {"tools": {}},
+                    },
+                },
+            )
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        if method == "tools/list":
+            if session_id == "session-1":
+                return httpx.Response(400, text="Bad Request: No valid session ID provided")
+            if session_id == "session-2":
+                return httpx.Response(
+                    200,
+                    headers={"content-type": "application/json"},
+                    json={"jsonrpc": "2.0", "id": body["id"], "result": {"tools": []}},
+                )
+        raise AssertionError(f"Unexpected method {method} with session {session_id}")
+
+    client = MCPHTTPClient(
+        config=MCPServerConfig(name="demo", url="https://example.com/mcp", headers={}),
+        transport=httpx.MockTransport(handler),
+    )
+
+    specs = asyncio.run(client.list_tools())
+
+    assert specs == []
+    assert [request["body"]["method"] for request in requests] == [
+        "initialize",
+        "notifications/initialized",
+        "tools/list",
+        "initialize",
+        "notifications/initialized",
+        "tools/list",
+    ]
+    assert requests[2]["headers"]["mcp-session-id"] == "session-1"
+    assert requests[5]["headers"]["mcp-session-id"] == "session-2"
+
+
+def test_mcp_http_client_returns_error_if_reinitialized_session_is_still_rejected() -> None:
+    requests: list[dict[str, object]] = []
+    session_ids = iter(["session-1", "session-2"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read().decode())
+        requests.append({"headers": dict(request.headers), "body": body})
+        method = body["method"]
+        if method == "initialize":
+            return httpx.Response(
+                200,
+                headers={
+                    "content-type": "application/json",
+                    "MCP-Session-Id": next(session_ids),
+                },
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "protocolVersion": "2025-11-25",
+                        "serverInfo": {"name": "demo-server", "version": "1.2.3"},
+                        "capabilities": {"tools": {}},
+                    },
+                },
+            )
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        if method == "tools/list":
+            return httpx.Response(400, text="Bad Request: No valid session ID provided")
+        raise AssertionError(f"Unexpected method {method}")
+
+    client = MCPHTTPClient(
+        config=MCPServerConfig(name="demo", url="https://example.com/mcp", headers={}),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(Exception, match="No valid session ID provided"):
+        asyncio.run(client.list_tools())
+
+    assert [request["body"]["method"] for request in requests] == [
+        "initialize",
+        "notifications/initialized",
+        "tools/list",
+        "initialize",
+        "notifications/initialized",
+        "tools/list",
+    ]
+
+
 def test_redacting_log_filter_redacts_httpx_style_log_messages(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

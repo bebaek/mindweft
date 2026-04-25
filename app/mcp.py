@@ -168,6 +168,7 @@ class MCPHTTPClient:
         params: dict[str, Any] | None,
         *,
         use_protocol_header: bool,
+        retry_invalid_session: bool = True,
     ) -> tuple[dict[str, Any], httpx.Headers]:
         self._request_id += 1
         headers = self._build_headers(include_protocol=use_protocol_header)
@@ -188,6 +189,25 @@ class MCPHTTPClient:
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
+                if self._should_retry_invalid_session(
+                    exc.response,
+                    use_protocol_header=use_protocol_header,
+                    retry_invalid_session=retry_invalid_session,
+                ):
+                    logger.warning(
+                        "MCP session rejected; reinitializing and retrying once: server=%s url=%s status=%s",
+                        self._config.name,
+                        redact_url_secrets(self._config.url),
+                        exc.response.status_code,
+                    )
+                    self._reset_session_state()
+                    await self._ensure_initialized()
+                    return await self._request_raw(
+                        method,
+                        params,
+                        use_protocol_header=use_protocol_header,
+                        retry_invalid_session=False,
+                    )
                 raise HTTPException(
                     status_code=502,
                     detail=f"MCP server '{self._config.name}' HTTP error: {exc.response.text}",
@@ -224,6 +244,32 @@ class MCPHTTPClient:
                 detail=f"MCP server '{self._config.name}' returned invalid JSON-RPC result",
             )
         return result, response.headers
+
+    def _reset_session_state(self) -> None:
+        self._session_id = None
+        self._negotiated_protocol_version = self._config.protocol_version
+        self._initialized = False
+        self._server_name = None
+        self._server_version = None
+
+    def _should_retry_invalid_session(
+        self,
+        response: httpx.Response,
+        *,
+        use_protocol_header: bool,
+        retry_invalid_session: bool,
+    ) -> bool:
+        if not retry_invalid_session or not use_protocol_header or not self._session_id:
+            return False
+        if response.status_code == 404:
+            return True
+        if response.status_code != 400:
+            return False
+
+        detail = response.text.lower()
+        return "session" in detail and (
+            "invalid" in detail or "no valid" in detail or "missing" in detail
+        )
 
     def _build_headers(self, *, include_protocol: bool) -> dict[str, str]:
         headers = {
