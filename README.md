@@ -274,7 +274,8 @@ minigent-voice-daemon --backend chat
 When `chat` runs on an interactive TTY, it enables the platform's `readline` support so
 common shell-style editing keys like `Ctrl-A` and `Ctrl-E` move within the current input
 line. Piped or otherwise non-interactive stdin keeps the existing plain line-read
-behavior.
+behavior. In chat mode, pressing Enter on an empty line is ignored; use `Ctrl-D` or
+`Ctrl-C` to exit.
 
 You can also enable local TTS on macOS with:
 

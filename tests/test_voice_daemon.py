@@ -2903,6 +2903,48 @@ def test_run_chat_loop_honors_once(
     assert output_stream.getvalue() == "[user] [assistant] first reply\n"
 
 
+def test_run_chat_loop_ignores_blank_interactive_submit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+    prompts: list[str] = []
+    messages: list[str] = []
+
+    class FakeChatClient:
+        def __init__(self, config: VoiceDaemonConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            messages.append(content)
+            return {"id": "message-1"}
+
+        def run_thread(self) -> str:
+            return "reply"
+
+    responses = iter(["", "real question"])
+
+    def fake_input(prompt: str) -> str:
+        prompts.append(prompt)
+        try:
+            return next(responses)
+        except StopIteration as exc:
+            raise EOFError from exc
+
+    monkeypatch.setattr(voice_cli, "MinigentClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "_enable_chat_line_editing", lambda **kwargs: True)
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+    )
+
+    assert exit_code == 0
+    assert messages == ["real question"]
+    assert prompts == ["[user] ", "[user] ", "[user] "]
+    assert output_stream.getvalue() == "[assistant] reply\n[idle] shutting down\n"
+
+
 def test_run_chat_loop_handles_keyboard_interrupt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

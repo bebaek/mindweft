@@ -372,7 +372,7 @@ def run_chat_loop(config: VoiceDaemonConfig, *, once: bool = False) -> int:
             output_stream.write("[idle] shutting down\n")
             output_stream.flush()
             return 0
-        if line == "":
+        if not interactive_prompt and line == "":
             output_stream.write("[idle] shutting down\n")
             output_stream.flush()
             return 0
