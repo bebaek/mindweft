@@ -171,6 +171,93 @@ def test_run_endpoint_azure_adapter_allows_second_turn_after_tool_completion() -
     assert second_run.json() == {"reply": "Mock reply: continue"}
 
 
+def test_run_endpoint_openrouter_retries_with_azure_tool_history_pruning() -> None:
+    seen_payloads: list[dict[str, object]] = []
+    responses = deque(
+        [
+            {"choices": [{"message": {"tool_calls": [{"id": "call_123", "function": {"name": "echo", "arguments": '{"text":"hello from api"}'}}]}}]},
+            {"choices": [{"message": {"content": 'Tool result: {"echo": "hello from api"}'}}]},
+            {
+                "error": {
+                    "message": "Provider returned error",
+                    "code": 400,
+                    "metadata": {
+                        "raw": (
+                            '{\n  "error": {\n    "message": '
+                            '"No tool call found for function call output with call_id '
+                            'call_123.",\n    "type": "invalid_request_error",\n    '
+                            '"param": "input",\n    "code": null\n  }\n}'
+                        ),
+                        "provider_name": "Azure",
+                        "is_byok": False,
+                    },
+                }
+            },
+            {"choices": [{"message": {"content": "Mock reply: continue"}}]},
+        ]
+    )
+    status_codes = deque([200, 200, 400, 200])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        seen_payloads.append(payload)
+        if len(seen_payloads) == 2:
+            assert [message["role"] for message in payload["messages"]] == [
+                "system",
+                "user",
+                "assistant",
+                "tool",
+            ]
+        if len(seen_payloads) == 3:
+            assert [message["role"] for message in payload["messages"]] == [
+                "system",
+                "user",
+                "assistant",
+                "tool",
+                "assistant",
+                "user",
+            ]
+        if len(seen_payloads) == 4:
+            assert [message["role"] for message in payload["messages"]] == [
+                "system",
+                "user",
+                "assistant",
+                "user",
+            ]
+            assert payload["messages"][2]["content"] == 'Tool result: {"echo": "hello from api"}'
+        return httpx.Response(status_codes.popleft(), json=responses.popleft())
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://openrouter.ai/api/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    client = TestClient(create_app(llm_adapter=adapter, tool_registry=build_local_tool_registry()))
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "weather today"},
+        headers=AUTH_HEADERS,
+    )
+
+    first_run = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    assert first_run.status_code == 200
+    assert first_run.json() == {"reply": 'Tool result: {"echo": "hello from api"}'}
+
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "continue"},
+        headers=AUTH_HEADERS,
+    )
+
+    second_run = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    assert second_run.status_code == 200
+    assert second_run.json() == {"reply": "Mock reply: continue"}
+
+
 def test_run_endpoint_returns_reply_when_tool_fails() -> None:
     class ToolFailingLLM(LLMAdapter):
         async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:

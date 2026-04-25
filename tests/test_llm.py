@@ -466,6 +466,143 @@ def test_openai_compatible_adapter_keeps_historical_tool_messages_for_non_azure(
     ]
 
 
+def test_openai_compatible_adapter_retries_openrouter_with_azure_tool_history_pruning() -> None:
+    seen_payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        seen_payloads.append(payload)
+        if len(seen_payloads) == 1:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "Provider returned error",
+                        "code": 400,
+                        "metadata": {
+                            "raw": (
+                                '{\n  "error": {\n    "message": '
+                                '"No tool call found for function call output with call_id '
+                                'call_123.",\n    "type": "invalid_request_error",\n    '
+                                '"param": "input",\n    "code": null\n  }\n}'
+                            ),
+                            "provider_name": "Azure",
+                            "is_byok": False,
+                        },
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "ok after retry"}}]},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://openrouter.ai/api/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(thread_id="thread", role=MessageRole.USER, content="weather today"),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name="echo",
+                    tool_call_id="call_123",
+                    tool_arguments={"text": "tool input"},
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content='{"echo": "tool output"}',
+                    tool_name="echo",
+                    tool_call_id="call_123",
+                ),
+                Message(thread_id="thread", role=MessageRole.ASSISTANT, content="It is warm today."),
+                Message(thread_id="thread", role=MessageRole.USER, content="current home temperature"),
+            ],
+            build_local_tool_registry().specs(),
+        )
+    )
+
+    assert response.content == "ok after retry"
+    assert len(seen_payloads) == 2
+    assert [message["role"] for message in seen_payloads[0]["messages"]] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+    ]
+    assert [message["role"] for message in seen_payloads[1]["messages"]] == [
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert seen_payloads[1]["messages"][1]["content"] == "It is warm today."
+
+
+def test_openai_compatible_adapter_does_not_retry_unrelated_provider_errors() -> None:
+    seen_payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        seen_payloads.append(payload)
+        return httpx.Response(
+            400,
+            json={"error": {"message": "Some other provider validation error"}},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://openrouter.ai/api/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(HTTPException, match="Some other provider validation error"):
+        asyncio.run(
+            adapter.generate(
+                [
+                    Message(thread_id="thread", role=MessageRole.USER, content="weather today"),
+                    Message(
+                        thread_id="thread",
+                        role=MessageRole.ASSISTANT,
+                        content="",
+                        tool_name="echo",
+                        tool_call_id="call_123",
+                        tool_arguments={"text": "tool input"},
+                    ),
+                    Message(
+                        thread_id="thread",
+                        role=MessageRole.TOOL,
+                        content='{"echo": "tool output"}',
+                        tool_name="echo",
+                        tool_call_id="call_123",
+                    ),
+                    Message(
+                        thread_id="thread",
+                        role=MessageRole.ASSISTANT,
+                        content="It is warm today.",
+                    ),
+                    Message(
+                        thread_id="thread",
+                        role=MessageRole.USER,
+                        content="current home temperature",
+                    ),
+                ],
+                build_local_tool_registry().specs(),
+            )
+        )
+
+    assert len(seen_payloads) == 1
+
+
 def test_openai_compatible_adapter_sanitizes_provider_tool_names() -> None:
     seen_payload: dict[str, object] = {}
 

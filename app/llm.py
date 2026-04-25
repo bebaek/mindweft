@@ -91,34 +91,78 @@ class OpenAICompatibleAdapter(LLMAdapter):
 
     async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
         tool_name_map = _build_provider_tool_name_map(tools)
-        request_messages = messages
-        if _is_azure_openai_base_url(self._base_url):
-            request_messages = _prune_historical_tool_messages_for_azure(messages)
-        payload = {
-            "model": self._model,
-            "messages": [
-                _message_to_chat_payload(message, tool_name_map) for message in request_messages
-            ],
-            "tools": [_tool_to_payload(tool, tool_name_map) for tool in tools],
-        }
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
             **self._extra_headers,
         }
+        request_messages = messages
+        pruned_for_azure = False
+        if _is_azure_openai_base_url(self._base_url):
+            request_messages = _prune_historical_tool_messages_for_azure(messages)
+            pruned_for_azure = True
+        logger.debug(
+            "LLM request provider=%s base_url=%s pruned_for_azure=%s",
+            self.describe()["provider"],
+            self._base_url,
+            pruned_for_azure,
+        )
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             try:
-                response = await client.post(
-                    f"{self._base_url}/chat/completions",
-                    json=payload,
+                response = await self._post_chat_completion(
+                    client=client,
                     headers=headers,
+                    request_messages=request_messages,
+                    tools=tools,
+                    tool_name_map=tool_name_map,
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                detail = exc.response.text or str(exc)
-                raise HTTPException(
-                    status_code=502, detail=f"LLM provider error: {detail}"
-                ) from exc
+                retry_messages = _prune_historical_tool_messages_for_azure(messages)
+                should_retry = (
+                    not pruned_for_azure
+                    and retry_messages != request_messages
+                    and _is_missing_tool_call_for_output_error(exc.response)
+                )
+                if should_retry:
+                    logger.warning(
+                        "Retrying chat completion with Azure tool-history pruning after provider error "
+                        "provider=%s base_url=%s",
+                        self.describe()["provider"],
+                        self._base_url,
+                    )
+                    retry_response = await self._post_chat_completion(
+                        client=client,
+                        headers=headers,
+                        request_messages=retry_messages,
+                        tools=tools,
+                        tool_name_map=tool_name_map,
+                    )
+                    try:
+                        retry_response.raise_for_status()
+                    except httpx.HTTPStatusError as retry_exc:
+                        detail = retry_exc.response.text or str(retry_exc)
+                        logger.warning(
+                            "Retried chat completion with Azure tool-history pruning failed provider=%s "
+                            "base_url=%s",
+                            self.describe()["provider"],
+                            self._base_url,
+                        )
+                        raise HTTPException(
+                            status_code=502, detail=f"LLM provider error: {detail}"
+                        ) from retry_exc
+                    logger.info(
+                        "Retried chat completion with Azure tool-history pruning succeeded provider=%s "
+                        "base_url=%s",
+                        self.describe()["provider"],
+                        self._base_url,
+                    )
+                    response = retry_response
+                else:
+                    detail = exc.response.text or str(exc)
+                    raise HTTPException(
+                        status_code=502, detail=f"LLM provider error: {detail}"
+                    ) from exc
             except httpx.HTTPError as exc:
                 raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}") from exc
         return _parse_chat_completion(response.json(), tool_name_map)
@@ -138,6 +182,28 @@ class OpenAICompatibleAdapter(LLMAdapter):
             "headers": sorted(self._extra_headers.keys()),
             "adapter": "OpenAICompatibleAdapter",
         }
+
+    async def _post_chat_completion(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        request_messages: list[Message],
+        tools: list[ToolSpec],
+        tool_name_map: dict[str, str],
+    ) -> httpx.Response:
+        payload = {
+            "model": self._model,
+            "messages": [
+                _message_to_chat_payload(message, tool_name_map) for message in request_messages
+            ],
+            "tools": [_tool_to_payload(tool, tool_name_map) for tool in tools],
+        }
+        return await client.post(
+            f"{self._base_url}/chat/completions",
+            json=payload,
+            headers=headers,
+        )
 
 
 @dataclass(frozen=True)
@@ -273,6 +339,11 @@ def _is_azure_openai_base_url(base_url: str) -> bool:
     return host.endswith(".openai.azure.com") or (
         host.endswith(".services.ai.azure.com") and "/openai/" in path
     )
+
+
+def _is_missing_tool_call_for_output_error(response: httpx.Response) -> bool:
+    detail = response.text or ""
+    return "No tool call found for function call output with call_id" in detail
 
 
 def _prune_historical_tool_messages_for_azure(messages: list[Message]) -> list[Message]:
