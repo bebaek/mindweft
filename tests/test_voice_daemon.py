@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import builtins
 import json
 import subprocess
 import wave
@@ -2718,6 +2719,123 @@ def test_run_chat_loop_handles_multiple_turns_and_blank_lines(
         "[user] [user] [assistant] first reply\n[user] [assistant] second reply\n"
         "[user] [idle] shutting down\n"
     )
+
+
+def test_enable_chat_line_editing_for_tty_streams(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class TtyStream(StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    readline_module = type(
+        "FakeReadlineModule",
+        (),
+        {"parse_and_bind": lambda self, binding: calls.append(binding)},
+    )()
+
+    monkeypatch.setattr(voice_cli, "import_module", lambda name: readline_module)
+
+    voice_cli._enable_chat_line_editing(
+        input_stream=TtyStream(),
+        output_stream=TtyStream(),
+    )
+
+    assert calls == ["tab: complete"]
+
+
+def test_enable_chat_line_editing_skips_non_tty_streams(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    imported: list[str] = []
+
+    def fake_import(name: str) -> object:
+        imported.append(name)
+        raise AssertionError("readline import should be skipped for non-tty streams")
+
+    monkeypatch.setattr(voice_cli, "import_module", fake_import)
+
+    voice_cli._enable_chat_line_editing(
+        input_stream=StringIO(),
+        output_stream=StringIO(),
+    )
+
+    assert imported == []
+
+
+def test_enable_chat_line_editing_falls_back_when_readline_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TtyStream(StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr(
+        voice_cli,
+        "import_module",
+        lambda name: (_ for _ in ()).throw(ImportError("no readline")),
+    )
+
+    voice_cli._enable_chat_line_editing(
+        input_stream=TtyStream(),
+        output_stream=TtyStream(),
+    )
+
+
+def test_enable_chat_line_editing_falls_back_when_setup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TtyStream(StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    readline_module = type(
+        "FakeReadlineModule",
+        (),
+        {"parse_and_bind": lambda self, binding: (_ for _ in ()).throw(RuntimeError("boom"))},
+    )()
+
+    monkeypatch.setattr(voice_cli, "import_module", lambda name: readline_module)
+
+    voice_cli._enable_chat_line_editing(
+        input_stream=TtyStream(),
+        output_stream=TtyStream(),
+    )
+
+
+def test_read_chat_line_uses_interactive_input_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompts: list[str] = []
+
+    monkeypatch.setattr(
+        builtins,
+        "input",
+        lambda prompt: prompts.append(prompt) or "hello",
+    )
+
+    line = voice_cli._read_chat_line(
+        input_stream=StringIO(),
+        output_stream=StringIO(),
+        interactive_prompt=True,
+    )
+
+    assert line == "hello"
+    assert prompts == ["[user] "]
+
+
+def test_read_chat_line_uses_plain_readline_when_not_interactive() -> None:
+    input_stream = StringIO("hello\n")
+    output_stream = StringIO()
+
+    line = voice_cli._read_chat_line(
+        input_stream=input_stream,
+        output_stream=output_stream,
+        interactive_prompt=False,
+    )
+
+    assert line == "hello\n"
+    assert output_stream.getvalue() == "[user] "
 
 
 def test_run_chat_loop_continues_after_backend_error(

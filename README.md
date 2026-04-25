@@ -271,6 +271,11 @@ For a plain terminal chat loop with no wake word, microphone, or spoken output, 
 minigent-voice-daemon --backend chat
 ```
 
+When `chat` runs on an interactive TTY, it enables the platform's `readline` support so
+common shell-style editing keys like `Ctrl-A` and `Ctrl-E` move within the current input
+line. Piped or otherwise non-interactive stdin keeps the existing plain line-read
+behavior.
+
 You can also enable local TTS on macOS with:
 
 ```bash

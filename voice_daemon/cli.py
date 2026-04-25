@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from importlib import import_module
 from pathlib import Path
 from typing import Callable
 
@@ -348,19 +349,29 @@ def main(argv: list[str] | None = None) -> int:
 def run_chat_loop(config: VoiceDaemonConfig, *, once: bool = False) -> int:
     output_stream = sys.stdout
     input_stream = sys.stdin
+    interactive_prompt = _enable_chat_line_editing(
+        input_stream=input_stream,
+        output_stream=output_stream,
+    )
     client = MinigentClient(config, output_stream=output_stream)
     speech_output = ConsoleSpeechOutput(output_stream=output_stream)
 
     turns_completed = 0
     while True:
-        output_stream.write("[user] ")
-        output_stream.flush()
         try:
-            line = input_stream.readline()
+            line = _read_chat_line(
+                input_stream=input_stream,
+                output_stream=output_stream,
+                interactive_prompt=interactive_prompt,
+            )
         except KeyboardInterrupt:
             output_stream.write("\n[idle] shutting down\n")
             output_stream.flush()
             return 130
+        except EOFError:
+            output_stream.write("[idle] shutting down\n")
+            output_stream.flush()
+            return 0
         if line == "":
             output_stream.write("[idle] shutting down\n")
             output_stream.flush()
@@ -379,6 +390,37 @@ def run_chat_loop(config: VoiceDaemonConfig, *, once: bool = False) -> int:
         turns_completed += 1
         if once and turns_completed >= 1:
             return 0
+
+
+def _read_chat_line(
+    *,
+    input_stream: object,
+    output_stream: object,
+    interactive_prompt: bool,
+) -> str:
+    if interactive_prompt:
+        return input("[user] ")
+    output_stream.write("[user] ")
+    output_stream.flush()
+    return input_stream.readline()
+
+
+def _enable_chat_line_editing(*, input_stream: object, output_stream: object) -> bool:
+    input_is_tty = getattr(input_stream, "isatty", lambda: False)
+    output_is_tty = getattr(output_stream, "isatty", lambda: False)
+    if not input_is_tty() or not output_is_tty():
+        return False
+    try:
+        readline_module = import_module("readline")
+    except ImportError:
+        return False
+    parse_and_bind = getattr(readline_module, "parse_and_bind", None)
+    if callable(parse_and_bind):
+        try:
+            parse_and_bind("tab: complete")
+        except Exception:
+            return False
+    return True
 
 
 def build_activation_source(
