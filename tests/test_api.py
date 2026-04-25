@@ -1,7 +1,9 @@
 import json
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -10,7 +12,7 @@ from fastapi.testclient import TestClient
 from jwt.algorithms import RSAAlgorithm
 
 from app import auth as auth_module
-from app.llm import LLMAdapter, MockLLMAdapter
+from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter
 from app.main import create_app
 from app.mcp import MCPServerInfo
 from app.models import LLMResponse, Message, MessageRole, ToolCall
@@ -107,6 +109,66 @@ def test_run_endpoint_handles_tool_call_flow() -> None:
         MessageRole.TOOL,
         MessageRole.ASSISTANT,
     ]
+
+
+def test_run_endpoint_azure_adapter_allows_second_turn_after_tool_completion() -> None:
+    seen_payloads: list[dict[str, object]] = []
+    responses = deque(
+        [
+            {"choices": [{"message": {"tool_calls": [{"id": "call_123", "function": {"name": "echo", "arguments": '{"text":"hello from api"}'}}]}}]},
+            {"choices": [{"message": {"content": 'Tool result: {"echo": "hello from api"}'}}]},
+            {"choices": [{"message": {"content": "Mock reply: continue"}}]},
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        seen_payloads.append(payload)
+        if len(seen_payloads) == 2:
+            assert [message["role"] for message in payload["messages"]] == [
+                "system",
+                "user",
+                "assistant",
+                "tool",
+            ]
+        if len(seen_payloads) == 3:
+            assert [message["role"] for message in payload["messages"]] == [
+                "system",
+                "user",
+                "assistant",
+                "user",
+            ]
+        return httpx.Response(200, json=responses.popleft())
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example-resource.openai.azure.com/openai/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    client = TestClient(create_app(llm_adapter=adapter, tool_registry=build_local_tool_registry()))
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "weather today"},
+        headers=AUTH_HEADERS,
+    )
+
+    first_run = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    assert first_run.status_code == 200
+    assert first_run.json() == {"reply": 'Tool result: {"echo": "hello from api"}'}
+
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "continue"},
+        headers=AUTH_HEADERS,
+    )
+
+    second_run = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    assert second_run.status_code == 200
+    assert second_run.json() == {"reply": "Mock reply: continue"}
 
 
 def test_run_endpoint_returns_reply_when_tool_fails() -> None:

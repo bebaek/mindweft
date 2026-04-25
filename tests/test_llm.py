@@ -310,6 +310,162 @@ def test_openai_compatible_adapter_sends_tool_call_id_for_tool_messages() -> Non
     assert "name" not in seen_payload["messages"][2]
 
 
+def test_openai_compatible_adapter_prunes_historical_tool_messages_for_azure() -> None:
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_payload
+        seen_payload = json.loads(request.read().decode())
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "ok"}}]},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example-resource.openai.azure.com/openai/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    asyncio.run(
+        adapter.generate(
+            [
+                Message(thread_id="thread", role=MessageRole.USER, content="weather today"),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name="echo",
+                    tool_call_id="call_123",
+                    tool_arguments={"text": "tool input"},
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content='{"echo": "tool output"}',
+                    tool_name="echo",
+                    tool_call_id="call_123",
+                ),
+                Message(thread_id="thread", role=MessageRole.ASSISTANT, content="It is warm today."),
+                Message(thread_id="thread", role=MessageRole.USER, content="current home temperature"),
+            ],
+            build_local_tool_registry().specs(),
+        )
+    )
+
+    assert [message["role"] for message in seen_payload["messages"]] == [
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert seen_payload["messages"][1]["content"] == "It is warm today."
+
+
+def test_openai_compatible_adapter_keeps_active_tool_messages_for_azure() -> None:
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_payload
+        seen_payload = json.loads(request.read().decode())
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "ok"}}]},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example-resource.openai.azure.com/openai/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    asyncio.run(
+        adapter.generate(
+            [
+                Message(thread_id="thread", role=MessageRole.USER, content="weather today"),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name="echo",
+                    tool_call_id="call_123",
+                    tool_arguments={"text": "tool input"},
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content='{"echo": "tool output"}',
+                    tool_name="echo",
+                    tool_call_id="call_123",
+                ),
+            ],
+            build_local_tool_registry().specs(),
+        )
+    )
+
+    assert [message["role"] for message in seen_payload["messages"]] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert seen_payload["messages"][1]["tool_calls"][0]["id"] == "call_123"
+    assert seen_payload["messages"][2]["tool_call_id"] == "call_123"
+
+
+def test_openai_compatible_adapter_keeps_historical_tool_messages_for_non_azure() -> None:
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_payload
+        seen_payload = json.loads(request.read().decode())
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "ok"}}]},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    asyncio.run(
+        adapter.generate(
+            [
+                Message(thread_id="thread", role=MessageRole.USER, content="weather today"),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name="echo",
+                    tool_call_id="call_123",
+                    tool_arguments={"text": "tool input"},
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content='{"echo": "tool output"}',
+                    tool_name="echo",
+                    tool_call_id="call_123",
+                ),
+                Message(thread_id="thread", role=MessageRole.ASSISTANT, content="It is warm today."),
+                Message(thread_id="thread", role=MessageRole.USER, content="current home temperature"),
+            ],
+            build_local_tool_registry().specs(),
+        )
+    )
+
+    assert [message["role"] for message in seen_payload["messages"]] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+    ]
+
+
 def test_openai_compatible_adapter_sanitizes_provider_tool_names() -> None:
     seen_payload: dict[str, object] = {}
 

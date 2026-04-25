@@ -7,6 +7,7 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
@@ -90,9 +91,14 @@ class OpenAICompatibleAdapter(LLMAdapter):
 
     async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
         tool_name_map = _build_provider_tool_name_map(tools)
+        request_messages = messages
+        if _is_azure_openai_base_url(self._base_url):
+            request_messages = _prune_historical_tool_messages_for_azure(messages)
         payload = {
             "model": self._model,
-            "messages": [_message_to_chat_payload(message, tool_name_map) for message in messages],
+            "messages": [
+                _message_to_chat_payload(message, tool_name_map) for message in request_messages
+            ],
             "tools": [_tool_to_payload(tool, tool_name_map) for tool in tools],
         }
         headers = {
@@ -121,6 +127,8 @@ class OpenAICompatibleAdapter(LLMAdapter):
         provider = "openai-compatible"
         if "openrouter.ai" in self._base_url:
             provider = "openrouter"
+        elif _is_azure_openai_base_url(self._base_url):
+            provider = "azure-openai"
         elif "api.openai.com" in self._base_url:
             provider = "openai"
         return {
@@ -256,6 +264,57 @@ def _tool_to_payload(tool: ToolSpec, tool_name_map: dict[str, str]) -> dict[str,
             "parameters": tool.input_schema,
         },
     }
+
+
+def _is_azure_openai_base_url(base_url: str) -> bool:
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.lower()
+    return host.endswith(".openai.azure.com") or (
+        host.endswith(".services.ai.azure.com") and "/openai/" in path
+    )
+
+
+def _prune_historical_tool_messages_for_azure(messages: list[Message]) -> list[Message]:
+    active_tool_pair_start = _active_tool_pair_start(messages)
+    pruned: list[Message] = []
+    dropped_pairs = 0
+    index = 0
+    while index < len(messages):
+        if (
+            index != active_tool_pair_start
+            and index + 1 < len(messages)
+            and _is_completed_tool_pair(messages[index], messages[index + 1])
+        ):
+            dropped_pairs += 1
+            index += 2
+            continue
+        pruned.append(messages[index])
+        index += 1
+    if dropped_pairs:
+        logger.debug(
+            "Pruned %s completed tool-call pair(s) from Azure chat-completions payload",
+            dropped_pairs,
+        )
+    return pruned
+
+
+def _active_tool_pair_start(messages: list[Message]) -> int | None:
+    if len(messages) < 2:
+        return None
+    if _is_completed_tool_pair(messages[-2], messages[-1]):
+        return len(messages) - 2
+    return None
+
+
+def _is_completed_tool_pair(assistant_message: Message, tool_message: Message) -> bool:
+    return (
+        assistant_message.role == MessageRole.ASSISTANT
+        and tool_message.role == MessageRole.TOOL
+        and bool(assistant_message.tool_name)
+        and bool(assistant_message.tool_call_id)
+        and assistant_message.tool_call_id == tool_message.tool_call_id
+    )
 
 
 def _parse_chat_completion(payload: dict[str, Any], tool_name_map: dict[str, str]) -> LLMResponse:
