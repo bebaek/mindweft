@@ -42,6 +42,31 @@ class ConsoleSpeechOutput(SpeechOutput):
 
 
 @dataclass
+class SilentSpeechOutput(SpeechOutput):
+    output_stream: TextIO
+    _speaking: bool = False
+
+    def speak(self, text: str) -> None:
+        self.start(text)
+        self.wait()
+
+    def start(self, text: str) -> None:
+        self._speaking = True
+        self.output_stream.write(f"[assistant] {text}\n")
+        self.output_stream.flush()
+        self._speaking = False
+
+    def stop(self) -> None:
+        self._speaking = False
+
+    def is_speaking(self) -> bool:
+        return self._speaking
+
+    def wait(self) -> None:
+        self._speaking = False
+
+
+@dataclass
 class MacOsSaySpeechOutput(SpeechOutput):
     output_stream: TextIO
     voice: str | None = None

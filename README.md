@@ -254,7 +254,7 @@ uv run minigent chat --resume-last "continue"
 uv run minigent threads show <thread-id>
 ```
 
-The repo also exposes the same voice-daemon entrypoint through `uv run`:
+The repo also exposes the same voice/chat daemon entrypoint through `uv run`:
 
 ```bash
 uv run minigent-voice-daemon --wake-phrase "hey minigent"
@@ -262,7 +262,16 @@ uv run minigent-voice-daemon --wake-phrase "hey minigent"
 
 By default, assistant replies are printed to the terminal. The examples below use the
 installed `minigent-voice-daemon` command; inside the repo you can replace it with
-`uv run minigent-voice-daemon`. You can also enable local TTS on macOS with:
+`uv run minigent-voice-daemon`.
+
+For a plain terminal chat loop with no wake word, microphone, or spoken output, use the
+`chat` backend:
+
+```bash
+minigent-voice-daemon --backend chat
+```
+
+You can also enable local TTS on macOS with:
 
 ```bash
 MINIGENT_VOICE_TTS_PROVIDER=say
@@ -326,8 +335,10 @@ MINIGENT_VOICE_TTS_LENGTH_SCALE=1.15
 minigent-voice-daemon --backend manual-audio --once
 ```
 
-The daemon currently supports three backends:
+The daemon currently supports four backends:
 
+- `chat`: plain terminal chat mode with direct stdin input and terminal replies, with no
+  wake-word or audio pipeline
 - `stdin`: text-driven wake phrase loop for cheap end-to-end testing
 - `manual-audio`: press Enter to activate the microphone, record until silence using
   Silero VAD, transcribe the utterance with OpenAI or OpenRouter speech-to-text, then send the text
@@ -335,14 +346,16 @@ The daemon currently supports three backends:
 - `passive-audio`: continuously listen for a wake word, keep a short pre-roll audio
   buffer, then record until silence and transcribe through the same speech pipeline
 
-`MINIGENT_VOICE_WAKE_PHRASE` is the text trigger for the `stdin` backend. In
-`passive-audio`, the actual wake trigger comes from the configured wake-word provider:
-`MINIGENT_VOICE_KEYWORD_PATH` for Porcupine or `MINIGENT_VOICE_OWW_MODEL` for
-openWakeWord.
+`MINIGENT_VOICE_WAKE_PHRASE` is the text trigger for the `stdin` backend. `chat` does
+not use wake-word processing at all. In `passive-audio`, the actual wake trigger comes
+from the configured wake-word provider: `MINIGENT_VOICE_KEYWORD_PATH` for Porcupine or
+`MINIGENT_VOICE_OWW_MODEL` for openWakeWord.
 
 Examples:
 
 ```bash
+minigent-voice-daemon --backend chat
+
 minigent-voice-daemon --wake-phrase "hey minigent"
 # ignored
 hello there
@@ -379,6 +392,15 @@ Manual audio example:
 
 ```bash
 OPENAI_API_KEY=...
+minigent-voice-daemon --backend manual-audio --once
+```
+
+If you want voice input without spoken assistant playback, disable TTS and keep the
+assistant reply in the terminal:
+
+```bash
+OPENAI_API_KEY=...
+MINIGENT_VOICE_TTS_PROVIDER=none
 minigent-voice-daemon --backend manual-audio --once
 ```
 

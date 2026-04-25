@@ -32,6 +32,7 @@ from voice_daemon.cli import (
     build_speech_output,
     build_speech_provider_config,
     build_wake_word_detector,
+    run_chat_loop,
 )
 from voice_daemon.config import PrincipalConfig, VoiceDaemonConfig
 from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
@@ -43,6 +44,7 @@ from voice_daemon.speech import (
     ConsoleSpeechOutput,
     MacOsSaySpeechOutput,
     PiperSpeechOutput,
+    SilentSpeechOutput,
     _sanitize_text_for_tts,
 )
 from voice_daemon.stt import (
@@ -415,6 +417,14 @@ def test_console_speech_output_prints_reply() -> None:
     assert output_stream.getvalue() == "[assistant] done\n"
 
 
+def test_silent_speech_output_prints_reply_without_audio() -> None:
+    output_stream = StringIO()
+
+    SilentSpeechOutput(output_stream=output_stream).speak("done")
+
+    assert output_stream.getvalue() == "[assistant] done\n"
+
+
 def test_macos_say_speech_output_prints_and_speaks(monkeypatch: pytest.MonkeyPatch) -> None:
     output_stream = StringIO()
     captured: dict[str, object] = {}
@@ -525,7 +535,14 @@ def test_piper_speech_output_prints_and_plays(monkeypatch: pytest.MonkeyPatch, t
     assert list(samples) == [1, 2]
 
 
-def test_build_speech_output_supports_console_say_and_piper() -> None:
+def test_build_speech_output_supports_none_console_say_and_piper() -> None:
+    silent = build_speech_output(
+        VoiceDaemonConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            tts_provider="none",
+        )
+    )
     console = build_speech_output(
         VoiceDaemonConfig(
             base_url="http://127.0.0.1:8000",
@@ -553,6 +570,7 @@ def test_build_speech_output_supports_console_say_and_piper() -> None:
         )
     )
 
+    assert isinstance(silent, SilentSpeechOutput)
     assert isinstance(console, ConsoleSpeechOutput)
     assert isinstance(say, MacOsSaySpeechOutput)
     assert say.voice == "Samantha"
@@ -1520,6 +1538,22 @@ def test_build_config_prefers_cli_capture_ended_acknowledgement(
     config = build_config(args)
 
     assert config.capture_ended_acknowledgement == "done"
+
+
+def test_build_config_accepts_none_tts_provider_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_VOICE_TTS_PROVIDER", "none")
+
+    config = build_config(build_parser().parse_args([]))
+
+    assert config.tts_provider == "none"
+
+
+def test_parser_accepts_chat_backend() -> None:
+    args = build_parser().parse_args(["--backend", "chat"])
+
+    assert args.backend == "chat"
 
 
 def test_wrap_feedback_with_ambient_restore_uses_controller_hook() -> None:
@@ -2629,7 +2663,11 @@ def test_voice_daemon_cli_handles_keyboard_interrupt(
         "build_activation_source",
         lambda backend, config, **kwargs: activation_source,
     )
-    monkeypatch.setattr(voice_cli, "MinigentClient", lambda config: object())
+    monkeypatch.setattr(
+        voice_cli,
+        "MinigentClient",
+        lambda config, output_stream=None: object(),
+    )
     monkeypatch.setattr(voice_cli, "build_speech_output", lambda config: object())
     monkeypatch.setattr(voice_cli, "VoiceDaemon", FakeVoiceDaemon)
 
@@ -2638,6 +2676,161 @@ def test_voice_daemon_cli_handles_keyboard_interrupt(
     assert exit_code == 130
     assert capsys.readouterr().out == "[idle] shutting down\n"
     assert activation_source.close_calls == 1
+
+
+def test_run_chat_loop_handles_multiple_turns_and_blank_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("\nfirst question\nsecond question\n")
+    events: list[tuple[str, str]] = []
+
+    class FakeChatClient:
+        def __init__(self, config: VoiceDaemonConfig, output_stream=None) -> None:
+            del config, output_stream
+            self.replies = iter(["first reply", "second reply"])
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            events.append(("message", content))
+            return {"id": "message-1"}
+
+        def run_thread(self) -> str:
+            reply = next(self.replies)
+            events.append(("run", reply))
+            return reply
+
+    monkeypatch.setattr(voice_cli, "MinigentClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+    )
+
+    assert exit_code == 0
+    assert events == [
+        ("message", "first question"),
+        ("run", "first reply"),
+        ("message", "second question"),
+        ("run", "second reply"),
+    ]
+    assert output_stream.getvalue() == (
+        "[user] [user] [assistant] first reply\n[user] [assistant] second reply\n"
+        "[user] [idle] shutting down\n"
+    )
+
+
+def test_run_chat_loop_continues_after_backend_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("bad request\ngood request\n")
+
+    class FakeChatClient:
+        def __init__(self, config: VoiceDaemonConfig, output_stream=None) -> None:
+            del config, output_stream
+            self.calls = 0
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            self.calls += 1
+            if content == "bad request":
+                raise RuntimeError("502 upstream")
+            return {"id": "message-1"}
+
+        def run_thread(self) -> str:
+            return "good reply"
+
+    monkeypatch.setattr(voice_cli, "MinigentClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+    )
+
+    assert exit_code == 0
+    assert "[idle] request failed, staying in chat mode: 502 upstream\n" in output_stream.getvalue()
+    assert "[assistant] good reply\n" in output_stream.getvalue()
+
+
+def test_run_chat_loop_honors_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("first question\nsecond question\n")
+    messages: list[str] = []
+
+    class FakeChatClient:
+        def __init__(self, config: VoiceDaemonConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            messages.append(content)
+            return {"id": "message-1"}
+
+        def run_thread(self) -> str:
+            return "first reply"
+
+    monkeypatch.setattr(voice_cli, "MinigentClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+        once=True,
+    )
+
+    assert exit_code == 0
+    assert messages == ["first question"]
+    assert output_stream.getvalue() == "[user] [assistant] first reply\n"
+
+
+def test_run_chat_loop_handles_keyboard_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+
+    class InterruptingInput:
+        def readline(self) -> str:
+            raise KeyboardInterrupt
+
+    class FakeChatClient:
+        def __init__(self, config: VoiceDaemonConfig, output_stream=None) -> None:
+            del config, output_stream
+
+    monkeypatch.setattr(voice_cli, "MinigentClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", InterruptingInput())
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+    )
+
+    assert exit_code == 130
+    assert output_stream.getvalue() == "[user] \n[idle] shutting down\n"
+
+
+def test_voice_daemon_cli_routes_chat_backend_without_voice_daemon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(voice_cli, "load_environment", lambda: None)
+
+    def fake_run_chat_loop(config: VoiceDaemonConfig, *, once: bool = False) -> int:
+        calls.append(("chat", config))
+        calls.append(("once", once))
+        return 7
+
+    monkeypatch.setattr(voice_cli, "run_chat_loop", fake_run_chat_loop)
+    monkeypatch.setattr(voice_cli, "VoiceDaemon", lambda **kwargs: (_ for _ in ()).throw(AssertionError("VoiceDaemon should not be built for chat")))
+
+    exit_code = voice_cli.main(["--backend", "chat", "--once"])
+
+    assert exit_code == 7
+    assert calls[0][0] == "chat"
+    assert isinstance(calls[0][1], VoiceDaemonConfig)
+    assert calls[1] == ("once", True)
 
 
 def test_audio_ring_buffer_keeps_recent_audio_only() -> None:

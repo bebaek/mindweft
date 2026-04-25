@@ -20,7 +20,12 @@ from voice_daemon.ducking import MacOsAmbientVolumeDucker
 from voice_daemon.minigent_client import MinigentClient
 from voice_daemon.ring_buffer import AudioRingBuffer
 from voice_daemon.service import VoiceDaemon
-from voice_daemon.speech import ConsoleSpeechOutput, MacOsSaySpeechOutput, PiperSpeechOutput
+from voice_daemon.speech import (
+    ConsoleSpeechOutput,
+    MacOsSaySpeechOutput,
+    PiperSpeechOutput,
+    SilentSpeechOutput,
+)
 from voice_daemon.stt import SpeechProviderConfig, build_transcription_adapter
 from voice_daemon.vad import SileroVoiceActivityDetector
 from voice_daemon.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
@@ -28,13 +33,13 @@ from voice_daemon.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetecto
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run the Minigent voice daemon scaffold with a wake phrase loop."
+        description="Run the Minigent voice/chat daemon scaffold."
     )
     parser.add_argument(
         "--backend",
-        choices=("stdin", "manual-audio", "passive-audio"),
+        choices=("chat", "stdin", "manual-audio", "passive-audio"),
         default="stdin",
-        help="Activation backend. `stdin` keeps the text wake-phrase scaffold, `manual-audio` uses the microphone after manual activation, and `passive-audio` adds continuous wake-word listening.",
+        help="Interaction backend. `chat` is a plain terminal chat loop, `stdin` keeps the text wake-phrase scaffold, `manual-audio` uses the microphone after manual activation, and `passive-audio` adds continuous wake-word listening.",
     )
     parser.add_argument(
         "--base-url",
@@ -139,7 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--tts-provider",
-        choices=("console", "say", "piper"),
+        choices=("none", "console", "say", "piper"),
         default=None,
         help="Speech output provider. Defaults to MINIGENT_VOICE_TTS_PROVIDER.",
     )
@@ -284,6 +289,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     config = build_config(args)
+    if args.backend == "chat":
+        return run_chat_loop(config, once=args.once)
     speech_output = build_speech_output(config)
     ambient_volume_controller = build_ambient_volume_controller(config)
     activation_feedback = wrap_feedback_with_ambient_restore(
@@ -336,6 +343,42 @@ def main(argv: list[str] | None = None) -> int:
         close = getattr(activation_source, "close", None)
         if callable(close):
             close()
+
+
+def run_chat_loop(config: VoiceDaemonConfig, *, once: bool = False) -> int:
+    output_stream = sys.stdout
+    input_stream = sys.stdin
+    client = MinigentClient(config, output_stream=output_stream)
+    speech_output = ConsoleSpeechOutput(output_stream=output_stream)
+
+    turns_completed = 0
+    while True:
+        output_stream.write("[user] ")
+        output_stream.flush()
+        try:
+            line = input_stream.readline()
+        except KeyboardInterrupt:
+            output_stream.write("\n[idle] shutting down\n")
+            output_stream.flush()
+            return 130
+        if line == "":
+            output_stream.write("[idle] shutting down\n")
+            output_stream.flush()
+            return 0
+        utterance = line.strip()
+        if not utterance:
+            continue
+        try:
+            client.send_user_message(utterance)
+            reply = client.run_thread()
+        except RuntimeError as exc:
+            output_stream.write(f"[idle] request failed, staying in chat mode: {exc}\n")
+            output_stream.flush()
+            continue
+        speech_output.speak(reply)
+        turns_completed += 1
+        if once and turns_completed >= 1:
+            return 0
 
 
 def build_activation_source(
@@ -445,6 +488,8 @@ def build_ambient_volume_controller(config: VoiceDaemonConfig):
 
 def build_speech_output(config: VoiceDaemonConfig):
     provider = config.tts_provider.lower()
+    if provider == "none":
+        return SilentSpeechOutput(output_stream=sys.stdout)
     if provider == "console":
         return ConsoleSpeechOutput(output_stream=sys.stdout)
     if provider == "say":
@@ -465,7 +510,7 @@ def build_speech_output(config: VoiceDaemonConfig):
         )
     raise SystemExit(
         f"Unsupported MINIGENT_VOICE_TTS_PROVIDER '{config.tts_provider}'. "
-        "Choose 'console', 'say', or 'piper'."
+        "Choose 'none', 'console', 'say', or 'piper'."
     )
 
 
