@@ -347,34 +347,27 @@ def _is_missing_tool_call_for_output_error(response: httpx.Response) -> bool:
 
 
 def _prune_historical_tool_messages_for_azure(messages: list[Message]) -> list[Message]:
-    active_tool_pair_start = _active_tool_pair_start(messages)
+    active_tool_call_id = _active_tool_call_id(messages)
     pruned: list[Message] = []
-    dropped_pairs = 0
-    index = 0
-    while index < len(messages):
-        if (
-            index != active_tool_pair_start
-            and index + 1 < len(messages)
-            and _is_completed_tool_pair(messages[index], messages[index + 1])
-        ):
-            dropped_pairs += 1
-            index += 2
+    dropped_messages = 0
+    for message in messages:
+        if _should_drop_historical_tool_message(message, active_tool_call_id):
+            dropped_messages += 1
             continue
-        pruned.append(messages[index])
-        index += 1
-    if dropped_pairs:
+        pruned.append(message)
+    if dropped_messages:
         logger.debug(
-            "Pruned %s completed tool-call pair(s) from Azure chat-completions payload",
-            dropped_pairs,
+            "Pruned %s historical tool-related message(s) from Azure chat-completions payload",
+            dropped_messages,
         )
     return pruned
 
 
-def _active_tool_pair_start(messages: list[Message]) -> int | None:
+def _active_tool_call_id(messages: list[Message]) -> str | None:
     if len(messages) < 2:
         return None
     if _is_completed_tool_pair(messages[-2], messages[-1]):
-        return len(messages) - 2
+        return messages[-1].tool_call_id
     return None
 
 
@@ -386,6 +379,15 @@ def _is_completed_tool_pair(assistant_message: Message, tool_message: Message) -
         and bool(assistant_message.tool_call_id)
         and assistant_message.tool_call_id == tool_message.tool_call_id
     )
+
+
+def _should_drop_historical_tool_message(message: Message, active_tool_call_id: str | None) -> bool:
+    tool_call_id = message.tool_call_id
+    if not tool_call_id or tool_call_id == active_tool_call_id:
+        return False
+    if message.role == MessageRole.TOOL:
+        return True
+    return message.role == MessageRole.ASSISTANT and bool(message.tool_name)
 
 
 def _parse_chat_completion(payload: dict[str, Any], tool_name_map: dict[str, str]) -> LLMResponse:

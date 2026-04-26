@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from app.llm import (
     MockLLMAdapter,
     OpenAICompatibleAdapter,
+    _prune_historical_tool_messages_for_azure,
     build_llm_adapter_from_env,
     load_provider_config,
 )
@@ -545,6 +546,78 @@ def test_openai_compatible_adapter_retries_openrouter_with_azure_tool_history_pr
         "user",
     ]
     assert seen_payloads[1]["messages"][1]["content"] == "It is warm today."
+
+
+def test_prune_historical_tool_messages_for_azure_drops_orphaned_tool_results() -> None:
+    pruned = _prune_historical_tool_messages_for_azure(
+        [
+            Message(thread_id="thread", role=MessageRole.USER, content="weather today"),
+            Message(
+                thread_id="thread",
+                role=MessageRole.TOOL,
+                content='{"echo": "tool output"}',
+                tool_name="echo",
+                tool_call_id="call_orphaned",
+            ),
+            Message(thread_id="thread", role=MessageRole.ASSISTANT, content="It is warm today."),
+            Message(thread_id="thread", role=MessageRole.USER, content="current home temperature"),
+        ]
+    )
+
+    assert [message.role for message in pruned] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+        MessageRole.USER,
+    ]
+
+
+def test_prune_historical_tool_messages_for_azure_keeps_only_active_trailing_tool_pair() -> None:
+    pruned = _prune_historical_tool_messages_for_azure(
+        [
+            Message(thread_id="thread", role=MessageRole.USER, content="weather today"),
+            Message(
+                thread_id="thread",
+                role=MessageRole.ASSISTANT,
+                content="",
+                tool_name="echo",
+                tool_call_id="call_123",
+                tool_arguments={"text": "tool input"},
+            ),
+            Message(thread_id="thread", role=MessageRole.ASSISTANT, content="Intervening note."),
+            Message(
+                thread_id="thread",
+                role=MessageRole.TOOL,
+                content='{"echo": "tool output"}',
+                tool_name="echo",
+                tool_call_id="call_123",
+            ),
+            Message(
+                thread_id="thread",
+                role=MessageRole.ASSISTANT,
+                content="",
+                tool_name="echo",
+                tool_call_id="call_456",
+                tool_arguments={"text": "latest tool input"},
+            ),
+            Message(
+                thread_id="thread",
+                role=MessageRole.TOOL,
+                content='{"echo": "latest tool output"}',
+                tool_name="echo",
+                tool_call_id="call_456",
+            ),
+        ]
+    )
+
+    assert [message.role for message in pruned] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+        MessageRole.ASSISTANT,
+        MessageRole.TOOL,
+    ]
+    assert pruned[1].content == "Intervening note."
+    assert pruned[2].tool_call_id == "call_456"
+    assert pruned[3].tool_call_id == "call_456"
 
 
 def test_openai_compatible_adapter_does_not_retry_unrelated_provider_errors() -> None:
