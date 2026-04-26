@@ -244,12 +244,13 @@ class AgentRuntime:
             _summarize_messages(messages[context.summarized_message_count:summarize_upto]),
             max_chars=self._max_summary_chars,
         )
-        return self._store.update_thread_context(
+        self._store.update_thread_context(
             principal.tenant_id,
             thread_id,
             summary=new_summary,
             summarized_message_count=summarize_upto,
         )
+        return self._store.compact_thread_messages(principal.tenant_id, thread_id)
 
     def _compute_summarize_upto(self, messages: list[Message], context: ThreadContext) -> int:
         max_summarize_upto = max(0, len(messages) - self._min_recent_message_limit)

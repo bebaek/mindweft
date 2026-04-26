@@ -143,9 +143,16 @@ def test_runtime_summarizes_older_messages_and_keeps_recent_tail_verbatim() -> N
         "assistant-5",
     ]
     context = store.get_thread_context(PRINCIPAL.tenant_id, thread.thread_id)
-    assert context.summarized_message_count == 8
+    assert context.summarized_message_count == 0
     assert "user-3" in context.summary
     assert "assistant-3" in context.summary
+    assert [message.content for message in store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)] == [
+        "user-4",
+        "assistant-4",
+        "user-5",
+        "assistant-5",
+        "ok",
+    ]
 
 
 def test_runtime_uses_prompt_budget_to_compact_more_than_default_tail() -> None:
@@ -201,9 +208,41 @@ def test_runtime_uses_prompt_budget_to_compact_more_than_default_tail() -> None:
         f"assistant-4 {long_text}",
     ]
     context = store.get_thread_context(PRINCIPAL.tenant_id, thread.thread_id)
-    assert context.summarized_message_count > 2
+    assert context.summarized_message_count == 0
     assert "user-3" in context.summary
     assert "user-0" in context.summary
+
+
+def test_runtime_drops_summarized_messages_from_store_after_multiple_turns() -> None:
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=build_local_tool_registry(),
+        recent_message_limit=4,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+
+    for index in range(6):
+        store.append_message(
+            PRINCIPAL.tenant_id,
+            Message(
+                thread_id=thread.thread_id,
+                role=MessageRole.USER,
+                content=f"user-{index}",
+                created_by=PRINCIPAL.user_id,
+            ),
+        )
+        asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    stored_messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    assert len(stored_messages) <= 5
+    assert stored_messages[-1].content == "Mock reply: user-5"
+
+    context = store.get_thread_context(PRINCIPAL.tenant_id, thread.thread_id)
+    assert context.summarized_message_count == 0
+    assert "user-0" in context.summary
+    assert "Mock reply: user-2" in context.summary
 
 
 def test_runtime_executes_tool_and_stores_tool_message() -> None:

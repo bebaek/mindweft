@@ -7,6 +7,7 @@ Minimal AI agent runtime POC from `DESIGN.md`.
 - FastAPI service
 - In-memory thread/message store
 - In-memory thread context compaction with rolling summary + token-budgeted recent-message tail
+  that also drops summarized raw turns from the in-memory transcript to keep memory bounded
 - Simple agent execution loop
 - Pluggable tool registry
 - Replaceable LLM adapter boundary
@@ -38,6 +39,10 @@ The current runtime has two important persistence boundaries:
 
 That means the current safe deployment shape is a single Minigent container behind your
 existing reverse proxy.
+
+Thread history is compacted in memory as conversations grow. Older turns are folded into
+the thread summary and removed from the raw message list, so `GET /threads/{thread_id}/messages`
+returns the retained recent tail instead of an unbounded full transcript.
 
 Start from [.env.template](/Users/burm/code/minigent/.env.template), then set at least:
 

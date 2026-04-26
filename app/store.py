@@ -87,6 +87,18 @@ class InMemoryThreadStore:
             thread.updated_at = utc_now()
             return context.model_copy(deep=True)
 
+    def compact_thread_messages(self, tenant_id: str, thread_id: str) -> ThreadContext:
+        with self._lock:
+            thread = self._require_thread(tenant_id, thread_id)
+            context = self._contexts[thread_id]
+            if context.summarized_message_count <= 0:
+                return context.model_copy(deep=True)
+            self._messages[thread_id] = self._messages[thread_id][context.summarized_message_count :]
+            context.summarized_message_count = 0
+            context.updated_at = utc_now()
+            thread.updated_at = utc_now()
+            return context.model_copy(deep=True)
+
     def start_run(self, tenant_id: str, thread_id: str) -> Thread:
         with self._lock:
             thread = self._require_thread(tenant_id, thread_id)
