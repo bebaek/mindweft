@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, TextIO
 
-from voice_daemon.audio import MicrophoneRecorder
-from voice_daemon.debug import CaptureDebugger
-from voice_daemon.service import Activation
-from voice_daemon.stt import SpeechToTextAdapter, SpeechToTextError
+from minigent_client.audio import MicrophoneRecorder
+from minigent_client.debug import CaptureDebugger
+from minigent_client.runtime import Activation
+from minigent_client.stt import SpeechToTextAdapter, SpeechToTextError
 
 
 @dataclass

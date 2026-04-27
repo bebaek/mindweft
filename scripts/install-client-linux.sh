@@ -19,14 +19,14 @@ AUDIO_GROUP_ADDED=0
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/install-voice-daemon-linux.sh [options]
+Usage: scripts/install-client-linux.sh [options]
 
-Installs Minigent's voice daemon dependencies on a Linux host and can create a
+Installs Minigent's chat/voice client dependencies on a Linux host and can create a
 systemd user service for always-on passive audio.
 
 Options:
   --install-dir PATH      Repo/source directory used by the service. Default: repo root
-  --env-file PATH         Voice daemon env file. Default: <repo>/.env.voice
+  --env-file PATH         Client env file. Default: <repo>/.env.voice
   --backend BACKEND       Service backend: stdin, manual-audio, passive-audio. Default: passive-audio
   --systemd-user          Install and enable a systemd user service
   --enable-linger         Allow the systemd user service to run after logout
@@ -40,16 +40,16 @@ Options:
 
 Notes:
   If this script adds your user to the audio group, log out and back in before
-  starting the daemon. Current sessions do not automatically gain new groups.
+  starting the client. Current sessions do not automatically gain new groups.
 USAGE
 }
 
 log() {
-  printf '[minigent-voice-install] %s\n' "$*"
+  printf '[minigent-client-install] %s\n' "$*"
 }
 
 die() {
-  printf '[minigent-voice-install] ERROR: %s\n' "$*" >&2
+  printf '[minigent-client-install] ERROR: %s\n' "$*" >&2
   exit 1
 }
 
@@ -158,7 +158,7 @@ if ! have_cmd uv; then
 fi
 
 if [[ "$INSTALL_TOOL" -eq 1 ]]; then
-  log "Installing minigent-voice-daemon with the voice extra"
+  log "Installing minigent-client with the voice extra"
   (cd "$INSTALL_DIR" && uv tool install --reinstall --editable '.[voice]')
 fi
 
@@ -195,7 +195,7 @@ if getent group audio >/dev/null 2>&1; then
       log "Adding $USER to the audio group"
       sudo usermod -aG audio "$USER"
       AUDIO_GROUP_ADDED=1
-      log "Log out and back in before starting the daemon so this session gains audio access"
+      log "Log out and back in before starting the client so this session gains audio access"
     fi
   else
     log "Current session is already in the audio group"
@@ -244,16 +244,30 @@ fi
 
 if [[ "$SYSTEMD_USER" -eq 1 ]]; then
   SERVICE_DIR="$HOME/.config/systemd/user"
-  SERVICE_PATH="$SERVICE_DIR/minigent-voice-daemon.service"
-  RUNNER="$INSTALL_DIR/scripts/run-voice-daemon-linux.sh"
+  SERVICE_PATH="$SERVICE_DIR/minigent-client.service"
+  LEGACY_DAEMON_SERVICE_PATH="$SERVICE_DIR/minigent-daemon.service"
+  LEGACY_VOICE_DAEMON_SERVICE_PATH="$SERVICE_DIR/minigent-voice-daemon.service"
+  RUNNER="$INSTALL_DIR/scripts/run-client-linux.sh"
 
   [[ -x "$RUNNER" ]] || die "runner is not executable: $RUNNER"
   mkdir -p "$SERVICE_DIR"
 
+  if [[ -f "$LEGACY_DAEMON_SERVICE_PATH" ]]; then
+    log "Removing legacy minigent-daemon user service"
+    systemctl --user disable --now minigent-daemon >/dev/null 2>&1 || true
+    rm -f "$LEGACY_DAEMON_SERVICE_PATH"
+  fi
+
+  if [[ -f "$LEGACY_VOICE_DAEMON_SERVICE_PATH" ]]; then
+    log "Removing legacy minigent-voice-daemon user service"
+    systemctl --user disable --now minigent-voice-daemon >/dev/null 2>&1 || true
+    rm -f "$LEGACY_VOICE_DAEMON_SERVICE_PATH"
+  fi
+
   log "Writing systemd user service to $SERVICE_PATH"
   cat > "$SERVICE_PATH" <<EOF
 [Unit]
-Description=Minigent voice daemon
+Description=Minigent chat/voice client
 After=network-online.target sound.target
 Wants=network-online.target
 
@@ -271,7 +285,7 @@ WantedBy=default.target
 EOF
 
   systemctl --user daemon-reload
-  systemctl --user enable minigent-voice-daemon
+  systemctl --user enable minigent-client
 
   if [[ "$ENABLE_LINGER" -eq 1 ]]; then
     log "Enabling linger for $USER"
@@ -280,17 +294,17 @@ EOF
 
   if [[ "$AUDIO_GROUP_ADDED" -eq 1 ]] || { getent group audio >/dev/null 2>&1 && ! session_in_group audio; }; then
     log "Service installed but not started because this session is not yet in the audio group"
-    log "Log out and back in, then run: systemctl --user start minigent-voice-daemon"
+    log "Log out and back in, then run: systemctl --user start minigent-client"
   else
     log "Starting systemd user service"
-    systemctl --user restart minigent-voice-daemon
+    systemctl --user restart minigent-client
   fi
 fi
 
 log "Done"
 log "Edit env file: $ENV_FILE"
-log "Manual smoke test: cd $INSTALL_DIR && MINIGENT_VOICE_ENV_FILE=$ENV_FILE scripts/run-voice-daemon-linux.sh --backend stdin"
-log "Audio smoke test: cd $INSTALL_DIR && MINIGENT_VOICE_ENV_FILE=$ENV_FILE scripts/run-voice-daemon-linux.sh --backend manual-audio --once"
+log "Manual smoke test: cd $INSTALL_DIR && MINIGENT_VOICE_ENV_FILE=$ENV_FILE scripts/run-client-linux.sh --backend stdin"
+log "Audio smoke test: cd $INSTALL_DIR && MINIGENT_VOICE_ENV_FILE=$ENV_FILE scripts/run-client-linux.sh --backend manual-audio --once"
 if [[ "$SYSTEMD_USER" -eq 1 ]]; then
-  log "Service logs: journalctl --user -u minigent-voice-daemon -f"
+  log "Service logs: journalctl --user -u minigent-client -f"
 fi

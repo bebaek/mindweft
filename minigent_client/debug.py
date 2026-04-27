@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
-from voice_daemon.audio import RecordedAudio
+from minigent_client.audio import RecordedAudio
 
 
 @dataclass(frozen=True)

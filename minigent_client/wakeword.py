@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from voice_daemon.audio import pcm16le_to_ints
+from minigent_client.audio import pcm16le_to_ints
 
 
 class WakeWordDependencyError(RuntimeError):

@@ -15,13 +15,13 @@ export PATH
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/run-voice-daemon-linux.sh [--env-file PATH] [--backend BACKEND] [daemon args...]
+Usage: scripts/run-client-linux.sh [--env-file PATH] [--backend BACKEND] [client args...]
 
-Loads a voice-daemon env file, then runs minigent-voice-daemon.
+Loads a client env file, then runs minigent-client.
 
 Environment overrides:
   MINIGENT_VOICE_ENV_FILE   Env file path. Default: .env.voice
-  MINIGENT_VOICE_BACKEND    Daemon backend. Default: passive-audio
+  MINIGENT_VOICE_BACKEND    Client backend. Default: passive-audio
 USAGE
 }
 
@@ -55,4 +55,4 @@ set -a
 source "$ENV_FILE"
 set +a
 
-exec minigent-voice-daemon --backend "$BACKEND" "$@"
+exec minigent-client --backend "$BACKEND" "$@"

@@ -16,7 +16,7 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY app ./app
-COPY voice_daemon ./voice_daemon
+COPY minigent_client ./minigent_client
 RUN uv sync --frozen --no-dev
 
 RUN mkdir -p /data && chown -R app:app /app /data

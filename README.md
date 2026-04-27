@@ -144,7 +144,7 @@ For remote deployments, set `MINIGENT_IMAGE` in the deployment env file to the p
 tag you want to run, then use `docker compose pull` followed by `docker compose up -d`.
 
 [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) uses whatever auth mode you set
-in `.env`; it does not override `MINIGENT_AUTH_MODE`. For local voice-daemon testing,
+in `.env`; it does not override `MINIGENT_AUTH_MODE`. For local client testing,
 `static-tokens` is the easiest path. For remote exposure, prefer `jwt` and include the
 required JWT verification settings in `.env`.
 
@@ -167,12 +167,12 @@ MINIGENT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
 When `MINIGENT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`,
 `MINIGENT_ADMIN_ENCRYPTION_KEY` is mandatory.
 
-For the voice daemon as a normal CLI app, install the package with the `voice` extra so
-the `minigent-voice-daemon` command is available on your `PATH`:
+For the client as a normal CLI app, install the package with the `voice` extra so the
+`minigent-client` command is available on your `PATH`:
 
 ```bash
 uv tool install '.[voice]'
-minigent-voice-daemon --wake-phrase "hey minigent"
+minigent-client --wake-phrase "hey minigent"
 ```
 
 That installs an isolated tool environment and links the console scripts into uv's tool
@@ -185,7 +185,7 @@ over SSH:
 ```bash
 ssh <user>@<host>
 cd /path/to/minigent
-./scripts/install-voice-daemon-linux.sh --systemd-user
+./scripts/install-client-linux.sh --systemd-user
 ```
 
 The script installs Linux audio/build prerequisites, installs the package with the
@@ -197,36 +197,36 @@ The generated env file enables a bell-style wake acknowledgement with
 had an env file before running the installer.
 
 If the script adds your user to the `audio` group, log out and back in before starting
-the daemon. Existing SSH sessions do not gain new group memberships automatically. You
+the client. Existing SSH sessions do not gain new group memberships automatically. You
 can inspect the host first without installing anything:
 
 ```bash
-./scripts/install-voice-daemon-linux.sh --check-only
+./scripts/install-client-linux.sh --check-only
 ```
 
 After editing `.env.voice`, run smoke tests in this order:
 
 ```bash
-./scripts/run-voice-daemon-linux.sh --backend stdin
-./scripts/run-voice-daemon-linux.sh --backend manual-audio --once
+./scripts/run-client-linux.sh --backend stdin
+./scripts/run-client-linux.sh --backend manual-audio --once
 ```
 
 If you installed the user service, manage it with:
 
 ```bash
-systemctl --user start minigent-voice-daemon
-journalctl --user -u minigent-voice-daemon -f
+systemctl --user start minigent-client
+journalctl --user -u minigent-client -f
 ```
 
 Use `--enable-linger` with the installer when the user service should continue running
 after the SSH user logs out:
 
 ```bash
-./scripts/install-voice-daemon-linux.sh --systemd-user --enable-linger
+./scripts/install-client-linux.sh --systemd-user --enable-linger
 ```
 
 If the remote host is only running the Minigent API and does not have the microphone,
-run the voice daemon on the local machine with audio hardware and point
+run the client on the local machine with audio hardware and point
 `MINIGENT_BASE_URL` at the remote API instead.
 
 If you want the installed tool to track your local checkout while you edit this repo, use
@@ -259,21 +259,21 @@ uv run minigent chat --resume-last "continue"
 uv run minigent threads show <thread-id>
 ```
 
-The repo also exposes the same voice/chat daemon entrypoint through `uv run`:
+The repo also exposes the same client entrypoint through `uv run`:
 
 ```bash
-uv run minigent-voice-daemon --wake-phrase "hey minigent"
+uv run minigent-client --wake-phrase "hey minigent"
 ```
 
 By default, assistant replies are printed to the terminal. The examples below use the
-installed `minigent-voice-daemon` command; inside the repo you can replace it with
-`uv run minigent-voice-daemon`.
+installed `minigent-client` command; inside the repo you can replace it with
+`uv run minigent-client`.
 
 For a plain terminal chat loop with no wake word, microphone, or spoken output, use the
 `chat` backend:
 
 ```bash
-minigent-voice-daemon --backend chat
+minigent-client --backend chat
 ```
 
 When `chat` runs on an interactive TTY, it enables the platform's `readline` support so
@@ -287,14 +287,14 @@ You can also enable local TTS on macOS with:
 ```bash
 MINIGENT_VOICE_TTS_PROVIDER=say
 MINIGENT_VOICE_TTS_VOICE=Samantha
-minigent-voice-daemon --backend manual-audio --once
+minigent-client --backend manual-audio --once
 ```
 
 With `MINIGENT_VOICE_TTS_PROVIDER=say`, passive mode also supports wake-word barge-in:
 saying the wake word again while the assistant is speaking will stop `say` and switch
 back to listening.
 
-When local TTS is enabled, the daemon strips common Markdown formatting such as `*`, `` ` ``,
+When local TTS is enabled, the client strips common Markdown formatting such as `*`, `` ` ``,
 headers, lists, and Markdown links before feeding text to the speech engine, while still
 printing the original assistant reply to the terminal. Structural Markdown like headers
 and list items is converted into short sentence boundaries so TTS does not run them into
@@ -307,7 +307,7 @@ Piper with a model path or model name:
 ```bash
 MINIGENT_VOICE_TTS_PROVIDER=piper
 MINIGENT_VOICE_TTS_MODEL=en_US-lessac-medium
-minigent-voice-daemon --backend manual-audio --once
+minigent-client --backend manual-audio --once
 ```
 
 For multi-speaker Piper models, also set `MINIGENT_VOICE_TTS_SPEAKER`:
@@ -316,11 +316,11 @@ For multi-speaker Piper models, also set `MINIGENT_VOICE_TTS_SPEAKER`:
 MINIGENT_VOICE_TTS_PROVIDER=piper
 MINIGENT_VOICE_TTS_MODEL=/absolute/path/to/voice.onnx
 MINIGENT_VOICE_TTS_SPEAKER=0
-minigent-voice-daemon --backend manual-audio --once
+minigent-client --backend manual-audio --once
 ```
 
 `piper-tts` ships as part of the `voice` extra. When
-`MINIGENT_VOICE_TTS_MODEL` is a bare voice name like `en_US-lessac-medium`, the daemon
+`MINIGENT_VOICE_TTS_MODEL` is a bare voice name like `en_US-lessac-medium`, the client
 downloads the `.onnx` and `.onnx.json` files on first use into
 `~/.cache/minigent/piper` by default. Override that cache directory with
 `MINIGENT_VOICE_TTS_MODEL_DIR` or `--tts-model-dir`. On macOS, Piper synthesis now plays
@@ -329,7 +329,7 @@ microphone PortAudio stream. On other platforms, Piper playback continues to use
 `sounddevice`.
 
 If the Minigent API or upstream LLM returns a transient error during a voice turn, the
-daemon logs the failure, optionally speaks a short local error message, and returns to
+client logs the failure, optionally speaks a short local error message, and returns to
 idle instead of exiting the process.
 
 Piper uses `MINIGENT_VOICE_TTS_SENTENCE_SILENCE=0.35` by default so Markdown lists and
@@ -343,10 +343,10 @@ MINIGENT_VOICE_TTS_PROVIDER=piper
 MINIGENT_VOICE_TTS_MODEL=en_US-lessac-medium
 MINIGENT_VOICE_TTS_SENTENCE_SILENCE=0.55
 MINIGENT_VOICE_TTS_LENGTH_SCALE=1.15
-minigent-voice-daemon --backend manual-audio --once
+minigent-client --backend manual-audio --once
 ```
 
-The daemon currently supports four backends:
+The client currently supports four backends:
 
 - `chat`: plain terminal chat mode with direct stdin input and terminal replies, with no
   wake-word or audio pipeline
@@ -365,9 +365,9 @@ from the configured wake-word provider: `MINIGENT_VOICE_KEYWORD_PATH` for Porcup
 Examples:
 
 ```bash
-minigent-voice-daemon --backend chat
+minigent-client --backend chat
 
-minigent-voice-daemon --wake-phrase "hey minigent"
+minigent-client --wake-phrase "hey minigent"
 # ignored
 hello there
 # activates and uses the rest of the line as the utterance
@@ -377,8 +377,8 @@ hey minigent
 show me the transcript
 ```
 
-If the daemon should consistently send client-owned prompt context with each utterance,
-set `MINIGENT_VOICE_PROMPT_PREAMBLE`. The daemon prepends it to the prompt text it sends
+If the client should consistently send client-owned prompt context with each utterance,
+set `MINIGENT_VOICE_PROMPT_PREAMBLE`. The client prepends it to the prompt text it sends
 to Minigent; the server treats that as ordinary user content and does not validate or
 infer anything on its own.
 
@@ -387,15 +387,15 @@ Example:
 ```bash
 MINIGENT_VOICE_PROMPT_PREAMBLE='timezone=America/Chicago
 note=prefer local context' \
-minigent-voice-daemon --backend manual-audio --once
+minigent-client --backend manual-audio --once
 ```
 
 For coarse location specifically, `MINIGENT_VOICE_LOCATION` remains available as a
-compatibility convenience. When `MINIGENT_VOICE_PROMPT_PREAMBLE` is unset, the daemon
+compatibility convenience. When `MINIGENT_VOICE_PROMPT_PREAMBLE` is unset, the client
 converts `MINIGENT_VOICE_LOCATION` into client context automatically. If both are set,
 `MINIGENT_VOICE_PROMPT_PREAMBLE` wins.
 
-For prompt-level diagnostics, set `MINIGENT_VOICE_DEBUG_SHOW_PROMPT=true`. The daemon
+For prompt-level diagnostics, set `MINIGENT_VOICE_DEBUG_SHOW_PROMPT=true`. The client
 will print the exact outbound user message after any location prefix is added and before
 it sends the request to Minigent.
 
@@ -403,7 +403,7 @@ Manual audio example:
 
 ```bash
 OPENAI_API_KEY=...
-minigent-voice-daemon --backend manual-audio --once
+minigent-client --backend manual-audio --once
 ```
 
 If you want voice input without spoken assistant playback, disable TTS and keep the
@@ -412,7 +412,7 @@ assistant reply in the terminal:
 ```bash
 OPENAI_API_KEY=...
 MINIGENT_VOICE_TTS_PROVIDER=none
-minigent-voice-daemon --backend manual-audio --once
+minigent-client --backend manual-audio --once
 ```
 
 Using OpenRouter for transcription:
@@ -421,7 +421,7 @@ Using OpenRouter for transcription:
 OPENROUTER_API_KEY=...
 MINIGENT_VOICE_STT_PROVIDER=openrouter
 MINIGENT_VOICE_STT_MODEL=openai/gpt-audio
-minigent-voice-daemon --backend manual-audio --once
+minigent-client --backend manual-audio --once
 ```
 
 Using local faster-whisper transcription:
@@ -432,10 +432,10 @@ MINIGENT_VOICE_STT_MODEL=base
 MINIGENT_VOICE_STT_DEVICE=cpu
 MINIGENT_VOICE_STT_COMPUTE_TYPE=int8
 MINIGENT_VOICE_STT_LANGUAGE=en
-minigent-voice-daemon --backend manual-audio --once
+minigent-client --backend manual-audio --once
 ```
 
-In `manual-audio` mode, press Enter to start recording. The daemon stops recording after
+In `manual-audio` mode, press Enter to start recording. The client stops recording after
 trailing silence or `MINIGENT_VOICE_MAX_RECORD_SECONDS`, transcribes the utterance, and
 then sends the transcript through the normal Minigent thread/run flow.
 
@@ -459,22 +459,22 @@ Passive wake-word example:
 ```bash
 PICOVOICE_ACCESS_KEY=...
 MINIGENT_VOICE_KEYWORD_PATH=/absolute/path/to/hey-minigent.ppn
-minigent-voice-daemon --backend passive-audio
+minigent-client --backend passive-audio
 ```
 
-If you keep the daemon settings in `.env.voice.docker`, use the wrapper script:
+If you keep the client settings in `.env.voice.docker`, use the wrapper script:
 
 ```bash
-./scripts/voice-daemon-docker.sh
+./scripts/client-docker.sh
 ```
 
 It exports `.env.voice.docker` into the process environment, then runs:
 
 ```bash
-minigent-voice-daemon --backend passive-audio
+minigent-client --backend passive-audio
 ```
 
-Press `Ctrl-C` to stop the daemon cleanly. It will print `[idle] shutting down` and
+Press `Ctrl-C` to stop the client cleanly. It will print `[idle] shutting down` and
 exit without dumping a traceback from the audio backend.
 
 Free `openwakeword` example:
@@ -482,7 +482,7 @@ Free `openwakeword` example:
 ```bash
 MINIGENT_VOICE_WAKEWORD_PROVIDER=openwakeword
 MINIGENT_VOICE_OWW_MODEL=okay_nabu
-minigent-voice-daemon --backend passive-audio
+minigent-client --backend passive-audio
 ```
 
 `passive-audio` keeps the microphone open, feeds chunks into the configured wake-word detector, and after the
@@ -520,36 +520,36 @@ To make short back-and-forth follow-ups feel more natural, set
 finishes speaking. During that window, `passive-audio` accepts one follow-up utterance
 without requiring the wake word, then returns to normal wake-word mode after silence.
 
-On macOS, you can also lower ambient system output only while the daemon is actively
+On macOS, you can also lower ambient system output only while the client is actively
 capturing an utterance or listening during that follow-up window:
 
 ```bash
 MINIGENT_VOICE_DUCKING_MODE=input-only
 MINIGENT_VOICE_DUCKED_OUTPUT_VOLUME=20
-minigent-voice-daemon --backend passive-audio
+minigent-client --backend passive-audio
 ```
 
-This is system-wide ducking, not per-app mixing. The daemon does not duck during idle
+This is system-wide ducking, not per-app mixing. The client does not duck during idle
 wake-word monitoring, thinking, or assistant speech. That keeps built-in TTS at your
 normal output level, but it also means this feature does not literally duck every other
-app while leaving the daemon isolated on the same output device.
+app while leaving the client isolated on the same output device.
 
 If you need to inspect captured audio, set `MINIGENT_VOICE_DEBUG_CAPTURE_PATH` or pass
-`--debug-capture-path`. The daemon will print capture metadata and write the last WAV
+`--debug-capture-path`. The client will print capture metadata and write the last WAV
 capture there before transcription. That is useful for comparing `manual-audio` and
 `passive-audio` artifacts.
 
 If you need to inspect the OpenRouter STT request/response payloads, set
-`MINIGENT_VOICE_STT_DEBUG_PATH` or pass `--stt-debug-path`. The daemon and replay tool
+`MINIGENT_VOICE_STT_DEBUG_PATH` or pass `--stt-debug-path`. The client and replay tool
 will write debug artifacts such as `request.json` and `response.json` there.
 
-When STT returns a bad assistant-style answer instead of a transcript, the daemon now
+When STT returns a bad assistant-style answer instead of a transcript, the client now
 logs the failure, ignores that capture, and returns to idle instead of crashing.
 
 If you want to experiment with audio level differences before STT, the replay tool also
 supports `--gain`, `--normalize-peak`, `--pad-leading-ms`, and `--pad-trailing-ms`. That
 is useful when comparing quieter passive captures against louder manual captures, or when
-you want to approximate the passive daemon's STT padding against a saved WAV.
+you want to approximate the passive client's STT padding against a saved WAV.
 
 To replay a prerecorded capture through the STT adapters without involving the microphone
 loop, use:

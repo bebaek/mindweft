@@ -18,7 +18,7 @@ dependencies = [
 
 [project.scripts]
 minigent = "app.cli:main"
-minigent-voice-daemon = "voice_daemon.cli:main"
+minigent-client = "minigent_client.cli:main"
 
 [project.optional-dependencies]
 minirag = [
@@ -46,7 +46,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["app*", "voice_daemon*"]
+include = ["app*", "minigent_client*"]
 
 [tool.uv.sources]
 minirag = { path = "../minirag" }
@@ -75,6 +75,6 @@ indent-style = "space"
 line-ending = "lf"
 
 [tool.basedpyright]
-include = ["app", "voice_daemon"]
+include = ["app", "minigent_client"]
 typeCheckingMode = "standard"
 pythonVersion = "3.11"

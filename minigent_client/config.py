@@ -22,7 +22,7 @@ class PrincipalConfig:
 
 
 @dataclass(frozen=True)
-class VoiceDaemonConfig:
+class ClientConfig:
     base_url: str
     wake_phrase: str
     prompt_preamble: str | None = None
@@ -80,7 +80,7 @@ class VoiceDaemonConfig:
     principal: PrincipalConfig = PrincipalConfig(user_id="demo-user", tenant_id="demo-tenant")
 
     @classmethod
-    def from_env(cls) -> "VoiceDaemonConfig":
+    def from_env(cls) -> "ClientConfig":
         return cls(
             base_url=os.getenv("MINIGENT_BASE_URL", "http://127.0.0.1:8000").rstrip("/"),
             wake_phrase=os.getenv("MINIGENT_VOICE_WAKE_PHRASE", "hey minigent").strip(),

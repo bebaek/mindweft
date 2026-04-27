@@ -6,14 +6,14 @@ import sys
 from pathlib import Path
 
 from app.config import load_environment
-from voice_daemon.audio import (
+from minigent_client.audio import (
     RecordedAudio,
     apply_gain,
     load_recorded_audio_from_wav,
     normalize_peak,
     pad_with_silence,
 )
-from voice_daemon.stt import SpeechProviderConfig, build_transcription_adapter
+from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
 
 
 def parse_args() -> argparse.Namespace:

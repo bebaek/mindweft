@@ -7,11 +7,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, TextIO
 
-from voice_daemon.service import DaemonState
+from minigent_client.runtime import ClientState
 
 
-def should_duck_for_state(state: DaemonState) -> bool:
-    return state in {DaemonState.LISTENING, DaemonState.FOLLOW_UP_LISTENING}
+def should_duck_for_state(state: ClientState) -> bool:
+    return state in {ClientState.LISTENING, ClientState.FOLLOW_UP_LISTENING}
 
 
 @dataclass
@@ -24,7 +24,7 @@ class MacOsAmbientVolumeDucker:
     _warned: bool = field(default=False, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
-    def sync_state(self, state: DaemonState) -> None:
+    def sync_state(self, state: ClientState) -> None:
         with self._lock:
             if self._disabled:
                 return

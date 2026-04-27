@@ -8,7 +8,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from voice_daemon.audio import RecordedAudio
+from minigent_client.audio import RecordedAudio
 
 
 class SpeechToTextError(RuntimeError):

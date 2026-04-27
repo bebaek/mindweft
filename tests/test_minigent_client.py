@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-import voice_daemon.cli as voice_cli
-from voice_daemon.audio import (
+import minigent_client.cli as voice_cli
+from minigent_client.audio import (
     AudioCaptureConfig,
     MicrophoneRecorder,
     RecordedAudio,
@@ -22,10 +22,10 @@ from voice_daemon.audio import (
     pcm16le_to_floats,
     split_pcm_chunk,
 )
-from voice_daemon.backends.manual_audio import ManualAudioActivationSource
-from voice_daemon.backends.passive_audio import PassiveAudioActivationSource
-from voice_daemon.backends.stdin_loop import StdinActivationSource
-from voice_daemon.cli import (
+from minigent_client.backends.manual_audio import ManualAudioActivationSource
+from minigent_client.backends.passive_audio import PassiveAudioActivationSource
+from minigent_client.backends.stdin_loop import StdinActivationSource
+from minigent_client.cli import (
     bounded_output_volume,
     build_ambient_volume_controller,
     build_config,
@@ -35,20 +35,20 @@ from voice_daemon.cli import (
     build_wake_word_detector,
     run_chat_loop,
 )
-from voice_daemon.config import PrincipalConfig, VoiceDaemonConfig
-from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
-from voice_daemon.ducking import MacOsAmbientVolumeDucker, should_duck_for_state
-from voice_daemon.minigent_client import MinigentClient
-from voice_daemon.ring_buffer import AudioRingBuffer
-from voice_daemon.service import Activation, DaemonState, VoiceDaemon
-from voice_daemon.speech import (
+from minigent_client.config import PrincipalConfig, ClientConfig
+from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
+from minigent_client.ducking import MacOsAmbientVolumeDucker, should_duck_for_state
+from minigent_client.api_client import MinigentAPIClient
+from minigent_client.ring_buffer import AudioRingBuffer
+from minigent_client.runtime import Activation, ClientState, MinigentClientRuntime
+from minigent_client.speech import (
     ConsoleSpeechOutput,
     MacOsSaySpeechOutput,
     PiperSpeechOutput,
     SilentSpeechOutput,
     _sanitize_text_for_tts,
 )
-from voice_daemon.stt import (
+from minigent_client.stt import (
     FasterWhisperTranscriptionAdapter,
     FasterWhisperTranscriptionConfig,
     OpenAITranscriptionAdapter,
@@ -123,21 +123,21 @@ class FakeSpeechOutput:
 
 class FakeAmbientVolumeController:
     def __init__(self) -> None:
-        self.states: list[DaemonState] = []
+        self.states: list[ClientState] = []
         self.close_calls = 0
 
-    def sync_state(self, state: DaemonState) -> None:
+    def sync_state(self, state: ClientState) -> None:
         self.states.append(state)
 
     def close(self) -> None:
         self.close_calls += 1
 
 
-def test_voice_daemon_uses_transcript_hint_without_capture() -> None:
+def test_minigent_client_uses_transcript_hint_without_capture() -> None:
     activation_source = FakeActivationSource(Activation(transcript_hint="what time is it"))
     minigent_client = FakeMinigentClient(reply="Tool result: 3:00 PM")
     speech_output = FakeSpeechOutput()
-    daemon = VoiceDaemon(
+    daemon = MinigentClientRuntime(
         wake_phrase="hey minigent",
         activation_source=activation_source,
         minigent_client=minigent_client,
@@ -153,11 +153,11 @@ def test_voice_daemon_uses_transcript_hint_without_capture() -> None:
     assert speech_output.spoken == ["Tool result: 3:00 PM"]
 
 
-def test_voice_daemon_captures_utterance_after_activation() -> None:
+def test_minigent_client_captures_utterance_after_activation() -> None:
     activation_source = FakeActivationSource(Activation(), utterance="continue")
     minigent_client = FakeMinigentClient(reply="continued")
     speech_output = FakeSpeechOutput()
-    daemon = VoiceDaemon(
+    daemon = MinigentClientRuntime(
         wake_phrase="hey minigent",
         activation_source=activation_source,
         minigent_client=minigent_client,
@@ -172,12 +172,12 @@ def test_voice_daemon_captures_utterance_after_activation() -> None:
     assert speech_output.spoken == ["continued"]
 
 
-def test_voice_daemon_emits_activation_feedback_before_capture() -> None:
+def test_minigent_client_emits_activation_feedback_before_capture() -> None:
     activation_source = FakeActivationSource(Activation(), utterance="continue")
     minigent_client = FakeMinigentClient(reply="continued")
     speech_output = FakeSpeechOutput()
     feedback_calls: list[str] = []
-    daemon = VoiceDaemon(
+    daemon = MinigentClientRuntime(
         wake_phrase="hey minigent",
         activation_source=activation_source,
         minigent_client=minigent_client,
@@ -192,12 +192,12 @@ def test_voice_daemon_emits_activation_feedback_before_capture() -> None:
     assert minigent_client.messages == ["continue"]
 
 
-def test_voice_daemon_skips_activation_feedback_for_transcript_hint() -> None:
+def test_minigent_client_skips_activation_feedback_for_transcript_hint() -> None:
     activation_source = FakeActivationSource(Activation(transcript_hint="continue"))
     minigent_client = FakeMinigentClient(reply="continued")
     speech_output = FakeSpeechOutput()
     feedback_calls: list[str] = []
-    daemon = VoiceDaemon(
+    daemon = MinigentClientRuntime(
         wake_phrase="hey minigent",
         activation_source=activation_source,
         minigent_client=minigent_client,
@@ -211,7 +211,7 @@ def test_voice_daemon_skips_activation_feedback_for_transcript_hint() -> None:
     assert feedback_calls == []
 
 
-def test_voice_daemon_supports_barge_in() -> None:
+def test_minigent_client_supports_barge_in() -> None:
     class FakeBargeInActivationSource:
         def __init__(self) -> None:
             self.capture_calls = 0
@@ -256,7 +256,7 @@ def test_voice_daemon_supports_barge_in() -> None:
     activation_source = FakeBargeInActivationSource()
     minigent_client = FakeMinigentClient(reply="first reply")
     speech_output = FakeInterruptibleSpeechOutput()
-    daemon = VoiceDaemon(
+    daemon = MinigentClientRuntime(
         wake_phrase="hey minigent",
         activation_source=activation_source,
         minigent_client=minigent_client,
@@ -274,12 +274,12 @@ def test_voice_daemon_supports_barge_in() -> None:
     assert speech_output.waits == 2
 
 
-def test_voice_daemon_uses_follow_up_window_without_wake_word() -> None:
+def test_minigent_client_uses_follow_up_window_without_wake_word() -> None:
     activation_source = FakeActivationSource(Activation(), utterance="first request")
     activation_source.follow_up_utterance = "second request"
     minigent_client = FakeMinigentClient(reply="first reply")
     speech_output = FakeSpeechOutput()
-    daemon = VoiceDaemon(
+    daemon = MinigentClientRuntime(
         wake_phrase="hey minigent",
         activation_source=activation_source,
         minigent_client=minigent_client,
@@ -297,12 +297,12 @@ def test_voice_daemon_uses_follow_up_window_without_wake_word() -> None:
     assert minigent_client.messages == ["first request", "second request"]
 
 
-def test_voice_daemon_returns_to_idle_when_follow_up_window_expires() -> None:
+def test_minigent_client_returns_to_idle_when_follow_up_window_expires() -> None:
     activation_source = FakeActivationSource(Activation(), utterance="first request")
     activation_source.follow_up_utterance = None
     minigent_client = FakeMinigentClient(reply="first reply")
     speech_output = FakeSpeechOutput()
-    daemon = VoiceDaemon(
+    daemon = MinigentClientRuntime(
         wake_phrase="hey minigent",
         activation_source=activation_source,
         minigent_client=minigent_client,
@@ -313,11 +313,11 @@ def test_voice_daemon_returns_to_idle_when_follow_up_window_expires() -> None:
     reply = daemon.run_once()
 
     assert reply == "first reply"
-    assert daemon.state == DaemonState.IDLE
+    assert daemon.state == ClientState.IDLE
     assert activation_source.follow_up_timeout_ms == [4000]
 
 
-def test_voice_daemon_recovers_from_backend_error() -> None:
+def test_minigent_client_recovers_from_backend_error() -> None:
     class FailingMinigentClient(FakeMinigentClient):
         def run_thread(self) -> str:
             raise RuntimeError(
@@ -328,7 +328,7 @@ def test_voice_daemon_recovers_from_backend_error() -> None:
     minigent_client = FailingMinigentClient(reply="")
     speech_output = FakeSpeechOutput()
     output_stream = StringIO()
-    daemon = VoiceDaemon(
+    daemon = MinigentClientRuntime(
         wake_phrase="hey minigent",
         activation_source=activation_source,
         minigent_client=minigent_client,
@@ -339,19 +339,19 @@ def test_voice_daemon_recovers_from_backend_error() -> None:
     reply = daemon.run_once()
 
     assert reply == ""
-    assert daemon.state == DaemonState.IDLE
+    assert daemon.state == ClientState.IDLE
     assert minigent_client.messages == ["okay"]
     assert speech_output.spoken == ["I hit an upstream error."]
     assert "[idle] request failed, returning to wake-word mode:" in output_stream.getvalue()
 
 
-def test_voice_daemon_updates_ambient_volume_for_listening_states() -> None:
+def test_minigent_client_updates_ambient_volume_for_listening_states() -> None:
     activation_source = FakeActivationSource(Activation(), utterance="first request")
     activation_source.follow_up_utterance = None
     minigent_client = FakeMinigentClient(reply="first reply")
     speech_output = FakeSpeechOutput()
     ambient_volume = FakeAmbientVolumeController()
-    daemon = VoiceDaemon(
+    daemon = MinigentClientRuntime(
         wake_phrase="hey minigent",
         activation_source=activation_source,
         minigent_client=minigent_client,
@@ -364,18 +364,18 @@ def test_voice_daemon_updates_ambient_volume_for_listening_states() -> None:
 
     assert reply == "first reply"
     assert ambient_volume.states == [
-        DaemonState.IDLE,
-        DaemonState.LISTENING,
-        DaemonState.THINKING,
-        DaemonState.SPEAKING,
-        DaemonState.FOLLOW_UP_LISTENING,
-        DaemonState.IDLE,
+        ClientState.IDLE,
+        ClientState.LISTENING,
+        ClientState.THINKING,
+        ClientState.SPEAKING,
+        ClientState.FOLLOW_UP_LISTENING,
+        ClientState.IDLE,
     ]
 
 
-def test_voice_daemon_closes_ambient_volume_controller() -> None:
+def test_minigent_client_closes_ambient_volume_controller() -> None:
     ambient_volume = FakeAmbientVolumeController()
-    daemon = VoiceDaemon(
+    daemon = MinigentClientRuntime(
         wake_phrase="hey minigent",
         activation_source=FakeActivationSource(Activation()),
         minigent_client=FakeMinigentClient(reply=""),
@@ -445,7 +445,7 @@ def test_macos_say_speech_output_prints_and_speaks(monkeypatch: pytest.MonkeyPat
         captured["text"] = text
         return FakeProcess()
 
-    monkeypatch.setattr("voice_daemon.speech.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("minigent_client.speech.subprocess.Popen", fake_popen)
 
     MacOsSaySpeechOutput(output_stream=output_stream, voice="Samantha").speak("*done*")
 
@@ -494,12 +494,12 @@ def test_piper_speech_output_prints_and_plays(monkeypatch: pytest.MonkeyPatch, t
 
     sounddevice = FakeSoundDevice()
 
-    monkeypatch.setattr("voice_daemon.speech.platform.system", lambda: "Linux")
-    monkeypatch.setattr("voice_daemon.speech.subprocess.run", fake_run)
-    monkeypatch.setattr("voice_daemon.speech._resolve_piper_executable", lambda: "piper")
-    monkeypatch.setattr("voice_daemon.speech._load_sounddevice_for_output", lambda: sounddevice)
+    monkeypatch.setattr("minigent_client.speech.platform.system", lambda: "Linux")
+    monkeypatch.setattr("minigent_client.speech.subprocess.run", fake_run)
+    monkeypatch.setattr("minigent_client.speech._resolve_piper_executable", lambda: "piper")
+    monkeypatch.setattr("minigent_client.speech._load_sounddevice_for_output", lambda: sounddevice)
     monkeypatch.setattr(
-        "voice_daemon.speech._resolve_piper_model_path",
+        "minigent_client.speech._resolve_piper_model_path",
         lambda model, model_dir: tmp_path / "voice.onnx",
     )
 
@@ -538,21 +538,21 @@ def test_piper_speech_output_prints_and_plays(monkeypatch: pytest.MonkeyPatch, t
 
 def test_build_speech_output_supports_none_console_say_and_piper() -> None:
     silent = build_speech_output(
-        VoiceDaemonConfig(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             tts_provider="none",
         )
     )
     console = build_speech_output(
-        VoiceDaemonConfig(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             tts_provider="console",
         )
     )
     say = build_speech_output(
-        VoiceDaemonConfig(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             tts_provider="say",
@@ -560,7 +560,7 @@ def test_build_speech_output_supports_none_console_say_and_piper() -> None:
         )
     )
     piper = build_speech_output(
-        VoiceDaemonConfig(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             tts_provider="piper",
@@ -587,16 +587,16 @@ def test_build_ambient_volume_controller_supports_off_and_input_only(
 ) -> None:
     assert (
         build_ambient_volume_controller(
-            VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+            ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
         )
         is None
     )
     monkeypatch.setattr(
-        "voice_daemon.cli.MacOsAmbientVolumeDucker.validate_platform", lambda: None
+        "minigent_client.cli.MacOsAmbientVolumeDucker.validate_platform", lambda: None
     )
 
     controller = build_ambient_volume_controller(
-        VoiceDaemonConfig(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             ducking_mode="input-only",
@@ -612,12 +612,12 @@ def test_build_ambient_volume_controller_warns_and_continues_when_unsupported(
     monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
     monkeypatch.setattr(
-        "voice_daemon.cli.MacOsAmbientVolumeDucker.validate_platform",
+        "minigent_client.cli.MacOsAmbientVolumeDucker.validate_platform",
         lambda: (_ for _ in ()).throw(RuntimeError("ambient audio ducking is currently supported only on macOS")),
     )
 
     controller = build_ambient_volume_controller(
-        VoiceDaemonConfig(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             ducking_mode="input-only",
@@ -648,17 +648,17 @@ def test_build_activation_feedback_prefers_system_sound_for_bell(
         return FakeResult()
 
     monkeypatch.setattr(
-        "voice_daemon.cli._resolve_acknowledgement_sound",
+        "minigent_client.cli._resolve_acknowledgement_sound",
         lambda configured_sound_path: Path("/tmp/glass.aiff"),
     )
     monkeypatch.setattr(
-        "voice_daemon.cli._resolve_acknowledgement_players",
+        "minigent_client.cli._resolve_acknowledgement_players",
         lambda sound_path: [["/usr/bin/afplay"]] if sound_path == Path("/tmp/glass.aiff") else [],
     )
-    monkeypatch.setattr("voice_daemon.cli.subprocess.run", fake_run)
+    monkeypatch.setattr("minigent_client.cli.subprocess.run", fake_run)
 
     bell = voice_cli.build_activation_feedback(
-        VoiceDaemonConfig(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             wake_acknowledgement="bell",
@@ -678,13 +678,13 @@ def test_build_activation_feedback_prefers_system_sound_for_bell(
 
 def test_build_activation_feedback_falls_back_to_terminal_bell(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     monkeypatch.setattr(
-        "voice_daemon.cli._resolve_acknowledgement_sound",
+        "minigent_client.cli._resolve_acknowledgement_sound",
         lambda configured_sound_path: None,
     )
-    monkeypatch.setattr("voice_daemon.cli._resolve_acknowledgement_players", lambda sound_path: [])
+    monkeypatch.setattr("minigent_client.cli._resolve_acknowledgement_players", lambda sound_path: [])
 
     bell = voice_cli.build_activation_feedback(
-        VoiceDaemonConfig(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             wake_acknowledgement="bell",
@@ -697,7 +697,7 @@ def test_build_activation_feedback_falls_back_to_terminal_bell(monkeypatch: pyte
 
     speech_output = FakeSpeechOutput()
     spoken = voice_cli.build_activation_feedback(
-        VoiceDaemonConfig(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             wake_acknowledgement="ready",
@@ -728,17 +728,17 @@ def test_build_activation_feedback_tries_next_player_after_failure(
         return FakeResult(0, "")
 
     monkeypatch.setattr(
-        "voice_daemon.cli._resolve_acknowledgement_sound",
+        "minigent_client.cli._resolve_acknowledgement_sound",
         lambda configured_sound_path: Path("/tmp/wake.wav"),
     )
     monkeypatch.setattr(
-        "voice_daemon.cli._resolve_acknowledgement_players",
+        "minigent_client.cli._resolve_acknowledgement_players",
         lambda sound_path: [["/usr/bin/paplay"], ["/usr/bin/aplay"]],
     )
-    monkeypatch.setattr("voice_daemon.cli.subprocess.run", fake_run)
+    monkeypatch.setattr("minigent_client.cli.subprocess.run", fake_run)
 
     bell = voice_cli.build_activation_feedback(
-        VoiceDaemonConfig(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             wake_acknowledgement="bell",
@@ -766,7 +766,7 @@ def test_build_acknowledgement_feedback_can_emit_bell_async(
         def start(self) -> None:
             started.append((self.target, self.args))
 
-    monkeypatch.setattr("voice_daemon.cli.threading.Thread", FakeThread)
+    monkeypatch.setattr("minigent_client.cli.threading.Thread", FakeThread)
 
     bell = voice_cli.build_acknowledgement_feedback(
         "bell",
@@ -784,18 +784,18 @@ def test_resolve_wake_acknowledgement_sound_prefers_configured_path(monkeypatch:
     sound_path = tmp_path / "wake.wav"
     sound_path.write_bytes(b"sound")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND", str(sound_path))
-    monkeypatch.setattr("voice_daemon.cli._default_wake_acknowledgement_sounds", lambda: [])
+    monkeypatch.setattr("minigent_client.cli._default_wake_acknowledgement_sounds", lambda: [])
 
     assert voice_cli._resolve_wake_acknowledgement_sound() == sound_path
 
 
 def test_default_wake_acknowledgement_sounds_supports_macos_and_linux(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("voice_daemon.cli.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("minigent_client.cli.platform.system", lambda: "Darwin")
     assert voice_cli._default_wake_acknowledgement_sounds() == [
         Path("/System/Library/Sounds/Glass.aiff")
     ]
 
-    monkeypatch.setattr("voice_daemon.cli.platform.system", lambda: "Linux")
+    monkeypatch.setattr("minigent_client.cli.platform.system", lambda: "Linux")
     assert voice_cli._default_wake_acknowledgement_sounds() == [
         Path("/usr/share/sounds/alsa/Front_Center.wav"),
         Path("/usr/share/sounds/sound-icons/glass-water-1.wav"),
@@ -805,18 +805,18 @@ def test_default_wake_acknowledgement_sounds_supports_macos_and_linux(monkeypatc
 
 
 def test_resolve_wake_acknowledgement_player_supports_macos_and_linux(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("voice_daemon.cli.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("minigent_client.cli.platform.system", lambda: "Darwin")
     monkeypatch.setattr(
-        "voice_daemon.cli.shutil.which",
+        "minigent_client.cli.shutil.which",
         lambda name: "/usr/bin/afplay" if name == "afplay" else None,
     )
     assert voice_cli._resolve_wake_acknowledgement_player(Path("/tmp/test.aiff")) == [
         "/usr/bin/afplay"
     ]
 
-    monkeypatch.setattr("voice_daemon.cli.platform.system", lambda: "Linux")
+    monkeypatch.setattr("minigent_client.cli.platform.system", lambda: "Linux")
     monkeypatch.setattr(
-        "voice_daemon.cli.shutil.which",
+        "minigent_client.cli.shutil.which",
         lambda name: "/usr/bin/paplay" if name == "paplay" else None,
     )
     assert voice_cli._resolve_wake_acknowledgement_player(Path("/tmp/test.oga")) == [
@@ -824,7 +824,7 @@ def test_resolve_wake_acknowledgement_player_supports_macos_and_linux(monkeypatc
     ]
 
     monkeypatch.setattr(
-        "voice_daemon.cli.shutil.which",
+        "minigent_client.cli.shutil.which",
         lambda name: "/usr/bin/aplay" if name == "aplay" else None,
     )
     assert voice_cli._resolve_wake_acknowledgement_player(Path("/tmp/test.oga")) is None
@@ -833,7 +833,7 @@ def test_resolve_wake_acknowledgement_player_supports_macos_and_linux(monkeypatc
     ]
 
     monkeypatch.setattr(
-        "voice_daemon.cli.shutil.which",
+        "minigent_client.cli.shutil.which",
         lambda name: f"/usr/bin/{name}" if name in {"aplay", "paplay"} else None,
     )
     assert voice_cli._resolve_acknowledgement_players(Path("/tmp/test.wav")) == [
@@ -900,7 +900,7 @@ def test_macos_say_speech_output_can_be_interrupted(monkeypatch: pytest.MonkeyPa
             terminated["value"] = True
             self.running = False
 
-    monkeypatch.setattr("voice_daemon.speech.subprocess.Popen", lambda command, text: FakeProcess())
+    monkeypatch.setattr("minigent_client.speech.subprocess.Popen", lambda command, text: FakeProcess())
     speech = MacOsSaySpeechOutput(output_stream=output_stream, voice="Samantha")
 
     speech.start("done")
@@ -949,12 +949,12 @@ def test_piper_speech_output_can_be_interrupted(monkeypatch: pytest.MonkeyPatch,
 
     sounddevice = FakeSoundDevice()
 
-    monkeypatch.setattr("voice_daemon.speech.platform.system", lambda: "Linux")
-    monkeypatch.setattr("voice_daemon.speech.subprocess.run", fake_run)
-    monkeypatch.setattr("voice_daemon.speech._resolve_piper_executable", lambda: "piper")
-    monkeypatch.setattr("voice_daemon.speech._load_sounddevice_for_output", lambda: sounddevice)
+    monkeypatch.setattr("minigent_client.speech.platform.system", lambda: "Linux")
+    monkeypatch.setattr("minigent_client.speech.subprocess.run", fake_run)
+    monkeypatch.setattr("minigent_client.speech._resolve_piper_executable", lambda: "piper")
+    monkeypatch.setattr("minigent_client.speech._load_sounddevice_for_output", lambda: sounddevice)
     monkeypatch.setattr(
-        "voice_daemon.speech._resolve_piper_model_path",
+        "minigent_client.speech._resolve_piper_model_path",
         lambda model, model_dir: tmp_path / "voice.onnx",
     )
 
@@ -1008,16 +1008,16 @@ def test_piper_speech_output_uses_afplay_on_macos(
         commands.append(command)
         return FakeProcess(command)
 
-    monkeypatch.setattr("voice_daemon.speech.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("minigent_client.speech.platform.system", lambda: "Darwin")
     monkeypatch.setattr(
-        "voice_daemon.speech.shutil.which",
+        "minigent_client.speech.shutil.which",
         lambda name: "/usr/bin/afplay" if name == "afplay" else None,
     )
-    monkeypatch.setattr("voice_daemon.speech.subprocess.run", fake_run)
-    monkeypatch.setattr("voice_daemon.speech.subprocess.Popen", fake_popen)
-    monkeypatch.setattr("voice_daemon.speech._resolve_piper_executable", lambda: "piper")
+    monkeypatch.setattr("minigent_client.speech.subprocess.run", fake_run)
+    monkeypatch.setattr("minigent_client.speech.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("minigent_client.speech._resolve_piper_executable", lambda: "piper")
     monkeypatch.setattr(
-        "voice_daemon.speech._resolve_piper_model_path",
+        "minigent_client.speech._resolve_piper_model_path",
         lambda model, model_dir: tmp_path / "voice.onnx",
     )
 
@@ -1065,16 +1065,16 @@ def test_piper_speech_output_can_be_interrupted_on_macos(
             terminated["value"] = True
             self.running = False
 
-    monkeypatch.setattr("voice_daemon.speech.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("minigent_client.speech.platform.system", lambda: "Darwin")
     monkeypatch.setattr(
-        "voice_daemon.speech.shutil.which",
+        "minigent_client.speech.shutil.which",
         lambda name: "/usr/bin/afplay" if name == "afplay" else None,
     )
-    monkeypatch.setattr("voice_daemon.speech.subprocess.run", fake_run)
-    monkeypatch.setattr("voice_daemon.speech.subprocess.Popen", FakeProcess)
-    monkeypatch.setattr("voice_daemon.speech._resolve_piper_executable", lambda: "piper")
+    monkeypatch.setattr("minigent_client.speech.subprocess.run", fake_run)
+    monkeypatch.setattr("minigent_client.speech.subprocess.Popen", FakeProcess)
+    monkeypatch.setattr("minigent_client.speech._resolve_piper_executable", lambda: "piper")
     monkeypatch.setattr(
-        "voice_daemon.speech._resolve_piper_model_path",
+        "minigent_client.speech._resolve_piper_model_path",
         lambda model, model_dir: tmp_path / "voice.onnx",
     )
 
@@ -1091,9 +1091,9 @@ def test_piper_speech_output_can_be_interrupted_on_macos(
 def test_piper_speech_output_reports_missing_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     output_stream = StringIO()
 
-    monkeypatch.setattr("voice_daemon.speech.shutil.which", lambda name: None)
-    monkeypatch.setattr("voice_daemon.speech.os.environ", {"PATH": "/tmp/does-not-exist"})
-    monkeypatch.setattr("voice_daemon.speech.sys.executable", "/tmp/does-not-exist/python")
+    monkeypatch.setattr("minigent_client.speech.shutil.which", lambda name: None)
+    monkeypatch.setattr("minigent_client.speech.os.environ", {"PATH": "/tmp/does-not-exist"})
+    monkeypatch.setattr("minigent_client.speech.sys.executable", "/tmp/does-not-exist/python")
 
     speech = PiperSpeechOutput(output_stream=output_stream, model="/tmp/voice.onnx")
 
@@ -1104,7 +1104,7 @@ def test_piper_speech_output_reports_missing_cli(monkeypatch: pytest.MonkeyPatch
 def test_resolve_piper_executable_finds_sibling_of_active_python(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    from voice_daemon.speech import _resolve_piper_executable
+    from minigent_client.speech import _resolve_piper_executable
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -1114,15 +1114,15 @@ def test_resolve_piper_executable_finds_sibling_of_active_python(
     piper_path.write_text("#!/bin/sh\n", encoding="utf-8")
     piper_path.chmod(0o755)
 
-    monkeypatch.setattr("voice_daemon.speech.shutil.which", lambda name: None)
-    monkeypatch.setattr("voice_daemon.speech.os.environ", {"PATH": "/tmp/does-not-exist"})
-    monkeypatch.setattr("voice_daemon.speech.sys.executable", str(python_path))
+    monkeypatch.setattr("minigent_client.speech.shutil.which", lambda name: None)
+    monkeypatch.setattr("minigent_client.speech.os.environ", {"PATH": "/tmp/does-not-exist"})
+    monkeypatch.setattr("minigent_client.speech.sys.executable", str(python_path))
 
     assert _resolve_piper_executable() == str(piper_path)
 
 
 def test_resolve_piper_model_path_uses_existing_onnx_path(tmp_path) -> None:
-    from voice_daemon.speech import _resolve_piper_model_path
+    from minigent_client.speech import _resolve_piper_model_path
 
     model_path = tmp_path / "voice.onnx"
     model_path.write_bytes(b"model")
@@ -1131,7 +1131,7 @@ def test_resolve_piper_model_path_uses_existing_onnx_path(tmp_path) -> None:
 
 
 def test_resolve_piper_model_path_downloads_named_voice(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    from voice_daemon import speech as speech_module
+    from minigent_client import speech as speech_module
 
     downloaded: dict[str, object] = {}
 
@@ -1170,7 +1170,7 @@ def test_principal_config_prefers_bearer_token() -> None:
     assert principal.build_headers() == {"Authorization": "Bearer secret-token"}
 
 
-def test_voice_daemon_config_from_env(monkeypatch) -> None:
+def test_minigent_client_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_BASE_URL", "http://127.0.0.1:9000/")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_PHRASE", "computer")
     monkeypatch.setenv("MINIGENT_VOICE_PROMPT_PREAMBLE", "timezone=America/Chicago")
@@ -1225,9 +1225,9 @@ def test_voice_daemon_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("OPENROUTER_HTTP_REFERER", "https://minigent.example")
     monkeypatch.setenv("OPENROUTER_APP_NAME", "minigent")
 
-    config = VoiceDaemonConfig.from_env()
+    config = ClientConfig.from_env()
 
-    assert config == VoiceDaemonConfig(
+    assert config == ClientConfig(
         base_url="http://127.0.0.1:9000",
         wake_phrase="computer",
         prompt_preamble="timezone=America/Chicago",
@@ -1322,8 +1322,8 @@ def test_minigent_client_sends_raw_message_when_location_is_unset(
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    client = MinigentClient(
-        VoiceDaemonConfig(
+    client = MinigentAPIClient(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             thread_id="thread-123",
@@ -1374,8 +1374,8 @@ def test_minigent_client_uses_location_as_compatibility_preamble_when_configured
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    client = MinigentClient(
-        VoiceDaemonConfig(
+    client = MinigentAPIClient(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             location="Austin, TX, US; timezone=America/Chicago",
@@ -1422,8 +1422,8 @@ def test_minigent_client_prefers_explicit_prompt_preamble_over_location(
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    client = MinigentClient(
-        VoiceDaemonConfig(
+    client = MinigentAPIClient(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             prompt_preamble="timezone=America/Chicago\nnote=prefer local context",
@@ -1473,8 +1473,8 @@ def test_minigent_client_can_log_full_prompt_for_diagnostics(
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     output_stream = StringIO()
 
-    client = MinigentClient(
-        VoiceDaemonConfig(
+    client = MinigentAPIClient(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             location="Austin, TX, US; timezone=America/Chicago",
@@ -1588,11 +1588,11 @@ def test_bounded_output_volume_rejects_out_of_range_values() -> None:
 
 
 def test_should_duck_for_state_only_covers_input_states() -> None:
-    assert should_duck_for_state(DaemonState.LISTENING) is True
-    assert should_duck_for_state(DaemonState.FOLLOW_UP_LISTENING) is True
-    assert should_duck_for_state(DaemonState.IDLE) is False
-    assert should_duck_for_state(DaemonState.THINKING) is False
-    assert should_duck_for_state(DaemonState.SPEAKING) is False
+    assert should_duck_for_state(ClientState.LISTENING) is True
+    assert should_duck_for_state(ClientState.FOLLOW_UP_LISTENING) is True
+    assert should_duck_for_state(ClientState.IDLE) is False
+    assert should_duck_for_state(ClientState.THINKING) is False
+    assert should_duck_for_state(ClientState.SPEAKING) is False
 
 
 def test_macos_ambient_volume_ducker_reads_sets_and_restores(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1611,12 +1611,12 @@ def test_macos_ambient_volume_ducker_reads_sets_and_restores(monkeypatch: pytest
             return Result(stdout="42\n")
         return Result()
 
-    monkeypatch.setattr("voice_daemon.ducking.subprocess.run", fake_run)
+    monkeypatch.setattr("minigent_client.ducking.subprocess.run", fake_run)
 
     ducker = MacOsAmbientVolumeDucker(ducked_output_volume=15, output_stream=output_stream)
-    ducker.sync_state(DaemonState.LISTENING)
-    ducker.sync_state(DaemonState.FOLLOW_UP_LISTENING)
-    ducker.sync_state(DaemonState.THINKING)
+    ducker.sync_state(ClientState.LISTENING)
+    ducker.sync_state(ClientState.FOLLOW_UP_LISTENING)
+    ducker.sync_state(ClientState.THINKING)
 
     assert commands == [
         ["osascript", "-e", "output volume of (get volume settings)"],
@@ -1651,10 +1651,10 @@ def test_macos_ambient_volume_ducker_restores_on_close(monkeypatch: pytest.Monke
             return Result(stdout="35\n")
         return Result()
 
-    monkeypatch.setattr("voice_daemon.ducking.subprocess.run", fake_run)
+    monkeypatch.setattr("minigent_client.ducking.subprocess.run", fake_run)
 
     ducker = MacOsAmbientVolumeDucker(ducked_output_volume=10, output_stream=output_stream)
-    ducker.sync_state(DaemonState.LISTENING)
+    ducker.sync_state(ClientState.LISTENING)
     ducker.close()
 
     assert commands[-1] == ["osascript", "-e", "set volume output volume 35"]
@@ -1689,11 +1689,11 @@ def test_macos_ambient_volume_ducker_temporarily_restores_for_feedback(
         def start(self) -> None:
             background_targets.append((self.target, self.args))
 
-    monkeypatch.setattr("voice_daemon.ducking.subprocess.run", fake_run)
-    monkeypatch.setattr("voice_daemon.ducking.threading.Thread", FakeThread)
+    monkeypatch.setattr("minigent_client.ducking.subprocess.run", fake_run)
+    monkeypatch.setattr("minigent_client.ducking.threading.Thread", FakeThread)
 
     ducker = MacOsAmbientVolumeDucker(ducked_output_volume=10, output_stream=output_stream)
-    ducker.sync_state(DaemonState.LISTENING)
+    ducker.sync_state(ClientState.LISTENING)
     ducker.temporarily_restore(lambda: events.append("bell"))
 
     assert events == ["bell"]
@@ -1723,11 +1723,11 @@ def test_macos_ambient_volume_ducker_warns_once_and_disables_after_failure(
     def fake_run(command, text, capture_output, check):
         raise OSError("osascript missing")
 
-    monkeypatch.setattr("voice_daemon.ducking.subprocess.run", fake_run)
+    monkeypatch.setattr("minigent_client.ducking.subprocess.run", fake_run)
 
     ducker = MacOsAmbientVolumeDucker(ducked_output_volume=10, output_stream=output_stream)
-    ducker.sync_state(DaemonState.LISTENING)
-    ducker.sync_state(DaemonState.FOLLOW_UP_LISTENING)
+    ducker.sync_state(ClientState.LISTENING)
+    ducker.sync_state(ClientState.FOLLOW_UP_LISTENING)
     ducker.close()
 
     assert output_stream.getvalue().count("ambient audio ducking disabled") == 1
@@ -2145,7 +2145,7 @@ def test_passive_audio_activation_source_settles_before_wake_feedback(
             events.append("transcribe")
             return "wake word request"
 
-    monkeypatch.setattr("voice_daemon.backends.passive_audio.time.sleep", lambda seconds: events.append(f"sleep:{seconds}"))
+    monkeypatch.setattr("minigent_client.backends.passive_audio.time.sleep", lambda seconds: events.append(f"sleep:{seconds}"))
 
     source = PassiveAudioActivationSource(
         output_stream=StringIO(),
@@ -2631,7 +2631,7 @@ def test_passive_audio_activation_source_close_is_idempotent() -> None:
     assert stream_context.exit_calls == 1
 
 
-def test_voice_daemon_cli_handles_keyboard_interrupt(
+def test_minigent_client_cli_handles_keyboard_interrupt(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -2657,7 +2657,7 @@ def test_voice_daemon_cli_handles_keyboard_interrupt(
     monkeypatch.setattr(
         voice_cli,
         "build_config",
-        lambda args: VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+        lambda args: ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
     )
     monkeypatch.setattr(
         voice_cli,
@@ -2666,11 +2666,11 @@ def test_voice_daemon_cli_handles_keyboard_interrupt(
     )
     monkeypatch.setattr(
         voice_cli,
-        "MinigentClient",
+        "MinigentAPIClient",
         lambda config, output_stream=None: object(),
     )
     monkeypatch.setattr(voice_cli, "build_speech_output", lambda config: object())
-    monkeypatch.setattr(voice_cli, "VoiceDaemon", FakeVoiceDaemon)
+    monkeypatch.setattr(voice_cli, "MinigentClientRuntime", FakeVoiceDaemon)
 
     exit_code = voice_cli.main(["--backend", "stdin"])
 
@@ -2687,7 +2687,7 @@ def test_run_chat_loop_handles_multiple_turns_and_blank_lines(
     events: list[tuple[str, str]] = []
 
     class FakeChatClient:
-        def __init__(self, config: VoiceDaemonConfig, output_stream=None) -> None:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
             del config, output_stream
             self.replies = iter(["first reply", "second reply"])
 
@@ -2700,12 +2700,12 @@ def test_run_chat_loop_handles_multiple_turns_and_blank_lines(
             events.append(("run", reply))
             return reply
 
-    monkeypatch.setattr(voice_cli, "MinigentClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
     exit_code = run_chat_loop(
-        VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
     )
 
     assert exit_code == 0
@@ -2845,7 +2845,7 @@ def test_run_chat_loop_continues_after_backend_error(
     input_stream = StringIO("bad request\ngood request\n")
 
     class FakeChatClient:
-        def __init__(self, config: VoiceDaemonConfig, output_stream=None) -> None:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
             del config, output_stream
             self.calls = 0
 
@@ -2858,12 +2858,12 @@ def test_run_chat_loop_continues_after_backend_error(
         def run_thread(self) -> str:
             return "good reply"
 
-    monkeypatch.setattr(voice_cli, "MinigentClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
     exit_code = run_chat_loop(
-        VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
     )
 
     assert exit_code == 0
@@ -2879,7 +2879,7 @@ def test_run_chat_loop_honors_once(
     messages: list[str] = []
 
     class FakeChatClient:
-        def __init__(self, config: VoiceDaemonConfig, output_stream=None) -> None:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
             del config, output_stream
 
         def send_user_message(self, content: str) -> dict[str, str]:
@@ -2889,12 +2889,12 @@ def test_run_chat_loop_honors_once(
         def run_thread(self) -> str:
             return "first reply"
 
-    monkeypatch.setattr(voice_cli, "MinigentClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
     exit_code = run_chat_loop(
-        VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
         once=True,
     )
 
@@ -2911,7 +2911,7 @@ def test_run_chat_loop_ignores_blank_interactive_submit(
     messages: list[str] = []
 
     class FakeChatClient:
-        def __init__(self, config: VoiceDaemonConfig, output_stream=None) -> None:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
             del config, output_stream
 
         def send_user_message(self, content: str) -> dict[str, str]:
@@ -2930,13 +2930,13 @@ def test_run_chat_loop_ignores_blank_interactive_submit(
         except StopIteration as exc:
             raise EOFError from exc
 
-    monkeypatch.setattr(voice_cli, "MinigentClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli, "_enable_chat_line_editing", lambda **kwargs: True)
     monkeypatch.setattr("builtins.input", fake_input)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
     exit_code = run_chat_loop(
-        VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
     )
 
     assert exit_code == 0
@@ -2955,41 +2955,41 @@ def test_run_chat_loop_handles_keyboard_interrupt(
             raise KeyboardInterrupt
 
     class FakeChatClient:
-        def __init__(self, config: VoiceDaemonConfig, output_stream=None) -> None:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
             del config, output_stream
 
-    monkeypatch.setattr(voice_cli, "MinigentClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", InterruptingInput())
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
     exit_code = run_chat_loop(
-        VoiceDaemonConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
     )
 
     assert exit_code == 130
     assert output_stream.getvalue() == "[user] \n[idle] shutting down\n"
 
 
-def test_voice_daemon_cli_routes_chat_backend_without_voice_daemon(
+def test_minigent_client_cli_routes_chat_backend_without_minigent_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, object]] = []
 
     monkeypatch.setattr(voice_cli, "load_environment", lambda: None)
 
-    def fake_run_chat_loop(config: VoiceDaemonConfig, *, once: bool = False) -> int:
+    def fake_run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         calls.append(("chat", config))
         calls.append(("once", once))
         return 7
 
     monkeypatch.setattr(voice_cli, "run_chat_loop", fake_run_chat_loop)
-    monkeypatch.setattr(voice_cli, "VoiceDaemon", lambda **kwargs: (_ for _ in ()).throw(AssertionError("VoiceDaemon should not be built for chat")))
+    monkeypatch.setattr(voice_cli, "MinigentClientRuntime", lambda **kwargs: (_ for _ in ()).throw(AssertionError("MinigentClientRuntime should not be built for chat")))
 
     exit_code = voice_cli.main(["--backend", "chat", "--once"])
 
     assert exit_code == 7
     assert calls[0][0] == "chat"
-    assert isinstance(calls[0][1], VoiceDaemonConfig)
+    assert isinstance(calls[0][1], ClientConfig)
     assert calls[1] == ("once", True)
 
 
@@ -3028,7 +3028,7 @@ def test_openai_transcription_adapter_returns_text(monkeypatch: pytest.MonkeyPat
         captured["timeout"] = timeout
         return FakeResponse()
 
-    monkeypatch.setattr("voice_daemon.stt.httpx.post", fake_post)
+    monkeypatch.setattr("minigent_client.stt.httpx.post", fake_post)
     adapter = OpenAITranscriptionAdapter(
         OpenAITranscriptionConfig(
             api_key="openai-key",
@@ -3061,7 +3061,7 @@ def test_openai_transcription_adapter_requires_text_response(monkeypatch: pytest
         def json(self) -> dict[str, object]:
             return {"unexpected": "payload"}
 
-    monkeypatch.setattr("voice_daemon.stt.httpx.post", lambda *_, **__: FakeResponse())
+    monkeypatch.setattr("minigent_client.stt.httpx.post", lambda *_, **__: FakeResponse())
     adapter = OpenAITranscriptionAdapter(OpenAITranscriptionConfig(api_key="openai-key"))
 
     with pytest.raises(SpeechToTextError, match="did not include text"):
@@ -3103,7 +3103,7 @@ def test_openrouter_transcription_adapter_returns_text(monkeypatch: pytest.Monke
         captured["timeout"] = timeout
         return FakeResponse()
 
-    monkeypatch.setattr("voice_daemon.stt.httpx.post", fake_post)
+    monkeypatch.setattr("minigent_client.stt.httpx.post", fake_post)
     adapter = OpenRouterTranscriptionAdapter(
         OpenRouterTranscriptionConfig(
             api_key="openrouter-key",
@@ -3162,7 +3162,7 @@ def test_openrouter_transcription_adapter_rejects_assistant_style_text(monkeypat
                 ]
             }
 
-    monkeypatch.setattr("voice_daemon.stt.httpx.post", lambda *_, **__: FakeResponse())
+    monkeypatch.setattr("minigent_client.stt.httpx.post", lambda *_, **__: FakeResponse())
     adapter = OpenRouterTranscriptionAdapter(
         OpenRouterTranscriptionConfig(
             api_key="openrouter-key",
@@ -3205,7 +3205,7 @@ def test_openrouter_transcription_adapter_rejects_missing_attachment_reply(
                 ]
             }
 
-    monkeypatch.setattr("voice_daemon.stt.httpx.post", lambda *_, **__: FakeResponse())
+    monkeypatch.setattr("minigent_client.stt.httpx.post", lambda *_, **__: FakeResponse())
     adapter = OpenRouterTranscriptionAdapter(
         OpenRouterTranscriptionConfig(
             api_key="openrouter-key",
@@ -3241,7 +3241,7 @@ def test_faster_whisper_transcription_adapter_returns_text(monkeypatch: pytest.M
             assert kwargs["language"] == "en"
             return iter([FakeSegment("hello "), FakeSegment("world")]), object()
 
-    monkeypatch.setattr("voice_daemon.stt._load_faster_whisper_model", FakeModel)
+    monkeypatch.setattr("minigent_client.stt._load_faster_whisper_model", FakeModel)
     adapter = FasterWhisperTranscriptionAdapter(
         FasterWhisperTranscriptionConfig(
             model="base",
@@ -3265,13 +3265,13 @@ def test_faster_whisper_transcription_adapter_returns_text(monkeypatch: pytest.M
 
 def test_build_transcription_adapter_supports_all_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "voice_daemon.stt._load_faster_whisper_model",
+        "minigent_client.stt._load_faster_whisper_model",
         lambda model, *, device, compute_type: object(),
     )
     assert isinstance(
         build_transcription_adapter(
             build_speech_provider_config(
-                VoiceDaemonConfig(
+                ClientConfig(
                     base_url="http://127.0.0.1:8000",
                     wake_phrase="hey minigent",
                     stt_provider="openai",
@@ -3284,7 +3284,7 @@ def test_build_transcription_adapter_supports_all_providers(monkeypatch: pytest.
     assert isinstance(
         build_transcription_adapter(
             build_speech_provider_config(
-                VoiceDaemonConfig(
+                ClientConfig(
                     base_url="http://127.0.0.1:8000",
                     wake_phrase="hey minigent",
                     stt_provider="openrouter",
@@ -3298,7 +3298,7 @@ def test_build_transcription_adapter_supports_all_providers(monkeypatch: pytest.
     assert isinstance(
         build_transcription_adapter(
             build_speech_provider_config(
-                VoiceDaemonConfig(
+                ClientConfig(
                     base_url="http://127.0.0.1:8000",
                     wake_phrase="hey minigent",
                     stt_provider="faster-whisper",
@@ -3313,20 +3313,20 @@ def test_build_transcription_adapter_supports_all_providers(monkeypatch: pytest.
     )
 
 
-def test_voice_daemon_config_defaults_openrouter_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_minigent_client_config_defaults_openrouter_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MINIGENT_VOICE_STT_MODEL", raising=False)
     monkeypatch.setenv("MINIGENT_VOICE_STT_PROVIDER", "openrouter")
 
-    config = VoiceDaemonConfig.from_env()
+    config = ClientConfig.from_env()
 
     assert config.stt_model == "openai/gpt-audio"
 
 
-def test_voice_daemon_config_defaults_faster_whisper_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_minigent_client_config_defaults_faster_whisper_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MINIGENT_VOICE_STT_MODEL", raising=False)
     monkeypatch.setenv("MINIGENT_VOICE_STT_PROVIDER", "faster-whisper")
 
-    config = VoiceDaemonConfig.from_env()
+    config = ClientConfig.from_env()
 
     assert config.stt_model == "base"
 
@@ -3334,7 +3334,7 @@ def test_voice_daemon_config_defaults_faster_whisper_model(monkeypatch: pytest.M
 def test_build_wake_word_detector_requires_access_key_and_keyword_path() -> None:
     with pytest.raises(SystemExit, match="PICOVOICE_ACCESS_KEY is required"):
         build_wake_word_detector(
-            VoiceDaemonConfig(
+            ClientConfig(
                 base_url="http://127.0.0.1:8000",
                 wake_phrase="hey minigent",
             )
@@ -3348,9 +3348,9 @@ def test_build_wake_word_detector_supports_openwakeword() -> None:
             self.threshold = threshold
 
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr("voice_daemon.cli.OpenWakeWordDetector", FakeOpenWakeWordDetector)
+    monkeypatch.setattr("minigent_client.cli.OpenWakeWordDetector", FakeOpenWakeWordDetector)
     detector = build_wake_word_detector(
-        VoiceDaemonConfig(
+        ClientConfig(
             base_url="http://127.0.0.1:8000",
             wake_phrase="hey minigent",
             wakeword_provider="openwakeword",

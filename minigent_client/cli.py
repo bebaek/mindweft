@@ -11,30 +11,30 @@ from pathlib import Path
 from typing import Callable
 
 from app.config import load_environment
-from voice_daemon.audio import AudioCaptureConfig, MicrophoneRecorder, open_microphone_stream
-from voice_daemon.backends.manual_audio import ManualAudioActivationSource
-from voice_daemon.backends.passive_audio import PassiveAudioActivationSource
-from voice_daemon.backends.stdin_loop import StdinActivationSource
-from voice_daemon.config import VoiceDaemonConfig
-from voice_daemon.debug import CaptureDebugConfig, CaptureDebugger
-from voice_daemon.ducking import MacOsAmbientVolumeDucker
-from voice_daemon.minigent_client import MinigentClient
-from voice_daemon.ring_buffer import AudioRingBuffer
-from voice_daemon.service import VoiceDaemon
-from voice_daemon.speech import (
+from minigent_client.audio import AudioCaptureConfig, MicrophoneRecorder, open_microphone_stream
+from minigent_client.backends.manual_audio import ManualAudioActivationSource
+from minigent_client.backends.passive_audio import PassiveAudioActivationSource
+from minigent_client.backends.stdin_loop import StdinActivationSource
+from minigent_client.config import ClientConfig
+from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
+from minigent_client.ducking import MacOsAmbientVolumeDucker
+from minigent_client.api_client import MinigentAPIClient
+from minigent_client.ring_buffer import AudioRingBuffer
+from minigent_client.runtime import MinigentClientRuntime
+from minigent_client.speech import (
     ConsoleSpeechOutput,
     MacOsSaySpeechOutput,
     PiperSpeechOutput,
     SilentSpeechOutput,
 )
-from voice_daemon.stt import SpeechProviderConfig, build_transcription_adapter
-from voice_daemon.vad import SileroVoiceActivityDetector
-from voice_daemon.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
+from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
+from minigent_client.vad import SileroVoiceActivityDetector
+from minigent_client.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run the Minigent voice/chat daemon scaffold."
+        description="Run the Minigent client for chat and voice."
     )
     parser.add_argument(
         "--backend",
@@ -108,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--ducking-mode",
         choices=("off", "input-only"),
         default=None,
-        help="Optional ambient audio ducking mode. `input-only` lowers macOS output volume while the daemon is actively listening after activation.",
+        help="Optional ambient audio ducking mode. `input-only` lowers macOS output volume while the client is actively listening after activation.",
     )
     parser.add_argument(
         "--ducked-output-volume",
@@ -201,8 +201,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
-    env_config = VoiceDaemonConfig.from_env()
+def build_config(args: argparse.Namespace) -> ClientConfig:
+    env_config = ClientConfig.from_env()
     principal = env_config.principal
     if any(value is not None for value in (args.api_token, args.user_id, args.tenant_id)) or args.admin:
         principal = type(principal)(
@@ -211,7 +211,7 @@ def build_config(args: argparse.Namespace) -> VoiceDaemonConfig:
             is_admin=args.admin or principal.is_admin,
             api_token=args.api_token if args.api_token is not None else principal.api_token,
         )
-    return VoiceDaemonConfig(
+    return ClientConfig(
         base_url=(args.base_url or env_config.base_url).rstrip("/"),
         wake_phrase=(args.wake_phrase or env_config.wake_phrase).strip(),
         prompt_preamble=env_config.prompt_preamble,
@@ -318,10 +318,10 @@ def main(argv: list[str] | None = None) -> int:
         activation_feedback=activation_feedback,
         capture_ended_feedback=capture_ended_feedback,
     )
-    daemon = VoiceDaemon(
+    client_runtime = MinigentClientRuntime(
         wake_phrase=config.wake_phrase,
         activation_source=activation_source,
-        minigent_client=MinigentClient(config, output_stream=sys.stdout),
+        minigent_client=MinigentAPIClient(config, output_stream=sys.stdout),
         speech_output=speech_output,
         activation_feedback=None if args.backend == "passive-audio" else activation_feedback,
         follow_up_timeout_ms=config.follow_up_timeout_ms,
@@ -329,31 +329,31 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         if args.once:
-            daemon.run_once()
+            client_runtime.run_once()
             return 0
-        daemon.run_forever()
+        client_runtime.run_forever()
         return 0
     except KeyboardInterrupt:
         sys.stdout.write("[idle] shutting down\n")
         sys.stdout.flush()
         return 130
     finally:
-        close_daemon = getattr(daemon, "close", None)
-        if callable(close_daemon):
-            close_daemon()
+        close_runtime = getattr(client_runtime, "close", None)
+        if callable(close_runtime):
+            close_runtime()
         close = getattr(activation_source, "close", None)
         if callable(close):
             close()
 
 
-def run_chat_loop(config: VoiceDaemonConfig, *, once: bool = False) -> int:
+def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
     output_stream = sys.stdout
     input_stream = sys.stdin
     interactive_prompt = _enable_chat_line_editing(
         input_stream=input_stream,
         output_stream=output_stream,
     )
-    client = MinigentClient(config, output_stream=output_stream)
+    client = MinigentAPIClient(config, output_stream=output_stream)
     speech_output = ConsoleSpeechOutput(output_stream=output_stream)
 
     turns_completed = 0
@@ -425,7 +425,7 @@ def _enable_chat_line_editing(*, input_stream: object, output_stream: object) ->
 
 def build_activation_source(
     backend: str,
-    config: VoiceDaemonConfig,
+    config: ClientConfig,
     *,
     activation_feedback: Callable[[], None] | None = None,
     capture_ended_feedback: Callable[[], None] | None = None,
@@ -486,7 +486,7 @@ def build_activation_source(
     raise ValueError(f"Unsupported backend '{backend}'")
 
 
-def build_microphone_recorder(config: VoiceDaemonConfig) -> MicrophoneRecorder:
+def build_microphone_recorder(config: ClientConfig) -> MicrophoneRecorder:
     return MicrophoneRecorder(
         AudioCaptureConfig(
             sample_rate=config.audio_sample_rate,
@@ -499,7 +499,7 @@ def build_microphone_recorder(config: VoiceDaemonConfig) -> MicrophoneRecorder:
     )
 
 
-def build_capture_debugger(config: VoiceDaemonConfig) -> CaptureDebugger | None:
+def build_capture_debugger(config: ClientConfig) -> CaptureDebugger | None:
     if not config.debug_capture_path:
         return None
     return CaptureDebugger(
@@ -508,7 +508,7 @@ def build_capture_debugger(config: VoiceDaemonConfig) -> CaptureDebugger | None:
     )
 
 
-def build_ambient_volume_controller(config: VoiceDaemonConfig):
+def build_ambient_volume_controller(config: ClientConfig):
     if config.ducking_mode == "off":
         return None
     if config.ducking_mode != "input-only":
@@ -528,7 +528,7 @@ def build_ambient_volume_controller(config: VoiceDaemonConfig):
     )
 
 
-def build_speech_output(config: VoiceDaemonConfig):
+def build_speech_output(config: ClientConfig):
     provider = config.tts_provider.lower()
     if provider == "none":
         return SilentSpeechOutput(output_stream=sys.stdout)
@@ -557,7 +557,7 @@ def build_speech_output(config: VoiceDaemonConfig):
 
 
 def build_activation_feedback(
-    config: VoiceDaemonConfig,
+    config: ClientConfig,
     speech_output,
 ) -> Callable[[], None] | None:
     return build_acknowledgement_feedback(
@@ -651,7 +651,7 @@ def _emit_terminal_bell_async(configured_sound_path: str | None = None) -> None:
 
 
 def _resolve_wake_acknowledgement_sound() -> Path | None:
-    return _resolve_acknowledgement_sound(VoiceDaemonConfig.from_env().wake_acknowledgement_sound)
+    return _resolve_acknowledgement_sound(ClientConfig.from_env().wake_acknowledgement_sound)
 
 
 def _resolve_acknowledgement_sound(configured_sound_path: str | None) -> Path | None:
@@ -721,7 +721,7 @@ def _resolve_acknowledgement_players(sound_path: Path | None) -> list[list[str]]
     return []
 
 
-def build_speech_provider_config(config: VoiceDaemonConfig) -> SpeechProviderConfig:
+def build_speech_provider_config(config: ClientConfig) -> SpeechProviderConfig:
     provider = config.stt_provider.lower()
     if provider == "openai":
         if not config.openai_api_key:
@@ -766,7 +766,7 @@ def build_speech_provider_config(config: VoiceDaemonConfig) -> SpeechProviderCon
     )
 
 
-def build_wake_word_detector(config: VoiceDaemonConfig):
+def build_wake_word_detector(config: ClientConfig):
     if config.wakeword_provider == "porcupine":
         if not config.picovoice_access_key:
             raise SystemExit(

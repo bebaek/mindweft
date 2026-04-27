@@ -4,17 +4,17 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Protocol, TextIO
 
-from voice_daemon.audio import (
+from minigent_client.audio import (
     MicrophoneRecorder,
     RawAudioInputStream,
     pad_with_silence,
     read_chunk,
 )
-from voice_daemon.debug import CaptureDebugger
-from voice_daemon.ring_buffer import AudioRingBuffer
-from voice_daemon.service import Activation
-from voice_daemon.stt import SpeechToTextAdapter, SpeechToTextError
-from voice_daemon.wakeword import WakeWordDetector
+from minigent_client.debug import CaptureDebugger
+from minigent_client.ring_buffer import AudioRingBuffer
+from minigent_client.runtime import Activation
+from minigent_client.stt import SpeechToTextAdapter, SpeechToTextError
+from minigent_client.wakeword import WakeWordDetector
 
 
 class StreamContext(Protocol):

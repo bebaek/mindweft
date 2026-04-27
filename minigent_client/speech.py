@@ -12,8 +12,8 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import TextIO
 
-from voice_daemon.audio import AudioDependencyError, load_recorded_audio_from_wav
-from voice_daemon.service import SpeechOutput
+from minigent_client.audio import AudioDependencyError, load_recorded_audio_from_wav
+from minigent_client.runtime import SpeechOutput
 
 
 @dataclass

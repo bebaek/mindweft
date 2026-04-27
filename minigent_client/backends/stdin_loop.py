@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TextIO
 
-from voice_daemon.service import Activation
+from minigent_client.runtime import Activation
 
 
 @dataclass

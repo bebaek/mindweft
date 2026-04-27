@@ -6,11 +6,11 @@ import urllib.error
 import urllib.request
 from typing import Any, TextIO
 
-from voice_daemon.config import VoiceDaemonConfig
+from minigent_client.config import ClientConfig
 
 
-class MinigentClient:
-    def __init__(self, config: VoiceDaemonConfig, output_stream: TextIO | None = None) -> None:
+class MinigentAPIClient:
+    def __init__(self, config: ClientConfig, output_stream: TextIO | None = None) -> None:
         self._config = config
         self._thread_id = config.thread_id
         self._output_stream = output_stream or sys.stdout

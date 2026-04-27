@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from voice_daemon.ring_buffer import AudioRingBuffer
+from minigent_client.ring_buffer import AudioRingBuffer
 
 
 class AudioDependencyError(RuntimeError):
