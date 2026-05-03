@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import builtins
 import json
 import subprocess
 import wave
@@ -11,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import minigent_client.cli as voice_cli
+from minigent_client.api_client import MinigentAPIClient
 from minigent_client.audio import (
     AudioCaptureConfig,
     MicrophoneRecorder,
@@ -35,10 +35,9 @@ from minigent_client.cli import (
     build_wake_word_detector,
     run_chat_loop,
 )
-from minigent_client.config import PrincipalConfig, ClientConfig
+from minigent_client.config import ClientConfig, PrincipalConfig
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker, should_duck_for_state
-from minigent_client.api_client import MinigentAPIClient
 from minigent_client.ring_buffer import AudioRingBuffer
 from minigent_client.runtime import Activation, ClientState, MinigentClientRuntime
 from minigent_client.speech import (
@@ -2721,30 +2720,78 @@ def test_run_chat_loop_handles_multiple_turns_and_blank_lines(
     )
 
 
-def test_enable_chat_line_editing_for_tty_streams(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[str] = []
+def test_build_chat_prompt_session_for_tty_streams(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[object] = []
 
     class TtyStream(StringIO):
         def isatty(self) -> bool:
             return True
 
-    readline_module = type(
-        "FakeReadlineModule",
+    class FakeFileHistory:
+        def __init__(self, path: str) -> None:
+            self.path = path
+            calls.append(("history", path))
+
+    class FakePromptSession:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+            calls.append(("session", kwargs))
+
+    class FakeKeyBindings:
+        def __init__(self) -> None:
+            calls.append(("key_bindings", self))
+
+        def add(self, *keys: str):
+            calls.append(("binding", keys))
+
+            def decorator(handler):
+                return handler
+
+            return decorator
+
+    prompt_toolkit_module = type(
+        "FakePromptToolkitModule",
         (),
-        {"parse_and_bind": lambda self, binding: calls.append(binding)},
+        {"PromptSession": FakePromptSession},
     )()
+    history_module = type("FakeHistoryModule", (), {"FileHistory": FakeFileHistory})()
+    key_binding_module = type("FakeKeyBindingModule", (), {"KeyBindings": FakeKeyBindings})()
 
-    monkeypatch.setattr(voice_cli, "import_module", lambda name: readline_module)
+    def fake_import(name: str) -> object:
+        if name == "prompt_toolkit":
+            return prompt_toolkit_module
+        if name == "prompt_toolkit.history":
+            return history_module
+        if name == "prompt_toolkit.key_binding":
+            return key_binding_module
+        raise ImportError(name)
 
-    voice_cli._enable_chat_line_editing(
+    monkeypatch.setattr(voice_cli, "import_module", fake_import)
+    monkeypatch.setattr(voice_cli, "chat_history_file_path", lambda: tmp_path / "history")
+
+    session = voice_cli._build_chat_prompt_session(
         input_stream=TtyStream(),
         output_stream=TtyStream(),
     )
 
-    assert calls == ["tab: complete"]
+    assert isinstance(session, FakePromptSession)
+    assert ("history", str(tmp_path / "history")) in calls
+    assert ("binding", ("enter",)) in calls
+    assert ("binding", ("escape", "enter")) in calls
+    session_call = calls[-1]
+    assert isinstance(session_call, tuple)
+    assert session_call[0] == "session"
+    session_kwargs = session_call[1]
+    assert isinstance(session_kwargs, dict)
+    assert isinstance(session_kwargs["history"], FakeFileHistory)
+    assert session_kwargs["history"].path == str(tmp_path / "history")
+    assert isinstance(session_kwargs["key_bindings"], FakeKeyBindings)
+    assert session_kwargs["multiline"] is True
 
 
-def test_enable_chat_line_editing_skips_non_tty_streams(
+def test_build_chat_prompt_session_skips_non_tty_streams(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     imported: list[str] = []
@@ -2755,15 +2802,16 @@ def test_enable_chat_line_editing_skips_non_tty_streams(
 
     monkeypatch.setattr(voice_cli, "import_module", fake_import)
 
-    voice_cli._enable_chat_line_editing(
+    session = voice_cli._build_chat_prompt_session(
         input_stream=StringIO(),
         output_stream=StringIO(),
     )
 
+    assert session is None
     assert imported == []
 
 
-def test_enable_chat_line_editing_falls_back_when_readline_missing(
+def test_build_chat_prompt_session_falls_back_when_prompt_toolkit_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class TtyStream(StringIO):
@@ -2773,34 +2821,67 @@ def test_enable_chat_line_editing_falls_back_when_readline_missing(
     monkeypatch.setattr(
         voice_cli,
         "import_module",
-        lambda name: (_ for _ in ()).throw(ImportError("no readline")),
+        lambda name: (_ for _ in ()).throw(ImportError("no prompt_toolkit")),
     )
 
-    voice_cli._enable_chat_line_editing(
+    session = voice_cli._build_chat_prompt_session(
         input_stream=TtyStream(),
         output_stream=TtyStream(),
     )
 
+    assert session is None
 
-def test_enable_chat_line_editing_falls_back_when_setup_fails(
+
+def test_build_chat_prompt_session_falls_back_when_setup_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class TtyStream(StringIO):
         def isatty(self) -> bool:
             return True
 
-    readline_module = type(
-        "FakeReadlineModule",
+    class FakeFileHistory:
+        def __init__(self, path: str) -> None:
+            del path
+
+    class FakePromptSession:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+            raise RuntimeError("boom")
+
+    class FakeKeyBindings:
+        def add(self, *keys: str):
+            del keys
+
+            def decorator(handler):
+                return handler
+
+            return decorator
+
+    prompt_toolkit_module = type(
+        "FakePromptToolkitModule",
         (),
-        {"parse_and_bind": lambda self, binding: (_ for _ in ()).throw(RuntimeError("boom"))},
+        {"PromptSession": FakePromptSession},
     )()
+    history_module = type("FakeHistoryModule", (), {"FileHistory": FakeFileHistory})()
+    key_binding_module = type("FakeKeyBindingModule", (), {"KeyBindings": FakeKeyBindings})()
 
-    monkeypatch.setattr(voice_cli, "import_module", lambda name: readline_module)
+    def fake_import(name: str) -> object:
+        if name == "prompt_toolkit":
+            return prompt_toolkit_module
+        if name == "prompt_toolkit.history":
+            return history_module
+        if name == "prompt_toolkit.key_binding":
+            return key_binding_module
+        raise ImportError(name)
 
-    voice_cli._enable_chat_line_editing(
+    monkeypatch.setattr(voice_cli, "import_module", fake_import)
+
+    session = voice_cli._build_chat_prompt_session(
         input_stream=TtyStream(),
         output_stream=TtyStream(),
     )
+
+    assert session is None
 
 
 def test_read_chat_line_uses_interactive_input_when_enabled(
@@ -2808,16 +2889,14 @@ def test_read_chat_line_uses_interactive_input_when_enabled(
 ) -> None:
     prompts: list[str] = []
 
-    monkeypatch.setattr(
-        builtins,
-        "input",
-        lambda prompt: prompts.append(prompt) or "hello",
-    )
-
     line = voice_cli._read_chat_line(
         input_stream=StringIO(),
         output_stream=StringIO(),
-        interactive_prompt=True,
+        prompt_session=type(
+            "FakePromptSession",
+            (),
+            {"prompt": lambda self, prompt: prompts.append(prompt) or "hello"},
+        )(),
     )
 
     assert line == "hello"
@@ -2831,7 +2910,7 @@ def test_read_chat_line_uses_plain_readline_when_not_interactive() -> None:
     line = voice_cli._read_chat_line(
         input_stream=input_stream,
         output_stream=output_stream,
-        interactive_prompt=False,
+        prompt_session=None,
     )
 
     assert line == "hello\n"
@@ -2923,16 +3002,20 @@ def test_run_chat_loop_ignores_blank_interactive_submit(
 
     responses = iter(["", "real question"])
 
-    def fake_input(prompt: str) -> str:
-        prompts.append(prompt)
-        try:
-            return next(responses)
-        except StopIteration as exc:
-            raise EOFError from exc
+    class FakePromptSession:
+        def prompt(self, prompt: str) -> str:
+            prompts.append(prompt)
+            try:
+                return next(responses)
+            except StopIteration as exc:
+                raise EOFError from exc
 
     monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
-    monkeypatch.setattr(voice_cli, "_enable_chat_line_editing", lambda **kwargs: True)
-    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(
+        voice_cli,
+        "_build_chat_prompt_session",
+        lambda **kwargs: FakePromptSession(),
+    )
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
     exit_code = run_chat_loop(
@@ -2943,6 +3026,35 @@ def test_run_chat_loop_ignores_blank_interactive_submit(
     assert messages == ["real question"]
     assert prompts == ["[user] ", "[user] ", "[user] "]
     assert output_stream.getvalue() == "[assistant] reply\n[idle] shutting down\n"
+
+
+def test_run_chat_loop_handles_local_chat_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("/help\n/exit\n")
+
+    class FakeChatClient:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            raise AssertionError(f"local chat command should not be sent: {content}")
+
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+    )
+
+    assert exit_code == 0
+    assert output_stream.getvalue() == (
+        "[user] [idle] chat commands: /help, /exit, /quit. "
+        "Press Enter to submit; use Esc+Enter for a newline.\n"
+        "[user] [idle] shutting down\n"
+    )
 
 
 def test_run_chat_loop_handles_keyboard_interrupt(

@@ -8,9 +8,10 @@ import sys
 import threading
 from importlib import import_module
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 from app.config import load_environment
+from minigent_client.api_client import MinigentAPIClient
 from minigent_client.audio import AudioCaptureConfig, MicrophoneRecorder, open_microphone_stream
 from minigent_client.backends.manual_audio import ManualAudioActivationSource
 from minigent_client.backends.passive_audio import PassiveAudioActivationSource
@@ -18,7 +19,6 @@ from minigent_client.backends.stdin_loop import StdinActivationSource
 from minigent_client.config import ClientConfig
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker
-from minigent_client.api_client import MinigentAPIClient
 from minigent_client.ring_buffer import AudioRingBuffer
 from minigent_client.runtime import MinigentClientRuntime
 from minigent_client.speech import (
@@ -30,6 +30,24 @@ from minigent_client.speech import (
 from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
 from minigent_client.vad import SileroVoiceActivityDetector
 from minigent_client.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
+
+STATE_DIR_NAME = ".minigent"
+CHAT_HISTORY_FILE_NAME = "client-chat-history"
+
+
+class ChatInputStream(Protocol):
+    def isatty(self) -> bool: ...
+    def readline(self) -> str: ...
+
+
+class ChatOutputStream(Protocol):
+    def isatty(self) -> bool: ...
+    def write(self, __text: str) -> object: ...
+    def flush(self) -> object: ...
+
+
+class ChatPromptSession(Protocol):
+    def prompt(self, message: str) -> str: ...
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -349,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
 def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
     output_stream = sys.stdout
     input_stream = sys.stdin
-    interactive_prompt = _enable_chat_line_editing(
+    prompt_session = _build_chat_prompt_session(
         input_stream=input_stream,
         output_stream=output_stream,
     )
@@ -362,7 +380,7 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             line = _read_chat_line(
                 input_stream=input_stream,
                 output_stream=output_stream,
-                interactive_prompt=interactive_prompt,
+                prompt_session=prompt_session,
             )
         except KeyboardInterrupt:
             output_stream.write("\n[idle] shutting down\n")
@@ -372,12 +390,23 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             output_stream.write("[idle] shutting down\n")
             output_stream.flush()
             return 0
-        if not interactive_prompt and line == "":
+        if prompt_session is None and line == "":
             output_stream.write("[idle] shutting down\n")
             output_stream.flush()
             return 0
         utterance = line.strip()
         if not utterance:
+            continue
+        if utterance in {"/exit", "/quit"}:
+            output_stream.write("[idle] shutting down\n")
+            output_stream.flush()
+            return 0
+        if utterance == "/help":
+            output_stream.write(
+                "[idle] chat commands: /help, /exit, /quit. "
+                "Press Enter to submit; use Esc+Enter for a newline.\n"
+            )
+            output_stream.flush()
             continue
         try:
             client.send_user_message(utterance)
@@ -394,33 +423,58 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
 
 def _read_chat_line(
     *,
-    input_stream: object,
-    output_stream: object,
-    interactive_prompt: bool,
+    input_stream: ChatInputStream,
+    output_stream: ChatOutputStream,
+    prompt_session: ChatPromptSession | None,
 ) -> str:
-    if interactive_prompt:
-        return input("[user] ")
+    if prompt_session is not None:
+        prompt = prompt_session.prompt
+        return prompt("[user] ")
     output_stream.write("[user] ")
     output_stream.flush()
     return input_stream.readline()
 
 
-def _enable_chat_line_editing(*, input_stream: object, output_stream: object) -> bool:
+def chat_history_file_path() -> Path:
+    return Path.home() / STATE_DIR_NAME / CHAT_HISTORY_FILE_NAME
+
+
+def _build_chat_prompt_session(
+    *, input_stream: ChatInputStream, output_stream: ChatOutputStream
+) -> ChatPromptSession | None:
     input_is_tty = getattr(input_stream, "isatty", lambda: False)
     output_is_tty = getattr(output_stream, "isatty", lambda: False)
     if not input_is_tty() or not output_is_tty():
-        return False
+        return None
     try:
-        readline_module = import_module("readline")
+        prompt_toolkit_module = import_module("prompt_toolkit")
+        history_module = import_module("prompt_toolkit.history")
+        key_binding_module = import_module("prompt_toolkit.key_binding")
     except ImportError:
-        return False
-    parse_and_bind = getattr(readline_module, "parse_and_bind", None)
-    if callable(parse_and_bind):
-        try:
-            parse_and_bind("tab: complete")
-        except Exception:
-            return False
-    return True
+        return None
+    PromptSession = prompt_toolkit_module.PromptSession
+    FileHistory = history_module.FileHistory
+    KeyBindings = key_binding_module.KeyBindings
+    try:
+        history_path = chat_history_file_path()
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        key_bindings = KeyBindings()
+
+        @key_bindings.add("enter")
+        def _(event: object) -> None:
+            event.current_buffer.validate_and_handle()
+
+        @key_bindings.add("escape", "enter")
+        def _(event: object) -> None:
+            event.current_buffer.insert_text("\n")
+
+        return PromptSession(
+            history=FileHistory(str(history_path)),
+            key_bindings=key_bindings,
+            multiline=True,
+        )
+    except Exception:
+        return None
 
 
 def build_activation_source(

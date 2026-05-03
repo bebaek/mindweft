@@ -276,11 +276,12 @@ For a plain terminal chat loop with no wake word, microphone, or spoken output, 
 minigent-client --backend chat
 ```
 
-When `chat` runs on an interactive TTY, it enables the platform's `readline` support so
-common shell-style editing keys like `Ctrl-A` and `Ctrl-E` move within the current input
-line. Piped or otherwise non-interactive stdin keeps the existing plain line-read
-behavior. In chat mode, pressing Enter on an empty line is ignored; use `Ctrl-D` or
-`Ctrl-C` to exit.
+When `chat` runs on an interactive TTY, it uses `prompt_toolkit` for shell-style editing,
+persistent local input history, and multiline input. Press `Enter` to submit a message, or
+use `Esc+Enter` to insert a newline before submitting. The history file is stored at
+`~/.minigent/client-chat-history`. Piped or otherwise non-interactive stdin keeps the
+existing plain line-read behavior. In chat mode, pressing Enter on an empty line is
+ignored; use `Ctrl-D`, `Ctrl-C`, `/exit`, or `/quit` to exit.
 
 You can also enable local TTS on macOS with:
 
