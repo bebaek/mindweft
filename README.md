@@ -15,6 +15,23 @@ Minimal AI agent runtime POC from `DESIGN.md`.
 - Optional MCP tool discovery and invocation over HTTP
 - Deterministic mock adapter for local testing
 
+## Built-In Tools
+
+The local tool registry includes:
+
+- `echo`: returns supplied text
+- `current_time`: returns the current UTC time
+- `fetch_url`: fetches HTTP/HTTPS URLs with `GET` or `HEAD`, bounded timeout,
+  redirect, and response-size controls
+- `sleep`: pauses execution
+- `calculator`: evaluates basic arithmetic
+- `retrieve_knowledge`: searches tenant-scoped MiniRAG knowledge when configured
+
+`fetch_url` is intended for lightweight web context and endpoint checks, not as a full
+`curl` replacement. It rejects non-HTTP schemes, private-network hosts, sensitive
+request headers such as `authorization` and `cookie`, and responses larger than the
+requested `max_bytes` limit are truncated in the returned text/body.
+
 ## Run
 
 ```bash

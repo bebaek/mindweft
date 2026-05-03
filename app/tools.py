@@ -5,9 +5,11 @@ import asyncio
 import concurrent.futures
 import importlib
 import inspect
+import ipaddress
 import logging
 import operator
 import os
+import socket
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -50,6 +52,14 @@ _CALCULATOR_BINARY_OPERATORS: dict[type[ast.operator], Callable[[float, float], 
 _CALCULATOR_UNARY_OPERATORS: dict[type[ast.unaryop], Callable[[float], float]] = {
     ast.UAdd: operator.pos,
     ast.USub: operator.neg,
+}
+_FETCH_URL_DEFAULT_MAX_BYTES = 200_000
+_FETCH_URL_MAX_BYTES_LIMIT = 1_000_000
+_FETCH_URL_MAX_REDIRECTS = 5
+_FETCH_URL_BLOCKED_REQUEST_HEADERS = {
+    "authorization",
+    "cookie",
+    "proxy-authorization",
 }
 
 
@@ -179,25 +189,70 @@ def build_local_tool_registry(allowed_tools: list[str] | None = None) -> ToolReg
     ) -> dict[str, Any]:
         _ = context
         url = str(arguments.get("url", "")).strip()
-        timeout = float(arguments.get("timeout_seconds", 10.0))
         if not url:
             raise HTTPException(status_code=400, detail="fetch_url requires a url")
+        method = str(arguments.get("method", "GET")).strip().upper()
+        if method not in {"GET", "HEAD"}:
+            raise HTTPException(status_code=400, detail="fetch_url method must be GET or HEAD")
+        timeout = _fetch_url_timeout(arguments.get("timeout_seconds", 10.0))
+        max_bytes = _fetch_url_max_bytes(arguments.get("max_bytes", _FETCH_URL_DEFAULT_MAX_BYTES))
+        follow_redirects = bool(arguments.get("follow_redirects", True))
+        headers = _fetch_url_headers(arguments.get("headers", {}))
+        _validate_fetch_url_target(url)
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                response = await client.get(url)
-                response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise HTTPException(
-                status_code=502, detail=f"fetch_url failed with status {exc.response.status_code}"
-            ) from exc
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                current_url = url
+                for redirect_count in range(_FETCH_URL_MAX_REDIRECTS + 1):
+                    async with client.stream(method, current_url, headers=headers) as response:
+                        if (
+                            follow_redirects
+                            and response.status_code in {301, 302, 303, 307, 308}
+                            and response.headers.get("location")
+                        ):
+                            if redirect_count >= _FETCH_URL_MAX_REDIRECTS:
+                                raise HTTPException(
+                                    status_code=502,
+                                    detail="fetch_url exceeded maximum redirects",
+                                )
+                            current_url = str(
+                                httpx.URL(str(response.url)).join(response.headers["location"])
+                            )
+                            _validate_fetch_url_target(current_url)
+                            if response.status_code == 303:
+                                method = "GET"
+                            continue
+                        body = bytearray()
+                        truncated = False
+                        async for chunk in response.aiter_bytes():
+                            remaining = max_bytes - len(body)
+                            if remaining <= 0:
+                                truncated = True
+                                break
+                            body.extend(chunk[:remaining])
+                            if len(chunk) > remaining:
+                                truncated = True
+                                break
+                        break
+                else:  # pragma: no cover - defensive loop boundary
+                    raise HTTPException(status_code=502, detail="fetch_url exceeded maximum redirects")
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=f"fetch_url request failed: {exc}") from exc
         content_type = response.headers.get("content-type", "")
+        text = _decode_fetch_url_body(bytes(body), response)
         return {
             "url": str(response.url),
+            "final_url": str(response.url),
             "status_code": response.status_code,
+            "status": response.status_code,
             "content_type": content_type,
-            "text": response.text,
+            "headers": dict(response.headers),
+            "text": text,
+            "body": text,
+            "truncated": truncated,
         }
 
     register_local_tool(
@@ -207,7 +262,18 @@ def build_local_tool_registry(allowed_tools: list[str] | None = None) -> ToolReg
             "type": "object",
             "properties": {
                 "url": {"type": "string"},
+                "method": {"type": "string", "enum": ["GET", "HEAD"]},
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
                 "timeout_seconds": {"type": "number", "minimum": 0.1},
+                "max_bytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": _FETCH_URL_MAX_BYTES_LIMIT,
+                },
+                "follow_redirects": {"type": "boolean"},
             },
             "required": ["url"],
         },
@@ -385,6 +451,110 @@ def _evaluate_calculator_node(node: ast.AST) -> float | int:
             raise HTTPException(status_code=400, detail="calculator operator is not supported")
         return operator_fn(_evaluate_calculator_node(node.operand))
     raise HTTPException(status_code=400, detail="calculator expression contains unsupported syntax")
+
+
+def _fetch_url_timeout(raw_timeout: Any) -> float:
+    try:
+        timeout = float(raw_timeout)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="fetch_url timeout_seconds must be a number") from exc
+    if timeout < 0.1 or timeout > 60:
+        raise HTTPException(
+            status_code=400,
+            detail="fetch_url timeout_seconds must be between 0.1 and 60",
+        )
+    return timeout
+
+
+def _fetch_url_max_bytes(raw_max_bytes: Any) -> int:
+    if isinstance(raw_max_bytes, bool):
+        raise HTTPException(status_code=400, detail="fetch_url max_bytes must be an integer")
+    try:
+        max_bytes = int(raw_max_bytes)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="fetch_url max_bytes must be an integer") from exc
+    if max_bytes < 1 or max_bytes > _FETCH_URL_MAX_BYTES_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"fetch_url max_bytes must be between 1 and {_FETCH_URL_MAX_BYTES_LIMIT}",
+        )
+    return max_bytes
+
+
+def _fetch_url_headers(raw_headers: Any) -> dict[str, str]:
+    if raw_headers is None:
+        return {}
+    if not isinstance(raw_headers, dict):
+        raise HTTPException(status_code=400, detail="fetch_url headers must be an object")
+    headers: dict[str, str] = {}
+    for raw_name, raw_value in raw_headers.items():
+        name = str(raw_name).strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="fetch_url header names must be non-empty")
+        if name.lower() in _FETCH_URL_BLOCKED_REQUEST_HEADERS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"fetch_url header '{name}' is not allowed",
+            )
+        if not isinstance(raw_value, str):
+            raise HTTPException(
+                status_code=400,
+                detail=f"fetch_url header '{name}' value must be a string",
+            )
+        headers[name] = raw_value
+    return headers
+
+
+def _validate_fetch_url_target(raw_url: str) -> None:
+    try:
+        url = httpx.URL(raw_url)
+    except httpx.InvalidURL as exc:
+        raise HTTPException(status_code=400, detail="fetch_url url is invalid") from exc
+    if url.scheme not in {"http", "https"}:
+        raise HTTPException(status_code=400, detail="fetch_url only supports http and https URLs")
+    if not url.host:
+        raise HTTPException(status_code=400, detail="fetch_url requires a URL host")
+    host = url.host.strip("[]")
+    if _is_blocked_fetch_host(host):
+        raise HTTPException(status_code=400, detail="fetch_url cannot access private network hosts")
+
+
+def _is_blocked_fetch_host(host: str) -> bool:
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise HTTPException(status_code=400, detail=f"fetch_url could not resolve host '{host}'") from exc
+        addresses = []
+        for info in infos:
+            sockaddr = info[4]
+            if not sockaddr:
+                continue
+            try:
+                addresses.append(ipaddress.ip_address(sockaddr[0]))
+            except ValueError:
+                continue
+    return any(
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_unspecified
+        or address.is_reserved
+        for address in addresses
+    )
+
+
+def _decode_fetch_url_body(body: bytes, response: httpx.Response) -> str:
+    if not body:
+        return ""
+    encoding = response.encoding or "utf-8"
+    try:
+        return body.decode(encoding, errors="replace")
+    except LookupError:
+        return body.decode("utf-8", errors="replace")
 
 
 def _execute_retrieve_knowledge(

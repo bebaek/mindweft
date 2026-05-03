@@ -69,10 +69,27 @@ def test_calculator_tool_rejects_unsupported_syntax() -> None:
 
 
 def test_fetch_url_tool_returns_response_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeStream:
+        def __init__(self, response: httpx.Response) -> None:
+            self.response = response
+
+        async def __aenter__(self) -> httpx.Response:
+            return self.response
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
     class FakeAsyncClient:
-        def __init__(self, *, timeout: float, follow_redirects: bool) -> None:
+        def __init__(
+            self,
+            *,
+            timeout: float,
+            follow_redirects: bool,
+            trust_env: bool,
+        ) -> None:
             assert timeout == 2.5
-            assert follow_redirects is True
+            assert follow_redirects is False
+            assert trust_env is False
 
         async def __aenter__(self) -> "FakeAsyncClient":
             return self
@@ -80,28 +97,153 @@ def test_fetch_url_tool_returns_response_text(monkeypatch: pytest.MonkeyPatch) -
         async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
             return None
 
-        async def get(self, url: str) -> httpx.Response:
+        def stream(
+            self, method: str, url: str, *, headers: dict[str, str]
+        ) -> FakeStream:
+            assert method == "GET"
+            assert headers == {"accept": "text/plain"}
             request = httpx.Request("GET", url)
-            return httpx.Response(
-                200,
-                request=request,
-                text="hello from url",
-                headers={"content-type": "text/plain; charset=utf-8"},
+            return FakeStream(
+                httpx.Response(
+                    200,
+                    request=request,
+                    text="hello from url",
+                    headers={"content-type": "text/plain; charset=utf-8"},
+                )
             )
 
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("app.tools._is_blocked_fetch_host", lambda host: False)
     registry = build_local_tool_registry()
 
     result = asyncio.run(
-        registry.execute("fetch_url", {"url": "https://example.com", "timeout_seconds": 2.5})
+        registry.execute(
+            "fetch_url",
+            {
+                "url": "https://example.com",
+                "timeout_seconds": 2.5,
+                "headers": {"accept": "text/plain"},
+            },
+        )
     )
 
-    assert result == {
-        "url": "https://example.com",
-        "status_code": 200,
-        "content_type": "text/plain; charset=utf-8",
-        "text": "hello from url",
-    }
+    assert result["url"] == "https://example.com"
+    assert result["final_url"] == "https://example.com"
+    assert result["status_code"] == 200
+    assert result["status"] == 200
+    assert result["content_type"] == "text/plain; charset=utf-8"
+    assert result["headers"]["content-type"] == "text/plain; charset=utf-8"
+    assert result["text"] == "hello from url"
+    assert result["body"] == "hello from url"
+    assert result["truncated"] is False
+
+
+def test_fetch_url_tool_truncates_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeStream:
+        async def __aenter__(self) -> httpx.Response:
+            request = httpx.Request("GET", "https://example.com")
+            return httpx.Response(200, request=request, content=b"abcdef")
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        def stream(self, method: str, url: str, *, headers: dict[str, str]) -> FakeStream:
+            return FakeStream()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("app.tools._is_blocked_fetch_host", lambda host: False)
+    registry = build_local_tool_registry()
+
+    result = asyncio.run(
+        registry.execute("fetch_url", {"url": "https://example.com", "max_bytes": 3})
+    )
+
+    assert result["text"] == "abc"
+    assert result["truncated"] is True
+
+
+def test_fetch_url_tool_blocks_private_redirect_before_following(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    class FakeStream:
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+        async def __aenter__(self) -> httpx.Response:
+            requested_urls.append(self.url)
+            request = httpx.Request("GET", self.url)
+            return httpx.Response(
+                302,
+                request=request,
+                headers={"location": "http://127.0.0.1/admin"},
+            )
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        def stream(self, method: str, url: str, *, headers: dict[str, str]) -> FakeStream:
+            return FakeStream(url)
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        "app.tools._is_blocked_fetch_host",
+        lambda host: host == "127.0.0.1",
+    )
+    registry = build_local_tool_registry()
+
+    with pytest.raises(HTTPException, match="cannot access private network hosts"):
+        asyncio.run(registry.execute("fetch_url", {"url": "https://example.com"}))
+
+    assert requested_urls == ["https://example.com"]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"url": "file:///etc/passwd"}, "only supports http and https"),
+        ({"url": "https://127.0.0.1"}, "cannot access private network hosts"),
+        ({"url": "https://example.com", "method": "POST"}, "method must be GET or HEAD"),
+        (
+            {"url": "https://example.com", "headers": {"authorization": "Bearer token"}},
+            "is not allowed",
+        ),
+    ],
+)
+def test_fetch_url_tool_rejects_unsafe_arguments(
+    arguments: dict[str, object],
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.tools._is_blocked_fetch_host",
+        lambda host: host == "127.0.0.1",
+    )
+    registry = build_local_tool_registry()
+
+    with pytest.raises(HTTPException, match=message):
+        asyncio.run(registry.execute("fetch_url", arguments))
 
 
 def test_tool_execution_logs_start_and_success(caplog: pytest.LogCaptureFixture) -> None:
