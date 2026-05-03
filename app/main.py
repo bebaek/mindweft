@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -49,6 +50,7 @@ load_environment()
 install_log_redaction()
 configure_logging()
 
+logger = logging.getLogger(__name__)
 WEB_CLIENT_DIR = Path(__file__).resolve().parent / "static" / "web"
 
 
@@ -64,9 +66,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        _ = app
         if mcp_manager is not None:
             await mcp_manager.start()
+        _log_available_internal_tools(app.state.execution_resolver)
         try:
             yield
         finally:
@@ -229,6 +231,29 @@ def create_app(
         request.app.state.store.delete_thread(principal.tenant_id, thread_id)
 
     return app
+
+
+def _log_available_internal_tools(execution_resolver: TenantExecutionResolver) -> None:
+    try:
+        description = execution_resolver.describe()
+    except Exception as exc:
+        logger.warning(
+            "available_internal_tools.unavailable error_type=%s detail=%s",
+            type(exc).__name__,
+            exc,
+        )
+        return
+
+    local_tools = description.get("local_tools", [])
+    if not isinstance(local_tools, list):
+        local_tools = []
+    tenant_id = description.get("tenant_id")
+    logger.info(
+        "available_internal_tools tenant_id=%s tools=%s count=%s",
+        tenant_id,
+        sorted(str(tool) for tool in local_tools),
+        len(local_tools),
+    )
 
 
 app = create_app()

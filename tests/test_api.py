@@ -1,4 +1,5 @@
 import json
+import logging
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -96,6 +97,22 @@ def test_web_client_static_files_are_served() -> None:
     assert response.status_code == 200
     assert "Minigent Web Client" in response.text
     assert "./app.js" in response.text
+
+
+def test_app_startup_logs_available_internal_tools(caplog: pytest.LogCaptureFixture) -> None:
+    app = create_app(
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=build_local_tool_registry(allowed_tools=["echo", "current_time"]),
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.main"):
+        with TestClient(app) as client:
+            assert client.get("/health").status_code == 200
+
+    assert (
+        "available_internal_tools tenant_id=* tools=['current_time', 'echo'] count=2"
+        in caplog.text
+    )
 
 
 def test_run_endpoint_handles_tool_call_flow() -> None:
