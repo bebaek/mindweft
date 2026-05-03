@@ -169,8 +169,14 @@ textarea:focus {
 
 .message.assistant,
 .message.tool,
-.message.system {
+.message.system,
+.message.notice {
   align-self: flex-start;
+}
+
+.message.notice {
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  color: var(--muted);
 }
 
 .role {

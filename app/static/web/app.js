@@ -115,6 +115,14 @@ async function refreshMessages() {
     renderMessages(messages);
     setStatus(`Thread ${state.threadId}`);
   } catch (error) {
+    if (error.status === 404) {
+      state.threadId = "";
+      saveState();
+      renderMessages([]);
+      appendNotice("Previous thread was no longer available. Started a fresh session.");
+      setStatus("Ready");
+      return;
+    }
     renderMessages([]);
     setStatus(error.message, true);
   }
@@ -183,7 +191,9 @@ async function requestJson(path, options = {}) {
 
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(`${response.status} ${detail || response.statusText}`);
+    const error = new Error(`${response.status} ${detail || response.statusText}`);
+    error.status = response.status;
+    throw error;
   }
 
   if (response.status === 204) {
@@ -206,14 +216,17 @@ function authHeaders() {
 
 function renderMessages(messages) {
   elements.messages.replaceChildren();
-  if (messages.length === 0) {
+  const visibleMessages = messages.filter((message) =>
+    ["user", "assistant"].includes(message.role || "")
+  );
+  if (visibleMessages.length === 0) {
     const empty = document.createElement("article");
     empty.className = "message assistant";
     empty.textContent = "Start a thread from this browser.";
     elements.messages.append(empty);
     return;
   }
-  for (const message of messages) {
+  for (const message of visibleMessages) {
     appendMessage(message);
   }
 }
@@ -234,6 +247,21 @@ function appendMessage(message) {
   const content = document.createElement("div");
   content.textContent = message.content || "";
   item.append(role, content);
+  elements.messages.append(item);
+  elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
+function appendNotice(content) {
+  if (
+    elements.messages.children.length === 1 &&
+    elements.messages.firstElementChild.textContent === "Start a thread from this browser."
+  ) {
+    elements.messages.replaceChildren();
+  }
+
+  const item = document.createElement("article");
+  item.className = "message notice";
+  item.textContent = content;
   elements.messages.append(item);
   elements.messages.scrollTop = elements.messages.scrollHeight;
 }
