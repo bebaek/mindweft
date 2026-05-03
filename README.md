@@ -24,6 +24,30 @@ uv sync --dev
 uv run uvicorn app.main:app --reload
 ```
 
+## Dev Web Client
+
+The API also serves a small static browser client at `/web` for quick manual testing from
+desktop and mobile browsers. It has no frontend build step or extra dependencies.
+
+For same-machine testing, start the API and open:
+
+```text
+http://127.0.0.1:8000/web/
+```
+
+For testing from another device on the same trusted network, bind Uvicorn to all
+interfaces and visit the host machine's LAN address:
+
+```bash
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+The browser client stores its base URL, auth settings, and current thread ID in browser
+`localStorage`. If no bearer token is configured, it sends the same development
+principal headers used by the CLI examples, so the default `dev-headers` auth mode works
+for local testing. Use `static-tokens` or `jwt` before exposing the API outside a trusted
+local network.
+
 ## Docker Compose Deployment
 
 This repo now includes a production-oriented [`Dockerfile`](/Users/burm/code/minigent/Dockerfile)

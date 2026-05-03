@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
 
 from app.admin_api import (
     admin_encryption_key_from_env,
@@ -21,8 +23,8 @@ from app.execution import (
     TenantExecutionResolver,
     build_execution_resolver_from_env,
     get_capability_profile,
-    get_skill_configs,
     get_skill_config,
+    get_skill_configs,
     resolve_tenant_config_source,
 )
 from app.llm import LLMAdapter, build_llm_adapter_from_env
@@ -46,6 +48,8 @@ load_environment()
 # Redact secrets in third-party logs like httpx request lines before any handler formats the record.
 install_log_redaction()
 configure_logging()
+
+WEB_CLIENT_DIR = Path(__file__).resolve().parent / "static" / "web"
 
 
 def create_app(
@@ -131,6 +135,8 @@ def create_app(
         execution_resolver=execution_resolver,
     )
     app.include_router(build_admin_router())
+    if WEB_CLIENT_DIR.exists():
+        app.mount("/web", StaticFiles(directory=WEB_CLIENT_DIR, html=True), name="web")
 
     @app.get("/health")
     async def health() -> dict[str, str]:

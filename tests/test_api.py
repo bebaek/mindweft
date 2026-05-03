@@ -86,6 +86,18 @@ def test_thread_lifecycle_endpoints() -> None:
     assert missing_response.status_code == 404
 
 
+def test_web_client_static_files_are_served() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    response = client.get("/web/")
+
+    assert response.status_code == 200
+    assert "Minigent Web Client" in response.text
+    assert "./app.js" in response.text
+
+
 def test_run_endpoint_handles_tool_call_flow() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())

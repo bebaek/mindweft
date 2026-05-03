@@ -1,0 +1,249 @@
+const storageKey = "minigent.webClient.v1";
+
+const defaults = {
+  baseUrl: window.location.origin,
+  apiToken: "",
+  userId: "demo-user",
+  tenantId: "demo-tenant",
+  skill: "",
+  capabilityProfile: "",
+  threadId: "",
+};
+
+const state = { ...defaults, ...loadState() };
+
+const elements = {
+  status: document.querySelector("#status"),
+  settingsButton: document.querySelector("#settings-button"),
+  newThreadButton: document.querySelector("#new-thread-button"),
+  settingsPanel: document.querySelector("#settings-panel"),
+  baseUrl: document.querySelector("#base-url"),
+  apiToken: document.querySelector("#api-token"),
+  userId: document.querySelector("#user-id"),
+  tenantId: document.querySelector("#tenant-id"),
+  skill: document.querySelector("#skill"),
+  capabilityProfile: document.querySelector("#capability-profile"),
+  messages: document.querySelector("#messages"),
+  composer: document.querySelector("#composer"),
+  messageInput: document.querySelector("#message-input"),
+  sendButton: document.querySelector("#send-button"),
+};
+
+hydrateForm();
+renderMessages([]);
+setStatus(state.threadId ? `Thread ${state.threadId}` : "Ready");
+if (state.threadId) {
+  refreshMessages();
+}
+
+elements.settingsButton.addEventListener("click", () => {
+  elements.settingsPanel.classList.toggle("open");
+});
+
+elements.newThreadButton.addEventListener("click", () => {
+  state.threadId = "";
+  saveFormState();
+  renderMessages([]);
+  setStatus("Ready");
+  elements.messageInput.focus();
+});
+
+for (const input of [
+  elements.baseUrl,
+  elements.apiToken,
+  elements.userId,
+  elements.tenantId,
+  elements.skill,
+  elements.capabilityProfile,
+]) {
+  input.addEventListener("change", saveFormState);
+}
+
+elements.messageInput.addEventListener("input", () => {
+  elements.messageInput.style.height = "auto";
+  elements.messageInput.style.height = `${elements.messageInput.scrollHeight}px`;
+});
+
+elements.messageInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    elements.composer.requestSubmit();
+  }
+});
+
+elements.composer.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const content = elements.messageInput.value.trim();
+  if (!content) {
+    return;
+  }
+
+  saveFormState();
+  setBusy(true);
+  setStatus("Sending");
+
+  try {
+    const threadId = await ensureThread();
+    appendMessage({ role: "user", content });
+    elements.messageInput.value = "";
+    elements.messageInput.style.height = "auto";
+
+    await requestJson(`/threads/${encodeURIComponent(threadId)}/messages`, {
+      method: "POST",
+      body: { content },
+    });
+
+    setStatus("Running");
+    const run = await requestJson(`/threads/${encodeURIComponent(threadId)}/run`, {
+      method: "POST",
+    });
+    appendMessage({ role: "assistant", content: run.reply || "" });
+    setStatus(`Thread ${threadId}`);
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    setBusy(false);
+    elements.messageInput.focus();
+  }
+});
+
+async function refreshMessages() {
+  saveFormState();
+  setStatus("Loading");
+  try {
+    const messages = await requestJson(`/threads/${encodeURIComponent(state.threadId)}/messages`);
+    renderMessages(messages);
+    setStatus(`Thread ${state.threadId}`);
+  } catch (error) {
+    renderMessages([]);
+    setStatus(error.message, true);
+  }
+}
+
+function hydrateForm() {
+  elements.baseUrl.value = state.baseUrl;
+  elements.apiToken.value = state.apiToken;
+  elements.userId.value = state.userId;
+  elements.tenantId.value = state.tenantId;
+  elements.skill.value = state.skill;
+  elements.capabilityProfile.value = state.capabilityProfile;
+}
+
+function saveFormState() {
+  state.baseUrl = elements.baseUrl.value.trim().replace(/\/+$/, "") || defaults.baseUrl;
+  state.apiToken = elements.apiToken.value.trim();
+  state.userId = elements.userId.value.trim() || defaults.userId;
+  state.tenantId = elements.tenantId.value.trim() || defaults.tenantId;
+  state.skill = elements.skill.value.trim();
+  state.capabilityProfile = elements.capabilityProfile.value.trim();
+  saveState();
+}
+
+function loadState() {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(storageKey) || "{}");
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveState() {
+  window.localStorage.setItem(storageKey, JSON.stringify(state));
+}
+
+async function ensureThread() {
+  if (state.threadId) {
+    return state.threadId;
+  }
+
+  const body = {};
+  if (state.skill) {
+    body.skill_name = state.skill;
+  }
+  if (state.capabilityProfile) {
+    body.capability_profile = state.capabilityProfile;
+  }
+
+  const response = await requestJson("/threads", { method: "POST", body });
+  state.threadId = response.thread_id;
+  saveState();
+  return state.threadId;
+}
+
+async function requestJson(path, options = {}) {
+  const response = await fetch(`${state.baseUrl}${path}`, {
+    method: options.method || "GET",
+    headers: {
+      ...authHeaders(),
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`${response.status} ${detail || response.statusText}`);
+  }
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  return response.json();
+}
+
+function authHeaders() {
+  if (state.apiToken) {
+    return { Authorization: `Bearer ${state.apiToken}` };
+  }
+  return {
+    "X-Minigent-User-Id": state.userId,
+    "X-Minigent-Tenant-Id": state.tenantId,
+    "X-Minigent-Admin": "false",
+  };
+}
+
+function renderMessages(messages) {
+  elements.messages.replaceChildren();
+  if (messages.length === 0) {
+    const empty = document.createElement("article");
+    empty.className = "message assistant";
+    empty.textContent = "Start a thread from this browser.";
+    elements.messages.append(empty);
+    return;
+  }
+  for (const message of messages) {
+    appendMessage(message);
+  }
+}
+
+function appendMessage(message) {
+  if (
+    elements.messages.children.length === 1 &&
+    elements.messages.firstElementChild.textContent === "Start a thread from this browser."
+  ) {
+    elements.messages.replaceChildren();
+  }
+
+  const item = document.createElement("article");
+  item.className = `message ${message.role || "assistant"}`;
+  const role = document.createElement("span");
+  role.className = "role";
+  role.textContent = message.role || "assistant";
+  const content = document.createElement("div");
+  content.textContent = message.content || "";
+  item.append(role, content);
+  elements.messages.append(item);
+  elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
+function setBusy(isBusy) {
+  elements.sendButton.disabled = isBusy;
+  elements.newThreadButton.disabled = isBusy;
+}
+
+function setStatus(message, isError = false) {
+  elements.status.textContent = message;
+  elements.status.classList.toggle("error", isError);
+}
