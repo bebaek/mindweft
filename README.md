@@ -909,6 +909,30 @@ The service retains MCP servers that fail discovery, reports them as `unavailabl
 succeeds, the discovered tools become available to future runs and `/config` reports the
 server as `connected`.
 
+### Stdio MCP Bridge
+
+Many local MCP servers expose the MCP `stdio` transport instead of HTTP. Minigent includes
+a sidecar bridge that exposes one stdio MCP server as a local HTTP MCP endpoint:
+
+```bash
+minigent-mcp-stdio-bridge \
+  --name filesystem \
+  --host 127.0.0.1 \
+  --port 8765 \
+  -- npx -y @modelcontextprotocol/server-filesystem /tmp
+```
+
+Then point Minigent at the bridge like any other HTTP MCP server:
+
+```dotenv
+MINIGENT_MCP_SERVERS=[{"name":"filesystem","url":"http://127.0.0.1:8765/mcp","headers":{}}]
+```
+
+The bridge binds to `127.0.0.1` by default and accepts the stdio server command as an
+argv array after `--`; it does not run commands through a shell. The v1 bridge starts one
+stdio MCP server per bridge process and supports the same tools-only MCP scope Minigent
+uses today: `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`.
+
 ## Observability
 
 Logging defaults to plaintext. Set `MINIGENT_LOG_FORMAT=json` for structured logs.

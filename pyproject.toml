@@ -19,6 +19,7 @@ dependencies = [
 
 [project.scripts]
 minigent = "app.cli:main"
+minigent-mcp-stdio-bridge = "app.mcp_stdio_bridge:main"
 minigent-client = "minigent_client.cli:main"
 
 [project.optional-dependencies]
