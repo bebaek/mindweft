@@ -99,6 +99,14 @@ def test_web_client_static_files_are_served() -> None:
     assert "./app.js" in response.text
 
 
+def test_create_app_uses_runtime_max_iterations_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("MINIGENT_MAX_ITERATIONS", "24")
+
+    app = create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+
+    assert app.state.runtime._max_iterations == 24
+
+
 def test_app_startup_logs_available_internal_tools(caplog: pytest.LogCaptureFixture) -> None:
     app = create_app(
         llm_adapter=MockLLMAdapter(),

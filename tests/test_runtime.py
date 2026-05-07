@@ -22,7 +22,12 @@ from app.models import (
     ToolCall,
     ToolSpec,
 )
-from app.runtime import RUNTIME_SYSTEM_PROMPT, AgentRuntime
+from app.runtime import (
+    DEFAULT_MAX_ITERATIONS,
+    RUNTIME_SYSTEM_PROMPT,
+    AgentRuntime,
+    max_iterations_from_env,
+)
 from app.store import InMemoryThreadStore
 from app.tools import build_local_tool_registry
 
@@ -555,6 +560,30 @@ def test_runtime_marks_thread_error_when_max_iterations_exceeded() -> None:
         raise AssertionError("Expected HTTPException")
 
     assert store._threads[thread.thread_id].status == ThreadStatus.ERROR
+
+
+def test_max_iterations_from_env_uses_practical_default(monkeypatch) -> None:
+    monkeypatch.delenv("MINIGENT_MAX_ITERATIONS", raising=False)
+
+    assert max_iterations_from_env() == DEFAULT_MAX_ITERATIONS
+    assert DEFAULT_MAX_ITERATIONS == 16
+
+
+def test_max_iterations_from_env_accepts_positive_integer(monkeypatch) -> None:
+    monkeypatch.setenv("MINIGENT_MAX_ITERATIONS", "24")
+
+    assert max_iterations_from_env() == 24
+
+
+def test_max_iterations_from_env_rejects_invalid_value(monkeypatch) -> None:
+    monkeypatch.setenv("MINIGENT_MAX_ITERATIONS", "0")
+
+    try:
+        max_iterations_from_env()
+    except RuntimeError as exc:
+        assert str(exc) == "MINIGENT_MAX_ITERATIONS must be a positive integer"
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("Expected RuntimeError")
 
 
 def test_runtime_rejects_concurrent_runs_for_same_thread() -> None:

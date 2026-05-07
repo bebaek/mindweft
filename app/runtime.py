@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import textwrap
 from typing import Any
 
@@ -26,6 +27,21 @@ RUNTIME_SYSTEM_PROMPT = (
     "Do not claim a live status, current availability, or real-time confirmation unless a tool result directly confirms it. "
     "If tool results fail, are indirect, or are insufficient, say that you could not directly verify the answer and explain what you were able to infer."
 )
+DEFAULT_MAX_ITERATIONS = 16
+MAX_ITERATIONS_ENV = "MINIGENT_MAX_ITERATIONS"
+
+
+def max_iterations_from_env() -> int:
+    raw = os.getenv(MAX_ITERATIONS_ENV, "").strip()
+    if not raw:
+        return DEFAULT_MAX_ITERATIONS
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{MAX_ITERATIONS_ENV} must be a positive integer") from exc
+    if value < 1:
+        raise RuntimeError(f"{MAX_ITERATIONS_ENV} must be a positive integer")
+    return value
 
 
 class AgentRuntime:
@@ -35,7 +51,7 @@ class AgentRuntime:
         execution_resolver: TenantExecutionResolver | None = None,
         llm_adapter: LLMAdapter | None = None,
         tool_registry: ToolRegistry | None = None,
-        max_iterations: int = 8,
+        max_iterations: int = DEFAULT_MAX_ITERATIONS,
         recent_message_limit: int = 8,
         min_recent_message_limit: int = 4,
         max_summary_chars: int = 4000,

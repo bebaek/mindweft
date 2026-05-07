@@ -740,6 +740,16 @@ X-Minigent-Admin: false
 
 Thread lifecycle endpoints require the auth material for the active mode. Threads are isolated by `tenant_id`, and cross-tenant access returns `404`.
 
+## Runtime Settings
+
+`MINIGENT_MAX_ITERATIONS` controls the maximum number of LLM loop passes for one
+`POST /threads/{thread_id}/run` call. The default is `16`.
+
+This count includes tool-call passes and the final assistant-response pass, so a run that
+uses tools can make at most one fewer tool call than the configured value. Increase it
+for deeper MCP, retrieval, or verification workflows; decrease it when you want a tighter
+runaway-loop guard.
+
 ## Tenant Execution Config
 
 The runtime config source is controlled by `MINIGENT_TENANT_CONFIG_SOURCE`:

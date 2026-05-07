@@ -41,7 +41,7 @@ from app.models import (
 )
 from app.observability import configure_logging, configure_tracing
 from app.redaction import install_log_redaction
-from app.runtime import AgentRuntime
+from app.runtime import AgentRuntime, max_iterations_from_env
 from app.store import InMemoryThreadStore
 from app.tools import ToolRegistry, build_tool_registry_from_env
 
@@ -135,6 +135,7 @@ def create_app(
     app.state.runtime = AgentRuntime(
         store=app.state.store,
         execution_resolver=execution_resolver,
+        max_iterations=max_iterations_from_env(),
     )
     app.include_router(build_admin_router())
     if WEB_CLIENT_DIR.exists():
