@@ -64,6 +64,9 @@ Then poll:
 curl -s http://127.0.0.1:8010/tasks/<task_id>
 ```
 
+Task responses include relative `links` and `artifacts` maps so clients can discover the
+status, events, cancel, and artifact URLs from the task payload.
+
 Poll parsed Codex JSON events separately:
 
 ```bash

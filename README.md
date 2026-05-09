@@ -87,7 +87,7 @@ default, parses JSONL events, and captures stdout/stderr tails separately. With 
 wrapper running, use `uv run python scripts/demo_task.py` from `codex-agent-wrapper` for
 a simple submit-and-poll demo. The demo prints `final_output` and hides Codex's
 stderr/progress log unless `--show-log` is passed. Add `--show-events` to print parsed
-JSON events.
+JSON events. Task responses include relative `links` and `artifacts` maps for discovery.
 
 ## Docker Compose Deployment
 

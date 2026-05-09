@@ -35,8 +35,39 @@ def test_task_captures_stdout_and_stderr(tmp_path: Path) -> None:
         result = _wait_for_terminal_task(client, task_id)
         assert result["status"] == "completed"
         assert result["exit_code"] == 0
+        assert result["links"] == {
+            "self": f"/tasks/{task_id}",
+            "events": f"/tasks/{task_id}/events",
+            "cancel": f"/tasks/{task_id}/cancel",
+        }
+        assert result["artifacts"] == {
+            "final_output": f"/tasks/{task_id}/artifacts/final-output",
+            "stdout_tail": f"/tasks/{task_id}/artifacts/stdout-tail",
+            "stderr_tail": f"/tasks/{task_id}/artifacts/stderr-tail",
+            "events": f"/tasks/{task_id}/artifacts/events",
+        }
         assert "stdout: hello" in result["stdout_tail"]
         assert "stderr: warning" in result["stderr_tail"]
+
+
+def test_create_task_response_includes_links_and_artifacts(tmp_path: Path) -> None:
+    fake_codex = tmp_path / "fake_codex.py"
+    fake_codex.write_text("print('ok')\n", encoding="utf-8")
+    settings = Settings(
+        codex_command=(sys.executable, str(fake_codex)),
+        allowed_workspaces=(tmp_path,),
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "hello"})
+
+        assert create_response.status_code == 200
+        body = create_response.json()
+        task_id = body["task_id"]
+        assert body["links"]["self"] == f"/tasks/{task_id}"
+        assert body["links"]["events"] == f"/tasks/{task_id}/events"
+        assert body["links"]["cancel"] == f"/tasks/{task_id}/cancel"
+        assert body["artifacts"]["final_output"] == f"/tasks/{task_id}/artifacts/final-output"
+        assert body["artifacts"]["events"] == f"/tasks/{task_id}/artifacts/events"
 
 
 def test_task_parses_jsonl_events_and_final_output(tmp_path: Path) -> None:

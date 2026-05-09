@@ -57,6 +57,8 @@ class TaskResponse(BaseModel):
     events_tail: list[dict[str, object]] = Field(default_factory=list)
     stdout_tail: str = ""
     stderr_tail: str = ""
+    links: dict[str, str] = Field(default_factory=dict)
+    artifacts: dict[str, str] = Field(default_factory=dict)
 
 
 class TaskEventsResponse(BaseModel):
@@ -133,6 +135,8 @@ class TaskRecord:
             events_tail=list(self.events),
             stdout_tail=self.stdout.text(),
             stderr_tail=self.stderr.text(),
+            links=_task_links(self.task_id),
+            artifacts=_task_artifacts(self.task_id),
         )
 
     def events_response(self, *, after: int | None = None) -> TaskEventsResponse:
@@ -288,6 +292,23 @@ def _capture_json_event(line: str, record: TaskRecord) -> None:
     final_output = _extract_final_output(indexed_event)
     if final_output is not None:
         record.final_output = final_output
+
+
+def _task_links(task_id: str) -> dict[str, str]:
+    return {
+        "self": f"/tasks/{task_id}",
+        "events": f"/tasks/{task_id}/events",
+        "cancel": f"/tasks/{task_id}/cancel",
+    }
+
+
+def _task_artifacts(task_id: str) -> dict[str, str]:
+    return {
+        "final_output": f"/tasks/{task_id}/artifacts/final-output",
+        "stdout_tail": f"/tasks/{task_id}/artifacts/stdout-tail",
+        "stderr_tail": f"/tasks/{task_id}/artifacts/stderr-tail",
+        "events": f"/tasks/{task_id}/artifacts/events",
+    }
 
 
 def _extract_final_output(event: dict[str, object]) -> str | None:
