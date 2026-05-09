@@ -80,6 +80,14 @@ class PeerAgentRegistry:
             response_label="task response",
         )
 
+    async def cancel_task(self, name: str, task_id: str) -> dict[str, Any]:
+        return await self._request_json(
+            name,
+            "POST",
+            f"/tasks/{task_id}/cancel",
+            response_label="task response",
+        )
+
     async def task_events(
         self,
         name: str,

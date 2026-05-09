@@ -107,6 +107,22 @@ def test_peer_agent_registry_fetches_task_status() -> None:
     assert response == {"task_id": "task_123", "status": "completed"}
 
 
+def test_peer_agent_registry_cancels_task() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == "http://codex-agent.test/tasks/task_123/cancel"
+        return httpx.Response(200, json={"task_id": "task_123", "status": "canceled"})
+
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(registry.cancel_task("codex", "task_123"))
+
+    assert response == {"task_id": "task_123", "status": "canceled"}
+
+
 def test_peer_agent_registry_fetches_task_events_with_after() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"

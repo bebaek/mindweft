@@ -179,6 +179,14 @@ def create_app(
     ) -> dict[str, object]:
         return await request.app.state.peer_agent_registry.task(name, task_id)
 
+    @app.post("/peer-agents/{name}/tasks/{task_id}/cancel")
+    async def cancel_peer_agent_task(
+        name: str,
+        task_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        return await request.app.state.peer_agent_registry.cancel_task(name, task_id)
+
     @app.get("/peer-agents/{name}/tasks/{task_id}/events")
     async def peer_agent_task_events(
         name: str,

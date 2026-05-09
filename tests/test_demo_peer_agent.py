@@ -115,3 +115,55 @@ def test_demo_peer_agent_returns_failure_for_failed_task(monkeypatch, capsys) ->
 
     assert exit_code == 1
     assert "status: failed" in capsys.readouterr().out
+
+
+def test_demo_peer_agent_can_cancel_after_delay(monkeypatch, capsys) -> None:
+    demo = load_demo_module()
+    task_polls = 0
+    calls: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    def fake_request_json(
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        nonlocal task_polls
+        calls.append((method, url, payload))
+        if method == "GET" and url.endswith("/health"):
+            return {"status": "ok"}
+        if method == "GET" and url.endswith("/peer-agents"):
+            return {"agents": [{"name": "codex"}]}
+        if method == "GET" and url.endswith("/agent-card"):
+            return {"name": "codex-coding-agent"}
+        if method == "POST" and url.endswith("/tasks"):
+            return {"task_id": "task_123", "status": "running"}
+        if method == "GET" and url.endswith("/tasks/task_123"):
+            task_polls += 1
+            if task_polls == 1:
+                return {"task_id": "task_123", "status": "running"}
+            return {"task_id": "task_123", "status": "canceled", "exit_code": -2}
+        if method == "POST" and url.endswith("/tasks/task_123/cancel"):
+            return {"task_id": "task_123", "status": "canceling"}
+        raise AssertionError(f"Unexpected request: {method} {url}")
+
+    monkeypatch.setattr(demo, "request_json", fake_request_json)
+    monkeypatch.setattr(demo.time, "sleep", lambda seconds: None)
+
+    exit_code = demo.main(
+        [
+            "--base-url",
+            "http://minigent.test",
+            "--cancel-after",
+            "0",
+        ]
+    )
+
+    assert exit_code == 1
+    assert (
+        "POST",
+        "http://minigent.test/peer-agents/codex/tasks/task_123/cancel",
+        None,
+    ) in calls
+    output = capsys.readouterr().out
+    assert "cancel_requested: task_123" in output
+    assert "status: canceled" in output

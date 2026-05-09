@@ -217,6 +217,33 @@ def test_peer_agent_task_proxy_endpoints() -> None:
     ]
 
 
+def test_peer_agent_cancel_task_proxy_endpoint() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == "http://codex-agent.test/tasks/task_123/cancel"
+        return httpx.Response(200, json={"task_id": "task_123", "status": "canceled"})
+
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            peer_agent_registry=registry,
+        )
+    )
+
+    cancel_response = client.post(
+        "/peer-agents/codex/tasks/task_123/cancel",
+        headers=AUTH_HEADERS,
+    )
+
+    assert cancel_response.status_code == 200
+    assert cancel_response.json() == {"task_id": "task_123", "status": "canceled"}
+
+
 def test_peer_agent_events_and_artifact_proxy_endpoints() -> None:
     requests: list[tuple[str, str]] = []
 

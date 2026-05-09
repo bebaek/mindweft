@@ -40,6 +40,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--poll-interval", type=float, default=1.0)
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument(
+        "--cancel-after",
+        type=float,
+        default=None,
+        help="Request peer task cancellation after this many seconds.",
+    )
+    parser.add_argument(
         "--show-log",
         action="store_true",
         help="Print peer stderr/progress log tail in addition to the final output.",
@@ -80,6 +86,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"submitted: {task_id}")
 
     deadline = time.monotonic() + args.timeout
+    cancel_deadline = (
+        time.monotonic() + args.cancel_after if args.cancel_after is not None else None
+    )
+    cancel_requested = False
     while time.monotonic() < deadline:
         try:
             task = request_json("GET", f"{base_url}/peer-agents/{args.peer}/tasks/{task_id}")
@@ -101,6 +111,21 @@ def main(argv: list[str] | None = None) -> int:
                     return 2
             print_result(task, events=events, show_log=args.show_log)
             return 0 if status == "completed" else 1
+        if (
+            cancel_deadline is not None
+            and not cancel_requested
+            and time.monotonic() >= cancel_deadline
+        ):
+            try:
+                task = request_json(
+                    "POST",
+                    f"{base_url}/peer-agents/{args.peer}/tasks/{task_id}/cancel",
+                )
+            except urllib.error.HTTPError as exc:
+                print_http_error(exc)
+                return 2
+            cancel_requested = True
+            print(f"cancel_requested: {task_id}")
         time.sleep(args.poll_interval)
 
     print(f"timed out waiting for {task_id}", file=sys.stderr)
