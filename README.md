@@ -1010,6 +1010,29 @@ allowed by tenant, skill, or capability-profile configuration. The tool requires
 This is explicit tool-based delegation only; Minigent does not automatically choose peer
 agents outside normal tool calling.
 
+To demo the runtime tool path with the mock LLM, start Minigent with
+`MINIGENT_ENABLE_PEER_AGENT_TOOL=true` and run:
+
+```bash
+uv run python scripts/demo_peer_agent_tool.py
+```
+
+That script creates a thread, sends a `/tool peer_agent_task ...` message, runs the
+thread, and prints the transcript so you can see the user message, assistant tool call,
+tool result, and final assistant reply.
+
+To run the Codex wrapper, Minigent, and the runtime tool demo as one local stack:
+
+```bash
+./scripts/demo_peer_agent_tool_stack.sh
+```
+
+Pass a custom peer prompt as the first argument:
+
+```bash
+./scripts/demo_peer_agent_tool_stack.sh "Summarize the API routes in this repository. Do not edit files."
+```
+
 ### Stdio MCP Bridge
 
 Many local MCP servers expose the MCP `stdio` transport instead of HTTP. Minigent includes
