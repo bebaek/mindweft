@@ -14,6 +14,7 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 
@@ -61,6 +62,11 @@ class TaskResponse(BaseModel):
 class TaskEventsResponse(BaseModel):
     task_id: str
     next_index: int
+    events: list[dict[str, object]] = Field(default_factory=list)
+
+
+class TaskEventsArtifactResponse(BaseModel):
+    task_id: str
     events: list[dict[str, object]] = Field(default_factory=list)
 
 
@@ -446,6 +452,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "create_task": "POST /tasks",
                 "get_task": "GET /tasks/{task_id}",
                 "get_task_events": "GET /tasks/{task_id}/events",
+                "get_final_output_artifact": "GET /tasks/{task_id}/artifacts/final-output",
+                "get_stdout_tail_artifact": "GET /tasks/{task_id}/artifacts/stdout-tail",
+                "get_stderr_tail_artifact": "GET /tasks/{task_id}/artifacts/stderr-tail",
+                "get_events_artifact": "GET /tasks/{task_id}/artifacts/events",
                 "cancel_task": "POST /tasks/{task_id}/cancel",
             },
             side_effects=["process_execution", "filesystem_read"],
@@ -475,6 +485,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> TaskEventsResponse:
         record = await store.get(task_id)
         return record.events_response(after=after)
+
+    @app.get("/tasks/{task_id}/artifacts/final-output", response_class=PlainTextResponse)
+    async def get_final_output_artifact(
+        task_id: str,
+        store: Annotated[TaskStore, Depends(get_store)],
+    ) -> str:
+        record = await store.get(task_id)
+        return record.final_output
+
+    @app.get("/tasks/{task_id}/artifacts/stdout-tail", response_class=PlainTextResponse)
+    async def get_stdout_tail_artifact(
+        task_id: str,
+        store: Annotated[TaskStore, Depends(get_store)],
+    ) -> str:
+        record = await store.get(task_id)
+        return record.stdout.text()
+
+    @app.get("/tasks/{task_id}/artifacts/stderr-tail", response_class=PlainTextResponse)
+    async def get_stderr_tail_artifact(
+        task_id: str,
+        store: Annotated[TaskStore, Depends(get_store)],
+    ) -> str:
+        record = await store.get(task_id)
+        return record.stderr.text()
+
+    @app.get("/tasks/{task_id}/artifacts/events", response_model=TaskEventsArtifactResponse)
+    async def get_events_artifact(
+        task_id: str,
+        store: Annotated[TaskStore, Depends(get_store)],
+    ) -> TaskEventsArtifactResponse:
+        record = await store.get(task_id)
+        return TaskEventsArtifactResponse(task_id=task_id, events=record.all_events)
 
     @app.post("/tasks/{task_id}/cancel", response_model=TaskResponse)
     async def cancel_task(

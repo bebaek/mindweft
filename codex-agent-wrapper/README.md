@@ -43,6 +43,10 @@ GET  /agent-card
 POST /tasks
 GET  /tasks/{task_id}
 GET  /tasks/{task_id}/events
+GET  /tasks/{task_id}/artifacts/final-output
+GET  /tasks/{task_id}/artifacts/stdout-tail
+GET  /tasks/{task_id}/artifacts/stderr-tail
+GET  /tasks/{task_id}/artifacts/events
 POST /tasks/{task_id}/cancel
 ```
 
@@ -67,6 +71,15 @@ curl -s http://127.0.0.1:8010/tasks/<task_id>/events
 curl -s 'http://127.0.0.1:8010/tasks/<task_id>/events?after=3'
 ```
 
+Fetch read-only task artifacts:
+
+```bash
+curl -s http://127.0.0.1:8010/tasks/<task_id>/artifacts/final-output
+curl -s http://127.0.0.1:8010/tasks/<task_id>/artifacts/stdout-tail
+curl -s http://127.0.0.1:8010/tasks/<task_id>/artifacts/stderr-tail
+curl -s http://127.0.0.1:8010/tasks/<task_id>/artifacts/events
+```
+
 Or run the scripted demo against the already-running wrapper:
 
 ```bash
@@ -87,6 +100,9 @@ keeps `stdout_tail` as a raw fallback/debug stream. Codex writes progress, comma
 transcripts, and other execution logs to stderr; the wrapper captures that stream as
 `stderr_tail`, but it is not necessarily error output. Task failure is determined by
 `status` and `exit_code`.
+
+The stdout/stderr artifacts are currently bounded tails, not durable full transcripts.
+The events artifact returns the parsed in-memory event list for the task.
 
 The demo script prints `final_output` and hides parsed events and the Codex stderr log by
 default. Add `--show-events` to fetch `/tasks/{task_id}/events` and print parsed events,

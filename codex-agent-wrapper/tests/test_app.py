@@ -114,6 +114,52 @@ def test_task_events_endpoint_returns_404_for_unknown_task() -> None:
         assert response.status_code == 404
 
 
+def test_task_artifact_endpoints_return_outputs_and_events(tmp_path: Path) -> None:
+    fake_codex = tmp_path / "fake_codex.py"
+    fake_codex.write_text(
+        "import json\n"
+        "import sys\n"
+        "print(json.dumps({'type': 'message.completed', 'message': {'role': 'assistant', 'content': 'artifact final'}}))\n"
+        "print('artifact stderr', file=sys.stderr)\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        codex_command=(sys.executable, str(fake_codex)),
+        allowed_workspaces=(tmp_path,),
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "hello"})
+
+        assert create_response.status_code == 200
+        task_id = create_response.json()["task_id"]
+        _wait_for_terminal_task(client, task_id)
+
+        final_output = client.get(f"/tasks/{task_id}/artifacts/final-output")
+        assert final_output.status_code == 200
+        assert final_output.text == "artifact final"
+        assert final_output.headers["content-type"].startswith("text/plain")
+
+        stdout_tail = client.get(f"/tasks/{task_id}/artifacts/stdout-tail")
+        assert stdout_tail.status_code == 200
+        assert "message.completed" in stdout_tail.text
+
+        stderr_tail = client.get(f"/tasks/{task_id}/artifacts/stderr-tail")
+        assert stderr_tail.status_code == 200
+        assert stderr_tail.text.strip() == "artifact stderr"
+
+        events = client.get(f"/tasks/{task_id}/artifacts/events")
+        assert events.status_code == 200
+        assert events.json()["task_id"] == task_id
+        assert events.json()["events"][0]["index"] == 0
+
+
+def test_task_artifact_endpoint_returns_404_for_unknown_task() -> None:
+    with TestClient(create_app(Settings(allowed_workspaces=(Path.cwd(),)))) as client:
+        response = client.get("/tasks/missing/artifacts/final-output")
+
+        assert response.status_code == 404
+
+
 def test_task_rejects_workspace_outside_allowlist(tmp_path: Path) -> None:
     allowed = tmp_path / "allowed"
     denied = tmp_path / "denied"
