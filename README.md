@@ -84,7 +84,8 @@ The POC supports `GET /agent-card`, `POST /tasks`, `GET /tasks/{task_id}`, and
 `POST /tasks/{task_id}/cancel`. It runs `codex exec` in read-only mode by
 default and captures stdout/stderr tails separately. With the wrapper running, use
 `uv run python scripts/demo_task.py` from `codex-agent-wrapper` for a simple submit-and-poll
-demo.
+demo. The demo prints stdout as `final_output` and hides Codex's stderr/progress log
+unless `--show-log` is passed.
 
 ## Docker Compose Deployment
 

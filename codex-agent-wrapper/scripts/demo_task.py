@@ -22,6 +22,11 @@ def main() -> int:
     )
     parser.add_argument("--poll-interval", type=float, default=1.0)
     parser.add_argument("--timeout", type=float, default=180.0)
+    parser.add_argument(
+        "--show-log",
+        action="store_true",
+        help="Print Codex stderr/progress log tail in addition to the final output.",
+    )
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/")
@@ -46,7 +51,7 @@ def main() -> int:
         status = str(task["status"])
         print(f"status: {status}")
         if status in TERMINAL_STATUSES:
-            _print_result(task)
+            _print_result(task, show_log=args.show_log)
             return 0 if status == "completed" else 1
         time.sleep(args.poll_interval)
 
@@ -65,16 +70,18 @@ def _request_json(method: str, url: str, payload: dict[str, Any] | None = None) 
         return json.loads(response.read().decode("utf-8"))
 
 
-def _print_result(task: dict[str, Any]) -> None:
+def _print_result(task: dict[str, Any], *, show_log: bool) -> None:
     print(f"exit_code: {task.get('exit_code')}")
     stdout_tail = str(task.get("stdout_tail") or "").strip()
     stderr_tail = str(task.get("stderr_tail") or "").strip()
     if stdout_tail:
-        print("\nstdout_tail:")
+        print("\nfinal_output:")
         print(stdout_tail)
-    if stderr_tail:
-        print("\nstderr_tail:")
+    if show_log and stderr_tail:
+        print("\ncodex_log_tail:")
         print(stderr_tail)
+    elif stderr_tail:
+        print("\ncodex_log_tail: hidden; rerun with --show-log to print it")
 
 
 if __name__ == "__main__":

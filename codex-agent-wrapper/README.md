@@ -71,6 +71,12 @@ uv run python scripts/demo_task.py \
   --prompt "List the main runtime components. Do not edit files."
 ```
 
+Codex writes progress, command transcripts, and other execution logs to stderr during
+`codex exec`. The wrapper captures that stream as `stderr_tail`, but it is not
+necessarily error output; task failure is determined by `status` and `exit_code`.
+The demo script prints the final stdout as `final_output` and hides the Codex log by
+default. Add `--show-log` to print it as `codex_log_tail`.
+
 ## Test
 
 ```bash
