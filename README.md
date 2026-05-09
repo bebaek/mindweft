@@ -65,6 +65,27 @@ principal headers used by the CLI examples, so the default `dev-headers` auth mo
 for local testing. Use `static-tokens` or `jwt` before exposing the API outside a trusted
 local network.
 
+## Codex Agent Wrapper POC
+
+[`codex-agent-wrapper`](/Users/burm/code/minigent/codex-agent-wrapper) is a separate
+minimal package that exposes the local Codex CLI as a federated-agent-style HTTP member.
+It is not wired into the Minigent runtime yet.
+
+Run it locally with an explicit workspace allowlist:
+
+```bash
+cd codex-agent-wrapper
+uv sync --dev
+CODEX_AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
+  uv run uvicorn codex_agent_wrapper.app:app --host 127.0.0.1 --port 8010
+```
+
+The POC supports `GET /agent-card`, `POST /tasks`, `GET /tasks/{task_id}`, and
+`POST /tasks/{task_id}/cancel`. It runs `codex exec` in read-only mode by
+default and captures stdout/stderr tails separately. With the wrapper running, use
+`uv run python scripts/demo_task.py` from `codex-agent-wrapper` for a simple submit-and-poll
+demo.
+
 ## Docker Compose Deployment
 
 This repo now includes a production-oriented [`Dockerfile`](/Users/burm/code/minigent/Dockerfile)
