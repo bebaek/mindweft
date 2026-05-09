@@ -17,6 +17,7 @@ from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter
 from app.main import create_app
 from app.mcp import MCPServerInfo
 from app.models import LLMResponse, Message, MessageRole, ToolCall
+from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
 from app.tools import build_local_tool_registry
 
 AUTH_HEADERS = {
@@ -38,7 +39,9 @@ TOKEN_HEADERS = {"Authorization": "Bearer token-1"}
 OTHER_TOKEN_HEADERS = {"Authorization": "Bearer token-2"}
 
 
-def _jwt_claims(*, issuer: str = "https://issuer.example", audience: str = "minigent-api") -> dict[str, object]:
+def _jwt_claims(
+    *, issuer: str = "https://issuer.example", audience: str = "minigent-api"
+) -> dict[str, object]:
     return {
         "sub": "jwt-user",
         "tenant_id": "jwt-tenant",
@@ -118,9 +121,51 @@ def test_app_startup_logs_available_internal_tools(caplog: pytest.LogCaptureFixt
             assert client.get("/health").status_code == 200
 
     assert (
-        "available_internal_tools tenant_id=* tools=['current_time', 'echo'] count=2"
-        in caplog.text
+        "available_internal_tools tenant_id=* tools=['current_time', 'echo'] count=2" in caplog.text
     )
+
+
+def test_peer_agent_endpoints_list_and_fetch_agent_card() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://codex-agent.test/agent-card"
+        return httpx.Response(200, json={"name": "codex-coding-agent"})
+
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs(
+            [
+                {
+                    "name": "codex",
+                    "base_url": "http://codex-agent.test",
+                    "description": "Local Codex wrapper",
+                }
+            ]
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+    client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            peer_agent_registry=registry,
+        )
+    )
+
+    list_response = client.get("/peer-agents", headers=AUTH_HEADERS)
+    assert list_response.status_code == 200
+    assert list_response.json() == {
+        "agents": [
+            {
+                "name": "codex",
+                "base_url": "http://codex-agent.test",
+                "description": "Local Codex wrapper",
+                "links": {"agent_card": "/peer-agents/codex/agent-card"},
+            }
+        ]
+    }
+
+    card_response = client.get("/peer-agents/codex/agent-card", headers=AUTH_HEADERS)
+    assert card_response.status_code == 200
+    assert card_response.json() == {"name": "codex-coding-agent"}
 
 
 def test_run_endpoint_handles_tool_call_flow() -> None:
@@ -152,7 +197,23 @@ def test_run_endpoint_azure_adapter_allows_second_turn_after_tool_completion() -
     seen_payloads: list[dict[str, object]] = []
     responses = deque(
         [
-            {"choices": [{"message": {"tool_calls": [{"id": "call_123", "function": {"name": "echo", "arguments": '{"text":"hello from api"}'}}]}}]},
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call_123",
+                                    "function": {
+                                        "name": "echo",
+                                        "arguments": '{"text":"hello from api"}',
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
             {"choices": [{"message": {"content": 'Tool result: {"echo": "hello from api"}'}}]},
             {"choices": [{"message": {"content": "Mock reply: continue"}}]},
         ]
@@ -212,7 +273,23 @@ def test_run_endpoint_openrouter_retries_with_azure_tool_history_pruning() -> No
     seen_payloads: list[dict[str, object]] = []
     responses = deque(
         [
-            {"choices": [{"message": {"tool_calls": [{"id": "call_123", "function": {"name": "echo", "arguments": '{"text":"hello from api"}'}}]}}]},
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call_123",
+                                    "function": {
+                                        "name": "echo",
+                                        "arguments": '{"text":"hello from api"}',
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
             {"choices": [{"message": {"content": 'Tool result: {"echo": "hello from api"}'}}]},
             {
                 "error": {
@@ -842,7 +919,9 @@ def test_admin_api_requires_admin_access(tmp_path: Path) -> None:
     assert response.json()["detail"] == "Admin access required"
 
 
-def test_admin_api_validates_tenant_execution_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_admin_api_validates_tenant_execution_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     class FakeMCPClient:
         def __init__(self, config, transport=None, timeout=15.0) -> None:
             _ = transport

@@ -40,6 +40,7 @@ from app.models import (
     RunThreadResponse,
 )
 from app.observability import configure_logging, configure_tracing
+from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_env
 from app.redaction import install_log_redaction
 from app.runtime import AgentRuntime, max_iterations_from_env
 from app.store import InMemoryThreadStore
@@ -60,9 +61,12 @@ def create_app(
     execution_resolver: TenantExecutionResolver | None = None,
     admin_store: SQLiteTenantConfigStore | None = None,
     tenant_config_source: str | None = None,
+    peer_agent_registry: PeerAgentRegistry | None = None,
 ) -> FastAPI:
     validate_auth_settings()
-    mcp_manager = MCPServerManager() if execution_resolver is None and tool_registry is None else None
+    mcp_manager = (
+        MCPServerManager() if execution_resolver is None and tool_registry is None else None
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -137,6 +141,7 @@ def create_app(
         execution_resolver=execution_resolver,
         max_iterations=max_iterations_from_env(),
     )
+    app.state.peer_agent_registry = peer_agent_registry or build_peer_agent_registry_from_env()
     app.include_router(build_admin_router())
     if WEB_CLIENT_DIR.exists():
         app.mount("/web", StaticFiles(directory=WEB_CLIENT_DIR, html=True), name="web")
@@ -148,6 +153,14 @@ def create_app(
     @app.get("/config")
     async def config(request: Request) -> dict[str, object]:
         return request.app.state.execution_resolver.describe()
+
+    @app.get("/peer-agents")
+    async def peer_agents(request: Request) -> dict[str, object]:
+        return {"agents": request.app.state.peer_agent_registry.list_agents()}
+
+    @app.get("/peer-agents/{name}/agent-card")
+    async def peer_agent_card(name: str, request: Request) -> dict[str, object]:
+        return await request.app.state.peer_agent_registry.agent_card(name)
 
     @app.post("/threads", response_model=CreateThreadResponse)
     async def create_thread(

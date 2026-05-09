@@ -943,6 +943,24 @@ The service retains MCP servers that fail discovery, reports them as `unavailabl
 succeeds, the discovered tools become available to future runs and `/config` reports the
 server as `connected`.
 
+## Peer Agent Config
+
+Minigent can discover configured federated peer agents without delegating runtime work to
+them yet. Configure peers with `MINIGENT_PEER_AGENTS`:
+
+```dotenv
+MINIGENT_PEER_AGENTS=[{"name":"codex","base_url":"http://127.0.0.1:8010","description":"Local Codex wrapper"}]
+```
+
+Discovery endpoints:
+
+- `GET /peer-agents`
+- `GET /peer-agents/{name}/agent-card`
+
+`GET /peer-agents/{name}/agent-card` fetches the peer's `/agent-card` endpoint and
+returns it through Minigent. Unknown peers return `404`; peer HTTP or JSON failures
+return `502`.
+
 ### Stdio MCP Bridge
 
 Many local MCP servers expose the MCP `stdio` transport instead of HTTP. Minigent includes

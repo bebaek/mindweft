@@ -83,3 +83,6 @@ line-ending = "lf"
 include = ["app", "minigent_client"]
 typeCheckingMode = "standard"
 pythonVersion = "3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
