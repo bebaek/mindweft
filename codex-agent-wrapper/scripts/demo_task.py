@@ -56,7 +56,18 @@ def main() -> int:
         status = str(task["status"])
         print(f"status: {status}")
         if status in TERMINAL_STATUSES:
-            _print_result(task, show_log=args.show_log, show_events=args.show_events)
+            events = []
+            if args.show_events:
+                events_response = _request_json("GET", f"{base_url}/tasks/{task_id}/events")
+                raw_events = events_response.get("events")
+                if isinstance(raw_events, list):
+                    events = raw_events
+            _print_result(
+                task,
+                events=events,
+                show_log=args.show_log,
+                show_events=args.show_events,
+            )
             return 0 if status == "completed" else 1
         time.sleep(args.poll_interval)
 
@@ -75,22 +86,29 @@ def _request_json(method: str, url: str, payload: dict[str, Any] | None = None) 
         return json.loads(response.read().decode("utf-8"))
 
 
-def _print_result(task: dict[str, Any], *, show_log: bool, show_events: bool) -> None:
+def _print_result(
+    task: dict[str, Any],
+    *,
+    events: list[object],
+    show_log: bool,
+    show_events: bool,
+) -> None:
     print(f"exit_code: {task.get('exit_code')}")
     final_output = str(task.get("final_output") or "").strip()
     stdout_tail = str(task.get("stdout_tail") or "").strip()
     stderr_tail = str(task.get("stderr_tail") or "").strip()
-    events_tail = task.get("events_tail")
     if final_output:
         print("\nfinal_output:")
         print(final_output)
     elif stdout_tail:
         print("\nfinal_output:")
         print(stdout_tail)
-    if show_events and isinstance(events_tail, list) and events_tail:
+    events_tail = task.get("events_tail")
+    has_events = bool(events) or bool(events_tail)
+    if show_events and events:
         print("\nevents_tail:")
-        print(json.dumps(events_tail, indent=2))
-    elif isinstance(events_tail, list) and events_tail:
+        print(json.dumps(events, indent=2))
+    elif has_events:
         print("\nevents_tail: hidden; rerun with --show-events to print it")
     if show_log and stderr_tail:
         print("\ncodex_log_tail:")

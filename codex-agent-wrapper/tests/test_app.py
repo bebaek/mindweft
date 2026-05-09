@@ -20,9 +20,7 @@ def test_agent_card() -> None:
 def test_task_captures_stdout_and_stderr(tmp_path: Path) -> None:
     fake_codex = tmp_path / "fake_codex.py"
     fake_codex.write_text(
-        "import sys\n"
-        "print('stdout: ' + sys.argv[-1])\n"
-        "print('stderr: warning', file=sys.stderr)\n",
+        "import sys\nprint('stdout: ' + sys.argv[-1])\nprint('stderr: warning', file=sys.stderr)\n",
         encoding="utf-8",
     )
     settings = Settings(
@@ -64,9 +62,56 @@ def test_task_parses_jsonl_events_and_final_output(tmp_path: Path) -> None:
         assert result["status"] == "completed"
         assert result["final_output"] == "final answer"
         assert len(result["events_tail"]) == 2
+        assert result["events_tail"][0]["index"] == 0
+        assert result["events_tail"][1]["index"] == 1
         assert result["events_tail"][1]["type"] == "message.completed"
         assert "message.completed" in result["stdout_tail"]
         assert "debug log" in result["stderr_tail"]
+
+
+def test_task_events_endpoint_supports_incremental_polling(tmp_path: Path) -> None:
+    fake_codex = tmp_path / "fake_codex.py"
+    fake_codex.write_text(
+        "import json\n"
+        "print(json.dumps({'type': 'task.started'}))\n"
+        "print(json.dumps({'type': 'message.completed', 'message': {'role': 'assistant', 'content': 'done'}}))\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        codex_command=(sys.executable, str(fake_codex)),
+        allowed_workspaces=(tmp_path,),
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "hello"})
+
+        assert create_response.status_code == 200
+        task_id = create_response.json()["task_id"]
+        _wait_for_terminal_task(client, task_id)
+
+        all_events_response = client.get(f"/tasks/{task_id}/events")
+        assert all_events_response.status_code == 200
+        all_events = all_events_response.json()
+        assert all_events["task_id"] == task_id
+        assert all_events["next_index"] == 2
+        assert [event["index"] for event in all_events["events"]] == [0, 1]
+
+        incremental_response = client.get(f"/tasks/{task_id}/events?after=0")
+        assert incremental_response.status_code == 200
+        incremental_events = incremental_response.json()
+        assert incremental_events["next_index"] == 2
+        assert [event["index"] for event in incremental_events["events"]] == [1]
+
+        empty_response = client.get(f"/tasks/{task_id}/events?after=1")
+        assert empty_response.status_code == 200
+        assert empty_response.json()["next_index"] == 2
+        assert empty_response.json()["events"] == []
+
+
+def test_task_events_endpoint_returns_404_for_unknown_task() -> None:
+    with TestClient(create_app(Settings(allowed_workspaces=(Path.cwd(),)))) as client:
+        response = client.get("/tasks/missing/events")
+
+        assert response.status_code == 404
 
 
 def test_task_rejects_workspace_outside_allowlist(tmp_path: Path) -> None:

@@ -58,6 +58,12 @@ class TaskResponse(BaseModel):
     stderr_tail: str = ""
 
 
+class TaskEventsResponse(BaseModel):
+    task_id: str
+    next_index: int
+    events: list[dict[str, object]] = Field(default_factory=list)
+
+
 class AgentCard(BaseModel):
     name: str
     description: str
@@ -102,6 +108,7 @@ class TaskRecord:
     finished_at: datetime | None = None
     exit_code: int | None = None
     final_output: str = ""
+    all_events: list[dict[str, object]] = field(default_factory=list)
     events: deque[dict[str, object]] = field(default_factory=deque)
     stdout: OutputTail = field(default_factory=lambda: OutputTail(20_000))
     stderr: OutputTail = field(default_factory=lambda: OutputTail(20_000))
@@ -122,6 +129,15 @@ class TaskRecord:
             stderr_tail=self.stderr.text(),
         )
 
+    def events_response(self, *, after: int | None = None) -> TaskEventsResponse:
+        start_index = 0 if after is None else max(0, after + 1)
+        events = self.all_events[start_index:]
+        return TaskEventsResponse(
+            task_id=self.task_id,
+            next_index=start_index + len(events),
+            events=events,
+        )
+
 
 class TaskStore:
     def __init__(self, settings: Settings) -> None:
@@ -136,6 +152,7 @@ class TaskStore:
             task_id=task_id,
             prompt=request.prompt,
             cwd=cwd,
+            all_events=[],
             events=deque(maxlen=self._settings.event_limit),
             stdout=OutputTail(self._settings.tail_chars),
             stderr=OutputTail(self._settings.tail_chars),
@@ -259,8 +276,10 @@ def _capture_json_event(line: str, record: TaskRecord) -> None:
         return
     if not isinstance(event, dict):
         return
-    record.events.append(event)
-    final_output = _extract_final_output(event)
+    indexed_event = {"index": len(record.all_events), **event}
+    record.all_events.append(indexed_event)
+    record.events.append(indexed_event)
+    final_output = _extract_final_output(indexed_event)
     if final_output is not None:
         record.final_output = final_output
 
@@ -356,11 +375,11 @@ def _codex_exec_command(settings: Settings, *, cwd: Path, prompt: str) -> list[s
         command.append("--json")
     command.extend(
         [
-        "--sandbox",
-        settings.codex_sandbox,
-        "--cd",
-        str(cwd),
-        prompt,
+            "--sandbox",
+            settings.codex_sandbox,
+            "--cd",
+            str(cwd),
+            prompt,
         ]
     )
     return command
@@ -426,6 +445,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             endpoints={
                 "create_task": "POST /tasks",
                 "get_task": "GET /tasks/{task_id}",
+                "get_task_events": "GET /tasks/{task_id}/events",
                 "cancel_task": "POST /tasks/{task_id}/cancel",
             },
             side_effects=["process_execution", "filesystem_read"],
@@ -446,6 +466,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> TaskResponse:
         record = await store.get(task_id)
         return record.response()
+
+    @app.get("/tasks/{task_id}/events", response_model=TaskEventsResponse)
+    async def get_task_events(
+        task_id: str,
+        store: Annotated[TaskStore, Depends(get_store)],
+        after: int | None = None,
+    ) -> TaskEventsResponse:
+        record = await store.get(task_id)
+        return record.events_response(after=after)
 
     @app.post("/tasks/{task_id}/cancel", response_model=TaskResponse)
     async def cancel_task(

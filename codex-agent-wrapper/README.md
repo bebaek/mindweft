@@ -42,6 +42,7 @@ GET  /health
 GET  /agent-card
 POST /tasks
 GET  /tasks/{task_id}
+GET  /tasks/{task_id}/events
 POST /tasks/{task_id}/cancel
 ```
 
@@ -57,6 +58,13 @@ Then poll:
 
 ```bash
 curl -s http://127.0.0.1:8010/tasks/<task_id>
+```
+
+Poll parsed Codex JSON events separately:
+
+```bash
+curl -s http://127.0.0.1:8010/tasks/<task_id>/events
+curl -s 'http://127.0.0.1:8010/tasks/<task_id>/events?after=3'
 ```
 
 Or run the scripted demo against the already-running wrapper:
@@ -81,7 +89,8 @@ transcripts, and other execution logs to stderr; the wrapper captures that strea
 `status` and `exit_code`.
 
 The demo script prints `final_output` and hides parsed events and the Codex stderr log by
-default. Add `--show-events` or `--show-log` to print those details.
+default. Add `--show-events` to fetch `/tasks/{task_id}/events` and print parsed events,
+or `--show-log` to print the stderr log.
 
 ## Test
 
