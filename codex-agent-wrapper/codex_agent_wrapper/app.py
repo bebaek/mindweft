@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shlex
 import signal
@@ -33,7 +34,9 @@ class Settings(BaseModel):
     codex_command: tuple[str, ...] = ("codex",)
     allowed_workspaces: tuple[Path, ...] = ()
     codex_sandbox: str = "read-only"
+    codex_json: bool = True
     tail_chars: int = 20_000
+    event_limit: int = 50
     cancel_grace_seconds: float = 5.0
 
 
@@ -49,6 +52,8 @@ class TaskResponse(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     exit_code: int | None = None
+    final_output: str = ""
+    events_tail: list[dict[str, object]] = Field(default_factory=list)
     stdout_tail: str = ""
     stderr_tail: str = ""
 
@@ -96,6 +101,8 @@ class TaskRecord:
     started_at: datetime | None = None
     finished_at: datetime | None = None
     exit_code: int | None = None
+    final_output: str = ""
+    events: deque[dict[str, object]] = field(default_factory=deque)
     stdout: OutputTail = field(default_factory=lambda: OutputTail(20_000))
     stderr: OutputTail = field(default_factory=lambda: OutputTail(20_000))
     process: asyncio.subprocess.Process | None = None
@@ -109,6 +116,8 @@ class TaskRecord:
             started_at=self.started_at,
             finished_at=self.finished_at,
             exit_code=self.exit_code,
+            final_output=self.final_output,
+            events_tail=list(self.events),
             stdout_tail=self.stdout.text(),
             stderr_tail=self.stderr.text(),
         )
@@ -127,6 +136,7 @@ class TaskStore:
             task_id=task_id,
             prompt=request.prompt,
             cwd=cwd,
+            events=deque(maxlen=self._settings.event_limit),
             stdout=OutputTail(self._settings.tail_chars),
             stderr=OutputTail(self._settings.tail_chars),
         )
@@ -181,7 +191,7 @@ class TaskStore:
                 start_new_session=True,
             )
             await asyncio.gather(
-                _capture_stream(record.process.stdout, record.stdout),
+                _capture_stdout(record.process.stdout, record),
                 _capture_stream(record.process.stderr, record.stderr),
             )
             record.exit_code = await record.process.wait()
@@ -211,6 +221,21 @@ class TaskStore:
         record.finished_at = utc_now()
 
 
+async def _capture_stdout(
+    stream: asyncio.StreamReader | None,
+    record: TaskRecord,
+) -> None:
+    if stream is None:
+        return
+    while True:
+        line = await stream.readline()
+        if not line:
+            return
+        text = line.decode(errors="replace")
+        record.stdout.append(text)
+        _capture_json_event(text, record)
+
+
 async def _capture_stream(
     stream: asyncio.StreamReader | None,
     tail: OutputTail,
@@ -222,6 +247,82 @@ async def _capture_stream(
         if not chunk:
             return
         tail.append(chunk.decode(errors="replace"))
+
+
+def _capture_json_event(line: str, record: TaskRecord) -> None:
+    stripped = line.strip()
+    if not stripped:
+        return
+    try:
+        event = json.loads(stripped)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(event, dict):
+        return
+    record.events.append(event)
+    final_output = _extract_final_output(event)
+    if final_output is not None:
+        record.final_output = final_output
+
+
+def _extract_final_output(event: dict[str, object]) -> str | None:
+    message = _event_message(event)
+    if message is None:
+        return None
+
+    text = _text_from_value(message)
+    event_type = str(event.get("type") or event.get("event") or "")
+    if text is not None and _looks_like_final_event(event_type, event):
+        return text
+
+    content = message.get("content")
+    if isinstance(content, list):
+        text_parts = []
+        for item in content:
+            text_part = _text_from_value(item)
+            if text_part:
+                text_parts.append(text_part)
+        if text_parts and _looks_like_final_event(event_type, event):
+            return "\n".join(text_parts)
+    return None
+
+
+def _event_message(event: dict[str, object]) -> dict[str, object] | None:
+    message = event.get("message")
+    if isinstance(message, dict):
+        return message
+    item = event.get("item")
+    if isinstance(item, dict):
+        return item
+    return None
+
+
+def _text_from_value(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return None
+    for key in ("text", "content", "message"):
+        text = value.get(key)
+        if isinstance(text, str):
+            return text
+    return None
+
+
+def _looks_like_final_event(event_type: str, event: dict[str, object]) -> bool:
+    normalized = event_type.lower()
+    if "final" in normalized or "complete" in normalized or normalized.endswith("done"):
+        return True
+    if event.get("is_final") is True or event.get("final") is True:
+        return True
+    message = _event_message(event)
+    if message is None:
+        return False
+    role = str(message.get("role") or "").lower()
+    if role != "assistant":
+        return False
+    status = str(event.get("status") or message.get("status") or "").lower()
+    return status in {"completed", "complete", "done", "final"}
 
 
 async def _terminate_process_group(
@@ -247,15 +348,22 @@ async def _terminate_process_group(
 
 
 def _codex_exec_command(settings: Settings, *, cwd: Path, prompt: str) -> list[str]:
-    return [
+    command = [
         *settings.codex_command,
         "exec",
+    ]
+    if settings.codex_json:
+        command.append("--json")
+    command.extend(
+        [
         "--sandbox",
         settings.codex_sandbox,
         "--cd",
         str(cwd),
         prompt,
-    ]
+        ]
+    )
+    return command
 
 
 def _resolve_allowed_workspace(cwd: Path, allowed_workspaces: tuple[Path, ...]) -> Path:
@@ -281,11 +389,15 @@ def settings_from_env() -> Settings:
     )
     tail_chars = int(os.getenv("CODEX_AGENT_TAIL_CHARS", "20000"))
     cancel_grace_seconds = float(os.getenv("CODEX_AGENT_CANCEL_GRACE_SECONDS", "5"))
+    event_limit = int(os.getenv("CODEX_AGENT_EVENT_LIMIT", "50"))
+    codex_json = os.getenv("CODEX_AGENT_JSON", "true").lower() not in {"0", "false", "no"}
     return Settings(
         codex_command=command,
         allowed_workspaces=allowed,
         codex_sandbox=os.getenv("CODEX_AGENT_SANDBOX", "read-only"),
+        codex_json=codex_json,
         tail_chars=tail_chars,
+        event_limit=event_limit,
         cancel_grace_seconds=cancel_grace_seconds,
     )
 

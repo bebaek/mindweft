@@ -41,6 +41,34 @@ def test_task_captures_stdout_and_stderr(tmp_path: Path) -> None:
         assert "stderr: warning" in result["stderr_tail"]
 
 
+def test_task_parses_jsonl_events_and_final_output(tmp_path: Path) -> None:
+    fake_codex = tmp_path / "fake_codex.py"
+    fake_codex.write_text(
+        "import json\n"
+        "import sys\n"
+        "print(json.dumps({'type': 'task.started', 'message': {'role': 'system', 'content': 'started'}}))\n"
+        "print(json.dumps({'type': 'message.completed', 'message': {'role': 'assistant', 'content': 'final answer'}}))\n"
+        "print('debug log', file=sys.stderr)\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        codex_command=(sys.executable, str(fake_codex)),
+        allowed_workspaces=(tmp_path,),
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "hello"})
+
+        assert create_response.status_code == 200
+        task_id = create_response.json()["task_id"]
+        result = _wait_for_terminal_task(client, task_id)
+        assert result["status"] == "completed"
+        assert result["final_output"] == "final answer"
+        assert len(result["events_tail"]) == 2
+        assert result["events_tail"][1]["type"] == "message.completed"
+        assert "message.completed" in result["stdout_tail"]
+        assert "debug log" in result["stderr_tail"]
+
+
 def test_task_rejects_workspace_outside_allowlist(tmp_path: Path) -> None:
     allowed = tmp_path / "allowed"
     denied = tmp_path / "denied"

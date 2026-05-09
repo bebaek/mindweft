@@ -22,7 +22,7 @@ CODEX_AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
 The default Codex invocation is read-only:
 
 ```text
-codex exec --sandbox read-only --cd <cwd> <prompt>
+codex exec --json --sandbox read-only --cd <cwd> <prompt>
 ```
 
 Override these if needed:
@@ -30,7 +30,9 @@ Override these if needed:
 - `CODEX_AGENT_COMMAND`: executable command, default `codex`
 - `CODEX_AGENT_ALLOWED_WORKSPACES`: path-list of allowed roots, required for task execution
 - `CODEX_AGENT_SANDBOX`: Codex sandbox mode, default `read-only`
+- `CODEX_AGENT_JSON`: set to `false` to disable `codex exec --json`, default `true`
 - `CODEX_AGENT_TAIL_CHARS`: captured stdout/stderr tail size, default `20000`
+- `CODEX_AGENT_EVENT_LIMIT`: parsed JSON event tail size, default `50`
 - `CODEX_AGENT_CANCEL_GRACE_SECONDS`: signal grace period, default `5`
 
 ## API
@@ -71,11 +73,15 @@ uv run python scripts/demo_task.py \
   --prompt "List the main runtime components. Do not edit files."
 ```
 
-Codex writes progress, command transcripts, and other execution logs to stderr during
-`codex exec`. The wrapper captures that stream as `stderr_tail`, but it is not
-necessarily error output; task failure is determined by `status` and `exit_code`.
-The demo script prints the final stdout as `final_output` and hides the Codex log by
-default. Add `--show-log` to print it as `codex_log_tail`.
+By default the wrapper runs `codex exec --json`, parses stdout JSONL into `events_tail`,
+and exposes the best final assistant message it can find as `final_output`. It still
+keeps `stdout_tail` as a raw fallback/debug stream. Codex writes progress, command
+transcripts, and other execution logs to stderr; the wrapper captures that stream as
+`stderr_tail`, but it is not necessarily error output. Task failure is determined by
+`status` and `exit_code`.
+
+The demo script prints `final_output` and hides parsed events and the Codex stderr log by
+default. Add `--show-events` or `--show-log` to print those details.
 
 ## Test
 
