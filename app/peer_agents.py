@@ -9,6 +9,14 @@ import httpx
 from fastapi import HTTPException
 
 PEER_AGENTS_ENV = "MINIGENT_PEER_AGENTS"
+PEER_AGENT_ARTIFACT_NAMES = frozenset(
+    {
+        "final-output",
+        "stdout-tail",
+        "stderr-tail",
+        "events",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -29,6 +37,12 @@ class PeerAgentConfig:
         if self.description is not None:
             payload["description"] = self.description
         return payload
+
+
+@dataclass(frozen=True)
+class PeerAgentArtifact:
+    content: bytes
+    media_type: str
 
 
 class PeerAgentRegistry:
@@ -66,6 +80,42 @@ class PeerAgentRegistry:
             response_label="task response",
         )
 
+    async def task_events(
+        self,
+        name: str,
+        task_id: str,
+        *,
+        after: int | None = None,
+    ) -> dict[str, Any]:
+        params = {"after": after} if after is not None else None
+        return await self._request_json(
+            name,
+            "GET",
+            f"/tasks/{task_id}/events",
+            query_params=params,
+            response_label="task events response",
+        )
+
+    async def task_artifact(
+        self,
+        name: str,
+        task_id: str,
+        artifact_name: str,
+    ) -> PeerAgentArtifact:
+        if artifact_name not in PEER_AGENT_ARTIFACT_NAMES:
+            allowed = ", ".join(sorted(PEER_AGENT_ARTIFACT_NAMES))
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported peer task artifact '{artifact_name}'. Allowed: {allowed}",
+            )
+        response = await self._request(
+            name,
+            "GET",
+            f"/tasks/{task_id}/artifacts/{artifact_name}",
+        )
+        media_type = response.headers.get("content-type", "application/octet-stream")
+        return PeerAgentArtifact(content=response.content, media_type=media_type)
+
     async def _request_json(
         self,
         name: str,
@@ -73,8 +123,39 @@ class PeerAgentRegistry:
         path: str,
         *,
         json_body: dict[str, Any] | None = None,
+        query_params: dict[str, Any] | None = None,
         response_label: str,
     ) -> dict[str, Any]:
+        response = await self._request(
+            name,
+            method,
+            path,
+            json_body=json_body,
+            query_params=query_params,
+        )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Peer agent '{name}' returned invalid JSON {response_label}",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Peer agent '{name}' returned non-object {response_label}",
+            )
+        return payload
+
+    async def _request(
+        self,
+        name: str,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        query_params: dict[str, Any] | None = None,
+    ) -> httpx.Response:
         agent = self._agent_or_404(name)
         url = f"{agent.base_url.rstrip('/')}{path}"
         try:
@@ -82,7 +163,12 @@ class PeerAgentRegistry:
                 timeout=self._timeout,
                 transport=self._transport,
             ) as client:
-                response = await client.request(method, url, json=json_body)
+                response = await client.request(
+                    method,
+                    url,
+                    json=json_body,
+                    params=query_params,
+                )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise HTTPException(
@@ -98,19 +184,7 @@ class PeerAgentRegistry:
                 detail=f"Peer agent '{name}' {path} request failed: {exc}",
             ) from exc
 
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Peer agent '{name}' returned invalid JSON {response_label}",
-            ) from exc
-        if not isinstance(payload, dict):
-            raise HTTPException(
-                status_code=502,
-                detail=f"Peer agent '{name}' returned non-object {response_label}",
-            )
-        return payload
+        return response
 
     def _agent_or_404(self, name: str) -> PeerAgentConfig:
         agent = self._agents.get(name)

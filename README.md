@@ -959,13 +959,17 @@ Discovery endpoints:
 - `GET /peer-agents/{name}/agent-card`
 - `POST /peer-agents/{name}/tasks`
 - `GET /peer-agents/{name}/tasks/{task_id}`
+- `GET /peer-agents/{name}/tasks/{task_id}/events`
+- `GET /peer-agents/{name}/tasks/{task_id}/artifacts/{artifact_name}`
 
 `GET /peer-agents/{name}/agent-card` fetches the peer's `/agent-card` endpoint and
 returns it through Minigent. Unknown peers return `404`; peer HTTP or JSON failures
 return `502`. `POST /peer-agents/{name}/tasks` forwards the request JSON to the peer's
 `/tasks` endpoint, and `GET /peer-agents/{name}/tasks/{task_id}` forwards task status
-lookups to the peer. These proxy endpoints are for manual federation demos; the agent
-runtime does not yet choose or invoke peers automatically.
+lookups to the peer. The task events and artifact endpoints forward to the peer's
+matching endpoints; artifact names are limited to `final-output`, `stdout-tail`,
+`stderr-tail`, and `events`. These proxy endpoints are for manual federation demos; the
+agent runtime does not yet choose or invoke peers automatically.
 
 With the Codex wrapper and Minigent running, use the root demo script to submit and poll
 a peer task through Minigent:
@@ -981,6 +985,7 @@ MINIGENT_BASE_URL=http://127.0.0.1:8000 \
   uv run python scripts/demo_peer_agent.py \
   --peer codex \
   --cwd /Users/burm/code/minigent \
+  --show-events \
   --prompt "Summarize this repository in one paragraph. Do not edit files."
 ```
 

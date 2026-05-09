@@ -45,6 +45,15 @@ def test_demo_peer_agent_submits_and_polls_through_minigent(
                 "exit_code": 0,
                 "final_output": "summary",
             }
+        if (
+            method == "GET"
+            and url == "http://minigent.test/peer-agents/codex/tasks/task_123/events"
+        ):
+            return {
+                "task_id": "task_123",
+                "next_index": 1,
+                "events": [{"index": 0, "type": "message.completed"}],
+            }
         raise AssertionError(f"Unexpected request: {method} {url}")
 
     monkeypatch.setattr(demo, "request_json", fake_request_json)
@@ -57,6 +66,7 @@ def test_demo_peer_agent_submits_and_polls_through_minigent(
             "/workspace/project",
             "--prompt",
             "summarize",
+            "--show-events",
         ]
     )
 
@@ -71,8 +81,11 @@ def test_demo_peer_agent_submits_and_polls_through_minigent(
             {"cwd": "/workspace/project", "prompt": "summarize"},
         ),
         ("GET", "http://minigent.test/peer-agents/codex/tasks/task_123", None),
+        ("GET", "http://minigent.test/peer-agents/codex/tasks/task_123/events", None),
     ]
-    assert "submitted: task_123" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "submitted: task_123" in output
+    assert '"type": "message.completed"' in output
 
 
 def test_demo_peer_agent_returns_failure_for_failed_task(monkeypatch, capsys) -> None:

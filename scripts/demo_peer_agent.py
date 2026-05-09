@@ -44,6 +44,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print peer stderr/progress log tail in addition to the final output.",
     )
+    parser.add_argument(
+        "--show-events",
+        action="store_true",
+        help="Fetch and print peer task events through Minigent when the task finishes.",
+    )
     return parser.parse_args(argv)
 
 
@@ -84,7 +89,17 @@ def main(argv: list[str] | None = None) -> int:
         status = str(task["status"])
         print(f"status: {status}")
         if status in TERMINAL_STATUSES:
-            print_result(task, show_log=args.show_log)
+            events = None
+            if args.show_events:
+                try:
+                    events = request_json(
+                        "GET",
+                        f"{base_url}/peer-agents/{args.peer}/tasks/{task_id}/events",
+                    )
+                except urllib.error.HTTPError as exc:
+                    print_http_error(exc)
+                    return 2
+            print_result(task, events=events, show_log=args.show_log)
             return 0 if status == "completed" else 1
         time.sleep(args.poll_interval)
 
@@ -108,7 +123,12 @@ def print_http_error(exc: urllib.error.HTTPError) -> None:
     print(f"Minigent request failed: {exc.code} {body}", file=sys.stderr)
 
 
-def print_result(task: dict[str, Any], *, show_log: bool) -> None:
+def print_result(
+    task: dict[str, Any],
+    *,
+    events: dict[str, Any] | None,
+    show_log: bool,
+) -> None:
     print(f"exit_code: {task.get('exit_code')}")
     final_output = str(task.get("final_output") or "").strip()
     stdout_tail = str(task.get("stdout_tail") or "").strip()
@@ -124,6 +144,9 @@ def print_result(task: dict[str, Any], *, show_log: bool) -> None:
         print(stderr_tail)
     elif stderr_tail:
         print("\nstderr_tail: hidden; rerun with --show-log to print it")
+    if events is not None:
+        print("\nevents:")
+        print(json.dumps(events, indent=2))
 
 
 if __name__ == "__main__":

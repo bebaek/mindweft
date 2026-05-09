@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.admin_api import (
@@ -178,6 +178,29 @@ def create_app(
         request: Request,
     ) -> dict[str, object]:
         return await request.app.state.peer_agent_registry.task(name, task_id)
+
+    @app.get("/peer-agents/{name}/tasks/{task_id}/events")
+    async def peer_agent_task_events(
+        name: str,
+        task_id: str,
+        request: Request,
+        after: int | None = None,
+    ) -> dict[str, object]:
+        return await request.app.state.peer_agent_registry.task_events(name, task_id, after=after)
+
+    @app.get("/peer-agents/{name}/tasks/{task_id}/artifacts/{artifact_name}")
+    async def peer_agent_task_artifact(
+        name: str,
+        task_id: str,
+        artifact_name: str,
+        request: Request,
+    ) -> Response:
+        artifact = await request.app.state.peer_agent_registry.task_artifact(
+            name,
+            task_id,
+            artifact_name,
+        )
+        return Response(content=artifact.content, media_type=artifact.media_type)
 
     @app.post("/threads", response_model=CreateThreadResponse)
     async def create_thread(

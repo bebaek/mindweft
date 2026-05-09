@@ -217,6 +217,61 @@ def test_peer_agent_task_proxy_endpoints() -> None:
     ]
 
 
+def test_peer_agent_events_and_artifact_proxy_endpoints() -> None:
+    requests: list[tuple[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, str(request.url)))
+        if request.method == "GET" and str(request.url).endswith("/tasks/task_123/events?after=0"):
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": "task_123",
+                    "next_index": 2,
+                    "events": [{"index": 1, "type": "message.completed"}],
+                },
+            )
+        if request.method == "GET" and request.url.path == "/tasks/task_123/artifacts/final-output":
+            return httpx.Response(200, text="final text", headers={"content-type": "text/plain"})
+        return httpx.Response(404, json={"detail": "missing"})
+
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            peer_agent_registry=registry,
+        )
+    )
+
+    events_response = client.get(
+        "/peer-agents/codex/tasks/task_123/events?after=0",
+        headers=AUTH_HEADERS,
+    )
+    assert events_response.status_code == 200
+    assert events_response.json() == {
+        "task_id": "task_123",
+        "next_index": 2,
+        "events": [{"index": 1, "type": "message.completed"}],
+    }
+
+    artifact_response = client.get(
+        "/peer-agents/codex/tasks/task_123/artifacts/final-output",
+        headers=AUTH_HEADERS,
+    )
+    assert artifact_response.status_code == 200
+    assert artifact_response.text == "final text"
+    assert artifact_response.headers["content-type"].startswith("text/plain")
+
+    assert requests == [
+        ("GET", "http://codex-agent.test/tasks/task_123/events?after=0"),
+        ("GET", "http://codex-agent.test/tasks/task_123/artifacts/final-output"),
+    ]
+
+
 def test_run_endpoint_handles_tool_call_flow() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
