@@ -32,6 +32,7 @@ MINIGENT_MINIRAG_BACKEND_ENV = "MINIGENT_MINIRAG_BACKEND"
 MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV = "MINIGENT_MINIRAG_EMBEDDING_PROVIDER"
 MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV = "MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT"
 MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV = "MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT"
+MINIGENT_ENABLE_PEER_AGENT_TOOL_ENV = "MINIGENT_ENABLE_PEER_AGENT_TOOL"
 LOCAL_TOOL_NAMES = {
     "echo",
     "current_time",
@@ -143,6 +144,7 @@ def build_local_tool_registry(
     allowed_tools: list[str] | None = None,
     *,
     peer_agent_registry: PeerAgentRegistry | None = None,
+    enable_peer_agent_tool: bool | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     allowed_tool_set = set(allowed_tools) if allowed_tools is not None else None
@@ -387,26 +389,27 @@ def build_local_tool_registry(
                 task = await registry.task(peer, task_id)
         return _peer_agent_tool_result(task, timed_out=False)
 
-    register_local_tool(
-        name="peer_agent_task",
-        description=(
-            "Submit a task to a configured peer agent and optionally poll until it finishes. "
-            "Use only when explicit delegation to a peer agent is useful."
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "peer": {"type": "string"},
-                "cwd": {"type": "string"},
-                "prompt": {"type": "string"},
-                "poll": {"type": "boolean"},
-                "timeout_seconds": {"type": "number", "minimum": 0.1},
-                "poll_interval_seconds": {"type": "number", "minimum": 0.1},
+    if _peer_agent_tool_enabled(enable_peer_agent_tool):
+        register_local_tool(
+            name="peer_agent_task",
+            description=(
+                "Submit a task to a configured peer agent and optionally poll until it finishes. "
+                "Use only when explicit delegation to a peer agent is useful."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "peer": {"type": "string"},
+                    "cwd": {"type": "string"},
+                    "prompt": {"type": "string"},
+                    "poll": {"type": "boolean"},
+                    "timeout_seconds": {"type": "number", "minimum": 0.1},
+                    "poll_interval_seconds": {"type": "number", "minimum": 0.1},
+                },
+                "required": ["peer", "cwd", "prompt"],
             },
-            "required": ["peer", "cwd", "prompt"],
-        },
-        handler=peer_agent_task_tool,
-    )
+            handler=peer_agent_task_tool,
+        )
 
     return registry
 
@@ -421,10 +424,12 @@ def build_tool_registry(
     mcp_snapshot: MCPRegistrySnapshot | None = None,
     allowed_local_tools: list[str] | None = None,
     peer_agent_registry: PeerAgentRegistry | None = None,
+    enable_peer_agent_tool: bool | None = None,
 ) -> ToolRegistry:
     registry = build_local_tool_registry(
         allowed_tools=allowed_local_tools,
         peer_agent_registry=peer_agent_registry,
+        enable_peer_agent_tool=enable_peer_agent_tool,
     )
 
     mcp_servers: list[dict[str, Any]] = []
@@ -523,6 +528,19 @@ def _evaluate_calculator_node(node: ast.AST) -> float | int:
             raise HTTPException(status_code=400, detail="calculator operator is not supported")
         return operator_fn(_evaluate_calculator_node(node.operand))
     raise HTTPException(status_code=400, detail="calculator expression contains unsupported syntax")
+
+
+def _peer_agent_tool_enabled(explicit: bool | None = None) -> bool:
+    if explicit is not None:
+        return explicit
+    return _env_flag(MINIGENT_ENABLE_PEER_AGENT_TOOL_ENV, default=False)
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _required_tool_string(arguments: dict[str, Any], field_name: str, tool_name: str) -> str:

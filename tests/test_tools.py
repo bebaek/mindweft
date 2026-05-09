@@ -35,8 +35,27 @@ def test_local_registry_exposes_expected_tools() -> None:
     assert "sleep" in specs
     assert "calculator" in specs
     assert "retrieve_knowledge" in specs
-    assert "peer_agent_task" in specs
+    assert "peer_agent_task" not in specs
     assert specs["current_time"].description == "Return the current UTC time in ISO 8601 format."
+
+
+def test_local_registry_can_enable_peer_agent_task_tool() -> None:
+    registry = build_local_tool_registry(enable_peer_agent_tool=True)
+
+    specs = {spec.name: spec for spec in registry.specs()}
+
+    assert "peer_agent_task" in specs
+
+
+def test_local_registry_can_enable_peer_agent_task_tool_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_ENABLE_PEER_AGENT_TOOL", "true")
+
+    registry = build_local_tool_registry()
+
+    specs = {spec.name for spec in registry.specs()}
+    assert "peer_agent_task" in specs
 
 
 def test_current_time_tool_returns_iso8601_timestamp() -> None:
@@ -349,7 +368,10 @@ def test_peer_agent_task_tool_can_submit_without_polling() -> None:
         parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
         transport=httpx.MockTransport(handler),
     )
-    registry = build_local_tool_registry(peer_agent_registry=peer_registry)
+    registry = build_local_tool_registry(
+        peer_agent_registry=peer_registry,
+        enable_peer_agent_tool=True,
+    )
 
     result = asyncio.run(
         registry.execute(
@@ -402,7 +424,10 @@ def test_peer_agent_task_tool_can_poll_until_completion(
         parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
         transport=httpx.MockTransport(handler),
     )
-    registry = build_local_tool_registry(peer_agent_registry=peer_registry)
+    registry = build_local_tool_registry(
+        peer_agent_registry=peer_registry,
+        enable_peer_agent_tool=True,
+    )
 
     result = asyncio.run(
         registry.execute(
