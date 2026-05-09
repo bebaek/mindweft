@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+
+def load_demo_module() -> ModuleType:
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "demo_peer_agent.py"
+    spec = importlib.util.spec_from_file_location("demo_peer_agent", script_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_demo_peer_agent_submits_and_polls_through_minigent(
+    monkeypatch,
+    capsys,
+) -> None:
+    demo = load_demo_module()
+    calls: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    def fake_request_json(
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        calls.append((method, url, payload))
+        if method == "GET" and url == "http://minigent.test/health":
+            return {"status": "ok"}
+        if method == "GET" and url == "http://minigent.test/peer-agents":
+            return {"agents": [{"name": "codex"}]}
+        if method == "GET" and url == "http://minigent.test/peer-agents/codex/agent-card":
+            return {"name": "codex-coding-agent"}
+        if method == "POST" and url == "http://minigent.test/peer-agents/codex/tasks":
+            assert payload == {"cwd": "/workspace/project", "prompt": "summarize"}
+            return {"task_id": "task_123", "status": "running"}
+        if method == "GET" and url == "http://minigent.test/peer-agents/codex/tasks/task_123":
+            return {
+                "task_id": "task_123",
+                "status": "completed",
+                "exit_code": 0,
+                "final_output": "summary",
+            }
+        raise AssertionError(f"Unexpected request: {method} {url}")
+
+    monkeypatch.setattr(demo, "request_json", fake_request_json)
+
+    exit_code = demo.main(
+        [
+            "--base-url",
+            "http://minigent.test",
+            "--cwd",
+            "/workspace/project",
+            "--prompt",
+            "summarize",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        ("GET", "http://minigent.test/health", None),
+        ("GET", "http://minigent.test/peer-agents", None),
+        ("GET", "http://minigent.test/peer-agents/codex/agent-card", None),
+        (
+            "POST",
+            "http://minigent.test/peer-agents/codex/tasks",
+            {"cwd": "/workspace/project", "prompt": "summarize"},
+        ),
+        ("GET", "http://minigent.test/peer-agents/codex/tasks/task_123", None),
+    ]
+    assert "submitted: task_123" in capsys.readouterr().out
+
+
+def test_demo_peer_agent_returns_failure_for_failed_task(monkeypatch, capsys) -> None:
+    demo = load_demo_module()
+
+    def fake_request_json(
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        del payload
+        if method == "GET" and url.endswith("/health"):
+            return {"status": "ok"}
+        if method == "GET" and url.endswith("/peer-agents"):
+            return {"agents": [{"name": "codex"}]}
+        if method == "GET" and url.endswith("/agent-card"):
+            return {"name": "codex-coding-agent"}
+        if method == "POST" and url.endswith("/tasks"):
+            return {"task_id": "task_123", "status": "running"}
+        if method == "GET" and url.endswith("/tasks/task_123"):
+            return {"task_id": "task_123", "status": "failed", "exit_code": 2}
+        raise AssertionError(f"Unexpected request: {method} {url}")
+
+    monkeypatch.setattr(demo, "request_json", fake_request_json)
+
+    exit_code = demo.main(["--base-url", "http://minigent.test"])
+
+    assert exit_code == 1
+    assert "status: failed" in capsys.readouterr().out

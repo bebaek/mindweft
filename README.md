@@ -967,6 +967,23 @@ return `502`. `POST /peer-agents/{name}/tasks` forwards the request JSON to the 
 lookups to the peer. These proxy endpoints are for manual federation demos; the agent
 runtime does not yet choose or invoke peers automatically.
 
+With the Codex wrapper and Minigent running, use the root demo script to submit and poll
+a peer task through Minigent:
+
+```bash
+uv run python scripts/demo_peer_agent.py
+```
+
+Useful overrides:
+
+```bash
+MINIGENT_BASE_URL=http://127.0.0.1:8000 \
+  uv run python scripts/demo_peer_agent.py \
+  --peer codex \
+  --cwd /Users/burm/code/minigent \
+  --prompt "Summarize this repository in one paragraph. Do not edit files."
+```
+
 ### Stdio MCP Bridge
 
 Many local MCP servers expose the MCP `stdio` transport instead of HTTP. Minigent includes
