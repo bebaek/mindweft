@@ -1041,6 +1041,13 @@ free:
 uv run python scripts/check_peer_agent_demo.py --check-running
 ```
 
+The same end-to-end path is available as an opt-in integration test:
+
+```bash
+MINIGENT_RUN_INTEGRATION_TESTS=true \
+  uv run pytest tests/test_peer_agent_tool_integration.py
+```
+
 Pass a custom peer prompt as the first argument:
 
 ```bash

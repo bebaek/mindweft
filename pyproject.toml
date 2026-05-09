@@ -86,3 +86,6 @@ pythonVersion = "3.11"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "integration: opt-in tests that start local services or call external CLIs",
+]
