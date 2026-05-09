@@ -50,6 +50,13 @@ wait_for_url() {
 
 echo "logs: $LOG_DIR"
 
+uv run python scripts/check_peer_agent_demo.py \
+  --workspace "$WORKSPACE" \
+  --codex-agent-host "$CODEX_AGENT_HOST" \
+  --codex-agent-port "$CODEX_AGENT_PORT" \
+  --minigent-host "$MINIGENT_HOST" \
+  --minigent-port "$MINIGENT_PORT"
+
 cd "$WRAPPER_DIR"
 CODEX_AGENT_ALLOWED_WORKSPACES="$WORKSPACE" \
   uv run uvicorn codex_agent_wrapper.app:app \

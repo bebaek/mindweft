@@ -1027,6 +1027,20 @@ To run the Codex wrapper, Minigent, and the runtime tool demo as one local stack
 ./scripts/demo_peer_agent_tool_stack.sh
 ```
 
+The stack script runs the preflight checker before starting services. You can run it
+directly when diagnosing setup:
+
+```bash
+uv run python scripts/check_peer_agent_demo.py
+```
+
+To check services that are already running instead of checking whether the demo ports are
+free:
+
+```bash
+uv run python scripts/check_peer_agent_demo.py --check-running
+```
+
 Pass a custom peer prompt as the first argument:
 
 ```bash
