@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -161,6 +162,22 @@ def create_app(
     @app.get("/peer-agents/{name}/agent-card")
     async def peer_agent_card(name: str, request: Request) -> dict[str, object]:
         return await request.app.state.peer_agent_registry.agent_card(name)
+
+    @app.post("/peer-agents/{name}/tasks")
+    async def create_peer_agent_task(
+        name: str,
+        body: dict[str, Any],
+        request: Request,
+    ) -> dict[str, object]:
+        return await request.app.state.peer_agent_registry.create_task(name, body)
+
+    @app.get("/peer-agents/{name}/tasks/{task_id}")
+    async def peer_agent_task(
+        name: str,
+        task_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        return await request.app.state.peer_agent_registry.task(name, task_id)
 
     @app.post("/threads", response_model=CreateThreadResponse)
     async def create_thread(

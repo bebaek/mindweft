@@ -158,7 +158,10 @@ def test_peer_agent_endpoints_list_and_fetch_agent_card() -> None:
                 "name": "codex",
                 "base_url": "http://codex-agent.test",
                 "description": "Local Codex wrapper",
-                "links": {"agent_card": "/peer-agents/codex/agent-card"},
+                "links": {
+                    "agent_card": "/peer-agents/codex/agent-card",
+                    "tasks": "/peer-agents/codex/tasks",
+                },
             }
         ]
     }
@@ -166,6 +169,52 @@ def test_peer_agent_endpoints_list_and_fetch_agent_card() -> None:
     card_response = client.get("/peer-agents/codex/agent-card", headers=AUTH_HEADERS)
     assert card_response.status_code == 200
     assert card_response.json() == {"name": "codex-coding-agent"}
+
+
+def test_peer_agent_task_proxy_endpoints() -> None:
+    requests: list[tuple[str, str, dict[str, object] | None]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content) if request.content else None
+        requests.append((request.method, request.url.path, payload))
+        if request.method == "POST" and request.url.path == "/tasks":
+            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            return httpx.Response(200, json={"task_id": "task_123", "status": "completed"})
+        return httpx.Response(404, json={"detail": "missing"})
+
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            peer_agent_registry=registry,
+        )
+    )
+
+    create_response = client.post(
+        "/peer-agents/codex/tasks",
+        headers=AUTH_HEADERS,
+        json={"cwd": "/workspace/project", "prompt": "summarize this repo"},
+    )
+    assert create_response.status_code == 200
+    assert create_response.json() == {"task_id": "task_123", "status": "running"}
+
+    task_response = client.get("/peer-agents/codex/tasks/task_123", headers=AUTH_HEADERS)
+    assert task_response.status_code == 200
+    assert task_response.json() == {"task_id": "task_123", "status": "completed"}
+
+    assert requests == [
+        (
+            "POST",
+            "/tasks",
+            {"cwd": "/workspace/project", "prompt": "summarize this repo"},
+        ),
+        ("GET", "/tasks/task_123", None),
+    ]
 
 
 def test_run_endpoint_handles_tool_call_flow() -> None:

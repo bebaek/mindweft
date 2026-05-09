@@ -945,8 +945,9 @@ server as `connected`.
 
 ## Peer Agent Config
 
-Minigent can discover configured federated peer agents without delegating runtime work to
-them yet. Configure peers with `MINIGENT_PEER_AGENTS`:
+Minigent can discover configured federated peer agents and manually proxy task requests
+to them without delegating runtime work to them yet. Configure peers with
+`MINIGENT_PEER_AGENTS`:
 
 ```dotenv
 MINIGENT_PEER_AGENTS=[{"name":"codex","base_url":"http://127.0.0.1:8010","description":"Local Codex wrapper"}]
@@ -956,10 +957,15 @@ Discovery endpoints:
 
 - `GET /peer-agents`
 - `GET /peer-agents/{name}/agent-card`
+- `POST /peer-agents/{name}/tasks`
+- `GET /peer-agents/{name}/tasks/{task_id}`
 
 `GET /peer-agents/{name}/agent-card` fetches the peer's `/agent-card` endpoint and
 returns it through Minigent. Unknown peers return `404`; peer HTTP or JSON failures
-return `502`.
+return `502`. `POST /peer-agents/{name}/tasks` forwards the request JSON to the peer's
+`/tasks` endpoint, and `GET /peer-agents/{name}/tasks/{task_id}` forwards task status
+lookups to the peer. These proxy endpoints are for manual federation demos; the agent
+runtime does not yet choose or invoke peers automatically.
 
 ### Stdio MCP Bridge
 

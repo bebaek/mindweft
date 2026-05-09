@@ -66,6 +66,47 @@ def test_peer_agent_registry_fetches_agent_card() -> None:
     assert card == {"name": "codex-coding-agent"}
 
 
+def test_peer_agent_registry_creates_task() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == "http://codex-agent.test/tasks"
+        assert json.loads(request.content) == {
+            "cwd": "/workspace/project",
+            "prompt": "summarize this repo",
+        }
+        return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        registry.create_task(
+            "codex",
+            {"cwd": "/workspace/project", "prompt": "summarize this repo"},
+        )
+    )
+
+    assert response == {"task_id": "task_123", "status": "running"}
+
+
+def test_peer_agent_registry_fetches_task_status() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert str(request.url) == "http://codex-agent.test/tasks/task_123"
+        return httpx.Response(200, json={"task_id": "task_123", "status": "completed"})
+
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(registry.task("codex", "task_123"))
+
+    assert response == {"task_id": "task_123", "status": "completed"}
+
+
 def test_peer_agent_registry_returns_404_for_unknown_agent() -> None:
     registry = PeerAgentRegistry([])
 

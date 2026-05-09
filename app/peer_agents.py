@@ -23,6 +23,7 @@ class PeerAgentConfig:
             "base_url": self.base_url,
             "links": {
                 "agent_card": f"/peer-agents/{self.name}/agent-card",
+                "tasks": f"/peer-agents/{self.name}/tasks",
             },
         }
         if self.description is not None:
@@ -46,28 +47,55 @@ class PeerAgentRegistry:
         return [self._agents[name].public_dict() for name in sorted(self._agents)]
 
     async def agent_card(self, name: str) -> dict[str, Any]:
-        agent = self._agents.get(name)
-        if agent is None:
-            raise HTTPException(status_code=404, detail=f"Peer agent '{name}' not found")
+        return await self._request_json(name, "GET", "/agent-card", response_label="agent card")
+
+    async def create_task(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json(
+            name,
+            "POST",
+            "/tasks",
+            json_body=payload,
+            response_label="task response",
+        )
+
+    async def task(self, name: str, task_id: str) -> dict[str, Any]:
+        return await self._request_json(
+            name,
+            "GET",
+            f"/tasks/{task_id}",
+            response_label="task response",
+        )
+
+    async def _request_json(
+        self,
+        name: str,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        response_label: str,
+    ) -> dict[str, Any]:
+        agent = self._agent_or_404(name)
+        url = f"{agent.base_url.rstrip('/')}{path}"
         try:
             async with httpx.AsyncClient(
                 timeout=self._timeout,
                 transport=self._transport,
             ) as client:
-                response = await client.get(f"{agent.base_url.rstrip('/')}/agent-card")
+                response = await client.request(method, url, json=json_body)
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise HTTPException(
                 status_code=502,
                 detail=(
-                    f"Peer agent '{name}' agent-card request failed with status "
+                    f"Peer agent '{name}' {path} request failed with status "
                     f"{exc.response.status_code}"
                 ),
             ) from exc
         except httpx.HTTPError as exc:
             raise HTTPException(
                 status_code=502,
-                detail=f"Peer agent '{name}' agent-card request failed: {exc}",
+                detail=f"Peer agent '{name}' {path} request failed: {exc}",
             ) from exc
 
         try:
@@ -75,14 +103,20 @@ class PeerAgentRegistry:
         except ValueError as exc:
             raise HTTPException(
                 status_code=502,
-                detail=f"Peer agent '{name}' returned invalid JSON agent card",
+                detail=f"Peer agent '{name}' returned invalid JSON {response_label}",
             ) from exc
         if not isinstance(payload, dict):
             raise HTTPException(
                 status_code=502,
-                detail=f"Peer agent '{name}' returned non-object agent card",
+                detail=f"Peer agent '{name}' returned non-object {response_label}",
             )
         return payload
+
+    def _agent_or_404(self, name: str) -> PeerAgentConfig:
+        agent = self._agents.get(name)
+        if agent is None:
+            raise HTTPException(status_code=404, detail=f"Peer agent '{name}' not found")
+        return agent
 
 
 def load_peer_agent_configs_from_env() -> list[PeerAgentConfig]:
