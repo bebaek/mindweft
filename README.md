@@ -26,6 +26,8 @@ The local tool registry includes:
 - `sleep`: pauses execution
 - `calculator`: evaluates basic arithmetic
 - `retrieve_knowledge`: searches tenant-scoped MiniRAG knowledge when configured
+- `peer_agent_task`: submits a task to a configured federated peer agent and optionally
+  polls for completion
 
 `fetch_url` is intended for lightweight web context and endpoint checks, not as a full
 `curl` replacement. It rejects non-HTTP schemes, private-network hosts, sensitive
@@ -998,6 +1000,13 @@ uv run python scripts/demo_peer_agent.py \
   --cancel-after 3
 ```
 
+The same peer task surface is also available to the agent runtime as the local
+`peer_agent_task` tool when that tool is allowed by tenant, skill, or capability-profile
+configuration. The tool requires `peer`, `cwd`, and `prompt`, accepts optional `poll`,
+`timeout_seconds`, and `poll_interval_seconds`, and returns compact task status plus
+truncated output fields. This is explicit tool-based delegation only; Minigent does not
+automatically choose peer agents outside normal tool calling.
+
 ### Stdio MCP Bridge
 
 Many local MCP servers expose the MCP `stdio` transport instead of HTTP. Minigent includes
@@ -1288,3 +1297,5 @@ Local tools currently include:
 - `fetch_url`
 - `sleep`
 - `calculator`
+- `retrieve_knowledge`
+- `peer_agent_task`

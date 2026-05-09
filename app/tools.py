@@ -22,6 +22,7 @@ from fastapi import HTTPException
 from app.mcp import MCPHTTPClient, MCPServerConfig, load_mcp_server_configs_from_env
 from app.mcp_manager import MCPRegistrySnapshot
 from app.models import ToolSpec
+from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_env
 from app.redaction import sanitize_value_for_logging
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ LOCAL_TOOL_NAMES = {
     "sleep",
     "calculator",
     "retrieve_knowledge",
+    "peer_agent_task",
 }
 
 _CALCULATOR_BINARY_OPERATORS: dict[type[ast.operator], Callable[[float, float], float]] = {
@@ -61,6 +63,10 @@ _FETCH_URL_BLOCKED_REQUEST_HEADERS = {
     "cookie",
     "proxy-authorization",
 }
+_PEER_AGENT_TERMINAL_STATUSES = {"completed", "failed", "canceled"}
+_PEER_AGENT_DEFAULT_TIMEOUT_SECONDS = 180.0
+_PEER_AGENT_DEFAULT_POLL_INTERVAL_SECONDS = 1.0
+_PEER_AGENT_MAX_OUTPUT_CHARS = 4000
 
 
 @dataclass(frozen=True)
@@ -133,7 +139,11 @@ class ToolRegistry:
         return list(self._mcp_servers)
 
 
-def build_local_tool_registry(allowed_tools: list[str] | None = None) -> ToolRegistry:
+def build_local_tool_registry(
+    allowed_tools: list[str] | None = None,
+    *,
+    peer_agent_registry: PeerAgentRegistry | None = None,
+) -> ToolRegistry:
     registry = ToolRegistry()
     allowed_tool_set = set(allowed_tools) if allowed_tools is not None else None
 
@@ -238,7 +248,9 @@ def build_local_tool_registry(allowed_tools: list[str] | None = None) -> ToolReg
                                 break
                         break
                 else:  # pragma: no cover - defensive loop boundary
-                    raise HTTPException(status_code=502, detail="fetch_url exceeded maximum redirects")
+                    raise HTTPException(
+                        status_code=502, detail="fetch_url exceeded maximum redirects"
+                    )
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=f"fetch_url request failed: {exc}") from exc
         content_type = response.headers.get("content-type", "")
@@ -340,6 +352,62 @@ def build_local_tool_registry(allowed_tools: list[str] | None = None) -> ToolReg
         handler=retrieve_knowledge_tool,
     )
 
+    async def peer_agent_task_tool(
+        arguments: dict[str, Any], context: ToolExecutionContext | None = None
+    ) -> dict[str, Any]:
+        _ = context
+        registry = peer_agent_registry or build_peer_agent_registry_from_env()
+        peer = _required_tool_string(arguments, "peer", "peer_agent_task")
+        cwd = _required_tool_string(arguments, "cwd", "peer_agent_task")
+        prompt = _required_tool_string(arguments, "prompt", "peer_agent_task")
+        poll = bool(arguments.get("poll", True))
+        timeout_seconds = _positive_float(
+            arguments.get("timeout_seconds", _PEER_AGENT_DEFAULT_TIMEOUT_SECONDS),
+            field_name="timeout_seconds",
+            tool_name="peer_agent_task",
+        )
+        poll_interval_seconds = _positive_float(
+            arguments.get("poll_interval_seconds", _PEER_AGENT_DEFAULT_POLL_INTERVAL_SECONDS),
+            field_name="poll_interval_seconds",
+            tool_name="peer_agent_task",
+        )
+        task = await registry.create_task(peer, {"cwd": cwd, "prompt": prompt})
+        task_id = str(task.get("task_id", "")).strip()
+        if not task_id:
+            raise HTTPException(
+                status_code=502,
+                detail="peer_agent_task peer returned task response without task_id",
+            )
+        if poll:
+            deadline = time.monotonic() + timeout_seconds
+            while str(task.get("status", "")) not in _PEER_AGENT_TERMINAL_STATUSES:
+                if time.monotonic() >= deadline:
+                    return _peer_agent_tool_result(task, timed_out=True)
+                await asyncio.sleep(poll_interval_seconds)
+                task = await registry.task(peer, task_id)
+        return _peer_agent_tool_result(task, timed_out=False)
+
+    register_local_tool(
+        name="peer_agent_task",
+        description=(
+            "Submit a task to a configured peer agent and optionally poll until it finishes. "
+            "Use only when explicit delegation to a peer agent is useful."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "peer": {"type": "string"},
+                "cwd": {"type": "string"},
+                "prompt": {"type": "string"},
+                "poll": {"type": "boolean"},
+                "timeout_seconds": {"type": "number", "minimum": 0.1},
+                "poll_interval_seconds": {"type": "number", "minimum": 0.1},
+            },
+            "required": ["peer", "cwd", "prompt"],
+        },
+        handler=peer_agent_task_tool,
+    )
+
     return registry
 
 
@@ -352,8 +420,12 @@ def build_tool_registry(
     mcp_server_configs: list[MCPServerConfig] | None = None,
     mcp_snapshot: MCPRegistrySnapshot | None = None,
     allowed_local_tools: list[str] | None = None,
+    peer_agent_registry: PeerAgentRegistry | None = None,
 ) -> ToolRegistry:
-    registry = build_local_tool_registry(allowed_tools=allowed_local_tools)
+    registry = build_local_tool_registry(
+        allowed_tools=allowed_local_tools,
+        peer_agent_registry=peer_agent_registry,
+    )
 
     mcp_servers: list[dict[str, Any]] = []
     if mcp_snapshot is not None:
@@ -365,8 +437,8 @@ def build_tool_registry(
                         name=spec.name,
                         description=spec.description,
                         input_schema=spec.input_schema,
-                        handler=lambda arguments, context=None, c=state.client, tool_name=raw_tool_name: c.call_tool(
-                            tool_name, arguments
+                        handler=lambda arguments, context=None, c=state.client, tool_name=raw_tool_name: (
+                            c.call_tool(tool_name, arguments)
                         ),
                     )
             mcp_servers.append(state.public_dict())
@@ -383,8 +455,8 @@ def build_tool_registry(
                     name=spec.name,
                     description=spec.description,
                     input_schema=spec.input_schema,
-                    handler=lambda arguments, context=None, c=client, tool_name=raw_tool_name: c.call_tool(
-                        tool_name, arguments
+                    handler=lambda arguments, context=None, c=client, tool_name=raw_tool_name: (
+                        c.call_tool(tool_name, arguments)
                     ),
                 )
             server_info = client.server_info()
@@ -453,11 +525,59 @@ def _evaluate_calculator_node(node: ast.AST) -> float | int:
     raise HTTPException(status_code=400, detail="calculator expression contains unsupported syntax")
 
 
+def _required_tool_string(arguments: dict[str, Any], field_name: str, tool_name: str) -> str:
+    value = str(arguments.get(field_name, "")).strip()
+    if not value:
+        raise HTTPException(status_code=400, detail=f"{tool_name} requires {field_name}")
+    return value
+
+
+def _positive_float(value: object, *, field_name: str, tool_name: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{tool_name} requires {field_name} to be numeric",
+        ) from exc
+    if parsed <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{tool_name} requires {field_name} > 0",
+        )
+    return parsed
+
+
+def _peer_agent_tool_result(task: dict[str, Any], *, timed_out: bool) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "task_id": task.get("task_id"),
+        "status": task.get("status"),
+        "exit_code": task.get("exit_code"),
+        "timed_out": timed_out,
+    }
+    for key in ("final_output", "stdout_tail"):
+        text = str(task.get(key) or "").strip()
+        if text:
+            result[key] = _truncate_peer_agent_output(text)
+    stderr_tail = str(task.get("stderr_tail") or "").strip()
+    if stderr_tail:
+        result["stderr_tail"] = _truncate_peer_agent_output(stderr_tail)
+    return result
+
+
+def _truncate_peer_agent_output(text: str) -> str:
+    if len(text) <= _PEER_AGENT_MAX_OUTPUT_CHARS:
+        return text
+    return text[:_PEER_AGENT_MAX_OUTPUT_CHARS] + "\n...[truncated]"
+
+
 def _fetch_url_timeout(raw_timeout: Any) -> float:
     try:
         timeout = float(raw_timeout)
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="fetch_url timeout_seconds must be a number") from exc
+        raise HTTPException(
+            status_code=400, detail="fetch_url timeout_seconds must be a number"
+        ) from exc
     if timeout < 0.1 or timeout > 60:
         raise HTTPException(
             status_code=400,
@@ -472,7 +592,9 @@ def _fetch_url_max_bytes(raw_max_bytes: Any) -> int:
     try:
         max_bytes = int(raw_max_bytes)
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="fetch_url max_bytes must be an integer") from exc
+        raise HTTPException(
+            status_code=400, detail="fetch_url max_bytes must be an integer"
+        ) from exc
     if max_bytes < 1 or max_bytes > _FETCH_URL_MAX_BYTES_LIMIT:
         raise HTTPException(
             status_code=400,
@@ -526,7 +648,9 @@ def _is_blocked_fetch_host(host: str) -> bool:
         try:
             infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
         except socket.gaierror as exc:
-            raise HTTPException(status_code=400, detail=f"fetch_url could not resolve host '{host}'") from exc
+            raise HTTPException(
+                status_code=400, detail=f"fetch_url could not resolve host '{host}'"
+            ) from exc
         addresses = []
         for info in infos:
             sockaddr = info[4]
@@ -606,14 +730,10 @@ def _execute_retrieve_knowledge(
             backend_name,
             embedding_provider_name=embedding_provider_name,
             hybrid_lexical_weight=(
-                float(hybrid_lexical_weight_raw)
-                if hybrid_lexical_weight_raw is not None
-                else None
+                float(hybrid_lexical_weight_raw) if hybrid_lexical_weight_raw is not None else None
             ),
             hybrid_dense_weight=(
-                float(hybrid_dense_weight_raw)
-                if hybrid_dense_weight_raw is not None
-                else None
+                float(hybrid_dense_weight_raw) if hybrid_dense_weight_raw is not None else None
             ),
         ),
     )

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from datetime import datetime
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from fastapi import HTTPException
 from app.mcp import MCPServerConfig, MCPServerInfo
 from app.mcp_manager import MCPServerManager
 from app.models import ToolSpec
+from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
 from app.tools import (
     MINIGENT_MINIRAG_BACKEND_ENV,
     MINIGENT_MINIRAG_DB_PATH_ENV,
@@ -33,6 +35,7 @@ def test_local_registry_exposes_expected_tools() -> None:
     assert "sleep" in specs
     assert "calculator" in specs
     assert "retrieve_knowledge" in specs
+    assert "peer_agent_task" in specs
     assert specs["current_time"].description == "Return the current UTC time in ISO 8601 format."
 
 
@@ -97,9 +100,7 @@ def test_fetch_url_tool_returns_response_text(monkeypatch: pytest.MonkeyPatch) -
         async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
             return None
 
-        def stream(
-            self, method: str, url: str, *, headers: dict[str, str]
-        ) -> FakeStream:
+        def stream(self, method: str, url: str, *, headers: dict[str, str]) -> FakeStream:
             assert method == "GET"
             assert headers == {"accept": "text/plain"}
             request = httpx.Request("GET", url)
@@ -311,7 +312,9 @@ def test_build_tool_registry_can_limit_local_tools() -> None:
 def test_retrieve_knowledge_tool_uses_tenant_context(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_execute(arguments: dict[str, object], context: ToolExecutionContext | None) -> dict[str, object]:
+    def fake_execute(
+        arguments: dict[str, object], context: ToolExecutionContext | None
+    ) -> dict[str, object]:
         captured["arguments"] = arguments
         captured["context"] = context
         return {"chunks": [{"chunk_id": "chk_1"}]}
@@ -330,6 +333,98 @@ def test_retrieve_knowledge_tool_uses_tenant_context(monkeypatch: pytest.MonkeyP
     assert result == {"chunks": [{"chunk_id": "chk_1"}]}
     assert captured["arguments"] == {"query": "token refresh", "top_k": 3}
     assert captured["context"] == ToolExecutionContext(tenant_id="tenant-1", thread_id="thread-1")
+
+
+def test_peer_agent_task_tool_can_submit_without_polling() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == "http://codex-agent.test/tasks"
+        assert json.loads(request.content) == {
+            "cwd": "/workspace/project",
+            "prompt": "summarize",
+        }
+        return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+
+    peer_registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    registry = build_local_tool_registry(peer_agent_registry=peer_registry)
+
+    result = asyncio.run(
+        registry.execute(
+            "peer_agent_task",
+            {
+                "peer": "codex",
+                "cwd": "/workspace/project",
+                "prompt": "summarize",
+                "poll": False,
+            },
+        )
+    )
+
+    assert result == {
+        "task_id": "task_123",
+        "status": "running",
+        "exit_code": None,
+        "timed_out": False,
+    }
+
+
+def test_peer_agent_task_tool_can_poll_until_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task_status_requests = 0
+
+    async def fake_sleep(seconds: float) -> None:
+        assert seconds == 0.1
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal task_status_requests
+        if request.method == "POST" and str(request.url) == "http://codex-agent.test/tasks":
+            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+        if request.method == "GET" and str(request.url) == "http://codex-agent.test/tasks/task_123":
+            task_status_requests += 1
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": "task_123",
+                    "status": "completed",
+                    "exit_code": 0,
+                    "final_output": "summary",
+                    "stderr_tail": "log",
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    monkeypatch.setattr("app.tools.asyncio.sleep", fake_sleep)
+    peer_registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    registry = build_local_tool_registry(peer_agent_registry=peer_registry)
+
+    result = asyncio.run(
+        registry.execute(
+            "peer_agent_task",
+            {
+                "peer": "codex",
+                "cwd": "/workspace/project",
+                "prompt": "summarize",
+                "poll_interval_seconds": 0.1,
+            },
+        )
+    )
+
+    assert task_status_requests == 1
+    assert result == {
+        "task_id": "task_123",
+        "status": "completed",
+        "exit_code": 0,
+        "timed_out": False,
+        "final_output": "summary",
+        "stderr_tail": "log",
+    }
 
 
 def test_retrieve_knowledge_requires_minirag_db_path(monkeypatch: pytest.MonkeyPatch) -> None:
