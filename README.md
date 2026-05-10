@@ -1054,6 +1054,35 @@ Pass a custom peer prompt as the first argument:
 ./scripts/demo_peer_agent_tool_stack.sh "Summarize the API routes in this repository. Do not edit files."
 ```
 
+For a local Docker Compose sidecar demo, prepare a minimal Codex home and run the
+containerized stack:
+
+```bash
+./scripts/prepare-codex-container-home.sh
+./scripts/demo_peer_agent_tool_compose.sh
+```
+
+The Compose demo uses [compose.peer-demo.yaml](/Users/burm/code/minigent/compose.peer-demo.yaml).
+It exposes Minigent on `127.0.0.1:8000`, keeps the Codex wrapper internal to the Compose
+network, mounts this repository read-only at `/workspace/minigent`, and mounts
+`.codex-container` as writable local Codex state at `CODEX_HOME=/home/codex/.codex`.
+The prepared
+`.codex-container` directory contains copied Codex credentials, is ignored by git, and is
+made readable by the non-root wrapper container user for this local-only demo. Codex may
+update files in that directory while it runs.
+
+The sidecar sets `CODEX_AGENT_SANDBOX=danger-full-access` because Codex's Linux sandbox
+needs unprivileged namespace support that is typically unavailable inside Docker. The
+demo still constrains the filesystem by mounting the repository read-only and only
+giving the wrapper writable access to `.codex-container`.
+
+Keep the Compose demo running for inspection:
+
+```bash
+./scripts/demo_peer_agent_tool_compose.sh --keep-running
+docker compose -f compose.peer-demo.yaml down
+```
+
 ### Stdio MCP Bridge
 
 Many local MCP servers expose the MCP `stdio` transport instead of HTTP. Minigent includes

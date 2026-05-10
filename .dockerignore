@@ -1,4 +1,7 @@
 .env
+.env.*
+!.env.template
+!.env.*.template
 .venv/
 .uv-cache/
 .pytest_cache/
@@ -7,4 +10,9 @@ __pycache__/
 .git/
 .gitignore
 .data/
+.codex-container/
 tests/
+codex-agent-wrapper/.venv/
+codex-agent-wrapper/.pytest_cache/
+codex-agent-wrapper/.ruff_cache/
+codex-agent-wrapper/**/__pycache__/

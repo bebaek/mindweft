@@ -33,6 +33,7 @@ def args_for(tmp_path: Path, *, check_running: bool = False) -> argparse.Namespa
         minigent_host="127.0.0.1",
         minigent_port=8000,
         check_running=check_running,
+        skip_codex_wrapper_health=False,
     )
 
 
@@ -110,3 +111,38 @@ def test_check_peer_agent_demo_running_mode_validates_config(monkeypatch, tmp_pa
     assert all(result.ok for result in results)
     assert any(result.name == "peer_agent_task enabled" for result in results)
     assert any(result.name == "codex peer configured" for result in results)
+
+
+def test_check_peer_agent_demo_running_mode_can_skip_direct_wrapper_health(
+    monkeypatch, tmp_path
+) -> None:
+    checker = load_check_module()
+    args = args_for(tmp_path, check_running=True)
+    args.skip_codex_wrapper_health = True
+
+    monkeypatch.setattr(checker.shutil, "which", lambda executable: f"/usr/bin/{executable}")
+    monkeypatch.setattr(
+        checker.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="ok", stderr=""),
+    )
+    monkeypatch.setattr(
+        checker,
+        "check_url",
+        lambda name, url: (_ for _ in ()).throw(AssertionError("unexpected wrapper check")),
+    )
+    monkeypatch.setattr(
+        checker,
+        "request_json_result",
+        lambda name, url: (
+            checker.CheckResult(name, True, url),
+            {"local_tools": ["peer_agent_task"]}
+            if url.endswith("/config")
+            else {"agents": [{"name": "codex"}]},
+        ),
+    )
+
+    results = checker.run_checks(args)
+
+    assert all(result.ok for result in results)
+    assert not any(result.name == "codex wrapper health" for result in results)

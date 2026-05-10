@@ -129,6 +129,15 @@ def main(argv: list[str] | None = None) -> int:
         tool_name = item.get("tool_name")
         suffix = f" ({tool_name})" if tool_name else ""
         print(f"- {role}{suffix}: {item['content']}")
+    peer_result = find_peer_agent_tool_result(transcript)
+    if peer_result is None:
+        print("peer_agent_task result was not found in the transcript", file=sys.stderr)
+        return 1
+    status = peer_result.get("status")
+    timed_out = peer_result.get("timed_out")
+    if status not in {"completed", "succeeded"} or timed_out is True:
+        print(f"peer_agent_task did not complete successfully: {peer_result}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -165,6 +174,25 @@ def request_json(
 def print_http_error(exc: urllib.error.HTTPError) -> None:
     body = exc.read().decode("utf-8", errors="replace")
     print(f"Minigent request failed: {exc.code} {body}", file=sys.stderr)
+
+
+def find_peer_agent_tool_result(transcript: Any) -> dict[str, Any] | None:
+    if not isinstance(transcript, list):
+        return None
+    for item in reversed(transcript):
+        if not isinstance(item, dict):
+            continue
+        if item.get("role") != "tool" or item.get("tool_name") != "peer_agent_task":
+            continue
+        content = item.get("content")
+        if not isinstance(content, str):
+            return None
+        try:
+            result = json.loads(content)
+        except json.JSONDecodeError:
+            return None
+        return result if isinstance(result, dict) else None
+    return None
 
 
 if __name__ == "__main__":

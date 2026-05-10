@@ -44,6 +44,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Check already-running services instead of checking that demo ports are free.",
     )
+    parser.add_argument(
+        "--skip-codex-wrapper-health",
+        action="store_true",
+        help="In --check-running mode, skip direct wrapper health checks for internal-only sidecars.",
+    )
     return parser.parse_args(argv)
 
 
@@ -138,7 +143,8 @@ def check_running_services(args: argparse.Namespace) -> list[CheckResult]:
     codex_url = f"http://{args.codex_agent_host}:{args.codex_agent_port}"
     minigent_url = f"http://{args.minigent_host}:{args.minigent_port}"
     results: list[CheckResult] = []
-    results.append(check_url("codex wrapper health", f"{codex_url}/health"))
+    if not args.skip_codex_wrapper_health:
+        results.append(check_url("codex wrapper health", f"{codex_url}/health"))
     config = request_json_result("minigent config", f"{minigent_url}/config")
     results.append(config[0])
     peers = request_json_result("minigent peer agents", f"{minigent_url}/peer-agents")

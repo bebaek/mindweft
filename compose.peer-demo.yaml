@@ -1,0 +1,52 @@
+services:
+  minigent:
+    build:
+      context: .
+    environment:
+      MINIGENT_LLM_PROVIDER: mock
+      MINIGENT_AUTH_MODE: dev-headers
+      MINIGENT_ENABLE_PEER_AGENT_TOOL: "true"
+      MINIGENT_PEER_AGENTS: '[{"name":"codex","base_url":"http://codex-agent-wrapper:8010","description":"Local Codex wrapper sidecar"}]'
+    ports:
+      - "127.0.0.1:${MINIGENT_PORT:-8000}:8000"
+    depends_on:
+      codex-agent-wrapper:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  codex-agent-wrapper:
+    build:
+      context: ./codex-agent-wrapper
+    environment:
+      CODEX_HOME: /home/codex/.codex
+      CODEX_AGENT_ALLOWED_WORKSPACES: /workspace/minigent
+      CODEX_AGENT_SANDBOX: danger-full-access
+      CODEX_AGENT_COMMAND: codex
+    expose:
+      - "8010"
+    volumes:
+      - .:/workspace/minigent:ro
+      - ./.codex-container:/home/codex/.codex
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health').read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
