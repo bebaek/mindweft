@@ -385,18 +385,20 @@ def test_peer_agent_task_tool_can_submit_without_polling() -> None:
         )
     )
 
-    assert result == {
-        "task_id": "task_123",
-        "status": "running",
-        "exit_code": None,
-        "timed_out": False,
-    }
+    assert result["peer"] == "codex"
+    assert result["task_id"] == "task_123"
+    assert result["status"] == "running"
+    assert result["exit_code"] is None
+    assert result["timed_out"] is False
+    assert result["duration_seconds"] >= 0
+    assert result["events_count"] == 0
 
 
 def test_peer_agent_task_tool_can_poll_until_completion(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     task_status_requests = 0
+    caplog.set_level(logging.INFO)
 
     async def fake_sleep(seconds: float) -> None:
         assert seconds == 0.1
@@ -415,6 +417,7 @@ def test_peer_agent_task_tool_can_poll_until_completion(
                     "exit_code": 0,
                     "final_output": "summary",
                     "stderr_tail": "log",
+                    "events_tail": [{"type": "turn.completed"}],
                 },
             )
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
@@ -442,14 +445,84 @@ def test_peer_agent_task_tool_can_poll_until_completion(
     )
 
     assert task_status_requests == 1
-    assert result == {
-        "task_id": "task_123",
-        "status": "completed",
-        "exit_code": 0,
-        "timed_out": False,
-        "final_output": "summary",
-        "stderr_tail": "log",
-    }
+    assert result["peer"] == "codex"
+    assert result["task_id"] == "task_123"
+    assert result["status"] == "completed"
+    assert result["exit_code"] == 0
+    assert result["timed_out"] is False
+    assert result["duration_seconds"] >= 0
+    assert result["events_count"] == 1
+    assert result["final_output"] == "summary"
+    assert result["final_output_preview"] == "summary"
+    assert result["stderr_tail"] == "log"
+    assert result["stderr_tail_preview"] == "log"
+    assert "peer_agent_task.result peer=codex task_id=task_123 status=completed" in caplog.text
+
+
+def test_peer_agent_task_tool_reports_timeout_with_observability_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps = 0
+
+    async def fake_sleep(seconds: float) -> None:
+        nonlocal sleeps
+        assert seconds == 0.1
+        sleeps += 1
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and str(request.url) == "http://codex-agent.test/tasks":
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": "task_123",
+                    "status": "running",
+                    "stderr_tail": "still working",
+                },
+            )
+        if request.method == "GET" and str(request.url) == "http://codex-agent.test/tasks/task_123":
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": "task_123",
+                    "status": "running",
+                    "stderr_tail": "still working",
+                    "events_tail": [{"type": "turn.started"}, {"type": "item.started"}],
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    monkeypatch.setattr("app.tools.asyncio.sleep", fake_sleep)
+    peer_registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    registry = build_local_tool_registry(
+        peer_agent_registry=peer_registry,
+        enable_peer_agent_tool=True,
+    )
+
+    result = asyncio.run(
+        registry.execute(
+            "peer_agent_task",
+            {
+                "peer": "codex",
+                "cwd": "/workspace/project",
+                "prompt": "summarize",
+                "timeout_seconds": 0.1,
+                "poll_interval_seconds": 0.1,
+            },
+        )
+    )
+
+    assert sleeps >= 1
+    assert result["peer"] == "codex"
+    assert result["task_id"] == "task_123"
+    assert result["status"] == "running"
+    assert result["timed_out"] is True
+    assert result["duration_seconds"] >= 0
+    assert result["events_count"] == 2
+    assert result["stderr_tail"] == "still working"
+    assert result["stderr_tail_preview"] == "still working"
 
 
 def test_retrieve_knowledge_requires_minirag_db_path(monkeypatch: pytest.MonkeyPatch) -> None:

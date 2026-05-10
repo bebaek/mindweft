@@ -123,13 +123,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"thread_id: {thread_id}")
     print(f"user: {message}")
     print(f"assistant: {run_response['reply']}")
+    peer_result = find_peer_agent_tool_result(transcript)
+    if peer_result is not None:
+        print(f"peer_summary: {format_peer_agent_summary(peer_result)}")
     print("\ntranscript:")
     for item in transcript:
         role = item["role"]
         tool_name = item.get("tool_name")
         suffix = f" ({tool_name})" if tool_name else ""
         print(f"- {role}{suffix}: {item['content']}")
-    peer_result = find_peer_agent_tool_result(transcript)
     if peer_result is None:
         print("peer_agent_task result was not found in the transcript", file=sys.stderr)
         return 1
@@ -193,6 +195,24 @@ def find_peer_agent_tool_result(transcript: Any) -> dict[str, Any] | None:
             return None
         return result if isinstance(result, dict) else None
     return None
+
+
+def format_peer_agent_summary(result: dict[str, Any]) -> str:
+    parts = [
+        f"peer={result.get('peer', '')}",
+        f"task_id={result.get('task_id', '')}",
+        f"status={result.get('status', '')}",
+        f"exit_code={result.get('exit_code')}",
+        f"timed_out={result.get('timed_out')}",
+        f"duration_seconds={result.get('duration_seconds')}",
+    ]
+    final_output_preview = str(result.get("final_output_preview") or "").strip()
+    stderr_tail_preview = str(result.get("stderr_tail_preview") or "").strip()
+    if final_output_preview:
+        parts.append(f"final_output_preview={json.dumps(final_output_preview)}")
+    if stderr_tail_preview:
+        parts.append(f"stderr_tail_preview={json.dumps(stderr_tail_preview)}")
+    return " ".join(parts)
 
 
 if __name__ == "__main__":

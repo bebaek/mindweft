@@ -68,6 +68,7 @@ _PEER_AGENT_TERMINAL_STATUSES = {"completed", "failed", "canceled"}
 _PEER_AGENT_DEFAULT_TIMEOUT_SECONDS = 180.0
 _PEER_AGENT_DEFAULT_POLL_INTERVAL_SECONDS = 1.0
 _PEER_AGENT_MAX_OUTPUT_CHARS = 4000
+_PEER_AGENT_PREVIEW_CHARS = 500
 
 
 @dataclass(frozen=True)
@@ -373,6 +374,7 @@ def build_local_tool_registry(
             field_name="poll_interval_seconds",
             tool_name="peer_agent_task",
         )
+        started_at = time.perf_counter()
         task = await registry.create_task(peer, {"cwd": cwd, "prompt": prompt})
         task_id = str(task.get("task_id", "")).strip()
         if not task_id:
@@ -384,10 +386,20 @@ def build_local_tool_registry(
             deadline = time.monotonic() + timeout_seconds
             while str(task.get("status", "")) not in _PEER_AGENT_TERMINAL_STATUSES:
                 if time.monotonic() >= deadline:
-                    return _peer_agent_tool_result(task, timed_out=True)
+                    return _peer_agent_tool_result(
+                        task,
+                        peer=peer,
+                        timed_out=True,
+                        duration_seconds=time.perf_counter() - started_at,
+                    )
                 await asyncio.sleep(poll_interval_seconds)
                 task = await registry.task(peer, task_id)
-        return _peer_agent_tool_result(task, timed_out=False)
+        return _peer_agent_tool_result(
+            task,
+            peer=peer,
+            timed_out=False,
+            duration_seconds=time.perf_counter() - started_at,
+        )
 
     if _peer_agent_tool_enabled(enable_peer_agent_tool):
         register_local_tool(
@@ -566,20 +578,46 @@ def _positive_float(value: object, *, field_name: str, tool_name: str) -> float:
     return parsed
 
 
-def _peer_agent_tool_result(task: dict[str, Any], *, timed_out: bool) -> dict[str, Any]:
+def _peer_agent_tool_result(
+    task: dict[str, Any],
+    *,
+    peer: str,
+    timed_out: bool,
+    duration_seconds: float,
+) -> dict[str, Any]:
+    final_output = str(task.get("final_output") or "").strip()
+    stdout_tail = str(task.get("stdout_tail") or "").strip()
+    stderr_tail = str(task.get("stderr_tail") or "").strip()
     result: dict[str, Any] = {
+        "peer": peer,
         "task_id": task.get("task_id"),
         "status": task.get("status"),
         "exit_code": task.get("exit_code"),
         "timed_out": timed_out,
+        "duration_seconds": round(max(0.0, duration_seconds), 3),
+        "events_count": _peer_agent_events_count(task),
     }
-    for key in ("final_output", "stdout_tail"):
-        text = str(task.get(key) or "").strip()
-        if text:
-            result[key] = _truncate_peer_agent_output(text)
-    stderr_tail = str(task.get("stderr_tail") or "").strip()
+    if final_output:
+        result["final_output"] = _truncate_peer_agent_output(final_output)
+        result["final_output_preview"] = _truncate_peer_agent_preview(final_output)
+    if stdout_tail:
+        result["stdout_tail"] = _truncate_peer_agent_output(stdout_tail)
     if stderr_tail:
         result["stderr_tail"] = _truncate_peer_agent_output(stderr_tail)
+        result["stderr_tail_preview"] = _truncate_peer_agent_preview(stderr_tail)
+    logger.info(
+        "peer_agent_task.result peer=%s task_id=%s status=%s exit_code=%s timed_out=%s "
+        "duration_seconds=%s events_count=%s final_output_preview=%s stderr_tail_preview=%s",
+        result["peer"],
+        result["task_id"],
+        result["status"],
+        result["exit_code"],
+        result["timed_out"],
+        result["duration_seconds"],
+        result["events_count"],
+        sanitize_value_for_logging("final_output_preview", result.get("final_output_preview", "")),
+        sanitize_value_for_logging("stderr_tail_preview", result.get("stderr_tail_preview", "")),
+    )
     return result
 
 
@@ -587,6 +625,21 @@ def _truncate_peer_agent_output(text: str) -> str:
     if len(text) <= _PEER_AGENT_MAX_OUTPUT_CHARS:
         return text
     return text[:_PEER_AGENT_MAX_OUTPUT_CHARS] + "\n...[truncated]"
+
+
+def _truncate_peer_agent_preview(text: str) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= _PEER_AGENT_PREVIEW_CHARS:
+        return normalized
+    return normalized[:_PEER_AGENT_PREVIEW_CHARS] + "...[truncated]"
+
+
+def _peer_agent_events_count(task: dict[str, Any]) -> int:
+    for key in ("events_tail", "events"):
+        events = task.get(key)
+        if isinstance(events, list):
+            return len(events)
+    return 0
 
 
 def _fetch_url_timeout(raw_timeout: Any) -> float:
