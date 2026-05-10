@@ -157,7 +157,7 @@ def create_app(
 
     @app.get("/peer-agents")
     async def peer_agents(request: Request) -> dict[str, object]:
-        return {"agents": request.app.state.peer_agent_registry.list_agents()}
+        return {"agents": await request.app.state.peer_agent_registry.list_agents_with_cards()}
 
     @app.get("/peer-agents/{name}/agent-card")
     async def peer_agent_card(name: str, request: Request) -> dict[str, object]:

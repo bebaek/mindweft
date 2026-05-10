@@ -24,6 +24,9 @@ class PeerAgentConfig:
     name: str
     base_url: str
     description: str | None = None
+    capabilities: tuple[str, ...] = ()
+    side_effects: tuple[str, ...] = ()
+    version: str | None = None
 
     def public_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -36,6 +39,12 @@ class PeerAgentConfig:
         }
         if self.description is not None:
             payload["description"] = self.description
+        if self.capabilities:
+            payload["capabilities"] = list(self.capabilities)
+        if self.side_effects:
+            payload["side_effects"] = list(self.side_effects)
+        if self.version is not None:
+            payload["version"] = self.version
         return payload
 
 
@@ -59,6 +68,19 @@ class PeerAgentRegistry:
 
     def list_agents(self) -> list[dict[str, object]]:
         return [self._agents[name].public_dict() for name in sorted(self._agents)]
+
+    async def list_agents_with_cards(self) -> list[dict[str, object]]:
+        agents: list[dict[str, object]] = []
+        for name in sorted(self._agents):
+            payload = self._agents[name].public_dict()
+            try:
+                card = await self.agent_card(name)
+            except HTTPException as exc:
+                payload["agent_card_error"] = str(exc.detail)
+            else:
+                _merge_agent_card_summary(payload, card)
+            agents.append(payload)
+        return agents
 
     async def agent_card(self, name: str) -> dict[str, Any]:
         return await self._request_json(name, "GET", "/agent-card", response_label="agent card")
@@ -229,16 +251,63 @@ def parse_peer_agent_configs(payload: object) -> list[PeerAgentConfig]:
             if description_value is not None and str(description_value).strip()
             else None
         )
+        capabilities = _optional_string_tuple(
+            item.get("capabilities"), f"agent '{name}' capabilities"
+        )
+        side_effects = _optional_string_tuple(
+            item.get("side_effects"), f"agent '{name}' side_effects"
+        )
+        version_value = item.get("version")
+        version = (
+            str(version_value).strip()
+            if version_value is not None and str(version_value).strip()
+            else None
+        )
         if not name:
             raise RuntimeError(f"{PEER_AGENTS_ENV} entries require a non-empty name")
         if name in seen:
             raise RuntimeError(f"{PEER_AGENTS_ENV} contains duplicate agent name '{name}'")
         if not base_url:
             raise RuntimeError(f"{PEER_AGENTS_ENV} entry '{name}' requires base_url")
-        configs.append(PeerAgentConfig(name=name, base_url=base_url, description=description))
+        configs.append(
+            PeerAgentConfig(
+                name=name,
+                base_url=base_url,
+                description=description,
+                capabilities=capabilities,
+                side_effects=side_effects,
+                version=version,
+            )
+        )
         seen.add(name)
     return configs
 
 
 def build_peer_agent_registry_from_env() -> PeerAgentRegistry:
     return PeerAgentRegistry(load_peer_agent_configs_from_env())
+
+
+def _optional_string_tuple(value: object, label: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise RuntimeError(f"{PEER_AGENTS_ENV} {label} must be an array of strings")
+    return tuple(item.strip() for item in value if item.strip())
+
+
+def _merge_agent_card_summary(payload: dict[str, object], card: dict[str, Any]) -> None:
+    name = card.get("name")
+    if isinstance(name, str) and name.strip():
+        payload["agent_card_name"] = name.strip()
+    description = card.get("description")
+    if "description" not in payload and isinstance(description, str) and description.strip():
+        payload["description"] = description.strip()
+    version = card.get("version")
+    if "version" not in payload and isinstance(version, str) and version.strip():
+        payload["version"] = version.strip()
+    capabilities = card.get("capabilities")
+    if "capabilities" not in payload and isinstance(capabilities, list):
+        payload["capabilities"] = [str(item) for item in capabilities if str(item).strip()]
+    side_effects = card.get("side_effects")
+    if "side_effects" not in payload and isinstance(side_effects, list):
+        payload["side_effects"] = [str(item) for item in side_effects if str(item).strip()]

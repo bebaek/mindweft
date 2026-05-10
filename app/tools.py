@@ -415,10 +415,7 @@ def build_local_tool_registry(
     if _peer_agent_tool_enabled(enable_peer_agent_tool):
         register_local_tool(
             name="peer_agent_task",
-            description=(
-                "Submit a task to a configured peer agent and optionally poll until it finishes. "
-                "Use only when explicit delegation to a peer agent is useful."
-            ),
+            description=_peer_agent_task_description(peer_agent_registry),
             input_schema={
                 "type": "object",
                 "properties": {
@@ -564,6 +561,49 @@ def _env_flag(name: str, *, default: bool) -> bool:
     if raw is None or not raw.strip():
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _peer_agent_task_description(peer_agent_registry: PeerAgentRegistry | None) -> str:
+    description = (
+        "Submit a task to a configured peer agent and optionally poll until it finishes. "
+        "Use only when explicit delegation to a peer agent is useful."
+    )
+    registry = peer_agent_registry
+    if registry is None:
+        try:
+            registry = build_peer_agent_registry_from_env()
+        except Exception:
+            return description
+    peers = registry.list_agents()
+    if not peers:
+        return description
+    peer_lines = []
+    for peer in peers:
+        peer_lines.append(_peer_agent_hint_line(peer))
+    return f"{description} Available peers: " + " ".join(peer_lines)
+
+
+def _peer_agent_hint_line(peer: dict[str, object]) -> str:
+    parts = [str(peer.get("name", "")).strip()]
+    description = str(peer.get("description", "")).strip()
+    if description:
+        parts.append(f"description: {description}")
+    capabilities = _string_list_for_tool_description(peer.get("capabilities"))
+    if capabilities:
+        parts.append(f"capabilities: {', '.join(capabilities)}")
+    side_effects = _string_list_for_tool_description(peer.get("side_effects"))
+    if side_effects:
+        parts.append(f"side effects: {', '.join(side_effects)}")
+    version = str(peer.get("version", "")).strip()
+    if version:
+        parts.append(f"version: {version}")
+    return "- " + "; ".join(part for part in parts if part)
+
+
+def _string_list_for_tool_description(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _required_tool_string(arguments: dict[str, Any], field_name: str, tool_name: str) -> str:

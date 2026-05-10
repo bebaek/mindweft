@@ -69,7 +69,7 @@ wait_for_url "codex wrapper" "http://$CODEX_AGENT_HOST:$CODEX_AGENT_PORT/health"
 
 cd "$ROOT_DIR"
 MINIGENT_ENABLE_PEER_AGENT_TOOL=true \
-MINIGENT_PEER_AGENTS="[{\"name\":\"codex\",\"base_url\":\"http://$CODEX_AGENT_HOST:$CODEX_AGENT_PORT\",\"description\":\"Local Codex wrapper\"}]" \
+MINIGENT_PEER_AGENTS="[{\"name\":\"codex\",\"base_url\":\"http://$CODEX_AGENT_HOST:$CODEX_AGENT_PORT\",\"description\":\"Local Codex wrapper\",\"capabilities\":[\"repository analysis\",\"codebase inspection\",\"read-only command execution in the allowed workspace\"],\"side_effects\":[\"runs Codex CLI commands on the local host\"],\"version\":\"0.1.0\"}]" \
   uv run uvicorn app.main:app \
     --host "$MINIGENT_HOST" \
     --port "$MINIGENT_PORT" \

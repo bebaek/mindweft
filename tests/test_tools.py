@@ -47,6 +47,35 @@ def test_local_registry_can_enable_peer_agent_task_tool() -> None:
     assert "peer_agent_task" in specs
 
 
+def test_peer_agent_task_tool_description_includes_peer_hints() -> None:
+    peer_registry = PeerAgentRegistry(
+        parse_peer_agent_configs(
+            [
+                {
+                    "name": "codex",
+                    "base_url": "http://codex-agent.test",
+                    "description": "Local Codex wrapper",
+                    "capabilities": ["repository analysis", "codebase inspection"],
+                    "side_effects": ["runs local commands in the allowed workspace"],
+                    "version": "0.1.0",
+                }
+            ]
+        )
+    )
+    registry = build_local_tool_registry(
+        peer_agent_registry=peer_registry,
+        enable_peer_agent_tool=True,
+    )
+
+    spec = {spec.name: spec for spec in registry.specs()}["peer_agent_task"]
+
+    assert "Available peers:" in spec.description
+    assert "codex" in spec.description
+    assert "Local Codex wrapper" in spec.description
+    assert "repository analysis, codebase inspection" in spec.description
+    assert "runs local commands in the allowed workspace" in spec.description
+
+
 def test_local_registry_can_enable_peer_agent_task_tool_from_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -56,6 +85,33 @@ def test_local_registry_can_enable_peer_agent_task_tool_from_env(
 
     specs = {spec.name for spec in registry.specs()}
     assert "peer_agent_task" in specs
+
+
+def test_peer_agent_task_tool_description_includes_env_peer_hints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_ENABLE_PEER_AGENT_TOOL", "true")
+    monkeypatch.setenv(
+        "MINIGENT_PEER_AGENTS",
+        json.dumps(
+            [
+                {
+                    "name": "codex",
+                    "base_url": "http://codex-agent.test",
+                    "description": "Local Codex wrapper",
+                    "capabilities": ["repository analysis"],
+                    "side_effects": ["runs local commands"],
+                }
+            ]
+        ),
+    )
+
+    registry = build_local_tool_registry()
+    spec = {spec.name: spec for spec in registry.specs()}["peer_agent_task"]
+
+    assert "codex" in spec.description
+    assert "repository analysis" in spec.description
+    assert "runs local commands" in spec.description
 
 
 def test_current_time_tool_returns_iso8601_timestamp() -> None:

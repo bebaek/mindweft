@@ -20,6 +20,9 @@ def test_parse_peer_agent_configs_accepts_valid_entries() -> None:
                 "name": "codex",
                 "base_url": "http://127.0.0.1:8010/",
                 "description": "Local Codex wrapper",
+                "capabilities": ["codebase inspection"],
+                "side_effects": ["runs local commands"],
+                "version": "0.1.0",
             }
         ]
     )
@@ -28,6 +31,9 @@ def test_parse_peer_agent_configs_accepts_valid_entries() -> None:
     assert configs[0].name == "codex"
     assert configs[0].base_url == "http://127.0.0.1:8010"
     assert configs[0].description == "Local Codex wrapper"
+    assert configs[0].capabilities == ("codebase inspection",)
+    assert configs[0].side_effects == ("runs local commands",)
+    assert configs[0].version == "0.1.0"
 
 
 def test_load_peer_agent_configs_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -64,6 +70,60 @@ def test_peer_agent_registry_fetches_agent_card() -> None:
     card = asyncio.run(registry.agent_card("codex"))
 
     assert card == {"name": "codex-coding-agent"}
+
+
+def test_peer_agent_registry_lists_agents_with_agent_card_summary() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://codex-agent.test/agent-card"
+        return httpx.Response(
+            200,
+            json={
+                "name": "codex-coding-agent",
+                "description": "Codex CLI wrapper",
+                "version": "0.1.0",
+                "capabilities": ["repository analysis"],
+                "side_effects": ["runs commands"],
+            },
+        )
+
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+
+    agents = asyncio.run(registry.list_agents_with_cards())
+
+    assert agents == [
+        {
+            "name": "codex",
+            "base_url": "http://codex-agent.test",
+            "links": {
+                "agent_card": "/peer-agents/codex/agent-card",
+                "tasks": "/peer-agents/codex/tasks",
+            },
+            "agent_card_name": "codex-coding-agent",
+            "description": "Codex CLI wrapper",
+            "version": "0.1.0",
+            "capabilities": ["repository analysis"],
+            "side_effects": ["runs commands"],
+        }
+    ]
+
+
+def test_peer_agent_registry_lists_agent_card_errors_nonfatally() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://codex-agent.test/agent-card"
+        return httpx.Response(503, json={"detail": "offline"})
+
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+
+    agents = asyncio.run(registry.list_agents_with_cards())
+
+    assert agents[0]["name"] == "codex"
+    assert "agent_card_error" in agents[0]
 
 
 def test_peer_agent_registry_creates_task() -> None:

@@ -128,7 +128,15 @@ def test_app_startup_logs_available_internal_tools(caplog: pytest.LogCaptureFixt
 def test_peer_agent_endpoints_list_and_fetch_agent_card() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert str(request.url) == "http://codex-agent.test/agent-card"
-        return httpx.Response(200, json={"name": "codex-coding-agent"})
+        return httpx.Response(
+            200,
+            json={
+                "name": "codex-coding-agent",
+                "version": "0.1.0",
+                "capabilities": ["repository analysis"],
+                "side_effects": ["runs local commands"],
+            },
+        )
 
     registry = PeerAgentRegistry(
         parse_peer_agent_configs(
@@ -158,6 +166,10 @@ def test_peer_agent_endpoints_list_and_fetch_agent_card() -> None:
                 "name": "codex",
                 "base_url": "http://codex-agent.test",
                 "description": "Local Codex wrapper",
+                "agent_card_name": "codex-coding-agent",
+                "version": "0.1.0",
+                "capabilities": ["repository analysis"],
+                "side_effects": ["runs local commands"],
                 "links": {
                     "agent_card": "/peer-agents/codex/agent-card",
                     "tasks": "/peer-agents/codex/tasks",
@@ -168,7 +180,12 @@ def test_peer_agent_endpoints_list_and_fetch_agent_card() -> None:
 
     card_response = client.get("/peer-agents/codex/agent-card", headers=AUTH_HEADERS)
     assert card_response.status_code == 200
-    assert card_response.json() == {"name": "codex-coding-agent"}
+    assert card_response.json() == {
+        "name": "codex-coding-agent",
+        "version": "0.1.0",
+        "capabilities": ["repository analysis"],
+        "side_effects": ["runs local commands"],
+    }
 
 
 def test_peer_agent_task_proxy_endpoints() -> None:

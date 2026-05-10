@@ -6,7 +6,7 @@ services:
       MINIGENT_LLM_PROVIDER: mock
       MINIGENT_AUTH_MODE: dev-headers
       MINIGENT_ENABLE_PEER_AGENT_TOOL: "true"
-      MINIGENT_PEER_AGENTS: '[{"name":"codex","base_url":"http://codex-agent-wrapper:8010","description":"Local Codex wrapper sidecar"}]'
+      MINIGENT_PEER_AGENTS: '[{"name":"codex","base_url":"http://codex-agent-wrapper:8010","description":"Local Codex wrapper sidecar","capabilities":["repository analysis","codebase inspection","read-only command execution in the mounted workspace"],"side_effects":["runs Codex CLI commands inside the wrapper container"],"version":"0.1.0"}]'
     ports:
       - "127.0.0.1:${MINIGENT_PORT:-8000}:8000"
     depends_on:

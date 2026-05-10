@@ -947,15 +947,19 @@ server as `connected`.
 
 ## Peer Agent Config
 
-Minigent can discover configured federated peer agents and manually proxy task requests
-to them without delegating runtime work to them yet. Configure peers with
+Minigent can discover configured federated peer agents, proxy task requests to them, and
+optionally expose them to the runtime through the `peer_agent_task` tool. Configure peers with
 `MINIGENT_PEER_AGENTS`:
 
 ```dotenv
-MINIGENT_PEER_AGENTS=[{"name":"codex","base_url":"http://127.0.0.1:8010","description":"Local Codex wrapper"}]
+MINIGENT_PEER_AGENTS=[{"name":"codex","base_url":"http://127.0.0.1:8010","description":"Local Codex wrapper","capabilities":["repository analysis","codebase inspection"],"side_effects":["runs Codex CLI commands in the allowed workspace"],"version":"0.1.0"}]
 # Required only when the agent runtime should be allowed to call peers as a tool:
 MINIGENT_ENABLE_PEER_AGENT_TOOL=true
 ```
+
+The optional `capabilities`, `side_effects`, and `version` fields are included in the
+`peer_agent_task` tool description so the model has peer-specific routing context when
+deciding whether to delegate.
 
 Discovery endpoints:
 
