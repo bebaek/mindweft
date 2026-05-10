@@ -53,6 +53,7 @@ def test_demo_peer_agent_tool_drives_runtime_tool_path(monkeypatch, capsys) -> N
                     "content": (
                         '{"peer":"codex","task_id":"task_123","status":"completed",'
                         '"exit_code":0,"timed_out":false,"duration_seconds":1.25,'
+                        '"canceled_on_timeout":false,'
                         '"final_output_preview":"summary"}'
                     ),
                     "tool_name": "peer_agent_task",
@@ -103,7 +104,8 @@ def test_demo_peer_agent_tool_drives_runtime_tool_path(monkeypatch, capsys) -> N
     assert "assistant: Tool result:" in output
     assert (
         "peer_summary: peer=codex task_id=task_123 status=completed exit_code=0 "
-        'timed_out=False duration_seconds=1.25 final_output_preview="summary"'
+        "timed_out=False canceled_on_timeout=False duration_seconds=1.25 "
+        'final_output_preview="summary"'
     ) in output
 
 

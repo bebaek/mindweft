@@ -204,6 +204,7 @@ def format_peer_agent_summary(result: dict[str, Any]) -> str:
         f"status={result.get('status', '')}",
         f"exit_code={result.get('exit_code')}",
         f"timed_out={result.get('timed_out')}",
+        f"canceled_on_timeout={result.get('canceled_on_timeout')}",
         f"duration_seconds={result.get('duration_seconds')}",
     ]
     final_output_preview = str(result.get("final_output_preview") or "").strip()

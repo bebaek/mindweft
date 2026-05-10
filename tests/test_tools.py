@@ -390,6 +390,7 @@ def test_peer_agent_task_tool_can_submit_without_polling() -> None:
     assert result["status"] == "running"
     assert result["exit_code"] is None
     assert result["timed_out"] is False
+    assert result["canceled_on_timeout"] is False
     assert result["duration_seconds"] >= 0
     assert result["events_count"] == 0
 
@@ -450,6 +451,7 @@ def test_peer_agent_task_tool_can_poll_until_completion(
     assert result["status"] == "completed"
     assert result["exit_code"] == 0
     assert result["timed_out"] is False
+    assert result["canceled_on_timeout"] is False
     assert result["duration_seconds"] >= 0
     assert result["events_count"] == 1
     assert result["final_output"] == "summary"
@@ -463,6 +465,7 @@ def test_peer_agent_task_tool_reports_timeout_with_observability_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sleeps = 0
+    cancel_requests = 0
 
     async def fake_sleep(seconds: float) -> None:
         nonlocal sleeps
@@ -470,6 +473,7 @@ def test_peer_agent_task_tool_reports_timeout_with_observability_fields(
         sleeps += 1
 
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal cancel_requests
         if request.method == "POST" and str(request.url) == "http://codex-agent.test/tasks":
             return httpx.Response(
                 200,
@@ -487,6 +491,19 @@ def test_peer_agent_task_tool_reports_timeout_with_observability_fields(
                     "status": "running",
                     "stderr_tail": "still working",
                     "events_tail": [{"type": "turn.started"}, {"type": "item.started"}],
+                },
+            )
+        if (
+            request.method == "POST"
+            and str(request.url) == "http://codex-agent.test/tasks/task_123/cancel"
+        ):
+            cancel_requests += 1
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": "task_123",
+                    "status": "canceled",
+                    "stderr_tail": "canceled",
                 },
             )
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
@@ -508,21 +525,126 @@ def test_peer_agent_task_tool_reports_timeout_with_observability_fields(
                 "peer": "codex",
                 "cwd": "/workspace/project",
                 "prompt": "summarize",
-                "timeout_seconds": 0.1,
+                "timeout_seconds": 0.000001,
                 "poll_interval_seconds": 0.1,
             },
         )
     )
 
     assert sleeps >= 1
+    assert cancel_requests == 1
     assert result["peer"] == "codex"
     assert result["task_id"] == "task_123"
+    assert result["status"] == "canceled"
+    assert result["timed_out"] is True
+    assert result["canceled_on_timeout"] is True
+    assert result["duration_seconds"] >= 0
+    assert result["events_count"] == 0
+    assert result["stderr_tail"] == "canceled"
+    assert result["stderr_tail_preview"] == "canceled"
+
+
+def test_peer_agent_task_tool_reports_timeout_cancel_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(seconds: float) -> None:
+        assert seconds == 0.1
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and str(request.url) == "http://codex-agent.test/tasks":
+            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+        if request.method == "GET" and str(request.url) == "http://codex-agent.test/tasks/task_123":
+            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+        if (
+            request.method == "POST"
+            and str(request.url) == "http://codex-agent.test/tasks/task_123/cancel"
+        ):
+            return httpx.Response(500, json={"detail": "nope"})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    monkeypatch.setattr("app.tools.asyncio.sleep", fake_sleep)
+    peer_registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    registry = build_local_tool_registry(
+        peer_agent_registry=peer_registry,
+        enable_peer_agent_tool=True,
+    )
+
+    result = asyncio.run(
+        registry.execute(
+            "peer_agent_task",
+            {
+                "peer": "codex",
+                "cwd": "/workspace/project",
+                "prompt": "summarize",
+                "timeout_seconds": 0.000001,
+                "poll_interval_seconds": 0.1,
+            },
+        )
+    )
+
     assert result["status"] == "running"
     assert result["timed_out"] is True
-    assert result["duration_seconds"] >= 0
-    assert result["events_count"] == 2
-    assert result["stderr_tail"] == "still working"
-    assert result["stderr_tail_preview"] == "still working"
+    assert result["canceled_on_timeout"] is False
+    assert "Peer agent 'codex' /tasks/task_123/cancel request failed" in result["cancel_error"]
+
+
+def test_peer_agent_task_tool_cancels_peer_when_coroutine_is_canceled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeping = asyncio.Event()
+    release_sleep = asyncio.Event()
+    cancel_requests = 0
+
+    async def fake_sleep(seconds: float) -> None:
+        assert seconds == 10.0
+        sleeping.set()
+        await release_sleep.wait()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal cancel_requests
+        if request.method == "POST" and str(request.url) == "http://codex-agent.test/tasks":
+            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+        if (
+            request.method == "POST"
+            and str(request.url) == "http://codex-agent.test/tasks/task_123/cancel"
+        ):
+            cancel_requests += 1
+            return httpx.Response(200, json={"task_id": "task_123", "status": "canceled"})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    async def run_scenario() -> None:
+        peer_registry = PeerAgentRegistry(
+            parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
+            transport=httpx.MockTransport(handler),
+        )
+        registry = build_local_tool_registry(
+            peer_agent_registry=peer_registry,
+            enable_peer_agent_tool=True,
+        )
+        task = asyncio.create_task(
+            registry.execute(
+                "peer_agent_task",
+                {
+                    "peer": "codex",
+                    "cwd": "/workspace/project",
+                    "prompt": "summarize",
+                    "poll_interval_seconds": 10.0,
+                },
+            )
+        )
+        await sleeping.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    monkeypatch.setattr("app.tools.asyncio.sleep", fake_sleep)
+
+    asyncio.run(run_scenario())
+
+    assert cancel_requests == 1
 
 
 def test_retrieve_knowledge_requires_minirag_db_path(monkeypatch: pytest.MonkeyPatch) -> None:

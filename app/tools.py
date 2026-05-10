@@ -375,31 +375,42 @@ def build_local_tool_registry(
             tool_name="peer_agent_task",
         )
         started_at = time.perf_counter()
-        task = await registry.create_task(peer, {"cwd": cwd, "prompt": prompt})
-        task_id = str(task.get("task_id", "")).strip()
-        if not task_id:
-            raise HTTPException(
-                status_code=502,
-                detail="peer_agent_task peer returned task response without task_id",
+        task_id = ""
+        try:
+            task = await registry.create_task(peer, {"cwd": cwd, "prompt": prompt})
+            task_id = str(task.get("task_id", "")).strip()
+            if not task_id:
+                raise HTTPException(
+                    status_code=502,
+                    detail="peer_agent_task peer returned task response without task_id",
+                )
+            if poll:
+                deadline = time.monotonic() + timeout_seconds
+                while str(task.get("status", "")) not in _PEER_AGENT_TERMINAL_STATUSES:
+                    if time.monotonic() >= deadline:
+                        canceled_task, cancel_error = await _cancel_peer_agent_task(
+                            registry, peer, task_id
+                        )
+                        return _peer_agent_tool_result(
+                            canceled_task or task,
+                            peer=peer,
+                            timed_out=True,
+                            duration_seconds=time.perf_counter() - started_at,
+                            canceled_on_timeout=cancel_error is None,
+                            cancel_error=cancel_error,
+                        )
+                    await asyncio.sleep(poll_interval_seconds)
+                    task = await registry.task(peer, task_id)
+            return _peer_agent_tool_result(
+                task,
+                peer=peer,
+                timed_out=False,
+                duration_seconds=time.perf_counter() - started_at,
             )
-        if poll:
-            deadline = time.monotonic() + timeout_seconds
-            while str(task.get("status", "")) not in _PEER_AGENT_TERMINAL_STATUSES:
-                if time.monotonic() >= deadline:
-                    return _peer_agent_tool_result(
-                        task,
-                        peer=peer,
-                        timed_out=True,
-                        duration_seconds=time.perf_counter() - started_at,
-                    )
-                await asyncio.sleep(poll_interval_seconds)
-                task = await registry.task(peer, task_id)
-        return _peer_agent_tool_result(
-            task,
-            peer=peer,
-            timed_out=False,
-            duration_seconds=time.perf_counter() - started_at,
-        )
+        except asyncio.CancelledError:
+            if task_id:
+                await _cancel_peer_agent_task(registry, peer, task_id)
+            raise
 
     if _peer_agent_tool_enabled(enable_peer_agent_tool):
         register_local_tool(
@@ -584,6 +595,8 @@ def _peer_agent_tool_result(
     peer: str,
     timed_out: bool,
     duration_seconds: float,
+    canceled_on_timeout: bool = False,
+    cancel_error: str | None = None,
 ) -> dict[str, Any]:
     final_output = str(task.get("final_output") or "").strip()
     stdout_tail = str(task.get("stdout_tail") or "").strip()
@@ -594,9 +607,12 @@ def _peer_agent_tool_result(
         "status": task.get("status"),
         "exit_code": task.get("exit_code"),
         "timed_out": timed_out,
+        "canceled_on_timeout": canceled_on_timeout,
         "duration_seconds": round(max(0.0, duration_seconds), 3),
         "events_count": _peer_agent_events_count(task),
     }
+    if cancel_error:
+        result["cancel_error"] = cancel_error
     if final_output:
         result["final_output"] = _truncate_peer_agent_output(final_output)
         result["final_output_preview"] = _truncate_peer_agent_preview(final_output)
@@ -607,18 +623,41 @@ def _peer_agent_tool_result(
         result["stderr_tail_preview"] = _truncate_peer_agent_preview(stderr_tail)
     logger.info(
         "peer_agent_task.result peer=%s task_id=%s status=%s exit_code=%s timed_out=%s "
-        "duration_seconds=%s events_count=%s final_output_preview=%s stderr_tail_preview=%s",
+        "duration_seconds=%s canceled_on_timeout=%s events_count=%s "
+        "final_output_preview=%s stderr_tail_preview=%s",
         result["peer"],
         result["task_id"],
         result["status"],
         result["exit_code"],
         result["timed_out"],
         result["duration_seconds"],
+        result["canceled_on_timeout"],
         result["events_count"],
         sanitize_value_for_logging("final_output_preview", result.get("final_output_preview", "")),
         sanitize_value_for_logging("stderr_tail_preview", result.get("stderr_tail_preview", "")),
     )
     return result
+
+
+async def _cancel_peer_agent_task(
+    registry: PeerAgentRegistry,
+    peer: str,
+    task_id: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        canceled_task = await registry.cancel_task(peer, task_id)
+    except Exception as exc:
+        detail = _tool_error_detail(exc)
+        logger.warning(
+            "peer_agent_task.cancel_failed peer=%s task_id=%s error_type=%s detail=%s",
+            peer,
+            task_id,
+            type(exc).__name__,
+            detail,
+        )
+        return None, detail
+    logger.info("peer_agent_task.cancel peer=%s task_id=%s", peer, task_id)
+    return canceled_task, None
 
 
 def _truncate_peer_agent_output(text: str) -> str:

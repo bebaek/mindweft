@@ -1020,8 +1020,8 @@ uv run python scripts/demo_peer_agent_tool.py
 That script creates a thread, sends a `/tool peer_agent_task ...` message, runs the
 thread, and prints the transcript so you can see the user message, assistant tool call,
 tool result, and final assistant reply. It also prints a compact `peer_summary` line with
-the peer name, task ID, status, exit code, timeout flag, duration, and short output/error
-previews before the full transcript.
+the peer name, task ID, status, exit code, timeout/cancellation flags, duration, and
+short output/error previews before the full transcript.
 
 To run the Codex wrapper, Minigent, and the runtime tool demo as one local stack:
 
