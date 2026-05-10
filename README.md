@@ -1048,6 +1048,15 @@ MINIGENT_RUN_INTEGRATION_TESTS=true \
   uv run pytest tests/test_peer_agent_tool_integration.py
 ```
 
+The Docker Compose sidecar demo also has an opt-in integration test. It requires Docker
+and a usable local Codex login because it builds the wrapper image and runs Codex inside
+the sidecar:
+
+```bash
+MINIGENT_RUN_COMPOSE_INTEGRATION_TESTS=true \
+  uv run pytest tests/test_peer_agent_tool_compose_integration.py
+```
+
 Pass a custom peer prompt as the first argument:
 
 ```bash
