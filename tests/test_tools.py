@@ -76,6 +76,37 @@ def test_peer_agent_task_tool_description_includes_peer_hints() -> None:
     assert "runs local commands in the allowed workspace" in spec.description
 
 
+def test_peer_agent_task_tool_schema_includes_peer_choices() -> None:
+    peer_registry = PeerAgentRegistry(
+        parse_peer_agent_configs(
+            [
+                {
+                    "name": "codex",
+                    "base_url": "http://codex-agent.test",
+                    "description": "Local Codex wrapper",
+                },
+                {
+                    "name": "docs",
+                    "base_url": "http://docs-agent.test",
+                    "description": "Documentation agent",
+                },
+            ]
+        )
+    )
+    registry = build_local_tool_registry(
+        peer_agent_registry=peer_registry,
+        enable_peer_agent_tool=True,
+    )
+
+    spec = {spec.name: spec for spec in registry.specs()}["peer_agent_task"]
+
+    assert spec.input_schema["properties"]["peer"]["enum"] == ["codex", "docs"]
+    assert spec.input_schema["properties"]["peer"]["description"] == "Configured peer agent name."
+    assert "Working directory" in spec.input_schema["properties"]["cwd"]["description"]
+    assert "Task prompt" in spec.input_schema["properties"]["prompt"]["description"]
+    assert "canceling" in spec.input_schema["properties"]["timeout_seconds"]["description"]
+
+
 def test_local_registry_can_enable_peer_agent_task_tool_from_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -112,6 +143,30 @@ def test_peer_agent_task_tool_description_includes_env_peer_hints(
     assert "codex" in spec.description
     assert "repository analysis" in spec.description
     assert "runs local commands" in spec.description
+
+
+def test_peer_agent_task_tool_schema_includes_env_peer_choices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_ENABLE_PEER_AGENT_TOOL", "true")
+    monkeypatch.setenv(
+        "MINIGENT_PEER_AGENTS",
+        json.dumps(
+            [
+                {
+                    "name": "codex",
+                    "base_url": "http://codex-agent.test",
+                    "description": "Local Codex wrapper",
+                }
+            ]
+        ),
+    )
+
+    registry = build_local_tool_registry()
+    spec = {spec.name: spec for spec in registry.specs()}["peer_agent_task"]
+
+    assert spec.input_schema["properties"]["peer"]["enum"] == ["codex"]
+    assert spec.input_schema["required"] == ["peer", "cwd", "prompt"]
 
 
 def test_current_time_tool_returns_iso8601_timestamp() -> None:

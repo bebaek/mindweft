@@ -416,18 +416,7 @@ def build_local_tool_registry(
         register_local_tool(
             name="peer_agent_task",
             description=_peer_agent_task_description(peer_agent_registry),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "peer": {"type": "string"},
-                    "cwd": {"type": "string"},
-                    "prompt": {"type": "string"},
-                    "poll": {"type": "boolean"},
-                    "timeout_seconds": {"type": "number", "minimum": 0.1},
-                    "poll_interval_seconds": {"type": "number", "minimum": 0.1},
-                },
-                "required": ["peer", "cwd", "prompt"],
-            },
+            input_schema=_peer_agent_task_input_schema(peer_agent_registry),
             handler=peer_agent_task_tool,
         )
 
@@ -568,19 +557,68 @@ def _peer_agent_task_description(peer_agent_registry: PeerAgentRegistry | None) 
         "Submit a task to a configured peer agent and optionally poll until it finishes. "
         "Use only when explicit delegation to a peer agent is useful."
     )
-    registry = peer_agent_registry
-    if registry is None:
-        try:
-            registry = build_peer_agent_registry_from_env()
-        except Exception:
-            return description
-    peers = registry.list_agents()
+    peers = _peer_agents_for_tool_metadata(peer_agent_registry)
     if not peers:
         return description
     peer_lines = []
     for peer in peers:
         peer_lines.append(_peer_agent_hint_line(peer))
     return f"{description} Available peers: " + " ".join(peer_lines)
+
+
+def _peer_agent_task_input_schema(peer_agent_registry: PeerAgentRegistry | None) -> dict[str, Any]:
+    peer_schema: dict[str, Any] = {
+        "type": "string",
+        "description": "Configured peer agent name.",
+    }
+    peer_names = [
+        name
+        for peer in _peer_agents_for_tool_metadata(peer_agent_registry)
+        if (name := str(peer.get("name", "")).strip())
+    ]
+    if peer_names:
+        peer_schema["enum"] = peer_names
+    return {
+        "type": "object",
+        "properties": {
+            "peer": peer_schema,
+            "cwd": {
+                "type": "string",
+                "description": "Working directory to pass to the peer agent.",
+            },
+            "prompt": {
+                "type": "string",
+                "description": "Task prompt for the peer agent.",
+            },
+            "poll": {
+                "type": "boolean",
+                "description": "Whether to wait for a terminal peer task status before returning.",
+            },
+            "timeout_seconds": {
+                "type": "number",
+                "minimum": 0.1,
+                "description": "Maximum time to poll before canceling the peer task.",
+            },
+            "poll_interval_seconds": {
+                "type": "number",
+                "minimum": 0.1,
+                "description": "Delay between peer task status checks while polling.",
+            },
+        },
+        "required": ["peer", "cwd", "prompt"],
+    }
+
+
+def _peer_agents_for_tool_metadata(
+    peer_agent_registry: PeerAgentRegistry | None,
+) -> list[dict[str, object]]:
+    registry = peer_agent_registry
+    if registry is None:
+        try:
+            registry = build_peer_agent_registry_from_env()
+        except Exception:
+            return []
+    return registry.list_agents()
 
 
 def _peer_agent_hint_line(peer: dict[str, object]) -> str:
