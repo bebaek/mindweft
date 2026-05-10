@@ -22,6 +22,7 @@ from app.models import (
     ToolCall,
     ToolSpec,
 )
+from app.peer_agents import PeerAgentConfig, PeerAgentRegistry
 from app.runtime import (
     DEFAULT_MAX_ITERATIONS,
     RUNTIME_SYSTEM_PROMPT,
@@ -140,7 +141,9 @@ def test_runtime_summarizes_older_messages_and_keeps_recent_tail_verbatim() -> N
     assert reply == "ok"
     assert seen_messages[0].role == MessageRole.SYSTEM
     assert seen_messages[1].role == MessageRole.SYSTEM
-    assert seen_messages[1].content.startswith("Thread summary:\nUser: user-0\nAssistant: assistant-0")
+    assert seen_messages[1].content.startswith(
+        "Thread summary:\nUser: user-0\nAssistant: assistant-0"
+    )
     assert [message.content for message in seen_messages[2:]] == [
         "user-4",
         "assistant-4",
@@ -151,7 +154,9 @@ def test_runtime_summarizes_older_messages_and_keeps_recent_tail_verbatim() -> N
     assert context.summarized_message_count == 0
     assert "user-3" in context.summary
     assert "assistant-3" in context.summary
-    assert [message.content for message in store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)] == [
+    assert [
+        message.content for message in store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    ] == [
         "user-4",
         "assistant-4",
         "user-5",
@@ -263,7 +268,7 @@ def test_runtime_executes_tool_and_stores_tool_message() -> None:
             role=MessageRole.USER,
             content="/tool echo hello from tool",
             created_by=PRINCIPAL.user_id,
-        )
+        ),
     )
 
     reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
@@ -314,6 +319,101 @@ def test_runtime_executes_current_time_tool() -> None:
     assert messages[1].tool_call_id == "mock-current_time-call"
     payload = json.loads(messages[2].content)
     datetime.fromisoformat(payload["current_time"])
+
+
+def test_runtime_exposes_peer_routing_hints_to_llm_and_delegates() -> None:
+    seen_peer_description: str | None = None
+
+    class PeerAwareLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            nonlocal seen_peer_description
+            if messages and messages[-1].role == MessageRole.TOOL:
+                return LLMResponse(content=f"Tool result: {messages[-1].content}")
+            specs = {tool.name: tool for tool in tools}
+            peer_spec = specs["peer_agent_task"]
+            seen_peer_description = peer_spec.description
+            assert "codex" in peer_spec.description
+            assert "repository analysis" in peer_spec.description
+            assert "runs local commands" in peer_spec.description
+            return LLMResponse(
+                tool_call=ToolCall(
+                    id="call-peer",
+                    name="peer_agent_task",
+                    arguments={
+                        "peer": "codex",
+                        "cwd": "/workspace/project",
+                        "prompt": "Summarize this repository. Do not edit files.",
+                        "poll": False,
+                    },
+                )
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    class FakePeerRegistry(PeerAgentRegistry):
+        def __init__(self) -> None:
+            super().__init__(
+                [
+                    PeerAgentConfig(
+                        name="codex",
+                        base_url="http://codex-agent.test",
+                        description="Local Codex wrapper",
+                        capabilities=("repository analysis",),
+                        side_effects=("runs local commands",),
+                    )
+                ]
+            )
+            self.created_tasks: list[tuple[str, dict[str, object]]] = []
+
+        async def create_task(self, name: str, payload: dict[str, object]) -> dict[str, object]:
+            self.created_tasks.append((name, payload))
+            return {"task_id": "task_123", "status": "running", "exit_code": None}
+
+    peer_registry = FakePeerRegistry()
+    registry = build_local_tool_registry(
+        peer_agent_registry=peer_registry,
+        enable_peer_agent_tool=True,
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(store=store, llm_adapter=PeerAwareLLM(), tool_registry=registry)
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="summarize this repo",
+            created_by=PRINCIPAL.user_id,
+        ),
+    )
+
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert seen_peer_description is not None
+    assert "Available peers:" in seen_peer_description
+    assert reply.startswith('Tool result: {"peer": "codex", "task_id": "task_123"')
+    assert peer_registry.created_tasks == [
+        (
+            "codex",
+            {
+                "cwd": "/workspace/project",
+                "prompt": "Summarize this repository. Do not edit files.",
+            },
+        )
+    ]
+    messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    assert messages[1].tool_name == "peer_agent_task"
+    assert messages[1].tool_call_id == "call-peer"
+    assert messages[1].tool_arguments == {
+        "peer": "codex",
+        "cwd": "/workspace/project",
+        "prompt": "Summarize this repository. Do not edit files.",
+        "poll": False,
+    }
+    tool_payload = json.loads(messages[2].content)
+    assert tool_payload["peer"] == "codex"
+    assert tool_payload["task_id"] == "task_123"
 
 
 def test_runtime_stores_tool_error_and_continues() -> None:
@@ -859,7 +959,7 @@ def test_build_tool_registry_for_skill_can_narrow_mcp_servers(monkeypatch) -> No
                 "mcp_servers": [
                     {"name": "home-assistant", "url": "https://ha.example/mcp", "headers": {}},
                     {"name": "docs", "url": "https://docs.example/mcp", "headers": {}},
-                ]
+                ],
             },
             "skills": {
                 "items": [
@@ -955,7 +1055,7 @@ def test_build_tool_registry_for_capability_profile_can_narrow_mcp_servers(monke
                 "mcp_servers": [
                     {"name": "home-assistant", "url": "https://ha.example/mcp", "headers": {}},
                     {"name": "docs", "url": "https://docs.example/mcp", "headers": {}},
-                ]
+                ],
             },
             "capability_profiles": {
                 "items": [
