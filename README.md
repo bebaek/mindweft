@@ -13,6 +13,7 @@ Minimal AI agent runtime POC from `DESIGN.md`.
 - Replaceable LLM adapter boundary
 - OpenAI and OpenRouter support via one OpenAI-compatible adapter
 - Optional MCP tool discovery and invocation over HTTP
+- Optional local agent wrapper for OpenCode-first peer-agent task execution
 - Deterministic mock adapter for local testing
 
 ## Built-In Tools
@@ -72,7 +73,8 @@ local network.
 [`local-agent-wrapper`](/Users/burm/code/minigent/local-agent-wrapper) is a separate
 minimal package that exposes a local coding-agent CLI as a federated-agent-style HTTP
 member. It defaults to OpenCode and can be configured for Codex or another CLI with a
-custom argv template. It is not wired into the Minigent runtime yet.
+custom argv template. Minigent can route tasks to it through the `peer_agent_task` tool
+when peer-agent tooling is enabled.
 
 Run it locally with an explicit workspace allowlist:
 

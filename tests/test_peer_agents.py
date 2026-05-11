@@ -19,7 +19,7 @@ def test_parse_peer_agent_configs_accepts_valid_entries() -> None:
             {
                 "name": "codex",
                 "base_url": "http://127.0.0.1:8010/",
-                "description": "Local Codex wrapper",
+                "description": "Local coding-agent wrapper",
                 "capabilities": ["codebase inspection"],
                 "side_effects": ["runs local commands"],
                 "version": "0.1.0",
@@ -30,7 +30,7 @@ def test_parse_peer_agent_configs_accepts_valid_entries() -> None:
     assert len(configs) == 1
     assert configs[0].name == "codex"
     assert configs[0].base_url == "http://127.0.0.1:8010"
-    assert configs[0].description == "Local Codex wrapper"
+    assert configs[0].description == "Local coding-agent wrapper"
     assert configs[0].capabilities == ("codebase inspection",)
     assert configs[0].side_effects == ("runs local commands",)
     assert configs[0].version == "0.1.0"

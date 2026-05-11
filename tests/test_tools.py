@@ -54,7 +54,7 @@ def test_peer_agent_task_tool_description_includes_peer_hints() -> None:
                 {
                     "name": "codex",
                     "base_url": "http://codex-agent.test",
-                    "description": "Local Codex wrapper",
+                    "description": "Local coding-agent wrapper",
                     "capabilities": ["repository analysis", "codebase inspection"],
                     "side_effects": ["runs local commands in the allowed workspace"],
                     "version": "0.1.0",
@@ -71,7 +71,7 @@ def test_peer_agent_task_tool_description_includes_peer_hints() -> None:
 
     assert "Available peers:" in spec.description
     assert "codex" in spec.description
-    assert "Local Codex wrapper" in spec.description
+    assert "Local coding-agent wrapper" in spec.description
     assert "repository analysis, codebase inspection" in spec.description
     assert "runs local commands in the allowed workspace" in spec.description
 
@@ -83,7 +83,7 @@ def test_peer_agent_task_tool_schema_includes_peer_choices() -> None:
                 {
                     "name": "codex",
                     "base_url": "http://codex-agent.test",
-                    "description": "Local Codex wrapper",
+                    "description": "Local coding-agent wrapper",
                 },
                 {
                     "name": "docs",
@@ -129,7 +129,7 @@ def test_peer_agent_task_tool_description_includes_env_peer_hints(
                 {
                     "name": "codex",
                     "base_url": "http://codex-agent.test",
-                    "description": "Local Codex wrapper",
+                    "description": "Local coding-agent wrapper",
                     "capabilities": ["repository analysis"],
                     "side_effects": ["runs local commands"],
                 }
@@ -156,7 +156,7 @@ def test_peer_agent_task_tool_schema_includes_env_peer_choices(
                 {
                     "name": "codex",
                     "base_url": "http://codex-agent.test",
-                    "description": "Local Codex wrapper",
+                    "description": "Local coding-agent wrapper",
                 }
             ]
         ),

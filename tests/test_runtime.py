@@ -358,7 +358,7 @@ def test_runtime_exposes_peer_routing_hints_to_llm_and_delegates() -> None:
                     PeerAgentConfig(
                         name="codex",
                         base_url="http://codex-agent.test",
-                        description="Local Codex wrapper",
+                        description="Local coding-agent wrapper",
                         capabilities=("repository analysis",),
                         side_effects=("runs local commands",),
                     )

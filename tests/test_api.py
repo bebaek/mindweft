@@ -144,7 +144,7 @@ def test_peer_agent_endpoints_list_and_fetch_agent_card() -> None:
                 {
                     "name": "codex",
                     "base_url": "http://codex-agent.test",
-                    "description": "Local Codex wrapper",
+                    "description": "Local coding-agent wrapper",
                 }
             ]
         ),
@@ -165,7 +165,7 @@ def test_peer_agent_endpoints_list_and_fetch_agent_card() -> None:
             {
                 "name": "codex",
                 "base_url": "http://codex-agent.test",
-                "description": "Local Codex wrapper",
+                "description": "Local coding-agent wrapper",
                 "agent_card_name": "codex-coding-agent",
                 "version": "0.1.0",
                 "capabilities": ["repository analysis"],
