@@ -30,7 +30,7 @@ def test_peer_agent_tool_stack_demo_completes() -> None:
     )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "[ok] codex wrapper port:" in completed.stdout
+    assert "[ok] agent wrapper port:" in completed.stdout
     assert "[ok] minigent port:" in completed.stdout
     assert "local_tools:" in completed.stdout
     assert "peer_agent_task" in completed.stdout

@@ -32,8 +32,10 @@ class TaskStatus(str, Enum):
 
 
 class Settings(BaseModel):
-    codex_command: tuple[str, ...] = ("codex",)
+    agent_command: tuple[str, ...] = ("opencode",)
     allowed_workspaces: tuple[Path, ...] = ()
+    agent_runtime: str = "opencode"
+    agent_args_template: tuple[str, ...] = ()
     codex_sandbox: str = "read-only"
     codex_json: bool = True
     tail_chars: int = 20_000
@@ -204,7 +206,7 @@ class TaskStore:
     async def _run(self, record: TaskRecord) -> None:
         record.started_at = utc_now()
         record.status = TaskStatus.RUNNING
-        command = _codex_exec_command(
+        command = _agent_command(
             self._settings,
             cwd=record.cwd,
             prompt=record.prompt,
@@ -227,7 +229,7 @@ class TaskStore:
             record.finished_at = utc_now()
             raise
         except FileNotFoundError:
-            record.stderr.append(f"Command not found: {self._settings.codex_command[0]}")
+            record.stderr.append(f"Command not found: {self._settings.agent_command[0]}")
             record.exit_code = 127
             record.status = TaskStatus.FAILED
             record.finished_at = utc_now()
@@ -242,6 +244,8 @@ class TaskStore:
         if record.status in {TaskStatus.CANCELING, TaskStatus.CANCELED}:
             record.status = TaskStatus.CANCELED
         elif record.exit_code == 0:
+            if not record.final_output:
+                record.final_output = record.stdout.text().strip()
             record.status = TaskStatus.COMPLETED
         else:
             record.status = TaskStatus.FAILED
@@ -312,6 +316,10 @@ def _task_artifacts(task_id: str) -> dict[str, str]:
 
 
 def _extract_final_output(event: dict[str, object]) -> str | None:
+    opencode_text = _opencode_text_part(event)
+    if opencode_text is not None:
+        return opencode_text
+
     message = _event_message(event)
     if message is None:
         return None
@@ -331,6 +339,16 @@ def _extract_final_output(event: dict[str, object]) -> str | None:
         if text_parts and _looks_like_final_event(event_type, event):
             return "\n".join(text_parts)
     return None
+
+
+def _opencode_text_part(event: dict[str, object]) -> str | None:
+    if event.get("type") != "text":
+        return None
+    part = event.get("part")
+    if not isinstance(part, dict) or part.get("type") != "text":
+        return None
+    text = part.get("text")
+    return text if isinstance(text, str) and text else None
 
 
 def _event_message(event: dict[str, object]) -> dict[str, object] | None:
@@ -393,30 +411,52 @@ async def _terminate_process_group(
             continue
 
 
-def _codex_exec_command(settings: Settings, *, cwd: Path, prompt: str) -> list[str]:
-    command = [
-        *settings.codex_command,
-        "exec",
-    ]
-    if settings.codex_json:
-        command.append("--json")
-    command.extend(
-        [
-            "--sandbox",
-            settings.codex_sandbox,
-            "--cd",
-            str(cwd),
-            prompt,
+def _agent_command(settings: Settings, *, cwd: Path, prompt: str) -> list[str]:
+    runtime = settings.agent_runtime.lower()
+    if settings.agent_args_template:
+        return [
+            *settings.agent_command,
+            *[_format_agent_arg(arg, cwd=cwd, prompt=prompt) for arg in settings.agent_args_template],
         ]
+    if runtime == "codex":
+        command = [
+            *settings.agent_command,
+            "exec",
+        ]
+        if settings.codex_json:
+            command.append("--json")
+        command.extend(
+            [
+                "--sandbox",
+                settings.codex_sandbox,
+                "--cd",
+                str(cwd),
+                prompt,
+            ]
+        )
+        return command
+    if runtime == "opencode":
+        return [*settings.agent_command, "run", "--format", "json", prompt]
+    if runtime == "plain":
+        return [*settings.agent_command, prompt]
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"Unsupported AGENT_RUNTIME '{settings.agent_runtime}'. "
+            "Use opencode, codex, plain, or set AGENT_ARGS_TEMPLATE."
+        ),
     )
-    return command
+
+
+def _format_agent_arg(arg: str, *, cwd: Path, prompt: str) -> str:
+    return arg.format(cwd=str(cwd), prompt=prompt)
 
 
 def _resolve_allowed_workspace(cwd: Path, allowed_workspaces: tuple[Path, ...]) -> Path:
     if not allowed_workspaces:
         raise HTTPException(
             status_code=503,
-            detail="CODEX_AGENT_ALLOWED_WORKSPACES must include at least one workspace",
+            detail="AGENT_ALLOWED_WORKSPACES must include at least one workspace",
         )
     resolved = cwd.expanduser().resolve()
     for workspace in allowed_workspaces:
@@ -427,19 +467,24 @@ def _resolve_allowed_workspace(cwd: Path, allowed_workspaces: tuple[Path, ...]) 
 
 
 def settings_from_env() -> Settings:
-    command = tuple(shlex.split(os.getenv("CODEX_AGENT_COMMAND", "codex")))
+    runtime = os.getenv("AGENT_RUNTIME", "opencode")
+    default_command = "codex" if runtime.lower() == "codex" else "opencode"
+    command = tuple(shlex.split(os.getenv("AGENT_COMMAND", default_command)))
     allowed = tuple(
         Path(item)
-        for item in os.getenv("CODEX_AGENT_ALLOWED_WORKSPACES", "").split(os.pathsep)
+        for item in os.getenv("AGENT_ALLOWED_WORKSPACES", "").split(os.pathsep)
         if item
     )
-    tail_chars = int(os.getenv("CODEX_AGENT_TAIL_CHARS", "20000"))
-    cancel_grace_seconds = float(os.getenv("CODEX_AGENT_CANCEL_GRACE_SECONDS", "5"))
-    event_limit = int(os.getenv("CODEX_AGENT_EVENT_LIMIT", "50"))
+    args_template = tuple(shlex.split(os.getenv("AGENT_ARGS_TEMPLATE", "")))
+    tail_chars = int(os.getenv("AGENT_TAIL_CHARS", "20000"))
+    cancel_grace_seconds = float(os.getenv("AGENT_CANCEL_GRACE_SECONDS", "5"))
+    event_limit = int(os.getenv("AGENT_EVENT_LIMIT", "50"))
     codex_json = os.getenv("CODEX_AGENT_JSON", "true").lower() not in {"0", "false", "no"}
     return Settings(
-        codex_command=command,
+        agent_command=command,
         allowed_workspaces=allowed,
+        agent_runtime=runtime,
+        agent_args_template=args_template,
         codex_sandbox=os.getenv("CODEX_AGENT_SANDBOX", "read-only"),
         codex_json=codex_json,
         tail_chars=tail_chars,
@@ -454,7 +499,7 @@ def get_store(request: Request) -> TaskStore:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or settings_from_env()
-    app = FastAPI(title="Minigent Codex Agent", version="0.1.0")
+    app = FastAPI(title="Minigent Local Agent Wrapper", version="0.1.0")
     app.state.settings = resolved_settings
     app.state.task_store = TaskStore(resolved_settings)
 
@@ -464,9 +509,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/agent-card", response_model=AgentCard)
     async def agent_card() -> AgentCard:
+        runtime = resolved_settings.agent_runtime.lower()
         return AgentCard(
-            name="codex-coding-agent",
-            description="Runs local Codex CLI tasks in configured workspaces.",
+            name=f"{runtime}-coding-agent",
+            description=f"Runs local {runtime} CLI tasks in configured workspaces.",
             version="0.1.0",
             capabilities=["code.inspect", "code.explain", "code.change.proposed"],
             endpoints={

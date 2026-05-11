@@ -19,7 +19,7 @@ def load_check_module() -> ModuleType:
 
 
 def args_for(tmp_path: Path, *, check_running: bool = False) -> argparse.Namespace:
-    wrapper_dir = tmp_path / "codex-agent-wrapper"
+    wrapper_dir = tmp_path / "local-agent-wrapper"
     workspace = tmp_path / "workspace"
     wrapper_dir.mkdir()
     workspace.mkdir()
@@ -27,13 +27,15 @@ def args_for(tmp_path: Path, *, check_running: bool = False) -> argparse.Namespa
         root_dir=str(tmp_path),
         wrapper_dir=str(wrapper_dir),
         workspace=str(workspace),
-        codex_command="codex",
-        codex_agent_host="127.0.0.1",
-        codex_agent_port=8010,
+        agent_runtime="opencode",
+        agent_command="opencode",
+        agent_host="127.0.0.1",
+        agent_port=8010,
+        peer_name="opencode",
         minigent_host="127.0.0.1",
         minigent_port=8000,
         check_running=check_running,
-        skip_codex_wrapper_health=False,
+        skip_wrapper_health=False,
     )
 
 
@@ -55,7 +57,7 @@ def test_check_peer_agent_demo_preflight_passes_with_free_ports(monkeypatch, tmp
     results = checker.run_checks(args_for(tmp_path))
 
     assert all(result.ok for result in results)
-    assert [result.name for result in results][-2:] == ["codex wrapper port", "minigent port"]
+    assert [result.name for result in results][-2:] == ["agent wrapper port", "minigent port"]
 
 
 def test_check_peer_agent_demo_reports_busy_port(monkeypatch, tmp_path) -> None:
@@ -101,7 +103,7 @@ def test_check_peer_agent_demo_running_mode_validates_config(monkeypatch, tmp_pa
                 "local_tools": ["echo", "peer_agent_task"]
             }
         if url.endswith("/peer-agents"):
-            return checker.CheckResult(name, True, url), {"agents": [{"name": "codex"}]}
+            return checker.CheckResult(name, True, url), {"agents": [{"name": "opencode"}]}
         raise AssertionError(f"Unexpected URL: {url}")
 
     monkeypatch.setattr(checker, "request_json_result", fake_request_json_result)
@@ -110,7 +112,7 @@ def test_check_peer_agent_demo_running_mode_validates_config(monkeypatch, tmp_pa
 
     assert all(result.ok for result in results)
     assert any(result.name == "peer_agent_task enabled" for result in results)
-    assert any(result.name == "codex peer configured" for result in results)
+    assert any(result.name == "peer configured" for result in results)
 
 
 def test_check_peer_agent_demo_running_mode_can_skip_direct_wrapper_health(
@@ -118,7 +120,7 @@ def test_check_peer_agent_demo_running_mode_can_skip_direct_wrapper_health(
 ) -> None:
     checker = load_check_module()
     args = args_for(tmp_path, check_running=True)
-    args.skip_codex_wrapper_health = True
+    args.skip_wrapper_health = True
 
     monkeypatch.setattr(checker.shutil, "which", lambda executable: f"/usr/bin/{executable}")
     monkeypatch.setattr(
@@ -138,11 +140,11 @@ def test_check_peer_agent_demo_running_mode_can_skip_direct_wrapper_health(
             checker.CheckResult(name, True, url),
             {"local_tools": ["peer_agent_task"]}
             if url.endswith("/config")
-            else {"agents": [{"name": "codex"}]},
+            else {"agents": [{"name": "opencode"}]},
         ),
     )
 
     results = checker.run_checks(args)
 
     assert all(result.ok for result in results)
-    assert not any(result.name == "codex wrapper health" for result in results)
+    assert not any(result.name == "agent wrapper health" for result in results)

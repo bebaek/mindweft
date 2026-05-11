@@ -1,7 +1,7 @@
 [project]
-name = "minigent-codex-agent"
+name = "minigent-local-agent-wrapper"
 version = "0.1.0"
-description = "Minimal local Codex CLI federated-agent wrapper POC"
+description = "Minimal local CLI federated-agent wrapper POC"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115,<1.0",
@@ -21,7 +21,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["codex_agent_wrapper*"]
+include = ["local_agent_wrapper*", "codex_agent_wrapper*"]
 
 [tool.ruff]
 line-length = 100

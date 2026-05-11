@@ -48,7 +48,8 @@ docker compose -f "$COMPOSE_FILE" up -d --build
 
 uv run python scripts/check_peer_agent_demo.py \
   --minigent-port "$MINIGENT_PORT" \
-  --skip-codex-wrapper-health \
+  --peer-name codex \
+  --skip-wrapper-health \
   --check-running
 
 uv run python scripts/demo_peer_agent_tool.py \

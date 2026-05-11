@@ -19,7 +19,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=os.getenv("MINIGENT_BASE_URL", "http://127.0.0.1:8000"),
         help="Base URL for the running Minigent API service.",
     )
-    parser.add_argument("--peer", default="codex")
+    parser.add_argument("--peer", default="opencode")
     parser.add_argument("--cwd", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument(
         "--prompt",

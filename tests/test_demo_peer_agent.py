@@ -32,13 +32,13 @@ def test_demo_peer_agent_submits_and_polls_through_minigent(
         if method == "GET" and url == "http://minigent.test/health":
             return {"status": "ok"}
         if method == "GET" and url == "http://minigent.test/peer-agents":
-            return {"agents": [{"name": "codex"}]}
-        if method == "GET" and url == "http://minigent.test/peer-agents/codex/agent-card":
-            return {"name": "codex-coding-agent"}
-        if method == "POST" and url == "http://minigent.test/peer-agents/codex/tasks":
+            return {"agents": [{"name": "opencode"}]}
+        if method == "GET" and url == "http://minigent.test/peer-agents/opencode/agent-card":
+            return {"name": "opencode-coding-agent"}
+        if method == "POST" and url == "http://minigent.test/peer-agents/opencode/tasks":
             assert payload == {"cwd": "/workspace/project", "prompt": "summarize"}
             return {"task_id": "task_123", "status": "running"}
-        if method == "GET" and url == "http://minigent.test/peer-agents/codex/tasks/task_123":
+        if method == "GET" and url == "http://minigent.test/peer-agents/opencode/tasks/task_123":
             return {
                 "task_id": "task_123",
                 "status": "completed",
@@ -47,7 +47,7 @@ def test_demo_peer_agent_submits_and_polls_through_minigent(
             }
         if (
             method == "GET"
-            and url == "http://minigent.test/peer-agents/codex/tasks/task_123/events"
+            and url == "http://minigent.test/peer-agents/opencode/tasks/task_123/events"
         ):
             return {
                 "task_id": "task_123",
@@ -74,14 +74,14 @@ def test_demo_peer_agent_submits_and_polls_through_minigent(
     assert calls == [
         ("GET", "http://minigent.test/health", None),
         ("GET", "http://minigent.test/peer-agents", None),
-        ("GET", "http://minigent.test/peer-agents/codex/agent-card", None),
+        ("GET", "http://minigent.test/peer-agents/opencode/agent-card", None),
         (
             "POST",
-            "http://minigent.test/peer-agents/codex/tasks",
+            "http://minigent.test/peer-agents/opencode/tasks",
             {"cwd": "/workspace/project", "prompt": "summarize"},
         ),
-        ("GET", "http://minigent.test/peer-agents/codex/tasks/task_123", None),
-        ("GET", "http://minigent.test/peer-agents/codex/tasks/task_123/events", None),
+        ("GET", "http://minigent.test/peer-agents/opencode/tasks/task_123", None),
+        ("GET", "http://minigent.test/peer-agents/opencode/tasks/task_123/events", None),
     ]
     output = capsys.readouterr().out
     assert "submitted: task_123" in output
@@ -100,7 +100,7 @@ def test_demo_peer_agent_returns_failure_for_failed_task(monkeypatch, capsys) ->
         if method == "GET" and url.endswith("/health"):
             return {"status": "ok"}
         if method == "GET" and url.endswith("/peer-agents"):
-            return {"agents": [{"name": "codex"}]}
+            return {"agents": [{"name": "opencode"}]}
         if method == "GET" and url.endswith("/agent-card"):
             return {"name": "codex-coding-agent"}
         if method == "POST" and url.endswith("/tasks"):
@@ -132,7 +132,7 @@ def test_demo_peer_agent_can_cancel_after_delay(monkeypatch, capsys) -> None:
         if method == "GET" and url.endswith("/health"):
             return {"status": "ok"}
         if method == "GET" and url.endswith("/peer-agents"):
-            return {"agents": [{"name": "codex"}]}
+            return {"agents": [{"name": "opencode"}]}
         if method == "GET" and url.endswith("/agent-card"):
             return {"name": "codex-coding-agent"}
         if method == "POST" and url.endswith("/tasks"):
@@ -161,7 +161,7 @@ def test_demo_peer_agent_can_cancel_after_delay(monkeypatch, capsys) -> None:
     assert exit_code == 1
     assert (
         "POST",
-        "http://minigent.test/peer-agents/codex/tasks/task_123/cancel",
+        "http://minigent.test/peer-agents/opencode/tasks/task_123/cancel",
         None,
     ) in calls
     output = capsys.readouterr().out

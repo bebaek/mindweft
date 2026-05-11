@@ -13,7 +13,7 @@ TERMINAL_STATUSES = {"completed", "failed", "canceled"}
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Submit and poll a simple Codex agent task.")
+    parser = argparse.ArgumentParser(description="Submit and poll a simple local agent task.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8010")
     parser.add_argument("--cwd", default=str(Path(__file__).resolve().parents[2]))
     parser.add_argument(
@@ -25,12 +25,12 @@ def main() -> int:
     parser.add_argument(
         "--show-log",
         action="store_true",
-        help="Print Codex stderr/progress log tail in addition to the final output.",
+        help="Print stderr/progress log tail in addition to the final output.",
     )
     parser.add_argument(
         "--show-events",
         action="store_true",
-        help="Print the parsed Codex JSON event tail.",
+        help="Print the parsed JSON event tail.",
     )
     args = parser.parse_args()
 
@@ -111,10 +111,10 @@ def _print_result(
     elif has_events:
         print("\nevents_tail: hidden; rerun with --show-events to print it")
     if show_log and stderr_tail:
-        print("\ncodex_log_tail:")
+        print("\nagent_log_tail:")
         print(stderr_tail)
     elif stderr_tail:
-        print("\ncodex_log_tail: hidden; rerun with --show-log to print it")
+        print("\nagent_log_tail: hidden; rerun with --show-log to print it")
 
 
 if __name__ == "__main__":

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from codex_agent_wrapper.app import Settings, create_app
+from local_agent_wrapper.app import Settings, create_app
 
 
 def test_agent_card() -> None:
@@ -14,17 +15,17 @@ def test_agent_card() -> None:
         response = client.get("/agent-card")
 
         assert response.status_code == 200
-        assert response.json()["name"] == "codex-coding-agent"
+        assert response.json()["name"] == "opencode-coding-agent"
 
 
 def test_task_captures_stdout_and_stderr(tmp_path: Path) -> None:
-    fake_codex = tmp_path / "fake_codex.py"
-    fake_codex.write_text(
+    fake_agent = tmp_path / "fake_agent.py"
+    fake_agent.write_text(
         "import sys\nprint('stdout: ' + sys.argv[-1])\nprint('stderr: warning', file=sys.stderr)\n",
         encoding="utf-8",
     )
     settings = Settings(
-        codex_command=(sys.executable, str(fake_codex)),
+        agent_command=(sys.executable, str(fake_agent)),
         allowed_workspaces=(tmp_path,),
     )
     with TestClient(create_app(settings)) as client:
@@ -51,10 +52,10 @@ def test_task_captures_stdout_and_stderr(tmp_path: Path) -> None:
 
 
 def test_create_task_response_includes_links_and_artifacts(tmp_path: Path) -> None:
-    fake_codex = tmp_path / "fake_codex.py"
-    fake_codex.write_text("print('ok')\n", encoding="utf-8")
+    fake_agent = tmp_path / "fake_agent.py"
+    fake_agent.write_text("print('ok')\n", encoding="utf-8")
     settings = Settings(
-        codex_command=(sys.executable, str(fake_codex)),
+        agent_command=(sys.executable, str(fake_agent)),
         allowed_workspaces=(tmp_path,),
     )
     with TestClient(create_app(settings)) as client:
@@ -70,9 +71,59 @@ def test_create_task_response_includes_links_and_artifacts(tmp_path: Path) -> No
         assert body["artifacts"]["events"] == f"/tasks/{task_id}/artifacts/events"
 
 
+def test_default_opencode_runtime_uses_run_prompt_argv(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    argv_file = tmp_path / "argv.json"
+    fake_agent.write_text(
+        "import json\n"
+        "import sys\n"
+        f"open({str(argv_file)!r}, 'w', encoding='utf-8').write(json.dumps(sys.argv[1:]))\n"
+        "print('done')\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "hello"})
+
+        assert create_response.status_code == 200
+        _wait_for_terminal_task(client, create_response.json()["task_id"])
+        assert argv_file.read_text(encoding="utf-8") == '["run", "--format", "json", "hello"]'
+
+
+def test_custom_args_template_overrides_runtime_argv(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    argv_file = tmp_path / "argv.json"
+    fake_agent.write_text(
+        "import json\n"
+        "import sys\n"
+        f"open({str(argv_file)!r}, 'w', encoding='utf-8').write(json.dumps(sys.argv[1:]))\n"
+        "print('done')\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+        agent_args_template=("--workspace", "{cwd}", "--message", "{prompt}"),
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "hello"})
+
+        assert create_response.status_code == 200
+        _wait_for_terminal_task(client, create_response.json()["task_id"])
+        assert json.loads(argv_file.read_text(encoding="utf-8")) == [
+            "--workspace",
+            str(tmp_path),
+            "--message",
+            "hello",
+        ]
+
+
 def test_task_parses_jsonl_events_and_final_output(tmp_path: Path) -> None:
-    fake_codex = tmp_path / "fake_codex.py"
-    fake_codex.write_text(
+    fake_agent = tmp_path / "fake_agent.py"
+    fake_agent.write_text(
         "import json\n"
         "import sys\n"
         "print(json.dumps({'type': 'task.started', 'message': {'role': 'system', 'content': 'started'}}))\n"
@@ -81,7 +132,7 @@ def test_task_parses_jsonl_events_and_final_output(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     settings = Settings(
-        codex_command=(sys.executable, str(fake_codex)),
+        agent_command=(sys.executable, str(fake_agent)),
         allowed_workspaces=(tmp_path,),
     )
     with TestClient(create_app(settings)) as client:
@@ -100,16 +151,37 @@ def test_task_parses_jsonl_events_and_final_output(tmp_path: Path) -> None:
         assert "debug log" in result["stderr_tail"]
 
 
+def test_task_extracts_opencode_text_events_as_final_output(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    fake_agent.write_text(
+        "import json\n"
+        "print(json.dumps({'type': 'text', 'part': {'type': 'text', 'text': 'working'}}))\n"
+        "print(json.dumps({'type': 'text', 'part': {'type': 'text', 'text': 'final answer'}}))\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "hello"})
+
+        assert create_response.status_code == 200
+        result = _wait_for_terminal_task(client, create_response.json()["task_id"])
+        assert result["status"] == "completed"
+        assert result["final_output"] == "final answer"
+
+
 def test_task_events_endpoint_supports_incremental_polling(tmp_path: Path) -> None:
-    fake_codex = tmp_path / "fake_codex.py"
-    fake_codex.write_text(
+    fake_agent = tmp_path / "fake_agent.py"
+    fake_agent.write_text(
         "import json\n"
         "print(json.dumps({'type': 'task.started'}))\n"
         "print(json.dumps({'type': 'message.completed', 'message': {'role': 'assistant', 'content': 'done'}}))\n",
         encoding="utf-8",
     )
     settings = Settings(
-        codex_command=(sys.executable, str(fake_codex)),
+        agent_command=(sys.executable, str(fake_agent)),
         allowed_workspaces=(tmp_path,),
     )
     with TestClient(create_app(settings)) as client:
@@ -146,8 +218,8 @@ def test_task_events_endpoint_returns_404_for_unknown_task() -> None:
 
 
 def test_task_artifact_endpoints_return_outputs_and_events(tmp_path: Path) -> None:
-    fake_codex = tmp_path / "fake_codex.py"
-    fake_codex.write_text(
+    fake_agent = tmp_path / "fake_agent.py"
+    fake_agent.write_text(
         "import json\n"
         "import sys\n"
         "print(json.dumps({'type': 'message.completed', 'message': {'role': 'assistant', 'content': 'artifact final'}}))\n"
@@ -155,7 +227,7 @@ def test_task_artifact_endpoints_return_outputs_and_events(tmp_path: Path) -> No
         encoding="utf-8",
     )
     settings = Settings(
-        codex_command=(sys.executable, str(fake_codex)),
+        agent_command=(sys.executable, str(fake_agent)),
         allowed_workspaces=(tmp_path,),
     )
     with TestClient(create_app(settings)) as client:
@@ -203,10 +275,10 @@ def test_task_rejects_workspace_outside_allowlist(tmp_path: Path) -> None:
 
 
 def test_task_cancel_sends_signal(tmp_path: Path) -> None:
-    fake_codex = tmp_path / "fake_codex.py"
+    fake_agent = tmp_path / "fake_agent.py"
     marker = tmp_path / "interrupted"
     ready = tmp_path / "ready"
-    fake_codex.write_text(
+    fake_agent.write_text(
         "import signal\n"
         "import sys\n"
         "import time\n"
@@ -222,7 +294,7 @@ def test_task_cancel_sends_signal(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     settings = Settings(
-        codex_command=(sys.executable, str(fake_codex)),
+        agent_command=(sys.executable, str(fake_agent)),
         allowed_workspaces=(tmp_path,),
         cancel_grace_seconds=0.1,
     )

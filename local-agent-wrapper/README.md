@@ -1,0 +1,145 @@
+# Minigent Local Agent Wrapper
+
+Minimal POC wrapper that exposes a local coding-agent CLI process as a small federated-agent-style HTTP service. It defaults to OpenCode, but the command profile can be switched to Codex or a custom argv template.
+
+This is intentionally not wired into Minigent yet. It proves the first boundary:
+
+- submit a prompt to a local coding-agent CLI
+- run it in an allowed workspace
+- poll task status
+- cancel a running task with signals
+- capture stdout and stderr tails separately
+
+## Run
+
+```bash
+cd local-agent-wrapper
+uv sync --dev
+AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
+  uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
+```
+
+The default OpenCode invocation is:
+
+```text
+opencode run --format json <prompt>
+```
+
+The process is started with `cwd` set to the requested allowed workspace. Override these if needed:
+
+- `AGENT_RUNTIME`: runtime profile, default `opencode`; supported built-ins are `opencode`, `codex`, and `plain`
+- `AGENT_COMMAND`: executable command, default `opencode` or `codex` when `AGENT_RUNTIME=codex`
+- `AGENT_ALLOWED_WORKSPACES`: path-list of allowed roots, required for task execution
+- `AGENT_ARGS_TEMPLATE`: optional shell-style argv template. Supports `{cwd}` and `{prompt}` placeholders and overrides the built-in runtime argv.
+- `AGENT_TAIL_CHARS`: captured stdout/stderr tail size, default `20000`
+- `AGENT_EVENT_LIMIT`: parsed JSON event tail size, default `50`
+- `AGENT_CANCEL_GRACE_SECONDS`: signal grace period, default `5`
+- `CODEX_AGENT_JSON`: set to `false` to disable `codex exec --json`, default `true`
+- `CODEX_AGENT_SANDBOX`: Codex sandbox mode, default `read-only`
+
+Codex compatibility:
+
+```bash
+AGENT_RUNTIME=codex \
+AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
+  uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
+```
+
+Custom CLI example:
+
+```bash
+AGENT_COMMAND="my-agent" \
+AGENT_ARGS_TEMPLATE="--workspace {cwd} --message {prompt}" \
+AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
+  uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
+```
+
+## API
+
+```text
+GET  /health
+GET  /agent-card
+POST /tasks
+GET  /tasks/{task_id}
+GET  /tasks/{task_id}/events
+GET  /tasks/{task_id}/artifacts/final-output
+GET  /tasks/{task_id}/artifacts/stdout-tail
+GET  /tasks/{task_id}/artifacts/stderr-tail
+GET  /tasks/{task_id}/artifacts/events
+POST /tasks/{task_id}/cancel
+```
+
+Example:
+
+```bash
+curl -s http://127.0.0.1:8010/tasks \
+  -H 'content-type: application/json' \
+  -d '{"cwd":"/Users/burm/code/minigent","prompt":"Summarize this repository in one paragraph."}'
+```
+
+Then poll:
+
+```bash
+curl -s http://127.0.0.1:8010/tasks/<task_id>
+```
+
+Task responses include relative `links` and `artifacts` maps so clients can discover the
+status, events, cancel, and artifact URLs from the task payload.
+
+Poll parsed JSON events separately:
+
+```bash
+curl -s http://127.0.0.1:8010/tasks/<task_id>/events
+curl -s 'http://127.0.0.1:8010/tasks/<task_id>/events?after=3'
+```
+
+Fetch read-only task artifacts:
+
+```bash
+curl -s http://127.0.0.1:8010/tasks/<task_id>/artifacts/final-output
+curl -s http://127.0.0.1:8010/tasks/<task_id>/artifacts/stdout-tail
+curl -s http://127.0.0.1:8010/tasks/<task_id>/artifacts/stderr-tail
+curl -s http://127.0.0.1:8010/tasks/<task_id>/artifacts/events
+```
+
+Or run the scripted demo against the already-running wrapper:
+
+```bash
+uv run python scripts/demo_task.py
+```
+
+Useful overrides:
+
+```bash
+uv run python scripts/demo_task.py \
+  --cwd /Users/burm/code/minigent \
+  --prompt "List the main runtime components. Do not edit files."
+```
+
+By default the wrapper runs `opencode run --format json`, parses stdout JSONL into
+`events_tail` when the CLI emits JSON objects one per line, and exposes the best final
+assistant message it can find as `final_output`. If no final JSON event is detected and
+the process exits successfully, `final_output` falls back to the captured stdout tail. It still keeps
+`stdout_tail` as a raw fallback/debug stream. Many agent CLIs write progress, command
+transcripts, and other execution logs to stderr; the wrapper captures that stream as
+`stderr_tail`, but it is not necessarily error output. Task failure is determined by
+`status` and `exit_code`.
+
+The stdout/stderr artifacts are currently bounded tails, not durable full transcripts.
+The events artifact returns the parsed in-memory event list for the task.
+
+The demo script prints `final_output` and hides parsed events and the agent stderr log by
+default. Add `--show-events` to fetch `/tasks/{task_id}/events` and print parsed events,
+or `--show-log` to print the stderr log.
+
+## Test
+
+```bash
+uv run pytest
+```
+
+Run the real OpenCode integration test only when the local CLI is installed and configured:
+
+```bash
+MINIGENT_RUN_OPENCODE_INTEGRATION_TESTS=true uv run pytest tests/test_opencode_integration.py
+```

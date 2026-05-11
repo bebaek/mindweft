@@ -25,15 +25,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     root_dir = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description="Preflight checks for the peer-agent demo stack.")
     parser.add_argument("--root-dir", default=str(root_dir))
-    parser.add_argument("--wrapper-dir", default=str(root_dir / "codex-agent-wrapper"))
+    parser.add_argument("--wrapper-dir", default=str(root_dir / "local-agent-wrapper"))
     parser.add_argument(
         "--workspace",
-        default=os.getenv("CODEX_AGENT_ALLOWED_WORKSPACES", str(root_dir)),
+        default=os.getenv("AGENT_ALLOWED_WORKSPACES", str(root_dir)),
     )
-    parser.add_argument("--codex-command", default=os.getenv("CODEX_AGENT_COMMAND", "codex"))
-    parser.add_argument("--codex-agent-host", default=os.getenv("CODEX_AGENT_HOST", "127.0.0.1"))
+    parser.add_argument("--agent-runtime", default=os.getenv("AGENT_RUNTIME", "opencode"))
+    parser.add_argument("--agent-command", default=os.getenv("AGENT_COMMAND", "opencode"))
+    parser.add_argument("--agent-host", default=os.getenv("AGENT_HOST", "127.0.0.1"))
     parser.add_argument(
-        "--codex-agent-port", type=int, default=int(os.getenv("CODEX_AGENT_PORT", "8010"))
+        "--agent-port", type=int, default=int(os.getenv("AGENT_PORT", "8010"))
+    )
+    parser.add_argument(
+        "--peer-name",
+        default=os.getenv("MINIGENT_DEMO_PEER_NAME", "opencode"),
+        help="Expected peer name in Minigent's /peer-agents response.",
     )
     parser.add_argument("--minigent-host", default=os.getenv("MINIGENT_HOST", "127.0.0.1"))
     parser.add_argument(
@@ -45,7 +51,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Check already-running services instead of checking that demo ports are free.",
     )
     parser.add_argument(
-        "--skip-codex-wrapper-health",
+        "--skip-wrapper-health",
+        dest="skip_wrapper_health",
         action="store_true",
         help="In --check-running mode, skip direct wrapper health checks for internal-only sidecars.",
     )
@@ -65,25 +72,25 @@ def run_checks(args: argparse.Namespace) -> list[CheckResult]:
     root_dir = Path(args.root_dir).expanduser().resolve()
     wrapper_dir = Path(args.wrapper_dir).expanduser().resolve()
     workspace = Path(args.workspace).expanduser().resolve()
-    codex_command = shlex.split(args.codex_command)
-    codex_executable = codex_command[0] if codex_command else ""
+    agent_command = shlex.split(args.agent_command)
+    agent_executable = agent_command[0] if agent_command else ""
 
     checks = [
         check_directory("root directory", root_dir),
-        check_directory("codex wrapper directory", wrapper_dir),
+        check_directory("agent wrapper directory", wrapper_dir),
         check_directory("workspace allowlist path", workspace),
         check_executable("uv executable", "uv"),
-        check_executable("codex executable", codex_executable),
+        check_executable("agent executable", agent_executable),
         check_command("uv can run", ["uv", "--version"], cwd=root_dir),
-        check_command("codex exec help", [*codex_command, "exec", "--help"], cwd=root_dir),
+        check_agent_command_help(args.agent_runtime, agent_command, cwd=root_dir),
         check_command(
             "minigent imports",
             ["uv", "run", "python", "-c", "import app.main"],
             cwd=root_dir,
         ),
         check_command(
-            "codex wrapper imports",
-            ["uv", "run", "python", "-c", "import codex_agent_wrapper.app"],
+            "agent wrapper imports",
+            ["uv", "run", "python", "-c", "import local_agent_wrapper.app"],
             cwd=wrapper_dir,
         ),
     ]
@@ -91,7 +98,7 @@ def run_checks(args: argparse.Namespace) -> list[CheckResult]:
         checks.extend(check_running_services(args))
     else:
         checks.append(
-            check_port_free("codex wrapper port", args.codex_agent_host, args.codex_agent_port)
+            check_port_free("agent wrapper port", args.agent_host, args.agent_port)
         )
         checks.append(check_port_free("minigent port", args.minigent_host, args.minigent_port))
     return checks
@@ -129,6 +136,15 @@ def check_command(name: str, command: list[str], *, cwd: Path) -> CheckResult:
     return CheckResult(name, False, detail or f"exit code {completed.returncode}")
 
 
+def check_agent_command_help(runtime: str, command: list[str], *, cwd: Path) -> CheckResult:
+    normalized = runtime.lower()
+    if normalized == "codex":
+        return check_command("agent command help", [*command, "exec", "--help"], cwd=cwd)
+    if normalized == "opencode":
+        return check_command("agent command help", [*command, "run", "--help"], cwd=cwd)
+    return check_command("agent command help", [*command, "--help"], cwd=cwd)
+
+
 def check_port_free(name: str, host: str, port: int) -> CheckResult:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -140,11 +156,11 @@ def check_port_free(name: str, host: str, port: int) -> CheckResult:
 
 
 def check_running_services(args: argparse.Namespace) -> list[CheckResult]:
-    codex_url = f"http://{args.codex_agent_host}:{args.codex_agent_port}"
+    agent_url = f"http://{args.agent_host}:{args.agent_port}"
     minigent_url = f"http://{args.minigent_host}:{args.minigent_port}"
     results: list[CheckResult] = []
-    if not args.skip_codex_wrapper_health:
-        results.append(check_url("codex wrapper health", f"{codex_url}/health"))
+    if not args.skip_wrapper_health:
+        results.append(check_url("agent wrapper health", f"{agent_url}/health"))
     config = request_json_result("minigent config", f"{minigent_url}/config")
     results.append(config[0])
     peers = request_json_result("minigent peer agents", f"{minigent_url}/peer-agents")
@@ -162,14 +178,16 @@ def check_running_services(args: argparse.Namespace) -> list[CheckResult]:
         )
     if peers[1] is not None:
         agents = peers[1].get("agents", [])
-        has_codex = any(
-            isinstance(agent, dict) and agent.get("name") == "codex" for agent in agents
+        has_peer = any(
+            isinstance(agent, dict) and agent.get("name") == args.peer_name for agent in agents
         )
         results.append(
             CheckResult(
-                "codex peer configured",
-                has_codex,
-                "codex listed in /peer-agents" if has_codex else "codex missing from /peer-agents",
+                "peer configured",
+                has_peer,
+                f"{args.peer_name} listed in /peer-agents"
+                if has_peer
+                else f"{args.peer_name} missing from /peer-agents",
             )
         )
     return results

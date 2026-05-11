@@ -67,29 +67,40 @@ principal headers used by the CLI examples, so the default `dev-headers` auth mo
 for local testing. Use `static-tokens` or `jwt` before exposing the API outside a trusted
 local network.
 
-## Codex Agent Wrapper POC
+## Local Agent Wrapper POC
 
-[`codex-agent-wrapper`](/Users/burm/code/minigent/codex-agent-wrapper) is a separate
-minimal package that exposes the local Codex CLI as a federated-agent-style HTTP member.
-It is not wired into the Minigent runtime yet.
+[`local-agent-wrapper`](/Users/burm/code/minigent/local-agent-wrapper) is a separate
+minimal package that exposes a local coding-agent CLI as a federated-agent-style HTTP
+member. It defaults to OpenCode and can be configured for Codex or another CLI with a
+custom argv template. It is not wired into the Minigent runtime yet.
 
 Run it locally with an explicit workspace allowlist:
 
 ```bash
-cd codex-agent-wrapper
+cd local-agent-wrapper
 uv sync --dev
-CODEX_AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
-  uv run uvicorn codex_agent_wrapper.app:app --host 127.0.0.1 --port 8010
+AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
+  uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
 ```
 
 The POC supports `GET /agent-card`, `POST /tasks`, `GET /tasks/{task_id}`,
 `GET /tasks/{task_id}/events`, read-only task artifact endpoints, and
-`POST /tasks/{task_id}/cancel`. It runs `codex exec --json` in read-only mode by
-default, parses JSONL events, and captures stdout/stderr tails separately. With the
-wrapper running, use `uv run python scripts/demo_task.py` from `codex-agent-wrapper` for
-a simple submit-and-poll demo. The demo prints `final_output` and hides Codex's
+`POST /tasks/{task_id}/cancel`. It runs `opencode run --format json` by default, parses
+JSONL events when present, falls back to stdout for `final_output`, and captures
+stdout/stderr tails separately. With the
+wrapper running, use `uv run python scripts/demo_task.py` from `local-agent-wrapper` for
+a simple submit-and-poll demo. The demo prints `final_output` and hides the agent's
 stderr/progress log unless `--show-log` is passed. Add `--show-events` to print parsed
-JSON events. Task responses include relative `links` and `artifacts` maps for discovery.
+JSON events. Set `AGENT_RUNTIME=codex` for the built-in Codex profile, or use
+`AGENT_ARGS_TEMPLATE` for another CLI. Task responses include relative `links` and
+`artifacts` maps for discovery.
+
+The wrapper has an opt-in real OpenCode integration test:
+
+```bash
+cd local-agent-wrapper
+MINIGENT_RUN_OPENCODE_INTEGRATION_TESTS=true uv run pytest tests/test_opencode_integration.py
+```
 
 ## Docker Compose Deployment
 
@@ -952,7 +963,7 @@ optionally expose them to the runtime through the `peer_agent_task` tool. Config
 `MINIGENT_PEER_AGENTS`:
 
 ```dotenv
-MINIGENT_PEER_AGENTS=[{"name":"codex","base_url":"http://127.0.0.1:8010","description":"Local Codex wrapper","capabilities":["repository analysis","codebase inspection"],"side_effects":["runs Codex CLI commands in the allowed workspace"],"version":"0.1.0"}]
+MINIGENT_PEER_AGENTS=[{"name":"opencode","base_url":"http://127.0.0.1:8010","description":"Local OpenCode wrapper","capabilities":["repository analysis","codebase inspection"],"side_effects":["runs OpenCode CLI commands in the allowed workspace"],"version":"0.1.0"}]
 # Required only when the agent runtime should be allowed to call peers as a tool:
 MINIGENT_ENABLE_PEER_AGENT_TOOL=true
 ```
@@ -980,7 +991,7 @@ peer's matching endpoints; artifact names are limited to `final-output`, `stdout
 `stderr-tail`, and `events`. These proxy endpoints are for manual federation demos; the
 agent runtime does not yet choose or invoke peers automatically.
 
-With the Codex wrapper and Minigent running, use the root demo script to submit and poll
+With the local agent wrapper and Minigent running, use the root demo script to submit and poll
 a peer task through Minigent:
 
 ```bash
@@ -992,7 +1003,7 @@ Useful overrides:
 ```bash
 MINIGENT_BASE_URL=http://127.0.0.1:8000 \
   uv run python scripts/demo_peer_agent.py \
-  --peer codex \
+  --peer opencode \
   --cwd /Users/burm/code/minigent \
   --show-events \
   --prompt "Summarize this repository in one paragraph. Do not edit files."
@@ -1027,7 +1038,7 @@ tool result, and final assistant reply. It also prints a compact `peer_summary` 
 the peer name, task ID, status, exit code, timeout/cancellation flags, duration, and
 short output/error previews before the full transcript.
 
-To run the Codex wrapper, Minigent, and the runtime tool demo as one local stack:
+To run the local agent wrapper, Minigent, and the runtime tool demo as one local stack:
 
 ```bash
 ./scripts/demo_peer_agent_tool_stack.sh
@@ -1055,8 +1066,8 @@ MINIGENT_RUN_INTEGRATION_TESTS=true \
 ```
 
 The Docker Compose sidecar demo also has an opt-in integration test. It requires Docker
-and a usable local Codex login because it builds the wrapper image and runs Codex inside
-the sidecar:
+and a usable local Codex login because that demo explicitly runs the wrapper in its Codex
+profile inside the sidecar:
 
 ```bash
 MINIGENT_RUN_COMPOSE_INTEGRATION_TESTS=true \
@@ -1078,15 +1089,15 @@ containerized stack:
 ```
 
 The Compose demo uses [compose.peer-demo.yaml](/Users/burm/code/minigent/compose.peer-demo.yaml).
-It exposes Minigent on `127.0.0.1:8000`, keeps the Codex wrapper internal to the Compose
-network, mounts this repository read-only at `/workspace/minigent`, and mounts
+It exposes Minigent on `127.0.0.1:8000`, keeps the local agent wrapper internal to the Compose
+network in its Codex profile, mounts this repository read-only at `/workspace/minigent`, and mounts
 `.codex-container` as writable local Codex state at `CODEX_HOME=/home/codex/.codex`.
 The prepared
 `.codex-container` directory contains copied Codex credentials, is ignored by git, and is
 made readable by the non-root wrapper container user for this local-only demo. Codex may
 update files in that directory while it runs.
 
-The sidecar sets `CODEX_AGENT_SANDBOX=danger-full-access` because Codex's Linux sandbox
+The sidecar sets `AGENT_RUNTIME=codex` and `CODEX_AGENT_SANDBOX=danger-full-access` because Codex's Linux sandbox
 needs unprivileged namespace support that is typically unavailable inside Docker. The
 demo still constrains the filesystem by mounting the repository read-only and only
 giving the wrapper writable access to `.codex-container`.
