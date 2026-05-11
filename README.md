@@ -87,7 +87,7 @@ AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
 
 The POC supports `GET /agent-card`, `POST /tasks`, `GET /tasks/{task_id}`,
 `GET /tasks/{task_id}/events`, read-only task artifact endpoints, and
-`POST /tasks/{task_id}/cancel`. It runs `opencode run --format json` by default, parses
+`POST /tasks/{task_id}/cancel`. It runs `opencode run --format json --dir <cwd>` by default, parses
 JSONL events when present, falls back to stdout for `final_output`, and captures
 stdout/stderr tails separately. With the
 wrapper running, use `uv run python scripts/demo_task.py` from `local-agent-wrapper` for
@@ -1068,8 +1068,8 @@ MINIGENT_RUN_INTEGRATION_TESTS=true \
 ```
 
 The Docker Compose sidecar demo also has an opt-in integration test. It requires Docker
-and a usable local Codex login because that demo explicitly runs the wrapper in its Codex
-profile inside the sidecar:
+and a usable local OpenCode login because that demo runs the OpenCode-first wrapper
+inside the sidecar:
 
 ```bash
 MINIGENT_RUN_COMPOSE_INTEGRATION_TESTS=true \
@@ -1082,27 +1082,35 @@ Pass a custom peer prompt as the first argument:
 ./scripts/demo_peer_agent_tool_stack.sh "Summarize the API routes in this repository. Do not edit files."
 ```
 
-For a local Docker Compose sidecar demo, prepare a minimal Codex home and run the
+For a local Docker Compose sidecar demo, prepare a minimal OpenCode home and run the
 containerized stack:
 
 ```bash
-./scripts/prepare-codex-container-home.sh
+./scripts/prepare-opencode-container-home.sh
 ./scripts/demo_peer_agent_tool_compose.sh
+```
+
+Pass a custom containerized peer prompt the same way:
+
+```bash
+./scripts/demo_peer_agent_tool_compose.sh "Summarize this repository in one paragraph. Do not edit files."
 ```
 
 The Compose demo uses [compose.peer-demo.yaml](/Users/burm/code/minigent/compose.peer-demo.yaml).
 It exposes Minigent on `127.0.0.1:8000`, keeps the local agent wrapper internal to the Compose
-network in its Codex profile, mounts this repository read-only at `/workspace/minigent`, and mounts
-`.codex-container` as writable local Codex state at `CODEX_HOME=/home/codex/.codex`.
+network in its OpenCode profile, mounts this repository read-only at `/workspace/minigent`, and mounts
+`.opencode-container/data` plus `.opencode-container/config` as writable local OpenCode state.
 The prepared
-`.codex-container` directory contains copied Codex credentials, is ignored by git, and is
-made readable by the non-root wrapper container user for this local-only demo. Codex may
-update files in that directory while it runs.
+`.opencode-container` directory contains copied OpenCode credentials, is ignored by git, and is
+made readable by the non-root wrapper container user for this local-only demo. OpenCode may
+update files in the mounted data directory while it runs.
 
-The sidecar sets `AGENT_RUNTIME=codex` and `CODEX_AGENT_SANDBOX=danger-full-access` because Codex's Linux sandbox
-needs unprivileged namespace support that is typically unavailable inside Docker. The
-demo still constrains the filesystem by mounting the repository read-only and only
-giving the wrapper writable access to `.codex-container`.
+The sidecar sets `AGENT_RUNTIME=opencode` and runs `opencode run --format json` inside
+the wrapper container. The demo constrains the repository by mounting it read-only and
+only giving the wrapper writable access to `.opencode-container` for OpenCode state.
+The Compose file sets `AGENT_ARGS_TEMPLATE` with an `OPENCODE_MODEL` override point and
+defaults to `openai/gpt-5.2`; set `OPENCODE_MODEL=provider/model` if your OpenCode login
+requires a different model.
 
 Keep the Compose demo running for inspection:
 

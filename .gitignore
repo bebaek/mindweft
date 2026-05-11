@@ -6,5 +6,6 @@
 .venv/
 .uv-cache/
 .codex-container/
+.opencode-container/
 __pycache__/
 .pytest_cache/

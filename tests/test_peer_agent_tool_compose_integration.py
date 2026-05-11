@@ -22,7 +22,7 @@ def test_peer_agent_tool_compose_demo_completes() -> None:
         **os.environ,
         "MINIGENT_PORT": os.getenv("MINIGENT_COMPOSE_TEST_PORT", "18080"),
     }
-    prompt = "Summarize this repository in one sentence. Do not edit files."
+    prompt = "Reply exactly: compose-opencode-ok"
 
     completed = subprocess.run(
         ["./scripts/demo_peer_agent_tool_compose.sh", prompt],
@@ -46,3 +46,4 @@ def test_peer_agent_tool_compose_demo_completes() -> None:
     assert "- tool (peer_agent_task):" in completed.stdout
     assert '"status": "completed"' in completed.stdout
     assert '"timed_out": false' in completed.stdout
+    assert "compose-opencode-ok" in completed.stdout

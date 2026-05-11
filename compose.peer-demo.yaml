@@ -6,7 +6,7 @@ services:
       MINIGENT_LLM_PROVIDER: mock
       MINIGENT_AUTH_MODE: dev-headers
       MINIGENT_ENABLE_PEER_AGENT_TOOL: "true"
-      MINIGENT_PEER_AGENTS: '[{"name":"codex","base_url":"http://local-agent-wrapper:8010","description":"Local Codex wrapper sidecar","capabilities":["repository analysis","codebase inspection","read-only command execution in the mounted workspace"],"side_effects":["runs Codex CLI commands inside the wrapper container"],"version":"0.1.0"}]'
+      MINIGENT_PEER_AGENTS: '[{"name":"opencode","base_url":"http://local-agent-wrapper:8010","description":"Local OpenCode wrapper sidecar","capabilities":["repository analysis","codebase inspection","read-only command execution in the mounted workspace"],"side_effects":["runs OpenCode CLI commands inside the wrapper container"],"version":"0.1.0"}]'
     ports:
       - "127.0.0.1:${MINIGENT_PORT:-8000}:8000"
     depends_on:
@@ -29,16 +29,16 @@ services:
     build:
       context: ./local-agent-wrapper
     environment:
-      CODEX_HOME: /home/codex/.codex
-      AGENT_RUNTIME: codex
+      AGENT_RUNTIME: opencode
       AGENT_ALLOWED_WORKSPACES: /workspace/minigent
-      AGENT_COMMAND: codex
-      CODEX_AGENT_SANDBOX: danger-full-access
+      AGENT_COMMAND: opencode
+      AGENT_ARGS_TEMPLATE: run --format json --model ${OPENCODE_MODEL:-openai/gpt-5.2} --dir {cwd} {prompt}
     expose:
       - "8010"
     volumes:
       - .:/workspace/minigent:ro
-      - ./.codex-container:/home/codex/.codex
+      - ./.opencode-container/data:/home/agent/.local/share/opencode
+      - ./.opencode-container/config:/home/agent/.config/opencode
     healthcheck:
       test:
         [

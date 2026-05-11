@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/compose.peer-demo.yaml"
 MINIGENT_PORT="${MINIGENT_PORT:-8000}"
-PROMPT="Summarize this repository in one paragraph. Do not edit files."
+PROMPT="Reply exactly: compose-opencode-ok"
 KEEP_RUNNING=false
 
 while [[ $# -gt 0 ]]; do
@@ -42,18 +42,18 @@ trap cleanup EXIT INT TERM
 
 cd "$ROOT_DIR"
 
-./scripts/prepare-codex-container-home.sh
+./scripts/prepare-opencode-container-home.sh
 
 docker compose -f "$COMPOSE_FILE" up -d --build
 
 uv run python scripts/check_peer_agent_demo.py \
   --minigent-port "$MINIGENT_PORT" \
-  --peer-name codex \
+  --peer-name opencode \
   --skip-wrapper-health \
   --check-running
 
 uv run python scripts/demo_peer_agent_tool.py \
   --base-url "http://127.0.0.1:$MINIGENT_PORT" \
-  --peer codex \
+  --peer opencode \
   --cwd /workspace/minigent \
   --prompt "$PROMPT"

@@ -436,7 +436,7 @@ def _agent_command(settings: Settings, *, cwd: Path, prompt: str) -> list[str]:
         )
         return command
     if runtime == "opencode":
-        return [*settings.agent_command, "run", "--format", "json", prompt]
+        return [*settings.agent_command, "run", "--format", "json", "--dir", str(cwd), prompt]
     if runtime == "plain":
         return [*settings.agent_command, prompt]
     raise HTTPException(

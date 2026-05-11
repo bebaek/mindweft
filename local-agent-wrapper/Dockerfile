@@ -2,12 +2,19 @@ FROM node:22-bookworm-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    CODEX_HOME=/home/codex/.codex \
-    PATH="/home/codex/.local/bin:${PATH}"
+    HOME=/home/agent \
+    CODEX_HOME=/home/agent/.codex \
+    XDG_CONFIG_HOME=/home/agent/.config \
+    XDG_DATA_HOME=/home/agent/.local/share \
+    XDG_STATE_HOME=/home/agent/.local/state \
+    PATH="/home/agent/.local/bin:${PATH}"
+
+ARG INSTALL_CODEX=false
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-pip python3-venv \
-    && npm install -g @openai/codex \
+    && npm install -g opencode-ai \
+    && if [ "$INSTALL_CODEX" = "true" ]; then npm install -g @openai/codex; fi \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -17,12 +24,12 @@ COPY local_agent_wrapper ./local_agent_wrapper
 COPY codex_agent_wrapper ./codex_agent_wrapper
 RUN python3 -m pip install --break-system-packages --no-cache-dir .
 
-RUN groupadd --system codex \
-    && useradd --system --gid codex --create-home codex \
-    && mkdir -p /home/codex/.codex \
-    && chown -R codex:codex /home/codex /app
+RUN groupadd --system agent \
+    && useradd --system --gid agent --home-dir /home/agent --no-create-home agent \
+    && mkdir -p /home/agent/.codex /home/agent/.config/opencode /home/agent/.local/share/opencode /home/agent/.local/state/opencode \
+    && chown -R agent:agent /home/agent /app
 
-USER codex
+USER agent
 
 EXPOSE 8010
 

@@ -90,7 +90,14 @@ def test_default_opencode_runtime_uses_run_prompt_argv(tmp_path: Path) -> None:
 
         assert create_response.status_code == 200
         _wait_for_terminal_task(client, create_response.json()["task_id"])
-        assert argv_file.read_text(encoding="utf-8") == '["run", "--format", "json", "hello"]'
+        assert json.loads(argv_file.read_text(encoding="utf-8")) == [
+            "run",
+            "--format",
+            "json",
+            "--dir",
+            str(tmp_path),
+            "hello",
+        ]
 
 
 def test_custom_args_template_overrides_runtime_argv(tmp_path: Path) -> None:

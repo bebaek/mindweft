@@ -2,13 +2,40 @@
 
 Minimal POC wrapper that exposes a local coding-agent CLI process as a small federated-agent-style HTTP service. It defaults to OpenCode, but the command profile can be switched to Codex or a custom argv template.
 
-This is intentionally not wired into Minigent yet. It proves the first boundary:
+It proves the local peer-agent boundary:
 
 - submit a prompt to a local coding-agent CLI
 - run it in an allowed workspace
 - poll task status
 - cancel a running task with signals
 - capture stdout and stderr tails separately
+
+## Container
+
+Build the default OpenCode-capable image:
+
+```bash
+docker build -t minigent-local-agent-wrapper:latest .
+```
+
+The image installs the `opencode-ai` npm package and runs the wrapper as a non-root
+`agent` user. To also include the optional Codex CLI in the same image, build with:
+
+```bash
+docker build --build-arg INSTALL_CODEX=true -t minigent-local-agent-wrapper:codex .
+```
+
+For the repository-level Compose demo, prepare a local OpenCode container home from your
+existing local OpenCode login, then run the sidecar stack from the repository root:
+
+```bash
+./scripts/prepare-opencode-container-home.sh
+./scripts/demo_peer_agent_tool_compose.sh
+```
+
+The Compose demo sets `OPENCODE_MODEL=openai/gpt-5.2` by default through
+`AGENT_ARGS_TEMPLATE`; override `OPENCODE_MODEL=provider/model` from the shell if your
+OpenCode account uses a different model.
 
 ## Run
 
@@ -25,7 +52,8 @@ The default OpenCode invocation is:
 opencode run --format json <prompt>
 ```
 
-The process is started with `cwd` set to the requested allowed workspace. Override these if needed:
+The built-in OpenCode profile also passes `--dir <cwd>` and starts the process with
+`cwd` set to the requested allowed workspace. Override these if needed:
 
 - `AGENT_RUNTIME`: runtime profile, default `opencode`; supported built-ins are `opencode`, `codex`, and `plain`
 - `AGENT_COMMAND`: executable command, default `opencode` or `codex` when `AGENT_RUNTIME=codex`
