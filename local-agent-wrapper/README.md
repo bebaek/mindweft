@@ -1,6 +1,6 @@
 # Minigent Local Agent Wrapper
 
-Minimal POC wrapper that exposes a local coding-agent CLI process as a small federated-agent-style HTTP service. It defaults to OpenCode, but the command profile can be switched to Codex or a custom argv template.
+Minimal POC wrapper that exposes a local coding-agent CLI process as a small federated-agent-style HTTP service. It defaults to OpenCode, but the command profile can be switched to Codex, Pi Coding Agent, or a custom argv template.
 
 It proves the local peer-agent boundary:
 
@@ -24,6 +24,10 @@ The image installs the `opencode-ai` npm package and runs the wrapper as a non-r
 ```bash
 docker build --build-arg INSTALL_CODEX=true -t minigent-local-agent-wrapper:codex .
 ```
+
+The stock image does not install Pi Coding Agent. For `AGENT_RUNTIME=pi`, run the wrapper
+on a host that has `pi` on `PATH` or build a custom image that installs
+`@earendil-works/pi-coding-agent`.
 
 For the repository-level Compose demo, prepare a local OpenCode container home from your
 existing local OpenCode login, then run the sidecar stack from the repository root:
@@ -55,8 +59,8 @@ opencode run --format json <prompt>
 The built-in OpenCode profile also passes `--dir <cwd>` and starts the process with
 `cwd` set to the requested allowed workspace. Override these if needed:
 
-- `AGENT_RUNTIME`: runtime profile, default `opencode`; supported built-ins are `opencode`, `codex`, and `plain`
-- `AGENT_COMMAND`: executable command, default `opencode` or `codex` when `AGENT_RUNTIME=codex`
+- `AGENT_RUNTIME`: runtime profile, default `opencode`; supported built-ins are `opencode`, `codex`, `pi`, and `plain`
+- `AGENT_COMMAND`: executable command, default `opencode`, `codex` when `AGENT_RUNTIME=codex`, or `pi` when `AGENT_RUNTIME=pi`
 - `AGENT_ALLOWED_WORKSPACES`: path-list of allowed roots, required for task execution
 - `AGENT_ARGS_TEMPLATE`: optional shell-style argv template. Supports `{cwd}` and `{prompt}` placeholders and overrides the built-in runtime argv.
 - `AGENT_TAIL_CHARS`: captured stdout/stderr tail size, default `20000`
@@ -72,6 +76,22 @@ AGENT_RUNTIME=codex \
 AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
   uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
 ```
+
+Pi Coding Agent compatibility uses Pi's non-interactive JSON event mode:
+
+```bash
+AGENT_RUNTIME=pi \
+AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
+  uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
+```
+
+The built-in Pi profile invokes
+`pi --mode json --no-session --tools read,grep,find,ls <prompt>` with the task process
+`cwd` set to the requested allowed workspace. This keeps the default Pi peer profile
+read-only. The wrapper parses Pi JSONL `message_end` assistant events for `final_output`.
+Use `AGENT_ARGS_TEMPLATE` if you want persistent Pi sessions, a specific model/provider,
+write-capable tools, different tool narrowing, or explicit Pi resources like `--skill` or
+`--extension`.
 
 Custom CLI example:
 
@@ -146,7 +166,8 @@ uv run python scripts/demo_task.py \
 
 By default the wrapper runs `opencode run --format json`, parses stdout JSONL into
 `events_tail` when the CLI emits JSON objects one per line, and exposes the best final
-assistant message it can find as `final_output`. If no final JSON event is detected and
+assistant message it can find as `final_output`. The read-only Pi profile similarly
+parses `pi --mode json` JSONL events. If no final JSON event is detected and
 the process exits successfully, `final_output` falls back to the captured stdout tail. It still keeps
 `stdout_tail` as a raw fallback/debug stream. Many agent CLIs write progress, command
 transcripts, and other execution logs to stderr; the wrapper captures that stream as
@@ -166,8 +187,9 @@ or `--show-log` to print the stderr log.
 uv run pytest
 ```
 
-Run the real OpenCode integration test only when the local CLI is installed and configured:
+Run real CLI integration tests only when the matching local CLI is installed and configured:
 
 ```bash
 MINIGENT_RUN_OPENCODE_INTEGRATION_TESTS=true uv run pytest tests/test_opencode_integration.py
+MINIGENT_RUN_PI_INTEGRATION_TESTS=true uv run pytest tests/test_pi_integration.py
 ```

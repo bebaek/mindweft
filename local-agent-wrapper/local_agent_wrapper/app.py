@@ -263,13 +263,23 @@ async def _capture_stdout(
 ) -> None:
     if stream is None:
         return
+    pending = ""
     while True:
-        line = await stream.readline()
-        if not line:
+        chunk = await stream.read(4096)
+        if not chunk:
+            if pending:
+                _capture_json_event(pending, record)
             return
-        text = line.decode(errors="replace")
+        text = chunk.decode(errors="replace")
         record.stdout.append(text)
-        _capture_json_event(text, record)
+        pending += text
+        lines = pending.splitlines(keepends=True)
+        if lines and not lines[-1].endswith(("\n", "\r")):
+            pending = lines.pop()
+        else:
+            pending = ""
+        for line in lines:
+            _capture_json_event(line, record)
 
 
 async def _capture_stream(
@@ -382,6 +392,9 @@ def _looks_like_final_event(event_type: str, event: dict[str, object]) -> bool:
     normalized = event_type.lower()
     if "final" in normalized or "complete" in normalized or normalized.endswith("done"):
         return True
+    if normalized == "message_end":
+        message = _event_message(event)
+        return message is not None and str(message.get("role") or "").lower() == "assistant"
     if event.get("is_final") is True or event.get("final") is True:
         return True
     message = _event_message(event)
@@ -421,7 +434,10 @@ def _agent_command(settings: Settings, *, cwd: Path, prompt: str) -> list[str]:
     if settings.agent_args_template:
         return [
             *settings.agent_command,
-            *[_format_agent_arg(arg, cwd=cwd, prompt=prompt) for arg in settings.agent_args_template],
+            *[
+                _format_agent_arg(arg, cwd=cwd, prompt=prompt)
+                for arg in settings.agent_args_template
+            ],
         ]
     if runtime == "codex":
         command = [
@@ -442,13 +458,23 @@ def _agent_command(settings: Settings, *, cwd: Path, prompt: str) -> list[str]:
         return command
     if runtime == "opencode":
         return [*settings.agent_command, "run", "--format", "json", "--dir", str(cwd), prompt]
+    if runtime == "pi":
+        return [
+            *settings.agent_command,
+            "--mode",
+            "json",
+            "--no-session",
+            "--tools",
+            "read,grep,find,ls",
+            prompt,
+        ]
     if runtime == "plain":
         return [*settings.agent_command, prompt]
     raise HTTPException(
         status_code=503,
         detail=(
             f"Unsupported AGENT_RUNTIME '{settings.agent_runtime}'. "
-            "Use opencode, codex, plain, or set AGENT_ARGS_TEMPLATE."
+            "Use opencode, codex, pi, plain, or set AGENT_ARGS_TEMPLATE."
         ),
     )
 
@@ -518,12 +544,16 @@ def _resolve_allowed_workspace(cwd: Path, allowed_workspaces: tuple[Path, ...]) 
 
 def settings_from_env() -> Settings:
     runtime = os.getenv("AGENT_RUNTIME", "opencode")
-    default_command = "codex" if runtime.lower() == "codex" else "opencode"
+    runtime_name = runtime.lower()
+    if runtime_name == "codex":
+        default_command = "codex"
+    elif runtime_name == "pi":
+        default_command = "pi"
+    else:
+        default_command = "opencode"
     command = tuple(shlex.split(os.getenv("AGENT_COMMAND", default_command)))
     allowed = tuple(
-        Path(item)
-        for item in os.getenv("AGENT_ALLOWED_WORKSPACES", "").split(os.pathsep)
-        if item
+        Path(item) for item in os.getenv("AGENT_ALLOWED_WORKSPACES", "").split(os.pathsep) if item
     )
     args_template = tuple(shlex.split(os.getenv("AGENT_ARGS_TEMPLATE", "")))
     tail_chars = int(os.getenv("AGENT_TAIL_CHARS", "20000"))
@@ -532,7 +562,9 @@ def settings_from_env() -> Settings:
     codex_json = os.getenv("CODEX_AGENT_JSON", "true").lower() not in {"0", "false", "no"}
     env_prefixes = tuple(
         prefix
-        for prefix in os.getenv("AGENT_ALLOWED_TASK_ENV_PREFIXES", "MINIGENT_MCP_BROKER_").split(",")
+        for prefix in os.getenv("AGENT_ALLOWED_TASK_ENV_PREFIXES", "MINIGENT_MCP_BROKER_").split(
+            ","
+        )
         if prefix
     )
     return Settings(

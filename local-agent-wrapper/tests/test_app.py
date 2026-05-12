@@ -100,6 +100,36 @@ def test_default_opencode_runtime_uses_run_prompt_argv(tmp_path: Path) -> None:
         ]
 
 
+def test_pi_runtime_uses_json_mode_argv(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    argv_file = tmp_path / "argv.json"
+    fake_agent.write_text(
+        "import json\n"
+        "import sys\n"
+        f"open({str(argv_file)!r}, 'w', encoding='utf-8').write(json.dumps(sys.argv[1:]))\n"
+        "print('done')\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+        agent_runtime="pi",
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "hello"})
+
+        assert create_response.status_code == 200
+        _wait_for_terminal_task(client, create_response.json()["task_id"])
+        assert json.loads(argv_file.read_text(encoding="utf-8")) == [
+            "--mode",
+            "json",
+            "--no-session",
+            "--tools",
+            "read,grep,find,ls",
+            "hello",
+        ]
+
+
 def test_custom_args_template_overrides_runtime_argv(tmp_path: Path) -> None:
     fake_agent = tmp_path / "fake_agent.py"
     argv_file = tmp_path / "argv.json"
@@ -217,7 +247,12 @@ def test_task_env_preserves_existing_opencode_config_content(tmp_path: Path, mon
     )
     monkeypatch.setenv(
         "OPENCODE_CONFIG_CONTENT",
-        json.dumps({"model": "test/model", "mcp": {"other": {"type": "remote", "url": "https://example.com"}}}),
+        json.dumps(
+            {
+                "model": "test/model",
+                "mcp": {"other": {"type": "remote", "url": "https://example.com"}},
+            }
+        ),
     )
     settings = Settings(
         agent_command=(sys.executable, str(fake_agent)),
@@ -275,6 +310,28 @@ def test_task_parses_jsonl_events_and_final_output(tmp_path: Path) -> None:
         assert "debug log" in result["stderr_tail"]
 
 
+def test_task_extracts_pi_message_end_events_as_final_output(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    fake_agent.write_text(
+        "import json\n"
+        "print(json.dumps({'type': 'session', 'version': 3}))\n"
+        "print(json.dumps({'type': 'message_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': 'pi final'}]}}))\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+        agent_runtime="pi",
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "hello"})
+
+        assert create_response.status_code == 200
+        result = _wait_for_terminal_task(client, create_response.json()["task_id"])
+        assert result["status"] == "completed"
+        assert result["final_output"] == "pi final"
+
+
 def test_task_extracts_opencode_text_events_as_final_output(tmp_path: Path) -> None:
     fake_agent = tmp_path / "fake_agent.py"
     fake_agent.write_text(
@@ -294,6 +351,27 @@ def test_task_extracts_opencode_text_events_as_final_output(tmp_path: Path) -> N
         result = _wait_for_terminal_task(client, create_response.json()["task_id"])
         assert result["status"] == "completed"
         assert result["final_output"] == "final answer"
+
+
+def test_task_parses_jsonl_events_longer_than_stream_reader_line_limit(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    long_final = "x" * 70000
+    fake_agent.write_text(
+        "import json\n"
+        f"print(json.dumps({{'type': 'message.completed', 'message': {{'role': 'assistant', 'content': {long_final!r}}}}}))\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "hello"})
+
+        assert create_response.status_code == 200
+        result = _wait_for_terminal_task(client, create_response.json()["task_id"])
+        assert result["status"] == "completed"
+        assert result["final_output"] == long_final
 
 
 def test_task_events_endpoint_supports_incremental_polling(tmp_path: Path) -> None:

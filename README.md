@@ -72,9 +72,9 @@ local network.
 
 [`local-agent-wrapper`](/Users/burm/code/minigent/local-agent-wrapper) is a separate
 minimal package that exposes a local coding-agent CLI as a federated-agent-style HTTP
-member. It defaults to OpenCode and can be configured for Codex or another CLI with a
-custom argv template. Minigent can route tasks to it through the `peer_agent_task` tool
-when peer-agent tooling is enabled.
+member. It defaults to OpenCode and can be configured for Codex, Pi Coding Agent, or
+another CLI with a custom argv template. Minigent can route tasks to it through the
+`peer_agent_task` tool when peer-agent tooling is enabled.
 
 Run it locally with an explicit workspace allowlist:
 
@@ -93,7 +93,8 @@ stdout/stderr tails separately. With the
 wrapper running, use `uv run python scripts/demo_task.py` from `local-agent-wrapper` for
 a simple submit-and-poll demo. The demo prints `final_output` and hides the agent's
 stderr/progress log unless `--show-log` is passed. Add `--show-events` to print parsed
-JSON events. Set `AGENT_RUNTIME=codex` for the built-in Codex profile, or use
+JSON events. Set `AGENT_RUNTIME=codex` for the built-in Codex profile,
+`AGENT_RUNTIME=pi` for the built-in Pi Coding Agent profile, or use
 `AGENT_ARGS_TEMPLATE` for another CLI. Task responses include relative `links` and
 `artifacts` maps for discovery.
 
@@ -131,6 +132,23 @@ the same backend shape:
 The default backend remains `native`, which preserves the existing Minigent LLM/tool
 runtime.
 
+To try Pi Coding Agent as the peer instead of OpenCode or Codex, install Pi separately
+and start the same wrapper with the Pi runtime:
+
+```bash
+cd local-agent-wrapper
+AGENT_RUNTIME=pi \
+AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
+  uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
+```
+
+The Pi profile invokes `pi --mode json --no-session --tools read,grep,find,ls <prompt>`
+from the task workspace and extracts assistant `message_end` events as the task
+`final_output`. This keeps the default Pi peer profile read-only. Override with
+`AGENT_ARGS_TEMPLATE` when you want persistent Pi sessions, explicit model/provider
+flags, write-capable tools, different tool narrowing, or Pi skills/extensions for a
+specific peer deployment.
+
 Set `MINIGENT_MCP_BROKER_ENABLED=false` or `agent_backend.mcp_broker_enabled=false` if
 the peer agent should run without Minigent-brokered MCP tools.
 
@@ -163,6 +181,26 @@ uv run python scripts/demo_opencode_backend.py \
   --message "Summarize this repository in one paragraph. Do not edit files."
 ```
 
+For a Pi-backed peer-agent backend, use the matching demo:
+
+```bash
+uv run python scripts/demo_pi_backend.py \
+  --message "Summarize this repository in one paragraph. Do not edit files."
+```
+
+To start the Pi wrapper, start Minigent in peer-agent backend mode, and run that demo as
+one local stack:
+
+```bash
+./scripts/demo_pi_backend_stack.sh
+```
+
+Pass a custom prompt as the first argument:
+
+```bash
+./scripts/demo_pi_backend_stack.sh "Summarize the local-agent-wrapper package. Do not edit files."
+```
+
 To smoke-test brokered MCP tool use, run:
 
 ```bash
@@ -172,11 +210,12 @@ uv run python scripts/demo_opencode_mcp_broker.py
 In the Minigent API logs, look for `mcp_broker.tool_call` to confirm OpenCode called a
 tool through the broker rather than only echoing the prompt text.
 
-The wrapper has an opt-in real OpenCode integration test:
+The wrapper has opt-in real CLI integration tests:
 
 ```bash
 cd local-agent-wrapper
 MINIGENT_RUN_OPENCODE_INTEGRATION_TESTS=true uv run pytest tests/test_opencode_integration.py
+MINIGENT_RUN_PI_INTEGRATION_TESTS=true uv run pytest tests/test_pi_integration.py
 ```
 
 ## Docker Compose Deployment
