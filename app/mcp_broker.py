@@ -3,6 +3,7 @@ from __future__ import annotations
 import secrets
 import time
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from fastapi import HTTPException, Request, Response
@@ -14,6 +15,8 @@ MINIGENT_MCP_BROKER_BASE_URL_ENV = "MINIGENT_MCP_BROKER_BASE_URL"
 MINIGENT_MCP_BROKER_URL_ENV = "MINIGENT_MCP_BROKER_URL"
 MINIGENT_MCP_BROKER_TOKEN_ENV = "MINIGENT_MCP_BROKER_TOKEN"
 MINIGENT_MCP_BROKER_SESSION_ENV = "MINIGENT_MCP_BROKER_SESSION"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -52,10 +55,24 @@ class MCPBrokerSessionStore:
             expires_at=time.time() + ttl_seconds,
         )
         self._sessions[session_id] = session
+        logger.info(
+            "mcp_broker.session_created session_id=%s tenant_id=%s thread_id=%s tools=%s",
+            session_id,
+            principal.tenant_id,
+            thread_id,
+            len(tool_registry.specs()),
+        )
         return session
 
     def delete_session(self, session_id: str) -> None:
-        self._sessions.pop(session_id, None)
+        session = self._sessions.pop(session_id, None)
+        if session is not None:
+            logger.info(
+                "mcp_broker.session_deleted session_id=%s tenant_id=%s thread_id=%s",
+                session_id,
+                session.tenant_id,
+                session.thread_id,
+            )
 
     def require_session(self, session_id: str, token: str | None) -> MCPBrokerSession:
         self._prune_expired()
@@ -106,6 +123,13 @@ async def handle_mcp_broker_request(
             },
         )
     if method == "tools/list":
+        logger.info(
+            "mcp_broker.tools_list session_id=%s tenant_id=%s thread_id=%s tools=%s",
+            session.session_id,
+            session.tenant_id,
+            session.thread_id,
+            len(session.tool_registry.specs()),
+        )
         return _jsonrpc_result(
             request_id,
             {
@@ -137,7 +161,22 @@ async def _call_tool(
     try:
         result = await session.tool_registry.execute(name, arguments, context=context)
     except HTTPException as exc:
+        logger.warning(
+            "mcp_broker.tool_call_error session_id=%s tenant_id=%s thread_id=%s tool=%s detail=%s",
+            session.session_id,
+            session.tenant_id,
+            session.thread_id,
+            name,
+            exc.detail,
+        )
         return _jsonrpc_error(request_id, -32000, str(exc.detail))
+    logger.info(
+        "mcp_broker.tool_call session_id=%s tenant_id=%s thread_id=%s tool=%s",
+        session.session_id,
+        session.tenant_id,
+        session.thread_id,
+        name,
+    )
     return _jsonrpc_result(
         request_id,
         {

@@ -26,6 +26,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="Summarize this repository in one paragraph. Do not edit files.",
         help="User message to send to the OpenCode-backed thread.",
     )
+    parser.add_argument(
+        "--expect-reply-contains",
+        default=None,
+        help="Fail unless the assistant reply contains this text.",
+    )
     return parser.parse_args(argv)
 
 
@@ -83,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"thread_id: {thread_id}")
     print(f"user: {args.message}")
     print(f"assistant: {run_response['reply']}")
+    if args.expect_reply_contains and args.expect_reply_contains not in str(run_response["reply"]):
+        print(
+            f"Assistant reply did not contain expected text: {args.expect_reply_contains}",
+            file=sys.stderr,
+        )
+        return 2
     print("\ntranscript:")
     for item in transcript:
         print(f"- {item['role']}: {item['content']}")

@@ -158,6 +158,15 @@ uv run python scripts/demo_opencode_backend.py \
   --message "Summarize this repository in one paragraph. Do not edit files."
 ```
 
+To smoke-test brokered MCP tool use, run:
+
+```bash
+uv run python scripts/demo_opencode_mcp_broker.py
+```
+
+In the Minigent API logs, look for `mcp_broker.tool_call` to confirm OpenCode called a
+tool through the broker rather than only echoing the prompt text.
+
 The wrapper has an opt-in real OpenCode integration test:
 
 ```bash

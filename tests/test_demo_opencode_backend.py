@@ -100,3 +100,41 @@ def test_demo_opencode_backend_reports_native_backend(monkeypatch, capsys) -> No
 
     assert exit_code == 2
     assert "Minigent is not configured for the peer_agent backend" in capsys.readouterr().err
+
+
+def test_demo_opencode_backend_checks_expected_reply(monkeypatch, capsys) -> None:
+    demo = load_demo_module()
+
+    def fake_request_json(
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 10.0,
+    ) -> Any:
+        del payload, headers, timeout
+        if method == "GET" and url == "http://minigent.test/config":
+            return {"agent_backend": {"type": "peer_agent", "timeout_seconds": 180.0}}
+        if method == "POST" and url == "http://minigent.test/threads":
+            return {"thread_id": "thread_123"}
+        if method == "POST" and url.endswith("/messages"):
+            return {"id": "message_123"}
+        if method == "POST" and url.endswith("/run"):
+            return {"reply": "different"}
+        if method == "GET" and url.endswith("/messages"):
+            return []
+        raise AssertionError(f"Unexpected request: {method} {url}")
+
+    monkeypatch.setattr(demo, "request_json", fake_request_json)
+
+    exit_code = demo.main(
+        [
+            "--base-url",
+            "http://minigent.test",
+            "--expect-reply-contains",
+            "expected",
+        ]
+    )
+
+    assert exit_code == 2
+    assert "Assistant reply did not contain expected text: expected" in capsys.readouterr().err
