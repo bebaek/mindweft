@@ -76,6 +76,7 @@ class AgentBackendRouter(AgentBackend):
                 cwd=backend.cwd,
                 timeout_seconds=backend.timeout_seconds,
                 poll_interval_seconds=backend.poll_interval_seconds,
+                mcp_broker_enabled=backend.mcp_broker_enabled,
             )
         raise HTTPException(status_code=500, detail=f"Unsupported agent backend '{backend.type}'")
 
@@ -88,16 +89,21 @@ class AgentBackendRouter(AgentBackend):
         cwd: str,
         timeout_seconds: float,
         poll_interval_seconds: float,
+        mcp_broker_enabled: bool,
     ) -> str:
         self._store.start_run(principal.tenant_id, thread_id)
         broker_session_id: str | None = None
         try:
             prompt = self._prompt_for_peer_agent(principal, thread_id)
             payload: dict[str, object] = {"cwd": cwd, "prompt": prompt}
-            broker_env = self._create_mcp_broker_env(
-                principal,
-                thread_id,
-                ttl_seconds=timeout_seconds + 60.0,
+            broker_env = (
+                self._create_mcp_broker_env(
+                    principal,
+                    thread_id,
+                    ttl_seconds=timeout_seconds + 60.0,
+                )
+                if mcp_broker_enabled
+                else {}
             )
             if broker_env:
                 broker_session_id = broker_env[MINIGENT_MCP_BROKER_SESSION_ENV]

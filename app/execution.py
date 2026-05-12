@@ -25,6 +25,7 @@ AGENT_BACKEND_PEER_ENV = "MINIGENT_AGENT_BACKEND_PEER"
 AGENT_BACKEND_CWD_ENV = "MINIGENT_AGENT_BACKEND_CWD"
 AGENT_BACKEND_TIMEOUT_ENV = "MINIGENT_AGENT_BACKEND_TIMEOUT_SECONDS"
 AGENT_BACKEND_POLL_INTERVAL_ENV = "MINIGENT_AGENT_BACKEND_POLL_INTERVAL_SECONDS"
+AGENT_BACKEND_MCP_BROKER_ENABLED_ENV = "MINIGENT_MCP_BROKER_ENABLED"
 AGENT_BACKEND_NATIVE = "native"
 AGENT_BACKEND_PEER_AGENT = "peer_agent"
 
@@ -52,6 +53,7 @@ class TenantAgentBackendConfig:
     cwd: str | None = None
     timeout_seconds: float = 180.0
     poll_interval_seconds: float = 1.0
+    mcp_broker_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -622,6 +624,11 @@ def _parse_tenant_agent_backend_config(
             payload.get("poll_interval_seconds", payload.get("pollIntervalSeconds", 1.0)),
             "agent_backend.poll_interval_seconds",
         ),
+        mcp_broker_enabled=_bool_config(
+            tenant_id,
+            payload.get("mcp_broker_enabled", payload.get("mcpBrokerEnabled", True)),
+            "agent_backend.mcp_broker_enabled",
+        ),
     )
 
 
@@ -646,6 +653,7 @@ def _agent_backend_config_from_env() -> TenantAgentBackendConfig:
         cwd=cwd,
         timeout_seconds=_positive_float_env(AGENT_BACKEND_TIMEOUT_ENV, 180.0),
         poll_interval_seconds=_positive_float_env(AGENT_BACKEND_POLL_INTERVAL_ENV, 1.0),
+        mcp_broker_enabled=_bool_env(AGENT_BACKEND_MCP_BROKER_ENABLED_ENV, True),
     )
 
 
@@ -880,6 +888,29 @@ def _positive_float_env(name: str, default: float) -> float:
     return parsed
 
 
+def _bool_config(tenant_id: str, value: object, label: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise RuntimeError(f"Tenant '{tenant_id}' {label} must be boolean")
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be boolean")
+
+
 def _agent_backend_public_dict(config: TenantAgentBackendConfig) -> dict[str, object]:
     payload: dict[str, object] = {"type": config.type}
     if config.peer is not None:
@@ -888,6 +919,7 @@ def _agent_backend_public_dict(config: TenantAgentBackendConfig) -> dict[str, ob
         payload["cwd"] = config.cwd
     payload["timeout_seconds"] = config.timeout_seconds
     payload["poll_interval_seconds"] = config.poll_interval_seconds
+    payload["mcp_broker_enabled"] = config.mcp_broker_enabled
     return payload
 
 

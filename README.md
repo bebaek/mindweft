@@ -107,6 +107,7 @@ MINIGENT_AGENT_BACKEND=peer_agent
 MINIGENT_AGENT_BACKEND_PEER=opencode
 MINIGENT_AGENT_BACKEND_CWD=/Users/burm/code/minigent
 MINIGENT_MCP_BROKER_BASE_URL=http://127.0.0.1:8000
+MINIGENT_MCP_BROKER_ENABLED=true
 ```
 
 With this mode, `POST /threads/{thread_id}/run` sends the Minigent thread context to the
@@ -121,13 +122,17 @@ the same backend shape:
     "peer": "opencode",
     "cwd": "/Users/burm/code/minigent",
     "timeout_seconds": 180,
-    "poll_interval_seconds": 1
+    "poll_interval_seconds": 1,
+    "mcp_broker_enabled": true
   }
 }
 ```
 
 The default backend remains `native`, which preserves the existing Minigent LLM/tool
 runtime.
+
+Set `MINIGENT_MCP_BROKER_ENABLED=false` or `agent_backend.mcp_broker_enabled=false` if
+the peer agent should run without Minigent-brokered MCP tools.
 
 When the peer-agent backend runs, Minigent mints a short-lived MCP broker session for
 that thread and passes these environment variables to the wrapper task:

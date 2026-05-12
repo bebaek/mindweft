@@ -410,6 +410,57 @@ def test_run_endpoint_can_use_peer_agent_backend() -> None:
     assert [request[:2] for request in requests] == [("POST", "/tasks"), ("GET", "/tasks/task_123")]
 
 
+def test_run_endpoint_can_disable_peer_agent_mcp_broker() -> None:
+    requests: list[dict[str, object] | None] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content) if request.content else None
+        if request.method == "POST" and request.url.path == "/tasks":
+            requests.append(payload)
+            assert payload is not None
+            assert "env" not in payload
+            assert "Minigent MCP broker:" not in str(payload["prompt"])
+            return httpx.Response(
+                200,
+                json={"task_id": "task_123", "status": "completed", "final_output": "ok"},
+            )
+        return httpx.Response(404, json={"detail": "missing"})
+
+    config = parse_tenant_execution_config(
+        "tenant-1",
+        {
+            "agent_backend": {
+                "type": "peer_agent",
+                "peer": "opencode",
+                "cwd": "/workspace/project",
+                "mcp_broker_enabled": False,
+            }
+        },
+    )
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "opencode", "base_url": "http://opencode.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    client = TestClient(
+        create_app(
+            execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
+            peer_agent_registry=registry,
+        )
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "please inspect the repo"},
+        headers=AUTH_HEADERS,
+    )
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert run_response.status_code == 200
+    assert run_response.json() == {"reply": "ok"}
+    assert len(requests) == 1
+
+
 def test_run_endpoint_azure_adapter_allows_second_turn_after_tool_completion() -> None:
     seen_payloads: list[dict[str, object]] = []
     responses = deque(
@@ -856,6 +907,30 @@ def test_tenant_execution_config_limits_tools_per_tenant(monkeypatch: pytest.Mon
 
     assert other_run.status_code == 200
     assert other_run.json() == {"reply": "Mock reply: /tool echo hello from tenant two"}
+
+
+def test_config_reports_peer_agent_mcp_broker_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "agent_backend": {
+                        "type": "peer_agent",
+                        "peer": "opencode",
+                        "cwd": "/workspace/project",
+                        "mcpBrokerEnabled": False,
+                    }
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+
+    response = client.get("/config", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["agent_backend"]["mcp_broker_enabled"] is False
 
 
 def test_tenant_execution_config_rejects_missing_tenant_config(
