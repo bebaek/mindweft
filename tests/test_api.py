@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from jwt.algorithms import RSAAlgorithm
 
 from app import auth as auth_module
+from app.execution import InMemoryTenantExecutionResolver, parse_tenant_execution_config
 from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter
 from app.main import create_app
 from app.mcp import MCPServerInfo
@@ -339,6 +340,68 @@ def test_run_endpoint_handles_tool_call_flow() -> None:
         MessageRole.TOOL,
         MessageRole.ASSISTANT,
     ]
+
+
+def test_run_endpoint_can_use_peer_agent_backend() -> None:
+    requests: list[tuple[str, str, dict[str, object] | None]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content) if request.content else None
+        requests.append((request.method, request.url.path, payload))
+        if request.method == "POST" and request.url.path == "/tasks":
+            assert payload is not None
+            assert payload["cwd"] == "/workspace/project"
+            prompt = str(payload["prompt"])
+            assert "You are running as the execution backend for a Minigent thread." in prompt
+            assert "[user]\nplease inspect the repo" in prompt
+            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": "task_123",
+                    "status": "completed",
+                    "final_output": "OpenCode result",
+                },
+            )
+        return httpx.Response(404, json={"detail": "missing"})
+
+    config = parse_tenant_execution_config(
+        "tenant-1",
+        {
+            "agent_backend": {
+                "type": "peer_agent",
+                "peer": "opencode",
+                "cwd": "/workspace/project",
+                "poll_interval_seconds": 0.001,
+            }
+        },
+    )
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "opencode", "base_url": "http://opencode.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    client = TestClient(
+        create_app(
+            execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
+            peer_agent_registry=registry,
+        )
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "please inspect the repo"},
+        headers=AUTH_HEADERS,
+    )
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert run_response.status_code == 200
+    assert run_response.json() == {"reply": "OpenCode result"}
+    messages = client.get(f"/threads/{thread_id}/messages", headers=AUTH_HEADERS).json()
+    assert [message["role"] for message in messages] == [MessageRole.USER, MessageRole.ASSISTANT]
+    assert messages[-1]["content"] == "OpenCode result"
+    assert [request[:2] for request in requests] == [("POST", "/tasks"), ("GET", "/tasks/task_123")]
 
 
 def test_run_endpoint_azure_adapter_allows_second_turn_after_tool_completion() -> None:

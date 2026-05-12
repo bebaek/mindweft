@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
+from app.agent_backends import AgentBackendRouter, NativeAgentBackend
 from app.admin_api import (
     admin_encryption_key_from_env,
     admin_store_path_from_env,
@@ -143,6 +144,12 @@ def create_app(
         max_iterations=max_iterations_from_env(),
     )
     app.state.peer_agent_registry = peer_agent_registry or build_peer_agent_registry_from_env()
+    app.state.agent_backend = AgentBackendRouter(
+        store=app.state.store,
+        execution_resolver=execution_resolver,
+        native_backend=NativeAgentBackend(app.state.runtime),
+        peer_agent_registry=app.state.peer_agent_registry,
+    )
     app.include_router(build_admin_router())
     if WEB_CLIENT_DIR.exists():
         app.mount("/web", StaticFiles(directory=WEB_CLIENT_DIR, html=True), name="web")
@@ -281,7 +288,7 @@ def create_app(
         principal: Principal = Depends(require_principal),
     ) -> RunThreadResponse:
         return RunThreadResponse(
-            reply=await request.app.state.runtime.run_thread(principal, thread_id)
+            reply=await request.app.state.agent_backend.run_thread(principal, thread_id)
         )
 
     @app.delete("/threads/{thread_id}", status_code=204)

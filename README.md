@@ -97,6 +97,45 @@ JSON events. Set `AGENT_RUNTIME=codex` for the built-in Codex profile, or use
 `AGENT_ARGS_TEMPLATE` for another CLI. Task responses include relative `links` and
 `artifacts` maps for discovery.
 
+Minigent can also use a configured peer agent as the primary thread execution backend
+instead of the built-in LLM/tool loop. Start the wrapper, register it in Minigent, and
+select the `peer_agent` backend:
+
+```dotenv
+MINIGENT_PEER_AGENTS='[{"name":"opencode","base_url":"http://127.0.0.1:8010"}]'
+MINIGENT_AGENT_BACKEND=peer_agent
+MINIGENT_AGENT_BACKEND_PEER=opencode
+MINIGENT_AGENT_BACKEND_CWD=/Users/burm/code/minigent
+```
+
+With this mode, `POST /threads/{thread_id}/run` sends the Minigent thread context to the
+peer agent, polls until the task completes, stores the peer `final_output` as the
+assistant message, and returns it as the run reply. Per-tenant execution config can use
+the same backend shape:
+
+```json
+{
+  "agent_backend": {
+    "type": "peer_agent",
+    "peer": "opencode",
+    "cwd": "/Users/burm/code/minigent",
+    "timeout_seconds": 180,
+    "poll_interval_seconds": 1
+  }
+}
+```
+
+The default backend remains `native`, which preserves the existing Minigent LLM/tool
+runtime.
+
+After starting both services with the peer-agent backend enabled, run a complete backend
+smoke test with:
+
+```bash
+uv run python scripts/demo_opencode_backend.py \
+  --message "Summarize this repository in one paragraph. Do not edit files."
+```
+
 The wrapper has an opt-in real OpenCode integration test:
 
 ```bash

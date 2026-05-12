@@ -20,6 +20,13 @@ DEFAULT_TENANT_KEY = "*"
 TENANT_CONFIG_SOURCE_ENV_ONLY = "env"
 TENANT_CONFIG_SOURCE_STORE = "store"
 TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS = "store-with-defaults"
+AGENT_BACKEND_ENV = "MINIGENT_AGENT_BACKEND"
+AGENT_BACKEND_PEER_ENV = "MINIGENT_AGENT_BACKEND_PEER"
+AGENT_BACKEND_CWD_ENV = "MINIGENT_AGENT_BACKEND_CWD"
+AGENT_BACKEND_TIMEOUT_ENV = "MINIGENT_AGENT_BACKEND_TIMEOUT_SECONDS"
+AGENT_BACKEND_POLL_INTERVAL_ENV = "MINIGENT_AGENT_BACKEND_POLL_INTERVAL_SECONDS"
+AGENT_BACKEND_NATIVE = "native"
+AGENT_BACKEND_PEER_AGENT = "peer_agent"
 
 
 @dataclass(frozen=True)
@@ -39,10 +46,22 @@ class TenantToolConfig:
 
 
 @dataclass(frozen=True)
+class TenantAgentBackendConfig:
+    type: str = AGENT_BACKEND_NATIVE
+    peer: str | None = None
+    cwd: str | None = None
+    timeout_seconds: float = 180.0
+    poll_interval_seconds: float = 1.0
+
+
+@dataclass(frozen=True)
 class TenantExecutionConfig:
     tenant_id: str
     llm: TenantLLMConfig = field(default_factory=TenantLLMConfig)
     tools: TenantToolConfig = field(default_factory=TenantToolConfig)
+    agent_backend: TenantAgentBackendConfig = field(
+        default_factory=TenantAgentBackendConfig
+    )
     skills: "TenantSkillsConfig" = field(default_factory=lambda: TenantSkillsConfig())
     capability_profiles: "TenantCapabilityProfilesConfig" = field(
         default_factory=lambda: TenantCapabilityProfilesConfig()
@@ -144,6 +163,7 @@ class FixedTenantExecutionResolver(TenantExecutionResolver):
         return {
             "tenant_id": DEFAULT_TENANT_KEY,
             "llm": self._context.llm_adapter.describe(),
+            "agent_backend": _agent_backend_public_dict(self._context.config.agent_backend),
             "mcp_servers": self._context.tool_registry.mcp_servers(),
             "local_tools": sorted(
                 spec.name for spec in self._context.tool_registry.specs() if "." not in spec.name
@@ -221,6 +241,9 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
                 return {
                     "tenant_id": DEFAULT_TENANT_KEY,
                     "llm": self._default_context.llm_adapter.describe(),
+                    "agent_backend": _agent_backend_public_dict(
+                        self._default_context.config.agent_backend
+                    ),
                     "mcp_servers": self._default_context.tool_registry.mcp_servers(),
                     "local_tools": sorted(
                         spec.name
@@ -237,6 +260,7 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
         return {
             "tenant_id": tenant_id,
             "llm": context.llm_adapter.describe(),
+            "agent_backend": _agent_backend_public_dict(context.config.agent_backend),
             "mcp_servers": context.tool_registry.mcp_servers(),
             "local_tools": sorted(
                 spec.name for spec in context.tool_registry.specs() if "." not in spec.name
@@ -320,6 +344,7 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
             return {
                 "tenant_id": tenant_id,
                 "llm": context.llm_adapter.describe(),
+                "agent_backend": _agent_backend_public_dict(context.config.agent_backend),
                 "mcp_servers": context.tool_registry.mcp_servers(),
                 "local_tools": sorted(
                     spec.name for spec in context.tool_registry.specs() if "." not in spec.name
@@ -385,6 +410,7 @@ def build_execution_resolver_from_env(
         config = TenantExecutionConfig(
             tenant_id=DEFAULT_TENANT_KEY,
             tools=TenantToolConfig(mcp_servers=mcp_server_configs),
+            agent_backend=_agent_backend_config_from_env(),
         )
         registry, generation = _build_registry_for_config(config, mcp_manager=mcp_manager)
         return FixedTenantExecutionResolver(
@@ -442,6 +468,7 @@ def parse_tenant_execution_config(
 ) -> TenantExecutionConfig:
     llm_payload = payload.get("llm") or {}
     tools_payload = payload.get("tools") or {}
+    backend_payload = payload.get("agent_backend") or payload.get("agentBackend") or {}
     skills_payload = payload.get("skills") or {}
     capability_profiles_payload = payload.get("capability_profiles") or payload.get(
         "capabilityProfiles"
@@ -450,6 +477,8 @@ def parse_tenant_execution_config(
         raise RuntimeError(f"Tenant '{tenant_id}' llm config must be an object")
     if not isinstance(tools_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' tools config must be an object")
+    if not isinstance(backend_payload, dict):
+        raise RuntimeError(f"Tenant '{tenant_id}' agent_backend config must be an object")
     if not isinstance(skills_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' skills config must be an object")
     if not isinstance(capability_profiles_payload, dict):
@@ -461,6 +490,7 @@ def parse_tenant_execution_config(
         tenant_id=tenant_id,
         llm=_parse_tenant_llm_config(tenant_id, llm_payload),
         tools=tool_config,
+        agent_backend=_parse_tenant_agent_backend_config(tenant_id, backend_payload),
         skills=_parse_tenant_skills_config(tenant_id, skills_payload, tool_config),
         capability_profiles=_parse_tenant_capability_profiles_config(
             tenant_id, capability_profiles_payload, tool_config
@@ -558,6 +588,64 @@ def _parse_tenant_tool_config(tenant_id: str, payload: dict[str, Any]) -> Tenant
     return TenantToolConfig(
         allowed_local_tools=allowed_local_tools,
         mcp_servers=[_parse_mcp_server_config(tenant_id, entry) for entry in mcp_servers_raw],
+    )
+
+
+def _parse_tenant_agent_backend_config(
+    tenant_id: str,
+    payload: dict[str, Any],
+) -> TenantAgentBackendConfig:
+    backend_type = str(payload.get("type", AGENT_BACKEND_NATIVE)).strip().lower()
+    if backend_type not in {AGENT_BACKEND_NATIVE, AGENT_BACKEND_PEER_AGENT}:
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' agent_backend.type must be '{AGENT_BACKEND_NATIVE}' "
+            f"or '{AGENT_BACKEND_PEER_AGENT}'"
+        )
+    peer = _optional_str(payload.get("peer"))
+    cwd = _optional_str(payload.get("cwd"))
+    if backend_type == AGENT_BACKEND_PEER_AGENT:
+        if peer is None:
+            raise RuntimeError(f"Tenant '{tenant_id}' agent_backend.peer is required")
+        if cwd is None:
+            raise RuntimeError(f"Tenant '{tenant_id}' agent_backend.cwd is required")
+    return TenantAgentBackendConfig(
+        type=backend_type,
+        peer=peer,
+        cwd=cwd,
+        timeout_seconds=_positive_float_config(
+            tenant_id,
+            payload.get("timeout_seconds", payload.get("timeoutSeconds", 180.0)),
+            "agent_backend.timeout_seconds",
+        ),
+        poll_interval_seconds=_positive_float_config(
+            tenant_id,
+            payload.get("poll_interval_seconds", payload.get("pollIntervalSeconds", 1.0)),
+            "agent_backend.poll_interval_seconds",
+        ),
+    )
+
+
+def _agent_backend_config_from_env() -> TenantAgentBackendConfig:
+    backend_type = os.getenv(AGENT_BACKEND_ENV, AGENT_BACKEND_NATIVE).strip().lower()
+    if backend_type == AGENT_BACKEND_NATIVE:
+        return TenantAgentBackendConfig()
+    if backend_type != AGENT_BACKEND_PEER_AGENT:
+        raise RuntimeError(
+            f"Unsupported {AGENT_BACKEND_ENV} '{backend_type}'. Expected "
+            f"'{AGENT_BACKEND_NATIVE}' or '{AGENT_BACKEND_PEER_AGENT}'."
+        )
+    peer = os.getenv(AGENT_BACKEND_PEER_ENV, "").strip()
+    cwd = os.getenv(AGENT_BACKEND_CWD_ENV, "").strip()
+    if not peer:
+        raise RuntimeError(f"{AGENT_BACKEND_PEER_ENV} is required for peer_agent backend")
+    if not cwd:
+        raise RuntimeError(f"{AGENT_BACKEND_CWD_ENV} is required for peer_agent backend")
+    return TenantAgentBackendConfig(
+        type=AGENT_BACKEND_PEER_AGENT,
+        peer=peer,
+        cwd=cwd,
+        timeout_seconds=_positive_float_env(AGENT_BACKEND_TIMEOUT_ENV, 180.0),
+        poll_interval_seconds=_positive_float_env(AGENT_BACKEND_POLL_INTERVAL_ENV, 1.0),
     )
 
 
@@ -767,6 +855,40 @@ def _optional_str(value: object) -> str | None:
         raise RuntimeError("Expected string value")
     stripped = value.strip()
     return stripped or None
+
+
+def _positive_float_config(tenant_id: str, value: object, label: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"Tenant '{tenant_id}' {label} must be numeric") from exc
+    if parsed <= 0:
+        raise RuntimeError(f"Tenant '{tenant_id}' {label} must be positive")
+    return parsed
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        parsed = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be numeric") from exc
+    if parsed <= 0:
+        raise RuntimeError(f"{name} must be positive")
+    return parsed
+
+
+def _agent_backend_public_dict(config: TenantAgentBackendConfig) -> dict[str, object]:
+    payload: dict[str, object] = {"type": config.type}
+    if config.peer is not None:
+        payload["peer"] = config.peer
+    if config.cwd is not None:
+        payload["cwd"] = config.cwd
+    payload["timeout_seconds"] = config.timeout_seconds
+    payload["poll_interval_seconds"] = config.poll_interval_seconds
+    return payload
 
 
 def _required_non_empty_str(tenant_id: str, value: object, label: str) -> str:
