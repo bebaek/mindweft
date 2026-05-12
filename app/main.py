@@ -31,6 +31,7 @@ from app.execution import (
     resolve_tenant_config_source,
 )
 from app.llm import LLMAdapter, build_llm_adapter_from_env
+from app.mcp_broker import MCPBrokerSessionStore, handle_mcp_broker_request
 from app.mcp_manager import MCPServerManager
 from app.models import (
     AddMessageRequest,
@@ -85,6 +86,7 @@ def create_app(
     configure_tracing(app)
     app.state.store = InMemoryThreadStore()
     app.state.mcp_manager = mcp_manager
+    app.state.mcp_broker_sessions = MCPBrokerSessionStore()
     admin_encryption_key = admin_encryption_key_from_env()
     if admin_store is None:
         admin_db_path = admin_store_path_from_env()
@@ -149,6 +151,7 @@ def create_app(
         execution_resolver=execution_resolver,
         native_backend=NativeAgentBackend(app.state.runtime),
         peer_agent_registry=app.state.peer_agent_registry,
+        mcp_broker_sessions=app.state.mcp_broker_sessions,
     )
     app.include_router(build_admin_router())
     if WEB_CLIENT_DIR.exists():
@@ -165,6 +168,14 @@ def create_app(
     @app.get("/peer-agents")
     async def peer_agents(request: Request) -> dict[str, object]:
         return {"agents": await request.app.state.peer_agent_registry.list_agents_with_cards()}
+
+    @app.post("/mcp/peer/{session_id}", response_model=None)
+    async def mcp_peer_broker(session_id: str, request: Request):
+        return await handle_mcp_broker_request(
+            session_store=request.app.state.mcp_broker_sessions,
+            session_id=session_id,
+            request=request,
+        )
 
     @app.get("/peer-agents/{name}/agent-card")
     async def peer_agent_card(name: str, request: Request) -> dict[str, object]:

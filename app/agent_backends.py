@@ -1,12 +1,28 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from abc import ABC, abstractmethod
 
 from fastapi import HTTPException
 
-from app.execution import AGENT_BACKEND_NATIVE, AGENT_BACKEND_PEER_AGENT, TenantExecutionResolver
+from app.execution import (
+    AGENT_BACKEND_NATIVE,
+    AGENT_BACKEND_PEER_AGENT,
+    TenantExecutionResolver,
+    build_tool_registry_for_capability_profile,
+    build_tool_registry_for_skill,
+    get_capability_profile,
+    get_skill_configs,
+)
+from app.mcp_broker import (
+    MINIGENT_MCP_BROKER_BASE_URL_ENV,
+    MINIGENT_MCP_BROKER_SESSION_ENV,
+    MINIGENT_MCP_BROKER_TOKEN_ENV,
+    MINIGENT_MCP_BROKER_URL_ENV,
+    MCPBrokerSessionStore,
+)
 from app.models import Message, MessageRole, Principal, ThreadStatus
 from app.peer_agents import PeerAgentRegistry
 from app.runtime import AgentRuntime
@@ -37,11 +53,13 @@ class AgentBackendRouter(AgentBackend):
         execution_resolver: TenantExecutionResolver,
         native_backend: NativeAgentBackend,
         peer_agent_registry: PeerAgentRegistry,
+        mcp_broker_sessions: MCPBrokerSessionStore | None = None,
     ) -> None:
         self._store = store
         self._execution_resolver = execution_resolver
         self._native_backend = native_backend
         self._peer_agent_registry = peer_agent_registry
+        self._mcp_broker_sessions = mcp_broker_sessions
 
     async def run_thread(self, principal: Principal, thread_id: str) -> str:
         execution = self._execution_resolver.resolve(principal.tenant_id)
@@ -72,9 +90,20 @@ class AgentBackendRouter(AgentBackend):
         poll_interval_seconds: float,
     ) -> str:
         self._store.start_run(principal.tenant_id, thread_id)
+        broker_session_id: str | None = None
         try:
             prompt = self._prompt_for_peer_agent(principal, thread_id)
-            task = await self._peer_agent_registry.create_task(peer, {"cwd": cwd, "prompt": prompt})
+            payload: dict[str, object] = {"cwd": cwd, "prompt": prompt}
+            broker_env = self._create_mcp_broker_env(
+                principal,
+                thread_id,
+                ttl_seconds=timeout_seconds + 60.0,
+            )
+            if broker_env:
+                broker_session_id = broker_env[MINIGENT_MCP_BROKER_SESSION_ENV]
+                payload["env"] = broker_env
+                payload["prompt"] = prompt + _mcp_broker_prompt_suffix()
+            task = await self._peer_agent_registry.create_task(peer, payload)
             task_id = str(task.get("task_id", "")).strip()
             if not task_id:
                 raise HTTPException(
@@ -104,6 +133,54 @@ class AgentBackendRouter(AgentBackend):
         except Exception as exc:  # pragma: no cover - defensive boundary
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.ERROR)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            if broker_session_id is not None and self._mcp_broker_sessions is not None:
+                self._mcp_broker_sessions.delete_session(broker_session_id)
+
+    def _create_mcp_broker_env(
+        self,
+        principal: Principal,
+        thread_id: str,
+        *,
+        ttl_seconds: float,
+    ) -> dict[str, str]:
+        if self._mcp_broker_sessions is None:
+            return {}
+        execution = self._execution_resolver.resolve(principal.tenant_id)
+        thread = self._store.get_thread(principal.tenant_id, thread_id)
+        skill_names = thread.skill_names
+        if skill_names is None and thread.skill_name is not None:
+            skill_names = [thread.skill_name]
+        skills = get_skill_configs(execution.config, skill_names)
+        capability_profile = get_capability_profile(execution.config, thread.capability_profile)
+        if capability_profile is not None:
+            tool_registry = build_tool_registry_for_capability_profile(
+                execution.config,
+                thread.capability_profile,
+                mcp_manager=execution.mcp_manager,
+            )
+        elif len(skills) == 1 and (
+            skills[0].allowed_local_tools is not None or skills[0].mcp_server_names is not None
+        ):
+            tool_registry = build_tool_registry_for_skill(
+                execution.config,
+                skills[0].name,
+                mcp_manager=execution.mcp_manager,
+            )
+        else:
+            tool_registry = execution.tool_registry
+        session = self._mcp_broker_sessions.create_session(
+            principal=principal,
+            thread_id=thread_id,
+            tool_registry=tool_registry,
+            ttl_seconds=ttl_seconds,
+        )
+        base_url = os.getenv(MINIGENT_MCP_BROKER_BASE_URL_ENV, "http://127.0.0.1:8000").rstrip("/")
+        return {
+            MINIGENT_MCP_BROKER_URL_ENV: f"{base_url}/mcp/peer/{session.session_id}",
+            MINIGENT_MCP_BROKER_TOKEN_ENV: session.token,
+            MINIGENT_MCP_BROKER_SESSION_ENV: session.session_id,
+        }
 
     def _prompt_for_peer_agent(self, principal: Principal, thread_id: str) -> str:
         messages = self._store.list_messages(principal.tenant_id, thread_id)
@@ -140,3 +217,12 @@ class AgentBackendRouter(AgentBackend):
             await self._peer_agent_registry.cancel_task(peer, task_id)
         except HTTPException:
             return
+
+
+def _mcp_broker_prompt_suffix() -> str:
+    return (
+        "\n\nMinigent MCP broker:\n"
+        f"- URL is available in ${MINIGENT_MCP_BROKER_URL_ENV}.\n"
+        f"- Bearer token is available in ${MINIGENT_MCP_BROKER_TOKEN_ENV}.\n"
+        "Use this broker only for tools needed to answer the current Minigent thread."
+    )

@@ -106,6 +106,7 @@ MINIGENT_PEER_AGENTS='[{"name":"opencode","base_url":"http://127.0.0.1:8010"}]'
 MINIGENT_AGENT_BACKEND=peer_agent
 MINIGENT_AGENT_BACKEND_PEER=opencode
 MINIGENT_AGENT_BACKEND_CWD=/Users/burm/code/minigent
+MINIGENT_MCP_BROKER_BASE_URL=http://127.0.0.1:8000
 ```
 
 With this mode, `POST /threads/{thread_id}/run` sends the Minigent thread context to the
@@ -127,6 +128,27 @@ the same backend shape:
 
 The default backend remains `native`, which preserves the existing Minigent LLM/tool
 runtime.
+
+When the peer-agent backend runs, Minigent mints a short-lived MCP broker session for
+that thread and passes these environment variables to the wrapper task:
+
+```dotenv
+MINIGENT_MCP_BROKER_URL=http://127.0.0.1:8000/mcp/peer/<session>
+MINIGENT_MCP_BROKER_TOKEN=<short-lived-token>
+MINIGENT_MCP_BROKER_SESSION=<session>
+```
+
+The broker exposes the thread's approved Minigent tools through MCP JSON-RPC and
+forwards allowed `tools/call` requests through Minigent's existing tool registry, so
+OpenCode does not receive upstream MCP server credentials. The wrapper only accepts task
+environment variables whose names start with `MINIGENT_MCP_BROKER_` by default; override
+that allowlist with `AGENT_ALLOWED_TASK_ENV_PREFIXES` if you add more task-scoped
+variables.
+
+For OpenCode tasks, the wrapper also generates per-task `OPENCODE_CONFIG_CONTENT` that
+adds a remote MCP server named `minigent` using the broker URL and bearer token. Existing
+`OPENCODE_CONFIG_CONTENT` JSON is preserved and merged with the generated `mcp.minigent`
+entry.
 
 After starting both services with the peer-agent backend enabled, run a complete backend
 smoke test with:

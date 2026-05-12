@@ -16,6 +16,7 @@ from app import auth as auth_module
 from app.execution import InMemoryTenantExecutionResolver, parse_tenant_execution_config
 from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter
 from app.main import create_app
+from app.mcp_broker import MINIGENT_MCP_BROKER_TOKEN_ENV, MINIGENT_MCP_BROKER_URL_ENV
 from app.mcp import MCPServerInfo
 from app.models import LLMResponse, Message, MessageRole, ToolCall
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
@@ -351,8 +352,13 @@ def test_run_endpoint_can_use_peer_agent_backend() -> None:
         if request.method == "POST" and request.url.path == "/tasks":
             assert payload is not None
             assert payload["cwd"] == "/workspace/project"
+            env = payload["env"]
+            assert isinstance(env, dict)
+            assert env[MINIGENT_MCP_BROKER_URL_ENV].startswith("http://127.0.0.1:8000/mcp/peer/")
+            assert env[MINIGENT_MCP_BROKER_TOKEN_ENV]
             prompt = str(payload["prompt"])
             assert "You are running as the execution backend for a Minigent thread." in prompt
+            assert "Minigent MCP broker:" in prompt
             assert "[user]\nplease inspect the repo" in prompt
             return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
         if request.method == "GET" and request.url.path == "/tasks/task_123":

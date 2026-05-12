@@ -128,6 +128,123 @@ def test_custom_args_template_overrides_runtime_argv(tmp_path: Path) -> None:
         ]
 
 
+def test_task_env_allows_only_configured_prefixes(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    env_file = tmp_path / "env.json"
+    fake_agent.write_text(
+        "import json\n"
+        "import os\n"
+        f"open({str(env_file)!r}, 'w', encoding='utf-8').write(json.dumps({{\n"
+        "    'broker_url': os.getenv('MINIGENT_MCP_BROKER_URL'),\n"
+        "    'secret': os.getenv('SECRET_VALUE'),\n"
+        "}))\n"
+        "print('done')\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post(
+            "/tasks",
+            json={
+                "cwd": str(tmp_path),
+                "prompt": "hello",
+                "env": {
+                    "MINIGENT_MCP_BROKER_URL": "http://127.0.0.1:8000/mcp/peer/session",
+                    "SECRET_VALUE": "must-not-pass",
+                },
+            },
+        )
+
+        assert create_response.status_code == 200
+        _wait_for_terminal_task(client, create_response.json()["task_id"])
+        assert json.loads(env_file.read_text(encoding="utf-8")) == {
+            "broker_url": "http://127.0.0.1:8000/mcp/peer/session",
+            "secret": None,
+        }
+
+
+def test_task_env_generates_opencode_mcp_config(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    env_file = tmp_path / "env.json"
+    fake_agent.write_text(
+        "import json\n"
+        "import os\n"
+        f"open({str(env_file)!r}, 'w', encoding='utf-8').write(os.environ['OPENCODE_CONFIG_CONTENT'])\n"
+        "print('done')\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post(
+            "/tasks",
+            json={
+                "cwd": str(tmp_path),
+                "prompt": "hello",
+                "env": {
+                    "MINIGENT_MCP_BROKER_URL": "http://127.0.0.1:8000/mcp/peer/session",
+                    "MINIGENT_MCP_BROKER_TOKEN": "token-123",
+                },
+            },
+        )
+
+        assert create_response.status_code == 200
+        _wait_for_terminal_task(client, create_response.json()["task_id"])
+        config = json.loads(env_file.read_text(encoding="utf-8"))
+
+    assert config["mcp"]["minigent"] == {
+        "type": "remote",
+        "url": "{env:MINIGENT_MCP_BROKER_URL}",
+        "enabled": True,
+        "oauth": False,
+        "headers": {"Authorization": "Bearer {env:MINIGENT_MCP_BROKER_TOKEN}"},
+    }
+
+
+def test_task_env_preserves_existing_opencode_config_content(tmp_path: Path, monkeypatch) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    env_file = tmp_path / "env.json"
+    fake_agent.write_text(
+        "import os\n"
+        f"open({str(env_file)!r}, 'w', encoding='utf-8').write(os.environ['OPENCODE_CONFIG_CONTENT'])\n"
+        "print('done')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "OPENCODE_CONFIG_CONTENT",
+        json.dumps({"model": "test/model", "mcp": {"other": {"type": "remote", "url": "https://example.com"}}}),
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post(
+            "/tasks",
+            json={
+                "cwd": str(tmp_path),
+                "prompt": "hello",
+                "env": {
+                    "MINIGENT_MCP_BROKER_URL": "http://127.0.0.1:8000/mcp/peer/session",
+                    "MINIGENT_MCP_BROKER_TOKEN": "token-123",
+                },
+            },
+        )
+
+        assert create_response.status_code == 200
+        _wait_for_terminal_task(client, create_response.json()["task_id"])
+        config = json.loads(env_file.read_text(encoding="utf-8"))
+
+    assert config["model"] == "test/model"
+    assert config["mcp"]["other"] == {"type": "remote", "url": "https://example.com"}
+    assert config["mcp"]["minigent"]["type"] == "remote"
+
+
 def test_task_parses_jsonl_events_and_final_output(tmp_path: Path) -> None:
     fake_agent = tmp_path / "fake_agent.py"
     fake_agent.write_text(

@@ -41,11 +41,13 @@ class Settings(BaseModel):
     tail_chars: int = 20_000
     event_limit: int = 50
     cancel_grace_seconds: float = 5.0
+    allowed_task_env_prefixes: tuple[str, ...] = ("MINIGENT_MCP_BROKER_",)
 
 
 class TaskRequest(BaseModel):
     prompt: str = Field(min_length=1)
     cwd: Path
+    env: dict[str, str] = Field(default_factory=dict)
 
 
 class TaskResponse(BaseModel):
@@ -113,6 +115,7 @@ class TaskRecord:
     task_id: str
     prompt: str
     cwd: Path
+    env: dict[str, str] = field(default_factory=dict)
     status: TaskStatus = TaskStatus.PENDING
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -164,6 +167,7 @@ class TaskStore:
             task_id=task_id,
             prompt=request.prompt,
             cwd=cwd,
+            env=_allowed_task_env(request.env, self._settings.allowed_task_env_prefixes),
             all_events=[],
             events=deque(maxlen=self._settings.event_limit),
             stdout=OutputTail(self._settings.tail_chars),
@@ -217,6 +221,7 @@ class TaskStore:
                 cwd=record.cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=_process_env(record.env),
                 start_new_session=True,
             )
             await asyncio.gather(
@@ -448,6 +453,51 @@ def _agent_command(settings: Settings, *, cwd: Path, prompt: str) -> list[str]:
     )
 
 
+def _allowed_task_env(values: dict[str, str], allowed_prefixes: tuple[str, ...]) -> dict[str, str]:
+    allowed: dict[str, str] = {}
+    for key, value in values.items():
+        if any(key.startswith(prefix) for prefix in allowed_prefixes):
+            allowed[key] = str(value)
+    return allowed
+
+
+def _process_env(task_env: dict[str, str]) -> dict[str, str]:
+    env = {**os.environ, **task_env}
+    broker_url = env.get("MINIGENT_MCP_BROKER_URL")
+    broker_token = env.get("MINIGENT_MCP_BROKER_TOKEN")
+    if broker_url and broker_token:
+        env["OPENCODE_CONFIG_CONTENT"] = _opencode_config_content(
+            env.get("OPENCODE_CONFIG_CONTENT")
+        )
+    return env
+
+
+def _opencode_config_content(existing: str | None) -> str:
+    config: dict[str, object]
+    if existing:
+        try:
+            parsed = json.loads(existing)
+        except json.JSONDecodeError:
+            parsed = {}
+        config = parsed if isinstance(parsed, dict) else {}
+    else:
+        config = {}
+    mcp = config.get("mcp")
+    if not isinstance(mcp, dict):
+        mcp = {}
+    mcp["minigent"] = {
+        "type": "remote",
+        "url": "{env:MINIGENT_MCP_BROKER_URL}",
+        "enabled": True,
+        "oauth": False,
+        "headers": {
+            "Authorization": "Bearer {env:MINIGENT_MCP_BROKER_TOKEN}",
+        },
+    }
+    config["mcp"] = mcp
+    return json.dumps(config, separators=(",", ":"))
+
+
 def _format_agent_arg(arg: str, *, cwd: Path, prompt: str) -> str:
     return arg.format(cwd=str(cwd), prompt=prompt)
 
@@ -480,6 +530,11 @@ def settings_from_env() -> Settings:
     cancel_grace_seconds = float(os.getenv("AGENT_CANCEL_GRACE_SECONDS", "5"))
     event_limit = int(os.getenv("AGENT_EVENT_LIMIT", "50"))
     codex_json = os.getenv("CODEX_AGENT_JSON", "true").lower() not in {"0", "false", "no"}
+    env_prefixes = tuple(
+        prefix
+        for prefix in os.getenv("AGENT_ALLOWED_TASK_ENV_PREFIXES", "MINIGENT_MCP_BROKER_").split(",")
+        if prefix
+    )
     return Settings(
         agent_command=command,
         allowed_workspaces=allowed,
@@ -490,6 +545,7 @@ def settings_from_env() -> Settings:
         tail_chars=tail_chars,
         event_limit=event_limit,
         cancel_grace_seconds=cancel_grace_seconds,
+        allowed_task_env_prefixes=env_prefixes,
     )
 
 
