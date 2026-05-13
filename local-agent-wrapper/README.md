@@ -1,6 +1,6 @@
 # Minigent Local Agent Wrapper
 
-Minimal POC wrapper that exposes a local coding-agent CLI process as a small federated-agent-style HTTP service. It defaults to OpenCode, but the command profile can be switched to Codex, Pi Coding Agent, or a custom argv template.
+Minimal POC wrapper that exposes a local coding-agent CLI process as a small federated-agent-style HTTP service. It defaults to Pi Coding Agent, but the command profile can be switched to OpenCode, Codex, or a custom argv template.
 
 It proves the local peer-agent boundary:
 
@@ -12,26 +12,26 @@ It proves the local peer-agent boundary:
 
 ## Container
 
-Build the default OpenCode-capable image:
+Build the default Pi-capable image:
 
 ```bash
 docker build -t minigent-local-agent-wrapper:latest .
 ```
 
-The image installs the `opencode-ai` npm package and runs the wrapper as a non-root
+The image installs the `opencode-ai` and Pi Coding Agent npm packages and runs the wrapper as a non-root
 `agent` user. To also include the optional Codex CLI in the same image, build with:
 
 ```bash
 docker build --build-arg INSTALL_CODEX=true -t minigent-local-agent-wrapper:codex .
 ```
 
-To include Pi Coding Agent in the image, build with:
+To build an OpenCode-only image without Pi, build with:
 
 ```bash
-docker build --build-arg INSTALL_PI=true -t minigent-local-agent-wrapper:pi .
+docker build --build-arg INSTALL_PI=false -t minigent-local-agent-wrapper:opencode .
 ```
 
-For `AGENT_RUNTIME=pi`, provide Pi credentials with either API-key environment variables
+For the default `AGENT_RUNTIME=pi`, provide Pi credentials with either API-key environment variables
 (such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`) or a mounted Pi config directory. Pi's
 config directory can be forced with `PI_CODING_AGENT_DIR=/home/agent/.pi/agent`. From the
 repository root, `./scripts/prepare-pi-container-home.sh` copies host `~/.pi/agent` into
@@ -58,17 +58,17 @@ AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
   uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
 ```
 
-The default OpenCode invocation is:
+The default Pi invocation is:
 
 ```text
-opencode run --format json <prompt>
+pi --mode json --no-session --tools read,grep,find,ls <prompt>
 ```
 
-The built-in OpenCode profile also passes `--dir <cwd>` and starts the process with
-`cwd` set to the requested allowed workspace. Override these if needed:
+The built-in Pi profile starts the process with `cwd` set to the requested allowed workspace.
+Override these if needed:
 
-- `AGENT_RUNTIME`: runtime profile, default `opencode`; supported built-ins are `opencode`, `codex`, `pi`, and `plain`
-- `AGENT_COMMAND`: executable command, default `opencode`, `codex` when `AGENT_RUNTIME=codex`, or `pi` when `AGENT_RUNTIME=pi`
+- `AGENT_RUNTIME`: runtime profile, default `pi`; supported built-ins are `pi`, `opencode`, `codex`, and `plain`
+- `AGENT_COMMAND`: executable command, default `pi`, `opencode` when `AGENT_RUNTIME=opencode`, or `codex` when `AGENT_RUNTIME=codex`
 - `AGENT_ALLOWED_WORKSPACES`: path-list of allowed roots, required for task execution
 - `AGENT_ARGS_TEMPLATE`: optional shell-style argv template. Supports `{cwd}` and `{prompt}` placeholders and overrides the built-in runtime argv.
 - `AGENT_TAIL_CHARS`: captured stdout/stderr tail size, default `20000`
@@ -85,10 +85,9 @@ AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
   uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
 ```
 
-Pi Coding Agent compatibility uses Pi's non-interactive JSON event mode:
+Pi Coding Agent uses Pi's non-interactive JSON event mode by default:
 
 ```bash
-AGENT_RUNTIME=pi \
 AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
   uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
 ```
@@ -177,10 +176,10 @@ uv run python scripts/demo_task.py \
   --prompt "List the main runtime components. Do not edit files."
 ```
 
-By default the wrapper runs `opencode run --format json`, parses stdout JSONL into
+By default the wrapper runs `pi --mode json --no-session --tools read,grep,find,ls`, parses stdout JSONL into
 `events_tail` when the CLI emits JSON objects one per line, and exposes the best final
-assistant message it can find as `final_output`. The read-only Pi profile similarly
-parses `pi --mode json` JSONL events. If no final JSON event is detected and
+assistant message it can find as `final_output`. The OpenCode profile similarly parses
+`opencode run --format json` JSONL events. If no final JSON event is detected and
 the process exits successfully, `final_output` falls back to the captured stdout tail. It still keeps
 `stdout_tail` as a raw fallback/debug stream. Many agent CLIs write progress, command
 transcripts, and other execution logs to stderr; the wrapper captures that stream as

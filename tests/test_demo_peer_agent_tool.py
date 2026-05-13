@@ -35,7 +35,7 @@ def test_demo_peer_agent_tool_drives_runtime_tool_path(monkeypatch, capsys) -> N
         if method == "GET" and url == "http://minigent.test/config":
             return {"local_tools": ["echo", "peer_agent_task"]}
         if method == "GET" and url == "http://minigent.test/peer-agents":
-            return {"agents": [{"name": "opencode"}]}
+            return {"agents": [{"name": "pi"}]}
         if method == "POST" and url == "http://minigent.test/threads":
             return {"thread_id": "thread_123"}
         if method == "POST" and url == "http://minigent.test/threads/thread_123/messages":
@@ -51,7 +51,7 @@ def test_demo_peer_agent_tool_drives_runtime_tool_path(monkeypatch, capsys) -> N
                 {
                     "role": "tool",
                     "content": (
-                        '{"peer":"opencode","task_id":"task_123","status":"completed",'
+                        '{"peer":"pi","task_id":"task_123","status":"completed",'
                         '"exit_code":0,"timed_out":false,"duration_seconds":1.25,'
                         '"canceled_on_timeout":false,'
                         '"final_output_preview":"summary"}'
@@ -82,7 +82,7 @@ def test_demo_peer_agent_tool_drives_runtime_tool_path(monkeypatch, capsys) -> N
     assert captured_message.startswith("/tool peer_agent_task ")
     tool_payload = json.loads(captured_message.removeprefix("/tool peer_agent_task "))
     assert tool_payload == {
-        "peer": "opencode",
+        "peer": "pi",
         "cwd": "/workspace/project",
         "prompt": "summarize",
         "poll": True,
@@ -103,7 +103,7 @@ def test_demo_peer_agent_tool_drives_runtime_tool_path(monkeypatch, capsys) -> N
     assert "local_tools: ['echo', 'peer_agent_task']" in output
     assert "assistant: Tool result:" in output
     assert (
-        "peer_summary: peer=opencode task_id=task_123 status=completed exit_code=0 "
+        "peer_summary: peer=pi task_id=task_123 status=completed exit_code=0 "
         "timed_out=False canceled_on_timeout=False duration_seconds=1.25 "
         'final_output_preview="summary"'
     ) in output

@@ -36,9 +36,9 @@ class TaskStatus(str, Enum):
 
 
 class Settings(BaseModel):
-    agent_command: tuple[str, ...] = ("opencode",)
+    agent_command: tuple[str, ...] = ("pi",)
     allowed_workspaces: tuple[Path, ...] = ()
-    agent_runtime: str = "opencode"
+    agent_runtime: str = "pi"
     agent_args_template: tuple[str, ...] = ()
     codex_sandbox: str = "read-only"
     codex_json: bool = True
@@ -710,7 +710,7 @@ def _resolve_allowed_workspace(cwd: Path, allowed_workspaces: tuple[Path, ...]) 
 
 
 def settings_from_env() -> Settings:
-    runtime = os.getenv("AGENT_RUNTIME", "opencode")
+    runtime = os.getenv("AGENT_RUNTIME", "pi")
     runtime_name = runtime.lower()
     if runtime_name == "codex":
         default_command = "codex"

@@ -10,7 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/home/agent/.local/bin:${PATH}"
 
 ARG INSTALL_CODEX=false
-ARG INSTALL_PI=false
+ARG INSTALL_PI=true
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-pip python3-venv \

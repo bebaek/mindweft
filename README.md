@@ -13,7 +13,7 @@ Minimal AI agent runtime POC from `DESIGN.md`.
 - Replaceable LLM adapter boundary
 - OpenAI and OpenRouter support via one OpenAI-compatible adapter
 - Optional MCP tool discovery and invocation over HTTP
-- Optional local agent wrapper for OpenCode-first peer-agent task execution
+- Optional local agent wrapper for Pi-first peer-agent task execution
 - Deterministic mock adapter for local testing
 
 ## Built-In Tools
@@ -72,7 +72,7 @@ local network.
 
 [`local-agent-wrapper`](/Users/burm/code/minigent/local-agent-wrapper) is a separate
 minimal package that exposes a local coding-agent CLI as a federated-agent-style HTTP
-member. It defaults to OpenCode and can be configured for Codex, Pi Coding Agent, or
+member. It defaults to Pi Coding Agent and can be configured for OpenCode, Codex, or
 another CLI with a custom argv template. Minigent can route tasks to it through the
 `peer_agent_task` tool when peer-agent tooling is enabled.
 
@@ -87,14 +87,14 @@ AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
 
 The POC supports `GET /agent-card`, `POST /tasks`, `GET /tasks/{task_id}`,
 `GET /tasks/{task_id}/events`, read-only task artifact endpoints, and
-`POST /tasks/{task_id}/cancel`. It runs `opencode run --format json --dir <cwd>` by default, parses
+`POST /tasks/{task_id}/cancel`. It runs `pi --mode json --no-session --tools read,grep,find,ls <prompt>` by default, parses
 JSONL events when present, falls back to stdout for `final_output`, and captures
 stdout/stderr tails separately. With the
 wrapper running, use `uv run python scripts/demo_task.py` from `local-agent-wrapper` for
 a simple submit-and-poll demo. The demo prints `final_output` and hides the agent's
 stderr/progress log unless `--show-log` is passed. Add `--show-events` to print parsed
-JSON events. Set `AGENT_RUNTIME=codex` for the built-in Codex profile,
-`AGENT_RUNTIME=pi` for the built-in Pi Coding Agent profile, or use
+JSON events. Set `AGENT_RUNTIME=opencode` for the built-in OpenCode profile,
+`AGENT_RUNTIME=codex` for the built-in Codex profile, or use
 `AGENT_ARGS_TEMPLATE` for another CLI. Task responses include relative `links` and
 `artifacts` maps for discovery.
 
@@ -103,9 +103,9 @@ instead of the built-in LLM/tool loop. Start the wrapper, register it in Minigen
 select the `peer_agent` backend:
 
 ```dotenv
-MINIGENT_PEER_AGENTS='[{"name":"opencode","base_url":"http://127.0.0.1:8010"}]'
+MINIGENT_PEER_AGENTS='[{"name":"pi","base_url":"http://127.0.0.1:8010"}]'
 MINIGENT_AGENT_BACKEND=peer_agent
-MINIGENT_AGENT_BACKEND_PEER=opencode
+MINIGENT_AGENT_BACKEND_PEER=pi
 MINIGENT_AGENT_BACKEND_CWD=/Users/burm/code/minigent
 MINIGENT_MCP_BROKER_BASE_URL=http://127.0.0.1:8000
 MINIGENT_MCP_BROKER_ENABLED=true
@@ -132,12 +132,10 @@ the same backend shape:
 The default backend remains `native`, which preserves the existing Minigent LLM/tool
 runtime.
 
-To try Pi Coding Agent as the peer instead of OpenCode or Codex, install Pi separately
-and start the same wrapper with the Pi runtime:
+Pi Coding Agent is the default peer profile. Install Pi separately and start the wrapper:
 
 ```bash
 cd local-agent-wrapper
-AGENT_RUNTIME=pi \
 AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
   uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
 ```
@@ -1108,7 +1106,7 @@ optionally expose them to the runtime through the `peer_agent_task` tool. Config
 `MINIGENT_PEER_AGENTS`:
 
 ```dotenv
-MINIGENT_PEER_AGENTS=[{"name":"opencode","base_url":"http://127.0.0.1:8010","description":"Local OpenCode wrapper","capabilities":["repository analysis","codebase inspection"],"side_effects":["runs OpenCode CLI commands in the allowed workspace"],"version":"0.1.0"}]
+MINIGENT_PEER_AGENTS=[{"name":"pi","base_url":"http://127.0.0.1:8010","description":"Local Pi Coding Agent wrapper","capabilities":["repository analysis","codebase inspection"],"side_effects":["runs Pi CLI commands in the allowed workspace"],"version":"0.1.0"}]
 # Required only when the agent runtime should be allowed to call peers as a tool:
 MINIGENT_ENABLE_PEER_AGENT_TOOL=true
 ```
@@ -1148,7 +1146,7 @@ Useful overrides:
 ```bash
 MINIGENT_BASE_URL=http://127.0.0.1:8000 \
   uv run python scripts/demo_peer_agent.py \
-  --peer opencode \
+  --peer pi \
   --cwd /Users/burm/code/minigent \
   --show-events \
   --prompt "Summarize this repository in one paragraph. Do not edit files."
@@ -1211,7 +1209,7 @@ MINIGENT_RUN_INTEGRATION_TESTS=true \
 ```
 
 The Docker Compose sidecar demo also has an opt-in integration test. It requires Docker
-and a usable local OpenCode login because that demo runs the OpenCode-first wrapper
+and a usable local OpenCode login because that demo selects the wrapper's OpenCode profile
 inside the sidecar:
 
 ```bash

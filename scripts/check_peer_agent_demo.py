@@ -30,15 +30,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--workspace",
         default=os.getenv("AGENT_ALLOWED_WORKSPACES", str(root_dir)),
     )
-    parser.add_argument("--agent-runtime", default=os.getenv("AGENT_RUNTIME", "opencode"))
-    parser.add_argument("--agent-command", default=os.getenv("AGENT_COMMAND", "opencode"))
+    parser.add_argument("--agent-runtime", default=os.getenv("AGENT_RUNTIME", "pi"))
+    parser.add_argument("--agent-command", default=os.getenv("AGENT_COMMAND"))
     parser.add_argument("--agent-host", default=os.getenv("AGENT_HOST", "127.0.0.1"))
     parser.add_argument(
         "--agent-port", type=int, default=int(os.getenv("AGENT_PORT", "8010"))
     )
     parser.add_argument(
         "--peer-name",
-        default=os.getenv("MINIGENT_DEMO_PEER_NAME", "opencode"),
+        default=os.getenv("MINIGENT_DEMO_PEER_NAME", "pi"),
         help="Expected peer name in Minigent's /peer-agents response.",
     )
     parser.add_argument("--minigent-host", default=os.getenv("MINIGENT_HOST", "127.0.0.1"))
@@ -56,7 +56,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="In --check-running mode, skip direct wrapper health checks for internal-only sidecars.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.agent_command is None:
+        args.agent_command = default_agent_command(args.agent_runtime)
+    return args
+
+
+def default_agent_command(runtime: str) -> str:
+    normalized = runtime.lower()
+    if normalized == "codex":
+        return "codex"
+    if normalized == "pi":
+        return "pi"
+    return "opencode"
 
 
 def main(argv: list[str] | None = None) -> int:

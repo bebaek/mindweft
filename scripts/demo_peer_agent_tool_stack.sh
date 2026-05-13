@@ -4,11 +4,18 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WRAPPER_DIR="$ROOT_DIR/local-agent-wrapper"
 WORKSPACE="${AGENT_ALLOWED_WORKSPACES:-$ROOT_DIR}"
-AGENT_RUNTIME="${AGENT_RUNTIME:-opencode}"
-AGENT_COMMAND="${AGENT_COMMAND:-opencode}"
+AGENT_RUNTIME="${AGENT_RUNTIME:-pi}"
+AGENT_RUNTIME_NORMALIZED="$(printf '%s' "$AGENT_RUNTIME" | tr '[:upper:]' '[:lower:]')"
+if [[ -z "${AGENT_COMMAND:-}" ]]; then
+  case "$AGENT_RUNTIME_NORMALIZED" in
+    codex) AGENT_COMMAND="codex" ;;
+    pi) AGENT_COMMAND="pi" ;;
+    *) AGENT_COMMAND="opencode" ;;
+  esac
+fi
 AGENT_HOST="${AGENT_HOST:-127.0.0.1}"
 AGENT_PORT="${AGENT_PORT:-8010}"
-PEER_NAME="${MINIGENT_DEMO_PEER_NAME:-opencode}"
+PEER_NAME="${MINIGENT_DEMO_PEER_NAME:-$AGENT_RUNTIME_NORMALIZED}"
 MINIGENT_HOST="${MINIGENT_HOST:-127.0.0.1}"
 MINIGENT_PORT="${MINIGENT_PORT:-8000}"
 PROMPT="${1:-Summarize this repository in one paragraph. Do not edit files.}"

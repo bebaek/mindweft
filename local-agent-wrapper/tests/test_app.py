@@ -17,7 +17,7 @@ def test_agent_card() -> None:
         response = client.get("/agent-card")
 
         assert response.status_code == 200
-        assert response.json()["name"] == "opencode-coding-agent"
+        assert response.json()["name"] == "pi-coding-agent"
 
 
 def test_task_captures_stdout_and_stderr(tmp_path: Path) -> None:
@@ -73,7 +73,7 @@ def test_create_task_response_includes_links_and_artifacts(tmp_path: Path) -> No
         assert body["artifacts"]["events"] == f"/tasks/{task_id}/artifacts/events"
 
 
-def test_default_opencode_runtime_uses_run_prompt_argv(tmp_path: Path) -> None:
+def test_opencode_runtime_uses_run_prompt_argv(tmp_path: Path) -> None:
     fake_agent = tmp_path / "fake_agent.py"
     argv_file = tmp_path / "argv.json"
     fake_agent.write_text(
@@ -86,6 +86,7 @@ def test_default_opencode_runtime_uses_run_prompt_argv(tmp_path: Path) -> None:
     settings = Settings(
         agent_command=(sys.executable, str(fake_agent)),
         allowed_workspaces=(tmp_path,),
+        agent_runtime="opencode",
     )
     with TestClient(create_app(settings)) as client:
         create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "hello"})

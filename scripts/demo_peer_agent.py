@@ -24,7 +24,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--peer",
-        default="opencode",
+        default="pi",
         help="Configured peer name from MINIGENT_PEER_AGENTS.",
     )
     parser.add_argument(
