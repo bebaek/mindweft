@@ -16,8 +16,8 @@ from app import auth as auth_module
 from app.execution import InMemoryTenantExecutionResolver, parse_tenant_execution_config
 from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter
 from app.main import create_app
-from app.mcp_broker import MINIGENT_MCP_BROKER_TOKEN_ENV, MINIGENT_MCP_BROKER_URL_ENV
 from app.mcp import MCPServerInfo
+from app.mcp_broker import MINIGENT_MCP_BROKER_TOKEN_ENV, MINIGENT_MCP_BROKER_URL_ENV
 from app.models import LLMResponse, Message, MessageRole, ToolCall
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
 from app.tools import build_local_tool_registry

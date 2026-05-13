@@ -8,13 +8,13 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
-from app.agent_backends import AgentBackendRouter, NativeAgentBackend
 from app.admin_api import (
     admin_encryption_key_from_env,
     admin_store_path_from_env,
     build_admin_router,
 )
 from app.admin_store import SQLiteTenantConfigStore
+from app.agent_backends import AgentBackendRouter, NativeAgentBackend
 from app.auth import require_principal, validate_auth_settings
 from app.config import load_environment
 from app.execution import (
