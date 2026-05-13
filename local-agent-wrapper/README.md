@@ -33,7 +33,9 @@ docker build --build-arg INSTALL_PI=true -t minigent-local-agent-wrapper:pi .
 
 For `AGENT_RUNTIME=pi`, provide Pi credentials with either API-key environment variables
 (such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`) or a mounted Pi config directory. Pi's
-config directory can be forced with `PI_CODING_AGENT_DIR=/home/agent/.pi/agent`.
+config directory can be forced with `PI_CODING_AGENT_DIR=/home/agent/.pi/agent`. From the
+repository root, `./scripts/prepare-pi-container-home.sh` copies host `~/.pi/agent` into
+ignored `.pi-container/agent` for the Pi Compose demo.
 
 For the repository-level Compose demo, prepare a local OpenCode container home from your
 existing local OpenCode login, then run the sidecar stack from the repository root:

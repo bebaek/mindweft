@@ -9,6 +9,7 @@ services:
       MINIGENT_AGENT_BACKEND_PEER: pi
       MINIGENT_AGENT_BACKEND_CWD: /workspace/minigent
       MINIGENT_MCP_BROKER_ENABLED: "true"
+      MINIGENT_MCP_BROKER_BASE_URL: http://minigent:8000
       MINIGENT_PEER_AGENTS: '[{"name":"pi","base_url":"http://local-agent-wrapper:8010","description":"Local Pi Coding Agent wrapper sidecar","capabilities":["repository analysis","codebase inspection","read-only command execution in the mounted workspace","Minigent MCP broker tools"],"side_effects":["runs Pi CLI commands inside the wrapper container"],"version":"0.1.0"}]'
     ports:
       - "127.0.0.1:${MINIGENT_PORT:-8000}:8000"

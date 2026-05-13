@@ -216,12 +216,21 @@ tool through the broker rather than only echoing the prompt text. The Pi stack s
 enables the MCP broker by default; set `MINIGENT_MCP_BROKER_ENABLED=false` to disable it.
 
 A Docker Compose variant is available for the Pi backend plus MCP broker path. It builds
-the wrapper with `INSTALL_PI=true`, mounts this repository read-only, keeps Pi state in
-ignored `.pi-container/agent`, and passes through common Pi API-key environment variables:
+the wrapper with `INSTALL_PI=true`, mounts this repository read-only, and keeps Pi state in
+ignored `.pi-container/agent`. If `~/.pi/agent` exists, the script automatically copies it
+into `.pi-container/agent` before starting the containers so host SSO/API-key logins are
+available in the wrapper container. You can also prepare it explicitly:
 
 ```bash
-ANTHROPIC_API_KEY=... ./scripts/demo_pi_backend_compose.sh
-# or OPENAI_API_KEY=... ./scripts/demo_pi_backend_compose.sh
+./scripts/prepare-pi-container-home.sh
+./scripts/demo_pi_backend_compose.sh
+```
+
+Or use common Pi API-key environment variables instead:
+
+```bash
+ANTHROPIC_API_KEY=... ./scripts/demo_pi_backend_compose.sh --no-prepare-pi-home
+# or OPENAI_API_KEY=... ./scripts/demo_pi_backend_compose.sh --no-prepare-pi-home
 ```
 
 Keep it running for inspection with `--keep-running`, then stop it with:
@@ -1257,9 +1266,10 @@ It uses [compose.pi-backend-demo.yaml](/Users/burm/code/minigent/compose.pi-back
 builds the wrapper image with Pi installed, enables Minigent's MCP broker, mounts this
 repository read-only at `/workspace/minigent`, and stores Pi state in ignored
 `.pi-container/agent`. The demo runs `scripts/demo_pi_mcp_broker.py`, so a successful run
-also verifies the brokered `calculator` tool path. If you prefer a mounted authenticated
-Pi config instead of API-key env vars, place it under `.pi-container/agent` or adjust the
-`PI_CODING_AGENT_DIR` volume.
+also verifies the brokered `calculator` tool path. By default the script copies host Pi
+state from `~/.pi/agent`; set `PI_HOST_AGENT_DIR=/path/to/agent` for a different source,
+`PI_CONTAINER_AGENT_DIR=/path/to/repo/.pi-container/agent` for a different target, or pass
+`--no-prepare-pi-home` to skip copying and rely on API-key env vars.
 
 Keep the Compose demos running for inspection:
 
