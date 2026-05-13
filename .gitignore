@@ -7,5 +7,6 @@
 .uv-cache/
 .codex-container/
 .opencode-container/
+.pi-container/
 __pycache__/
 .pytest_cache/

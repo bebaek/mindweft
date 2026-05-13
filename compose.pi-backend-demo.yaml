@@ -1,0 +1,61 @@
+services:
+  minigent:
+    build:
+      context: .
+    environment:
+      MINIGENT_LLM_PROVIDER: mock
+      MINIGENT_AUTH_MODE: dev-headers
+      MINIGENT_AGENT_BACKEND: peer_agent
+      MINIGENT_AGENT_BACKEND_PEER: pi
+      MINIGENT_AGENT_BACKEND_CWD: /workspace/minigent
+      MINIGENT_MCP_BROKER_ENABLED: "true"
+      MINIGENT_PEER_AGENTS: '[{"name":"pi","base_url":"http://local-agent-wrapper:8010","description":"Local Pi Coding Agent wrapper sidecar","capabilities":["repository analysis","codebase inspection","read-only command execution in the mounted workspace","Minigent MCP broker tools"],"side_effects":["runs Pi CLI commands inside the wrapper container"],"version":"0.1.0"}]'
+    ports:
+      - "127.0.0.1:${MINIGENT_PORT:-8000}:8000"
+    depends_on:
+      local-agent-wrapper:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  local-agent-wrapper:
+    build:
+      context: ./local-agent-wrapper
+      args:
+        INSTALL_PI: "true"
+    environment:
+      AGENT_RUNTIME: pi
+      AGENT_ALLOWED_WORKSPACES: /workspace/minigent
+      AGENT_COMMAND: pi
+      PI_CODING_AGENT_DIR: /home/agent/.pi/agent
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    expose:
+      - "8010"
+    volumes:
+      - .:/workspace/minigent:ro
+      - ./.pi-container/agent:/home/agent/.pi/agent
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health').read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s

@@ -25,9 +25,15 @@ The image installs the `opencode-ai` npm package and runs the wrapper as a non-r
 docker build --build-arg INSTALL_CODEX=true -t minigent-local-agent-wrapper:codex .
 ```
 
-The stock image does not install Pi Coding Agent. For `AGENT_RUNTIME=pi`, run the wrapper
-on a host that has `pi` on `PATH` or build a custom image that installs
-`@earendil-works/pi-coding-agent`.
+To include Pi Coding Agent in the image, build with:
+
+```bash
+docker build --build-arg INSTALL_PI=true -t minigent-local-agent-wrapper:pi .
+```
+
+For `AGENT_RUNTIME=pi`, provide Pi credentials with either API-key environment variables
+(such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`) or a mounted Pi config directory. Pi's
+config directory can be forced with `PI_CODING_AGENT_DIR=/home/agent/.pi/agent`.
 
 For the repository-level Compose demo, prepare a local OpenCode container home from your
 existing local OpenCode login, then run the sidecar stack from the repository root:

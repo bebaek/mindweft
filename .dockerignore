@@ -11,6 +11,8 @@ __pycache__/
 .gitignore
 .data/
 .codex-container/
+.opencode-container/
+.pi-container/
 tests/
 codex-agent-wrapper/.venv/
 codex-agent-wrapper/.pytest_cache/

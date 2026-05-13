@@ -10,11 +10,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/home/agent/.local/bin:${PATH}"
 
 ARG INSTALL_CODEX=false
+ARG INSTALL_PI=false
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-pip python3-venv \
     && npm install -g opencode-ai \
     && if [ "$INSTALL_CODEX" = "true" ]; then npm install -g @openai/codex; fi \
+    && if [ "$INSTALL_PI" = "true" ]; then npm install -g @earendil-works/pi-coding-agent; fi \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -26,7 +28,7 @@ RUN python3 -m pip install --break-system-packages --no-cache-dir .
 
 RUN groupadd --system agent \
     && useradd --system --gid agent --home-dir /home/agent --no-create-home agent \
-    && mkdir -p /home/agent/.codex /home/agent/.config/opencode /home/agent/.local/share/opencode /home/agent/.local/state/opencode \
+    && mkdir -p /home/agent/.codex /home/agent/.pi/agent /home/agent/.config/opencode /home/agent/.local/share/opencode /home/agent/.local/state/opencode \
     && chown -R agent:agent /home/agent /app
 
 USER agent

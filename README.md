@@ -215,6 +215,21 @@ In the Minigent API logs, look for `mcp_broker.tool_call` to confirm the peer ca
 tool through the broker rather than only echoing the prompt text. The Pi stack script
 enables the MCP broker by default; set `MINIGENT_MCP_BROKER_ENABLED=false` to disable it.
 
+A Docker Compose variant is available for the Pi backend plus MCP broker path. It builds
+the wrapper with `INSTALL_PI=true`, mounts this repository read-only, keeps Pi state in
+ignored `.pi-container/agent`, and passes through common Pi API-key environment variables:
+
+```bash
+ANTHROPIC_API_KEY=... ./scripts/demo_pi_backend_compose.sh
+# or OPENAI_API_KEY=... ./scripts/demo_pi_backend_compose.sh
+```
+
+Keep it running for inspection with `--keep-running`, then stop it with:
+
+```bash
+docker compose -f compose.pi-backend-demo.yaml down
+```
+
 The wrapper has opt-in real CLI integration tests:
 
 ```bash
@@ -1231,11 +1246,28 @@ The Compose file sets `AGENT_ARGS_TEMPLATE` with an `OPENCODE_MODEL` override po
 defaults to `openai/gpt-5.2`; set `OPENCODE_MODEL=provider/model` if your OpenCode login
 requires a different model.
 
-Keep the Compose demo running for inspection:
+A Pi backend Compose demo is also available:
+
+```bash
+ANTHROPIC_API_KEY=... ./scripts/demo_pi_backend_compose.sh
+# or OPENAI_API_KEY=... ./scripts/demo_pi_backend_compose.sh
+```
+
+It uses [compose.pi-backend-demo.yaml](/Users/burm/code/minigent/compose.pi-backend-demo.yaml),
+builds the wrapper image with Pi installed, enables Minigent's MCP broker, mounts this
+repository read-only at `/workspace/minigent`, and stores Pi state in ignored
+`.pi-container/agent`. The demo runs `scripts/demo_pi_mcp_broker.py`, so a successful run
+also verifies the brokered `calculator` tool path. If you prefer a mounted authenticated
+Pi config instead of API-key env vars, place it under `.pi-container/agent` or adjust the
+`PI_CODING_AGENT_DIR` volume.
+
+Keep the Compose demos running for inspection:
 
 ```bash
 ./scripts/demo_peer_agent_tool_compose.sh --keep-running
+./scripts/demo_pi_backend_compose.sh --keep-running
 docker compose -f compose.peer-demo.yaml down
+docker compose -f compose.pi-backend-demo.yaml down
 ```
 
 ### Stdio MCP Bridge
