@@ -144,10 +144,13 @@ AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
 
 The Pi profile invokes `pi --mode json --no-session --tools read,grep,find,ls <prompt>`
 from the task workspace and extracts assistant `message_end` events as the task
-`final_output`. This keeps the default Pi peer profile read-only. Override with
-`AGENT_ARGS_TEMPLATE` when you want persistent Pi sessions, explicit model/provider
-flags, write-capable tools, different tool narrowing, or Pi skills/extensions for a
-specific peer deployment.
+`final_output`. This keeps the default Pi peer profile read-only. When Minigent passes MCP
+broker environment variables, the wrapper adds a generated Pi extension that registers
+brokered Minigent tools and activates them alongside the read-only file-inspection tools.
+Those brokered tools are exposed to Pi with a sanitized `minigent_` prefix. Override with
+`AGENT_ARGS_TEMPLATE` when you want persistent Pi sessions, explicit
+model/provider flags, write-capable tools, different tool narrowing, or custom Pi
+skills/extensions for a specific peer deployment.
 
 Set `MINIGENT_MCP_BROKER_ENABLED=false` or `agent_backend.mcp_broker_enabled=false` if
 the peer agent should run without Minigent-brokered MCP tools.
@@ -201,14 +204,16 @@ Pass a custom prompt as the first argument:
 ./scripts/demo_pi_backend_stack.sh "Summarize the local-agent-wrapper package. Do not edit files."
 ```
 
-To smoke-test brokered MCP tool use, run:
+To smoke-test brokered MCP tool use, run the demo for the configured peer:
 
 ```bash
 uv run python scripts/demo_opencode_mcp_broker.py
+uv run python scripts/demo_pi_mcp_broker.py
 ```
 
-In the Minigent API logs, look for `mcp_broker.tool_call` to confirm OpenCode called a
-tool through the broker rather than only echoing the prompt text.
+In the Minigent API logs, look for `mcp_broker.tool_call` to confirm the peer called a
+tool through the broker rather than only echoing the prompt text. The Pi stack script
+enables the MCP broker by default; set `MINIGENT_MCP_BROKER_ENABLED=false` to disable it.
 
 The wrapper has opt-in real CLI integration tests:
 

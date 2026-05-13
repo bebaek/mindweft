@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from local_agent_wrapper.app import Settings, create_app
+from local_agent_wrapper.app import Settings, _pi_mcp_broker_tool_names, create_app
 
 
 def test_agent_card() -> None:
@@ -128,6 +130,86 @@ def test_pi_runtime_uses_json_mode_argv(tmp_path: Path) -> None:
             "read,grep,find,ls",
             "hello",
         ]
+
+
+def test_pi_runtime_adds_mcp_broker_extension_when_env_is_present(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    argv_file = tmp_path / "argv.json"
+    fake_agent.write_text(
+        "import json\n"
+        "import sys\n"
+        f"open({str(argv_file)!r}, 'w', encoding='utf-8').write(json.dumps(sys.argv[1:]))\n"
+        "print('done')\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+        agent_runtime="pi",
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post(
+            "/tasks",
+            json={
+                "cwd": str(tmp_path),
+                "prompt": "hello",
+                "env": {
+                    "MINIGENT_MCP_BROKER_URL": "http://127.0.0.1:8000/mcp/peer/session",
+                    "MINIGENT_MCP_BROKER_TOKEN": "token-123",
+                },
+            },
+        )
+
+        assert create_response.status_code == 200
+        _wait_for_terminal_task(client, create_response.json()["task_id"])
+        argv = json.loads(argv_file.read_text(encoding="utf-8"))
+        assert argv[:3] == ["--mode", "json", "--no-session"]
+        assert argv[3] == "--extension"
+        extension_path = Path(argv[4])
+        assert extension_path.read_text(encoding="utf-8").startswith(
+            'import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";'
+        )
+        assert argv[5:] == ["--tools", "read,grep,find,ls", "hello"]
+
+
+def test_pi_mcp_broker_tool_names_lists_remote_tools() -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            assert self.headers["authorization"] == "Bearer token-123"
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "minigent-tool-list",
+                        "result": {
+                            "tools": [
+                                {"name": "calculator"},
+                                {"name": "echo"},
+                            ]
+                        },
+                    }
+                ).encode("utf-8")
+            )
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert _pi_mcp_broker_tool_names(
+            {
+                "MINIGENT_MCP_BROKER_URL": f"http://127.0.0.1:{server.server_port}/mcp/peer/session",
+                "MINIGENT_MCP_BROKER_TOKEN": "token-123",
+            }
+        ) == ["minigent_calculator", "minigent_echo"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
 
 
 def test_custom_args_template_overrides_runtime_argv(tmp_path: Path) -> None:

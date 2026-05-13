@@ -12,6 +12,7 @@ PEER_NAME="${MINIGENT_DEMO_PEER_NAME:-pi}"
 MINIGENT_HOST="${MINIGENT_HOST:-127.0.0.1}"
 MINIGENT_PORT="${MINIGENT_PORT:-8000}"
 PROMPT="${1:-Summarize this repository in one paragraph. Do not edit files.}"
+MCP_BROKER_ENABLED="${MINIGENT_MCP_BROKER_ENABLED:-true}"
 LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/minigent-pi-backend-demo.XXXXXX")"
 
 WRAPPER_PID=""
@@ -81,7 +82,7 @@ MINIGENT_PEER_AGENTS="[{\"name\":\"$PEER_NAME\",\"base_url\":\"http://$AGENT_HOS
 MINIGENT_AGENT_BACKEND=peer_agent \
 MINIGENT_AGENT_BACKEND_PEER="$PEER_NAME" \
 MINIGENT_AGENT_BACKEND_CWD="$WORKSPACE" \
-MINIGENT_MCP_BROKER_ENABLED=false \
+MINIGENT_MCP_BROKER_ENABLED="$MCP_BROKER_ENABLED" \
   uv run uvicorn app.main:app \
     --host "$MINIGENT_HOST" \
     --port "$MINIGENT_PORT" \

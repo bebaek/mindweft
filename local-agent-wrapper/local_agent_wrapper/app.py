@@ -5,7 +5,11 @@ import json
 import os
 import shlex
 import signal
+import tempfile
+import urllib.error
+import urllib.request
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -214,6 +218,7 @@ class TaskStore:
             self._settings,
             cwd=record.cwd,
             prompt=record.prompt,
+            task_env=record.env,
         )
         try:
             record.process = await asyncio.create_subprocess_exec(
@@ -429,7 +434,13 @@ async def _terminate_process_group(
             continue
 
 
-def _agent_command(settings: Settings, *, cwd: Path, prompt: str) -> list[str]:
+def _agent_command(
+    settings: Settings,
+    *,
+    cwd: Path,
+    prompt: str,
+    task_env: dict[str, str] | None = None,
+) -> list[str]:
     runtime = settings.agent_runtime.lower()
     if settings.agent_args_template:
         return [
@@ -459,15 +470,13 @@ def _agent_command(settings: Settings, *, cwd: Path, prompt: str) -> list[str]:
     if runtime == "opencode":
         return [*settings.agent_command, "run", "--format", "json", "--dir", str(cwd), prompt]
     if runtime == "pi":
-        return [
-            *settings.agent_command,
-            "--mode",
-            "json",
-            "--no-session",
-            "--tools",
-            "read,grep,find,ls",
-            prompt,
-        ]
+        pi_tools = ["read", "grep", "find", "ls"]
+        command = [*settings.agent_command, "--mode", "json", "--no-session"]
+        if _has_mcp_broker_env(task_env or os.environ):
+            pi_tools.extend(_pi_mcp_broker_tool_names(task_env or os.environ))
+            command.extend(["--extension", str(_pi_mcp_broker_extension_path())])
+        command.extend(["--tools", ",".join(dict.fromkeys(pi_tools)), prompt])
+        return command
     if runtime == "plain":
         return [*settings.agent_command, prompt]
     raise HTTPException(
@@ -489,13 +498,171 @@ def _allowed_task_env(values: dict[str, str], allowed_prefixes: tuple[str, ...])
 
 def _process_env(task_env: dict[str, str]) -> dict[str, str]:
     env = {**os.environ, **task_env}
-    broker_url = env.get("MINIGENT_MCP_BROKER_URL")
-    broker_token = env.get("MINIGENT_MCP_BROKER_TOKEN")
-    if broker_url and broker_token:
+    if _has_mcp_broker_env(env):
         env["OPENCODE_CONFIG_CONTENT"] = _opencode_config_content(
             env.get("OPENCODE_CONFIG_CONTENT")
         )
     return env
+
+
+def _has_mcp_broker_env(env: Mapping[str, str]) -> bool:
+    return bool(env.get("MINIGENT_MCP_BROKER_URL") and env.get("MINIGENT_MCP_BROKER_TOKEN"))
+
+
+def _pi_mcp_broker_tool_names(env: Mapping[str, str]) -> list[str]:
+    url = env.get("MINIGENT_MCP_BROKER_URL")
+    token = env.get("MINIGENT_MCP_BROKER_TOKEN")
+    if not url or not token:
+        return []
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(
+            {"jsonrpc": "2.0", "id": "minigent-tool-list", "method": "tools/list", "params": {}}
+        ).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {token}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return []
+    tools = result.get("tools")
+    if not isinstance(tools, list):
+        return []
+    names: list[str] = []
+    for tool in tools:
+        if isinstance(tool, dict):
+            name = tool.get("name")
+            if isinstance(name, str) and name:
+                names.append(_pi_mcp_broker_tool_name(name))
+    return names
+
+
+def _pi_mcp_broker_tool_name(name: str) -> str:
+    safe = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in name)
+    safe = safe.strip("_-") or "tool"
+    return f"minigent_{safe}"
+
+
+def _pi_mcp_broker_extension_path() -> Path:
+    extension_dir = Path(tempfile.gettempdir()) / "minigent-local-agent-wrapper"
+    extension_dir.mkdir(parents=True, exist_ok=True)
+    extension_path = extension_dir / "pi-mcp-broker-extension.ts"
+    if (
+        not extension_path.exists()
+        or extension_path.read_text(encoding="utf-8") != _PI_MCP_BROKER_EXTENSION
+    ):
+        extension_path.write_text(_PI_MCP_BROKER_EXTENSION, encoding="utf-8")
+    return extension_path
+
+
+_PI_MCP_BROKER_EXTENSION = r"""
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+type MCPTool = {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+};
+
+type MCPContent = {
+  type: string;
+  text?: string;
+  [key: string]: unknown;
+};
+
+export default async function (pi: ExtensionAPI) {
+  const url = process.env.MINIGENT_MCP_BROKER_URL;
+  const token = process.env.MINIGENT_MCP_BROKER_TOKEN;
+  if (!url || !token) return;
+
+  let nextId = 1;
+  async function request(method: string, params?: Record<string, unknown>, signal?: AbortSignal) {
+    const id = nextId++;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${token}`,
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
+      signal,
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`Minigent MCP broker HTTP ${response.status}: ${body}`);
+    }
+    const payload = body ? JSON.parse(body) : null;
+    if (payload?.error) {
+      throw new Error(payload.error.message ?? JSON.stringify(payload.error));
+    }
+    return payload?.result;
+  }
+
+  const listed = await request("tools/list");
+  const tools = Array.isArray(listed?.tools) ? listed.tools as MCPTool[] : [];
+  const registered: string[] = [];
+  for (const tool of tools) {
+    if (!tool?.name) continue;
+    const registeredName = piToolName(tool.name);
+    registered.push(registeredName);
+    pi.registerTool({
+      name: registeredName,
+      label: `Minigent ${tool.name}`,
+      description: tool.description ?? `Call Minigent MCP broker tool ${tool.name}`,
+      promptSnippet: tool.description ?? `Call Minigent MCP broker tool ${tool.name}`,
+      promptGuidelines: [
+        `Use ${registeredName} when the current Minigent thread needs the brokered ${tool.name} tool.`,
+      ],
+      parameters: tool.inputSchema ?? { type: "object", properties: {} },
+      async execute(_toolCallId, params, signal) {
+        const result = await request("tools/call", { name: tool.name, arguments: params ?? {} }, signal);
+        const content = normalizeContent(result?.content);
+        return {
+          content: content.length > 0 ? content : [{ type: "text", text: stringifyResult(result?.structuredContent ?? result) }],
+          details: { structuredContent: result?.structuredContent ?? result },
+        };
+      },
+    });
+  }
+
+  if (registered.length > 0) {
+    pi.on("session_start", () => {
+      pi.setActiveTools([...new Set([...pi.getActiveTools(), ...registered])]);
+    });
+  }
+}
+
+function piToolName(name: string): string {
+  const safe = name.replace(/[^a-zA-Z0-9_-]/g, "_").replace(/^[_-]+|[_-]+$/g, "") || "tool";
+  return `minigent_${safe}`;
+}
+
+function normalizeContent(value: unknown): MCPContent[] {
+  if (!Array.isArray(value)) return [];
+  const content: MCPContent[] = [];
+  for (const item of value) {
+    if (item && typeof item === "object" && (item as MCPContent).type === "text") {
+      content.push({ type: "text", text: String((item as MCPContent).text ?? "") });
+    }
+  }
+  return content;
+}
+
+function stringifyResult(value: unknown): string {
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
+}
+""".lstrip()
 
 
 def _opencode_config_content(existing: str | None) -> str:

@@ -88,10 +88,15 @@ AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
 The built-in Pi profile invokes
 `pi --mode json --no-session --tools read,grep,find,ls <prompt>` with the task process
 `cwd` set to the requested allowed workspace. This keeps the default Pi peer profile
-read-only. The wrapper parses Pi JSONL `message_end` assistant events for `final_output`.
-Use `AGENT_ARGS_TEMPLATE` if you want persistent Pi sessions, a specific model/provider,
-write-capable tools, different tool narrowing, or explicit Pi resources like `--skill` or
-`--extension`.
+read-only. When task env includes `MINIGENT_MCP_BROKER_URL` and
+`MINIGENT_MCP_BROKER_TOKEN`, the wrapper also passes a generated `--extension` file that
+registers brokered Minigent tools with Pi and activates them alongside the read-only
+file-inspection tools. Brokered tool names are exposed to Pi with a `minigent_` prefix
+and sanitized to provider-compatible characters. The wrapper parses Pi JSONL
+`message_end` assistant events for
+`final_output`. Use `AGENT_ARGS_TEMPLATE` if you want persistent Pi sessions, a specific
+model/provider, write-capable tools, different tool narrowing, or explicit Pi resources
+like `--skill` or `--extension`.
 
 Custom CLI example:
 
