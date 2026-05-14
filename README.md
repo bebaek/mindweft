@@ -361,6 +361,19 @@ The script reads these environment variables:
 - `PLATFORMS` (default `linux/amd64`): comma-separated buildx target platforms
 - `REGISTRY` (default `ghcr.io`): registry hostname
 
+For the Pi peer-agent wrapper image, use the matching helper script:
+
+```bash
+IMAGE_NAMESPACE=<github-user-or-org> \
+IMAGE_TAG=latest \
+./scripts/docker-build-push-pi-peer-agent.sh
+```
+
+It builds `local-agent-wrapper/Dockerfile` with Pi enabled and pushes
+`ghcr.io/<namespace>/minigent-local-agent-wrapper:<tag>` by default. It supports the same
+`REGISTRY`, `IMAGE_NAMESPACE`, `IMAGE_NAME`, `IMAGE_TAG`, and `PLATFORMS` variables, plus
+`INSTALL_PI` (default `true`) and `INSTALL_CODEX` (default `false`) build-arg overrides.
+
 For remote deployments, set `MINIGENT_IMAGE` in the deployment env file to the published
 tag you want to run, then use `docker compose pull` followed by `docker compose up -d`.
 

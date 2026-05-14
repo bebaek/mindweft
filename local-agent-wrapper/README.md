@@ -18,6 +18,14 @@ Build the default Pi-capable image:
 docker build -t minigent-local-agent-wrapper:latest .
 ```
 
+From the repository root, build and push the Pi-capable image to GHCR with:
+
+```bash
+IMAGE_NAMESPACE=<github-user-or-org> \
+IMAGE_TAG=latest \
+./scripts/docker-build-push-pi-peer-agent.sh
+```
+
 The image installs the `opencode-ai` and Pi Coding Agent npm packages and runs the wrapper as a non-root
 `agent` user. To also include the optional Codex CLI in the same image, build with:
 
