@@ -32,11 +32,13 @@
 
 html,
 body {
-  min-height: 100%;
+  height: 100%;
 }
 
 body {
+  height: var(--app-height, 100dvh);
   margin: 0;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
 }
@@ -67,11 +69,13 @@ button:disabled {
 
 .shell {
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   width: min(100%, 860px);
-  min-height: 100svh;
+  height: calc(var(--app-height, 100dvh) - var(--keyboard-lift, 0px));
+  min-height: 0;
   margin: 0 auto;
-  padding: 12px;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   gap: 10px;
 }
 
@@ -144,6 +148,8 @@ textarea:focus {
 
 .messages {
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -203,12 +209,14 @@ textarea:focus {
   grid-template-columns: 1fr auto;
   align-items: end;
   gap: 8px;
+  padding-top: 8px;
   padding-bottom: max(0px, env(safe-area-inset-bottom));
+  background: var(--bg);
 }
 
 textarea {
   min-height: 42px;
-  max-height: 36svh;
+  max-height: min(36svh, 180px);
   resize: none;
 }
 
@@ -236,9 +244,17 @@ textarea {
     align-items: flex-start;
   }
 
-  .grid,
-  .composer {
+  .grid {
     grid-template-columns: 1fr;
+  }
+
+  .topbar h1 {
+    font-size: 1.1rem;
+  }
+
+  .actions button {
+    min-height: 38px;
+    padding: 0 10px;
   }
 
   .message {

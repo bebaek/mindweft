@@ -58,8 +58,9 @@ from peer agent JSON events. The existing
 
 The API also serves a small static browser client at `/web` for quick manual testing from
 desktop and mobile browsers. It uses the NDJSON run stream to display live run/tool/peer
-progress before appending the final assistant reply. It has no frontend build step or extra
-dependencies.
+progress before appending the final assistant reply. The client adjusts to mobile visual
+viewport changes so the composer remains usable when the screen keyboard is open. It has
+no frontend build step or extra dependencies.
 
 For same-machine testing, start the API and open:
 

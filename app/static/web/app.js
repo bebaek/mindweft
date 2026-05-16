@@ -29,6 +29,7 @@ const elements = {
   sendButton: document.querySelector("#send-button"),
 };
 
+syncViewportHeight();
 hydrateForm();
 renderMessages([]);
 setStatus(state.threadId ? `Thread ${state.threadId}` : "Ready");
@@ -64,8 +65,23 @@ elements.messageInput.addEventListener("input", () => {
   elements.messageInput.style.height = `${elements.messageInput.scrollHeight}px`;
 });
 
+window.visualViewport?.addEventListener("resize", syncViewportHeight);
+window.visualViewport?.addEventListener("scroll", syncViewportHeight);
+window.addEventListener("resize", syncViewportHeight);
+
+elements.messageInput.addEventListener("focus", () => {
+  syncViewportHeight();
+  scrollMessagesToBottom();
+});
+
+elements.messageInput.addEventListener("blur", () => {
+  // Let taps on Send complete before dropping the mobile keyboard clearance;
+  // otherwise the button can move under the finger and cancel the click.
+  window.setTimeout(syncViewportHeight, 300);
+});
+
 elements.messageInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+  if (event.key === "Enter" && shouldSubmitOnEnter(event)) {
     event.preventDefault();
     elements.composer.requestSubmit();
   }
@@ -323,7 +339,7 @@ function appendMessage(message) {
   content.textContent = message.content || "";
   item.append(role, content);
   elements.messages.append(item);
-  elements.messages.scrollTop = elements.messages.scrollHeight;
+  scrollMessagesToBottom();
 }
 
 function appendNotice(content) {
@@ -346,7 +362,7 @@ function appendInlineMessage(kind, content) {
   item.className = `message ${kind}`;
   item.textContent = content;
   elements.messages.append(item);
-  elements.messages.scrollTop = elements.messages.scrollHeight;
+  scrollMessagesToBottom();
   return item;
 }
 
@@ -421,6 +437,35 @@ function formatPeerTaskEvent(peerEvent) {
     return `Peer tool ${action}${toolName ? `: ${toolName}` : ""}`;
   }
   return `Peer event: ${peerEventType}`;
+}
+
+function syncViewportHeight() {
+  const viewport = window.visualViewport;
+  const height = viewport?.height || window.innerHeight;
+  const inputFocused = document.activeElement === elements.messageInput;
+  const mobileLike = window.matchMedia("(pointer: coarse), (max-width: 640px)").matches;
+
+  // Some mobile keyboards expose predictive text / shortcut bars that still overlap
+  // the visual viewport. Reserve extra layout height whenever the input is focused
+  // so the composer sits above those bars without floating over the chat.
+  const keyboardLift = inputFocused && mobileLike ? 40 : 0;
+
+  document.documentElement.style.setProperty("--app-height", `${height}px`);
+  document.documentElement.style.setProperty("--keyboard-lift", `${keyboardLift}px`);
+  scrollMessagesToBottom();
+}
+
+function scrollMessagesToBottom() {
+  requestAnimationFrame(() => {
+    elements.messages.scrollTop = elements.messages.scrollHeight;
+  });
+}
+
+function shouldSubmitOnEnter(event) {
+  if (event.shiftKey || event.isComposing) {
+    return false;
+  }
+  return !window.matchMedia("(pointer: coarse), (max-width: 640px)").matches;
 }
 
 function setBusy(isBusy) {
