@@ -51,7 +51,9 @@ progress without waiting for the final JSON response. It returns newline-delimit
 with `Content-Type: application/x-ndjson`. The stream emits `run.started`, native runtime
 progress such as `llm.request`, `tool.call`, and `tool.result`, peer-backend progress such
 as `peer.task.created`/`peer.task.poll`/`peer.task.event`/`peer.task.completed`, then either
-`assistant.message` and `run.completed`, or `run.error`. The existing
+`assistant.message` and `run.completed`, or `run.error`. Peer task events are sanitized before
+streaming: Minigent forwards event type/status/tool metadata but strips nested message content
+from peer agent JSON events. The existing
 `POST /threads/{thread_id}/run` endpoint remains unchanged.
 
 The API also serves a small static browser client at `/web` for quick manual testing from

@@ -304,7 +304,7 @@ class AgentBackendRouter(AgentBackend):
                     "type": "peer.task.event",
                     "peer": peer,
                     "task_id": task_id,
-                    "event": event,
+                    "event": _sanitize_peer_task_event(event),
                 },
             )
         if isinstance(next_index, int) and next_index > 0:
@@ -324,6 +324,37 @@ class AgentBackendRouter(AgentBackend):
             await self._peer_agent_registry.cancel_task(peer, task_id)
         except HTTPException:
             return
+
+
+def _sanitize_peer_task_event(event: dict[object, object]) -> dict[str, object]:
+    sanitized: dict[str, object] = {}
+    index = event.get("index")
+    if isinstance(index, int):
+        sanitized["index"] = index
+    event_type = event.get("type") or event.get("event")
+    if isinstance(event_type, str) and event_type:
+        sanitized["type"] = event_type
+    status = event.get("status")
+    if isinstance(status, str) and status:
+        sanitized["status"] = status
+    tool_name = _peer_event_tool_name(event)
+    if tool_name:
+        sanitized["tool_name"] = tool_name
+    return sanitized or {"type": "event"}
+
+
+def _peer_event_tool_name(event: dict[object, object]) -> str:
+    for key in ("tool_name", "name", "tool"):
+        value = event.get(key)
+        if isinstance(value, str) and value:
+            return value
+    tool_call = event.get("tool_call")
+    if isinstance(tool_call, dict):
+        for key in ("name", "tool_name"):
+            value = tool_call.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return ""
 
 
 async def _emit_run_event(

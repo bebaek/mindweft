@@ -409,7 +409,13 @@ def test_run_stream_endpoint_emits_peer_task_events() -> None:
                     json={
                         "task_id": "task_123",
                         "next_index": 2,
-                        "events": [{"index": 1, "type": "message", "message": {"role": "assistant"}}],
+                        "events": [
+                            {
+                                "index": 1,
+                                "type": "message",
+                                "message": {"role": "assistant", "content": "sensitive draft"},
+                            }
+                        ],
                     },
                 )
             return httpx.Response(
@@ -463,7 +469,9 @@ def test_run_stream_endpoint_emits_peer_task_events() -> None:
     ]
     assert events[2]["peer"] == "pi"
     assert events[2]["event"] == {"index": 0, "type": "session_start"}
-    assert events[4]["event"] == {"index": 1, "type": "message", "message": {"role": "assistant"}}
+    assert events[4]["event"] == {"index": 1, "type": "message"}
+    assert "message" not in events[4]["event"]
+    assert "sensitive draft" not in "\n".join(json.dumps(event) for event in events)
     assert events[6]["content"] == "Pi result"
 
 
