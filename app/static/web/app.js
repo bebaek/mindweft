@@ -180,6 +180,7 @@ async function streamRun(threadId) {
   let assistantMessage = null;
   let runFailed = false;
   const peerTaskStatuses = new Map();
+  const seenProgressLabels = new Set();
   await requestNdjson(`/threads/${encodeURIComponent(threadId)}/run/stream`, {
     method: "POST",
     onEvent(event) {
@@ -194,7 +195,8 @@ async function streamRun(threadId) {
         return;
       }
       const label = formatRunEvent(event, peerTaskStatuses);
-      if (label) {
+      if (label && !seenProgressLabels.has(label)) {
+        seenProgressLabels.add(label);
         appendProgress(label);
         setStatus(label);
       }
@@ -366,6 +368,10 @@ function formatRunEvent(event, peerTaskStatuses = new Map()) {
     return `Peer task created: ${event.peer || "peer"} ${event.status || ""}`.trim();
   }
   if (event.type === "peer.task.poll") {
+    if (event.status === "completed") {
+      rememberPeerTaskStatus(event, peerTaskStatuses);
+      return "";
+    }
     if (!rememberPeerTaskStatus(event, peerTaskStatuses)) {
       return "";
     }
@@ -379,7 +385,7 @@ function formatRunEvent(event, peerTaskStatuses = new Map()) {
     return formatPeerTaskEvent(event.event || {});
   }
   if (event.type === "run.completed") {
-    return "Run completed";
+    return "";
   }
   return "";
 }
