@@ -1503,6 +1503,128 @@ def test_minigent_client_can_log_full_prompt_for_diagnostics(
     )
 
 
+def test_minigent_client_can_run_thread_with_ndjson_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict[str, object]] = []
+
+    class FakeStreamResponse:
+        def __iter__(self):
+            lines = [
+                {"type": "run.started"},
+                {"type": "tool.call", "name": "echo"},
+                {"type": "tool.result", "name": "echo", "is_error": False},
+                {"type": "peer.task.created", "peer": "pi", "task_id": "task-1", "status": "queued"},
+                {"type": "peer.task.poll", "peer": "pi", "task_id": "task-1", "status": "running"},
+                {"type": "peer.task.poll", "peer": "pi", "task_id": "task-1", "status": "running"},
+                {"type": "peer.task.event", "task_id": "task-1", "event": {"type": "message_update"}},
+                {"type": "peer.task.event", "task_id": "task-1", "event": {"type": "message_update"}},
+                {
+                    "type": "peer.task.event",
+                    "task_id": "task-1",
+                    "event": {"type": "tool_execution_start", "tool_name": "read"},
+                },
+                {"type": "assistant.message", "content": "streamed reply"},
+                {"type": "run.completed"},
+            ]
+            return iter((json.dumps(line) + "\n").encode("utf-8") for line in lines)
+
+        def __enter__(self) -> "FakeStreamResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    def fake_urlopen(request: object) -> FakeStreamResponse:
+        requests.append(
+            {
+                "method": request.get_method(),
+                "url": request.full_url,
+                "headers": dict(request.header_items()),
+            }
+        )
+        return FakeStreamResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    output_stream = StringIO()
+    progress_stream = StringIO()
+    client = MinigentAPIClient(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            thread_id="thread-123",
+            stream_runs=True,
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        ),
+        output_stream=output_stream,
+        progress_stream=progress_stream,
+    )
+
+    reply = client.run_thread()
+
+    assert reply == "streamed reply"
+    assert requests == [
+        {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/threads/thread-123/run/stream",
+            "headers": {
+                "Accept": "application/x-ndjson",
+                "X-minigent-user-id": "user-1",
+                "X-minigent-tenant-id": "tenant-1",
+                "X-minigent-admin": "false",
+            },
+        }
+    ]
+    assert output_stream.getvalue() == ""
+    assert progress_stream.getvalue() == (
+        "[run] started\n"
+        "[tool] call echo\n"
+        "[tool] result echo ok\n"
+        "[peer] task created peer=pi task_id=task-1 status=queued\n"
+        "[peer] task status peer=pi task_id=task-1 status=running\n"
+        "[peer] message updating...\n"
+        "[peer] tool start read\n"
+        "[run] completed\n"
+    )
+
+
+def test_minigent_client_stream_run_errors_raise_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeStreamResponse:
+        def __iter__(self):
+            event = {"type": "run.error", "status_code": 502, "detail": "upstream"}
+            return iter([(json.dumps(event) + "\n").encode("utf-8")])
+
+        def __enter__(self) -> "FakeStreamResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request: FakeStreamResponse())
+    client = MinigentAPIClient(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            thread_id="thread-123",
+            stream_runs=True,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="502 upstream"):
+        client.run_thread()
+
+
+def test_build_config_prefers_cli_stream_run_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_CLIENT_STREAM_RUNS", "false")
+
+    args = build_parser().parse_args(["--stream-runs"])
+    config = build_config(args)
+
+    assert config.stream_runs is True
+
+
 def test_build_config_prefers_cli_ducking_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIGENT_VOICE_DUCKING_MODE", "off")
     monkeypatch.setenv("MINIGENT_VOICE_DUCKED_OUTPUT_VOLUME", "20")

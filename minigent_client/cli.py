@@ -71,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Text wake phrase for the stdin backend. Passive-audio uses the configured wake-word provider/model instead.",
     )
     parser.add_argument(
+        "--stream-runs",
+        action="store_true",
+        help="Use Minigent's NDJSON run stream endpoint and print run/tool/peer progress.",
+    )
+    parser.add_argument(
         "--wake-acknowledgement",
         default=None,
         help="Optional cue to emit after activation before recording. Use `bell` for a terminal bell or plain text for a spoken acknowledgement.",
@@ -235,6 +240,7 @@ def build_config(args: argparse.Namespace) -> ClientConfig:
         prompt_preamble=env_config.prompt_preamble,
         location=env_config.location,
         debug_show_prompt=env_config.debug_show_prompt,
+        stream_runs=args.stream_runs or env_config.stream_runs,
         wake_acknowledgement=args.wake_acknowledgement or env_config.wake_acknowledgement,
         wake_acknowledgement_sound=env_config.wake_acknowledgement_sound,
         capture_ended_acknowledgement=(

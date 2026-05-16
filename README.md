@@ -523,6 +523,10 @@ For a plain terminal chat loop with no wake word, microphone, or spoken output, 
 minigent-client --backend chat
 ```
 
+Add `--stream-runs`, or set `MINIGENT_CLIENT_STREAM_RUNS=true`, to have `minigent-client`
+use `POST /threads/{thread_id}/run/stream` and print live run/tool/peer progress to stderr
+before printing or speaking the final assistant reply.
+
 When `chat` runs on an interactive TTY, it uses `prompt_toolkit` for shell-style editing,
 persistent local input history, and multiline input. Press `Enter` to submit a message, or
 use `Esc+Enter` to insert a newline before submitting. The history file is stored at
@@ -824,6 +828,7 @@ Daemon-related env vars:
 - `MINIGENT_VOICE_PROMPT_PREAMBLE`
 - `MINIGENT_VOICE_LOCATION`
 - `MINIGENT_VOICE_DEBUG_SHOW_PROMPT`
+- `MINIGENT_CLIENT_STREAM_RUNS`
 - `MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT`
 - `MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND`
 - `MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT`
