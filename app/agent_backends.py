@@ -147,6 +147,12 @@ class AgentBackendRouter(AgentBackend):
                     status_code=502,
                     detail="peer_agent backend returned task response without task_id",
                 )
+            last_peer_event_index = await self._emit_peer_task_events(
+                event_sink,
+                peer=peer,
+                task_id=task_id,
+                after=None,
+            )
             deadline = time.monotonic() + timeout_seconds
             while str(task.get("status", "")) not in _TERMINAL_PEER_STATUSES:
                 if time.monotonic() >= deadline:
@@ -166,6 +172,18 @@ class AgentBackendRouter(AgentBackend):
                         "status": str(task.get("status", "")),
                     },
                 )
+                last_peer_event_index = await self._emit_peer_task_events(
+                    event_sink,
+                    peer=peer,
+                    task_id=task_id,
+                    after=last_peer_event_index,
+                )
+            last_peer_event_index = await self._emit_peer_task_events(
+                event_sink,
+                peer=peer,
+                task_id=task_id,
+                after=last_peer_event_index,
+            )
             reply = self._reply_from_task(task)
             await _emit_run_event(
                 event_sink,
@@ -258,6 +276,40 @@ class AgentBackendRouter(AgentBackend):
             "Return only the final response text. If files were changed, summarize changed paths and verification."
         )
         return "\n\n".join(sections)
+
+    async def _emit_peer_task_events(
+        self,
+        event_sink: RunEventSink | None,
+        *,
+        peer: str,
+        task_id: str,
+        after: int | None,
+    ) -> int | None:
+        if event_sink is None:
+            return after
+        try:
+            response = await self._peer_agent_registry.task_events(peer, task_id, after=after)
+        except HTTPException:
+            return after
+        events = response.get("events")
+        if not isinstance(events, list):
+            return after
+        next_index = response.get("next_index")
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            await _emit_run_event(
+                event_sink,
+                {
+                    "type": "peer.task.event",
+                    "peer": peer,
+                    "task_id": task_id,
+                    "event": event,
+                },
+            )
+        if isinstance(next_index, int) and next_index > 0:
+            return next_index - 1
+        return after
 
     def _reply_from_task(self, task: dict[str, object]) -> str:
         status = str(task.get("status", ""))

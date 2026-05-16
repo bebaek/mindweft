@@ -179,6 +179,7 @@ async function ensureThread() {
 async function streamRun(threadId) {
   let assistantMessage = null;
   let runFailed = false;
+  const peerTaskStatuses = new Map();
   await requestNdjson(`/threads/${encodeURIComponent(threadId)}/run/stream`, {
     method: "POST",
     onEvent(event) {
@@ -192,7 +193,7 @@ async function streamRun(threadId) {
         setStatus(event.detail || "Run failed", true);
         return;
       }
-      const label = formatRunEvent(event);
+      const label = formatRunEvent(event, peerTaskStatuses);
       if (label) {
         appendProgress(label);
         setStatus(label);
@@ -347,7 +348,7 @@ function appendInlineMessage(kind, content) {
   return item;
 }
 
-function formatRunEvent(event) {
+function formatRunEvent(event, peerTaskStatuses = new Map()) {
   if (event.type === "run.started") {
     return "Run started";
   }
@@ -361,18 +362,59 @@ function formatRunEvent(event) {
     return `Tool result: ${event.name || "unknown"} ${event.is_error ? "error" : "ok"}`;
   }
   if (event.type === "peer.task.created") {
+    rememberPeerTaskStatus(event, peerTaskStatuses);
     return `Peer task created: ${event.peer || "peer"} ${event.status || ""}`.trim();
   }
   if (event.type === "peer.task.poll") {
+    if (!rememberPeerTaskStatus(event, peerTaskStatuses)) {
+      return "";
+    }
     return `Peer task: ${event.peer || "peer"} ${event.status || ""}`.trim();
   }
   if (event.type === "peer.task.completed") {
+    rememberPeerTaskStatus(event, peerTaskStatuses);
     return `Peer task completed: ${event.peer || "peer"} ${event.status || ""}`.trim();
+  }
+  if (event.type === "peer.task.event") {
+    return formatPeerTaskEvent(event.event || {});
   }
   if (event.type === "run.completed") {
     return "Run completed";
   }
   return "";
+}
+
+function rememberPeerTaskStatus(event, peerTaskStatuses) {
+  const taskId = event.task_id || "";
+  const status = event.status || "";
+  if (!taskId || !status) {
+    return true;
+  }
+  const previousStatus = peerTaskStatuses.get(taskId);
+  peerTaskStatuses.set(taskId, status);
+  return previousStatus !== status;
+}
+
+function formatPeerTaskEvent(peerEvent) {
+  const peerEventType = peerEvent.type || peerEvent.event || "event";
+  if (peerEventType === "message_update") {
+    return "";
+  }
+  if (["message_start", "message_end", "turn_start", "turn_end", "session"].includes(peerEventType)) {
+    return "";
+  }
+  if (peerEventType === "agent_start") {
+    return "Peer agent started";
+  }
+  if (peerEventType === "agent_end") {
+    return "Peer agent finished";
+  }
+  if (peerEventType === "tool_execution_start" || peerEventType === "tool_execution_end") {
+    const action = peerEventType.endsWith("start") ? "start" : "end";
+    const toolName = peerEvent.tool_name || peerEvent.name || peerEvent.tool || peerEvent.tool_call?.name;
+    return `Peer tool ${action}${toolName ? `: ${toolName}` : ""}`;
+  }
+  return `Peer event: ${peerEventType}`;
 }
 
 function setBusy(isBusy) {

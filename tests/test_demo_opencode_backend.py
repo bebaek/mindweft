@@ -46,10 +46,7 @@ def test_demo_opencode_backend_drives_run_endpoint(monkeypatch, capsys) -> None:
         if method == "POST" and url == "http://minigent.test/threads/thread_123/run":
             return {"reply": "OpenCode summary"}
         if method == "GET" and url == "http://minigent.test/threads/thread_123/messages":
-            return [
-                {"role": "user", "content": "summarize"},
-                {"role": "assistant", "content": "OpenCode summary"},
-            ]
+            raise AssertionError("Transcript should not be fetched unless --show-content is set")
         raise AssertionError(f"Unexpected request: {method} {url}")
 
     monkeypatch.setattr(demo, "request_json", fake_request_json)
@@ -76,7 +73,8 @@ def test_demo_opencode_backend_drives_run_endpoint(monkeypatch, capsys) -> None:
     )
     output = capsys.readouterr().out
     assert "agent_backend: {'type': 'peer_agent'" in output
-    assert "assistant: OpenCode summary" in output
+    assert "assistant: <redacted length=16>" in output
+    assert "OpenCode summary" not in output
 
 
 def test_demo_opencode_backend_reports_native_backend(monkeypatch, capsys) -> None:

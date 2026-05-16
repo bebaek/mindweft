@@ -50,7 +50,7 @@ uv run uvicorn app.main:app --reload
 progress without waiting for the final JSON response. It returns newline-delimited JSON
 with `Content-Type: application/x-ndjson`. The stream emits `run.started`, native runtime
 progress such as `llm.request`, `tool.call`, and `tool.result`, peer-backend progress such
-as `peer.task.created`/`peer.task.poll`/`peer.task.completed`, then either
+as `peer.task.created`/`peer.task.poll`/`peer.task.event`/`peer.task.completed`, then either
 `assistant.message` and `run.completed`, or `run.error`. The existing
 `POST /threads/{thread_id}/run` endpoint remains unchanged.
 

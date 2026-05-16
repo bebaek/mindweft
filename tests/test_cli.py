@@ -95,3 +95,71 @@ def test_chat_stream_text_prints_progress_to_stderr(
     assert "[tool] call echo" in captured.err
     assert "[tool] result echo ok" in captured.err
     assert "[run] completed" in captured.err
+
+
+def test_chat_stream_text_coalesces_peer_message_updates(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    stream_events = [
+        {"type": "run.started", "thread_id": "thread-1"},
+        {"type": "peer.task.event", "thread_id": "thread-1", "task_id": "task-1", "event": {"type": "agent_start"}},
+        {"type": "peer.task.event", "thread_id": "thread-1", "task_id": "task-1", "event": {"type": "message_update"}},
+        {"type": "peer.task.event", "thread_id": "thread-1", "task_id": "task-1", "event": {"type": "message_update"}},
+        {"type": "peer.task.event", "thread_id": "thread-1", "task_id": "task-1", "event": {"type": "tool_execution_start", "name": "read"}},
+        {"type": "assistant.message", "thread_id": "thread-1", "content": "done"},
+        {"type": "run.completed", "thread_id": "thread-1"},
+    ]
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run/stream"):
+            return _Response(lines=stream_events)
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    assert cli.main(["chat", "--stream", "hello"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == "done\n"
+    assert "[peer] agent started" in captured.err
+    assert captured.err.count("[peer] message updating...") == 1
+    assert "[peer] tool start read" in captured.err
+
+
+def test_chat_stream_text_coalesces_repeated_peer_poll_statuses(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    stream_events = [
+        {"type": "run.started", "thread_id": "thread-1"},
+        {"type": "peer.task.created", "thread_id": "thread-1", "peer": "pi", "task_id": "task-1", "status": "pending"},
+        {"type": "peer.task.poll", "thread_id": "thread-1", "peer": "pi", "task_id": "task-1", "status": "running"},
+        {"type": "peer.task.poll", "thread_id": "thread-1", "peer": "pi", "task_id": "task-1", "status": "running"},
+        {"type": "peer.task.poll", "thread_id": "thread-1", "peer": "pi", "task_id": "task-1", "status": "completed"},
+        {"type": "peer.task.completed", "thread_id": "thread-1", "peer": "pi", "task_id": "task-1", "status": "completed"},
+        {"type": "assistant.message", "thread_id": "thread-1", "content": "done"},
+        {"type": "run.completed", "thread_id": "thread-1"},
+    ]
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run/stream"):
+            return _Response(lines=stream_events)
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    assert cli.main(["chat", "--stream", "hello"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == "done\n"
+    assert captured.err.count("status=running") == 1
+    assert captured.err.count("status=completed") == 2

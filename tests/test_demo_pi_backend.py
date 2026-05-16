@@ -46,10 +46,7 @@ def test_demo_pi_backend_drives_run_endpoint(monkeypatch, capsys) -> None:
         if method == "POST" and url == "http://minigent.test/threads/thread_123/run":
             return {"reply": "Pi summary"}
         if method == "GET" and url == "http://minigent.test/threads/thread_123/messages":
-            return [
-                {"role": "user", "content": "summarize"},
-                {"role": "assistant", "content": "Pi summary"},
-            ]
+            raise AssertionError("Transcript should not be fetched unless --show-content is set")
         raise AssertionError(f"Unexpected request: {method} {url}")
 
     monkeypatch.setattr(demo, "request_json", fake_request_json)
@@ -76,7 +73,44 @@ def test_demo_pi_backend_drives_run_endpoint(monkeypatch, capsys) -> None:
     )
     output = capsys.readouterr().out
     assert "agent_backend: {'type': 'peer_agent'" in output
+    assert "assistant: <redacted length=10>" in output
+    assert "Pi summary" not in output
+
+
+def test_demo_pi_backend_show_content_prints_transcript(monkeypatch, capsys) -> None:
+    demo = load_demo_module()
+
+    def fake_request_json(
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 10.0,
+    ) -> Any:
+        del payload, headers, timeout
+        if method == "GET" and url == "http://minigent.test/config":
+            return {"agent_backend": {"type": "peer_agent", "peer": "pi", "timeout_seconds": 180.0}}
+        if method == "POST" and url == "http://minigent.test/threads":
+            return {"thread_id": "thread_123"}
+        if method == "POST" and url.endswith("/messages"):
+            return {"id": "message_123"}
+        if method == "POST" and url.endswith("/run"):
+            return {"reply": "Pi summary"}
+        if method == "GET" and url.endswith("/messages"):
+            return [
+                {"role": "user", "content": "summarize"},
+                {"role": "assistant", "content": "Pi summary"},
+            ]
+        raise AssertionError(f"Unexpected request: {method} {url}")
+
+    monkeypatch.setattr(demo, "request_json", fake_request_json)
+
+    exit_code = demo.main(["--base-url", "http://minigent.test", "--show-content"])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
     assert "assistant: Pi summary" in output
+    assert "- user: summarize" in output
 
 
 def test_demo_pi_backend_reports_native_backend(monkeypatch, capsys) -> None:

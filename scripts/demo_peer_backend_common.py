@@ -41,6 +41,11 @@ def parse_args(
         default=None,
         help="Fail unless the assistant reply contains this text.",
     )
+    parser.add_argument(
+        "--show-content",
+        action="store_true",
+        help="Print user/assistant message content and transcript. Off by default to avoid leaking prompts or replies into logs.",
+    )
     return parser.parse_args(argv)
 
 
@@ -100,12 +105,16 @@ def run_peer_backend_demo(
             headers,
             float(backend.get("timeout_seconds") or 180.0) + 30.0,
         )
-        transcript = request_json_func(
-            "GET",
-            f"{base_url}/threads/{thread_id}/messages",
-            None,
-            headers,
-            10.0,
+        transcript = (
+            request_json_func(
+                "GET",
+                f"{base_url}/threads/{thread_id}/messages",
+                None,
+                headers,
+                10.0,
+            )
+            if args.show_content
+            else []
         )
     except urllib.error.HTTPError as exc:
         print_http_error(exc)
@@ -114,18 +123,26 @@ def run_peer_backend_demo(
         print("Minigent run timed out", file=sys.stderr)
         return 2
 
+    reply = str(run_response["reply"])
     print(f"thread_id: {thread_id}")
-    print(f"user: {args.message}")
-    print(f"assistant: {run_response['reply']}")
-    if args.expect_reply_contains and args.expect_reply_contains not in str(run_response["reply"]):
+    if args.show_content:
+        print(f"user: {args.message}")
+        print(f"assistant: {reply}")
+    else:
+        print(f"user: <redacted length={len(args.message)}>")
+        print(f"assistant: <redacted length={len(reply)}>")
+    if args.expect_reply_contains and args.expect_reply_contains not in reply:
         print(
             f"Assistant reply did not contain expected text: {args.expect_reply_contains}",
             file=sys.stderr,
         )
         return 2
-    print("\ntranscript:")
-    for item in transcript:
-        print(f"- {item['role']}: {item['content']}")
+    if args.show_content:
+        print("\ntranscript:")
+        for item in transcript:
+            print(f"- {item['role']}: {item['content']}")
+    else:
+        print("transcript: <redacted; pass --show-content to print>")
     return 0
 
 

@@ -379,6 +379,94 @@ def test_run_stream_endpoint_emits_tool_events() -> None:
     assert events[5]["content"] == 'Tool result: {"echo": "hello from stream"}'
 
 
+def test_run_stream_endpoint_emits_peer_task_events() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/tasks":
+            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": "task_123",
+                    "status": "completed",
+                    "final_output": "Pi result",
+                },
+            )
+        if request.method == "GET" and request.url.path == "/tasks/task_123/events":
+            after = request.url.params.get("after")
+            if after is None:
+                return httpx.Response(
+                    200,
+                    json={
+                        "task_id": "task_123",
+                        "next_index": 1,
+                        "events": [{"index": 0, "type": "session_start"}],
+                    },
+                )
+            if after == "0":
+                return httpx.Response(
+                    200,
+                    json={
+                        "task_id": "task_123",
+                        "next_index": 2,
+                        "events": [{"index": 1, "type": "message", "message": {"role": "assistant"}}],
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={"task_id": "task_123", "next_index": 2, "events": []},
+            )
+        return httpx.Response(404, json={"detail": "missing"})
+
+    config = parse_tenant_execution_config(
+        "tenant-1",
+        {
+            "agent_backend": {
+                "type": "peer_agent",
+                "peer": "pi",
+                "cwd": "/workspace/project",
+                "poll_interval_seconds": 0.001,
+                "mcp_broker_enabled": False,
+            }
+        },
+    )
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "pi", "base_url": "http://pi-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    client = TestClient(
+        create_app(
+            execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
+            peer_agent_registry=registry,
+        )
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "please inspect the repo"},
+        headers=AUTH_HEADERS,
+    )
+
+    with client.stream("POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS) as response:
+        assert response.status_code == 200
+        events = [json.loads(line) for line in response.iter_lines() if line]
+
+    assert [event["type"] for event in events] == [
+        "run.started",
+        "peer.task.created",
+        "peer.task.event",
+        "peer.task.poll",
+        "peer.task.event",
+        "peer.task.completed",
+        "assistant.message",
+        "run.completed",
+    ]
+    assert events[2]["peer"] == "pi"
+    assert events[2]["event"] == {"index": 0, "type": "session_start"}
+    assert events[4]["event"] == {"index": 1, "type": "message", "message": {"role": "assistant"}}
+    assert events[6]["content"] == "Pi result"
+
+
 def test_run_stream_endpoint_emits_error_event() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())

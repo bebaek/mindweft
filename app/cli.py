@@ -293,7 +293,26 @@ def print_json(data: object) -> None:
     print(json.dumps(data, indent=2, sort_keys=True))
 
 
-def _print_stream_progress(event: dict[str, Any]) -> None:
+def _make_stream_progress_printer() -> Any:
+    seen_peer_update_tasks: set[str] = set()
+    peer_task_statuses: dict[str, str] = {}
+
+    def print_progress(event: dict[str, Any]) -> None:
+        _print_stream_progress(
+            event,
+            seen_peer_update_tasks=seen_peer_update_tasks,
+            peer_task_statuses=peer_task_statuses,
+        )
+
+    return print_progress
+
+
+def _print_stream_progress(
+    event: dict[str, Any],
+    *,
+    seen_peer_update_tasks: set[str] | None = None,
+    peer_task_statuses: dict[str, str] | None = None,
+) -> None:
     event_type = event.get("type")
     if event_type == "run.started":
         print("[run] started", file=sys.stderr)
@@ -305,24 +324,85 @@ def _print_stream_progress(event: dict[str, Any]) -> None:
         status = "error" if event.get("is_error") else "ok"
         print(f"[tool] result {event.get('name')} {status}", file=sys.stderr)
     elif event_type == "peer.task.created":
-        print(
-            f"[peer] task created peer={event.get('peer')} task_id={event.get('task_id')} status={event.get('status')}",
-            file=sys.stderr,
-        )
+        _print_peer_task_status(event, label="created", peer_task_statuses=peer_task_statuses)
     elif event_type == "peer.task.poll":
-        print(
-            f"[peer] task poll peer={event.get('peer')} task_id={event.get('task_id')} status={event.get('status')}",
-            file=sys.stderr,
-        )
+        _print_peer_task_status(event, label="status", peer_task_statuses=peer_task_statuses)
     elif event_type == "peer.task.completed":
-        print(
-            f"[peer] task completed peer={event.get('peer')} task_id={event.get('task_id')} status={event.get('status')}",
-            file=sys.stderr,
-        )
+        _print_peer_task_status(event, label="completed", peer_task_statuses=peer_task_statuses)
+    elif event_type == "peer.task.event":
+        _print_peer_task_event(event, seen_peer_update_tasks=seen_peer_update_tasks)
     elif event_type == "run.error":
         print(f"[run] error {event.get('status_code')}: {event.get('detail')}", file=sys.stderr)
     elif event_type == "run.completed":
         print("[run] completed", file=sys.stderr)
+
+
+def _print_peer_task_status(
+    event: dict[str, Any],
+    *,
+    label: str,
+    peer_task_statuses: dict[str, str] | None,
+) -> None:
+    peer = event.get("peer")
+    task_id = str(event.get("task_id") or "")
+    status = str(event.get("status") or "")
+    if label == "status":
+        previous_status = peer_task_statuses.get(task_id) if peer_task_statuses is not None else None
+        if previous_status == status:
+            return
+    if peer_task_statuses is not None and task_id and status:
+        peer_task_statuses[task_id] = status
+    task_part = f" task_id={task_id}" if task_id else ""
+    print(f"[peer] task {label} peer={peer}{task_part} status={status}", file=sys.stderr)
+
+
+def _print_peer_task_event(
+    event: dict[str, Any],
+    *,
+    seen_peer_update_tasks: set[str] | None,
+) -> None:
+    peer_event = event.get("event")
+    if not isinstance(peer_event, dict):
+        print("[peer] event", file=sys.stderr)
+        return
+    peer_event_type = str(peer_event.get("type") or peer_event.get("event") or "event")
+    if peer_event_type == "message_update":
+        task_id = str(event.get("task_id") or "")
+        if seen_peer_update_tasks is not None and task_id in seen_peer_update_tasks:
+            return
+        if seen_peer_update_tasks is not None and task_id:
+            seen_peer_update_tasks.add(task_id)
+        print("[peer] message updating...", file=sys.stderr)
+        return
+    if peer_event_type in {"message_start", "message_end", "turn_start", "turn_end", "session"}:
+        return
+    if peer_event_type == "agent_start":
+        print("[peer] agent started", file=sys.stderr)
+        return
+    if peer_event_type == "agent_end":
+        print("[peer] agent finished", file=sys.stderr)
+        return
+    if peer_event_type in {"tool_execution_start", "tool_execution_end"}:
+        tool_name = _peer_event_tool_name(peer_event)
+        action = "start" if peer_event_type.endswith("start") else "end"
+        suffix = f" {tool_name}" if tool_name else ""
+        print(f"[peer] tool {action}{suffix}", file=sys.stderr)
+        return
+    print(f"[peer] event {peer_event_type}", file=sys.stderr)
+
+
+def _peer_event_tool_name(peer_event: dict[str, Any]) -> str:
+    for key in ("tool_name", "name", "tool"):
+        value = peer_event.get(key)
+        if isinstance(value, str) and value:
+            return value
+    tool_call = peer_event.get("tool_call")
+    if isinstance(tool_call, dict):
+        for key in ("name", "tool_name"):
+            value = tool_call.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return ""
 
 
 def _reply_from_run_stream(events: list[dict[str, Any]]) -> str:
@@ -351,7 +431,7 @@ def run_chat(args: argparse.Namespace, base_url: str, headers: dict[str, str], t
             "POST",
             f"{base_url}/threads/{thread_id}/run/stream",
             headers=headers,
-            on_event=None if args.json else _print_stream_progress,
+            on_event=None if args.json else _make_stream_progress_printer(),
         )
         reply = _reply_from_run_stream(events)
     else:

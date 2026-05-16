@@ -11,6 +11,11 @@ AGENT_PORT="${AGENT_PORT:-8010}"
 PEER_NAME="${MINIGENT_DEMO_PEER_NAME:-pi}"
 MINIGENT_HOST="${MINIGENT_HOST:-127.0.0.1}"
 MINIGENT_PORT="${MINIGENT_PORT:-8000}"
+KEEP_RUNNING=false
+if [[ "${1:-}" == "--keep-running" ]]; then
+  KEEP_RUNNING=true
+  shift
+fi
 PROMPT="${1:-Summarize this repository in one paragraph. Do not edit files.}"
 MCP_BROKER_ENABLED="${MINIGENT_MCP_BROKER_ENABLED:-true}"
 LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/minigent-pi-backend-demo.XXXXXX")"
@@ -20,6 +25,7 @@ MINIGENT_PID=""
 
 cleanup() {
   local status=$?
+  trap - EXIT INT TERM
   if [[ -n "$MINIGENT_PID" ]] && kill -0 "$MINIGENT_PID" 2>/dev/null; then
     kill "$MINIGENT_PID" 2>/dev/null || true
     wait "$MINIGENT_PID" 2>/dev/null || true
@@ -27,6 +33,11 @@ cleanup() {
   if [[ -n "$WRAPPER_PID" ]] && kill -0 "$WRAPPER_PID" 2>/dev/null; then
     kill "$WRAPPER_PID" 2>/dev/null || true
     wait "$WRAPPER_PID" 2>/dev/null || true
+  fi
+  if [[ "$KEEP_RUNNING" == true && ( $status -eq 130 || $status -eq 143 ) ]]; then
+    echo
+    echo "stopped services; logs are in $LOG_DIR"
+    exit 0
   fi
   if [[ $status -ne 0 ]]; then
     echo
@@ -93,4 +104,16 @@ wait_for_url "minigent" "http://$MINIGENT_HOST:$MINIGENT_PORT/health"
 
 uv run python scripts/demo_pi_backend.py \
   --base-url "http://$MINIGENT_HOST:$MINIGENT_PORT" \
-  --message "$PROMPT"
+  --message="$PROMPT"
+
+if [[ "$KEEP_RUNNING" == true ]]; then
+  echo
+  echo "services are still running:"
+  echo "- Minigent: http://$MINIGENT_HOST:$MINIGENT_PORT"
+  echo "- Pi wrapper: http://$AGENT_HOST:$AGENT_PORT"
+  echo "- logs: $LOG_DIR"
+  echo "Press Ctrl-C to stop."
+  while true; do
+    sleep 3600
+  done
+fi
