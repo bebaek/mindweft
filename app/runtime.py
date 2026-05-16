@@ -4,6 +4,7 @@ import inspect
 import json
 import os
 import textwrap
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import HTTPException
@@ -29,6 +30,7 @@ RUNTIME_SYSTEM_PROMPT = (
 )
 DEFAULT_MAX_ITERATIONS = 16
 MAX_ITERATIONS_ENV = "MINIGENT_MAX_ITERATIONS"
+RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
 
 
 def max_iterations_from_env() -> int:
@@ -74,7 +76,13 @@ class AgentRuntime:
         self._max_summary_chars = max(256, max_summary_chars)
         self._target_prompt_tokens = max(256, target_prompt_tokens)
 
-    async def run_thread(self, principal: Principal, thread_id: str) -> str:
+    async def run_thread(
+        self,
+        principal: Principal,
+        thread_id: str,
+        *,
+        event_sink: RunEventSink | None = None,
+    ) -> str:
         self._store.start_run(principal.tenant_id, thread_id)
         failed_tool_calls: set[str] = set()
         execution = self._execution_resolver.resolve(principal.tenant_id)
@@ -101,16 +109,23 @@ class AgentRuntime:
         else:
             tool_registry = execution.tool_registry
         try:
-            for _ in range(self._max_iterations):
+            for iteration in range(1, self._max_iterations + 1):
                 messages = self._messages_for_llm(
                     principal,
                     thread_id,
                     skill_prompts=[skill.system_prompt for skill in skills],
                     skill_names=[skill.name for skill in skills],
                 )
-                response = await execution.llm_adapter.generate(
-                    messages, tool_registry.specs()
+                await _emit_run_event(
+                    event_sink,
+                    {
+                        "type": "llm.request",
+                        "iteration": iteration,
+                        "message_count": len(messages),
+                        "tool_count": len(tool_registry.specs()),
+                    },
                 )
+                response = await execution.llm_adapter.generate(messages, tool_registry.specs())
                 if response.tool_call is not None:
                     await self._handle_tool_call(
                         principal,
@@ -118,6 +133,7 @@ class AgentRuntime:
                         response,
                         failed_tool_calls,
                         tool_registry=tool_registry,
+                        event_sink=event_sink,
                     )
                     continue
 
@@ -152,10 +168,20 @@ class AgentRuntime:
         failed_tool_calls: set[str],
         *,
         tool_registry: ToolRegistry,
+        event_sink: RunEventSink | None = None,
     ) -> None:
         tool_call = response.tool_call
         if tool_call is None:
             return
+        await _emit_run_event(
+            event_sink,
+            {
+                "type": "tool.call",
+                "tool_call_id": tool_call.id,
+                "name": tool_call.name,
+                "arguments": tool_call.arguments,
+            },
+        )
         tool_call_signature = _tool_call_signature(tool_call.name, tool_call.arguments)
         self._store.append_message(
             principal.tenant_id,
@@ -199,15 +225,26 @@ class AgentRuntime:
                 if normalized_error is not None:
                     failed_tool_calls.add(tool_call_signature)
                     result = normalized_error
+        serialized_result = serialize_tool_result(result)
         self._store.append_message(
             principal.tenant_id,
             Message(
                 thread_id=thread_id,
                 role=MessageRole.TOOL,
-                content=serialize_tool_result(result),
+                content=serialized_result,
                 tool_name=tool_call.name,
                 tool_call_id=tool_call.id,
             )
+        )
+        await _emit_run_event(
+            event_sink,
+            {
+                "type": "tool.result",
+                "tool_call_id": tool_call.id,
+                "name": tool_call.name,
+                "is_error": _normalize_tool_error_result(tool_call.name, result) is not None,
+                "result": result,
+            },
         )
 
     def _messages_for_llm(
@@ -283,6 +320,14 @@ class AgentRuntime:
             estimated_tokens -= _estimate_message_tokens(messages[summarize_upto])
             summarize_upto += 1
         return summarize_upto
+
+
+async def _emit_run_event(
+    event_sink: RunEventSink | None,
+    event: dict[str, object],
+) -> None:
+    if event_sink is not None:
+        await event_sink(event)
 
 
 def _serialize_tool_error(

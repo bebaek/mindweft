@@ -318,6 +318,87 @@ def test_peer_agent_events_and_artifact_proxy_endpoints() -> None:
     ]
 
 
+def test_run_stream_endpoint_emits_ndjson_events() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "hello stream"},
+        headers=AUTH_HEADERS,
+    )
+
+    with client.stream("POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/x-ndjson")
+        events = [json.loads(line) for line in response.iter_lines() if line]
+
+    assert [event["type"] for event in events] == [
+        "run.started",
+        "llm.request",
+        "assistant.message",
+        "run.completed",
+    ]
+    assert all(event["thread_id"] == thread_id for event in events)
+    assert events[1]["iteration"] == 1
+    assert events[1]["message_count"] >= 2
+    assert events[1]["tool_count"] >= 1
+    assert events[2]["content"] == "Mock reply: hello stream"
+
+
+def test_run_stream_endpoint_emits_tool_events() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "/tool echo hello from stream"},
+        headers=AUTH_HEADERS,
+    )
+
+    with client.stream("POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS) as response:
+        assert response.status_code == 200
+        events = [json.loads(line) for line in response.iter_lines() if line]
+
+    assert [event["type"] for event in events] == [
+        "run.started",
+        "llm.request",
+        "tool.call",
+        "tool.result",
+        "llm.request",
+        "assistant.message",
+        "run.completed",
+    ]
+    assert events[2]["name"] == "echo"
+    assert events[2]["arguments"] == {"text": "hello from stream"}
+    assert events[3]["name"] == "echo"
+    assert events[3]["is_error"] is False
+    assert events[3]["result"] == {"echo": "hello from stream"}
+    assert events[5]["content"] == 'Tool result: {"echo": "hello from stream"}'
+
+
+def test_run_stream_endpoint_emits_error_event() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    with client.stream("POST", "/threads/missing/run/stream", headers=AUTH_HEADERS) as response:
+        assert response.status_code == 200
+        events = [json.loads(line) for line in response.iter_lines() if line]
+
+    assert events == [
+        {"thread_id": "missing", "type": "run.started"},
+        {
+            "thread_id": "missing",
+            "type": "run.error",
+            "status_code": 404,
+            "detail": "Thread 'missing' not found",
+        },
+    ]
+
+
 def test_run_endpoint_handles_tool_call_flow() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())

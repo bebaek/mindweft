@@ -1,298 +1,97 @@
 import json
+from collections.abc import Iterator
 from pathlib import Path
-
-import pytest
+from typing import Any
 
 from app import cli
 
 
-@pytest.fixture
-def isolated_cli_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cli, "state_file_path", lambda: tmp_path / "cli-state.json")
+class _Response:
+    def __init__(self, *, body: object | None = None, lines: list[dict[str, object]] | None = None) -> None:
+        self._body = body
+        self._lines = lines or []
 
+    def __enter__(self) -> "_Response":
+        return self
 
-def test_chat_creates_thread_and_prints_reply(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    isolated_cli_state: None,
-) -> None:
-    calls: list[tuple[str, str, dict[str, object] | None, dict[str, str] | None]] = []
-
-    def fake_request_json(
-        method: str,
-        url: str,
-        *,
-        payload: dict[str, object] | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> object:
-        calls.append((method, url, payload, headers))
-        if method == "POST" and url == "http://127.0.0.1:8000/threads":
-            return {"thread_id": "thread-123"}
-        if method == "POST" and url.endswith("/messages"):
-            return {"id": "message-1"}
-        if method == "POST" and url.endswith("/run"):
-            return {"reply": "Mock reply: hello"}
-        raise AssertionError(f"Unexpected request: {method} {url}")
-
-    monkeypatch.setattr(cli, "request_json", fake_request_json)
-
-    exit_code = cli.main(["chat", "--print-thread-id", "hello"])
-
-    assert exit_code == 0
-    assert capsys.readouterr().out == "thread_id=thread-123\nMock reply: hello\n"
-    assert calls == [
-        (
-            "POST",
-            "http://127.0.0.1:8000/threads",
-            None,
-            {
-                "X-Minigent-User-Id": "demo-user",
-                "X-Minigent-Tenant-Id": "demo-tenant",
-                "X-Minigent-Admin": "false",
-            },
-        ),
-        (
-            "POST",
-            "http://127.0.0.1:8000/threads/thread-123/messages",
-            {"content": "hello"},
-            {
-                "X-Minigent-User-Id": "demo-user",
-                "X-Minigent-Tenant-Id": "demo-tenant",
-                "X-Minigent-Admin": "false",
-            },
-        ),
-        (
-            "POST",
-            "http://127.0.0.1:8000/threads/thread-123/run",
-            None,
-            {
-                "X-Minigent-User-Id": "demo-user",
-                "X-Minigent-Tenant-Id": "demo-tenant",
-                "X-Minigent-Admin": "false",
-            },
-        ),
-    ]
-
-
-def test_chat_json_can_include_transcript(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    isolated_cli_state: None,
-) -> None:
-    def fake_request_json(
-        method: str,
-        url: str,
-        *,
-        payload: dict[str, object] | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> object:
-        del payload, headers
-        if method == "POST" and url == "http://127.0.0.1:8000/threads":
-            return {"thread_id": "thread-123"}
-        if method == "POST" and url.endswith("/messages"):
-            return {"id": "message-1"}
-        if method == "POST" and url.endswith("/run"):
-            return {"reply": "Mock reply: hello"}
-        if method == "GET" and url.endswith("/messages"):
-            return [
-                {"role": "user", "content": "hello"},
-                {"role": "assistant", "content": "Mock reply: hello"},
-            ]
-        raise AssertionError(f"Unexpected request: {method} {url}")
-
-    monkeypatch.setattr(cli, "request_json", fake_request_json)
-
-    exit_code = cli.main(["--json", "chat", "--transcript", "hello"])
-
-    assert exit_code == 0
-    assert json.loads(capsys.readouterr().out) == {
-        "created_thread": True,
-        "messages": [
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "content": "Mock reply: hello"},
-        ],
-        "reply": "Mock reply: hello",
-        "thread_id": "thread-123",
-    }
-
-
-def test_threads_show_formats_tool_messages(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    isolated_cli_state: None,
-) -> None:
-    def fake_request_json(
-        method: str,
-        url: str,
-        *,
-        payload: dict[str, object] | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> object:
-        del payload, headers
-        assert method == "GET"
-        assert url == "http://127.0.0.1:8000/threads/thread-123/messages"
-        return [
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "content": "", "tool_name": "calculator"},
-            {"role": "tool", "content": '{"result": 3}', "tool_name": "calculator"},
-            {"role": "assistant", "content": "3"},
-        ]
-
-    monkeypatch.setattr(cli, "request_json", fake_request_json)
-
-    exit_code = cli.main(["threads", "show", "thread-123"])
-
-    assert exit_code == 0
-    assert capsys.readouterr().out == (
-        "user: hello\n"
-        "assistant (calculator): \n"
-        'tool (calculator): {"result": 3}\n'
-        "assistant: 3\n"
-    )
-
-
-def test_threads_delete_json_reports_deleted(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    isolated_cli_state: None,
-) -> None:
-    def fake_request_json(
-        method: str,
-        url: str,
-        *,
-        payload: dict[str, object] | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> object:
-        del payload, headers
-        assert method == "DELETE"
-        assert url == "http://127.0.0.1:8000/threads/thread-123"
+    def __exit__(self, *_args: object) -> None:
         return None
 
-    monkeypatch.setattr(cli, "request_json", fake_request_json)
+    def read(self) -> bytes:
+        if self._body is None:
+            return b""
+        return json.dumps(self._body).encode("utf-8")
 
-    exit_code = cli.main(["--json", "threads", "delete", "thread-123"])
-
-    assert exit_code == 0
-    assert json.loads(capsys.readouterr().out) == {"deleted": True, "thread_id": "thread-123"}
-
-
-def test_health_uses_bearer_token_auth(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    isolated_cli_state: None,
-) -> None:
-    captured_headers: dict[str, str] | None = None
-
-    def fake_request_json(
-        method: str,
-        url: str,
-        *,
-        payload: dict[str, object] | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> object:
-        nonlocal captured_headers
-        del payload
-        assert method == "GET"
-        assert url == "http://127.0.0.1:8000/health"
-        captured_headers = headers
-        return {"status": "ok"}
-
-    monkeypatch.setattr(cli, "request_json", fake_request_json)
-
-    exit_code = cli.main(["--api-token", "secret-token", "health"])
-
-    assert exit_code == 0
-    assert capsys.readouterr().out == "ok\n"
-    assert captured_headers == {"Authorization": "Bearer secret-token"}
+    def __iter__(self) -> Iterator[bytes]:
+        for line in self._lines:
+            yield (json.dumps(line) + "\n").encode("utf-8")
 
 
-def test_chat_resume_last_uses_locally_remembered_thread(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    isolated_cli_state: None,
-) -> None:
-    cli.save_state(
-        {
-            "recent_threads": {
-                "http://127.0.0.1:8000|dev:demo-user:demo-tenant:false": "thread-remembered"
-            }
-        }
-    )
-    calls: list[tuple[str, str, dict[str, object] | None]] = []
-
-    def fake_request_json(
-        method: str,
-        url: str,
-        *,
-        payload: dict[str, object] | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> object:
-        del headers
-        calls.append((method, url, payload))
-        if method == "POST" and url.endswith("/messages"):
-            return {"id": "message-1"}
-        if method == "POST" and url.endswith("/run"):
-            return {"reply": "continued"}
-        raise AssertionError(f"Unexpected request: {method} {url}")
-
-    monkeypatch.setattr(cli, "request_json", fake_request_json)
-
-    exit_code = cli.main(["chat", "--resume-last", "continue"])
-
-    assert exit_code == 0
-    assert capsys.readouterr().out == "continued\n"
-    assert calls == [
-        (
-            "POST",
-            "http://127.0.0.1:8000/threads/thread-remembered/messages",
-            {"content": "continue"},
-        ),
-        (
-            "POST",
-            "http://127.0.0.1:8000/threads/thread-remembered/run",
-            None,
-        ),
+def test_chat_stream_json_prints_events(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    calls: list[tuple[str, str]] = []
+    stream_events = [
+        {"type": "run.started", "thread_id": "thread-1"},
+        {"type": "llm.request", "thread_id": "thread-1", "iteration": 1},
+        {"type": "assistant.message", "thread_id": "thread-1", "content": "streamed reply"},
+        {"type": "run.completed", "thread_id": "thread-1"},
     ]
 
+    def urlopen(request: Any) -> _Response:
+        calls.append((request.get_method(), request.full_url))
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run/stream"):
+            return _Response(lines=stream_events)
+        raise AssertionError(f"Unexpected request: {request.full_url}")
 
-def test_chat_resume_last_errors_without_saved_thread(
-    capsys: pytest.CaptureFixture[str], isolated_cli_state: None
-) -> None:
-    with pytest.raises(SystemExit, match="No remembered thread for this server and principal"):
-        cli.main(["chat", "--resume-last", "continue"])
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
 
-    assert capsys.readouterr().out == ""
-
-
-def test_threads_delete_clears_saved_last_thread(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    isolated_cli_state: None,
-) -> None:
-    cli.save_state(
-        {
-            "recent_threads": {
-                "http://127.0.0.1:8000|dev:demo-user:demo-tenant:false": "thread-123"
-            }
-        }
-    )
-
-    def fake_request_json(
-        method: str,
-        url: str,
-        *,
-        payload: dict[str, object] | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> object:
-        del payload, headers
-        assert method == "DELETE"
-        assert url == "http://127.0.0.1:8000/threads/thread-123"
-        return None
-
-    monkeypatch.setattr(cli, "request_json", fake_request_json)
-
-    exit_code = cli.main(["threads", "delete", "thread-123"])
+    exit_code = cli.main(["--json", "chat", "--stream", "hello"])
 
     assert exit_code == 0
-    assert capsys.readouterr().out == "thread-123\n"
-    assert cli.load_state() == {"recent_threads": {}}
+    assert calls == [
+        ("POST", "http://127.0.0.1:8000/threads"),
+        ("POST", "http://127.0.0.1:8000/threads/thread-1/messages"),
+        ("POST", "http://127.0.0.1:8000/threads/thread-1/run/stream"),
+    ]
+    output = json.loads(capsys.readouterr().out)
+    assert output["thread_id"] == "thread-1"
+    assert output["reply"] == "streamed reply"
+    assert output["events"] == stream_events
+
+
+def test_chat_stream_text_prints_progress_to_stderr(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    stream_events = [
+        {"type": "run.started", "thread_id": "thread-1"},
+        {"type": "tool.call", "thread_id": "thread-1", "name": "echo"},
+        {"type": "tool.result", "thread_id": "thread-1", "name": "echo", "is_error": False},
+        {"type": "assistant.message", "thread_id": "thread-1", "content": "done"},
+        {"type": "run.completed", "thread_id": "thread-1"},
+    ]
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run/stream"):
+            return _Response(lines=stream_events)
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["chat", "--stream", "hello"])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert captured.out == "done\n"
+    assert "[run] started" in captured.err
+    assert "[tool] call echo" in captured.err
+    assert "[tool] result echo ok" in captured.err
+    assert "[run] completed" in captured.err

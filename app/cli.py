@@ -85,6 +85,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the full thread transcript after the reply in text mode.",
     )
+    chat_parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Use the NDJSON streaming run endpoint and print progress in text mode.",
+    )
 
     threads_parser = subparsers.add_parser("threads", help="Manage conversation threads.")
     threads_subparsers = threads_parser.add_subparsers(dest="threads_command", required=True)
@@ -144,6 +149,38 @@ def request_json(
         raise SystemExit(f"{method} {url} failed: {exc.code} {body}") from exc
     except urllib.error.URLError as exc:
         raise SystemExit(f"{method} {url} failed: {exc.reason}") from exc
+
+
+def request_ndjson_events(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    on_event: Any | None = None,
+) -> list[dict[str, Any]]:
+    request_headers = {"Accept": "application/x-ndjson", **dict(headers or {})}
+    request = urllib.request.Request(url, method=method, headers=request_headers)
+    events: list[dict[str, Any]] = []
+    try:
+        with urllib.request.urlopen(request) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                event = json.loads(line)
+                if not isinstance(event, dict):
+                    raise SystemExit(f"{method} {url} returned a non-object NDJSON event")
+                events.append(event)
+                if on_event is not None:
+                    on_event(event)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"{method} {url} failed: {exc.code} {body}") from exc
+    except urllib.error.URLError as exc:
+        raise SystemExit(f"{method} {url} failed: {exc.reason}") from exc
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{method} {url} returned invalid NDJSON: {exc}") from exc
+    return events
 
 
 def build_trace_headers(trace_id: str | None) -> dict[str, str]:
@@ -256,6 +293,50 @@ def print_json(data: object) -> None:
     print(json.dumps(data, indent=2, sort_keys=True))
 
 
+def _print_stream_progress(event: dict[str, Any]) -> None:
+    event_type = event.get("type")
+    if event_type == "run.started":
+        print("[run] started", file=sys.stderr)
+    elif event_type == "llm.request":
+        print(f"[llm] request iteration={event.get('iteration')}", file=sys.stderr)
+    elif event_type == "tool.call":
+        print(f"[tool] call {event.get('name')}", file=sys.stderr)
+    elif event_type == "tool.result":
+        status = "error" if event.get("is_error") else "ok"
+        print(f"[tool] result {event.get('name')} {status}", file=sys.stderr)
+    elif event_type == "peer.task.created":
+        print(
+            f"[peer] task created peer={event.get('peer')} task_id={event.get('task_id')} status={event.get('status')}",
+            file=sys.stderr,
+        )
+    elif event_type == "peer.task.poll":
+        print(
+            f"[peer] task poll peer={event.get('peer')} task_id={event.get('task_id')} status={event.get('status')}",
+            file=sys.stderr,
+        )
+    elif event_type == "peer.task.completed":
+        print(
+            f"[peer] task completed peer={event.get('peer')} task_id={event.get('task_id')} status={event.get('status')}",
+            file=sys.stderr,
+        )
+    elif event_type == "run.error":
+        print(f"[run] error {event.get('status_code')}: {event.get('detail')}", file=sys.stderr)
+    elif event_type == "run.completed":
+        print("[run] completed", file=sys.stderr)
+
+
+def _reply_from_run_stream(events: list[dict[str, Any]]) -> str:
+    for event in events:
+        if event.get("type") == "run.error":
+            raise SystemExit(f"run failed: {event.get('status_code')} {event.get('detail')}")
+    for event in reversed(events):
+        if event.get("type") == "assistant.message":
+            content = event.get("content")
+            if isinstance(content, str):
+                return content
+    raise SystemExit("run stream ended without an assistant.message event")
+
+
 def run_chat(args: argparse.Namespace, base_url: str, headers: dict[str, str], trace_id: str | None) -> int:
     thread_id, created_thread = ensure_thread(args, base_url, headers)
     request_json(
@@ -264,8 +345,18 @@ def run_chat(args: argparse.Namespace, base_url: str, headers: dict[str, str], t
         payload={"content": args.message},
         headers=headers,
     )
-    run_response = request_json("POST", f"{base_url}/threads/{thread_id}/run", headers=headers)
-    reply = run_response["reply"]
+    events: list[dict[str, Any]] | None = None
+    if args.stream:
+        events = request_ndjson_events(
+            "POST",
+            f"{base_url}/threads/{thread_id}/run/stream",
+            headers=headers,
+            on_event=None if args.json else _print_stream_progress,
+        )
+        reply = _reply_from_run_stream(events)
+    else:
+        run_response = request_json("POST", f"{base_url}/threads/{thread_id}/run", headers=headers)
+        reply = run_response["reply"]
     remember_thread(base_url, args, thread_id)
 
     if args.json:
@@ -274,6 +365,8 @@ def run_chat(args: argparse.Namespace, base_url: str, headers: dict[str, str], t
             "created_thread": created_thread,
             "reply": reply,
         }
+        if events is not None:
+            output["events"] = events
         if trace_id is not None:
             output["trace_id"] = trace_id
         if args.transcript:

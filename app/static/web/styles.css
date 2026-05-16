@@ -170,13 +170,23 @@ textarea:focus {
 .message.assistant,
 .message.tool,
 .message.system,
-.message.notice {
+.message.notice,
+.message.progress {
   align-self: flex-start;
 }
 
 .message.notice {
   background: color-mix(in srgb, var(--accent) 9%, var(--panel));
   color: var(--muted);
+}
+
+.message.progress {
+  max-width: 100%;
+  padding: 6px 9px;
+  border-style: dashed;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .role {

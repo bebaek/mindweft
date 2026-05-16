@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.admin_api import (
@@ -56,6 +60,56 @@ configure_logging()
 
 logger = logging.getLogger(__name__)
 WEB_CLIENT_DIR = Path(__file__).resolve().parent / "static" / "web"
+
+
+async def _run_thread_ndjson_stream(
+    request: Request,
+    principal: Principal,
+    thread_id: str,
+) -> AsyncIterator[str]:
+    queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
+
+    async def emit(event: dict[str, object]) -> None:
+        await queue.put({"thread_id": thread_id, **event})
+
+    async def run() -> None:
+        await emit({"type": "run.started"})
+        try:
+            reply = await request.app.state.agent_backend.run_thread(
+                principal,
+                thread_id,
+                event_sink=emit,
+            )
+        except HTTPException as exc:
+            await emit(
+                {
+                    "type": "run.error",
+                    "status_code": exc.status_code,
+                    "detail": exc.detail,
+                }
+            )
+            return
+        except Exception as exc:  # pragma: no cover - defensive streaming boundary
+            await emit({"type": "run.error", "status_code": 500, "detail": str(exc)})
+            return
+        await emit({"type": "assistant.message", "content": reply})
+        await emit({"type": "run.completed"})
+
+    task = asyncio.create_task(run())
+    try:
+        while True:
+            if task.done() and queue.empty():
+                break
+            event = await queue.get()
+            if event is not None:
+                yield _ndjson_event(event)
+    finally:
+        if not task.done():
+            task.cancel()
+
+
+def _ndjson_event(event: dict[str, object]) -> str:
+    return json.dumps(event, ensure_ascii=True) + "\n"
 
 
 def create_app(
@@ -300,6 +354,17 @@ def create_app(
     ) -> RunThreadResponse:
         return RunThreadResponse(
             reply=await request.app.state.agent_backend.run_thread(principal, thread_id)
+        )
+
+    @app.post("/threads/{thread_id}/run/stream", response_model=None)
+    async def run_thread_stream(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_principal),
+    ) -> StreamingResponse:
+        return StreamingResponse(
+            _run_thread_ndjson_stream(request, principal, thread_id),
+            media_type="application/x-ndjson",
         )
 
     @app.delete("/threads/{thread_id}", status_code=204)

@@ -94,10 +94,7 @@ elements.composer.addEventListener("submit", async (event) => {
     });
 
     setStatus("Running");
-    const run = await requestJson(`/threads/${encodeURIComponent(threadId)}/run`, {
-      method: "POST",
-    });
-    appendMessage({ role: "assistant", content: run.reply || "" });
+    await streamRun(threadId);
     setStatus(`Thread ${threadId}`);
   } catch (error) {
     setStatus(error.message, true);
@@ -179,6 +176,37 @@ async function ensureThread() {
   return state.threadId;
 }
 
+async function streamRun(threadId) {
+  let assistantMessage = null;
+  let runFailed = false;
+  await requestNdjson(`/threads/${encodeURIComponent(threadId)}/run/stream`, {
+    method: "POST",
+    onEvent(event) {
+      if (event.type === "assistant.message") {
+        assistantMessage = appendMessage({ role: "assistant", content: event.content || "" });
+        return;
+      }
+      if (event.type === "run.error") {
+        runFailed = true;
+        appendNotice(`Run failed: ${event.status_code || "error"} ${event.detail || ""}`.trim());
+        setStatus(event.detail || "Run failed", true);
+        return;
+      }
+      const label = formatRunEvent(event);
+      if (label) {
+        appendProgress(label);
+        setStatus(label);
+      }
+    },
+  });
+  if (runFailed) {
+    throw new Error("Run failed");
+  }
+  if (!assistantMessage) {
+    throw new Error("Run stream ended without an assistant message.");
+  }
+}
+
 async function requestJson(path, options = {}) {
   const response = await fetch(`${state.baseUrl}${path}`, {
     method: options.method || "GET",
@@ -201,6 +229,50 @@ async function requestJson(path, options = {}) {
   }
 
   return response.json();
+}
+
+async function requestNdjson(path, options = {}) {
+  const response = await fetch(`${state.baseUrl}${path}`, {
+    method: options.method || "GET",
+    headers: {
+      ...authHeaders(),
+      Accept: "application/x-ndjson",
+    },
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    const error = new Error(`${response.status} ${detail || response.statusText}`);
+    error.status = response.status;
+    throw error;
+  }
+
+  if (!response.body) {
+    throw new Error("Streaming responses are not supported by this browser.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed) {
+        options.onEvent?.(JSON.parse(trimmed));
+      }
+    }
+    if (done) {
+      break;
+    }
+  }
+  const finalLine = buffer.trim();
+  if (finalLine) {
+    options.onEvent?.(JSON.parse(finalLine));
+  }
 }
 
 function authHeaders() {
@@ -252,6 +324,14 @@ function appendMessage(message) {
 }
 
 function appendNotice(content) {
+  return appendInlineMessage("notice", content);
+}
+
+function appendProgress(content) {
+  return appendInlineMessage("progress", content);
+}
+
+function appendInlineMessage(kind, content) {
   if (
     elements.messages.children.length === 1 &&
     elements.messages.firstElementChild.textContent === "Start a thread from this browser."
@@ -260,10 +340,39 @@ function appendNotice(content) {
   }
 
   const item = document.createElement("article");
-  item.className = "message notice";
+  item.className = `message ${kind}`;
   item.textContent = content;
   elements.messages.append(item);
   elements.messages.scrollTop = elements.messages.scrollHeight;
+  return item;
+}
+
+function formatRunEvent(event) {
+  if (event.type === "run.started") {
+    return "Run started";
+  }
+  if (event.type === "llm.request") {
+    return `LLM request ${event.iteration || ""}`.trim();
+  }
+  if (event.type === "tool.call") {
+    return `Tool call: ${event.name || "unknown"}`;
+  }
+  if (event.type === "tool.result") {
+    return `Tool result: ${event.name || "unknown"} ${event.is_error ? "error" : "ok"}`;
+  }
+  if (event.type === "peer.task.created") {
+    return `Peer task created: ${event.peer || "peer"} ${event.status || ""}`.trim();
+  }
+  if (event.type === "peer.task.poll") {
+    return `Peer task: ${event.peer || "peer"} ${event.status || ""}`.trim();
+  }
+  if (event.type === "peer.task.completed") {
+    return `Peer task completed: ${event.peer || "peer"} ${event.status || ""}`.trim();
+  }
+  if (event.type === "run.completed") {
+    return "Run completed";
+  }
+  return "";
 }
 
 function setBusy(isBusy) {

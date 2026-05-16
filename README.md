@@ -46,8 +46,18 @@ uv run uvicorn app.main:app --reload
 
 ## Dev Web Client
 
+`POST /threads/{thread_id}/run/stream` is also available for clients that want run
+progress without waiting for the final JSON response. It returns newline-delimited JSON
+with `Content-Type: application/x-ndjson`. The stream emits `run.started`, native runtime
+progress such as `llm.request`, `tool.call`, and `tool.result`, peer-backend progress such
+as `peer.task.created`/`peer.task.poll`/`peer.task.completed`, then either
+`assistant.message` and `run.completed`, or `run.error`. The existing
+`POST /threads/{thread_id}/run` endpoint remains unchanged.
+
 The API also serves a small static browser client at `/web` for quick manual testing from
-desktop and mobile browsers. It has no frontend build step or extra dependencies.
+desktop and mobile browsers. It uses the NDJSON run stream to display live run/tool/peer
+progress before appending the final assistant reply. It has no frontend build step or extra
+dependencies.
 
 For same-machine testing, start the API and open:
 
@@ -488,6 +498,7 @@ For the simplest client flow against a running server, use the packaged CLI:
 
 ```bash
 uv run minigent chat "hello"
+uv run minigent chat --stream "hello with progress"
 uv run minigent chat --thread <thread-id> "continue"
 uv run minigent chat --resume-last "continue"
 uv run minigent threads show <thread-id>

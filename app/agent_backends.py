@@ -4,6 +4,7 @@ import asyncio
 import os
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 
 from fastapi import HTTPException
 
@@ -29,11 +30,18 @@ from app.runtime import AgentRuntime
 from app.store import InMemoryThreadStore
 
 _TERMINAL_PEER_STATUSES = {"completed", "failed", "canceled"}
+RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
 
 
 class AgentBackend(ABC):
     @abstractmethod
-    async def run_thread(self, principal: Principal, thread_id: str) -> str:
+    async def run_thread(
+        self,
+        principal: Principal,
+        thread_id: str,
+        *,
+        event_sink: RunEventSink | None = None,
+    ) -> str:
         raise NotImplementedError
 
 
@@ -41,8 +49,14 @@ class NativeAgentBackend(AgentBackend):
     def __init__(self, runtime: AgentRuntime) -> None:
         self._runtime = runtime
 
-    async def run_thread(self, principal: Principal, thread_id: str) -> str:
-        return await self._runtime.run_thread(principal, thread_id)
+    async def run_thread(
+        self,
+        principal: Principal,
+        thread_id: str,
+        *,
+        event_sink: RunEventSink | None = None,
+    ) -> str:
+        return await self._runtime.run_thread(principal, thread_id, event_sink=event_sink)
 
 
 class AgentBackendRouter(AgentBackend):
@@ -61,11 +75,17 @@ class AgentBackendRouter(AgentBackend):
         self._peer_agent_registry = peer_agent_registry
         self._mcp_broker_sessions = mcp_broker_sessions
 
-    async def run_thread(self, principal: Principal, thread_id: str) -> str:
+    async def run_thread(
+        self,
+        principal: Principal,
+        thread_id: str,
+        *,
+        event_sink: RunEventSink | None = None,
+    ) -> str:
         execution = self._execution_resolver.resolve(principal.tenant_id)
         backend = execution.config.agent_backend
         if backend.type == AGENT_BACKEND_NATIVE:
-            return await self._native_backend.run_thread(principal, thread_id)
+            return await self._native_backend.run_thread(principal, thread_id, event_sink=event_sink)
         if backend.type == AGENT_BACKEND_PEER_AGENT:
             if backend.peer is None or backend.cwd is None:
                 raise HTTPException(status_code=500, detail="peer_agent backend is incomplete")
@@ -77,6 +97,7 @@ class AgentBackendRouter(AgentBackend):
                 timeout_seconds=backend.timeout_seconds,
                 poll_interval_seconds=backend.poll_interval_seconds,
                 mcp_broker_enabled=backend.mcp_broker_enabled,
+                event_sink=event_sink,
             )
         raise HTTPException(status_code=500, detail=f"Unsupported agent backend '{backend.type}'")
 
@@ -90,6 +111,7 @@ class AgentBackendRouter(AgentBackend):
         timeout_seconds: float,
         poll_interval_seconds: float,
         mcp_broker_enabled: bool,
+        event_sink: RunEventSink | None,
     ) -> str:
         self._store.start_run(principal.tenant_id, thread_id)
         broker_session_id: str | None = None
@@ -111,6 +133,15 @@ class AgentBackendRouter(AgentBackend):
                 payload["prompt"] = prompt + _mcp_broker_prompt_suffix()
             task = await self._peer_agent_registry.create_task(peer, payload)
             task_id = str(task.get("task_id", "")).strip()
+            await _emit_run_event(
+                event_sink,
+                {
+                    "type": "peer.task.created",
+                    "peer": peer,
+                    "task_id": task_id,
+                    "status": str(task.get("status", "")),
+                },
+            )
             if not task_id:
                 raise HTTPException(
                     status_code=502,
@@ -126,7 +157,25 @@ class AgentBackendRouter(AgentBackend):
                     )
                 await asyncio.sleep(poll_interval_seconds)
                 task = await self._peer_agent_registry.task(peer, task_id)
+                await _emit_run_event(
+                    event_sink,
+                    {
+                        "type": "peer.task.poll",
+                        "peer": peer,
+                        "task_id": task_id,
+                        "status": str(task.get("status", "")),
+                    },
+                )
             reply = self._reply_from_task(task)
+            await _emit_run_event(
+                event_sink,
+                {
+                    "type": "peer.task.completed",
+                    "peer": peer,
+                    "task_id": task_id,
+                    "status": str(task.get("status", "")),
+                },
+            )
             self._store.append_message(
                 principal.tenant_id,
                 Message(thread_id=thread_id, role=MessageRole.ASSISTANT, content=reply),
@@ -223,6 +272,14 @@ class AgentBackendRouter(AgentBackend):
             await self._peer_agent_registry.cancel_task(peer, task_id)
         except HTTPException:
             return
+
+
+async def _emit_run_event(
+    event_sink: RunEventSink | None,
+    event: dict[str, object],
+) -> None:
+    if event_sink is not None:
+        await event_sink(event)
 
 
 def _mcp_broker_prompt_suffix() -> str:
