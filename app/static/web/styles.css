@@ -68,10 +68,11 @@ button:disabled {
 }
 
 .shell {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   width: min(100%, 860px);
   height: calc(var(--app-height, 100dvh) - var(--keyboard-lift, 0px));
+  max-height: calc(var(--app-height, 100dvh) - var(--keyboard-lift, 0px));
   min-height: 0;
   margin: 0 auto;
   padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
@@ -80,6 +81,7 @@ button:disabled {
 }
 
 .topbar {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -105,6 +107,7 @@ h1 {
 }
 
 .settings {
+  flex: 0 0 auto;
   display: none;
   gap: 10px;
   padding: 12px;
@@ -147,6 +150,7 @@ textarea:focus {
 }
 
 .messages {
+  flex: 1 1 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -158,6 +162,7 @@ textarea:focus {
 }
 
 .message {
+  flex: 0 0 auto;
   max-width: min(78ch, 88%);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -205,6 +210,7 @@ textarea:focus {
 }
 
 .composer {
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: end;
