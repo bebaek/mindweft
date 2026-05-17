@@ -5,8 +5,11 @@ from datetime import datetime
 from fastapi import HTTPException
 
 from app.execution import (
+    FixedTenantExecutionResolver,
     InMemoryTenantExecutionResolver,
+    TenantExecutionConfig,
     TenantExecutionContext,
+    TenantQualityConfig,
     build_tool_registry_for_capability_profile,
     build_tool_registry_for_skill,
     parse_tenant_execution_config,
@@ -23,6 +26,7 @@ from app.models import (
     ToolSpec,
 )
 from app.peer_agents import PeerAgentConfig, PeerAgentRegistry
+from app.quality import QualityEnhancer
 from app.runtime import (
     DEFAULT_MAX_ITERATIONS,
     RUNTIME_SYSTEM_PROMPT,
@@ -1073,3 +1077,70 @@ def test_build_tool_registry_for_capability_profile_can_narrow_mcp_servers(monke
 
     assert {spec.name for spec in registry.specs()} == {"current_time", "home-assistant.ping"}
     assert [server["name"] for server in registry.mcp_servers()] == ["home-assistant"]
+
+
+def test_runtime_applies_enabled_remote_quality_critique() -> None:
+    events: list[dict[str, object]] = []
+
+    class DraftThenRevisionLLM(LLMAdapter):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            _ = tools
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResponse(content="Draft with /Users/alice and alice@example.com")
+            critique_message = next(
+                message.content for message in messages if "Advisory critique" in message.content
+            )
+            assert "[PATH]" in critique_message
+            assert "[EMAIL]" in critique_message
+            assert "/Users/alice" not in critique_message
+            assert "alice@example.com" not in critique_message
+            synthesis_system = next(
+                message.content
+                for message in messages
+                if message.role == MessageRole.SYSTEM
+                and "remote critique may refer to sanitized placeholders" in message.content
+            )
+            assert "Preserve concrete details from the original local draft" in synthesis_system
+            return LLMResponse(content="Revised final answer")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    async def emit(event: dict[str, object]) -> None:
+        events.append(event)
+
+    store = InMemoryThreadStore()
+    llm = DraftThenRevisionLLM()
+    registry = build_local_tool_registry()
+    resolver = FixedTenantExecutionResolver(
+        llm,
+        registry,
+        config=TenantExecutionConfig(
+            tenant_id=PRINCIPAL.tenant_id,
+            quality=TenantQualityConfig(enabled=True, provider="mock"),
+        ),
+    )
+    runtime = AgentRuntime(
+        store=store,
+        execution_resolver=resolver,
+        quality_enhancer=QualityEnhancer(),
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello"),
+    )
+
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id, event_sink=emit))
+
+    assert reply == "Revised final answer"
+    assert llm.calls == 2
+    assert store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)[-1].content == reply
+    event_types = [event["type"] for event in events]
+    assert "quality.sanitized" in event_types
+    assert "quality.remote_request" in event_types
+    assert "quality.applied" in event_types

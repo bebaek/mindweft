@@ -19,6 +19,7 @@ from app.execution import (
 )
 from app.llm import LLMAdapter, serialize_tool_result
 from app.models import LLMResponse, Message, MessageRole, Principal, ThreadContext, ThreadStatus
+from app.quality import QualityEnhancer
 from app.store import InMemoryThreadStore
 from app.tools import ToolExecutionContext, ToolRegistry
 
@@ -58,6 +59,7 @@ class AgentRuntime:
         min_recent_message_limit: int = 4,
         max_summary_chars: int = 4000,
         target_prompt_tokens: int = 3000,
+        quality_enhancer: QualityEnhancer | None = None,
     ) -> None:
         self._store = store
         if execution_resolver is not None:
@@ -75,6 +77,7 @@ class AgentRuntime:
         )
         self._max_summary_chars = max(256, max_summary_chars)
         self._target_prompt_tokens = max(256, target_prompt_tokens)
+        self._quality_enhancer = quality_enhancer
 
     async def run_thread(
         self,
@@ -142,14 +145,20 @@ class AgentRuntime:
                         status_code=500, detail="LLM returned neither content nor tool call"
                     )
 
+                final_content = await self._maybe_apply_quality_enhancement(
+                    principal,
+                    thread_id,
+                    response.content,
+                    execution=execution,
+                    base_messages=messages,
+                    event_sink=event_sink,
+                )
                 self._store.append_message(
                     principal.tenant_id,
-                    Message(
-                        thread_id=thread_id, role=MessageRole.ASSISTANT, content=response.content
-                    )
+                    Message(thread_id=thread_id, role=MessageRole.ASSISTANT, content=final_content),
                 )
                 self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
-                return response.content
+                return final_content
         except HTTPException:
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.ERROR)
             raise
@@ -159,6 +168,70 @@ class AgentRuntime:
 
         self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.ERROR)
         raise HTTPException(status_code=500, detail="Agent exceeded maximum tool iterations")
+
+    async def _maybe_apply_quality_enhancement(
+        self,
+        principal: Principal,
+        thread_id: str,
+        local_draft: str,
+        *,
+        execution: Any,
+        base_messages: list[Message],
+        event_sink: RunEventSink | None,
+    ) -> str:
+        if self._quality_enhancer is None:
+            return local_draft
+        critique_result = await self._quality_enhancer.maybe_critique_draft(
+            config=execution.config.quality,
+            tenant_id=principal.tenant_id,
+            thread_id=thread_id,
+            local_draft=local_draft,
+            event_sink=event_sink,
+        )
+        if not critique_result.used_remote or not critique_result.critique:
+            return local_draft
+        synthesis_messages = [
+            *base_messages,
+            Message(thread_id=thread_id, role=MessageRole.ASSISTANT, content=local_draft),
+            Message(
+                thread_id=thread_id,
+                role=MessageRole.SYSTEM,
+                content=(
+                    "A remote reviewer provided advisory feedback on the assistant draft. "
+                    "Use it only if consistent with the private conversation and tool results. "
+                    "Do not add facts that are not supported by the private context. "
+                    "The remote critique may refer to sanitized placeholders such as [PATH], "
+                    "[EMAIL], [INTERNAL_URL], or [REDACTED_*]. Those placeholders were only "
+                    "used for the remote reviewer. Preserve concrete details from the original "
+                    "local draft when they are appropriate for the user and supported by the "
+                    "private context; do not replace them with placeholders unless the user "
+                    "requested anonymization or policy requires it."
+                ),
+            ),
+            Message(
+                thread_id=thread_id,
+                role=MessageRole.USER,
+                content=(
+                    "Revise the assistant draft if the following advisory critique is useful. "
+                    "Return only the final answer.\n\n"
+                    f"Advisory critique:\n{critique_result.critique}"
+                ),
+            ),
+        ]
+        await _emit_run_event(event_sink, {"type": "quality.synthesis_request"})
+        try:
+            revised = await execution.llm_adapter.generate(synthesis_messages, [])
+        except Exception as exc:  # pragma: no cover - advisory fallback boundary
+            await _emit_run_event(event_sink, {"type": "quality.error", "detail": str(exc)})
+            return local_draft
+        if revised.content is None:
+            await _emit_run_event(
+                event_sink,
+                {"type": "quality.error", "detail": "quality synthesis returned no content"},
+            )
+            return local_draft
+        await _emit_run_event(event_sink, {"type": "quality.applied"})
+        return revised.content
 
     async def _handle_tool_call(
         self,
@@ -192,7 +265,7 @@ class AgentRuntime:
                 tool_name=tool_call.name,
                 tool_call_id=tool_call.id,
                 tool_arguments=tool_call.arguments,
-            )
+            ),
         )
         if tool_call_signature in failed_tool_calls:
             result = _serialize_tool_error(
@@ -234,7 +307,7 @@ class AgentRuntime:
                 content=serialized_result,
                 tool_name=tool_call.name,
                 tool_call_id=tool_call.id,
-            )
+            ),
         )
         await _emit_run_event(
             event_sink,
@@ -294,7 +367,7 @@ class AgentRuntime:
 
         new_summary = _merge_summaries(
             context.summary,
-            _summarize_messages(messages[context.summarized_message_count:summarize_upto]),
+            _summarize_messages(messages[context.summarized_message_count : summarize_upto]),
             max_chars=self._max_summary_chars,
         )
         self._store.update_thread_context(

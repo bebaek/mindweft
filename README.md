@@ -15,6 +15,7 @@ Minimal AI agent runtime POC from `DESIGN.md`.
 - Optional MCP tool discovery and invocation over HTTP
 - Optional local agent wrapper for Pi-first peer-agent task execution
 - Deterministic mock adapter for local testing
+- Optional privacy-preserving remote quality critique of sanitized local drafts
 
 ## Built-In Tools
 
@@ -144,6 +145,68 @@ the same backend shape:
 
 The default backend remains `native`, which preserves the existing Minigent LLM/tool
 runtime.
+
+## Remote Quality Enhancement
+
+Minigent can optionally ask a separate remote-quality model to critique a sanitized local
+draft before the final assistant message is stored. The main runtime still produces the
+initial answer with the tenant's normal LLM and tools. The quality path is advisory only:
+Minigent sends a redacted/minimized draft to the quality model, receives critique, then
+asks the primary LLM to revise using the private thread context. Raw thread history, tool
+outputs, and files are not sent to the quality model by this feature.
+
+It is disabled by default. Enable it for env-based config with:
+
+```dotenv
+MINIGENT_REMOTE_QUALITY_ENABLED=true
+MINIGENT_REMOTE_QUALITY_PROVIDER=openrouter
+MINIGENT_REMOTE_QUALITY_MODEL=openai/gpt-5.4-mini
+MINIGENT_REMOTE_QUALITY_API_KEY=...
+MINIGENT_REMOTE_QUALITY_MODE=critique_draft
+```
+
+Per-tenant execution config can include the same shape:
+
+```json
+{
+  "quality": {
+    "enabled": true,
+    "mode": "critique_draft",
+    "provider": "openrouter",
+    "model": "openai/gpt-5.4-mini",
+    "api_key": "...",
+    "max_payload_chars": 6000
+  }
+}
+```
+
+The sanitizer redacts common secrets, tokens, emails, private-network URLs, and absolute
+paths, and can truncate the remote payload. This is a data-minimization guardrail, not a
+mathematical privacy guarantee; keep the feature disabled for strict local-only use.
+
+For a local llama.cpp demo with its OpenAI-compatible server listening on port 8080:
+
+```bash
+uv run python scripts/demo_local_quality.py \
+  --llama-base-url http://127.0.0.1:8080/v1 \
+  --llama-model local-model \
+  --quality-provider mock
+```
+
+The `mock` quality provider exercises the sanitized critique path without requiring a
+remote API key. Use `--quality-provider openrouter --quality-model ... --quality-api-key ...`
+(or `openai`/`openai-compatible`) to demo a real remote reviewer. The script prints the
+NDJSON run events, including `quality.sanitized`, `quality.remote_request`, and
+`quality.applied` when the quality path is active.
+
+The same local llama.cpp path is available as an opt-in integration test:
+
+```bash
+MINIGENT_RUN_LLAMA_CPP_INTEGRATION_TESTS=true \
+  LLAMA_CPP_BASE_URL=http://127.0.0.1:8080/v1 \
+  LLAMA_CPP_MODEL=local-model \
+  uv run pytest tests/test_demo_local_quality_integration.py
+```
 
 Pi Coding Agent is the default peer profile. Install Pi separately and start the wrapper:
 

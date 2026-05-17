@@ -205,6 +205,17 @@ def _serialize_config_payload(config: TenantExecutionConfig) -> dict[str, Any]:
                 for server in config.tools.mcp_servers
             ],
         },
+        "quality": {
+            "enabled": config.quality.enabled,
+            "mode": config.quality.mode,
+            "provider": config.quality.provider,
+            "model": config.quality.model,
+            "base_url": config.quality.base_url,
+            "api_key": config.quality.api_key,
+            "extra_headers": dict(config.quality.extra_headers),
+            "timeout": config.quality.timeout,
+            "max_payload_chars": config.quality.max_payload_chars,
+        },
         "skills": {
             "default_skill": config.skills.default_skill,
             "items": [

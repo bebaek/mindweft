@@ -28,6 +28,14 @@ AGENT_BACKEND_POLL_INTERVAL_ENV = "MINIGENT_AGENT_BACKEND_POLL_INTERVAL_SECONDS"
 AGENT_BACKEND_MCP_BROKER_ENABLED_ENV = "MINIGENT_MCP_BROKER_ENABLED"
 AGENT_BACKEND_NATIVE = "native"
 AGENT_BACKEND_PEER_AGENT = "peer_agent"
+QUALITY_ENABLED_ENV = "MINIGENT_REMOTE_QUALITY_ENABLED"
+QUALITY_MODE_ENV = "MINIGENT_REMOTE_QUALITY_MODE"
+QUALITY_PROVIDER_ENV = "MINIGENT_REMOTE_QUALITY_PROVIDER"
+QUALITY_MODEL_ENV = "MINIGENT_REMOTE_QUALITY_MODEL"
+QUALITY_BASE_URL_ENV = "MINIGENT_REMOTE_QUALITY_BASE_URL"
+QUALITY_API_KEY_ENV = "MINIGENT_REMOTE_QUALITY_API_KEY"
+QUALITY_TIMEOUT_ENV = "MINIGENT_REMOTE_QUALITY_TIMEOUT"
+QUALITY_MAX_PAYLOAD_CHARS_ENV = "MINIGENT_REMOTE_QUALITY_MAX_PAYLOAD_CHARS"
 
 
 @dataclass(frozen=True)
@@ -57,13 +65,25 @@ class TenantAgentBackendConfig:
 
 
 @dataclass(frozen=True)
+class TenantQualityConfig:
+    enabled: bool = False
+    mode: str = "critique_draft"
+    provider: str = "mock"
+    model: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    extra_headers: dict[str, str] = field(default_factory=dict)
+    timeout: float = 30.0
+    max_payload_chars: int = 6000
+
+
+@dataclass(frozen=True)
 class TenantExecutionConfig:
     tenant_id: str
     llm: TenantLLMConfig = field(default_factory=TenantLLMConfig)
     tools: TenantToolConfig = field(default_factory=TenantToolConfig)
-    agent_backend: TenantAgentBackendConfig = field(
-        default_factory=TenantAgentBackendConfig
-    )
+    agent_backend: TenantAgentBackendConfig = field(default_factory=TenantAgentBackendConfig)
+    quality: TenantQualityConfig = field(default_factory=TenantQualityConfig)
     skills: "TenantSkillsConfig" = field(default_factory=lambda: TenantSkillsConfig())
     capability_profiles: "TenantCapabilityProfilesConfig" = field(
         default_factory=lambda: TenantCapabilityProfilesConfig()
@@ -166,6 +186,7 @@ class FixedTenantExecutionResolver(TenantExecutionResolver):
             "tenant_id": DEFAULT_TENANT_KEY,
             "llm": self._context.llm_adapter.describe(),
             "agent_backend": _agent_backend_public_dict(self._context.config.agent_backend),
+            "quality": _quality_public_dict(self._context.config.quality),
             "mcp_servers": self._context.tool_registry.mcp_servers(),
             "local_tools": sorted(
                 spec.name for spec in self._context.tool_registry.specs() if "." not in spec.name
@@ -246,6 +267,7 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
                     "agent_backend": _agent_backend_public_dict(
                         self._default_context.config.agent_backend
                     ),
+                    "quality": _quality_public_dict(self._default_context.config.quality),
                     "mcp_servers": self._default_context.tool_registry.mcp_servers(),
                     "local_tools": sorted(
                         spec.name
@@ -263,6 +285,7 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
             "tenant_id": tenant_id,
             "llm": context.llm_adapter.describe(),
             "agent_backend": _agent_backend_public_dict(context.config.agent_backend),
+            "quality": _quality_public_dict(context.config.quality),
             "mcp_servers": context.tool_registry.mcp_servers(),
             "local_tools": sorted(
                 spec.name for spec in context.tool_registry.specs() if "." not in spec.name
@@ -347,6 +370,7 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
                 "tenant_id": tenant_id,
                 "llm": context.llm_adapter.describe(),
                 "agent_backend": _agent_backend_public_dict(context.config.agent_backend),
+                "quality": _quality_public_dict(context.config.quality),
                 "mcp_servers": context.tool_registry.mcp_servers(),
                 "local_tools": sorted(
                     spec.name for spec in context.tool_registry.specs() if "." not in spec.name
@@ -413,6 +437,7 @@ def build_execution_resolver_from_env(
             tenant_id=DEFAULT_TENANT_KEY,
             tools=TenantToolConfig(mcp_servers=mcp_server_configs),
             agent_backend=_agent_backend_config_from_env(),
+            quality=_quality_config_from_env(),
         )
         registry, generation = _build_registry_for_config(config, mcp_manager=mcp_manager)
         return FixedTenantExecutionResolver(
@@ -447,9 +472,13 @@ def build_execution_resolver_from_env(
 def resolve_tenant_config_source(
     explicit_source: str | None = None,
 ) -> str:
-    raw = explicit_source if explicit_source is not None else os.getenv(
-        TENANT_CONFIG_SOURCE_ENV,
-        TENANT_CONFIG_SOURCE_ENV_ONLY,
+    raw = (
+        explicit_source
+        if explicit_source is not None
+        else os.getenv(
+            TENANT_CONFIG_SOURCE_ENV,
+            TENANT_CONFIG_SOURCE_ENV_ONLY,
+        )
     )
     source = raw.strip().lower()
     if source in {
@@ -465,22 +494,23 @@ def resolve_tenant_config_source(
     )
 
 
-def parse_tenant_execution_config(
-    tenant_id: str, payload: dict[str, Any]
-) -> TenantExecutionConfig:
+def parse_tenant_execution_config(tenant_id: str, payload: dict[str, Any]) -> TenantExecutionConfig:
     llm_payload = payload.get("llm") or {}
     tools_payload = payload.get("tools") or {}
     backend_payload = payload.get("agent_backend") or payload.get("agentBackend") or {}
+    quality_payload = payload.get("quality") or {}
     skills_payload = payload.get("skills") or {}
-    capability_profiles_payload = payload.get("capability_profiles") or payload.get(
-        "capabilityProfiles"
-    ) or {}
+    capability_profiles_payload = (
+        payload.get("capability_profiles") or payload.get("capabilityProfiles") or {}
+    )
     if not isinstance(llm_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' llm config must be an object")
     if not isinstance(tools_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' tools config must be an object")
     if not isinstance(backend_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' agent_backend config must be an object")
+    if not isinstance(quality_payload, dict):
+        raise RuntimeError(f"Tenant '{tenant_id}' quality config must be an object")
     if not isinstance(skills_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' skills config must be an object")
     if not isinstance(capability_profiles_payload, dict):
@@ -493,6 +523,7 @@ def parse_tenant_execution_config(
         llm=_parse_tenant_llm_config(tenant_id, llm_payload),
         tools=tool_config,
         agent_backend=_parse_tenant_agent_backend_config(tenant_id, backend_payload),
+        quality=_parse_tenant_quality_config(tenant_id, quality_payload),
         skills=_parse_tenant_skills_config(tenant_id, skills_payload, tool_config),
         capability_profiles=_parse_tenant_capability_profiles_config(
             tenant_id, capability_profiles_payload, tool_config
@@ -657,6 +688,61 @@ def _agent_backend_config_from_env() -> TenantAgentBackendConfig:
     )
 
 
+def _parse_tenant_quality_config(tenant_id: str, payload: dict[str, Any]) -> TenantQualityConfig:
+    provider = str(payload.get("provider", "mock")).strip().lower()
+    mode = str(payload.get("mode", "critique_draft")).strip().lower()
+    if mode != "critique_draft":
+        raise RuntimeError(f"Tenant '{tenant_id}' quality.mode must be 'critique_draft'")
+    extra_headers = payload.get("extra_headers") or payload.get("extraHeaders") or {}
+    if not isinstance(extra_headers, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in extra_headers.items()
+    ):
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' quality extra_headers must be an object of strings"
+        )
+    timeout_value = payload.get("timeout", 30.0)
+    try:
+        timeout = float(timeout_value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"Tenant '{tenant_id}' quality timeout must be numeric") from exc
+    max_payload_value = payload.get("max_payload_chars", payload.get("maxPayloadChars", 6000))
+    try:
+        max_payload_chars = int(max_payload_value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' quality max_payload_chars must be an integer"
+        ) from exc
+    if max_payload_chars < 256:
+        raise RuntimeError(f"Tenant '{tenant_id}' quality max_payload_chars must be at least 256")
+    return TenantQualityConfig(
+        enabled=_bool_config(tenant_id, payload.get("enabled", False), "quality.enabled"),
+        mode=mode,
+        provider=provider,
+        model=_optional_str(payload.get("model")),
+        base_url=_optional_str(payload.get("base_url") or payload.get("baseUrl")),
+        api_key=_optional_str(payload.get("api_key") or payload.get("apiKey")),
+        extra_headers=extra_headers,
+        timeout=timeout,
+        max_payload_chars=max_payload_chars,
+    )
+
+
+def _quality_config_from_env() -> TenantQualityConfig:
+    max_payload_chars = int(_positive_float_env(QUALITY_MAX_PAYLOAD_CHARS_ENV, 6000.0))
+    if max_payload_chars < 256:
+        raise RuntimeError(f"{QUALITY_MAX_PAYLOAD_CHARS_ENV} must be at least 256")
+    return TenantQualityConfig(
+        enabled=_bool_env(QUALITY_ENABLED_ENV, False),
+        mode=os.getenv(QUALITY_MODE_ENV, "critique_draft").strip().lower(),
+        provider=os.getenv(QUALITY_PROVIDER_ENV, "mock").strip().lower(),
+        model=os.getenv(QUALITY_MODEL_ENV, "").strip() or None,
+        base_url=os.getenv(QUALITY_BASE_URL_ENV, "").strip() or None,
+        api_key=os.getenv(QUALITY_API_KEY_ENV, "").strip() or None,
+        timeout=_positive_float_env(QUALITY_TIMEOUT_ENV, 30.0),
+        max_payload_chars=max_payload_chars,
+    )
+
+
 def _parse_tenant_skills_config(
     tenant_id: str,
     payload: dict[str, Any],
@@ -668,7 +754,9 @@ def _parse_tenant_skills_config(
         raise RuntimeError(f"Tenant '{tenant_id}' skills.items must be an array")
 
     allowed_local_tools = (
-        set(tool_config.allowed_local_tools) if tool_config.allowed_local_tools is not None else None
+        set(tool_config.allowed_local_tools)
+        if tool_config.allowed_local_tools is not None
+        else None
     )
     configured_mcp_server_names = {server.name for server in tool_config.mcp_servers}
     seen_names: set[str] = set()
@@ -744,7 +832,9 @@ def _parse_tenant_capability_profiles_config(
         raise RuntimeError(f"Tenant '{tenant_id}' capability_profiles.items must be an array")
 
     allowed_local_tools = (
-        set(tool_config.allowed_local_tools) if tool_config.allowed_local_tools is not None else None
+        set(tool_config.allowed_local_tools)
+        if tool_config.allowed_local_tools is not None
+        else None
     )
     configured_mcp_server_names = {server.name for server in tool_config.mcp_servers}
     seen_names: set[str] = set()
@@ -923,6 +1013,19 @@ def _agent_backend_public_dict(config: TenantAgentBackendConfig) -> dict[str, ob
     return payload
 
 
+def _quality_public_dict(config: TenantQualityConfig) -> dict[str, object]:
+    return {
+        "enabled": config.enabled,
+        "mode": config.mode,
+        "provider": config.provider,
+        "model": config.model,
+        "base_url": config.base_url,
+        "headers": sorted(config.extra_headers.keys()),
+        "timeout": config.timeout,
+        "max_payload_chars": config.max_payload_chars,
+    }
+
+
 def _required_non_empty_str(tenant_id: str, value: object, label: str) -> str:
     try:
         parsed = _optional_str(value)
@@ -945,7 +1048,9 @@ def _validate_local_tool_policy(tenant_id: str, payload: dict[str, Any]) -> list
     tools_payload = payload.get("tools") or {}
     if not isinstance(tools_payload, dict):
         return []
-    allowed_local_tools_raw = tools_payload.get("allowed_local_tools", tools_payload.get("allowedLocalTools"))
+    allowed_local_tools_raw = tools_payload.get(
+        "allowed_local_tools", tools_payload.get("allowedLocalTools")
+    )
     if allowed_local_tools_raw is None:
         return []
     if not isinstance(allowed_local_tools_raw, list) or not all(
@@ -965,10 +1070,16 @@ def _extract_unknown_local_tools(payload: dict[str, Any]) -> set[str]:
     tools_payload = payload.get("tools") or {}
     if not isinstance(tools_payload, dict):
         return set()
-    allowed_local_tools_raw = tools_payload.get("allowed_local_tools", tools_payload.get("allowedLocalTools"))
+    allowed_local_tools_raw = tools_payload.get(
+        "allowed_local_tools", tools_payload.get("allowedLocalTools")
+    )
     if not isinstance(allowed_local_tools_raw, list):
         return set()
-    return {tool for tool in allowed_local_tools_raw if isinstance(tool, str) and tool not in LOCAL_TOOL_NAMES}
+    return {
+        tool
+        for tool in allowed_local_tools_raw
+        if isinstance(tool, str) and tool not in LOCAL_TOOL_NAMES
+    }
 
 
 def _validate_llm_config(config: TenantExecutionConfig) -> dict[str, Any]:
@@ -1093,8 +1204,7 @@ def get_capability_profile(
     raise HTTPException(
         status_code=400,
         detail=(
-            f"Unknown capability profile '{resolved_profile_name}' "
-            f"for tenant '{config.tenant_id}'"
+            f"Unknown capability profile '{resolved_profile_name}' for tenant '{config.tenant_id}'"
         ),
     )
 
@@ -1145,7 +1255,9 @@ def build_tool_registry_for_capability_profile(
         if allowed_local_tools is None:
             allowed_local_tools = list(profile.allowed_local_tools)
         else:
-            allowed_local_tools = sorted(set(allowed_local_tools) & set(profile.allowed_local_tools))
+            allowed_local_tools = sorted(
+                set(allowed_local_tools) & set(profile.allowed_local_tools)
+            )
     mcp_servers = config.tools.mcp_servers
     if profile.mcp_server_names is not None:
         allowed_mcp_server_names = set(profile.mcp_server_names)

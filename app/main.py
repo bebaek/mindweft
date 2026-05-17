@@ -48,6 +48,7 @@ from app.models import (
 )
 from app.observability import configure_logging, configure_tracing
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_env
+from app.quality import QualityEnhancer
 from app.redaction import install_log_redaction
 from app.runtime import AgentRuntime, max_iterations_from_env
 from app.store import InMemoryThreadStore
@@ -194,10 +195,12 @@ def create_app(
             else:
                 raise RuntimeError(f"Unhandled tenant config source '{config_source}'")
     app.state.execution_resolver = execution_resolver
+    app.state.quality_enhancer = QualityEnhancer()
     app.state.runtime = AgentRuntime(
         store=app.state.store,
         execution_resolver=execution_resolver,
         max_iterations=max_iterations_from_env(),
+        quality_enhancer=app.state.quality_enhancer,
     )
     app.state.peer_agent_registry = peer_agent_registry or build_peer_agent_registry_from_env()
     app.state.agent_backend = AgentBackendRouter(
