@@ -63,7 +63,6 @@ WRAPPER_PID=$!
     MINIGENT_MCP_BROKER_BASE_URL="http://$MINIGENT_HOST:$MINIGENT_PORT" \
     MINIGENT_MCP_BROKER_ENABLED="$MINIGENT_MCP_BROKER_ENABLED" \
     uv run uvicorn app.main:app \
-    --reload \
     --host "$MINIGENT_HOST" \
     --port "$MINIGENT_PORT"
 ) &
