@@ -600,6 +600,8 @@ uv run minigent chat --stream "hello with progress"
 uv run minigent chat --thread <thread-id> "continue"
 uv run minigent chat --resume-last "continue"
 uv run minigent threads show <thread-id>
+uv run minigent --admin admin threads list --tenant <tenant-id>
+uv run minigent --admin admin threads show <thread-id> --tenant <tenant-id>
 ```
 
 The repo also exposes the same client entrypoint through `uv run`:
@@ -631,6 +633,8 @@ minigent-client config
 minigent-client threads create
 minigent-client threads show THREAD_ID
 minigent-client threads delete THREAD_ID
+minigent-client --admin admin threads list --tenant TENANT_ID
+minigent-client --admin admin threads show THREAD_ID --tenant TENANT_ID
 ```
 
 Add `--stream-runs`, or set `MINIGENT_CLIENT_STREAM_RUNS=true`, to have `minigent-client`
@@ -1187,6 +1191,14 @@ X-Minigent-Admin: true
 ```
 
 Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata and message counts; the detail endpoint returns metadata, compacted context state, and messages for one thread. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect persisted threads after process restarts.
+
+The packaged CLI can inspect the same thread data when authenticated as an admin:
+
+```bash
+minigent --admin admin threads list --tenant TENANT_ID
+minigent --admin admin threads show THREAD_ID --tenant TENANT_ID
+minigent --api-token ADMIN_TOKEN admin threads list --tenant TENANT_ID --json
+```
 
 Secrets such as LLM API keys and MCP headers are accepted on writes but redacted in read responses. If `MINIGENT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`, `MINIGENT_ADMIN_ENCRYPTION_KEY` is required and those secrets are encrypted before being written to SQLite. Updating or deleting a tenant config invalidates the in-process execution cache for that tenant so new runs pick up the change immediately.
 

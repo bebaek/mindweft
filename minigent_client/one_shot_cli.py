@@ -117,6 +117,34 @@ def build_parser() -> argparse.ArgumentParser:
     threads_delete_parser = threads_subparsers.add_parser("delete", help="Delete a thread.")
     threads_delete_parser.add_argument("thread_id", help="Thread ID to delete.")
 
+    admin_parser = subparsers.add_parser("admin", help="Admin inspection commands.")
+    admin_subparsers = admin_parser.add_subparsers(dest="admin_command", required=True)
+    admin_threads_parser = admin_subparsers.add_parser("threads", help="Inspect tenant threads.")
+    admin_threads_subparsers = admin_threads_parser.add_subparsers(
+        dest="admin_threads_command", required=True
+    )
+
+    admin_threads_list_parser = admin_threads_subparsers.add_parser(
+        "list", help="List threads for a tenant."
+    )
+    admin_threads_list_parser.add_argument(
+        "--tenant",
+        required=True,
+        dest="admin_tenant_id",
+        help="Tenant ID whose threads should be listed.",
+    )
+
+    admin_threads_show_parser = admin_threads_subparsers.add_parser(
+        "show", help="Show admin thread metadata, context, and messages."
+    )
+    admin_threads_show_parser.add_argument("thread_id", help="Thread ID to inspect.")
+    admin_threads_show_parser.add_argument(
+        "--tenant",
+        required=True,
+        dest="admin_tenant_id",
+        help="Tenant ID that owns the thread.",
+    )
+
     subparsers.add_parser("health", help="Check API health.")
     subparsers.add_parser("config", help="Show resolved API configuration.")
 
@@ -334,6 +362,84 @@ def run_threads_delete(
     return 0
 
 
+def run_admin_threads_list(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    response = client.list_admin_threads(args.admin_tenant_id)
+    if args.json:
+        output: dict[str, Any] = dict(response)
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    for thread in response.get("threads", []):
+        if not isinstance(thread, dict):
+            continue
+        print(
+            " ".join(
+                [
+                    str(thread.get("thread_id", "")),
+                    f"status={thread.get('status')}",
+                    f"messages={thread.get('message_count')}",
+                    f"updated_at={thread.get('updated_at')}",
+                ]
+            )
+        )
+    return 0
+
+
+def run_admin_threads_show(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    response = client.get_admin_thread(args.admin_tenant_id, args.thread_id)
+    if args.json:
+        output: dict[str, Any] = dict(response)
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    print(f"thread_id={response.get('thread_id')}")
+    print(f"tenant_id={response.get('tenant_id')}")
+    print(f"status={response.get('status')}")
+    print(f"message_count={response.get('message_count')}")
+    print(f"created_at={response.get('created_at')}")
+    print(f"updated_at={response.get('updated_at')}")
+    skill_name = response.get("skill_name")
+    if skill_name is not None:
+        print(f"skill_name={skill_name}")
+    skill_names = response.get("skill_names")
+    if skill_names is not None:
+        print(f"skill_names={skill_names}")
+    capability_profile = response.get("capability_profile")
+    if capability_profile is not None:
+        print(f"capability_profile={capability_profile}")
+    context = response.get("context")
+    if isinstance(context, dict):
+        print(
+            "context="
+            f"summarized_message_count={context.get('summarized_message_count')} "
+            f"updated_at={context.get('updated_at')}"
+        )
+        summary = context.get("summary")
+        if isinstance(summary, str) and summary:
+            print(f"summary={summary}")
+    messages = response.get("messages", [])
+    if isinstance(messages, list) and messages:
+        print("messages:")
+        for message in messages:
+            if isinstance(message, dict):
+                print(format_message(message))
+    return 0
+
+
 def run_health(
     client: MinigentAPIClient, as_json: bool, trace_id: str | None
 ) -> int:
@@ -377,6 +483,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return run_threads_show(args, client, trace_id)
             if args.threads_command == "delete":
                 return run_threads_delete(args, client, base_url, trace_id)
+        if args.command == "admin":
+            if args.admin_command == "threads":
+                if args.admin_threads_command == "list":
+                    return run_admin_threads_list(args, client, trace_id)
+                if args.admin_threads_command == "show":
+                    return run_admin_threads_show(args, client, trace_id)
         if args.command == "health":
             return run_health(client, args.json, trace_id)
         if args.command == "config":

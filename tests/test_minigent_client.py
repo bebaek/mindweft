@@ -3390,7 +3390,7 @@ def test_minigent_client_cli_routes_chat_backend_without_minigent_client(
     assert calls[1] == ("once", True)
 
 
-def test_minigent_client_cli_delegates_thread_commands_to_one_shot_cli(
+def test_minigent_client_cli_delegates_one_shot_commands_to_one_shot_cli(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[list[str]] = []
@@ -3405,10 +3405,22 @@ def test_minigent_client_cli_delegates_thread_commands_to_one_shot_cli(
 
     monkeypatch.setattr(one_shot_cli, "main", fake_one_shot_main)
 
-    exit_code = voice_cli.main(["--base-url", "http://example.test", "threads", "create"])
+    thread_exit_code = voice_cli.main(["--base-url", "http://example.test", "threads", "create"])
+    admin_exit_code = voice_cli.main([
+        "--admin",
+        "admin",
+        "threads",
+        "list",
+        "--tenant",
+        "tenant-a",
+    ])
 
-    assert exit_code == 9
-    assert calls == [["--base-url", "http://example.test", "threads", "create"]]
+    assert thread_exit_code == 9
+    assert admin_exit_code == 9
+    assert calls == [
+        ["--base-url", "http://example.test", "threads", "create"],
+        ["--admin", "admin", "threads", "list", "--tenant", "tenant-a"],
+    ]
 
 
 def test_audio_ring_buffer_keeps_recent_audio_only() -> None:
