@@ -610,10 +610,24 @@ installed `minigent-client` command; inside the repo you can replace it with
 `uv run minigent-client`.
 
 For a plain terminal chat loop with no wake word, microphone, or spoken output, use the
-`chat` backend:
+`chat` subcommand. The older `--backend chat` form remains supported:
 
 ```bash
-minigent-client --backend chat
+minigent-client chat
+```
+
+You can also use `minigent-client stdin`, `minigent-client manual-audio`,
+`minigent-client passive-audio`, or `minigent-client voice` (`manual-audio`) instead of
+passing `--backend`.
+
+Operational one-shot commands are also available on the shared client entrypoint:
+
+```bash
+minigent-client health
+minigent-client config
+minigent-client threads create
+minigent-client threads show THREAD_ID
+minigent-client threads delete THREAD_ID
 ```
 
 Add `--stream-runs`, or set `MINIGENT_CLIENT_STREAM_RUNS=true`, to have `minigent-client`

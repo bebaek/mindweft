@@ -3332,6 +3332,35 @@ def test_run_chat_loop_handles_keyboard_interrupt(
     assert output_stream.getvalue() == "[user] \n[idle] shutting down\n"
 
 
+def test_minigent_client_cli_routes_chat_subcommand_without_minigent_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(voice_cli, "load_environment", lambda: None)
+
+    def fake_run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
+        calls.append(("chat", config))
+        calls.append(("once", once))
+        return 7
+
+    monkeypatch.setattr(voice_cli, "run_chat_loop", fake_run_chat_loop)
+    monkeypatch.setattr(
+        voice_cli,
+        "MinigentClientRuntime",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("MinigentClientRuntime should not be built for chat")
+        ),
+    )
+
+    exit_code = voice_cli.main(["chat", "--once"])
+
+    assert exit_code == 7
+    assert calls[0][0] == "chat"
+    assert isinstance(calls[0][1], ClientConfig)
+    assert calls[1] == ("once", True)
+
+
 def test_minigent_client_cli_routes_chat_backend_without_minigent_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3345,7 +3374,13 @@ def test_minigent_client_cli_routes_chat_backend_without_minigent_client(
         return 7
 
     monkeypatch.setattr(voice_cli, "run_chat_loop", fake_run_chat_loop)
-    monkeypatch.setattr(voice_cli, "MinigentClientRuntime", lambda **kwargs: (_ for _ in ()).throw(AssertionError("MinigentClientRuntime should not be built for chat")))
+    monkeypatch.setattr(
+        voice_cli,
+        "MinigentClientRuntime",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("MinigentClientRuntime should not be built for chat")
+        ),
+    )
 
     exit_code = voice_cli.main(["--backend", "chat", "--once"])
 
@@ -3353,6 +3388,27 @@ def test_minigent_client_cli_routes_chat_backend_without_minigent_client(
     assert calls[0][0] == "chat"
     assert isinstance(calls[0][1], ClientConfig)
     assert calls[1] == ("once", True)
+
+
+def test_minigent_client_cli_delegates_thread_commands_to_one_shot_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(voice_cli, "load_environment", lambda: None)
+
+    import app.cli as one_shot_cli
+
+    def fake_one_shot_main(argv: list[str]) -> int:
+        calls.append(argv)
+        return 9
+
+    monkeypatch.setattr(one_shot_cli, "main", fake_one_shot_main)
+
+    exit_code = voice_cli.main(["--base-url", "http://example.test", "threads", "create"])
+
+    assert exit_code == 9
+    assert calls == [["--base-url", "http://example.test", "threads", "create"]]
 
 
 def test_audio_ring_buffer_keeps_recent_audio_only() -> None:

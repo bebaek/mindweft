@@ -310,13 +310,108 @@ def build_config(args: argparse.Namespace) -> ClientConfig:
     )
 
 
+def _first_cli_command(argv: list[str], commands: set[str]) -> str | None:
+    skip_next = False
+    for item in argv:
+        if skip_next:
+            skip_next = False
+            continue
+        if item == "--":
+            return None
+        if item in commands:
+            return item
+        if item.startswith("--"):
+            if "=" not in item and item in _OPTIONS_WITH_VALUES:
+                skip_next = True
+            continue
+        if item.startswith("-"):
+            continue
+        return None
+    return None
+
+
+_BACKEND_SUBCOMMANDS = {
+    "chat": "chat",
+    "stdin": "stdin",
+    "manual-audio": "manual-audio",
+    "passive-audio": "passive-audio",
+    "voice": "manual-audio",
+}
+
+_OPTIONS_WITH_VALUES = {
+    "--backend",
+    "--base-url",
+    "--wake-phrase",
+    "--wake-acknowledgement",
+    "--capture-ended-acknowledgement",
+    "--skill",
+    "--thread-id",
+    "--api-token",
+    "--user-id",
+    "--tenant-id",
+    "--audio-device",
+    "--debug-capture-path",
+    "--stt-debug-path",
+    "--ducking-mode",
+    "--ducked-output-volume",
+    "--follow-up-timeout-ms",
+    "--stt-provider",
+    "--stt-device",
+    "--stt-compute-type",
+    "--stt-language",
+    "--tts-provider",
+    "--tts-voice",
+    "--tts-model",
+    "--tts-model-dir",
+    "--tts-speaker",
+    "--tts-length-scale",
+    "--tts-sentence-silence",
+    "--wakeword-provider",
+    "--keyword-path",
+    "--oww-model",
+}
+
+
+def _consume_backend_subcommand(argv: list[str]) -> tuple[str | None, list[str]]:
+    skip_next = False
+    for index, item in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
+        if item == "--":
+            return None, argv
+        if item in _BACKEND_SUBCOMMANDS:
+            return _BACKEND_SUBCOMMANDS[item], argv[:index] + argv[index + 1 :]
+        if item.startswith("--"):
+            if "=" not in item and item in _OPTIONS_WITH_VALUES:
+                skip_next = True
+            continue
+        if item.startswith("-"):
+            continue
+        return None, argv
+    return None, argv
+
+
 def main(argv: list[str] | None = None) -> int:
     load_environment()
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    one_shot_command = _first_cli_command(raw_argv, {"threads", "health", "config"})
+    if one_shot_command is not None:
+        from app.cli import main as one_shot_main
+
+        return one_shot_main(raw_argv)
+    backend_override, parser_argv = _consume_backend_subcommand(raw_argv)
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(parser_argv)
+    if backend_override is not None:
+        args.backend = backend_override
     config = build_config(args)
-    if args.backend == "chat":
-        return run_chat_loop(config, once=args.once)
+    return run_backend(args.backend, config, once=args.once)
+
+
+def run_backend(backend: str, config: ClientConfig, *, once: bool = False) -> int:
+    if backend == "chat":
+        return run_chat_loop(config, once=once)
     speech_output = build_speech_output(config)
     ambient_volume_controller = build_ambient_volume_controller(config)
     activation_feedback = wrap_feedback_with_ambient_restore(
@@ -324,10 +419,10 @@ def main(argv: list[str] | None = None) -> int:
             config.wake_acknowledgement,
             config.wake_acknowledgement_sound,
             speech_output,
-            async_bell=args.backend == "passive-audio",
+            async_bell=backend == "passive-audio",
         ),
         ambient_volume_controller,
-        reduck_delay_seconds=0.5 if args.backend == "passive-audio" else 0.0,
+        reduck_delay_seconds=0.5 if backend == "passive-audio" else 0.0,
     )
     capture_ended_feedback = wrap_feedback_with_ambient_restore(
         build_acknowledgement_feedback(
@@ -338,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
         ambient_volume_controller,
     )
     activation_source = build_activation_source(
-        args.backend,
+        backend,
         config,
         activation_feedback=activation_feedback,
         capture_ended_feedback=capture_ended_feedback,
@@ -348,12 +443,12 @@ def main(argv: list[str] | None = None) -> int:
         activation_source=activation_source,
         minigent_client=MinigentAPIClient(config, output_stream=sys.stdout),
         speech_output=speech_output,
-        activation_feedback=None if args.backend == "passive-audio" else activation_feedback,
+        activation_feedback=None if backend == "passive-audio" else activation_feedback,
         follow_up_timeout_ms=config.follow_up_timeout_ms,
         ambient_volume_controller=ambient_volume_controller,
     )
     try:
-        if args.once:
+        if once:
             client_runtime.run_once()
             return 0
         client_runtime.run_forever()
