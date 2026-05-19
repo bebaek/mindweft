@@ -47,6 +47,8 @@ from minigent_client.speech import (
     SilentSpeechOutput,
     _sanitize_text_for_tts,
 )
+from minigent_client.state import ClientState as PersistentClientState
+from minigent_client.state import principal_key, state_scope_key
 from minigent_client.stt import (
     FasterWhisperTranscriptionAdapter,
     FasterWhisperTranscriptionConfig,
@@ -130,6 +132,49 @@ class FakeAmbientVolumeController:
 
     def close(self) -> None:
         self.close_calls += 1
+
+
+def test_persistent_client_state_round_trips_last_thread(tmp_path: Path) -> None:
+    state_path = tmp_path / "cli-state.json"
+    key = state_scope_key(
+        "http://127.0.0.1:8000/",
+        api_token=None,
+        user_id="demo-user",
+        tenant_id="demo-tenant",
+        is_admin=False,
+    )
+    state = PersistentClientState.load(state_path)
+
+    assert key == "http://127.0.0.1:8000|dev:demo-user:demo-tenant:false"
+    assert state.get_last_thread(key) is None
+
+    state.set_last_thread(key, "thread-1")
+    state.save()
+
+    loaded = PersistentClientState.load(state_path)
+    assert loaded.get_last_thread(key) == "thread-1"
+    assert loaded.forget_last_thread(key, "thread-2") is False
+    assert loaded.forget_last_thread(key, "thread-1") is True
+    assert loaded.get_last_thread(key) is None
+
+
+def test_persistent_client_state_uses_stable_token_fingerprint() -> None:
+    first_key = principal_key(
+        api_token="secret-token",
+        user_id="ignored-user",
+        tenant_id="ignored-tenant",
+        is_admin=False,
+    )
+    second_key = principal_key(
+        api_token="secret-token",
+        user_id="other-user",
+        tenant_id="other-tenant",
+        is_admin=True,
+    )
+
+    assert first_key == second_key
+    assert first_key.startswith("bearer:")
+    assert "secret-token" not in first_key
 
 
 def test_minigent_client_uses_transcript_hint_without_capture() -> None:
@@ -1501,6 +1546,89 @@ def test_minigent_client_can_log_full_prompt_for_diagnostics(
         "location=Austin, TX, US; timezone=America/Chicago\n\n"
         "What's my location?\n"
     )
+
+
+def test_minigent_api_client_exposes_shared_thread_methods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, payload: object | None = None) -> None:
+            self._payload = payload
+
+        def read(self) -> bytes:
+            if self._payload is None:
+                return b""
+            return json.dumps(self._payload).encode("utf-8")
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    def fake_urlopen(request: object) -> FakeResponse:
+        payload = json.loads(request.data.decode("utf-8")) if request.data else None
+        requests.append(
+            {
+                "method": request.get_method(),
+                "url": request.full_url,
+                "payload": payload,
+                "headers": dict(request.header_items()),
+            }
+        )
+        if request.full_url.endswith("/health"):
+            return FakeResponse({"status": "ok"})
+        if request.full_url.endswith("/config"):
+            return FakeResponse({"llm_provider": "mock"})
+        if request.full_url.endswith("/threads"):
+            return FakeResponse({"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages") and request.get_method() == "POST":
+            return FakeResponse({"id": "message-1"})
+        if request.full_url.endswith("/threads/thread-1/messages") and request.get_method() == "GET":
+            return FakeResponse([{"role": "user", "content": "hello"}])
+        if request.full_url.endswith("/threads/thread-1/run"):
+            return FakeResponse({"reply": "hi"})
+        if request.full_url.endswith("/threads/thread-1"):
+            return FakeResponse()
+        raise AssertionError(f"unexpected url {request.full_url}")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = MinigentAPIClient(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        )
+    )
+
+    assert client.health() == {"status": "ok"}
+    assert client.config() == {"llm_provider": "mock"}
+    assert client.create_thread(skills=["coding", "review"], capability_profile="dev") == {
+        "thread_id": "thread-1"
+    }
+    assert client.add_message("thread-1", "hello") == {"id": "message-1"}
+    assert client.get_thread("thread-1") == {
+        "thread_id": "thread-1",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    assert client.run_thread("thread-1", stream=False) == "hi"
+    client.delete_thread("thread-1")
+
+    assert [request["method"] for request in requests] == [
+        "GET",
+        "GET",
+        "POST",
+        "POST",
+        "GET",
+        "POST",
+        "DELETE",
+    ]
+    assert requests[2]["payload"] == {
+        "skill_names": ["coding", "review"],
+        "capability_profile": "dev",
+    }
 
 
 def test_minigent_client_can_run_thread_with_ndjson_stream(

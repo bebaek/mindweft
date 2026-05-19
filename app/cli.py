@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import secrets
 import sys
 import urllib.error
 import urllib.request
-from pathlib import Path
 from typing import Any, Sequence
 
-STATE_DIR_NAME = ".minigent"
-STATE_FILE_NAME = "cli-state.json"
+from minigent_client.state import ClientState
+from minigent_client.state import state_scope_key as build_state_scope_key
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -204,68 +202,34 @@ def build_auth_headers(args: argparse.Namespace) -> dict[str, str]:
     return build_principal_headers(args.user_id, args.tenant_id, args.admin)
 
 
-def state_file_path() -> Path:
-    return Path.home() / STATE_DIR_NAME / STATE_FILE_NAME
-
-
-def load_state() -> dict[str, Any]:
-    path = state_file_path()
-    try:
-        return json.loads(path.read_text())
-    except FileNotFoundError:
-        return {}
-    except json.JSONDecodeError:
-        return {}
-
-
-def save_state(state: dict[str, Any]) -> None:
-    path = state_file_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
-
-
-def principal_key(args: argparse.Namespace) -> str:
-    if args.api_token:
-        token_fingerprint = hashlib.sha256(args.api_token.encode("utf-8")).hexdigest()[:16]
-        return f"bearer:{token_fingerprint}"
-    return f"dev:{args.user_id}:{args.tenant_id}:{str(args.admin).lower()}"
-
-
 def state_scope_key(base_url: str, args: argparse.Namespace) -> str:
-    return f"{base_url}|{principal_key(args)}"
+    return build_state_scope_key(
+        base_url,
+        api_token=args.api_token,
+        user_id=args.user_id,
+        tenant_id=args.tenant_id,
+        is_admin=args.admin,
+    )
 
 
 def remember_thread(base_url: str, args: argparse.Namespace, thread_id: str) -> None:
-    state = load_state()
-    recent_threads = state.setdefault("recent_threads", {})
-    if not isinstance(recent_threads, dict):
-        recent_threads = {}
-        state["recent_threads"] = recent_threads
-    recent_threads[state_scope_key(base_url, args)] = thread_id
-    save_state(state)
+    state = ClientState.load()
+    state.set_last_thread(state_scope_key(base_url, args), thread_id)
+    state.save()
 
 
 def load_remembered_thread(base_url: str, args: argparse.Namespace) -> str:
-    state = load_state()
-    recent_threads = state.get("recent_threads", {})
-    if not isinstance(recent_threads, dict):
-        raise SystemExit("No saved thread history is available for this CLI.")
-    thread_id = recent_threads.get(state_scope_key(base_url, args))
-    if not isinstance(thread_id, str) or not thread_id:
+    state = ClientState.load()
+    thread_id = state.get_last_thread(state_scope_key(base_url, args))
+    if thread_id is None:
         raise SystemExit("No remembered thread for this server and principal. Start a chat first.")
     return thread_id
 
 
 def forget_thread(base_url: str, args: argparse.Namespace, thread_id: str) -> None:
-    state = load_state()
-    recent_threads = state.get("recent_threads", {})
-    if not isinstance(recent_threads, dict):
-        return
-    scope_key = state_scope_key(base_url, args)
-    if recent_threads.get(scope_key) != thread_id:
-        return
-    del recent_threads[scope_key]
-    save_state(state)
+    state = ClientState.load()
+    if state.forget_last_thread(state_scope_key(base_url, args), thread_id):
+        state.save()
 
 
 def ensure_thread(

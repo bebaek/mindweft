@@ -27,11 +27,11 @@ from minigent_client.speech import (
     PiperSpeechOutput,
     SilentSpeechOutput,
 )
+from minigent_client.state import STATE_DIR_NAME
 from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
 from minigent_client.vad import SileroVoiceActivityDetector
 from minigent_client.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
 
-STATE_DIR_NAME = ".minigent"
 CHAT_HISTORY_FILE_NAME = "client-chat-history"
 
 
