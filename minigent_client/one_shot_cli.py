@@ -50,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print structured JSON output.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print extra run progress metadata in streaming text mode.",
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -334,7 +339,11 @@ def build_config(args: argparse.Namespace, trace_id: str | None) -> ClientConfig
 
 
 def build_client(args: argparse.Namespace, trace_id: str | None) -> MinigentAPIClient:
-    return MinigentAPIClient(build_config(args, trace_id), progress_stream=sys.stderr)
+    return MinigentAPIClient(
+        build_config(args, trace_id),
+        progress_stream=sys.stderr,
+        progress_verbose=args.verbose,
+    )
 
 
 def validate_thread_create_options(args: argparse.Namespace) -> None:
@@ -363,8 +372,8 @@ def ensure_thread(
     return thread_id, True
 
 
-def _make_stream_progress_printer() -> Any:
-    renderer = StreamProgressRenderer(sys.stderr)
+def _make_stream_progress_printer(*, verbose: bool = False) -> Any:
+    renderer = StreamProgressRenderer(sys.stderr, verbose=verbose)
     return renderer.render
 
 
@@ -725,7 +734,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     trace_id = secrets.token_hex(16) if args.trace else None
     config = build_config(args, trace_id)
     base_url = config.base_url
-    client = MinigentAPIClient(config, progress_stream=sys.stderr)
+    client = MinigentAPIClient(config, progress_stream=sys.stderr, progress_verbose=args.verbose)
 
     try:
         if args.command == "chat":

@@ -68,10 +68,10 @@ def test_chat_stream_text_prints_progress_to_stderr(
 ) -> None:
     stream_events = [
         {"type": "run.started", "thread_id": "thread-1"},
-        {"type": "tool.call", "thread_id": "thread-1", "name": "echo"},
+        {"type": "tool.call", "thread_id": "thread-1", "name": "echo", "arguments": {"text": "hi"}},
         {"type": "tool.result", "thread_id": "thread-1", "name": "echo", "is_error": False},
         {"type": "assistant.message", "thread_id": "thread-1", "content": "done"},
-        {"type": "run.completed", "thread_id": "thread-1"},
+        {"type": "run.completed", "thread_id": "thread-1", "usage": {"prompt_tokens": 1800, "completion_tokens": 420, "total_tokens": 2220}},
     ]
 
     def urlopen(request: Any) -> _Response:
@@ -91,10 +91,10 @@ def test_chat_stream_text_prints_progress_to_stderr(
     assert exit_code == 0
     captured = capsys.readouterr()
     assert captured.out == "done\n"
-    assert "[run] started" in captured.err
-    assert "[tool] call echo" in captured.err
-    assert "[tool] result echo ok" in captured.err
-    assert "[run] completed" in captured.err
+    assert "● preparing" in captured.err
+    assert '🔧 echo(text="hi") ...' in captured.err
+    assert '🔧 echo(text="hi") done' in captured.err
+    assert "● done · tokens: prompt 1.8k · completion 420 · total 2.2k" in captured.err
 
 
 def test_chat_stream_text_coalesces_peer_message_updates(

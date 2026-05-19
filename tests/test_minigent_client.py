@@ -1705,14 +1705,14 @@ def test_minigent_client_can_run_thread_with_ndjson_stream(
     ]
     assert output_stream.getvalue() == ""
     assert progress_stream.getvalue() == (
-        "[run] started\n"
-        "[tool] call echo\n"
-        "[tool] result echo ok\n"
+        "● preparing\n"
+        "🔧 echo() ...\n"
+        "🔧 echo() done\n"
         "[peer] task created peer=pi task_id=task-1 status=queued\n"
         "[peer] task status peer=pi task_id=task-1 status=running\n"
         "[peer] message updating...\n"
         "[peer] tool start read\n"
-        "[run] completed\n"
+        "● done\n"
     )
 
 

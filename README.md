@@ -641,7 +641,11 @@ minigent-client --admin admin threads delete THREAD_ID --tenant TENANT_ID
 
 Add `--stream-runs`, or set `MINIGENT_CLIENT_STREAM_RUNS=true`, to have `minigent-client`
 use `POST /threads/{thread_id}/run/stream` and print live run/tool/peer progress to stderr
-before printing or speaking the final assistant reply.
+before printing or speaking the final assistant reply. The one-shot CLI also supports
+`minigent chat --stream ...`; in text mode it keeps the assistant reply on stdout and
+prints compact status/tool lines such as `● preparing`, `● sending`, `🔧 echo(...) done`,
+and `● done` to stderr. Use global `--verbose` with one-shot streaming commands to include
+extra progress metadata such as LLM iteration numbers.
 
 When `chat` runs on an interactive TTY, it uses `prompt_toolkit` for shell-style editing,
 persistent local input history, and multiline input. Press `Enter` to submit a message, or

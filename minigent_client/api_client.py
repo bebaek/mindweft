@@ -17,12 +17,16 @@ class MinigentAPIClient:
         config: ClientConfig,
         output_stream: TextIO | None = None,
         progress_stream: TextIO | None = None,
+        progress_verbose: bool = False,
     ) -> None:
         self._config = config
         self._thread_id = config.thread_id
         self._output_stream = output_stream or sys.stdout
         self._progress_stream = progress_stream or sys.stderr
-        self._stream_progress_renderer = StreamProgressRenderer(self._progress_stream)
+        self._stream_progress_renderer = StreamProgressRenderer(
+            self._progress_stream,
+            verbose=progress_verbose,
+        )
 
     def health(self) -> dict[str, Any]:
         response = self.request_json("GET", f"{self._config.base_url}/health")
