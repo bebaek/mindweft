@@ -278,6 +278,35 @@ Pass a custom prompt as the first argument:
 ./scripts/demo_pi_backend_stack.sh "Summarize the local-agent-wrapper package. Do not edit files."
 ```
 
+For an interactive development stack that keeps the Pi wrapper and Minigent running
+without launching a demo prompt, use:
+
+```bash
+./scripts/dev_pi_peer_stack.sh
+```
+
+By default, the wrapper allows tasks only in the Minigent checkout and Minigent sends peer
+backend tasks with that same working directory. Override the target working directory with
+`MINIGENT_PI_WORKSPACE`:
+
+```bash
+MINIGENT_PI_WORKSPACE=/Users/burm/code/some-project ./scripts/dev_pi_peer_stack.sh
+```
+
+If the wrapper should allow multiple roots, set `AGENT_ALLOWED_WORKSPACES` with the
+platform path separator, for example `:` on macOS/Linux, while keeping
+`MINIGENT_PI_WORKSPACE` as the task working directory:
+
+```bash
+MINIGENT_PI_WORKSPACE=/Users/burm/code/some-project \
+AGENT_ALLOWED_WORKSPACES="/Users/burm/code/minigent:/Users/burm/code/some-project" \
+  ./scripts/dev_pi_peer_stack.sh
+```
+
+Other useful overrides are `MINIGENT_HOST`, `MINIGENT_PORT`,
+`MINIGENT_PI_WRAPPER_PORT`, `MINIGENT_PI_PEER_NAME`, `AGENT_COMMAND`, and
+`AGENT_RUNTIME`.
+
 To smoke-test brokered MCP tool use, run the demo for the configured peer:
 
 ```bash
