@@ -511,7 +511,7 @@ For the client as a normal CLI app, install the package with the `voice` extra s
 
 ```bash
 uv tool install '.[voice]'
-minigent-client --wake-phrase "hey minigent"
+minigent-client stdin --wake-phrase "hey minigent"
 ```
 
 That installs an isolated tool environment and links the console scripts into uv's tool
@@ -602,7 +602,7 @@ uv run minigent threads show <thread-id>
 The repo also exposes the same client entrypoint through `uv run`:
 
 ```bash
-uv run minigent-client --wake-phrase "hey minigent"
+uv run minigent-client stdin --wake-phrase "hey minigent"
 ```
 
 By default, assistant replies are printed to the terminal. The examples below use the
@@ -646,7 +646,7 @@ You can also enable local TTS on macOS with:
 ```bash
 MINIGENT_VOICE_TTS_PROVIDER=say
 MINIGENT_VOICE_TTS_VOICE=Samantha
-minigent-client --backend manual-audio --once
+minigent-client manual-audio --once
 ```
 
 With `MINIGENT_VOICE_TTS_PROVIDER=say`, passive mode also supports wake-word barge-in:
@@ -666,7 +666,7 @@ Piper with a model path or model name:
 ```bash
 MINIGENT_VOICE_TTS_PROVIDER=piper
 MINIGENT_VOICE_TTS_MODEL=en_US-lessac-medium
-minigent-client --backend manual-audio --once
+minigent-client manual-audio --once
 ```
 
 For multi-speaker Piper models, also set `MINIGENT_VOICE_TTS_SPEAKER`:
@@ -675,7 +675,7 @@ For multi-speaker Piper models, also set `MINIGENT_VOICE_TTS_SPEAKER`:
 MINIGENT_VOICE_TTS_PROVIDER=piper
 MINIGENT_VOICE_TTS_MODEL=/absolute/path/to/voice.onnx
 MINIGENT_VOICE_TTS_SPEAKER=0
-minigent-client --backend manual-audio --once
+minigent-client manual-audio --once
 ```
 
 `piper-tts` ships as part of the `voice` extra. When
@@ -702,7 +702,7 @@ MINIGENT_VOICE_TTS_PROVIDER=piper
 MINIGENT_VOICE_TTS_MODEL=en_US-lessac-medium
 MINIGENT_VOICE_TTS_SENTENCE_SILENCE=0.55
 MINIGENT_VOICE_TTS_LENGTH_SCALE=1.15
-minigent-client --backend manual-audio --once
+minigent-client manual-audio --once
 ```
 
 The client currently supports four backends:
@@ -724,9 +724,9 @@ from the configured wake-word provider: `MINIGENT_VOICE_KEYWORD_PATH` for Porcup
 Examples:
 
 ```bash
-minigent-client --backend chat
+minigent-client chat
 
-minigent-client --wake-phrase "hey minigent"
+minigent-client stdin --wake-phrase "hey minigent"
 # ignored
 hello there
 # activates and uses the rest of the line as the utterance
@@ -746,7 +746,7 @@ Example:
 ```bash
 MINIGENT_VOICE_PROMPT_PREAMBLE='timezone=America/Chicago
 note=prefer local context' \
-minigent-client --backend manual-audio --once
+minigent-client manual-audio --once
 ```
 
 For coarse location specifically, `MINIGENT_VOICE_LOCATION` remains available as a
@@ -762,7 +762,7 @@ Manual audio example:
 
 ```bash
 OPENAI_API_KEY=...
-minigent-client --backend manual-audio --once
+minigent-client manual-audio --once
 ```
 
 If you want voice input without spoken assistant playback, disable TTS and keep the
@@ -771,7 +771,7 @@ assistant reply in the terminal:
 ```bash
 OPENAI_API_KEY=...
 MINIGENT_VOICE_TTS_PROVIDER=none
-minigent-client --backend manual-audio --once
+minigent-client manual-audio --once
 ```
 
 Using OpenRouter for transcription:
@@ -780,7 +780,7 @@ Using OpenRouter for transcription:
 OPENROUTER_API_KEY=...
 MINIGENT_VOICE_STT_PROVIDER=openrouter
 MINIGENT_VOICE_STT_MODEL=openai/gpt-audio
-minigent-client --backend manual-audio --once
+minigent-client manual-audio --once
 ```
 
 Using local faster-whisper transcription:
@@ -791,7 +791,7 @@ MINIGENT_VOICE_STT_MODEL=base
 MINIGENT_VOICE_STT_DEVICE=cpu
 MINIGENT_VOICE_STT_COMPUTE_TYPE=int8
 MINIGENT_VOICE_STT_LANGUAGE=en
-minigent-client --backend manual-audio --once
+minigent-client manual-audio --once
 ```
 
 In `manual-audio` mode, press Enter to start recording. The client stops recording after
@@ -818,7 +818,7 @@ Passive wake-word example:
 ```bash
 PICOVOICE_ACCESS_KEY=...
 MINIGENT_VOICE_KEYWORD_PATH=/absolute/path/to/hey-minigent.ppn
-minigent-client --backend passive-audio
+minigent-client passive-audio
 ```
 
 If you keep the client settings in `.env.voice.docker`, use the wrapper script:
@@ -830,7 +830,7 @@ If you keep the client settings in `.env.voice.docker`, use the wrapper script:
 It exports `.env.voice.docker` into the process environment, then runs:
 
 ```bash
-minigent-client --backend passive-audio
+minigent-client passive-audio
 ```
 
 Press `Ctrl-C` to stop the client cleanly. It will print `[idle] shutting down` and
@@ -841,7 +841,7 @@ Free `openwakeword` example:
 ```bash
 MINIGENT_VOICE_WAKEWORD_PROVIDER=openwakeword
 MINIGENT_VOICE_OWW_MODEL=okay_nabu
-minigent-client --backend passive-audio
+minigent-client passive-audio
 ```
 
 `passive-audio` keeps the microphone open, feeds chunks into the configured wake-word detector, and after the
@@ -885,7 +885,7 @@ capturing an utterance or listening during that follow-up window:
 ```bash
 MINIGENT_VOICE_DUCKING_MODE=input-only
 MINIGENT_VOICE_DUCKED_OUTPUT_VOLUME=20
-minigent-client --backend passive-audio
+minigent-client passive-audio
 ```
 
 This is system-wide ducking, not per-app mixing. The client does not duck during idle

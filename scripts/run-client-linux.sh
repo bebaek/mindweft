@@ -55,4 +55,4 @@ set -a
 source "$ENV_FILE"
 set +a
 
-exec minigent-client --backend "$BACKEND" "$@"
+exec minigent-client "$BACKEND" "$@"
