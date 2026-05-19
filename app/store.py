@@ -1,10 +1,53 @@
 from __future__ import annotations
 
+import json
+import os
+import sqlite3
+from pathlib import Path
 from threading import Lock
+from typing import Protocol
 
 from fastapi import HTTPException
 
 from app.models import Message, Thread, ThreadContext, ThreadStatus, utc_now
+
+THREAD_DB_PATH_ENV = "MINIGENT_THREAD_DB_PATH"
+
+
+class ThreadStore(Protocol):
+    def create_thread(
+        self,
+        tenant_id: str,
+        *,
+        skill_name: str | None = None,
+        skill_names: list[str] | None = None,
+        capability_profile: str | None = None,
+    ) -> Thread: ...
+
+    def delete_thread(self, tenant_id: str, thread_id: str) -> None: ...
+
+    def list_messages(self, tenant_id: str, thread_id: str) -> list[Message]: ...
+
+    def append_message(self, tenant_id: str, message: Message) -> Message: ...
+
+    def set_thread_status(self, tenant_id: str, thread_id: str, status: ThreadStatus) -> Thread: ...
+
+    def get_thread(self, tenant_id: str, thread_id: str) -> Thread: ...
+
+    def get_thread_context(self, tenant_id: str, thread_id: str) -> ThreadContext: ...
+
+    def update_thread_context(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        summary: str,
+        summarized_message_count: int,
+    ) -> ThreadContext: ...
+
+    def compact_thread_messages(self, tenant_id: str, thread_id: str) -> ThreadContext: ...
+
+    def start_run(self, tenant_id: str, thread_id: str) -> Thread: ...
 
 
 class InMemoryThreadStore:
@@ -115,3 +158,206 @@ class InMemoryThreadStore:
         if thread is None or thread.tenant_id != tenant_id:
             raise HTTPException(status_code=404, detail=f"Thread '{thread_id}' not found")
         return thread
+
+
+class SQLiteThreadStore:
+    def __init__(self, db_path: str | Path) -> None:
+        self._db_path = Path(db_path)
+        if self._db_path.parent != Path(""):
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = Lock()
+        self._initialize()
+
+    def create_thread(
+        self,
+        tenant_id: str,
+        *,
+        skill_name: str | None = None,
+        skill_names: list[str] | None = None,
+        capability_profile: str | None = None,
+    ) -> Thread:
+        with self._lock, self._connect() as conn:
+            normalized_skill_names = list(skill_names) if skill_names is not None else None
+            thread = Thread(
+                tenant_id=tenant_id,
+                skill_name=skill_name,
+                skill_names=normalized_skill_names,
+                capability_profile=capability_profile,
+            )
+            context = ThreadContext(thread_id=thread.thread_id)
+            conn.execute(
+                "INSERT INTO threads (thread_id, tenant_id, payload) VALUES (?, ?, ?)",
+                (thread.thread_id, tenant_id, _dump_model(thread)),
+            )
+            conn.execute(
+                "INSERT INTO thread_contexts (thread_id, payload) VALUES (?, ?)",
+                (thread.thread_id, _dump_model(context)),
+            )
+            return thread
+
+    def delete_thread(self, tenant_id: str, thread_id: str) -> None:
+        with self._lock, self._connect() as conn:
+            self._require_thread(conn, tenant_id, thread_id)
+            conn.execute("DELETE FROM threads WHERE thread_id = ?", (thread_id,))
+
+    def list_messages(self, tenant_id: str, thread_id: str) -> list[Message]:
+        with self._lock, self._connect() as conn:
+            self._require_thread(conn, tenant_id, thread_id)
+            rows = conn.execute(
+                "SELECT payload FROM messages WHERE thread_id = ? ORDER BY position ASC",
+                (thread_id,),
+            ).fetchall()
+            return [Message.model_validate(json.loads(row[0])) for row in rows]
+
+    def append_message(self, tenant_id: str, message: Message) -> Message:
+        with self._lock, self._connect() as conn:
+            thread = self._require_thread(conn, tenant_id, message.thread_id)
+            conn.execute(
+                "INSERT INTO messages (thread_id, payload) VALUES (?, ?)",
+                (message.thread_id, _dump_model(message)),
+            )
+            thread.updated_at = utc_now()
+            self._save_thread(conn, thread)
+            return message
+
+    def set_thread_status(self, tenant_id: str, thread_id: str, status: ThreadStatus) -> Thread:
+        with self._lock, self._connect() as conn:
+            thread = self._require_thread(conn, tenant_id, thread_id)
+            thread.status = status
+            thread.updated_at = utc_now()
+            self._save_thread(conn, thread)
+            return thread
+
+    def get_thread(self, tenant_id: str, thread_id: str) -> Thread:
+        with self._lock, self._connect() as conn:
+            return self._require_thread(conn, tenant_id, thread_id)
+
+    def get_thread_context(self, tenant_id: str, thread_id: str) -> ThreadContext:
+        with self._lock, self._connect() as conn:
+            self._require_thread(conn, tenant_id, thread_id)
+            return self._require_context(conn, thread_id)
+
+    def update_thread_context(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        summary: str,
+        summarized_message_count: int,
+    ) -> ThreadContext:
+        with self._lock, self._connect() as conn:
+            thread = self._require_thread(conn, tenant_id, thread_id)
+            context = self._require_context(conn, thread_id)
+            context.summary = summary
+            context.summarized_message_count = summarized_message_count
+            context.updated_at = utc_now()
+            thread.updated_at = utc_now()
+            self._save_context(conn, context)
+            self._save_thread(conn, thread)
+            return context
+
+    def compact_thread_messages(self, tenant_id: str, thread_id: str) -> ThreadContext:
+        with self._lock, self._connect() as conn:
+            thread = self._require_thread(conn, tenant_id, thread_id)
+            context = self._require_context(conn, thread_id)
+            if context.summarized_message_count <= 0:
+                return context
+            rows = conn.execute(
+                "SELECT position FROM messages WHERE thread_id = ? ORDER BY position ASC LIMIT ?",
+                (thread_id, context.summarized_message_count),
+            ).fetchall()
+            if rows:
+                max_deleted_position = rows[-1][0]
+                conn.execute(
+                    "DELETE FROM messages WHERE thread_id = ? AND position <= ?",
+                    (thread_id, max_deleted_position),
+                )
+            context.summarized_message_count = 0
+            context.updated_at = utc_now()
+            thread.updated_at = utc_now()
+            self._save_context(conn, context)
+            self._save_thread(conn, thread)
+            return context
+
+    def start_run(self, tenant_id: str, thread_id: str) -> Thread:
+        with self._lock, self._connect() as conn:
+            thread = self._require_thread(conn, tenant_id, thread_id)
+            if thread.status == ThreadStatus.RUNNING:
+                raise HTTPException(
+                    status_code=409, detail=f"Thread '{thread_id}' is already running"
+                )
+            thread.status = ThreadStatus.RUNNING
+            thread.updated_at = utc_now()
+            self._save_thread(conn, thread)
+            return thread
+
+    def _initialize(self) -> None:
+        with self._connect() as conn:
+            conn.executescript(
+                """
+                PRAGMA foreign_keys = ON;
+                CREATE TABLE IF NOT EXISTS threads (
+                    thread_id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_threads_tenant_id ON threads (tenant_id);
+                CREATE TABLE IF NOT EXISTS thread_contexts (
+                    thread_id TEXT PRIMARY KEY REFERENCES threads(thread_id) ON DELETE CASCADE,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS messages (
+                    position INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_id TEXT NOT NULL REFERENCES threads(thread_id) ON DELETE CASCADE,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_messages_thread_position
+                    ON messages (thread_id, position);
+                """
+            )
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
+    def _require_thread(self, conn: sqlite3.Connection, tenant_id: str, thread_id: str) -> Thread:
+        row = conn.execute(
+            "SELECT payload FROM threads WHERE thread_id = ? AND tenant_id = ?",
+            (thread_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"Thread '{thread_id}' not found")
+        return Thread.model_validate(json.loads(row[0]))
+
+    def _require_context(self, conn: sqlite3.Connection, thread_id: str) -> ThreadContext:
+        row = conn.execute(
+            "SELECT payload FROM thread_contexts WHERE thread_id = ?",
+            (thread_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"Thread '{thread_id}' not found")
+        return ThreadContext.model_validate(json.loads(row[0]))
+
+    def _save_thread(self, conn: sqlite3.Connection, thread: Thread) -> None:
+        conn.execute(
+            "UPDATE threads SET payload = ? WHERE thread_id = ?",
+            (_dump_model(thread), thread.thread_id),
+        )
+
+    def _save_context(self, conn: sqlite3.Connection, context: ThreadContext) -> None:
+        conn.execute(
+            "UPDATE thread_contexts SET payload = ? WHERE thread_id = ?",
+            (_dump_model(context), context.thread_id),
+        )
+
+
+def build_thread_store_from_env() -> ThreadStore:
+    db_path = os.getenv(THREAD_DB_PATH_ENV, "").strip()
+    if db_path:
+        return SQLiteThreadStore(db_path)
+    return InMemoryThreadStore()
+
+
+def _dump_model(model: Message | Thread | ThreadContext) -> str:
+    return json.dumps(model.model_dump(mode="json"), ensure_ascii=True, sort_keys=True)

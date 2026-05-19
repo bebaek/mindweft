@@ -10,6 +10,8 @@ services:
       MINIGENT_LOG_FORMAT: json
     ports:
       - "127.0.0.1:8000:8000"
+    volumes:
+      - minigent-data:/data
     healthcheck:
       test:
         [
@@ -22,3 +24,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+volumes:
+  minigent-data:

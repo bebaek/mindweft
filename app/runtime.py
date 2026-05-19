@@ -20,7 +20,7 @@ from app.execution import (
 from app.llm import LLMAdapter, serialize_tool_result
 from app.models import LLMResponse, Message, MessageRole, Principal, ThreadContext, ThreadStatus
 from app.quality import QualityEnhancer
-from app.store import InMemoryThreadStore
+from app.store import ThreadStore
 from app.tools import ToolExecutionContext, ToolRegistry
 
 RUNTIME_SYSTEM_PROMPT = (
@@ -50,7 +50,7 @@ def max_iterations_from_env() -> int:
 class AgentRuntime:
     def __init__(
         self,
-        store: InMemoryThreadStore,
+        store: ThreadStore,
         execution_resolver: TenantExecutionResolver | None = None,
         llm_adapter: LLMAdapter | None = None,
         tool_registry: ToolRegistry | None = None,

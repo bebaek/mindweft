@@ -51,7 +51,7 @@ from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_en
 from app.quality import QualityEnhancer
 from app.redaction import install_log_redaction
 from app.runtime import AgentRuntime, max_iterations_from_env
-from app.store import InMemoryThreadStore
+from app.store import ThreadStore, build_thread_store_from_env
 from app.tools import ToolRegistry, build_tool_registry_from_env
 
 load_environment()
@@ -120,6 +120,7 @@ def create_app(
     admin_store: SQLiteTenantConfigStore | None = None,
     tenant_config_source: str | None = None,
     peer_agent_registry: PeerAgentRegistry | None = None,
+    thread_store: ThreadStore | None = None,
 ) -> FastAPI:
     validate_auth_settings()
     mcp_manager = (
@@ -139,7 +140,7 @@ def create_app(
 
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0", lifespan=lifespan)
     configure_tracing(app)
-    app.state.store = InMemoryThreadStore()
+    app.state.store = thread_store or build_thread_store_from_env()
     app.state.mcp_manager = mcp_manager
     app.state.mcp_broker_sessions = MCPBrokerSessionStore()
     admin_encryption_key = admin_encryption_key_from_env()

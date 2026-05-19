@@ -20,6 +20,7 @@ from app.mcp import MCPServerInfo
 from app.mcp_broker import MINIGENT_MCP_BROKER_TOKEN_ENV, MINIGENT_MCP_BROKER_URL_ENV
 from app.models import LLMResponse, Message, MessageRole, ToolCall
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
+from app.store import SQLiteThreadStore
 from app.tools import build_local_tool_registry
 
 AUTH_HEADERS = {
@@ -90,6 +91,41 @@ def test_thread_lifecycle_endpoints() -> None:
 
     missing_response = client.get(f"/threads/{thread_id}/messages", headers=AUTH_HEADERS)
     assert missing_response.status_code == 404
+
+
+def test_sqlite_thread_store_persists_threads_and_messages(tmp_path: Path) -> None:
+    db_path = tmp_path / "threads.db"
+    first_client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            thread_store=SQLiteThreadStore(db_path),
+        )
+    )
+    thread_id = first_client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    first_client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "hello before restart"},
+        headers=AUTH_HEADERS,
+    )
+    run_response = first_client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    assert run_response.status_code == 200
+
+    second_client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            thread_store=SQLiteThreadStore(db_path),
+        )
+    )
+
+    messages_response = second_client.get(f"/threads/{thread_id}/messages", headers=AUTH_HEADERS)
+
+    assert messages_response.status_code == 200
+    messages = messages_response.json()
+    assert [message["role"] for message in messages] == [MessageRole.USER, MessageRole.ASSISTANT]
+    assert messages[0]["content"] == "hello before restart"
+    assert messages[1]["content"] == "Mock reply: hello before restart"
 
 
 def test_web_client_static_files_are_served() -> None:

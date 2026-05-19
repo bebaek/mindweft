@@ -5,8 +5,8 @@ Minimal AI agent runtime POC from `DESIGN.md`.
 ## What it includes
 
 - FastAPI service
-- In-memory thread/message store
-- In-memory thread context compaction with rolling summary + token-budgeted recent-message tail
+- In-memory thread/message store by default, with optional SQLite persistence
+- Thread context compaction with rolling summary + token-budgeted recent-message tail
   that also drops summarized raw turns from the in-memory transcript to keep memory bounded
 - Simple agent execution loop
 - Pluggable tool registry
@@ -356,15 +356,14 @@ This repo now includes a production-oriented [`Dockerfile`](/Users/burm/code/min
 and [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) for running Minigent on a remote
 host that already manages apps with Docker Compose.
 
-The current runtime has two important persistence boundaries:
+The runtime can persist thread state and message history in SQLite when
+`MINIGENT_THREAD_DB_PATH` points at a writable database path. Without that setting,
+threads remain in memory and are lost on restart. The optional admin control plane can
+also persist tenant execution config in SQLite when `MINIGENT_ADMIN_DB_PATH` points at a
+mounted volume.
 
-- Thread state and message history are stored in memory, so restarting the container loses
-  active threads.
-- The optional admin control plane can persist tenant execution config in SQLite when
-  `MINIGENT_ADMIN_DB_PATH` points at a mounted volume.
-
-That means the current safe deployment shape is a single Minigent container behind your
-existing reverse proxy.
+The current safe deployment shape is a single Minigent container behind your existing
+reverse proxy.
 
 Thread history is compacted in memory as conversations grow. Older turns are folded into
 the thread summary and removed from the raw message list, so `GET /threads/{thread_id}/messages`
@@ -377,6 +376,7 @@ MINIGENT_AUTH_MODE=jwt
 MINIGENT_LLM_PROVIDER=openai
 OPENAI_API_KEY=...
 MINIGENT_LOG_FORMAT=json
+MINIGENT_THREAD_DB_PATH=/data/minigent-threads.db
 ```
 
 Bring the service up with:
@@ -494,8 +494,11 @@ interfaces by default.
 
 The container exposes `GET /health` for Compose health checks.
 
-If you want the optional admin SQLite control plane, add these settings to `.env` and
-mount `/data` in Compose:
+[`compose.yaml`](/Users/burm/code/minigent/compose.yaml) mounts a named volume at
+`/data`, so `MINIGENT_THREAD_DB_PATH=/data/minigent-threads.db` survives container
+restarts.
+
+If you want the optional admin SQLite control plane too, add these settings to `.env`:
 
 ```dotenv
 MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults

@@ -27,7 +27,7 @@ from app.mcp_broker import (
 from app.models import Message, MessageRole, Principal, ThreadStatus
 from app.peer_agents import PeerAgentRegistry
 from app.runtime import AgentRuntime
-from app.store import InMemoryThreadStore
+from app.store import ThreadStore
 
 _TERMINAL_PEER_STATUSES = {"completed", "failed", "canceled"}
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
@@ -63,7 +63,7 @@ class AgentBackendRouter(AgentBackend):
     def __init__(
         self,
         *,
-        store: InMemoryThreadStore,
+        store: ThreadStore,
         execution_resolver: TenantExecutionResolver,
         native_backend: NativeAgentBackend,
         peer_agent_registry: PeerAgentRegistry,
