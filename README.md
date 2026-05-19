@@ -647,6 +647,13 @@ prints compact status/tool lines such as `● preparing`, `● sending`, `🔧 e
 and `● done` to stderr. Use global `--verbose` with one-shot streaming commands to include
 extra progress metadata such as LLM iteration numbers.
 
+The CLI reports common API failures with short friendly errors on stderr while keeping
+technical request/response detail hidden unless `--verbose` is set. For example, auth
+failures prompt you to check `MINIGENT_API_TOKEN`, connection failures suggest checking
+`--base-url` and whether the server is running, and server/timeout/malformed-response
+failures are categorized without dumping raw HTTP bodies by default. In `--json` mode,
+errors are emitted as a structured `{"error": ...}` object and the process exits nonzero.
+
 When `chat` runs on an interactive TTY, it uses `prompt_toolkit` for shell-style editing,
 persistent local input history, and multiline input. Press `Enter` to submit a message, or
 use `Esc+Enter` to insert a newline before submitting. The history file is stored at

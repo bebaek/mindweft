@@ -1,5 +1,8 @@
 import json
+import urllib.error
 from collections.abc import Iterator, Mapping, Sequence
+from email.message import Message
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -163,6 +166,70 @@ def test_chat_stream_text_coalesces_repeated_peer_poll_statuses(
     assert captured.out == "done\n"
     assert captured.err.count("status=running") == 1
     assert captured.err.count("status=completed") == 2
+
+
+def test_cli_prints_friendly_auth_errors(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    def urlopen(request: Any) -> _Response:
+        raise urllib.error.HTTPError(
+            request.full_url,
+            401,
+            "Unauthorized",
+            Message(),
+            BytesIO(b'{"detail":"invalid token"}'),
+        )
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["chat", "hello"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Error: Authentication failed." in captured.err
+    assert "invalid token" not in captured.err
+
+
+def test_cli_verbose_errors_include_technical_detail(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    def urlopen(request: Any) -> _Response:
+        raise urllib.error.HTTPError(
+            request.full_url,
+            502,
+            "Bad Gateway",
+            Message(),
+            BytesIO(b'{"detail":"LLM provider returned no message content"}'),
+        )
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["--verbose", "chat", "hello"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "Error: Minigent server error (502). LLM provider returned no message content" in captured.err
+    assert "Detail: POST http://127.0.0.1:8000/threads failed: 502" in captured.err
+
+
+def test_cli_json_errors_are_structured(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    def urlopen(request: Any) -> _Response:
+        raise urllib.error.URLError(ConnectionRefusedError("connection refused"))
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["--json", "health"])
+
+    assert exit_code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "error": {
+            "category": "server_unavailable",
+            "message": "Cannot reach the Minigent API. Check --base-url and make sure the server is running.",
+        }
+    }
 
 
 def test_admin_threads_list_json(monkeypatch: Any, capsys: Any) -> None:

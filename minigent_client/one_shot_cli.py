@@ -8,6 +8,7 @@ from typing import Any, Sequence
 
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.config import ClientConfig, build_client_config
+from minigent_client.errors import MinigentAPIError
 from minigent_client.output import StreamProgressRenderer, format_message, print_json
 from minigent_client.state import ClientState
 from minigent_client.state import state_scope_key as build_state_scope_key
@@ -763,8 +764,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_health(client, args.json, trace_id)
         if args.command == "config":
             return run_config(client, trace_id)
+    except MinigentAPIError as exc:
+        if args.json:
+            print_json({"error": exc.to_dict(include_detail=args.verbose)})
+        else:
+            print(f"Error: {exc.message}", file=sys.stderr)
+            if args.verbose and exc.detail:
+                print(f"Detail: {exc.detail}", file=sys.stderr)
+        return 1
     except (RuntimeError, ValueError) as exc:
-        raise SystemExit(str(exc)) from exc
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     parser.error(f"Unhandled command: {args.command}")
     return 2

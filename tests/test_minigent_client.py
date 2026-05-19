@@ -1740,7 +1740,7 @@ def test_minigent_client_stream_run_errors_raise_runtime_error(
         )
     )
 
-    with pytest.raises(RuntimeError, match="502 upstream"):
+    with pytest.raises(RuntimeError, match=r"Minigent server error \(502\). upstream"):
         client.run_thread()
 
 

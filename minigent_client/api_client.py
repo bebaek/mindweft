@@ -8,6 +8,7 @@ import urllib.request
 from typing import Any, Iterator, TextIO, cast
 
 from minigent_client.config import ClientConfig
+from minigent_client.errors import MinigentAPIError
 from minigent_client.output import StreamProgressRenderer
 
 
@@ -241,7 +242,13 @@ class MinigentAPIClient:
             elif event_type == "run.error":
                 status_code = event.get("status_code")
                 detail = event.get("detail")
-                raise RuntimeError(f"Minigent run stream failed: {status_code} {detail}")
+                raise _api_error_from_status(
+                    "POST",
+                    f"{self._config.base_url}/threads/{thread_id}/run/stream",
+                    int(status_code) if isinstance(status_code, int) else None,
+                    detail,
+                    technical_detail=f"run.error event: status_code={status_code} detail={detail}",
+                )
         if reply is None:
             raise RuntimeError("Minigent run stream ended without an assistant message")
         return reply
@@ -269,11 +276,23 @@ class MinigentAPIClient:
                     yield event
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"{method} {url} failed: {exc.code} {body}") from exc
+            raise _api_error_from_status(
+                method,
+                url,
+                exc.code,
+                _extract_error_detail(body),
+                technical_detail=f"{method} {url} failed: {exc.code} {body}",
+            ) from exc
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"{method} {url} failed: {exc.reason}") from exc
+            raise _api_error_from_url_error(method, url, exc) from exc
+        except TimeoutError as exc:
+            raise _timeout_error(method, url, str(exc)) from exc
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"{method} {url} returned invalid NDJSON: {exc}") from exc
+            raise MinigentAPIError(
+                "The Minigent API returned malformed streaming data.",
+                category="malformed_response",
+                detail=f"{method} {url} returned invalid NDJSON: {exc}",
+            ) from exc
 
     def request_json(
         self,
@@ -297,9 +316,23 @@ class MinigentAPIClient:
                 return json.loads(raw_body)
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"{method} {url} failed: {exc.code} {body}") from exc
+            raise _api_error_from_status(
+                method,
+                url,
+                exc.code,
+                _extract_error_detail(body),
+                technical_detail=f"{method} {url} failed: {exc.code} {body}",
+            ) from exc
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"{method} {url} failed: {exc.reason}") from exc
+            raise _api_error_from_url_error(method, url, exc) from exc
+        except TimeoutError as exc:
+            raise _timeout_error(method, url, str(exc)) from exc
+        except json.JSONDecodeError as exc:
+            raise MinigentAPIError(
+                "The Minigent API returned malformed JSON.",
+                category="malformed_response",
+                detail=f"{method} {url} returned invalid JSON: {exc}",
+            ) from exc
 
     def _format_user_message(self, content: str) -> str:
         preamble = self._resolved_prompt_preamble()
@@ -319,6 +352,105 @@ class MinigentAPIClient:
         if self._config.location:
             return f"location={self._config.location}"
         return None
+
+
+def _extract_error_detail(body: str) -> str:
+    if not body:
+        return ""
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return body.strip()
+    if isinstance(payload, dict):
+        detail = payload.get("detail")
+        if isinstance(detail, str):
+            return detail
+        if detail is not None:
+            return json.dumps(detail, sort_keys=True)
+    return body.strip()
+
+
+def _api_error_from_status(
+    method: str,
+    url: str,
+    status_code: int | None,
+    detail: object,
+    *,
+    technical_detail: str,
+) -> MinigentAPIError:
+    detail_text = detail if isinstance(detail, str) else ""
+    if status_code == 401:
+        return MinigentAPIError(
+            "Authentication failed. Check MINIGENT_API_TOKEN or your Minigent principal headers.",
+            category="authentication_failed",
+            detail=technical_detail,
+            status_code=status_code,
+        )
+    if status_code == 403:
+        return MinigentAPIError(
+            "Permission denied. Your Minigent principal is not allowed to perform this action.",
+            category="permission_denied",
+            detail=technical_detail,
+            status_code=status_code,
+        )
+    if status_code == 404:
+        message = "Minigent resource not found. Check the thread ID or base URL."
+        if detail_text:
+            message = f"{message} {detail_text}"
+        return MinigentAPIError(
+            message,
+            category="not_found",
+            detail=technical_detail,
+            status_code=status_code,
+        )
+    if status_code in {408, 504}:
+        return MinigentAPIError(
+            "The Minigent request timed out. Try again or check the API server.",
+            category="timeout",
+            detail=technical_detail,
+            status_code=status_code,
+        )
+    if status_code is not None and status_code >= 500:
+        message = f"Minigent server error ({status_code})."
+        if detail_text:
+            message = f"{message} {detail_text}"
+        return MinigentAPIError(
+            message,
+            category="server_error",
+            detail=technical_detail,
+            status_code=status_code,
+        )
+    message = "Minigent request failed."
+    if status_code is not None:
+        message = f"Minigent request failed ({status_code})."
+    if detail_text:
+        message = f"{message} {detail_text}"
+    return MinigentAPIError(
+        message,
+        category="request_failed",
+        detail=technical_detail,
+        status_code=status_code,
+    )
+
+
+def _api_error_from_url_error(method: str, url: str, exc: urllib.error.URLError) -> MinigentAPIError:
+    reason = exc.reason
+    reason_text = str(reason)
+    if isinstance(reason, TimeoutError) or "timed out" in reason_text.lower():
+        return _timeout_error(method, url, reason_text)
+    return MinigentAPIError(
+        "Cannot reach the Minigent API. Check --base-url and make sure the server is running.",
+        category="server_unavailable",
+        detail=f"{method} {url} failed: {reason_text}",
+    )
+
+
+def _timeout_error(method: str, url: str, detail: str) -> MinigentAPIError:
+    return MinigentAPIError(
+        "The Minigent request timed out. Try again or check the API server.",
+        category="timeout",
+        detail=f"{method} {url} timed out: {detail}",
+    )
 
 
 def _build_query(params: dict[str, object | None]) -> str:
