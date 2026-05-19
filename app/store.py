@@ -53,9 +53,23 @@ class ThreadStore(Protocol):
         self,
         tenant_id: str,
         *,
+        action: str | None = None,
+        actor_user_id: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[AuditRecord]: ...
+
+    def count_audit_records(
+        self,
+        tenant_id: str,
+        *,
+        action: str | None = None,
+        actor_user_id: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+    ) -> int: ...
 
     def list_threads(
         self,
@@ -196,6 +210,10 @@ class InMemoryThreadStore:
         self,
         tenant_id: str,
         *,
+        action: str | None = None,
+        actor_user_id: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[AuditRecord]:
@@ -203,10 +221,40 @@ class InMemoryThreadStore:
             records = [
                 record.model_copy(deep=True)
                 for record in self._audit_records
-                if record.tenant_id == tenant_id
+                if _audit_record_matches_filters(
+                    record,
+                    tenant_id,
+                    action=action,
+                    actor_user_id=actor_user_id,
+                    created_after=created_after,
+                    created_before=created_before,
+                )
             ]
             records.sort(key=lambda record: record.created_at, reverse=True)
             return _paginate_audit_records(records, limit=limit, offset=offset)
+
+    def count_audit_records(
+        self,
+        tenant_id: str,
+        *,
+        action: str | None = None,
+        actor_user_id: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+    ) -> int:
+        with self._lock:
+            return sum(
+                1
+                for record in self._audit_records
+                if _audit_record_matches_filters(
+                    record,
+                    tenant_id,
+                    action=action,
+                    actor_user_id=actor_user_id,
+                    created_after=created_after,
+                    created_before=created_before,
+                )
+            )
 
     def list_threads(
         self,
@@ -469,16 +517,44 @@ class SQLiteThreadStore:
         self,
         tenant_id: str,
         *,
+        action: str | None = None,
+        actor_user_id: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[AuditRecord]:
         with self._lock, self._connect() as conn:
-            rows = conn.execute(
-                "SELECT payload FROM audit_records WHERE tenant_id = ? ORDER BY created_at DESC",
-                (tenant_id,),
-            ).fetchall()
-            records = [AuditRecord.model_validate(json.loads(row[0])) for row in rows]
+            records = self._load_matching_audit_records(
+                conn,
+                tenant_id,
+                action=action,
+                actor_user_id=actor_user_id,
+                created_after=created_after,
+                created_before=created_before,
+            )
             return _paginate_audit_records(records, limit=limit, offset=offset)
+
+    def count_audit_records(
+        self,
+        tenant_id: str,
+        *,
+        action: str | None = None,
+        actor_user_id: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+    ) -> int:
+        with self._lock, self._connect() as conn:
+            return len(
+                self._load_matching_audit_records(
+                    conn,
+                    tenant_id,
+                    action=action,
+                    actor_user_id=actor_user_id,
+                    created_after=created_after,
+                    created_before=created_before,
+                )
+            )
 
     def list_threads(
         self,
@@ -695,6 +771,33 @@ class SQLiteThreadStore:
             )
         ]
 
+    def _load_matching_audit_records(
+        self,
+        conn: sqlite3.Connection,
+        tenant_id: str,
+        *,
+        action: str | None,
+        actor_user_id: str | None,
+        created_after: datetime | None,
+        created_before: datetime | None,
+    ) -> list[AuditRecord]:
+        rows = conn.execute(
+            "SELECT payload FROM audit_records WHERE tenant_id = ? ORDER BY created_at DESC",
+            (tenant_id,),
+        ).fetchall()
+        return [
+            record
+            for record in (AuditRecord.model_validate(json.loads(row[0])) for row in rows)
+            if _audit_record_matches_filters(
+                record,
+                tenant_id,
+                action=action,
+                actor_user_id=actor_user_id,
+                created_after=created_after,
+                created_before=created_before,
+            )
+        ]
+
     def _load_prunable_threads(
         self,
         conn: sqlite3.Connection,
@@ -775,6 +878,28 @@ def _thread_matches_filters(
     if created_after is not None and thread.created_at <= created_after:
         return False
     if updated_after is not None and thread.updated_at <= updated_after:
+        return False
+    return True
+
+
+def _audit_record_matches_filters(
+    record: AuditRecord,
+    tenant_id: str,
+    *,
+    action: str | None,
+    actor_user_id: str | None,
+    created_after: datetime | None,
+    created_before: datetime | None,
+) -> bool:
+    if record.tenant_id != tenant_id:
+        return False
+    if action is not None and record.action != action:
+        return False
+    if actor_user_id is not None and record.actor_user_id != actor_user_id:
+        return False
+    if created_after is not None and record.created_at <= created_after:
+        return False
+    if created_before is not None and record.created_at >= created_before:
         return False
     return True
 

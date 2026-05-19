@@ -255,6 +255,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Zero-based result offset for pagination.",
     )
+    admin_audit_list_parser.add_argument(
+        "--action",
+        default=None,
+        help="Filter audit records by action, such as threads.prune.",
+    )
+    admin_audit_list_parser.add_argument(
+        "--actor",
+        default=None,
+        help="Filter audit records by actor user ID.",
+    )
+    admin_audit_list_parser.add_argument(
+        "--created-after",
+        default=None,
+        help="Filter audit records created after this ISO-8601 timestamp.",
+    )
+    admin_audit_list_parser.add_argument(
+        "--created-before",
+        default=None,
+        help="Filter audit records created before this ISO-8601 timestamp.",
+    )
 
     subparsers.add_parser("health", help="Check API health.")
     subparsers.add_parser("config", help="Show resolved API configuration.")
@@ -585,6 +605,10 @@ def run_admin_audit_list(
         args.admin_tenant_id,
         limit=args.limit,
         offset=args.offset,
+        action=args.action,
+        actor=args.actor,
+        created_after=args.created_after,
+        created_before=args.created_before,
     )
     if args.json:
         output: dict[str, Any] = dict(response)
@@ -600,6 +624,8 @@ def run_admin_audit_list(
                 f"tenant_id={response.get('tenant_id')}",
                 f"limit={response.get('limit')}",
                 f"offset={response.get('offset')}",
+                f"total={response.get('total')}",
+                f"next_offset={response.get('next_offset')}",
             ]
         )
     )

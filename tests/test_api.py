@@ -18,7 +18,7 @@ from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter
 from app.main import create_app
 from app.mcp import MCPServerInfo
 from app.mcp_broker import MINIGENT_MCP_BROKER_TOKEN_ENV, MINIGENT_MCP_BROKER_URL_ENV
-from app.models import LLMResponse, Message, MessageRole, ToolCall
+from app.models import AuditRecord, LLMResponse, Message, MessageRole, ToolCall
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
 from app.store import InMemoryThreadStore, SQLiteThreadStore
 from app.tools import build_local_tool_registry
@@ -1864,6 +1864,96 @@ def test_admin_api_delete_writes_audit_record() -> None:
     assert audit_response.json()["audit_records"][0]["actor_user_id"] == "admin-user"
     assert audit_response.json()["audit_records"][0]["affected_count"] == 1
     assert audit_response.json()["audit_records"][0]["thread_ids"] == [thread_id]
+
+
+def test_admin_api_audit_records_are_paginated_and_filtered() -> None:
+    store = InMemoryThreadStore()
+    old_delete = AuditRecord(
+        tenant_id="tenant-1",
+        actor_user_id="admin-user",
+        action="threads.delete",
+        affected_count=1,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    matching_prune = AuditRecord(
+        tenant_id="tenant-1",
+        actor_user_id="admin-user",
+        action="threads.prune",
+        affected_count=2,
+        created_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
+    other_actor = AuditRecord(
+        tenant_id="tenant-1",
+        actor_user_id="other-admin",
+        action="threads.prune",
+        affected_count=3,
+        created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+    )
+    other_tenant = AuditRecord(
+        tenant_id="tenant-2",
+        actor_user_id="admin-user",
+        action="threads.prune",
+        affected_count=4,
+        created_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
+    for record in [old_delete, matching_prune, other_actor, other_tenant]:
+        store.append_audit_record(record)
+    client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            thread_store=store,
+        )
+    )
+
+    response = client.get(
+        "/admin/tenants/tenant-1/audit-records"
+        "?limit=1&offset=0&action=threads.prune&actor=admin-user"
+        "&created_after=2026-01-15T00:00:00Z&created_before=2026-03-01T00:00:00Z",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["limit"] == 1
+    assert body["offset"] == 0
+    assert body["total"] == 1
+    assert body["next_offset"] is None
+    assert [record["audit_id"] for record in body["audit_records"]] == [
+        matching_prune.audit_id
+    ]
+
+
+def test_admin_api_audit_records_pagination_metadata() -> None:
+    store = InMemoryThreadStore()
+    for index in range(3):
+        store.append_audit_record(
+            AuditRecord(
+                tenant_id="tenant-1",
+                actor_user_id="admin-user",
+                action="threads.prune",
+                affected_count=index,
+                created_at=datetime(2026, 1, index + 1, tzinfo=timezone.utc),
+            )
+        )
+    client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            thread_store=store,
+        )
+    )
+
+    response = client.get(
+        "/admin/tenants/tenant-1/audit-records?limit=2&offset=0",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 3
+    assert body["next_offset"] == 2
+    assert len(body["audit_records"]) == 2
 
 
 def test_admin_thread_inspection_requires_admin() -> None:

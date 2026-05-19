@@ -370,6 +370,8 @@ def test_admin_audit_list_text(monkeypatch: Any, capsys: Any) -> None:
         "tenant_id": "tenant-a",
         "limit": 10,
         "offset": 0,
+        "total": 1,
+        "next_offset": None,
         "audit_records": [
             {
                 "audit_id": "audit-1",
@@ -390,18 +392,35 @@ def test_admin_audit_list_text(monkeypatch: Any, capsys: Any) -> None:
     monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
 
     exit_code = cli.main(
-        ["--admin", "admin", "audit", "list", "--tenant", "tenant-a", "--limit", "10"]
+        [
+            "--admin",
+            "admin",
+            "audit",
+            "list",
+            "--tenant",
+            "tenant-a",
+            "--limit",
+            "10",
+            "--action",
+            "threads.delete",
+            "--actor",
+            "admin-user",
+            "--created-after",
+            "2026-05-19T09:00:00Z",
+            "--created-before",
+            "2026-05-19T11:00:00Z",
+        ]
     )
 
     assert exit_code == 0
     assert calls == [
         (
             "GET",
-            "http://127.0.0.1:8000/admin/tenants/tenant-a/audit-records?limit=10",
+            "http://127.0.0.1:8000/admin/tenants/tenant-a/audit-records?limit=10&action=threads.delete&actor=admin-user&created_after=2026-05-19T09%3A00%3A00Z&created_before=2026-05-19T11%3A00%3A00Z",
         )
     ]
     assert capsys.readouterr().out == (
-        "tenant_id=tenant-a limit=10 offset=0\n"
+        "tenant_id=tenant-a limit=10 offset=0 total=1 next_offset=None\n"
         "audit-1 action=threads.delete actor=admin-user affected_count=1 created_at=2026-05-19T10:00:00Z\n"
     )
 

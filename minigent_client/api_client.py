@@ -157,8 +157,21 @@ class MinigentAPIClient:
         *,
         limit: int | None = None,
         offset: int | None = None,
+        action: str | None = None,
+        actor: str | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
     ) -> dict[str, Any]:
-        query = _build_query({"limit": limit, "offset": offset})
+        query = _build_query(
+            {
+                "limit": limit,
+                "offset": offset,
+                "action": action,
+                "actor": actor,
+                "created_after": created_after,
+                "created_before": created_before,
+            }
+        )
         response = self.request_json(
             "GET",
             f"{self._config.base_url}/admin/tenants/{tenant_id}/audit-records{query}",

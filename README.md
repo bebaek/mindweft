@@ -1195,7 +1195,7 @@ X-Minigent-Tenant-Id: admin-tenant
 X-Minigent-Admin: true
 ```
 
-Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. Admin deletion removes a thread and its messages and writes an audit record. The prune endpoint deletes matching tenant threads with `updated_at` older than required `updated_before`, with optional `status`, `profile`, and `skill` filters. Add `dry_run=true` to preview `candidate_thread_ids` without deleting threads or writing audit records. The audit endpoint lists deletion/prune records with actor, action, affected count, thread IDs, and timestamp. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect and manage persisted threads and audit records after process restarts.
+Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. Admin deletion removes a thread and its messages and writes an audit record. The prune endpoint deletes matching tenant threads with `updated_at` older than required `updated_before`, with optional `status`, `profile`, and `skill` filters. Add `dry_run=true` to preview `candidate_thread_ids` without deleting threads or writing audit records. The audit endpoint lists deletion/prune records with actor, action, affected count, thread IDs, timestamp, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `action`, `actor`, `created_after`, and `created_before` query parameters. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect and manage persisted threads and audit records after process restarts.
 
 The packaged CLI can inspect the same thread data when authenticated as an admin:
 
@@ -1206,7 +1206,8 @@ minigent --admin admin threads show THREAD_ID --tenant TENANT_ID
 minigent --admin admin threads delete THREAD_ID --tenant TENANT_ID
 minigent --admin admin threads prune --tenant TENANT_ID --updated-before 2026-05-01T00:00:00Z
 minigent --admin admin threads prune --tenant TENANT_ID --updated-before 2026-05-01T00:00:00Z --dry-run
-minigent --admin admin audit list --tenant TENANT_ID
+minigent --admin admin audit list --tenant TENANT_ID --limit 50
+minigent --admin admin audit list --tenant TENANT_ID --action threads.prune --actor admin-user --created-after 2026-05-01T00:00:00Z
 minigent --api-token ADMIN_TOKEN admin threads list --tenant TENANT_ID --json
 ```
 

@@ -95,6 +95,8 @@ class AdminAuditRecordListResponse(BaseModel):
     audit_records: list[AdminAuditRecordResponse]
     limit: int
     offset: int
+    total: int
+    next_offset: int | None = None
 
 
 class AdminMCPServerValidationResponse(BaseModel):
@@ -250,14 +252,36 @@ def build_admin_router() -> APIRouter:
         admin: Principal = Depends(require_admin_principal),
         limit: int = Query(default=50, ge=1, le=500),
         offset: int = Query(default=0, ge=0),
+        action: str | None = Query(default=None),
+        actor: str | None = Query(default=None),
+        created_after: datetime | None = Query(default=None),
+        created_before: datetime | None = Query(default=None),
     ) -> AdminAuditRecordListResponse:
         _ = admin
         store = _require_thread_store(request)
-        records = store.list_audit_records(tenant_id, limit=limit, offset=offset)
+        total = store.count_audit_records(
+            tenant_id,
+            action=action,
+            actor_user_id=actor,
+            created_after=created_after,
+            created_before=created_before,
+        )
+        records = store.list_audit_records(
+            tenant_id,
+            action=action,
+            actor_user_id=actor,
+            created_after=created_after,
+            created_before=created_before,
+            limit=limit,
+            offset=offset,
+        )
+        next_offset = offset + len(records) if offset + len(records) < total else None
         return AdminAuditRecordListResponse(
             tenant_id=tenant_id,
             limit=limit,
             offset=offset,
+            total=total,
+            next_offset=next_offset,
             audit_records=[_audit_record_response(record) for record in records],
         )
 
