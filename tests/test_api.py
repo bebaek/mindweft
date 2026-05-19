@@ -1690,6 +1690,121 @@ def test_admin_api_filters_and_paginates_threads() -> None:
     assert status_response.json()["threads"][0]["thread_id"] == research_thread_id
 
 
+def test_admin_api_deletes_thread_with_tenant_isolation() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    tenant_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{tenant_thread_id}/messages",
+        json={"content": "delete me"},
+        headers=AUTH_HEADERS,
+    )
+    other_thread_id = client.post("/threads", headers=OTHER_TENANT_HEADERS).json()["thread_id"]
+
+    isolated_response = client.delete(
+        f"/admin/tenants/tenant-1/threads/{other_thread_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert isolated_response.status_code == 404
+
+    delete_response = client.delete(
+        f"/admin/tenants/tenant-1/threads/{tenant_thread_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {
+        "deleted": True,
+        "tenant_id": "tenant-1",
+        "thread_id": tenant_thread_id,
+    }
+    assert (
+        client.get(
+            f"/admin/tenants/tenant-1/threads/{tenant_thread_id}",
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 404
+    )
+
+
+def test_admin_api_prunes_threads_with_filters() -> None:
+    store = InMemoryThreadStore()
+    old_coding = store.create_thread("tenant-1", skill_name="coding", capability_profile="dev")
+    old_research = store.create_thread("tenant-1", skill_name="research", capability_profile="dev")
+    recent_coding = store.create_thread("tenant-1", skill_name="coding", capability_profile="dev")
+    other_tenant = store.create_thread("tenant-2", skill_name="coding", capability_profile="dev")
+    old_timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cutoff = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    old_coding.updated_at = old_timestamp
+    old_research.updated_at = old_timestamp
+    other_tenant.updated_at = old_timestamp
+    client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            thread_store=store,
+        )
+    )
+
+    prune_response = client.post(
+        "/admin/tenants/tenant-1/threads/prune"
+        "?updated_before=2026-02-01T00:00:00Z&skill=coding&profile=dev",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert prune_response.status_code == 200
+    assert prune_response.json()["deleted_count"] == 1
+    assert client.get(
+        f"/admin/tenants/tenant-1/threads/{old_coding.thread_id}", headers=ADMIN_HEADERS
+    ).status_code == 404
+    assert client.get(
+        f"/admin/tenants/tenant-1/threads/{old_research.thread_id}", headers=ADMIN_HEADERS
+    ).status_code == 200
+    assert client.get(
+        f"/admin/tenants/tenant-1/threads/{recent_coding.thread_id}", headers=ADMIN_HEADERS
+    ).status_code == 200
+    assert client.get(
+        f"/admin/tenants/tenant-2/threads/{other_tenant.thread_id}", headers=ADMIN_HEADERS
+    ).status_code == 200
+    assert cutoff.isoformat().replace("+00:00", "Z") == "2026-02-01T00:00:00Z"
+
+
+def test_admin_api_prune_deletes_sqlite_messages_durably(tmp_path: Path) -> None:
+    db_path = tmp_path / "threads.db"
+    store = SQLiteThreadStore(db_path)
+    client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            thread_store=store,
+        )
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "persisted message"},
+        headers=AUTH_HEADERS,
+    )
+
+    prune_response = client.post(
+        "/admin/tenants/tenant-1/threads/prune?updated_before=2999-01-01T00:00:00Z",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert prune_response.status_code == 200
+    assert prune_response.json()["deleted_count"] == 1
+    restarted_client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            thread_store=SQLiteThreadStore(db_path),
+        )
+    )
+    assert restarted_client.get(
+        f"/admin/tenants/tenant-1/threads/{thread_id}", headers=ADMIN_HEADERS
+    ).status_code == 404
+
+
 def test_admin_thread_inspection_requires_admin() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
@@ -1699,6 +1814,17 @@ def test_admin_thread_inspection_requires_admin() -> None:
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Admin access required"
+
+    delete_response = client.delete(
+        "/admin/tenants/tenant-1/threads/thread-1", headers=AUTH_HEADERS
+    )
+    assert delete_response.status_code == 403
+
+    prune_response = client.post(
+        "/admin/tenants/tenant-1/threads/prune?updated_before=2999-01-01T00:00:00Z",
+        headers=AUTH_HEADERS,
+    )
+    assert prune_response.status_code == 403
 
 
 def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(

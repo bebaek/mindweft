@@ -254,6 +254,73 @@ def test_admin_threads_list_sends_pagination_and_filter_params(
     assert "tenant_id=tenant-a total=42 limit=10 offset=20 next_offset=30" in output
 
 
+def test_admin_threads_delete_json(monkeypatch: Any, capsys: Any) -> None:
+    calls: list[tuple[str, str]] = []
+    response = {"deleted": True, "tenant_id": "tenant-a", "thread_id": "thread-1"}
+
+    def urlopen(request: Any) -> _Response:
+        calls.append((request.get_method(), request.full_url))
+        if request.full_url.endswith("/admin/tenants/tenant-a/threads/thread-1"):
+            return _Response(body=response)
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        ["--admin", "--json", "admin", "threads", "delete", "thread-1", "--tenant", "tenant-a"]
+    )
+
+    assert exit_code == 0
+    assert calls == [("DELETE", "http://127.0.0.1:8000/admin/tenants/tenant-a/threads/thread-1")]
+    assert json.loads(capsys.readouterr().out) == response
+
+
+def test_admin_threads_prune_sends_filters(monkeypatch: Any, capsys: Any) -> None:
+    calls: list[tuple[str, str]] = []
+    response = {
+        "tenant_id": "tenant-a",
+        "deleted_count": 3,
+        "updated_before": "2026-05-19T10:00:00Z",
+    }
+
+    def urlopen(request: Any) -> _Response:
+        calls.append((request.get_method(), request.full_url))
+        return _Response(body=response)
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        [
+            "--admin",
+            "admin",
+            "threads",
+            "prune",
+            "--tenant",
+            "tenant-a",
+            "--updated-before",
+            "2026-05-19T10:00:00Z",
+            "--status",
+            "idle",
+            "--profile",
+            "dev",
+            "--skill",
+            "coding",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:8000/admin/tenants/tenant-a/threads/prune?updated_before=2026-05-19T10%3A00%3A00Z&status=idle&profile=dev&skill=coding",
+        )
+    ]
+    assert (
+        capsys.readouterr().out
+        == "tenant_id=tenant-a deleted_count=3 updated_before=2026-05-19T10:00:00Z\n"
+    )
+
+
 def test_admin_threads_show_text(monkeypatch: Any, capsys: Any) -> None:
     response = {
         "thread_id": "thread-1",

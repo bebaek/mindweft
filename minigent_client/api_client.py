@@ -115,6 +115,40 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent admin thread-detail response must be an object")
         return cast(dict[str, Any], response)
 
+    def delete_admin_thread(self, tenant_id: str, thread_id: str) -> dict[str, Any]:
+        response = self.request_json(
+            "DELETE",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}/threads/{thread_id}",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin thread-delete response must be an object")
+        return cast(dict[str, Any], response)
+
+    def prune_admin_threads(
+        self,
+        tenant_id: str,
+        *,
+        updated_before: str,
+        status: str | None = None,
+        profile: str | None = None,
+        skill: str | None = None,
+    ) -> dict[str, Any]:
+        query = _build_query(
+            {
+                "updated_before": updated_before,
+                "status": status,
+                "profile": profile,
+                "skill": skill,
+            }
+        )
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}/threads/prune{query}",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin thread-prune response must be an object")
+        return cast(dict[str, Any], response)
+
     def add_message(self, thread_id: str, content: str) -> dict[str, Any]:
         response = self.request_json(
             "POST",

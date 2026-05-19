@@ -27,6 +27,16 @@ class ThreadStore(Protocol):
 
     def delete_thread(self, tenant_id: str, thread_id: str) -> None: ...
 
+    def prune_threads(
+        self,
+        tenant_id: str,
+        *,
+        updated_before: datetime,
+        status: ThreadStatus | None = None,
+        capability_profile: str | None = None,
+        skill: str | None = None,
+    ) -> int: ...
+
     def list_threads(
         self,
         tenant_id: str,
@@ -111,6 +121,36 @@ class InMemoryThreadStore:
             del self._threads[thread_id]
             del self._contexts[thread_id]
             del self._messages[thread_id]
+
+    def prune_threads(
+        self,
+        tenant_id: str,
+        *,
+        updated_before: datetime,
+        status: ThreadStatus | None = None,
+        capability_profile: str | None = None,
+        skill: str | None = None,
+    ) -> int:
+        with self._lock:
+            thread_ids = [
+                thread.thread_id
+                for thread in self._threads.values()
+                if _thread_matches_filters(
+                    thread,
+                    tenant_id,
+                    status=status,
+                    capability_profile=capability_profile,
+                    skill=skill,
+                    created_after=None,
+                    updated_after=None,
+                )
+                and thread.updated_at < updated_before
+            ]
+            for thread_id in thread_ids:
+                del self._threads[thread_id]
+                del self._contexts[thread_id]
+                del self._messages[thread_id]
+            return len(thread_ids)
 
     def list_threads(
         self,
@@ -285,6 +325,34 @@ class SQLiteThreadStore:
         with self._lock, self._connect() as conn:
             self._require_thread(conn, tenant_id, thread_id)
             conn.execute("DELETE FROM threads WHERE thread_id = ?", (thread_id,))
+
+    def prune_threads(
+        self,
+        tenant_id: str,
+        *,
+        updated_before: datetime,
+        status: ThreadStatus | None = None,
+        capability_profile: str | None = None,
+        skill: str | None = None,
+    ) -> int:
+        with self._lock, self._connect() as conn:
+            threads = self._load_matching_threads(
+                conn,
+                tenant_id,
+                status=status,
+                capability_profile=capability_profile,
+                skill=skill,
+                created_after=None,
+                updated_after=None,
+            )
+            thread_ids = [
+                thread.thread_id for thread in threads if thread.updated_at < updated_before
+            ]
+            conn.executemany(
+                "DELETE FROM threads WHERE thread_id = ?",
+                [(thread_id,) for thread_id in thread_ids],
+            )
+            return len(thread_ids)
 
     def list_threads(
         self,

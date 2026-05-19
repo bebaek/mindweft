@@ -66,6 +66,18 @@ class AdminThreadDetailResponse(AdminThreadSummaryResponse):
     messages: list[Message]
 
 
+class AdminThreadDeleteResponse(BaseModel):
+    deleted: bool
+    tenant_id: str
+    thread_id: str
+
+
+class AdminThreadPruneResponse(BaseModel):
+    tenant_id: str
+    deleted_count: int
+    updated_before: datetime
+
+
 class AdminMCPServerValidationResponse(BaseModel):
     name: str
     url: str
@@ -160,6 +172,34 @@ def build_admin_router() -> APIRouter:
             ],
         )
 
+    @router.post(
+        "/tenants/{tenant_id}/threads/prune",
+        response_model=AdminThreadPruneResponse,
+    )
+    async def prune_tenant_threads(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+        updated_before: datetime = Query(...),
+        status: ThreadStatus | None = Query(default=None),
+        profile: str | None = Query(default=None),
+        skill: str | None = Query(default=None),
+    ) -> AdminThreadPruneResponse:
+        _ = admin
+        store = _require_thread_store(request)
+        deleted_count = store.prune_threads(
+            tenant_id,
+            updated_before=updated_before,
+            status=status,
+            capability_profile=profile,
+            skill=skill,
+        )
+        return AdminThreadPruneResponse(
+            tenant_id=tenant_id,
+            deleted_count=deleted_count,
+            updated_before=updated_before,
+        )
+
     @router.get(
         "/tenants/{tenant_id}/threads/{thread_id}",
         response_model=AdminThreadDetailResponse,
@@ -179,6 +219,25 @@ def build_admin_router() -> APIRouter:
             **_thread_summary(thread, len(messages)).model_dump(),
             context=_thread_context_response(context),
             messages=messages,
+        )
+
+    @router.delete(
+        "/tenants/{tenant_id}/threads/{thread_id}",
+        response_model=AdminThreadDeleteResponse,
+    )
+    async def delete_tenant_thread(
+        tenant_id: str,
+        thread_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminThreadDeleteResponse:
+        _ = admin
+        store = _require_thread_store(request)
+        store.delete_thread(tenant_id, thread_id)
+        return AdminThreadDeleteResponse(
+            deleted=True,
+            tenant_id=tenant_id,
+            thread_id=thread_id,
         )
 
     @router.get(
