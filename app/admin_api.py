@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.auth import require_admin_principal
@@ -49,6 +49,10 @@ class AdminThreadSummaryResponse(BaseModel):
 class AdminThreadListResponse(BaseModel):
     tenant_id: str
     threads: list[AdminThreadSummaryResponse]
+    limit: int
+    offset: int
+    total: int
+    next_offset: int | None = None
 
 
 class AdminThreadContextResponse(BaseModel):
@@ -115,14 +119,44 @@ def build_admin_router() -> APIRouter:
         tenant_id: str,
         request: Request,
         admin: Principal = Depends(require_admin_principal),
+        limit: int = Query(default=50, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+        status: ThreadStatus | None = Query(default=None),
+        profile: str | None = Query(default=None),
+        skill: str | None = Query(default=None),
+        created_after: datetime | None = Query(default=None),
+        updated_after: datetime | None = Query(default=None),
     ) -> AdminThreadListResponse:
         _ = admin
         store = _require_thread_store(request)
+        total = store.count_threads(
+            tenant_id,
+            status=status,
+            capability_profile=profile,
+            skill=skill,
+            created_after=created_after,
+            updated_after=updated_after,
+        )
+        threads = store.list_threads(
+            tenant_id,
+            status=status,
+            capability_profile=profile,
+            skill=skill,
+            created_after=created_after,
+            updated_after=updated_after,
+            limit=limit,
+            offset=offset,
+        )
+        next_offset = offset + len(threads) if offset + len(threads) < total else None
         return AdminThreadListResponse(
             tenant_id=tenant_id,
+            limit=limit,
+            offset=offset,
+            total=total,
+            next_offset=next_offset,
             threads=[
                 _thread_summary(thread, store.count_messages(tenant_id, thread.thread_id))
-                for thread in store.list_threads(tenant_id)
+                for thread in threads
             ],
         )
 

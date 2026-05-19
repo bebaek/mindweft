@@ -1190,12 +1190,13 @@ X-Minigent-Tenant-Id: admin-tenant
 X-Minigent-Admin: true
 ```
 
-Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata and message counts; the detail endpoint returns metadata, compacted context state, and messages for one thread. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect persisted threads after process restarts.
+Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect persisted threads after process restarts.
 
 The packaged CLI can inspect the same thread data when authenticated as an admin:
 
 ```bash
-minigent --admin admin threads list --tenant TENANT_ID
+minigent --admin admin threads list --tenant TENANT_ID --limit 50
+minigent --admin admin threads list --tenant TENANT_ID --status idle --profile default --skill coding
 minigent --admin admin threads show THREAD_ID --tenant TENANT_ID
 minigent --api-token ADMIN_TOKEN admin threads list --tenant TENANT_ID --json
 ```

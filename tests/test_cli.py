@@ -169,6 +169,10 @@ def test_admin_threads_list_json(monkeypatch: Any, capsys: Any) -> None:
     calls: list[tuple[str, str, dict[str, str]]] = []
     response = {
         "tenant_id": "tenant-a",
+        "limit": 25,
+        "offset": 0,
+        "total": 1,
+        "next_offset": None,
         "threads": [
             {
                 "thread_id": "thread-1",
@@ -198,6 +202,56 @@ def test_admin_threads_list_json(monkeypatch: Any, capsys: Any) -> None:
     assert calls[0][0:2] == ("GET", "http://127.0.0.1:8000/admin/tenants/tenant-a/threads")
     assert calls[0][2]["X-minigent-admin"] == "true"
     assert json.loads(capsys.readouterr().out) == response
+
+
+def test_admin_threads_list_sends_pagination_and_filter_params(
+    monkeypatch: Any, capsys: Any
+) -> None:
+    calls: list[str] = []
+    response = {
+        "tenant_id": "tenant-a",
+        "limit": 10,
+        "offset": 20,
+        "total": 42,
+        "next_offset": 30,
+        "threads": [],
+    }
+
+    def urlopen(request: Any) -> _Response:
+        calls.append(request.full_url)
+        return _Response(body=response)
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        [
+            "--admin",
+            "admin",
+            "threads",
+            "list",
+            "--tenant",
+            "tenant-a",
+            "--limit",
+            "10",
+            "--offset",
+            "20",
+            "--status",
+            "idle",
+            "--profile",
+            "dev",
+            "--skill",
+            "coding",
+            "--updated-after",
+            "2026-05-19T10:00:00Z",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        "http://127.0.0.1:8000/admin/tenants/tenant-a/threads?limit=10&offset=20&status=idle&profile=dev&skill=coding&updated_after=2026-05-19T10%3A00%3A00Z"
+    ]
+    output = capsys.readouterr().out
+    assert "tenant_id=tenant-a total=42 limit=10 offset=20 next_offset=30" in output
 
 
 def test_admin_threads_show_text(monkeypatch: Any, capsys: Any) -> None:

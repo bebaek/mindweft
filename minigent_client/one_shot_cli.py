@@ -133,6 +133,44 @@ def build_parser() -> argparse.ArgumentParser:
         dest="admin_tenant_id",
         help="Tenant ID whose threads should be listed.",
     )
+    admin_threads_list_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of threads to return (server default: 50, max: 500).",
+    )
+    admin_threads_list_parser.add_argument(
+        "--offset",
+        type=int,
+        default=None,
+        help="Zero-based result offset for pagination.",
+    )
+    admin_threads_list_parser.add_argument(
+        "--status",
+        choices=["idle", "running", "error"],
+        default=None,
+        help="Filter by thread status.",
+    )
+    admin_threads_list_parser.add_argument(
+        "--profile",
+        default=None,
+        help="Filter by capability profile.",
+    )
+    admin_threads_list_parser.add_argument(
+        "--skill",
+        default=None,
+        help="Filter by skill name.",
+    )
+    admin_threads_list_parser.add_argument(
+        "--created-after",
+        default=None,
+        help="Filter to threads created after this ISO-8601 timestamp.",
+    )
+    admin_threads_list_parser.add_argument(
+        "--updated-after",
+        default=None,
+        help="Filter to threads updated after this ISO-8601 timestamp.",
+    )
 
     admin_threads_show_parser = admin_threads_subparsers.add_parser(
         "show", help="Show admin thread metadata, context, and messages."
@@ -367,7 +405,16 @@ def run_admin_threads_list(
     client: MinigentAPIClient,
     trace_id: str | None,
 ) -> int:
-    response = client.list_admin_threads(args.admin_tenant_id)
+    response = client.list_admin_threads(
+        args.admin_tenant_id,
+        limit=args.limit,
+        offset=args.offset,
+        status=args.status,
+        profile=args.profile,
+        skill=args.skill,
+        created_after=args.created_after,
+        updated_after=args.updated_after,
+    )
     if args.json:
         output: dict[str, Any] = dict(response)
         if trace_id is not None:
@@ -376,6 +423,17 @@ def run_admin_threads_list(
         return 0
     if trace_id is not None:
         print(f"trace_id={trace_id}")
+    print(
+        " ".join(
+            [
+                f"tenant_id={response.get('tenant_id')}",
+                f"total={response.get('total')}",
+                f"limit={response.get('limit')}",
+                f"offset={response.get('offset')}",
+                f"next_offset={response.get('next_offset')}",
+            ]
+        )
+    )
     for thread in response.get("threads", []):
         if not isinstance(thread, dict):
             continue

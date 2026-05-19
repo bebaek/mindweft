@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Iterator, TextIO, cast
 
@@ -74,10 +75,32 @@ class MinigentAPIClient:
         if self._thread_id == thread_id:
             self._thread_id = None
 
-    def list_admin_threads(self, tenant_id: str) -> dict[str, Any]:
+    def list_admin_threads(
+        self,
+        tenant_id: str,
+        *,
+        limit: int | None = None,
+        offset: int | None = None,
+        status: str | None = None,
+        profile: str | None = None,
+        skill: str | None = None,
+        created_after: str | None = None,
+        updated_after: str | None = None,
+    ) -> dict[str, Any]:
+        query = _build_query(
+            {
+                "limit": limit,
+                "offset": offset,
+                "status": status,
+                "profile": profile,
+                "skill": skill,
+                "created_after": created_after,
+                "updated_after": updated_after,
+            }
+        )
         response = self.request_json(
             "GET",
-            f"{self._config.base_url}/admin/tenants/{tenant_id}/threads",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}/threads{query}",
         )
         if not isinstance(response, dict):
             raise RuntimeError("Minigent admin thread-list response must be an object")
@@ -227,6 +250,13 @@ class MinigentAPIClient:
         if self._config.location:
             return f"location={self._config.location}"
         return None
+
+
+def _build_query(params: dict[str, object | None]) -> str:
+    clean_params = {key: value for key, value in params.items() if value is not None}
+    if not clean_params:
+        return ""
+    return "?" + urllib.parse.urlencode(clean_params)
 
 
 def _build_thread_create_payload(

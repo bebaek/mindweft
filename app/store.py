@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Protocol
@@ -26,7 +27,29 @@ class ThreadStore(Protocol):
 
     def delete_thread(self, tenant_id: str, thread_id: str) -> None: ...
 
-    def list_threads(self, tenant_id: str) -> list[Thread]: ...
+    def list_threads(
+        self,
+        tenant_id: str,
+        *,
+        status: ThreadStatus | None = None,
+        capability_profile: str | None = None,
+        skill: str | None = None,
+        created_after: datetime | None = None,
+        updated_after: datetime | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Thread]: ...
+
+    def count_threads(
+        self,
+        tenant_id: str,
+        *,
+        status: ThreadStatus | None = None,
+        capability_profile: str | None = None,
+        skill: str | None = None,
+        created_after: datetime | None = None,
+        updated_after: datetime | None = None,
+    ) -> int: ...
 
     def count_messages(self, tenant_id: str, thread_id: str) -> int: ...
 
@@ -89,14 +112,59 @@ class InMemoryThreadStore:
             del self._contexts[thread_id]
             del self._messages[thread_id]
 
-    def list_threads(self, tenant_id: str) -> list[Thread]:
+    def list_threads(
+        self,
+        tenant_id: str,
+        *,
+        status: ThreadStatus | None = None,
+        capability_profile: str | None = None,
+        skill: str | None = None,
+        created_after: datetime | None = None,
+        updated_after: datetime | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Thread]:
         with self._lock:
             threads = [
                 thread.model_copy(deep=True)
                 for thread in self._threads.values()
-                if thread.tenant_id == tenant_id
+                if _thread_matches_filters(
+                    thread,
+                    tenant_id,
+                    status=status,
+                    capability_profile=capability_profile,
+                    skill=skill,
+                    created_after=created_after,
+                    updated_after=updated_after,
+                )
             ]
-            return sorted(threads, key=lambda thread: thread.updated_at, reverse=True)
+            sorted_threads = sorted(threads, key=lambda thread: thread.updated_at, reverse=True)
+            return _paginate_threads(sorted_threads, limit=limit, offset=offset)
+
+    def count_threads(
+        self,
+        tenant_id: str,
+        *,
+        status: ThreadStatus | None = None,
+        capability_profile: str | None = None,
+        skill: str | None = None,
+        created_after: datetime | None = None,
+        updated_after: datetime | None = None,
+    ) -> int:
+        with self._lock:
+            return sum(
+                1
+                for thread in self._threads.values()
+                if _thread_matches_filters(
+                    thread,
+                    tenant_id,
+                    status=status,
+                    capability_profile=capability_profile,
+                    skill=skill,
+                    created_after=created_after,
+                    updated_after=updated_after,
+                )
+            )
 
     def count_messages(self, tenant_id: str, thread_id: str) -> int:
         with self._lock:
@@ -218,14 +286,53 @@ class SQLiteThreadStore:
             self._require_thread(conn, tenant_id, thread_id)
             conn.execute("DELETE FROM threads WHERE thread_id = ?", (thread_id,))
 
-    def list_threads(self, tenant_id: str) -> list[Thread]:
+    def list_threads(
+        self,
+        tenant_id: str,
+        *,
+        status: ThreadStatus | None = None,
+        capability_profile: str | None = None,
+        skill: str | None = None,
+        created_after: datetime | None = None,
+        updated_after: datetime | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Thread]:
         with self._lock, self._connect() as conn:
-            rows = conn.execute(
-                "SELECT payload FROM threads WHERE tenant_id = ?",
-                (tenant_id,),
-            ).fetchall()
-            threads = [Thread.model_validate(json.loads(row[0])) for row in rows]
-            return sorted(threads, key=lambda thread: thread.updated_at, reverse=True)
+            threads = self._load_matching_threads(
+                conn,
+                tenant_id,
+                status=status,
+                capability_profile=capability_profile,
+                skill=skill,
+                created_after=created_after,
+                updated_after=updated_after,
+            )
+            sorted_threads = sorted(threads, key=lambda thread: thread.updated_at, reverse=True)
+            return _paginate_threads(sorted_threads, limit=limit, offset=offset)
+
+    def count_threads(
+        self,
+        tenant_id: str,
+        *,
+        status: ThreadStatus | None = None,
+        capability_profile: str | None = None,
+        skill: str | None = None,
+        created_after: datetime | None = None,
+        updated_after: datetime | None = None,
+    ) -> int:
+        with self._lock, self._connect() as conn:
+            return len(
+                self._load_matching_threads(
+                    conn,
+                    tenant_id,
+                    status=status,
+                    capability_profile=capability_profile,
+                    skill=skill,
+                    created_after=created_after,
+                    updated_after=updated_after,
+                )
+            )
 
     def count_messages(self, tenant_id: str, thread_id: str) -> int:
         with self._lock, self._connect() as conn:
@@ -357,6 +464,35 @@ class SQLiteThreadStore:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
+    def _load_matching_threads(
+        self,
+        conn: sqlite3.Connection,
+        tenant_id: str,
+        *,
+        status: ThreadStatus | None,
+        capability_profile: str | None,
+        skill: str | None,
+        created_after: datetime | None,
+        updated_after: datetime | None,
+    ) -> list[Thread]:
+        rows = conn.execute(
+            "SELECT payload FROM threads WHERE tenant_id = ?",
+            (tenant_id,),
+        ).fetchall()
+        return [
+            thread
+            for thread in (Thread.model_validate(json.loads(row[0])) for row in rows)
+            if _thread_matches_filters(
+                thread,
+                tenant_id,
+                status=status,
+                capability_profile=capability_profile,
+                skill=skill,
+                created_after=created_after,
+                updated_after=updated_after,
+            )
+        ]
+
     def _require_thread(self, conn: sqlite3.Connection, tenant_id: str, thread_id: str) -> Thread:
         row = conn.execute(
             "SELECT payload FROM threads WHERE thread_id = ? AND tenant_id = ?",
@@ -393,6 +529,38 @@ def build_thread_store_from_env() -> ThreadStore:
     if db_path:
         return SQLiteThreadStore(db_path)
     return InMemoryThreadStore()
+
+
+def _thread_matches_filters(
+    thread: Thread,
+    tenant_id: str,
+    *,
+    status: ThreadStatus | None,
+    capability_profile: str | None,
+    skill: str | None,
+    created_after: datetime | None,
+    updated_after: datetime | None,
+) -> bool:
+    if thread.tenant_id != tenant_id:
+        return False
+    if status is not None and thread.status != status:
+        return False
+    if capability_profile is not None and thread.capability_profile != capability_profile:
+        return False
+    if skill is not None and thread.skill_name != skill and skill not in (thread.skill_names or []):
+        return False
+    if created_after is not None and thread.created_at <= created_after:
+        return False
+    if updated_after is not None and thread.updated_at <= updated_after:
+        return False
+    return True
+
+
+def _paginate_threads(threads: list[Thread], *, limit: int | None, offset: int) -> list[Thread]:
+    start = max(offset, 0)
+    if limit is None:
+        return threads[start:]
+    return threads[start : start + max(limit, 0)]
 
 
 def _dump_model(model: Message | Thread | ThreadContext) -> str:

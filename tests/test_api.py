@@ -20,7 +20,7 @@ from app.mcp import MCPServerInfo
 from app.mcp_broker import MINIGENT_MCP_BROKER_TOKEN_ENV, MINIGENT_MCP_BROKER_URL_ENV
 from app.models import LLMResponse, Message, MessageRole, ToolCall
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
-from app.store import SQLiteThreadStore
+from app.store import InMemoryThreadStore, SQLiteThreadStore
 from app.tools import build_local_tool_registry
 
 AUTH_HEADERS = {
@@ -1602,6 +1602,10 @@ def test_admin_api_lists_and_inspects_threads_with_tenant_isolation() -> None:
 
     assert list_response.status_code == 200
     assert list_response.json()["tenant_id"] == "tenant-1"
+    assert list_response.json()["limit"] == 50
+    assert list_response.json()["offset"] == 0
+    assert list_response.json()["total"] == 1
+    assert list_response.json()["next_offset"] is None
     assert list_response.json()["threads"] == [
         {
             "thread_id": tenant_thread_id,
@@ -1635,6 +1639,55 @@ def test_admin_api_lists_and_inspects_threads_with_tenant_isolation() -> None:
         headers=ADMIN_HEADERS,
     )
     assert isolated_response.status_code == 404
+
+
+def test_admin_api_filters_and_paginates_threads() -> None:
+    store = InMemoryThreadStore()
+    coding_thread_id = store.create_thread(
+        "tenant-1",
+        skill_name="coding",
+        skill_names=["coding"],
+        capability_profile="dev",
+    ).thread_id
+    research_thread_id = store.create_thread(
+        "tenant-1",
+        skill_names=["research", "writing"],
+        capability_profile="default",
+    ).thread_id
+    client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            thread_store=store,
+        )
+    )
+
+    coding_response = client.get(
+        "/admin/tenants/tenant-1/threads?skill=coding&profile=dev&limit=1",
+        headers=ADMIN_HEADERS,
+    )
+    assert coding_response.status_code == 200
+    assert coding_response.json()["total"] == 1
+    assert coding_response.json()["threads"][0]["thread_id"] == coding_thread_id
+
+    paged_response = client.get(
+        "/admin/tenants/tenant-1/threads?limit=1&offset=1",
+        headers=ADMIN_HEADERS,
+    )
+    assert paged_response.status_code == 200
+    assert paged_response.json()["total"] == 2
+    assert paged_response.json()["next_offset"] is None
+    assert [thread["thread_id"] for thread in paged_response.json()["threads"]] == [
+        coding_thread_id
+    ]
+
+    status_response = client.get(
+        "/admin/tenants/tenant-1/threads?status=idle&skill=research",
+        headers=ADMIN_HEADERS,
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["total"] == 1
+    assert status_response.json()["threads"][0]["thread_id"] == research_thread_id
 
 
 def test_admin_thread_inspection_requires_admin() -> None:
