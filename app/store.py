@@ -10,7 +10,7 @@ from typing import Protocol
 
 from fastapi import HTTPException
 
-from app.models import Message, Thread, ThreadContext, ThreadStatus, utc_now
+from app.models import AuditRecord, Message, Thread, ThreadContext, ThreadStatus, utc_now
 
 THREAD_DB_PATH_ENV = "MINIGENT_THREAD_DB_PATH"
 
@@ -36,6 +36,26 @@ class ThreadStore(Protocol):
         capability_profile: str | None = None,
         skill: str | None = None,
     ) -> int: ...
+
+    def list_prunable_threads(
+        self,
+        tenant_id: str,
+        *,
+        updated_before: datetime,
+        status: ThreadStatus | None = None,
+        capability_profile: str | None = None,
+        skill: str | None = None,
+    ) -> list[Thread]: ...
+
+    def append_audit_record(self, record: AuditRecord) -> AuditRecord: ...
+
+    def list_audit_records(
+        self,
+        tenant_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[AuditRecord]: ...
 
     def list_threads(
         self,
@@ -92,6 +112,7 @@ class InMemoryThreadStore:
         self._threads: dict[str, Thread] = {}
         self._contexts: dict[str, ThreadContext] = {}
         self._messages: dict[str, list[Message]] = {}
+        self._audit_records: list[AuditRecord] = []
         self._lock = Lock()
 
     def create_thread(
@@ -132,25 +153,60 @@ class InMemoryThreadStore:
         skill: str | None = None,
     ) -> int:
         with self._lock:
-            thread_ids = [
-                thread.thread_id
-                for thread in self._threads.values()
-                if _thread_matches_filters(
-                    thread,
+            threads = self._list_prunable_threads_unlocked(
+                tenant_id,
+                updated_before=updated_before,
+                status=status,
+                capability_profile=capability_profile,
+                skill=skill,
+            )
+            for thread in threads:
+                del self._threads[thread.thread_id]
+                del self._contexts[thread.thread_id]
+                del self._messages[thread.thread_id]
+            return len(threads)
+
+    def list_prunable_threads(
+        self,
+        tenant_id: str,
+        *,
+        updated_before: datetime,
+        status: ThreadStatus | None = None,
+        capability_profile: str | None = None,
+        skill: str | None = None,
+    ) -> list[Thread]:
+        with self._lock:
+            return [
+                thread.model_copy(deep=True)
+                for thread in self._list_prunable_threads_unlocked(
                     tenant_id,
+                    updated_before=updated_before,
                     status=status,
                     capability_profile=capability_profile,
                     skill=skill,
-                    created_after=None,
-                    updated_after=None,
                 )
-                and thread.updated_at < updated_before
             ]
-            for thread_id in thread_ids:
-                del self._threads[thread_id]
-                del self._contexts[thread_id]
-                del self._messages[thread_id]
-            return len(thread_ids)
+
+    def append_audit_record(self, record: AuditRecord) -> AuditRecord:
+        with self._lock:
+            self._audit_records.append(record)
+            return record
+
+    def list_audit_records(
+        self,
+        tenant_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[AuditRecord]:
+        with self._lock:
+            records = [
+                record.model_copy(deep=True)
+                for record in self._audit_records
+                if record.tenant_id == tenant_id
+            ]
+            records.sort(key=lambda record: record.created_at, reverse=True)
+            return _paginate_audit_records(records, limit=limit, offset=offset)
 
     def list_threads(
         self,
@@ -285,6 +341,30 @@ class InMemoryThreadStore:
             raise HTTPException(status_code=404, detail=f"Thread '{thread_id}' not found")
         return thread
 
+    def _list_prunable_threads_unlocked(
+        self,
+        tenant_id: str,
+        *,
+        updated_before: datetime,
+        status: ThreadStatus | None,
+        capability_profile: str | None,
+        skill: str | None,
+    ) -> list[Thread]:
+        return [
+            thread
+            for thread in self._threads.values()
+            if _thread_matches_filters(
+                thread,
+                tenant_id,
+                status=status,
+                capability_profile=capability_profile,
+                skill=skill,
+                created_after=None,
+                updated_after=None,
+            )
+            and thread.updated_at < updated_before
+        ]
+
 
 class SQLiteThreadStore:
     def __init__(self, db_path: str | Path) -> None:
@@ -336,23 +416,69 @@ class SQLiteThreadStore:
         skill: str | None = None,
     ) -> int:
         with self._lock, self._connect() as conn:
-            threads = self._load_matching_threads(
+            threads = self._load_prunable_threads(
                 conn,
                 tenant_id,
+                updated_before=updated_before,
                 status=status,
                 capability_profile=capability_profile,
                 skill=skill,
-                created_after=None,
-                updated_after=None,
             )
-            thread_ids = [
-                thread.thread_id for thread in threads if thread.updated_at < updated_before
-            ]
             conn.executemany(
                 "DELETE FROM threads WHERE thread_id = ?",
-                [(thread_id,) for thread_id in thread_ids],
+                [(thread.thread_id,) for thread in threads],
             )
-            return len(thread_ids)
+            return len(threads)
+
+    def list_prunable_threads(
+        self,
+        tenant_id: str,
+        *,
+        updated_before: datetime,
+        status: ThreadStatus | None = None,
+        capability_profile: str | None = None,
+        skill: str | None = None,
+    ) -> list[Thread]:
+        with self._lock, self._connect() as conn:
+            return self._load_prunable_threads(
+                conn,
+                tenant_id,
+                updated_before=updated_before,
+                status=status,
+                capability_profile=capability_profile,
+                skill=skill,
+            )
+
+    def append_audit_record(self, record: AuditRecord) -> AuditRecord:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO audit_records (audit_id, tenant_id, created_at, payload)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    record.audit_id,
+                    record.tenant_id,
+                    record.created_at.isoformat(),
+                    _dump_model(record),
+                ),
+            )
+            return record
+
+    def list_audit_records(
+        self,
+        tenant_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[AuditRecord]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM audit_records WHERE tenant_id = ? ORDER BY created_at DESC",
+                (tenant_id,),
+            ).fetchall()
+            records = [AuditRecord.model_validate(json.loads(row[0])) for row in rows]
+            return _paginate_audit_records(records, limit=limit, offset=offset)
 
     def list_threads(
         self,
@@ -524,6 +650,14 @@ class SQLiteThreadStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_thread_position
                     ON messages (thread_id, position);
+                CREATE TABLE IF NOT EXISTS audit_records (
+                    audit_id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_audit_records_tenant_created
+                    ON audit_records (tenant_id, created_at DESC);
                 """
             )
 
@@ -560,6 +694,27 @@ class SQLiteThreadStore:
                 updated_after=updated_after,
             )
         ]
+
+    def _load_prunable_threads(
+        self,
+        conn: sqlite3.Connection,
+        tenant_id: str,
+        *,
+        updated_before: datetime,
+        status: ThreadStatus | None,
+        capability_profile: str | None,
+        skill: str | None,
+    ) -> list[Thread]:
+        threads = self._load_matching_threads(
+            conn,
+            tenant_id,
+            status=status,
+            capability_profile=capability_profile,
+            skill=skill,
+            created_after=None,
+            updated_after=None,
+        )
+        return [thread for thread in threads if thread.updated_at < updated_before]
 
     def _require_thread(self, conn: sqlite3.Connection, tenant_id: str, thread_id: str) -> Thread:
         row = conn.execute(
@@ -631,5 +786,14 @@ def _paginate_threads(threads: list[Thread], *, limit: int | None, offset: int) 
     return threads[start : start + max(limit, 0)]
 
 
-def _dump_model(model: Message | Thread | ThreadContext) -> str:
+def _paginate_audit_records(
+    records: list[AuditRecord], *, limit: int | None, offset: int
+) -> list[AuditRecord]:
+    start = max(offset, 0)
+    if limit is None:
+        return records[start:]
+    return records[start : start + max(limit, 0)]
+
+
+def _dump_model(model: AuditRecord | Message | Thread | ThreadContext) -> str:
     return json.dumps(model.model_dump(mode="json"), ensure_ascii=True, sort_keys=True)

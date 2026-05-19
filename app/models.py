@@ -55,6 +55,16 @@ class ThreadContext(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class AuditRecord(BaseModel):
+    audit_id: str = Field(default_factory=lambda: str(uuid4()))
+    tenant_id: str
+    actor_user_id: str
+    action: str
+    affected_count: int
+    thread_ids: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class Principal(BaseModel):
     user_id: str
     tenant_id: str

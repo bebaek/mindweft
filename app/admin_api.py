@@ -15,7 +15,7 @@ from app.execution import (
     redact_tenant_execution_payload,
     validate_tenant_execution_config,
 )
-from app.models import Message, Principal, Thread, ThreadContext, ThreadStatus
+from app.models import AuditRecord, Message, Principal, Thread, ThreadContext, ThreadStatus
 
 ADMIN_DB_PATH_ENV = "MINIGENT_ADMIN_DB_PATH"
 ADMIN_ENCRYPTION_KEY_ENV = "MINIGENT_ADMIN_ENCRYPTION_KEY"
@@ -76,6 +76,25 @@ class AdminThreadPruneResponse(BaseModel):
     tenant_id: str
     deleted_count: int
     updated_before: datetime
+    dry_run: bool = False
+    candidate_thread_ids: list[str] = Field(default_factory=list)
+
+
+class AdminAuditRecordResponse(BaseModel):
+    audit_id: str
+    tenant_id: str
+    actor_user_id: str
+    action: str
+    affected_count: int
+    thread_ids: list[str]
+    created_at: datetime
+
+
+class AdminAuditRecordListResponse(BaseModel):
+    tenant_id: str
+    audit_records: list[AdminAuditRecordResponse]
+    limit: int
+    offset: int
 
 
 class AdminMCPServerValidationResponse(BaseModel):
@@ -184,20 +203,62 @@ def build_admin_router() -> APIRouter:
         status: ThreadStatus | None = Query(default=None),
         profile: str | None = Query(default=None),
         skill: str | None = Query(default=None),
+        dry_run: bool = Query(default=False),
     ) -> AdminThreadPruneResponse:
-        _ = admin
         store = _require_thread_store(request)
-        deleted_count = store.prune_threads(
+        candidates = store.list_prunable_threads(
             tenant_id,
             updated_before=updated_before,
             status=status,
             capability_profile=profile,
             skill=skill,
         )
+        candidate_thread_ids = [thread.thread_id for thread in candidates]
+        deleted_count = 0
+        if not dry_run:
+            deleted_count = store.prune_threads(
+                tenant_id,
+                updated_before=updated_before,
+                status=status,
+                capability_profile=profile,
+                skill=skill,
+            )
+            store.append_audit_record(
+                AuditRecord(
+                    tenant_id=tenant_id,
+                    actor_user_id=admin.user_id,
+                    action="threads.prune",
+                    affected_count=deleted_count,
+                    thread_ids=candidate_thread_ids,
+                )
+            )
         return AdminThreadPruneResponse(
             tenant_id=tenant_id,
             deleted_count=deleted_count,
             updated_before=updated_before,
+            dry_run=dry_run,
+            candidate_thread_ids=candidate_thread_ids,
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/audit-records",
+        response_model=AdminAuditRecordListResponse,
+    )
+    async def list_tenant_audit_records(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+        limit: int = Query(default=50, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+    ) -> AdminAuditRecordListResponse:
+        _ = admin
+        store = _require_thread_store(request)
+        records = store.list_audit_records(tenant_id, limit=limit, offset=offset)
+        return AdminAuditRecordListResponse(
+            tenant_id=tenant_id,
+            limit=limit,
+            offset=offset,
+            audit_records=[_audit_record_response(record) for record in records],
         )
 
     @router.get(
@@ -231,9 +292,17 @@ def build_admin_router() -> APIRouter:
         request: Request,
         admin: Principal = Depends(require_admin_principal),
     ) -> AdminThreadDeleteResponse:
-        _ = admin
         store = _require_thread_store(request)
         store.delete_thread(tenant_id, thread_id)
+        store.append_audit_record(
+            AuditRecord(
+                tenant_id=tenant_id,
+                actor_user_id=admin.user_id,
+                action="threads.delete",
+                affected_count=1,
+                thread_ids=[thread_id],
+            )
+        )
         return AdminThreadDeleteResponse(
             deleted=True,
             tenant_id=tenant_id,
@@ -363,6 +432,10 @@ def _thread_context_response(context: ThreadContext) -> AdminThreadContextRespon
         summarized_message_count=context.summarized_message_count,
         updated_at=context.updated_at,
     )
+
+
+def _audit_record_response(record: AuditRecord) -> AdminAuditRecordResponse:
+    return AdminAuditRecordResponse(**record.model_dump())
 
 
 def _invalidate_resolver(resolver: TenantExecutionResolver, tenant_id: str) -> None:

@@ -1769,6 +1769,38 @@ def test_admin_api_prunes_threads_with_filters() -> None:
     assert cutoff.isoformat().replace("+00:00", "Z") == "2026-02-01T00:00:00Z"
 
 
+def test_admin_api_prune_dry_run_does_not_delete_or_audit() -> None:
+    store = InMemoryThreadStore()
+    thread = store.create_thread("tenant-1")
+    thread.updated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            thread_store=store,
+        )
+    )
+
+    response = client.post(
+        "/admin/tenants/tenant-1/threads/prune"
+        "?updated_before=2026-02-01T00:00:00Z&dry_run=true",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["deleted_count"] == 0
+    assert response.json()["dry_run"] is True
+    assert response.json()["candidate_thread_ids"] == [thread.thread_id]
+    assert client.get(
+        f"/admin/tenants/tenant-1/threads/{thread.thread_id}", headers=ADMIN_HEADERS
+    ).status_code == 200
+    audit_response = client.get(
+        "/admin/tenants/tenant-1/audit-records", headers=ADMIN_HEADERS
+    )
+    assert audit_response.status_code == 200
+    assert audit_response.json()["audit_records"] == []
+
+
 def test_admin_api_prune_deletes_sqlite_messages_durably(tmp_path: Path) -> None:
     db_path = tmp_path / "threads.db"
     store = SQLiteThreadStore(db_path)
@@ -1803,6 +1835,35 @@ def test_admin_api_prune_deletes_sqlite_messages_durably(tmp_path: Path) -> None
     assert restarted_client.get(
         f"/admin/tenants/tenant-1/threads/{thread_id}", headers=ADMIN_HEADERS
     ).status_code == 404
+    audit_response = restarted_client.get(
+        "/admin/tenants/tenant-1/audit-records", headers=ADMIN_HEADERS
+    )
+    assert audit_response.status_code == 200
+    assert audit_response.json()["audit_records"][0]["action"] == "threads.prune"
+    assert audit_response.json()["audit_records"][0]["actor_user_id"] == "admin-user"
+    assert audit_response.json()["audit_records"][0]["affected_count"] == 1
+    assert audit_response.json()["audit_records"][0]["thread_ids"] == [thread_id]
+
+
+def test_admin_api_delete_writes_audit_record() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    delete_response = client.delete(
+        f"/admin/tenants/tenant-1/threads/{thread_id}", headers=ADMIN_HEADERS
+    )
+    audit_response = client.get(
+        "/admin/tenants/tenant-1/audit-records", headers=ADMIN_HEADERS
+    )
+
+    assert delete_response.status_code == 200
+    assert audit_response.status_code == 200
+    assert audit_response.json()["audit_records"][0]["action"] == "threads.delete"
+    assert audit_response.json()["audit_records"][0]["actor_user_id"] == "admin-user"
+    assert audit_response.json()["audit_records"][0]["affected_count"] == 1
+    assert audit_response.json()["audit_records"][0]["thread_ids"] == [thread_id]
 
 
 def test_admin_thread_inspection_requires_admin() -> None:

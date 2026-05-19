@@ -224,6 +224,37 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Restrict pruning to a skill name.",
     )
+    admin_threads_prune_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview matching threads without deleting them or writing audit records.",
+    )
+
+    admin_audit_parser = admin_subparsers.add_parser("audit", help="Inspect admin audit records.")
+    admin_audit_subparsers = admin_audit_parser.add_subparsers(
+        dest="admin_audit_command", required=True
+    )
+    admin_audit_list_parser = admin_audit_subparsers.add_parser(
+        "list", help="List audit records for a tenant."
+    )
+    admin_audit_list_parser.add_argument(
+        "--tenant",
+        required=True,
+        dest="admin_tenant_id",
+        help="Tenant ID whose audit records should be listed.",
+    )
+    admin_audit_list_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of audit records to return (server default: 50, max: 500).",
+    )
+    admin_audit_list_parser.add_argument(
+        "--offset",
+        type=int,
+        default=None,
+        help="Zero-based result offset for pagination.",
+    )
 
     subparsers.add_parser("health", help="Check API health.")
     subparsers.add_parser("config", help="Show resolved API configuration.")
@@ -521,6 +552,7 @@ def run_admin_threads_prune(
         status=args.status,
         profile=args.profile,
         skill=args.skill,
+        dry_run=args.dry_run,
     )
     if args.json:
         output: dict[str, Any] = dict(response)
@@ -535,10 +567,56 @@ def run_admin_threads_prune(
             [
                 f"tenant_id={response.get('tenant_id')}",
                 f"deleted_count={response.get('deleted_count')}",
+                f"dry_run={response.get('dry_run')}",
+                f"candidate_count={len(response.get('candidate_thread_ids', []))}",
                 f"updated_before={response.get('updated_before')}",
             ]
         )
     )
+    return 0
+
+
+def run_admin_audit_list(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    response = client.list_admin_audit_records(
+        args.admin_tenant_id,
+        limit=args.limit,
+        offset=args.offset,
+    )
+    if args.json:
+        output: dict[str, Any] = dict(response)
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    print(
+        " ".join(
+            [
+                f"tenant_id={response.get('tenant_id')}",
+                f"limit={response.get('limit')}",
+                f"offset={response.get('offset')}",
+            ]
+        )
+    )
+    for record in response.get("audit_records", []):
+        if not isinstance(record, dict):
+            continue
+        print(
+            " ".join(
+                [
+                    str(record.get("audit_id", "")),
+                    f"action={record.get('action')}",
+                    f"actor={record.get('actor_user_id')}",
+                    f"affected_count={record.get('affected_count')}",
+                    f"created_at={record.get('created_at')}",
+                ]
+            )
+        )
     return 0
 
 
@@ -643,6 +721,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     return run_admin_threads_delete(args, client, trace_id)
                 if args.admin_threads_command == "prune":
                     return run_admin_threads_prune(args, client, trace_id)
+            if args.admin_command == "audit":
+                if args.admin_audit_command == "list":
+                    return run_admin_audit_list(args, client, trace_id)
         if args.command == "health":
             return run_health(client, args.json, trace_id)
         if args.command == "config":

@@ -132,6 +132,7 @@ class MinigentAPIClient:
         status: str | None = None,
         profile: str | None = None,
         skill: str | None = None,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         query = _build_query(
             {
@@ -139,6 +140,7 @@ class MinigentAPIClient:
                 "status": status,
                 "profile": profile,
                 "skill": skill,
+                "dry_run": dry_run if dry_run else None,
             }
         )
         response = self.request_json(
@@ -147,6 +149,22 @@ class MinigentAPIClient:
         )
         if not isinstance(response, dict):
             raise RuntimeError("Minigent admin thread-prune response must be an object")
+        return cast(dict[str, Any], response)
+
+    def list_admin_audit_records(
+        self,
+        tenant_id: str,
+        *,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> dict[str, Any]:
+        query = _build_query({"limit": limit, "offset": offset})
+        response = self.request_json(
+            "GET",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}/audit-records{query}",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin audit-record-list response must be an object")
         return cast(dict[str, Any], response)
 
     def add_message(self, thread_id: str, content: str) -> dict[str, Any]:

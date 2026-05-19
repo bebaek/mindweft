@@ -280,6 +280,8 @@ def test_admin_threads_prune_sends_filters(monkeypatch: Any, capsys: Any) -> Non
     response = {
         "tenant_id": "tenant-a",
         "deleted_count": 3,
+        "dry_run": False,
+        "candidate_thread_ids": ["thread-1", "thread-2", "thread-3"],
         "updated_before": "2026-05-19T10:00:00Z",
     }
 
@@ -317,7 +319,90 @@ def test_admin_threads_prune_sends_filters(monkeypatch: Any, capsys: Any) -> Non
     ]
     assert (
         capsys.readouterr().out
-        == "tenant_id=tenant-a deleted_count=3 updated_before=2026-05-19T10:00:00Z\n"
+        == "tenant_id=tenant-a deleted_count=3 dry_run=False candidate_count=3 updated_before=2026-05-19T10:00:00Z\n"
+    )
+
+
+def test_admin_threads_prune_dry_run_json(monkeypatch: Any, capsys: Any) -> None:
+    calls: list[tuple[str, str]] = []
+    response = {
+        "tenant_id": "tenant-a",
+        "deleted_count": 0,
+        "dry_run": True,
+        "candidate_thread_ids": ["thread-1"],
+        "updated_before": "2026-05-19T10:00:00Z",
+    }
+
+    def urlopen(request: Any) -> _Response:
+        calls.append((request.get_method(), request.full_url))
+        return _Response(body=response)
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        [
+            "--admin",
+            "--json",
+            "admin",
+            "threads",
+            "prune",
+            "--tenant",
+            "tenant-a",
+            "--updated-before",
+            "2026-05-19T10:00:00Z",
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:8000/admin/tenants/tenant-a/threads/prune?updated_before=2026-05-19T10%3A00%3A00Z&dry_run=True",
+        )
+    ]
+    assert json.loads(capsys.readouterr().out) == response
+
+
+def test_admin_audit_list_text(monkeypatch: Any, capsys: Any) -> None:
+    calls: list[tuple[str, str]] = []
+    response = {
+        "tenant_id": "tenant-a",
+        "limit": 10,
+        "offset": 0,
+        "audit_records": [
+            {
+                "audit_id": "audit-1",
+                "tenant_id": "tenant-a",
+                "actor_user_id": "admin-user",
+                "action": "threads.delete",
+                "affected_count": 1,
+                "thread_ids": ["thread-1"],
+                "created_at": "2026-05-19T10:00:00Z",
+            }
+        ],
+    }
+
+    def urlopen(request: Any) -> _Response:
+        calls.append((request.get_method(), request.full_url))
+        return _Response(body=response)
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        ["--admin", "admin", "audit", "list", "--tenant", "tenant-a", "--limit", "10"]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        (
+            "GET",
+            "http://127.0.0.1:8000/admin/tenants/tenant-a/audit-records?limit=10",
+        )
+    ]
+    assert capsys.readouterr().out == (
+        "tenant_id=tenant-a limit=10 offset=0\n"
+        "audit-1 action=threads.delete actor=admin-user affected_count=1 created_at=2026-05-19T10:00:00Z\n"
     )
 
 
