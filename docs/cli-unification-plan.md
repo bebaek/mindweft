@@ -1,3 +1,7 @@
+## Status
+
+Completed. The one-shot and interactive/client code now share the `minigent_client` API client, config, state, and output rendering helpers. `app/cli.py` is a compatibility wrapper around `minigent_client.one_shot_cli`.
+
 ## Goal
 
 Make `minigent_client` the shared client implementation, and make both CLI entrypoints use the same API/session/thread code.
@@ -179,22 +183,7 @@ But internally route it to the new `chat` command.
 
 ### 6. Share rendering/output logic
 
-Create:
-
-```text
-minigent_client/output.py
-```
-
-With helpers:
-
-```python
-print_reply(...)
-print_thread(...)
-print_json(...)
-print_stream_event(...)
-```
-
-Then `--json`, `--stream`, interactive chat, and future slash commands can use the same formatting.
+Done: shared formatting and stream progress rendering live in `minigent_client/output.py`.
 
 ### 7. Suggested implementation order
 
