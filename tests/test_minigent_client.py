@@ -3397,7 +3397,7 @@ def test_minigent_client_cli_delegates_thread_commands_to_one_shot_cli(
 
     monkeypatch.setattr(voice_cli, "load_environment", lambda: None)
 
-    import app.cli as one_shot_cli
+    import minigent_client.one_shot_cli as one_shot_cli
 
     def fake_one_shot_main(argv: list[str]) -> int:
         calls.append(argv)

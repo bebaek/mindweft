@@ -397,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     one_shot_command = _first_cli_command(raw_argv, {"threads", "health", "config"})
     if one_shot_command is not None:
-        from app.cli import main as one_shot_main
+        from minigent_client.one_shot_cli import main as one_shot_main
 
         return one_shot_main(raw_argv)
     backend_override, parser_argv = _consume_backend_subcommand(raw_argv)
