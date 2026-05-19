@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -14,7 +15,7 @@ from app.execution import (
     redact_tenant_execution_payload,
     validate_tenant_execution_config,
 )
-from app.models import Principal
+from app.models import Message, Principal, Thread, ThreadContext, ThreadStatus
 
 ADMIN_DB_PATH_ENV = "MINIGENT_ADMIN_DB_PATH"
 ADMIN_ENCRYPTION_KEY_ENV = "MINIGENT_ADMIN_ENCRYPTION_KEY"
@@ -31,6 +32,34 @@ class AdminTenantExecutionConfigResponse(BaseModel):
 
 class AdminTenantExecutionConfigRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdminThreadSummaryResponse(BaseModel):
+    thread_id: str
+    tenant_id: str
+    status: ThreadStatus
+    created_at: datetime
+    updated_at: datetime
+    skill_name: str | None = None
+    skill_names: list[str] | None = None
+    capability_profile: str | None = None
+    message_count: int
+
+
+class AdminThreadListResponse(BaseModel):
+    tenant_id: str
+    threads: list[AdminThreadSummaryResponse]
+
+
+class AdminThreadContextResponse(BaseModel):
+    summary: str
+    summarized_message_count: int
+    updated_at: datetime
+
+
+class AdminThreadDetailResponse(AdminThreadSummaryResponse):
+    context: AdminThreadContextResponse
+    messages: list[Message]
 
 
 class AdminMCPServerValidationResponse(BaseModel):
@@ -80,6 +109,43 @@ def build_admin_router() -> APIRouter:
         _ = admin
         store = _require_admin_store(request)
         return AdminTenantListResponse(tenants=store.list_tenants())
+
+    @router.get("/tenants/{tenant_id}/threads", response_model=AdminThreadListResponse)
+    async def list_tenant_threads(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminThreadListResponse:
+        _ = admin
+        store = _require_thread_store(request)
+        return AdminThreadListResponse(
+            tenant_id=tenant_id,
+            threads=[
+                _thread_summary(thread, store.count_messages(tenant_id, thread.thread_id))
+                for thread in store.list_threads(tenant_id)
+            ],
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/threads/{thread_id}",
+        response_model=AdminThreadDetailResponse,
+    )
+    async def get_tenant_thread(
+        tenant_id: str,
+        thread_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminThreadDetailResponse:
+        _ = admin
+        store = _require_thread_store(request)
+        thread = store.get_thread(tenant_id, thread_id)
+        context = store.get_thread_context(tenant_id, thread_id)
+        messages = store.list_messages(tenant_id, thread_id)
+        return AdminThreadDetailResponse(
+            **_thread_summary(thread, len(messages)).model_dump(),
+            context=_thread_context_response(context),
+            messages=messages,
+        )
 
     @router.get(
         "/tenants/{tenant_id}/execution-config",
@@ -175,6 +241,35 @@ def _require_admin_store(request: Request) -> Any:
     if store is None:
         raise HTTPException(status_code=503, detail="Admin config store is not enabled")
     return store
+
+
+def _require_thread_store(request: Request) -> Any:
+    store = getattr(request.app.state, "store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="Thread store is not enabled")
+    return store
+
+
+def _thread_summary(thread: Thread, message_count: int) -> AdminThreadSummaryResponse:
+    return AdminThreadSummaryResponse(
+        thread_id=thread.thread_id,
+        tenant_id=thread.tenant_id,
+        status=thread.status,
+        created_at=thread.created_at,
+        updated_at=thread.updated_at,
+        skill_name=thread.skill_name,
+        skill_names=thread.skill_names,
+        capability_profile=thread.capability_profile,
+        message_count=message_count,
+    )
+
+
+def _thread_context_response(context: ThreadContext) -> AdminThreadContextResponse:
+    return AdminThreadContextResponse(
+        summary=context.summary,
+        summarized_message_count=context.summarized_message_count,
+        updated_at=context.updated_at,
+    )
 
 
 def _invalidate_resolver(resolver: TenantExecutionResolver, tenant_id: str) -> None:

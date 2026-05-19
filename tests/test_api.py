@@ -1580,6 +1580,74 @@ def test_admin_api_validation_reports_tool_policy_and_mcp_errors(
     assert body["tools"]["mcp_servers"][0]["error"] == "MCP server 'demo' request failed: boom"
 
 
+def test_admin_api_lists_and_inspects_threads_with_tenant_isolation() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    tenant_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{tenant_thread_id}/messages",
+        json={"content": "tenant one message"},
+        headers=AUTH_HEADERS,
+    )
+    client.post(f"/threads/{tenant_thread_id}/run", headers=AUTH_HEADERS)
+    other_thread_id = client.post("/threads", headers=OTHER_TENANT_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{other_thread_id}/messages",
+        json={"content": "tenant two message"},
+        headers=OTHER_TENANT_HEADERS,
+    )
+
+    list_response = client.get("/admin/tenants/tenant-1/threads", headers=ADMIN_HEADERS)
+
+    assert list_response.status_code == 200
+    assert list_response.json()["tenant_id"] == "tenant-1"
+    assert list_response.json()["threads"] == [
+        {
+            "thread_id": tenant_thread_id,
+            "tenant_id": "tenant-1",
+            "status": "idle",
+            "created_at": list_response.json()["threads"][0]["created_at"],
+            "updated_at": list_response.json()["threads"][0]["updated_at"],
+            "skill_name": None,
+            "skill_names": None,
+            "capability_profile": None,
+            "message_count": 2,
+        }
+    ]
+
+    detail_response = client.get(
+        f"/admin/tenants/tenant-1/threads/{tenant_thread_id}",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["message_count"] == 2
+    assert detail["context"]["summary"] == ""
+    assert [message["content"] for message in detail["messages"]] == [
+        "tenant one message",
+        "Mock reply: tenant one message",
+    ]
+
+    isolated_response = client.get(
+        f"/admin/tenants/tenant-1/threads/{other_thread_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert isolated_response.status_code == 404
+
+
+def test_admin_thread_inspection_requires_admin() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    response = client.get("/admin/tenants/tenant-1/threads", headers=AUTH_HEADERS)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin access required"
+
+
 def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
     tmp_path: Path,
 ) -> None:

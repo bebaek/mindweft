@@ -1159,9 +1159,9 @@ In `store-with-defaults`, a `*` tenant record in the admin store acts as a defau
 
 ## Admin API
 
-The admin API is an optional control plane for tenant execution config backed by SQLite.
+The admin API is an authenticated control plane for tenant execution config and thread inspection. Tenant execution config storage is optional and backed by SQLite.
 
-Enable it with:
+Enable tenant execution config storage with:
 
 ```dotenv
 MINIGENT_ADMIN_DB_PATH=.data/minigent-admin.db
@@ -1171,6 +1171,8 @@ MINIGENT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
 Admin endpoints:
 
 - `GET /admin/tenants`
+- `GET /admin/tenants/{tenant_id}/threads`
+- `GET /admin/tenants/{tenant_id}/threads/{thread_id}`
 - `GET /admin/tenants/{tenant_id}/execution-config`
 - `PUT /admin/tenants/{tenant_id}/execution-config`
 - `POST /admin/tenants/{tenant_id}/execution-config/validate`
@@ -1183,6 +1185,8 @@ X-Minigent-User-Id: admin-user
 X-Minigent-Tenant-Id: admin-tenant
 X-Minigent-Admin: true
 ```
+
+Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata and message counts; the detail endpoint returns metadata, compacted context state, and messages for one thread. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect persisted threads after process restarts.
 
 Secrets such as LLM API keys and MCP headers are accepted on writes but redacted in read responses. If `MINIGENT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`, `MINIGENT_ADMIN_ENCRYPTION_KEY` is required and those secrets are encrypted before being written to SQLite. Updating or deleting a tenant config invalidates the in-process execution cache for that tenant so new runs pick up the change immediately.
 

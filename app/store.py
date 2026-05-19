@@ -26,6 +26,10 @@ class ThreadStore(Protocol):
 
     def delete_thread(self, tenant_id: str, thread_id: str) -> None: ...
 
+    def list_threads(self, tenant_id: str) -> list[Thread]: ...
+
+    def count_messages(self, tenant_id: str, thread_id: str) -> int: ...
+
     def list_messages(self, tenant_id: str, thread_id: str) -> list[Message]: ...
 
     def append_message(self, tenant_id: str, message: Message) -> Message: ...
@@ -84,6 +88,20 @@ class InMemoryThreadStore:
             del self._threads[thread_id]
             del self._contexts[thread_id]
             del self._messages[thread_id]
+
+    def list_threads(self, tenant_id: str) -> list[Thread]:
+        with self._lock:
+            threads = [
+                thread.model_copy(deep=True)
+                for thread in self._threads.values()
+                if thread.tenant_id == tenant_id
+            ]
+            return sorted(threads, key=lambda thread: thread.updated_at, reverse=True)
+
+    def count_messages(self, tenant_id: str, thread_id: str) -> int:
+        with self._lock:
+            self._require_thread(tenant_id, thread_id)
+            return len(self._messages[thread_id])
 
     def list_messages(self, tenant_id: str, thread_id: str) -> list[Message]:
         with self._lock:
@@ -199,6 +217,24 @@ class SQLiteThreadStore:
         with self._lock, self._connect() as conn:
             self._require_thread(conn, tenant_id, thread_id)
             conn.execute("DELETE FROM threads WHERE thread_id = ?", (thread_id,))
+
+    def list_threads(self, tenant_id: str) -> list[Thread]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM threads WHERE tenant_id = ?",
+                (tenant_id,),
+            ).fetchall()
+            threads = [Thread.model_validate(json.loads(row[0])) for row in rows]
+            return sorted(threads, key=lambda thread: thread.updated_at, reverse=True)
+
+    def count_messages(self, tenant_id: str, thread_id: str) -> int:
+        with self._lock, self._connect() as conn:
+            self._require_thread(conn, tenant_id, thread_id)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+            return int(row[0]) if row is not None else 0
 
     def list_messages(self, tenant_id: str, thread_id: str) -> list[Message]:
         with self._lock, self._connect() as conn:
