@@ -4,7 +4,7 @@ import json
 import sys
 import urllib.error
 import urllib.request
-from typing import Any, Iterator, TextIO
+from typing import Any, Iterator, TextIO, cast
 
 from minigent_client.config import ClientConfig
 
@@ -21,37 +21,93 @@ class MinigentAPIClient:
         self._output_stream = output_stream or sys.stdout
         self._progress_stream = progress_stream or sys.stderr
 
-    def ensure_thread(self) -> str:
-        if self._thread_id:
-            return self._thread_id
-        payload = {"skill_name": self._config.skill_name} if self._config.skill_name else None
+    def health(self) -> dict[str, Any]:
+        response = self.request_json("GET", f"{self._config.base_url}/health")
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent health response must be an object")
+        return cast(dict[str, Any], response)
+
+    def config(self) -> dict[str, Any]:
+        response = self.request_json("GET", f"{self._config.base_url}/config")
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent config response must be an object")
+        return cast(dict[str, Any], response)
+
+    def create_thread(
+        self,
+        *,
+        skill_name: str | None = None,
+        skills: list[str] | None = None,
+        capability_profile: str | None = None,
+    ) -> dict[str, Any]:
+        payload = _build_thread_create_payload(
+            skill_name=skill_name,
+            skills=skills,
+            capability_profile=capability_profile,
+        )
         response = self.request_json(
             "POST",
             f"{self._config.base_url}/threads",
             payload=payload,
         )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent create-thread response must be an object")
+        thread = cast(dict[str, Any], response)
+        thread_id = thread.get("thread_id")
+        if isinstance(thread_id, str) and thread_id:
+            self._thread_id = thread_id
+        return thread
+
+    def get_thread(self, thread_id: str) -> dict[str, Any]:
+        messages = self.request_json(
+            "GET",
+            f"{self._config.base_url}/threads/{thread_id}/messages",
+        )
+        if not isinstance(messages, list):
+            raise RuntimeError("Minigent thread messages response must be a list")
+        return {"thread_id": thread_id, "messages": messages}
+
+    def delete_thread(self, thread_id: str) -> None:
+        self.request_json("DELETE", f"{self._config.base_url}/threads/{thread_id}")
+        if self._thread_id == thread_id:
+            self._thread_id = None
+
+    def add_message(self, thread_id: str, content: str) -> dict[str, Any]:
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/threads/{thread_id}/messages",
+            payload={"content": content},
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent add-message response must be an object")
+        return cast(dict[str, Any], response)
+
+    def ensure_thread(self) -> str:
+        if self._thread_id:
+            return self._thread_id
+        response = self.create_thread(skill_name=self._config.skill_name)
         thread_id = response["thread_id"]
-        self._thread_id = thread_id
+        if not isinstance(thread_id, str) or not thread_id:
+            raise RuntimeError("Minigent create-thread response must include thread_id")
         return thread_id
 
     def send_user_message(self, content: str) -> dict[str, Any]:
         thread_id = self.ensure_thread()
         formatted_content = self._format_user_message(content)
         self._maybe_log_prompt(formatted_content)
-        return self.request_json(
-            "POST",
-            f"{self._config.base_url}/threads/{thread_id}/messages",
-            payload={"content": formatted_content},
-        )
+        return self.add_message(thread_id, formatted_content)
 
-    def run_thread(self) -> str:
-        thread_id = self.ensure_thread()
-        if self._config.stream_runs:
-            return self._run_thread_stream(thread_id)
+    def run_thread(self, thread_id: str | None = None, *, stream: bool | None = None) -> str:
+        resolved_thread_id = thread_id or self.ensure_thread()
+        use_stream = self._config.stream_runs if stream is None else stream
+        if use_stream:
+            return self._run_thread_stream(resolved_thread_id)
         response = self.request_json(
             "POST",
-            f"{self._config.base_url}/threads/{thread_id}/run",
+            f"{self._config.base_url}/threads/{resolved_thread_id}/run",
         )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent run response must be an object")
         reply = response["reply"]
         if not isinstance(reply, str):
             raise RuntimeError("Minigent reply must be a string")
@@ -89,7 +145,11 @@ class MinigentAPIClient:
         method: str,
         url: str,
     ) -> Iterator[dict[str, Any]]:
-        headers = {"Accept": "application/x-ndjson", **self._config.principal.build_headers()}
+        headers = {
+            "Accept": "application/x-ndjson",
+            **self._config.principal.build_headers(),
+            **self._config.extra_headers,
+        }
         request = urllib.request.Request(url, method=method, headers=headers)
         try:
             with urllib.request.urlopen(request) as response:
@@ -117,7 +177,7 @@ class MinigentAPIClient:
         payload: dict[str, Any] | None = None,
     ) -> Any:
         data = None
-        headers = self._config.principal.build_headers()
+        headers = {**self._config.principal.build_headers(), **self._config.extra_headers}
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -247,6 +307,24 @@ class MinigentAPIClient:
         if self._config.location:
             return f"location={self._config.location}"
         return None
+
+
+def _build_thread_create_payload(
+    *,
+    skill_name: str | None,
+    skills: list[str] | None,
+    capability_profile: str | None,
+) -> dict[str, Any] | None:
+    if skill_name is not None and skills is not None:
+        raise ValueError("Provide either skill_name or skills, not both.")
+    payload: dict[str, Any] = {}
+    if skill_name is not None:
+        payload["skill_name"] = skill_name
+    if skills is not None:
+        payload["skill_names"] = skills
+    if capability_profile is not None:
+        payload["capability_profile"] = capability_profile
+    return payload or None
 
 
 def _peer_event_tool_name(peer_event: dict[str, Any]) -> str:

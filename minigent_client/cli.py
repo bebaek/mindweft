@@ -16,7 +16,7 @@ from minigent_client.audio import AudioCaptureConfig, MicrophoneRecorder, open_m
 from minigent_client.backends.manual_audio import ManualAudioActivationSource
 from minigent_client.backends.passive_audio import PassiveAudioActivationSource
 from minigent_client.backends.stdin_loop import StdinActivationSource
-from minigent_client.config import ClientConfig
+from minigent_client.config import ClientConfig, build_client_config
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker
 from minigent_client.ring_buffer import AudioRingBuffer
@@ -225,18 +225,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_config(args: argparse.Namespace) -> ClientConfig:
-    env_config = ClientConfig.from_env()
+    env_config = build_client_config(
+        base_url=args.base_url,
+        api_token=args.api_token,
+        user_id=args.user_id,
+        tenant_id=args.tenant_id,
+        admin=args.admin if args.admin else None,
+        stream_runs=args.stream_runs or None,
+        wake_phrase=args.wake_phrase,
+    )
     principal = env_config.principal
-    if any(value is not None for value in (args.api_token, args.user_id, args.tenant_id)) or args.admin:
-        principal = type(principal)(
-            user_id=args.user_id or principal.user_id,
-            tenant_id=args.tenant_id or principal.tenant_id,
-            is_admin=args.admin or principal.is_admin,
-            api_token=args.api_token if args.api_token is not None else principal.api_token,
-        )
     return ClientConfig(
-        base_url=(args.base_url or env_config.base_url).rstrip("/"),
-        wake_phrase=(args.wake_phrase or env_config.wake_phrase).strip(),
+        base_url=env_config.base_url,
+        wake_phrase=env_config.wake_phrase,
         prompt_preamble=env_config.prompt_preamble,
         location=env_config.location,
         debug_show_prompt=env_config.debug_show_prompt,

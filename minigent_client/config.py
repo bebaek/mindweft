@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,7 @@ class ClientConfig:
     openwakeword_model: str = "okay_nabu"
     openwakeword_threshold: float = 0.5
     principal: PrincipalConfig = PrincipalConfig(user_id="demo-user", tenant_id="demo-tenant")
+    extra_headers: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls) -> "ClientConfig":
@@ -164,6 +165,41 @@ class ClientConfig:
                 api_token=_clean_optional(os.getenv("MINIGENT_VOICE_API_TOKEN")),
             ),
         )
+
+
+def build_client_config(
+    *,
+    base_url: str | None = None,
+    api_token: str | None = None,
+    user_id: str | None = None,
+    tenant_id: str | None = None,
+    admin: bool | None = None,
+    thread_id: str | None = None,
+    skill_name: str | None = None,
+    stream_runs: bool | None = None,
+    extra_headers: dict[str, str] | None = None,
+    wake_phrase: str | None = None,
+    env_config: ClientConfig | None = None,
+) -> ClientConfig:
+    base = env_config or ClientConfig.from_env()
+    principal = base.principal
+    if any(value is not None for value in (api_token, user_id, tenant_id, admin)):
+        principal = PrincipalConfig(
+            user_id=user_id or principal.user_id,
+            tenant_id=tenant_id or principal.tenant_id,
+            is_admin=principal.is_admin if admin is None else admin,
+            api_token=api_token if api_token is not None else principal.api_token,
+        )
+    return replace(
+        base,
+        base_url=(base_url or base.base_url).rstrip("/"),
+        wake_phrase=(wake_phrase or base.wake_phrase).strip(),
+        thread_id=thread_id if thread_id is not None else base.thread_id,
+        skill_name=skill_name if skill_name is not None else base.skill_name,
+        stream_runs=stream_runs if stream_runs is not None else base.stream_runs,
+        principal=principal,
+        extra_headers=dict(extra_headers or base.extra_headers),
+    )
 
 
 def _clean_optional(value: str | None) -> str | None:
