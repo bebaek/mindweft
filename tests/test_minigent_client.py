@@ -1421,6 +1421,46 @@ def test_minigent_client_sends_raw_message_when_location_is_unset(
     ]
 
 
+def test_minigent_client_can_cancel_current_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+    def fake_urlopen(request: object) -> FakeResponse:
+        requests.append({"method": request.get_method(), "url": request.full_url})
+        return FakeResponse({"cancelled": True, "thread_id": "thread-123"})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    client = MinigentAPIClient(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            thread_id="thread-123",
+        )
+    )
+
+    client.cancel_current_run()
+
+    assert requests == [
+        {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/threads/thread-123/run/cancel",
+        }
+    ]
+
+
 def test_minigent_client_uses_location_as_compatibility_preamble_when_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3783,6 +3823,43 @@ def test_run_chat_loop_handles_keyboard_interrupt(
 
     assert exit_code == 130
     assert output_stream.getvalue() == "[user] \n[idle] shutting down\n"
+
+
+def test_run_chat_loop_interrupt_during_run_aborts_turn_and_stays_in_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("hello\n")
+    calls: list[str] = []
+
+    class FakeChatClient:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def send_user_message(self, content: str) -> None:
+            calls.append(content)
+
+        def run_thread(self) -> str:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            stream_runs=True,
+        )
+    )
+
+    assert exit_code == 0
+    assert calls == ["hello"]
+    output = output_stream.getvalue()
+    assert "locally aborted current run" in output
+    assert "server cancellation requested" in output
+    assert output.endswith("[user] [idle] shutting down\n")
 
 
 def test_minigent_client_cli_routes_chat_subcommand_without_minigent_client(

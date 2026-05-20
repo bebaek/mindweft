@@ -1504,6 +1504,30 @@ def run_debug_bundle(
     return 0 if success else 1
 
 
+def _abort_detail(args: argparse.Namespace) -> tuple[str, bool]:
+    server_cancelled = bool(getattr(args, "stream", False))
+    if server_cancelled:
+        return "server cancellation requested", server_cancelled
+    return "server cancellation unavailable for non-streaming runs", server_cancelled
+
+
+def _print_abort_message(args: argparse.Namespace) -> None:
+    detail, server_cancelled = _abort_detail(args)
+    if getattr(args, "json", False):
+        print_json(
+            {
+                "error": {
+                    "message": "Run aborted locally.",
+                    "category": "aborted",
+                    "server_cancelled": server_cancelled,
+                    "detail": detail,
+                }
+            }
+        )
+        return
+    print(f"[idle] locally aborted current run; {detail}.", file=sys.stderr)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -1555,6 +1579,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return run_config(client, trace_id)
             if args.config_command == "doctor":
                 return run_config_doctor(args, client, trace_id)
+    except KeyboardInterrupt:
+        try:
+            client.cancel_current_run()
+        except Exception:
+            pass
+        _print_abort_message(args)
+        return 130
     except MinigentAPIError as exc:
         if args.json:
             print_json({"error": exc.to_dict(include_detail=args.verbose)})

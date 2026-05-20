@@ -45,6 +45,7 @@ from app.models import (
     MessageRole,
     Principal,
     RunThreadResponse,
+    ThreadStatus,
 )
 from app.observability import configure_logging, configure_tracing
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_env
@@ -96,7 +97,9 @@ async def _run_thread_ndjson_stream(
         await emit({"type": "assistant.message", "content": reply})
         await emit({"type": "run.completed"})
 
+    run_key = (principal.tenant_id, thread_id)
     task = asyncio.create_task(run())
+    request.app.state.active_run_tasks[run_key] = task
     try:
         while True:
             if task.done() and queue.empty():
@@ -105,8 +108,14 @@ async def _run_thread_ndjson_stream(
             if event is not None:
                 yield _ndjson_event(event)
     finally:
+        if request.app.state.active_run_tasks.get(run_key) is task:
+            request.app.state.active_run_tasks.pop(run_key, None)
         if not task.done():
             task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 def _ndjson_event(event: dict[str, object]) -> str:
@@ -204,6 +213,7 @@ def create_app(
         quality_enhancer=app.state.quality_enhancer,
     )
     app.state.peer_agent_registry = peer_agent_registry or build_peer_agent_registry_from_env()
+    app.state.active_run_tasks = {}
     app.state.agent_backend = AgentBackendRouter(
         store=app.state.store,
         execution_resolver=execution_resolver,
@@ -370,6 +380,31 @@ def create_app(
             _run_thread_ndjson_stream(request, principal, thread_id),
             media_type="application/x-ndjson",
         )
+
+    @app.post("/threads/{thread_id}/run/cancel")
+    async def cancel_thread_run(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_principal),
+    ) -> dict[str, object]:
+        run_key = (principal.tenant_id, thread_id)
+        task = request.app.state.active_run_tasks.pop(run_key, None)
+        cancelled = False
+        if task is not None and not task.done():
+            task.cancel()
+            cancelled = True
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        thread = request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        if thread.status == ThreadStatus.RUNNING:
+            request.app.state.store.set_thread_status(
+                principal.tenant_id,
+                thread_id,
+                ThreadStatus.IDLE,
+            )
+        return {"cancelled": cancelled, "thread_id": thread_id}
 
     @app.delete("/threads/{thread_id}", status_code=204)
     async def delete_thread(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import os
@@ -159,6 +160,9 @@ class AgentRuntime:
                 )
                 self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
                 return final_content
+        except asyncio.CancelledError:
+            self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
+            raise
         except HTTPException:
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.ERROR)
             raise

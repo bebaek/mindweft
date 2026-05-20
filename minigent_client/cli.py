@@ -666,6 +666,11 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         try:
             client.send_user_message(utterance)
             reply = client.run_thread()
+        except KeyboardInterrupt:
+            _cancel_current_run_after_interrupt(client)
+            output_stream.write(f"\n{_chat_abort_message(config)}\n")
+            output_stream.flush()
+            continue
         except RuntimeError as exc:
             output_stream.write(f"[idle] request failed, staying in chat mode: {exc}\n")
             output_stream.flush()
@@ -674,6 +679,25 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         turns_completed += 1
         if once and turns_completed >= 1:
             return 0
+
+
+def _cancel_current_run_after_interrupt(client: MinigentAPIClient) -> None:
+    try:
+        client.cancel_current_run()
+    except Exception:
+        return
+
+
+def _chat_abort_message(config: ClientConfig) -> str:
+    if config.stream_runs:
+        return (
+            "[idle] locally aborted current run; server cancellation requested. "
+            "Press Ctrl+C again at prompt to exit."
+        )
+    return (
+        "[idle] locally aborted current run; server cancellation unavailable for "
+        "non-streaming runs. Press Ctrl+C again at prompt to exit."
+    )
 
 
 def _write_chat_help(output_stream: ChatOutputStream) -> None:

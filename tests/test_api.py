@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from collections import deque
@@ -19,8 +20,17 @@ from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter
 from app.main import create_app
 from app.mcp import MCPServerInfo
 from app.mcp_broker import MINIGENT_MCP_BROKER_TOKEN_ENV, MINIGENT_MCP_BROKER_URL_ENV
-from app.models import AuditRecord, LLMResponse, Message, MessageRole, ToolCall
+from app.models import (
+    AuditRecord,
+    LLMResponse,
+    Message,
+    MessageRole,
+    Principal,
+    ThreadStatus,
+    ToolCall,
+)
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
+from app.runtime import AgentRuntime
 from app.store import InMemoryThreadStore, SQLiteThreadStore
 from app.tools import build_local_tool_registry
 
@@ -583,6 +593,62 @@ def test_run_stream_endpoint_emits_error_event() -> None:
     ]
 
 
+def test_cancel_thread_run_endpoint_resets_stale_running_thread() -> None:
+    app = create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    client = TestClient(app)
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    app.state.store.set_thread_status("tenant-1", thread_id, ThreadStatus.RUNNING)
+
+    response = client.post(f"/threads/{thread_id}/run/cancel", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json() == {"cancelled": False, "thread_id": thread_id}
+    assert app.state.store.get_thread("tenant-1", thread_id).status == ThreadStatus.IDLE
+
+
+class BlockingLLMAdapter(LLMAdapter):
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+        self.started.set()
+        await self.release.wait()
+        return LLMResponse(content="done")
+
+    def describe(self) -> dict[str, object]:
+        return {"provider": "blocking"}
+
+
+def test_agent_runtime_cancellation_resets_thread_to_idle() -> None:
+    async def scenario() -> None:
+        store = InMemoryThreadStore()
+        adapter = BlockingLLMAdapter()
+        runtime = AgentRuntime(
+            store=store,
+            llm_adapter=adapter,
+            tool_registry=build_local_tool_registry(),
+        )
+        principal = Principal(user_id="user-1", tenant_id="tenant-1")
+        thread = store.create_thread(principal.tenant_id)
+        store.append_message(
+            principal.tenant_id,
+            Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello"),
+        )
+
+        task = asyncio.create_task(runtime.run_thread(principal, thread.thread_id))
+        await adapter.started.wait()
+        assert store.get_thread(principal.tenant_id, thread.thread_id).status == ThreadStatus.RUNNING
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert store.get_thread(principal.tenant_id, thread.thread_id).status == ThreadStatus.IDLE
+
+    asyncio.run(scenario())
+
+
 def test_run_endpoint_handles_tool_call_flow() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
@@ -673,6 +739,67 @@ def test_run_endpoint_can_use_peer_agent_backend() -> None:
     assert [message["role"] for message in messages] == [MessageRole.USER, MessageRole.ASSISTANT]
     assert messages[-1]["content"] == "OpenCode result"
     assert [request[:2] for request in requests] == [("POST", "/tasks"), ("GET", "/tasks/task_123")]
+
+
+def test_peer_agent_backend_cancellation_cancels_peer_task_and_resets_thread() -> None:
+    async def scenario() -> None:
+        requests: list[tuple[str, str]] = []
+        task_polled = asyncio.Event()
+        release_poll = asyncio.Event()
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests.append((request.method, request.url.path))
+            if request.method == "POST" and request.url.path == "/tasks":
+                return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+            if request.method == "GET" and request.url.path == "/tasks/task_123":
+                task_polled.set()
+                await release_poll.wait()
+                return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+            if request.method == "POST" and request.url.path == "/tasks/task_123/cancel":
+                return httpx.Response(200, json={"task_id": "task_123", "status": "canceled"})
+            return httpx.Response(404, json={"detail": "missing"})
+
+        config = parse_tenant_execution_config(
+            "tenant-1",
+            {
+                "agent_backend": {
+                    "type": "peer_agent",
+                    "peer": "opencode",
+                    "cwd": "/workspace/project",
+                    "poll_interval_seconds": 0.001,
+                }
+            },
+        )
+        registry = PeerAgentRegistry(
+            parse_peer_agent_configs([{"name": "opencode", "base_url": "http://opencode.test"}]),
+            transport=httpx.MockTransport(handler),
+        )
+        store = InMemoryThreadStore()
+        app = create_app(
+            execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
+            peer_agent_registry=registry,
+            thread_store=store,
+        )
+        principal = Principal(user_id="user-1", tenant_id="tenant-1")
+        thread = store.create_thread(principal.tenant_id)
+        store.append_message(
+            principal.tenant_id,
+            Message(thread_id=thread.thread_id, role=MessageRole.USER, content="please inspect"),
+        )
+
+        task = asyncio.create_task(app.state.agent_backend.run_thread(principal, thread.thread_id))
+        await task_polled.wait()
+        assert store.get_thread(principal.tenant_id, thread.thread_id).status == ThreadStatus.RUNNING
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release_poll.set()
+
+        assert ("POST", "/tasks/task_123/cancel") in requests
+        assert store.get_thread(principal.tenant_id, thread.thread_id).status == ThreadStatus.IDLE
+
+    asyncio.run(scenario())
 
 
 def test_run_endpoint_can_disable_peer_agent_mcp_broker() -> None:

@@ -244,6 +244,15 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent reply must be a string")
         return reply
 
+    def cancel_current_run(self, thread_id: str | None = None) -> None:
+        resolved_thread_id = thread_id or self._thread_id
+        if resolved_thread_id is None:
+            return
+        self.request_json(
+            "POST",
+            f"{self._config.base_url}/threads/{resolved_thread_id}/run/cancel",
+        )
+
     def _run_thread_stream(self, thread_id: str) -> str:
         reply: str | None = None
         for event in self.request_ndjson_events(

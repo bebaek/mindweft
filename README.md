@@ -707,6 +707,12 @@ When stderr/stdout is connected to a TTY, the CLI uses subtle ANSI styling for i
 prompts, assistant replies, progress, tool calls, peer events, warnings, and errors. Color
 is disabled automatically for pipes and can be disabled with `NO_COLOR=1`.
 
+Press `Ctrl+C` during an interactive chat run to abort the current turn and return to the
+prompt; press `Ctrl+C` again at the prompt to exit. One-shot commands return exit code
+130 on abort. Streaming runs request cancellation from the API and close the stream; the
+API resets the thread to idle once cancellation is handled. Non-streaming runs report that
+server cancellation is unavailable.
+
 The CLI reports common API failures with short friendly errors on stderr while keeping
 technical request/response detail hidden unless `--verbose` is set. For example, auth
 failures prompt you to check `MINIGENT_API_TOKEN`, connection failures suggest checking

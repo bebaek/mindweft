@@ -177,14 +177,16 @@ or with `NO_COLOR`. Clearly distinguish:
 - warnings
 - errors
 
-## [ ] 15. Abort handling
+## [x] 15. Abort handling
 
 Make `Ctrl+C` graceful:
 
 - First press stops the current generation.
 - Second press exits.
 
-Print whether the run was locally aborted or server-cancelled.
+Print whether the run was locally aborted or server-cancelled. Streaming cancellation now
+uses an explicit API cancel request and resets stale running thread state so the next prompt
+can run immediately.
 
 ## [~] 16. Token count display
 

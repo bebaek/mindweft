@@ -154,6 +154,70 @@ def test_run_quiet_suppresses_streaming_progress(
     assert captured.err == ""
 
 
+def test_run_stream_keyboard_interrupt_reports_abort(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    class InterruptingResponse(_Response):
+        def __iter__(self) -> Iterator[bytes]:
+            yield (json.dumps({"type": "run.started", "thread_id": "thread-1"}) + "\n").encode(
+                "utf-8"
+            )
+            raise KeyboardInterrupt
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run/stream"):
+            return InterruptingResponse()
+        if request.full_url.endswith("/threads/thread-1/run/cancel"):
+            return _Response(body={"cancelled": True, "thread_id": "thread-1"})
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["run", "--stream", "hello"])
+
+    assert exit_code == 130
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "locally aborted current run" in captured.err
+    assert "server cancellation requested" in captured.err
+
+
+def test_run_json_keyboard_interrupt_reports_structured_abort(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run"):
+            raise KeyboardInterrupt
+        if request.full_url.endswith("/threads/thread-1/run/cancel"):
+            return _Response(body={"cancelled": False, "thread_id": "thread-1"})
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["run", "--json", "hello"])
+
+    assert exit_code == 130
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "error": {
+            "message": "Run aborted locally.",
+            "category": "aborted",
+            "server_cancelled": False,
+            "detail": "server cancellation unavailable for non-streaming runs",
+        }
+    }
+
+
 def test_chat_stream_text_prints_progress_to_stderr(
     monkeypatch: Any, tmp_path: Path, capsys: Any
 ) -> None:
