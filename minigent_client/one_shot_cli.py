@@ -121,6 +121,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the selected thread ID before the transcript in text mode.",
     )
+    resume_parser.add_argument(
+        "--no-picker",
+        dest="thread_picker",
+        action="store_false",
+        default=True,
+        help="When resuming without an ID, skip the interactive thread picker and use the latest thread.",
+    )
 
     export_parser = subparsers.add_parser("export", help="Export a thread transcript.")
     export_parser.add_argument(
@@ -359,18 +366,83 @@ def remember_thread(
     thread_id: str,
     *,
     title: str | None = None,
+    message_count: int | None = None,
 ) -> None:
     state = ClientState.load()
-    state.set_last_thread(state_scope_key(base_url, args), thread_id, title=title)
+    state.set_last_thread(
+        state_scope_key(base_url, args), thread_id, title=title, message_count=message_count
+    )
     state.save()
 
 
 def load_remembered_thread(base_url: str, args: argparse.Namespace) -> str:
     state = ClientState.load()
+    threads = state.list_threads(state_scope_key(base_url, args))
+    if getattr(args, "thread_picker", False) and len(threads) > 1 and sys.stdin.isatty() and sys.stdout.isatty():
+        selected_thread_id = pick_thread_from_history(threads)
+        if selected_thread_id is not None:
+            return selected_thread_id
     thread_id = state.get_last_thread(state_scope_key(base_url, args))
     if thread_id is None:
         raise SystemExit("No remembered thread for this server and principal. Start a chat first.")
     return thread_id
+
+
+def pick_thread_from_history(threads: list[ThreadHistoryItem]) -> str | None:
+    try:
+        prompt_toolkit_module = __import__("prompt_toolkit")
+        completion_module = __import__("prompt_toolkit.completion", fromlist=["WordCompleter"])
+    except ImportError:
+        return _pick_thread_from_numbered_list(threads)
+    PromptSession = prompt_toolkit_module.PromptSession
+    WordCompleter = completion_module.WordCompleter
+    print("Select a thread by number, ID, or search text; blank cancels.")
+    _print_numbered_thread_history(threads)
+    session = PromptSession(completer=WordCompleter([item.thread_id for item in threads], ignore_case=True))
+    try:
+        selection = session.prompt("thread> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nThread selection cancelled.")
+        return None
+    return _resolve_thread_selection(selection, threads)
+
+
+def _pick_thread_from_numbered_list(threads: list[ThreadHistoryItem]) -> str | None:
+    print("Select a thread by number, ID, or search text; blank cancels.")
+    _print_numbered_thread_history(threads)
+    return _resolve_thread_selection(input("thread> ").strip(), threads)
+
+
+def _print_numbered_thread_history(threads: list[ThreadHistoryItem]) -> None:
+    for index, item in enumerate(threads, start=1):
+        message_count = "?" if item.message_count is None else str(item.message_count)
+        print(
+            f"{index}. {item.updated_at or 'unknown'}  {item.title or 'Untitled thread'}  "
+            f"messages={message_count}  {item.thread_id}"
+        )
+
+
+def _resolve_thread_selection(selection: str, threads: list[ThreadHistoryItem]) -> str | None:
+    if not selection:
+        return None
+    if selection.isdigit():
+        index = int(selection) - 1
+        if 0 <= index < len(threads):
+            return threads[index].thread_id
+    for item in threads:
+        if item.thread_id == selection:
+            return item.thread_id
+    normalized = selection.casefold()
+    matches = [
+        item
+        for item in threads
+        if normalized in item.thread_id.casefold()
+        or normalized in (item.title or "").casefold()
+        or normalized in (item.updated_at or "").casefold()
+    ]
+    if len(matches) == 1:
+        return matches[0].thread_id
+    return None
 
 
 def list_remembered_threads(base_url: str, args: argparse.Namespace) -> list[ThreadHistoryItem]:
@@ -544,7 +616,8 @@ def run_threads_list(
     for index, item in enumerate(threads, start=1):
         title = item.title or "Untitled thread"
         updated_at = item.updated_at or "unknown"
-        print(f"{index}. {updated_at}  {title}  {item.thread_id}")
+        message_count = "?" if item.message_count is None else str(item.message_count)
+        print(f"{index}. {updated_at}  {title}  messages={message_count}  {item.thread_id}")
     return 0
 
 
@@ -556,10 +629,14 @@ def run_resume(
 ) -> int:
     thread_id = args.thread_id or load_remembered_thread(base_url, args)
     thread = client.get_thread(thread_id)
-    remember_thread(
-        base_url, args, thread_id, title=_title_from_thread_messages(thread["messages"])
-    )
     messages = thread["messages"]
+    remember_thread(
+        base_url,
+        args,
+        thread_id,
+        title=_title_from_thread_messages(messages),
+        message_count=len(messages) if isinstance(messages, list) else None,
+    )
     if args.json:
         output: dict[str, Any] = {"thread_id": thread_id, "messages": messages}
         if trace_id is not None:
@@ -595,7 +672,13 @@ def run_export(
     thread_id = args.thread_id or load_remembered_thread(base_url, args)
     thread = client.get_thread(thread_id)
     messages = thread["messages"]
-    remember_thread(base_url, args, thread_id, title=_title_from_thread_messages(messages))
+    remember_thread(
+        base_url,
+        args,
+        thread_id,
+        title=_title_from_thread_messages(messages),
+        message_count=len(messages) if isinstance(messages, list) else None,
+    )
     if args.format == "json":
         output: dict[str, Any] = {"thread_id": thread_id, "messages": messages}
         if trace_id is not None:

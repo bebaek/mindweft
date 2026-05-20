@@ -32,7 +32,7 @@ from minigent_client.speech import (
     PiperSpeechOutput,
     SilentSpeechOutput,
 )
-from minigent_client.state import STATE_DIR_NAME, state_scope_key
+from minigent_client.state import STATE_DIR_NAME, ThreadHistoryItem, state_scope_key
 from minigent_client.state import ClientState as PersistentClientState
 from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
 from minigent_client.vad import SileroVoiceActivityDetector
@@ -358,9 +358,12 @@ def remember_client_thread(
     thread_id: str,
     *,
     title: str | None = None,
+    message_count: int | None = None,
 ) -> None:
     state = PersistentClientState.load()
-    state.set_last_thread(client_state_scope_key(config), thread_id, title=title)
+    state.set_last_thread(
+        client_state_scope_key(config), thread_id, title=title, message_count=message_count
+    )
     state.save()
 
 
@@ -706,13 +709,104 @@ def _handle_chat_threads(
         output_stream.write("[idle] no locally remembered threads\n")
         output_stream.flush()
         return
-    current_thread_id = client.thread_id
+    if getattr(output_stream, "isatty", lambda: False)():
+        selected_thread_id = _pick_thread_from_history(threads, output_stream=output_stream)
+        if selected_thread_id:
+            _switch_to_thread(selected_thread_id, client, config, output_stream)
+        return
+    _write_thread_history_list(threads, current_thread_id=client.thread_id, output_stream=output_stream)
+
+
+def _write_thread_history_list(
+    threads: list[ThreadHistoryItem],
+    *,
+    current_thread_id: str | None,
+    output_stream: ChatOutputStream,
+) -> None:
     for item in threads:
         marker = "*" if item.thread_id == current_thread_id else " "
-        title = item.title or "Untitled thread"
-        updated_at = item.updated_at or "unknown"
-        output_stream.write(f"[idle] {marker} {item.thread_id}  {title}  {updated_at}\n")
+        output_stream.write(f"[idle] {marker} {_format_thread_history_item(item)}\n")
     output_stream.flush()
+
+
+def _format_thread_history_item(item: ThreadHistoryItem) -> str:
+    title = item.title or "Untitled thread"
+    updated_at = item.updated_at or "unknown"
+    message_count = "?" if item.message_count is None else str(item.message_count)
+    return f"{item.thread_id}  {title}  {updated_at}  messages={message_count}"
+
+
+def _pick_thread_from_history(
+    threads: list[ThreadHistoryItem],
+    *,
+    output_stream: ChatOutputStream,
+) -> str | None:
+    if not threads:
+        return None
+    try:
+        prompt_toolkit_module = import_module("prompt_toolkit")
+        completion_module = import_module("prompt_toolkit.completion")
+    except ImportError:
+        return _pick_thread_from_numbered_list(threads, output_stream=output_stream)
+    PromptSession = prompt_toolkit_module.PromptSession
+    WordCompleter = completion_module.WordCompleter
+    choices = [item.thread_id for item in threads]
+    output_stream.write("[idle] select a thread by number, ID, or search text; blank cancels\n")
+    _write_numbered_thread_history(threads, output_stream=output_stream)
+    output_stream.flush()
+    session = PromptSession(completer=WordCompleter(choices, ignore_case=True))
+    try:
+        selection = session.prompt("[thread] ").strip()
+    except (EOFError, KeyboardInterrupt):
+        output_stream.write("\n[idle] thread selection cancelled\n")
+        output_stream.flush()
+        return None
+    return _resolve_thread_selection(selection, threads)
+
+
+def _pick_thread_from_numbered_list(
+    threads: list[ThreadHistoryItem],
+    *,
+    output_stream: ChatOutputStream,
+) -> str | None:
+    output_stream.write("[idle] select a thread by number, ID, or search text; blank cancels\n")
+    _write_numbered_thread_history(threads, output_stream=output_stream)
+    output_stream.write("[thread] ")
+    output_stream.flush()
+    selection = sys.stdin.readline().strip()
+    return _resolve_thread_selection(selection, threads)
+
+
+def _write_numbered_thread_history(
+    threads: list[ThreadHistoryItem],
+    *,
+    output_stream: ChatOutputStream,
+) -> None:
+    for index, item in enumerate(threads, start=1):
+        output_stream.write(f"[idle] {index}. {_format_thread_history_item(item)}\n")
+
+
+def _resolve_thread_selection(selection: str, threads: list[ThreadHistoryItem]) -> str | None:
+    if not selection:
+        return None
+    if selection.isdigit():
+        index = int(selection) - 1
+        if 0 <= index < len(threads):
+            return threads[index].thread_id
+    for item in threads:
+        if item.thread_id == selection:
+            return item.thread_id
+    normalized = selection.casefold()
+    matches = [
+        item
+        for item in threads
+        if normalized in item.thread_id.casefold()
+        or normalized in (item.title or "").casefold()
+        or normalized in (item.updated_at or "").casefold()
+    ]
+    if len(matches) == 1:
+        return matches[0].thread_id
+    return None
 
 
 def _handle_chat_switch(
@@ -726,7 +820,15 @@ def _handle_chat_switch(
         output_stream.write("[idle] usage: /switch <thread-id>\n")
         output_stream.flush()
         return
-    thread_id = parts[1].strip()
+    _switch_to_thread(parts[1].strip(), client, config, output_stream)
+
+
+def _switch_to_thread(
+    thread_id: str,
+    client: RememberingMinigentAPIClient,
+    config: ClientConfig,
+    output_stream: ChatOutputStream,
+) -> None:
     try:
         thread = client.get_thread(thread_id)
     except RuntimeError as exc:
@@ -734,8 +836,14 @@ def _handle_chat_switch(
         output_stream.flush()
         return
     client.set_thread_id(thread_id)
-    title = _title_from_thread_messages(thread.get("messages")) if isinstance(thread, dict) else None
-    remember_client_thread(config, thread_id, title=title)
+    messages = thread.get("messages") if isinstance(thread, dict) else None
+    title = _title_from_thread_messages(messages)
+    remember_client_thread(
+        config,
+        thread_id,
+        title=title,
+        message_count=len(messages) if isinstance(messages, list) else None,
+    )
     output_stream.write(f"[idle] switched to {thread_id}\n")
     output_stream.flush()
 

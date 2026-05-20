@@ -666,10 +666,12 @@ result bodies in the streaming progress output. Use global `--verbose` with one-
 streaming commands to include extra progress metadata such as LLM iteration numbers.
 
 Use `minigent threads` or `minigent-client threads` to list locally remembered recent
-threads for the current server and principal. `minigent resume` and `minigent-client
-resume` print the latest remembered thread transcript, while `resume THREAD_ID` selects
-and prints a specific thread so later `chat --resume-last ...`, `stdin --resume-last`,
-`manual-audio --resume-last`, or `passive-audio --resume-last` calls continue from it.
+threads for the current server and principal, including title, last updated time, and
+known message count. In a TTY, `minigent resume` and `minigent-client resume` show an
+interactive thread picker when multiple remembered threads exist; pass `--no-picker` to
+resume the latest thread directly. `resume THREAD_ID` selects and prints a specific
+thread so later `chat --resume-last ...`, `stdin --resume-last`, `manual-audio
+--resume-last`, or `passive-audio --resume-last` calls continue from it.
 Use `minigent export` or `minigent-client export` to write the latest remembered
 transcript as Markdown, or pass a thread ID and `--format json` for a structured export.
 The interactive and voice `minigent-client` modes remember the thread after each
@@ -696,7 +698,8 @@ message, or use `Esc+Enter`/`Ctrl+J` to insert a newline before submitting. Set
 plain `Enter` insert newlines and `Esc+Enter` submit instead. Use `/editor` to compose a
 long prompt in `$VISUAL` or `$EDITOR`. Interactive chat also supports thread-shell
 commands: `/new`, `/threads`, `/switch <id>`, `/rename <title>`, `/copy-id`,
-`/export [markdown|json]`, and `/debug`. The history file is stored at
+`/export [markdown|json]`, and `/debug`; in a TTY, `/threads` opens the same thread
+picker and switches to the selected thread. The history file is stored at
 `~/.minigent/client-chat-history`. Piped or otherwise non-interactive stdin keeps the
 existing plain line-read behavior. In chat mode, pressing Enter on an empty line is
 ignored; use `Ctrl-D`, `Ctrl-C`, `/exit`, or `/quit` to exit.

@@ -20,13 +20,16 @@ class ThreadHistoryItem:
     thread_id: str
     title: str | None = None
     updated_at: str | None = None
+    message_count: int | None = None
 
-    def to_dict(self) -> dict[str, str]:
-        payload = {"thread_id": self.thread_id}
+    def to_dict(self) -> dict[str, str | int]:
+        payload: dict[str, str | int] = {"thread_id": self.thread_id}
         if self.title:
             payload["title"] = self.title
         if self.updated_at:
             payload["updated_at"] = self.updated_at
+        if self.message_count is not None:
+            payload["message_count"] = self.message_count
         return payload
 
 
@@ -97,9 +100,12 @@ class ClientState:
         *,
         title: str | None = None,
         updated_at: str | None = None,
+        message_count: int | None = None,
     ) -> None:
         self.recent_threads[key] = thread_id
-        self.remember_thread(key, thread_id, title=title, updated_at=updated_at)
+        self.remember_thread(
+            key, thread_id, title=title, updated_at=updated_at, message_count=message_count
+        )
 
     def remember_thread(
         self,
@@ -108,6 +114,7 @@ class ClientState:
         *,
         title: str | None = None,
         updated_at: str | None = None,
+        message_count: int | None = None,
     ) -> None:
         items = [item for item in self.thread_history.get(key, []) if item.thread_id != thread_id]
         items.insert(
@@ -116,6 +123,7 @@ class ClientState:
                 thread_id=thread_id,
                 title=title,
                 updated_at=updated_at or _utc_now_iso(),
+                message_count=message_count,
             ),
         )
         self.thread_history[key] = items[:50]
@@ -161,11 +169,13 @@ def _parse_thread_history(raw_history: dict[Any, Any]) -> dict[str, list[ThreadH
                 continue
             title = raw_item.get("title")
             updated_at = raw_item.get("updated_at")
+            message_count = raw_item.get("message_count")
             items.append(
                 ThreadHistoryItem(
                     thread_id=thread_id,
                     title=title if isinstance(title, str) else None,
                     updated_at=updated_at if isinstance(updated_at, str) else None,
+                    message_count=message_count if isinstance(message_count, int) else None,
                 )
             )
         if items:

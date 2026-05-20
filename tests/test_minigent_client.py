@@ -3536,6 +3536,28 @@ def test_run_chat_loop_handles_local_chat_commands(
     )
 
 
+def test_thread_history_selection_resolves_number_id_and_unique_search() -> None:
+    threads = [
+        voice_cli.ThreadHistoryItem(
+            thread_id="thread-a",
+            title="Austin weather",
+            updated_at="2026-05-20T01:00:00Z",
+            message_count=4,
+        ),
+        voice_cli.ThreadHistoryItem(
+            thread_id="thread-b",
+            title="NBA status",
+            updated_at="2026-05-20T02:00:00Z",
+            message_count=2,
+        ),
+    ]
+
+    assert voice_cli._resolve_thread_selection("2", threads) == "thread-b"
+    assert voice_cli._resolve_thread_selection("thread-a", threads) == "thread-a"
+    assert voice_cli._resolve_thread_selection("nba", threads) == "thread-b"
+    assert voice_cli._resolve_thread_selection("missing", threads) is None
+
+
 def test_run_chat_loop_handles_thread_shell_commands(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

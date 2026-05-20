@@ -50,10 +50,12 @@ Implemented by interactive chat commands:
 /debug
 ```
 
-## [ ] 5. Thread history picker
+## [x] 5. Thread history picker
 
-Add a simple fuzzy selector for previous threads. Show title, last updated time, and
-message count.
+Implemented by interactive selection for `minigent resume` / `minigent-client resume`
+when run in a TTY with multiple remembered threads, plus interactive `/threads` selection
+in chat mode. The picker accepts a number, exact thread ID, or unique title/date substring,
+and thread lists show title, last updated time, and known message count.
 
 ## [x] 6. Transcript export
 
