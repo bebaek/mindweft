@@ -694,7 +694,9 @@ persistent local input history, and multiline input. By default, press `Enter` t
 message, or use `Esc+Enter`/`Ctrl+J` to insert a newline before submitting. Set
 `MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter` or pass `--chat-submit-mode alt-enter` to make
 plain `Enter` insert newlines and `Esc+Enter` submit instead. Use `/editor` to compose a
-long prompt in `$VISUAL` or `$EDITOR`. The history file is stored at
+long prompt in `$VISUAL` or `$EDITOR`. Interactive chat also supports thread-shell
+commands: `/new`, `/threads`, `/switch <id>`, `/rename <title>`, `/copy-id`,
+`/export [markdown|json]`, and `/debug`. The history file is stored at
 `~/.minigent/client-chat-history`. Piped or otherwise non-interactive stdin keeps the
 existing plain line-read behavior. In chat mode, pressing Enter on an empty line is
 ignored; use `Ctrl-D`, `Ctrl-C`, `/exit`, or `/quit` to exit.

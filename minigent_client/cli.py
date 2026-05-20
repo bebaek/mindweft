@@ -23,6 +23,7 @@ from minigent_client.backends.stdin_loop import StdinActivationSource
 from minigent_client.config import ClientConfig, build_client_config
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker
+from minigent_client.one_shot_cli import _format_markdown_transcript
 from minigent_client.ring_buffer import AudioRingBuffer
 from minigent_client.runtime import MinigentClientRuntime
 from minigent_client.speech import (
@@ -370,6 +371,18 @@ def _thread_title_from_message(message: str) -> str:
     return f"{normalized[:57]}..."
 
 
+def _rename_client_thread(config: ClientConfig, thread_id: str, title: str) -> bool:
+    state = PersistentClientState.load()
+    changed = state.rename_thread(client_state_scope_key(config), thread_id, title)
+    if changed:
+        state.save()
+    return changed
+
+
+def _list_client_threads(config: ClientConfig):
+    return PersistentClientState.load().list_threads(client_state_scope_key(config))
+
+
 class RememberingMinigentAPIClient:
     def __init__(self, client: object, config: ClientConfig) -> None:
         self._client = client
@@ -377,6 +390,23 @@ class RememberingMinigentAPIClient:
 
     def __getattr__(self, name: str) -> object:
         return getattr(self._client, name)
+
+    @property
+    def thread_id(self) -> str | None:
+        thread_id = getattr(self._client, "thread_id", None)
+        return thread_id if isinstance(thread_id, str) else None
+
+    def set_thread_id(self, thread_id: str | None) -> None:
+        setter = getattr(self._client, "set_thread_id", None)
+        if callable(setter):
+            setter(thread_id)
+            return
+        self._client.thread_id = thread_id  # type: ignore[attr-defined]
+
+    def set_debug_enabled(self, enabled: bool) -> None:
+        setter = getattr(self._client, "set_debug_enabled", None)
+        if callable(setter):
+            setter(enabled)
 
     def send_user_message(self, content: str) -> object:
         message = self._client.send_user_message(content)  # type: ignore[attr-defined]
@@ -594,11 +624,31 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             output_stream.flush()
             return 0
         if utterance == "/help":
-            output_stream.write(
-                "[idle] chat commands: /help, /editor, /exit, /quit. "
-                "Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
-                "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
-            )
+            _write_chat_help(output_stream)
+            continue
+        if utterance == "/new":
+            _handle_chat_new(client, config, output_stream)
+            continue
+        if utterance == "/threads":
+            _handle_chat_threads(client, config, output_stream)
+            continue
+        if utterance.startswith("/switch"):
+            _handle_chat_switch(utterance, client, config, output_stream)
+            continue
+        if utterance.startswith("/rename"):
+            _handle_chat_rename(utterance, client, config, output_stream)
+            continue
+        if utterance == "/copy-id":
+            _handle_chat_copy_id(client, output_stream)
+            continue
+        if utterance.startswith("/export"):
+            _handle_chat_export(utterance, client, output_stream)
+            continue
+        if utterance == "/debug":
+            debug_enabled = not getattr(client, "_chat_debug_enabled", config.debug_show_prompt)
+            client._chat_debug_enabled = debug_enabled  # type: ignore[attr-defined]
+            client.set_debug_enabled(debug_enabled)
+            output_stream.write(f"[idle] debug {'on' if debug_enabled else 'off'}\n")
             output_stream.flush()
             continue
         if utterance == "/editor":
@@ -619,6 +669,163 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         turns_completed += 1
         if once and turns_completed >= 1:
             return 0
+
+
+def _write_chat_help(output_stream: ChatOutputStream) -> None:
+    output_stream.write(
+        "[idle] chat commands: /help, /new, /threads, /switch <id>, /rename <title>, "
+        "/copy-id, /export [markdown|json], /debug, /editor, /exit, /quit. "
+        "Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
+        "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
+    )
+    output_stream.flush()
+
+
+def _handle_chat_new(
+    client: RememberingMinigentAPIClient,
+    config: ClientConfig,
+    output_stream: ChatOutputStream,
+) -> None:
+    response = client.create_thread(skill_name=config.skill_name)
+    thread_id = response.get("thread_id") if isinstance(response, dict) else None
+    if not isinstance(thread_id, str) or not thread_id:
+        output_stream.write("[idle] failed to create thread: missing thread_id\n")
+    else:
+        remember_client_thread(config, thread_id, title="New thread")
+        output_stream.write(f"[idle] created thread {thread_id}\n")
+    output_stream.flush()
+
+
+def _handle_chat_threads(
+    client: RememberingMinigentAPIClient,
+    config: ClientConfig,
+    output_stream: ChatOutputStream,
+) -> None:
+    threads = _list_client_threads(config)
+    if not threads:
+        output_stream.write("[idle] no locally remembered threads\n")
+        output_stream.flush()
+        return
+    current_thread_id = client.thread_id
+    for item in threads:
+        marker = "*" if item.thread_id == current_thread_id else " "
+        title = item.title or "Untitled thread"
+        updated_at = item.updated_at or "unknown"
+        output_stream.write(f"[idle] {marker} {item.thread_id}  {title}  {updated_at}\n")
+    output_stream.flush()
+
+
+def _handle_chat_switch(
+    utterance: str,
+    client: RememberingMinigentAPIClient,
+    config: ClientConfig,
+    output_stream: ChatOutputStream,
+) -> None:
+    parts = utterance.split(maxsplit=1)
+    if len(parts) != 2 or not parts[1].strip():
+        output_stream.write("[idle] usage: /switch <thread-id>\n")
+        output_stream.flush()
+        return
+    thread_id = parts[1].strip()
+    try:
+        thread = client.get_thread(thread_id)
+    except RuntimeError as exc:
+        output_stream.write(f"[idle] switch failed: {exc}\n")
+        output_stream.flush()
+        return
+    client.set_thread_id(thread_id)
+    title = _title_from_thread_messages(thread.get("messages")) if isinstance(thread, dict) else None
+    remember_client_thread(config, thread_id, title=title)
+    output_stream.write(f"[idle] switched to {thread_id}\n")
+    output_stream.flush()
+
+
+def _handle_chat_rename(
+    utterance: str,
+    client: RememberingMinigentAPIClient,
+    config: ClientConfig,
+    output_stream: ChatOutputStream,
+) -> None:
+    title = utterance.removeprefix("/rename").strip()
+    thread_id = client.thread_id
+    if not thread_id:
+        output_stream.write("[idle] no current thread\n")
+    elif not title:
+        output_stream.write("[idle] usage: /rename <title>\n")
+    elif _rename_client_thread(config, thread_id, title):
+        output_stream.write(f"[idle] renamed {thread_id} to \"{title}\"\n")
+    else:
+        remember_client_thread(config, thread_id, title=title)
+        output_stream.write(f"[idle] renamed {thread_id} to \"{title}\"\n")
+    output_stream.flush()
+
+
+def _handle_chat_copy_id(
+    client: RememberingMinigentAPIClient,
+    output_stream: ChatOutputStream,
+) -> None:
+    thread_id = client.thread_id
+    if not thread_id:
+        output_stream.write("[idle] no current thread\n")
+        output_stream.flush()
+        return
+    if platform.system() == "Darwin" and shutil.which("pbcopy"):
+        try:
+            subprocess.run(["pbcopy"], input=thread_id, text=True, check=True)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            output_stream.write(f"[idle] {thread_id} (clipboard unavailable: {exc})\n")
+        else:
+            output_stream.write(f"[idle] copied {thread_id}\n")
+    else:
+        output_stream.write(f"[idle] {thread_id} (clipboard unavailable)\n")
+    output_stream.flush()
+
+
+def _handle_chat_export(
+    utterance: str,
+    client: RememberingMinigentAPIClient,
+    output_stream: ChatOutputStream,
+) -> None:
+    thread_id = client.thread_id
+    if not thread_id:
+        output_stream.write("[idle] no current thread\n")
+        output_stream.flush()
+        return
+    export_format = utterance.removeprefix("/export").strip() or "markdown"
+    if export_format not in {"markdown", "json"}:
+        output_stream.write("[idle] usage: /export [markdown|json]\n")
+        output_stream.flush()
+        return
+    try:
+        thread = client.get_thread(thread_id)
+    except RuntimeError as exc:
+        output_stream.write(f"[idle] export failed: {exc}\n")
+        output_stream.flush()
+        return
+    messages = thread.get("messages") if isinstance(thread, dict) else None
+    if not isinstance(messages, list):
+        output_stream.write("[idle] export failed: thread messages missing\n")
+    elif export_format == "json":
+        import json
+
+        output_stream.write(json.dumps({"thread_id": thread_id, "messages": messages}, indent=2) + "\n")
+    else:
+        output_stream.write(_format_markdown_transcript(thread_id, messages))
+    output_stream.flush()
+
+
+def _title_from_thread_messages(messages: object) -> str | None:
+    if not isinstance(messages, list):
+        return None
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return _thread_title_from_message(content)
+    return None
 
 
 def _read_editor_chat_prompt(*, output_stream: ChatOutputStream) -> str | None:

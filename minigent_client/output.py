@@ -37,6 +37,9 @@ class StreamProgressRenderer:
         self._tool_name_arguments: dict[str, str] = {}
         self._last_usage_summary: str | None = None
 
+    def set_verbose(self, verbose: bool) -> None:
+        self._verbose = verbose
+
     def render(self, event: dict[str, Any]) -> None:
         usage = _format_usage_summary(event)
         if usage is not None:

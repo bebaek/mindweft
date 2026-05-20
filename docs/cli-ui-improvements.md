@@ -36,11 +36,9 @@ Implemented by `0fed3f4 feat(cli): improve streaming status output`.
 Keep assistant text flowing naturally. Put system/run metadata on stderr or behind
 `--verbose`, and prevent progress logs from interrupting streamed assistant prose.
 
-## [~] 4. Interactive thread commands
+## [x] 4. Interactive thread commands
 
-Partially covered by existing interactive chat commands: `/help`, `/exit`, and `/quit`.
-
-Still open:
+Implemented by interactive chat commands:
 
 ```text
 /new
@@ -48,7 +46,7 @@ Still open:
 /switch <id>
 /rename <title>
 /copy-id
-/export
+/export [markdown|json]
 /debug
 ```
 

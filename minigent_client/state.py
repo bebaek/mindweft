@@ -123,6 +123,16 @@ class ClientState:
     def list_threads(self, key: str) -> list[ThreadHistoryItem]:
         return list(self.thread_history.get(key, []))
 
+    def rename_thread(self, key: str, thread_id: str, title: str) -> bool:
+        changed = False
+        for item in self.thread_history.get(key, []):
+            if item.thread_id == thread_id:
+                item.title = title
+                item.updated_at = _utc_now_iso()
+                changed = True
+                break
+        return changed
+
     def forget_last_thread(self, key: str, thread_id: str) -> bool:
         changed = False
         if self.recent_threads.get(key) == thread_id:

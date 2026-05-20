@@ -5,6 +5,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import replace
 from typing import Any, Iterator, TextIO, cast
 
 from minigent_client.config import ClientConfig
@@ -194,6 +195,13 @@ class MinigentAPIClient:
     @property
     def thread_id(self) -> str | None:
         return self._thread_id
+
+    def set_thread_id(self, thread_id: str | None) -> None:
+        self._thread_id = thread_id
+
+    def set_debug_enabled(self, enabled: bool) -> None:
+        self._config = replace(self._config, debug_show_prompt=enabled)
+        self._stream_progress_renderer.set_verbose(enabled)
 
     def add_message(self, thread_id: str, content: str) -> dict[str, Any]:
         response = self.request_json(

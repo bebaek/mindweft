@@ -3528,11 +3528,71 @@ def test_run_chat_loop_handles_local_chat_commands(
 
     assert exit_code == 0
     assert output_stream.getvalue() == (
-        "[user] [idle] chat commands: /help, /editor, /exit, /quit. "
-        "Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
+        "[user] [idle] chat commands: /help, /new, /threads, /switch <id>, "
+        "/rename <title>, /copy-id, /export [markdown|json], /debug, /editor, "
+        "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
         "[user] [idle] shutting down\n"
     )
+
+
+def test_run_chat_loop_handles_thread_shell_commands(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO(
+        "/new\n/threads\n/rename renamed thread\n/copy-id\n/export\n/switch existing-thread\n/debug\n/exit\n"
+    )
+
+    class FakeChatClient:
+        thread_id: str | None = None
+
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def create_thread(self, **kwargs: object) -> dict[str, str]:
+            del kwargs
+            self.thread_id = "new-thread"
+            return {"thread_id": "new-thread"}
+
+        def get_thread(self, thread_id: str) -> dict[str, object]:
+            return {
+                "thread_id": thread_id,
+                "messages": [
+                    {"role": "user", "content": f"question for {thread_id}"},
+                    {"role": "assistant", "content": "answer"},
+                ],
+            }
+
+        def set_thread_id(self, thread_id: str | None) -> None:
+            self.thread_id = thread_id
+
+        def set_debug_enabled(self, enabled: bool) -> None:
+            self.debug_enabled = enabled
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            raise AssertionError(f"local chat command should not be sent: {content}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(voice_cli.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+    )
+
+    output = output_stream.getvalue()
+    assert exit_code == 0
+    assert "[idle] created thread new-thread\n" in output
+    assert "[idle] * new-thread  New thread" in output
+    assert "[idle] renamed new-thread to \"renamed thread\"\n" in output
+    assert "[idle] new-thread (clipboard unavailable)\n" in output
+    assert "# Minigent transcript\n\nThread: `new-thread`" in output
+    assert "[idle] switched to existing-thread\n" in output
+    assert "[idle] debug on\n" in output
 
 
 def test_run_chat_loop_handles_editor_command(
