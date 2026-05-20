@@ -599,6 +599,9 @@ uv run minigent chat "hello"
 uv run minigent chat --stream "hello with progress"
 uv run minigent chat --thread <thread-id> "continue"
 uv run minigent chat --resume-last "continue"
+uv run minigent threads
+uv run minigent resume
+uv run minigent resume <thread-id>
 uv run minigent ping
 uv run minigent config doctor
 uv run minigent threads show <thread-id>
@@ -635,9 +638,12 @@ minigent-client health
 minigent-client ping
 minigent-client config
 minigent-client config doctor
+minigent-client threads
 minigent-client threads create
 minigent-client threads show THREAD_ID
 minigent-client threads delete THREAD_ID
+minigent-client resume
+minigent-client resume THREAD_ID
 minigent-client --admin admin threads list --tenant TENANT_ID
 minigent-client --admin admin threads show THREAD_ID --tenant TENANT_ID
 minigent-client --admin admin threads delete THREAD_ID --tenant TENANT_ID
@@ -650,6 +656,11 @@ before printing or speaking the final assistant reply. The one-shot CLI also sup
 prints compact status/tool lines such as `● preparing`, `● sending`, `🔧 echo(...) done`,
 and `● done` to stderr. Use global `--verbose` with one-shot streaming commands to include
 extra progress metadata such as LLM iteration numbers.
+
+Use `minigent threads` to list locally remembered recent threads for the current server
+and principal. `minigent resume` prints the latest remembered thread transcript, while
+`minigent resume THREAD_ID` selects and prints a specific thread so later
+`minigent chat --resume-last ...` calls continue from it.
 
 Use `minigent ping` for a short API reachability check, and `minigent config doctor` for
 a fuller local/server diagnostic that reports the base URL, configured principal/token,

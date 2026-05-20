@@ -148,14 +148,20 @@ def test_persistent_client_state_round_trips_last_thread(tmp_path: Path) -> None
     assert key == "http://127.0.0.1:8000|dev:demo-user:demo-tenant:false"
     assert state.get_last_thread(key) is None
 
-    state.set_last_thread(key, "thread-1")
+    state.set_last_thread(key, "thread-1", title="First thread", updated_at="2026-05-19T10:00:00Z")
     state.save()
 
     loaded = PersistentClientState.load(state_path)
     assert loaded.get_last_thread(key) == "thread-1"
+    history = loaded.list_threads(key)
+    assert len(history) == 1
+    assert history[0].thread_id == "thread-1"
+    assert history[0].title == "First thread"
+    assert history[0].updated_at == "2026-05-19T10:00:00Z"
     assert loaded.forget_last_thread(key, "thread-2") is False
     assert loaded.forget_last_thread(key, "thread-1") is True
     assert loaded.get_last_thread(key) is None
+    assert loaded.list_threads(key) == []
 
 
 def test_persistent_client_state_uses_stable_token_fingerprint() -> None:

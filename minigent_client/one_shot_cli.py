@@ -12,7 +12,7 @@ from minigent_client.api_client import MinigentAPIClient
 from minigent_client.config import ClientConfig, build_client_config
 from minigent_client.errors import MinigentAPIError
 from minigent_client.output import StreamProgressRenderer, format_message, print_json
-from minigent_client.state import ClientState
+from minigent_client.state import ClientState, ThreadHistoryItem
 from minigent_client.state import state_scope_key as build_state_scope_key
 
 
@@ -98,8 +98,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use the NDJSON streaming run endpoint and print progress in text mode.",
     )
 
+    resume_parser = subparsers.add_parser(
+        "resume", help="Show and remember the latest or selected local thread."
+    )
+    resume_parser.add_argument(
+        "thread_id",
+        nargs="?",
+        default=None,
+        help="Thread ID to resume. Defaults to the latest locally remembered thread.",
+    )
+    resume_parser.add_argument(
+        "--print-thread-id",
+        action="store_true",
+        help="Print the selected thread ID before the transcript in text mode.",
+    )
+
     threads_parser = subparsers.add_parser("threads", help="Manage conversation threads.")
-    threads_subparsers = threads_parser.add_subparsers(dest="threads_command", required=True)
+    threads_subparsers = threads_parser.add_subparsers(dest="threads_command")
+    threads_subparsers.add_parser("list", help="List locally remembered threads.")
 
     threads_create_parser = threads_subparsers.add_parser("create", help="Create a new thread.")
     threads_create_parser.add_argument(
@@ -313,9 +329,15 @@ def state_scope_key(base_url: str, args: argparse.Namespace) -> str:
     )
 
 
-def remember_thread(base_url: str, args: argparse.Namespace, thread_id: str) -> None:
+def remember_thread(
+    base_url: str,
+    args: argparse.Namespace,
+    thread_id: str,
+    *,
+    title: str | None = None,
+) -> None:
     state = ClientState.load()
-    state.set_last_thread(state_scope_key(base_url, args), thread_id)
+    state.set_last_thread(state_scope_key(base_url, args), thread_id, title=title)
     state.save()
 
 
@@ -325,6 +347,11 @@ def load_remembered_thread(base_url: str, args: argparse.Namespace) -> str:
     if thread_id is None:
         raise SystemExit("No remembered thread for this server and principal. Start a chat first.")
     return thread_id
+
+
+def list_remembered_threads(base_url: str, args: argparse.Namespace) -> list[ThreadHistoryItem]:
+    state = ClientState.load()
+    return state.list_threads(state_scope_key(base_url, args))
 
 
 def forget_thread(base_url: str, args: argparse.Namespace, thread_id: str) -> None:
@@ -381,6 +408,27 @@ def ensure_thread(
     return thread_id, True
 
 
+def _thread_title_from_message(message: str) -> str:
+    normalized = " ".join(message.split())
+    if len(normalized) <= 60:
+        return normalized or "Thread"
+    return f"{normalized[:57]}..."
+
+
+def _title_from_thread_messages(messages: object) -> str | None:
+    if not isinstance(messages, list):
+        return None
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return _thread_title_from_message(content)
+    return None
+
+
 def _make_stream_progress_printer(*, verbose: bool = False) -> Any:
     renderer = StreamProgressRenderer(sys.stderr, verbose=verbose)
     return renderer.render
@@ -414,7 +462,7 @@ def run_chat(
         reply = _reply_from_run_stream(events)
     else:
         reply = client.run_thread(thread_id, stream=args.stream)
-    remember_thread(base_url, args, thread_id)
+    remember_thread(base_url, args, thread_id, title=_thread_title_from_message(args.message))
 
     if args.json:
         output: dict[str, Any] = {
@@ -443,6 +491,57 @@ def run_chat(
     return 0
 
 
+def run_threads_list(
+    args: argparse.Namespace,
+    base_url: str,
+    trace_id: str | None,
+) -> int:
+    threads = list_remembered_threads(base_url, args)
+    if args.json:
+        output: dict[str, Any] = {"threads": [item.to_dict() for item in threads]}
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    if not threads:
+        print("No locally remembered threads.")
+        return 0
+    print("Recent threads")
+    print("")
+    for index, item in enumerate(threads, start=1):
+        title = item.title or "Untitled thread"
+        updated_at = item.updated_at or "unknown"
+        print(f"{index}. {updated_at}  {title}  {item.thread_id}")
+    return 0
+
+
+def run_resume(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    base_url: str,
+    trace_id: str | None,
+) -> int:
+    thread_id = args.thread_id or load_remembered_thread(base_url, args)
+    thread = client.get_thread(thread_id)
+    remember_thread(base_url, args, thread_id, title=_title_from_thread_messages(thread["messages"]))
+    messages = thread["messages"]
+    if args.json:
+        output: dict[str, Any] = {"thread_id": thread_id, "messages": messages}
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    if args.print_thread_id:
+        print(f"thread_id={thread_id}")
+    for message in messages:
+        print(format_message(message))
+    return 0
+
+
 def run_threads_create(
     args: argparse.Namespace,
     client: MinigentAPIClient,
@@ -458,7 +557,7 @@ def run_threads_create(
     thread_id = response["thread_id"]
     if not isinstance(thread_id, str):
         raise SystemExit("Create-thread response did not include a thread_id.")
-    remember_thread(base_url, args, thread_id)
+    remember_thread(base_url, args, thread_id, title="New thread")
     if args.json:
         output: dict[str, Any] = {"thread_id": thread_id}
         if trace_id is not None:
@@ -973,7 +1072,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "chat":
             return run_chat(args, client, base_url, trace_id)
+        if args.command == "resume":
+            return run_resume(args, client, base_url, trace_id)
         if args.command == "threads":
+            if args.threads_command in {None, "list"}:
+                return run_threads_list(args, base_url, trace_id)
             if args.threads_command == "create":
                 return run_threads_create(args, client, base_url, trace_id)
             if args.threads_command == "show":

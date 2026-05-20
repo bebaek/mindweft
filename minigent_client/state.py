@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 STATE_DIR_NAME = ".minigent"
 STATE_FILE_NAME = "cli-state.json"
@@ -14,8 +16,24 @@ def state_file_path() -> Path:
 
 
 @dataclass
+class ThreadHistoryItem:
+    thread_id: str
+    title: str | None = None
+    updated_at: str | None = None
+
+    def to_dict(self) -> dict[str, str]:
+        payload = {"thread_id": self.thread_id}
+        if self.title:
+            payload["title"] = self.title
+        if self.updated_at:
+            payload["updated_at"] = self.updated_at
+        return payload
+
+
+@dataclass
 class ClientState:
     recent_threads: dict[str, str] = field(default_factory=dict)
+    thread_history: dict[str, list[ThreadHistoryItem]] = field(default_factory=dict)
     path: Path = field(default_factory=state_file_path)
     extra: dict[str, object] = field(default_factory=dict)
 
@@ -33,17 +51,37 @@ class ClientState:
         recent_threads = data.get("recent_threads", {})
         if not isinstance(recent_threads, dict):
             return cls(path=resolved_path)
+        thread_history = data.get("thread_history", {})
+        if not isinstance(thread_history, dict):
+            thread_history = {}
+        parsed_recent_threads = {
+            str(key): value for key, value in recent_threads.items() if isinstance(value, str)
+        }
+        parsed_thread_history = _parse_thread_history(thread_history)
+        for key, thread_id in parsed_recent_threads.items():
+            if key not in parsed_thread_history:
+                parsed_thread_history[key] = [ThreadHistoryItem(thread_id=thread_id)]
         return cls(
-            recent_threads={
-                str(key): value for key, value in recent_threads.items() if isinstance(value, str)
-            },
+            recent_threads=parsed_recent_threads,
+            thread_history=parsed_thread_history,
             path=resolved_path,
-            extra={str(key): value for key, value in data.items() if key != "recent_threads"},
+            extra={
+                str(key): value
+                for key, value in data.items()
+                if key not in {"recent_threads", "thread_history"}
+            },
         )
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        data = {**self.extra, "recent_threads": self.recent_threads}
+        data = {
+            **self.extra,
+            "recent_threads": self.recent_threads,
+            "thread_history": {
+                key: [item.to_dict() for item in items]
+                for key, items in self.thread_history.items()
+            },
+        }
         self.path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
     def get_last_thread(self, key: str) -> str | None:
@@ -52,14 +90,81 @@ class ClientState:
             return None
         return thread_id
 
-    def set_last_thread(self, key: str, thread_id: str) -> None:
+    def set_last_thread(
+        self,
+        key: str,
+        thread_id: str,
+        *,
+        title: str | None = None,
+        updated_at: str | None = None,
+    ) -> None:
         self.recent_threads[key] = thread_id
+        self.remember_thread(key, thread_id, title=title, updated_at=updated_at)
+
+    def remember_thread(
+        self,
+        key: str,
+        thread_id: str,
+        *,
+        title: str | None = None,
+        updated_at: str | None = None,
+    ) -> None:
+        items = [item for item in self.thread_history.get(key, []) if item.thread_id != thread_id]
+        items.insert(
+            0,
+            ThreadHistoryItem(
+                thread_id=thread_id,
+                title=title,
+                updated_at=updated_at or _utc_now_iso(),
+            ),
+        )
+        self.thread_history[key] = items[:50]
+
+    def list_threads(self, key: str) -> list[ThreadHistoryItem]:
+        return list(self.thread_history.get(key, []))
 
     def forget_last_thread(self, key: str, thread_id: str) -> bool:
-        if self.recent_threads.get(key) != thread_id:
-            return False
-        del self.recent_threads[key]
-        return True
+        changed = False
+        if self.recent_threads.get(key) == thread_id:
+            del self.recent_threads[key]
+            changed = True
+        items = self.thread_history.get(key)
+        if items is not None:
+            filtered = [item for item in items if item.thread_id != thread_id]
+            if len(filtered) != len(items):
+                self.thread_history[key] = filtered
+                changed = True
+        return changed
+
+
+def _parse_thread_history(raw_history: dict[Any, Any]) -> dict[str, list[ThreadHistoryItem]]:
+    parsed: dict[str, list[ThreadHistoryItem]] = {}
+    for key, raw_items in raw_history.items():
+        if not isinstance(raw_items, list):
+            continue
+        items: list[ThreadHistoryItem] = []
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+            thread_id = raw_item.get("thread_id")
+            if not isinstance(thread_id, str) or not thread_id:
+                continue
+            title = raw_item.get("title")
+            updated_at = raw_item.get("updated_at")
+            items.append(
+                ThreadHistoryItem(
+                    thread_id=thread_id,
+                    title=title if isinstance(title, str) else None,
+                    updated_at=updated_at if isinstance(updated_at, str) else None,
+                )
+            )
+        if items:
+            parsed[str(key)] = items
+    return parsed
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def principal_key(

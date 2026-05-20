@@ -168,6 +168,85 @@ def test_chat_stream_text_coalesces_repeated_peer_poll_statuses(
     assert captured.err.count("status=completed") == 2
 
 
+def test_threads_lists_locally_remembered_threads(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run"):
+            return _Response(body={"reply": "hi"})
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    assert cli.main(["chat", "hello there"]) == 0
+    assert cli.main(["threads"]) == 0
+
+    output = capsys.readouterr().out
+    assert "hi" in output
+    assert "Recent threads" in output
+    assert "hello there" in output
+    assert "thread-1" in output
+
+
+def test_resume_defaults_to_latest_thread_and_prints_transcript(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def urlopen(request: Any) -> _Response:
+        calls.append((request.get_method(), request.full_url))
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            if request.get_method() == "POST":
+                return _Response(body={"role": "user"})
+            return _Response(
+                body=[
+                    {"role": "user", "content": "hello there"},
+                    {"role": "assistant", "content": "hi"},
+                ]
+            )
+        if request.full_url.endswith("/threads/thread-1/run"):
+            return _Response(body={"reply": "hi"})
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    assert cli.main(["chat", "hello there"]) == 0
+    capsys.readouterr()
+    assert cli.main(["resume"]) == 0
+
+    assert calls[-1] == ("GET", "http://127.0.0.1:8000/threads/thread-1/messages")
+    assert capsys.readouterr().out == "user: hello there\nassistant: hi\n"
+
+
+def test_resume_thread_id_remembers_selected_thread(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads/thread-2/messages"):
+            return _Response(body=[{"role": "user", "content": "second thread"}])
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    assert cli.main(["--json", "resume", "thread-2"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["thread_id"] == "thread-2"
+
+    assert cli.main(["--json", "threads", "list"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["threads"][0]["thread_id"] == "thread-2"
+    assert output["threads"][0]["title"] == "second thread"
+
+
 def test_cli_prints_friendly_auth_errors(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     def urlopen(request: Any) -> _Response:
         raise urllib.error.HTTPError(
