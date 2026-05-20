@@ -3036,6 +3036,7 @@ def test_build_chat_prompt_session_for_tty_streams(
     assert ("history", str(tmp_path / "history")) in calls
     assert ("binding", ("enter",)) in calls
     assert ("binding", ("escape", "enter")) in calls
+    assert ("binding", ("c-j",)) in calls
     session_call = calls[-1]
     assert isinstance(session_call, tuple)
     assert session_call[0] == "session"
@@ -3045,6 +3046,15 @@ def test_build_chat_prompt_session_for_tty_streams(
     assert session_kwargs["history"].path == str(tmp_path / "history")
     assert isinstance(session_kwargs["key_bindings"], FakeKeyBindings)
     assert session_kwargs["multiline"] is True
+
+
+def test_build_config_accepts_chat_submit_mode() -> None:
+    args = build_parser().parse_args(["--chat-submit-mode", "alt-enter"])
+
+    config = build_config(args)
+
+    assert config.chat_submit_mode == "alt-enter"
+
 
 
 def test_build_chat_prompt_session_skips_non_tty_streams(
@@ -3372,10 +3382,98 @@ def test_run_chat_loop_handles_local_chat_commands(
 
     assert exit_code == 0
     assert output_stream.getvalue() == (
-        "[user] [idle] chat commands: /help, /exit, /quit. "
-        "Press Enter to submit; use Esc+Enter for a newline.\n"
+        "[user] [idle] chat commands: /help, /editor, /exit, /quit. "
+        "Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
+        "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
         "[user] [idle] shutting down\n"
     )
+
+
+def test_run_chat_loop_handles_editor_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("/editor\n")
+    messages: list[str] = []
+
+    class FakeChatClient:
+        thread_id = "thread-1"
+
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            messages.append(content)
+            return {"id": "message-1"}
+
+        def run_thread(self) -> str:
+            return "reply"
+
+    def fake_run(argv: list[str], check: bool = False) -> object:
+        del check
+        Path(argv[-1]).write_text("first line\n# ignored\nsecond line\n", encoding="utf-8")
+        return object()
+
+    monkeypatch.setenv("EDITOR", "fake-editor --wait")
+    monkeypatch.setattr(voice_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+        once=True,
+    )
+
+    assert exit_code == 0
+    assert messages == ["first line\nsecond line"]
+    assert output_stream.getvalue() == "[user] [assistant] reply\n"
+
+
+
+def test_run_chat_loop_handles_editor_atomic_save(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("/editor\n")
+    messages: list[str] = []
+
+    class FakeChatClient:
+        thread_id = "thread-1"
+
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            messages.append(content)
+            return {"id": "message-1"}
+
+        def run_thread(self) -> str:
+            return "reply"
+
+    def fake_run(argv: list[str], check: bool = False) -> object:
+        del check
+        prompt_path = Path(argv[-1])
+        replacement_path = prompt_path.with_suffix(".md.tmp")
+        replacement_path.write_text("saved through rename\n", encoding="utf-8")
+        replacement_path.replace(prompt_path)
+        return object()
+
+    monkeypatch.setenv("EDITOR", "fake-editor")
+    monkeypatch.setattr(voice_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+        once=True,
+    )
+
+    assert exit_code == 0
+    assert messages == ["saved through rename"]
+    assert output_stream.getvalue() == "[user] [assistant] reply\n"
+
 
 
 def test_run_chat_loop_handles_keyboard_interrupt(

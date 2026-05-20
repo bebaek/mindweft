@@ -688,8 +688,11 @@ failures are categorized without dumping raw HTTP bodies by default. In `--json`
 errors are emitted as a structured `{"error": ...}` object and the process exits nonzero.
 
 When `chat` runs on an interactive TTY, it uses `prompt_toolkit` for shell-style editing,
-persistent local input history, and multiline input. Press `Enter` to submit a message, or
-use `Esc+Enter` to insert a newline before submitting. The history file is stored at
+persistent local input history, and multiline input. By default, press `Enter` to submit a
+message, or use `Esc+Enter`/`Ctrl+J` to insert a newline before submitting. Set
+`MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter` or pass `--chat-submit-mode alt-enter` to make
+plain `Enter` insert newlines and `Esc+Enter` submit instead. Use `/editor` to compose a
+long prompt in `$VISUAL` or `$EDITOR`. The history file is stored at
 `~/.minigent/client-chat-history`. Piped or otherwise non-interactive stdin keeps the
 existing plain line-read behavior. In chat mode, pressing Enter on an empty line is
 ignored; use `Ctrl-D`, `Ctrl-C`, `/exit`, or `/quit` to exit.

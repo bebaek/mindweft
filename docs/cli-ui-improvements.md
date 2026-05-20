@@ -1,6 +1,10 @@
 # Minigent CLI UI Improvement Ideas
 
-## 1. Better run status display
+Status legend: `[x]` done, `[~]` partially done, `[ ]` not done.
+
+## [x] 1. Better run status display
+
+Implemented by `0fed3f4 feat(cli): improve streaming status output`.
 
 Show clear phases such as:
 
@@ -13,7 +17,11 @@ Show clear phases such as:
 
 Avoid dumping raw event noise unless `--debug` is enabled.
 
-## 2. Structured tool call output
+## [~] 2. Structured tool call output
+
+Partially covered by `0fed3f4 feat(cli): improve streaming status output`: streaming runs render compact tool-call status lines such as `🔧 name(args) ...` and `🔧 name(args) done`.
+
+Still open: an explicit `--show-tool-results` mode for expanded tool output.
 
 Render tool calls as compact blocks:
 
@@ -23,14 +31,18 @@ Render tool calls as compact blocks:
 
 Add `--show-tool-results` for expanded output.
 
-## 3. Improved streaming layout
+## [x] 3. Improved streaming layout
+
+Implemented by `0fed3f4 feat(cli): improve streaming status output`.
 
 Keep assistant text flowing naturally. Put system/run metadata on stderr or behind
 `--verbose`, and prevent progress logs from interrupting streamed assistant prose.
 
-## 4. Interactive thread commands
+## [~] 4. Interactive thread commands
 
-In interactive mode, support commands such as:
+Partially covered by existing interactive chat commands: `/help`, `/exit`, and `/quit`.
+
+Still open:
 
 ```text
 /new
@@ -40,15 +52,16 @@ In interactive mode, support commands such as:
 /copy-id
 /export
 /debug
-/quit
 ```
 
-## 5. Thread history picker
+## [ ] 5. Thread history picker
 
 Add a simple fuzzy selector for previous threads. Show title, last updated time, and
 message count.
 
-## 6. Transcript export
+## [x] 6. Transcript export
+
+Implemented by `962e7ed feat(cli): add transcript export command`.
 
 Support transcript export commands:
 
@@ -59,7 +72,9 @@ minigent export --format json
 
 This is useful for sharing debugging sessions or saving agent work.
 
-## 7. Clearer error messages
+## [x] 7. Clearer error messages
+
+Implemented by `e60c987 feat(cli): add friendly error messages`.
 
 Replace raw HTTP/API errors with friendly summaries. For example:
 
@@ -69,7 +84,9 @@ Authentication failed. Check MINIGENT_API_TOKEN.
 
 Include `--debug` for full response bodies.
 
-## 8. Config inspection command
+## [x] 8. Config inspection command
+
+Implemented by `844328f feat(cli): add diagnostics commands`.
 
 Add config inspection and validation commands:
 
@@ -81,7 +98,9 @@ minigent config doctor
 Mask secrets by default. Validate base URL, token presence, model, broker URL, and
 backend mode.
 
-## 9. Connection test
+## [x] 9. Connection test
+
+Implemented by `844328f feat(cli): add diagnostics commands`.
 
 Add a ping command:
 
@@ -91,7 +110,9 @@ minigent ping
 
 Report API reachability, auth status, MCP broker availability, and model/backend info.
 
-## 10. Better multiline input
+## [x] 10. Better multiline input
+
+Implemented by interactive chat `prompt_toolkit` support: persistent history, configurable submit behavior, `Esc+Enter`/`Ctrl+J` newline insertion, and `/editor` for long prompts.
 
 In interactive mode:
 
@@ -99,7 +120,7 @@ In interactive mode:
 - `Alt+Enter` / `Ctrl+J` inserts a newline.
 - `/editor` opens `$EDITOR` for long prompts.
 
-## 11. Shell-friendly non-interactive mode
+## [ ] 11. Shell-friendly non-interactive mode
 
 Make piping clean:
 
@@ -116,7 +137,12 @@ Add flags such as:
 --quiet
 ```
 
-## 12. Session resume UX
+## [x] 12. Session resume UX
+
+Implemented by:
+
+- `ca52ec5 feat(cli): add local thread history and resume command`
+- `26d9937 feat(client): support thread resume across all modes`
 
 Support session resume commands:
 
@@ -127,7 +153,7 @@ minigent resume <thread-id>
 
 `resume` without an ID should pick the latest thread.
 
-## 13. Debug bundle command
+## [ ] 13. Debug bundle command
 
 Add a debug bundle command:
 
@@ -138,7 +164,7 @@ minigent debug-bundle
 Include thread ID, config minus secrets, recent events, backend mode, MCP status, and
 version info.
 
-## 14. CLI visual polish
+## [ ] 14. CLI visual polish
 
 Use subtle ANSI formatting when a TTY is detected. Disable color automatically for pipes
 or with `NO_COLOR`. Clearly distinguish:
@@ -149,7 +175,7 @@ or with `NO_COLOR`. Clearly distinguish:
 - warnings
 - errors
 
-## 15. Abort handling
+## [ ] 15. Abort handling
 
 Make `Ctrl+C` graceful:
 
@@ -158,7 +184,11 @@ Make `Ctrl+C` graceful:
 
 Print whether the run was locally aborted or server-cancelled.
 
-## 16. Token count display
+## [~] 16. Token count display
+
+Partially covered by `0fed3f4 feat(cli): improve streaming status output`: streaming runs print a compact final token summary when usage metadata is available.
+
+Still open: `--tokens live`, `--tokens off`, JSON fields, context-window percentage, and interactive `/tokens`.
 
 Show lightweight token usage in both interactive and one-shot runs:
 

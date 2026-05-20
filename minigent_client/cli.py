@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from dataclasses import replace
 from importlib import import_module
@@ -117,6 +120,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--once",
         action="store_true",
         help="Handle one activation and exit.",
+    )
+    parser.add_argument(
+        "--chat-submit-mode",
+        choices=("enter", "alt-enter"),
+        default=None,
+        help="Interactive chat submit behavior. `enter` submits and Esc+Enter/Ctrl+J insert newlines; `alt-enter` makes Enter/Ctrl+J insert newlines and Esc+Enter submit.",
     )
     parser.add_argument(
         "--audio-device",
@@ -248,6 +257,7 @@ def build_config(args: argparse.Namespace) -> ClientConfig:
         location=env_config.location,
         debug_show_prompt=env_config.debug_show_prompt,
         stream_runs=args.stream_runs or env_config.stream_runs,
+        chat_submit_mode=args.chat_submit_mode or env_config.chat_submit_mode,
         wake_acknowledgement=args.wake_acknowledgement or env_config.wake_acknowledgement,
         wake_acknowledgement_sound=env_config.wake_acknowledgement_sound,
         capture_ended_acknowledgement=(
@@ -413,6 +423,7 @@ _OPTIONS_WITH_VALUES = {
     "--api-token",
     "--user-id",
     "--tenant-id",
+    "--chat-submit-mode",
     "--audio-device",
     "--debug-capture-path",
     "--stt-debug-path",
@@ -541,6 +552,7 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
     prompt_session = _build_chat_prompt_session(
         input_stream=input_stream,
         output_stream=output_stream,
+        submit_mode=config.chat_submit_mode,
     )
     client = RememberingMinigentAPIClient(
         MinigentAPIClient(config, output_stream=output_stream),
@@ -577,11 +589,19 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             return 0
         if utterance == "/help":
             output_stream.write(
-                "[idle] chat commands: /help, /exit, /quit. "
-                "Press Enter to submit; use Esc+Enter for a newline.\n"
+                "[idle] chat commands: /help, /editor, /exit, /quit. "
+                "Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
+                "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
             )
             output_stream.flush()
             continue
+        if utterance == "/editor":
+            edited = _read_editor_chat_prompt(output_stream=output_stream)
+            if edited is None:
+                continue
+            utterance = edited.strip()
+            if not utterance:
+                continue
         try:
             client.send_user_message(utterance)
             reply = client.run_thread()
@@ -593,6 +613,35 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         turns_completed += 1
         if once and turns_completed >= 1:
             return 0
+
+
+def _read_editor_chat_prompt(*, output_stream: ChatOutputStream) -> str | None:
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+    if not editor:
+        output_stream.write("[idle] set EDITOR or VISUAL to use /editor\n")
+        output_stream.flush()
+        return None
+    with tempfile.TemporaryDirectory(prefix="minigent-prompt-") as prompt_dir:
+        prompt_path = Path(prompt_dir) / "prompt.md"
+        prompt_path.write_text(
+            "\n# Write your Minigent prompt above. Lines starting with # are ignored.\n",
+            encoding="utf-8",
+        )
+        try:
+            subprocess.run([*shlex.split(editor), str(prompt_path)], check=False)
+        except OSError as exc:
+            output_stream.write(f"[idle] failed to open editor: {exc}\n")
+            output_stream.flush()
+            return None
+        try:
+            content = prompt_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            output_stream.write(f"[idle] failed to read editor content: {exc}\n")
+            output_stream.flush()
+            return None
+    lines = [line for line in content.splitlines() if not line.lstrip().startswith("#")]
+    return "\n".join(lines).strip()
+
 
 
 def _read_chat_line(
@@ -614,7 +663,10 @@ def chat_history_file_path() -> Path:
 
 
 def _build_chat_prompt_session(
-    *, input_stream: ChatInputStream, output_stream: ChatOutputStream
+    *,
+    input_stream: ChatInputStream,
+    output_stream: ChatOutputStream,
+    submit_mode: str = "enter",
 ) -> ChatPromptSession | None:
     input_is_tty = getattr(input_stream, "isatty", lambda: False)
     output_is_tty = getattr(output_stream, "isatty", lambda: False)
@@ -634,11 +686,27 @@ def _build_chat_prompt_session(
         history_path.parent.mkdir(parents=True, exist_ok=True)
         key_bindings = KeyBindings()
 
-        @key_bindings.add("enter")
-        def _(event: object) -> None:
-            event.current_buffer.validate_and_handle()
+        if submit_mode == "alt-enter":
 
-        @key_bindings.add("escape", "enter")
+            @key_bindings.add("enter")
+            def _(event: object) -> None:
+                event.current_buffer.insert_text("\n")
+
+            @key_bindings.add("escape", "enter")
+            def _(event: object) -> None:
+                event.current_buffer.validate_and_handle()
+
+        else:
+
+            @key_bindings.add("enter")
+            def _(event: object) -> None:
+                event.current_buffer.validate_and_handle()
+
+            @key_bindings.add("escape", "enter")
+            def _(event: object) -> None:
+                event.current_buffer.insert_text("\n")
+
+        @key_bindings.add("c-j")
         def _(event: object) -> None:
             event.current_buffer.insert_text("\n")
 
