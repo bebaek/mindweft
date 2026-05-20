@@ -153,7 +153,9 @@ minigent resume <thread-id>
 
 `resume` without an ID should pick the latest thread.
 
-## [ ] 13. Debug bundle command
+## [x] 13. Debug bundle command
+
+Implemented by `minigent debug-bundle` / `minigent-client debug-bundle`, with masked JSON or human-readable diagnostics and optional `--output`.
 
 Add a debug bundle command:
 

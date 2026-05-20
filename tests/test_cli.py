@@ -635,6 +635,79 @@ def test_ping_returns_nonzero_for_unreachable_server(monkeypatch: Any, capsys: A
     assert "✗ API reachable: Cannot reach the Minigent API." in captured.out
 
 
+def test_debug_bundle_json_masks_secrets_and_reports_diagnostics(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/health"):
+            return _Response(body={"status": "ok"})
+        if request.full_url.endswith("/config"):
+            return _Response(
+                body={
+                    "llm": {"provider": "mock", "model": "mock-model", "api_key": "secret"},
+                    "agent_backend": {"type": "peer_agent", "mcp_broker_enabled": True},
+                    "mcp_servers": [{"name": "home", "token": "secret-token"}],
+                }
+            )
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("MINIGENT_API_TOKEN", "env-secret")
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["--api-token", "cli-secret", "debug-bundle", "--json"])
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["client"]["auth"] == {
+        "mode": "bearer_token",
+        "api_token": "<set>",
+        "user_id": "demo-user",
+        "tenant_id": "demo-tenant",
+        "admin": False,
+    }
+    assert output["server"]["summary"] == {
+        "backend": "peer_agent",
+        "model": "mock-model",
+        "provider": "mock",
+    }
+    assert output["server"]["config"]["llm"]["api_key"] == "<set>"
+    assert output["server"]["config"]["mcp_servers"][0]["token"] == "<set>"
+    assert output["mcp"] == {"broker_enabled": True, "server_count": 1}
+    dumped = json.dumps(output)
+    assert "cli-secret" not in dumped
+    assert "env-secret" not in dumped
+
+
+def test_debug_bundle_output_writes_human_report(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/health"):
+            return _Response(body={"status": "ok"})
+        if request.full_url.endswith("/config"):
+            return _Response(
+                body={
+                    "llm": {"provider": "mock", "model": "mock-model"},
+                    "agent_backend": {"type": "native", "mcp_broker_enabled": False},
+                    "mcp_servers": [],
+                }
+            )
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    output_path = tmp_path / "bundle.txt"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["debug-bundle", "--output", str(output_path)])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert captured.out == f"Wrote debug bundle to {output_path}\n"
+    report = output_path.read_text(encoding="utf-8")
+    assert "Minigent debug bundle" in report
+    assert "backend: native" in report
+    assert "model: mock-model" in report
+
+
 def test_admin_threads_list_json(monkeypatch: Any, capsys: Any) -> None:
     calls: list[tuple[str, str, dict[str, str]]] = []
     response = {

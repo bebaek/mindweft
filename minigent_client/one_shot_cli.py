@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import platform
 import secrets
 import sys
 import urllib.parse
 import urllib.request  # noqa: F401 - exposed for existing CLI tests that monkeypatch urlopen.
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from typing import Any, Sequence
 
 from minigent_client.api_client import MinigentAPIClient
@@ -399,6 +405,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("health", help="Check API health.")
     subparsers.add_parser("ping", help="Check API reachability and basic server config.")
+    debug_bundle_parser = subparsers.add_parser(
+        "debug-bundle", help="Collect masked local/server diagnostics for bug reports."
+    )
+    debug_bundle_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the debug bundle as structured JSON.",
+    )
+    debug_bundle_parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional path to write the debug bundle instead of stdout.",
+    )
 
     config_parser = subparsers.add_parser(
         "config", help="Show or inspect resolved API configuration."
@@ -1294,6 +1313,197 @@ def _format_check(check: DiagnosticCheck) -> str:
     return line
 
 
+_SECRET_KEY_PARTS = ("token", "secret", "key", "authorization", "password")
+
+
+def _mask_value(value: object) -> object:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return "<set>" if value else ""
+    return "<set>"
+
+
+def _mask_secrets(value: object) -> object:
+    if isinstance(value, dict):
+        masked: dict[str, object] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if any(part in key_text.casefold() for part in _SECRET_KEY_PARTS):
+                masked[key_text] = _mask_value(item)
+            else:
+                masked[key_text] = _mask_secrets(item)
+        return masked
+    if isinstance(value, list):
+        return [_mask_secrets(item) for item in value]
+    return value
+
+
+def _client_config_summary(args: argparse.Namespace, config: ClientConfig) -> dict[str, object]:
+    principal = config.principal
+    return {
+        "base_url": config.base_url,
+        "auth": {
+            "mode": "bearer_token" if principal.api_token else "trusted_headers",
+            "api_token": _mask_value(principal.api_token) if principal.api_token else None,
+            "user_id": principal.user_id,
+            "tenant_id": principal.tenant_id,
+            "admin": principal.is_admin,
+        },
+        "flags": {
+            "json": args.json,
+            "verbose": args.verbose,
+            "trace": args.trace,
+        },
+        "environment": _mask_secrets(
+            {
+                name: os.environ.get(name)
+                for name in (
+                    "MINIGENT_BASE_URL",
+                    "MINIGENT_API_TOKEN",
+                    "MINIGENT_VOICE_API_TOKEN",
+                    "MINIGENT_VOICE_USER_ID",
+                    "MINIGENT_VOICE_TENANT_ID",
+                    "MINIGENT_CLIENT_STREAM_RUNS",
+                    "MINIGENT_CLIENT_SHOW_TOOL_RESULTS",
+                )
+                if os.environ.get(name) is not None
+            }
+        ),
+    }
+
+
+def _package_version() -> str:
+    try:
+        return version("minigent")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def collect_debug_bundle(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    config: ClientConfig,
+    trace_id: str | None,
+) -> tuple[dict[str, object], bool]:
+    checks, config_response = collect_connection_checks(args, client)
+    success = not any(check.blocking for check in checks)
+    threads = list_remembered_threads(config.base_url, args)
+    server_config = _mask_secrets(config_response) if config_response is not None else None
+    server_summary = _server_summary(config_response) if config_response is not None else {}
+    agent_backend = config_response.get("agent_backend") if isinstance(config_response, dict) else None
+    mcp_servers = config_response.get("mcp_servers") if isinstance(config_response, dict) else None
+    bundle: dict[str, object] = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "version": {
+            "minigent": _package_version(),
+            "python": platform.python_version(),
+        },
+        "platform": {
+            "system": platform.system(),
+            "release": platform.release(),
+            "machine": platform.machine(),
+        },
+        "client": _client_config_summary(args, config),
+        "checks": [check.to_dict() for check in checks],
+        "server": {
+            "summary": server_summary,
+            "config": server_config,
+        },
+        "mcp": {
+            "broker_enabled": (
+                agent_backend.get("mcp_broker_enabled") if isinstance(agent_backend, dict) else None
+            ),
+            "server_count": len(mcp_servers) if isinstance(mcp_servers, list) else None,
+        },
+        "threads": {
+            "last_thread_id": ClientState.load().get_last_thread(state_scope_key(config.base_url, args)),
+            "recent": [item.to_dict() for item in threads[:10]],
+        },
+        "recent_events": "not collected by the local CLI; rerun the failing command with --verbose or --stream",
+    }
+    if trace_id is not None:
+        bundle["trace_id"] = trace_id
+    return bundle, success
+
+
+def _format_debug_bundle(bundle: dict[str, object]) -> str:
+    lines = ["Minigent debug bundle", ""]
+    version_info = bundle.get("version") if isinstance(bundle.get("version"), dict) else {}
+    platform_info = bundle.get("platform") if isinstance(bundle.get("platform"), dict) else {}
+    client_info = bundle.get("client") if isinstance(bundle.get("client"), dict) else {}
+    server_info = bundle.get("server") if isinstance(bundle.get("server"), dict) else {}
+    mcp_info = bundle.get("mcp") if isinstance(bundle.get("mcp"), dict) else {}
+    threads_info = bundle.get("threads") if isinstance(bundle.get("threads"), dict) else {}
+
+    lines.append(f"generated_at: {bundle.get('generated_at')}")
+    lines.append(f"minigent: {version_info.get('minigent', 'unknown')}")
+    lines.append(f"python: {version_info.get('python', 'unknown')}")
+    lines.append(
+        "platform: "
+        f"{platform_info.get('system', 'unknown')} {platform_info.get('release', '')} "
+        f"{platform_info.get('machine', '')}".strip()
+    )
+    lines.append("")
+    lines.append("Client")
+    lines.append(f"base_url: {client_info.get('base_url')}")
+    auth = client_info.get("auth") if isinstance(client_info.get("auth"), dict) else {}
+    lines.append(
+        "auth: "
+        f"mode={auth.get('mode')} user={auth.get('user_id')} tenant={auth.get('tenant_id')} "
+        f"admin={auth.get('admin')} token={auth.get('api_token') or '<not set>'}"
+    )
+    lines.append("")
+    lines.append("Checks")
+    for check in bundle.get("checks", []):
+        if isinstance(check, dict):
+            lines.append(_format_check(DiagnosticCheck(**check)))
+    lines.append("")
+    summary = server_info.get("summary") if isinstance(server_info.get("summary"), dict) else {}
+    lines.append("Server")
+    lines.append(f"backend: {summary.get('backend', 'unknown')}")
+    lines.append(f"provider: {summary.get('provider', 'unknown')}")
+    lines.append(f"model: {summary.get('model', 'unknown')}")
+    lines.append("")
+    lines.append("MCP")
+    lines.append(f"broker_enabled: {mcp_info.get('broker_enabled')}")
+    lines.append(f"server_count: {mcp_info.get('server_count')}")
+    lines.append("")
+    lines.append("Threads")
+    lines.append(f"last_thread_id: {threads_info.get('last_thread_id')}")
+    recent = threads_info.get("recent")
+    if isinstance(recent, list) and recent:
+        for item in recent:
+            if isinstance(item, dict):
+                lines.append(
+                    f"- {item.get('thread_id')}  {item.get('title') or 'Untitled thread'}  "
+                    f"{item.get('updated_at') or 'unknown'}  messages={item.get('message_count')}"
+                )
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append(f"recent_events: {bundle.get('recent_events')}")
+    return "\n".join(lines) + "\n"
+
+
+def run_debug_bundle(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    config: ClientConfig,
+    trace_id: str | None,
+) -> int:
+    bundle, success = collect_debug_bundle(args, client, config, trace_id)
+    text = json.dumps(bundle, indent=2, sort_keys=True) + "\n" if args.json else _format_debug_bundle(bundle)
+    output_path = getattr(args, "output", None)
+    if output_path:
+        Path(output_path).write_text(text, encoding="utf-8")
+        if not args.json:
+            print(f"Wrote debug bundle to {output_path}")
+    else:
+        print(text, end="")
+    return 0 if success else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -1338,6 +1548,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_health(client, args.json, trace_id)
         if args.command == "ping":
             return run_ping(args, client, trace_id)
+        if args.command == "debug-bundle":
+            return run_debug_bundle(args, client, config, trace_id)
         if args.command == "config":
             if args.config_command in {None, "show"}:
                 return run_config(client, trace_id)

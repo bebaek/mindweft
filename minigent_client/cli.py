@@ -510,7 +510,8 @@ def main(argv: list[str] | None = None) -> int:
     load_environment()
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     one_shot_command = _first_cli_command(
-        raw_argv, {"run", "threads", "resume", "export", "health", "config", "admin"}
+        raw_argv,
+        {"run", "threads", "resume", "export", "health", "ping", "debug-bundle", "config", "admin"},
     )
     if one_shot_command is not None:
         from minigent_client.one_shot_cli import main as one_shot_main

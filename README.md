@@ -609,6 +609,7 @@ uv run minigent export --format markdown
 uv run minigent export <thread-id> --format json
 uv run minigent ping
 uv run minigent config doctor
+uv run minigent debug-bundle
 uv run minigent threads show <thread-id>
 uv run minigent --admin admin threads list --tenant <tenant-id>
 uv run minigent --admin admin threads show <thread-id> --tenant <tenant-id>
@@ -643,6 +644,8 @@ minigent-client health
 minigent-client ping
 minigent-client config
 minigent-client config doctor
+minigent-client debug-bundle
+minigent-client debug-bundle --json --output debug-bundle.json
 minigent-client threads
 minigent-client threads create
 minigent-client threads show THREAD_ID
@@ -695,7 +698,10 @@ Use `minigent ping` for a short API reachability check, and `minigent config doc
 a fuller local/server diagnostic that reports the base URL, configured principal/token,
 server reachability, backend mode, default model, MCP server/broker status, and remote
 quality status. Both commands support global `--json` for machine-readable checks and
-return nonzero when a blocking issue is detected.
+return nonzero when a blocking issue is detected. Use `minigent debug-bundle` to collect a
+masked bug-report bundle with platform/version info, local config, API checks, server
+config summary, MCP status, and recent local thread IDs; add global `--json` for structured
+output or `--output debug-bundle.json` to write it to a file.
 
 The CLI reports common API failures with short friendly errors on stderr while keeping
 technical request/response detail hidden unless `--verbose` is set. For example, auth
