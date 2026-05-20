@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import secrets
 import sys
+import urllib.parse
 import urllib.request  # noqa: F401 - exposed for existing CLI tests that monkeypatch urlopen.
+from dataclasses import dataclass
 from typing import Any, Sequence
 
 from minigent_client.api_client import MinigentAPIClient
@@ -283,7 +285,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers.add_parser("health", help="Check API health.")
-    subparsers.add_parser("config", help="Show resolved API configuration.")
+    subparsers.add_parser("ping", help="Check API reachability and basic server config.")
+
+    config_parser = subparsers.add_parser("config", help="Show or inspect resolved API configuration.")
+    config_subparsers = config_parser.add_subparsers(dest="config_command")
+    config_subparsers.add_parser("show", help="Show resolved API configuration as JSON.")
+    config_subparsers.add_parser("doctor", help="Check common CLI/API configuration issues.")
+
 
     return parser
 
@@ -720,12 +728,237 @@ def run_health(
     return 0
 
 
+@dataclass(frozen=True)
+class DiagnosticCheck:
+    status: str
+    label: str
+    detail: str | None = None
+    blocking: bool = False
+
+    def to_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "status": self.status,
+            "label": self.label,
+            "blocking": self.blocking,
+        }
+        if self.detail is not None:
+            payload["detail"] = self.detail
+        return payload
+
+
 def run_config(client: MinigentAPIClient, trace_id: str | None) -> int:
     response = client.config()
     if trace_id is not None:
         response = {**response, "trace_id": trace_id}
     print_json(response)
     return 0
+
+
+def run_ping(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    checks, config_response = collect_connection_checks(args, client)
+    success = not any(check.blocking for check in checks)
+    if args.json:
+        output: dict[str, object] = {
+            "ok": success,
+            "checks": [check.to_dict() for check in checks],
+        }
+        if config_response is not None:
+            output["server"] = _server_summary(config_response)
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0 if success else 1
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    for check in checks:
+        print(_format_check(check))
+    if config_response is not None:
+        summary = _server_summary(config_response)
+        backend = summary.get("backend")
+        model = summary.get("model")
+        if backend:
+            print(f"✓ Backend mode: {backend}")
+        if model:
+            print(f"✓ Default model configured: {model}")
+    return 0 if success else 1
+
+
+def run_config_doctor(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    checks: list[DiagnosticCheck] = [*_local_config_checks(args)]
+    config_response: dict[str, Any] | None = None
+    if not any(check.blocking for check in checks):
+        connection_checks, config_response = collect_connection_checks(args, client)
+        checks.extend(connection_checks)
+    checks.extend(_server_config_checks(config_response))
+    success = not any(check.blocking for check in checks)
+
+    if args.json:
+        output: dict[str, object] = {
+            "ok": success,
+            "checks": [check.to_dict() for check in checks],
+        }
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0 if success else 1
+
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    print("Minigent config doctor")
+    print("")
+    for check in checks:
+        print(_format_check(check))
+    print("")
+    if success:
+        print("No blocking issues found.")
+    else:
+        print("Blocking issues found. Re-run with --verbose for technical details.")
+    return 0 if success else 1
+
+
+def collect_connection_checks(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+) -> tuple[list[DiagnosticCheck], dict[str, Any] | None]:
+    checks: list[DiagnosticCheck] = []
+    config_response: dict[str, Any] | None = None
+    try:
+        health_response = client.health()
+    except MinigentAPIError as exc:
+        checks.append(
+            DiagnosticCheck(
+                "error",
+                "API reachable",
+                _diagnostic_detail(exc, verbose=args.verbose),
+                blocking=True,
+            )
+        )
+        return checks, None
+    status = health_response.get("status")
+    detail = str(status) if status is not None else None
+    checks.append(DiagnosticCheck("ok", "API reachable", detail))
+
+    try:
+        config_response = client.config()
+    except MinigentAPIError as exc:
+        checks.append(
+            DiagnosticCheck(
+                "error",
+                "Server config readable",
+                _diagnostic_detail(exc, verbose=args.verbose),
+                blocking=True,
+            )
+        )
+        return checks, None
+    checks.append(DiagnosticCheck("ok", "Server config readable"))
+    return checks, config_response
+
+
+def _local_config_checks(args: argparse.Namespace) -> list[DiagnosticCheck]:
+    checks: list[DiagnosticCheck] = []
+    parsed = urllib.parse.urlparse(args.base_url)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        checks.append(DiagnosticCheck("ok", "Base URL configured", args.base_url.rstrip("/")))
+    else:
+        checks.append(
+            DiagnosticCheck(
+                "error",
+                "Base URL configured",
+                "Use an http:// or https:// URL.",
+                blocking=True,
+            )
+        )
+    if args.api_token:
+        checks.append(DiagnosticCheck("ok", "API token present"))
+    else:
+        checks.append(
+            DiagnosticCheck(
+                "ok",
+                "Trusted principal headers configured",
+                f"user={args.user_id} tenant={args.tenant_id}",
+            )
+        )
+    return checks
+
+
+def _server_config_checks(config_response: dict[str, Any] | None) -> list[DiagnosticCheck]:
+    if config_response is None:
+        return []
+    checks: list[DiagnosticCheck] = []
+    summary = _server_summary(config_response)
+    backend = summary.get("backend")
+    if backend:
+        checks.append(DiagnosticCheck("ok", "Backend mode", backend))
+    else:
+        checks.append(DiagnosticCheck("warning", "Backend mode", "not reported"))
+    model = summary.get("model")
+    if model:
+        checks.append(DiagnosticCheck("ok", "Default model configured", model))
+    else:
+        checks.append(DiagnosticCheck("warning", "Default model configured", "not reported"))
+    mcp_servers = config_response.get("mcp_servers")
+    if isinstance(mcp_servers, list) and mcp_servers:
+        checks.append(DiagnosticCheck("ok", "MCP servers configured", str(len(mcp_servers))))
+    else:
+        checks.append(DiagnosticCheck("warning", "MCP servers configured", "none reported"))
+    agent_backend = config_response.get("agent_backend")
+    mcp_broker_enabled = (
+        agent_backend.get("mcp_broker_enabled") if isinstance(agent_backend, dict) else None
+    )
+    if mcp_broker_enabled is True:
+        checks.append(DiagnosticCheck("ok", "MCP broker enabled"))
+    else:
+        checks.append(DiagnosticCheck("warning", "MCP broker enabled", "false or not reported"))
+    quality = config_response.get("quality")
+    quality_enabled = quality.get("enabled") if isinstance(quality, dict) else None
+    checks.append(
+        DiagnosticCheck(
+            "ok" if quality_enabled is True else "warning",
+            "Remote quality enhancement",
+            "enabled" if quality_enabled is True else "disabled or not reported",
+        )
+    )
+    return checks
+
+
+def _server_summary(config_response: dict[str, Any]) -> dict[str, str]:
+    summary: dict[str, str] = {}
+    agent_backend = config_response.get("agent_backend")
+    if isinstance(agent_backend, dict):
+        backend = agent_backend.get("type")
+        if isinstance(backend, str) and backend:
+            summary["backend"] = backend
+    llm = config_response.get("llm")
+    if isinstance(llm, dict):
+        model = llm.get("model")
+        provider = llm.get("provider")
+        if isinstance(model, str) and model:
+            summary["model"] = model
+        if isinstance(provider, str) and provider:
+            summary["provider"] = provider
+    return summary
+
+
+def _diagnostic_detail(exc: MinigentAPIError, *, verbose: bool) -> str:
+    if verbose and exc.detail:
+        return f"{exc.message} Detail: {exc.detail}"
+    return exc.message
+
+
+def _format_check(check: DiagnosticCheck) -> str:
+    marker = {"ok": "✓", "warning": "⚠", "error": "✗"}.get(check.status, "•")
+    line = f"{marker} {check.label}"
+    if check.detail:
+        line = f"{line}: {check.detail}"
+    return line
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -762,8 +995,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     return run_admin_audit_list(args, client, trace_id)
         if args.command == "health":
             return run_health(client, args.json, trace_id)
+        if args.command == "ping":
+            return run_ping(args, client, trace_id)
         if args.command == "config":
-            return run_config(client, trace_id)
+            if args.config_command in {None, "show"}:
+                return run_config(client, trace_id)
+            if args.config_command == "doctor":
+                return run_config_doctor(args, client, trace_id)
     except MinigentAPIError as exc:
         if args.json:
             print_json({"error": exc.to_dict(include_detail=args.verbose)})

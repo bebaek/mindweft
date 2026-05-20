@@ -232,6 +232,99 @@ def test_cli_json_errors_are_structured(monkeypatch: Any, tmp_path: Path, capsys
     }
 
 
+def test_config_doctor_reports_local_and_server_checks(monkeypatch: Any, capsys: Any) -> None:
+    calls: list[tuple[str, str]] = []
+    config_response = {
+        "llm": {"provider": "mock", "model": "mock-model"},
+        "agent_backend": {"type": "native", "mcp_broker_enabled": False},
+        "quality": {"enabled": False},
+        "mcp_servers": [],
+        "local_tools": ["echo"],
+    }
+
+    def urlopen(request: Any) -> _Response:
+        calls.append((request.get_method(), request.full_url))
+        if request.full_url.endswith("/health"):
+            return _Response(body={"status": "ok"})
+        if request.full_url.endswith("/config"):
+            return _Response(body=config_response)
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["config", "doctor"])
+
+    assert exit_code == 0
+    assert calls == [
+        ("GET", "http://127.0.0.1:8000/health"),
+        ("GET", "http://127.0.0.1:8000/config"),
+    ]
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "Minigent config doctor" in captured.out
+    assert "✓ Base URL configured: http://127.0.0.1:8000" in captured.out
+    assert "✓ Trusted principal headers configured: user=demo-user tenant=demo-tenant" in captured.out
+    assert "✓ API reachable: ok" in captured.out
+    assert "✓ Backend mode: native" in captured.out
+    assert "✓ Default model configured: mock-model" in captured.out
+    assert "⚠ MCP broker enabled: false or not reported" in captured.out
+    assert "No blocking issues found." in captured.out
+
+
+def test_config_doctor_returns_nonzero_for_bad_base_url(capsys: Any) -> None:
+    exit_code = cli.main(["--base-url", "not-a-url", "config", "doctor"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "✗ Base URL configured: Use an http:// or https:// URL." in captured.out
+    assert "Blocking issues found." in captured.out
+
+
+def test_ping_json_reports_server_summary(monkeypatch: Any, capsys: Any) -> None:
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/health"):
+            return _Response(body={"status": "ok"})
+        if request.full_url.endswith("/config"):
+            return _Response(
+                body={
+                    "llm": {"provider": "mock", "model": "mock-model"},
+                    "agent_backend": {"type": "peer_agent"},
+                }
+            )
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["--json", "ping"])
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["ok"] is True
+    assert output["server"] == {
+        "backend": "peer_agent",
+        "model": "mock-model",
+        "provider": "mock",
+    }
+    assert output["checks"] == [
+        {"status": "ok", "label": "API reachable", "blocking": False, "detail": "ok"},
+        {"status": "ok", "label": "Server config readable", "blocking": False},
+    ]
+
+
+def test_ping_returns_nonzero_for_unreachable_server(monkeypatch: Any, capsys: Any) -> None:
+    def urlopen(request: Any) -> _Response:
+        raise urllib.error.URLError(ConnectionRefusedError("connection refused"))
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["ping"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "✗ API reachable: Cannot reach the Minigent API." in captured.out
+
+
 def test_admin_threads_list_json(monkeypatch: Any, capsys: Any) -> None:
     calls: list[tuple[str, str, dict[str, str]]] = []
     response = {
