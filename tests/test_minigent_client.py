@@ -3609,6 +3609,7 @@ def test_thread_history_selection_resolves_number_id_and_unique_search() -> None
 
     assert voice_cli._resolve_thread_selection("2", threads) == "thread-b"
     assert voice_cli._resolve_thread_selection("thread-a", threads) == "thread-a"
+    assert voice_cli._resolve_thread_selection("/threads thread-a", threads) == "thread-a"
     assert voice_cli._resolve_thread_selection("nba", threads) == "thread-b"
     assert voice_cli._resolve_thread_selection("missing", threads) is None
 
@@ -3619,7 +3620,7 @@ def test_run_chat_loop_handles_thread_shell_commands(
 ) -> None:
     output_stream = StringIO()
     input_stream = StringIO(
-        "/new\n/threads\n/rename renamed thread\n/copy-id\n/export\n/switch existing-thread\n/debug\n/exit\n"
+        "/new\n/threads\n/rename renamed thread\n/copy-id\n/export\n/threads existing-thread\n/debug\n/exit\n"
     )
 
     class FakeChatClient:

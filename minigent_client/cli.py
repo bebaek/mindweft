@@ -634,8 +634,8 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         if utterance == "/new":
             _handle_chat_new(client, config, output_stream)
             continue
-        if utterance == "/threads":
-            _handle_chat_threads(client, config, output_stream)
+        if utterance == "/threads" or utterance.startswith("/threads "):
+            _handle_chat_threads(utterance, client, config, output_stream)
             continue
         if utterance.startswith("/switch"):
             _handle_chat_switch(utterance, client, config, output_stream)
@@ -702,10 +702,15 @@ def _handle_chat_new(
 
 
 def _handle_chat_threads(
+    utterance: str,
     client: RememberingMinigentAPIClient,
     config: ClientConfig,
     output_stream: ChatOutputStream,
 ) -> None:
+    selector = utterance.removeprefix("/threads").strip()
+    if selector:
+        _switch_to_thread(selector, client, config, output_stream)
+        return
     threads = _list_client_threads(config)
     if not threads:
         output_stream.write("[idle] no locally remembered threads\n")
@@ -789,6 +794,8 @@ def _write_numbered_thread_history(
 
 
 def _resolve_thread_selection(selection: str, threads: list[ThreadHistoryItem]) -> str | None:
+    if selection == "/threads" or selection.startswith("/threads "):
+        selection = selection.removeprefix("/threads").strip()
     if not selection:
         return None
     if selection.isdigit():
