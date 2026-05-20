@@ -31,8 +31,8 @@ from minigent_client.speech import (
     PiperSpeechOutput,
     SilentSpeechOutput,
 )
-from minigent_client.state import STATE_DIR_NAME, ClientState as PersistentClientState
-from minigent_client.state import state_scope_key
+from minigent_client.state import STATE_DIR_NAME, state_scope_key
+from minigent_client.state import ClientState as PersistentClientState
 from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
 from minigent_client.vad import SileroVoiceActivityDetector
 from minigent_client.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
@@ -77,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--stream-runs",
         action="store_true",
         help="Use Minigent's NDJSON run stream endpoint and print run/tool/peer progress.",
+    )
+    parser.add_argument(
+        "--show-tool-results",
+        action="store_true",
+        help="With streaming runs, print expanded tool result bodies to stderr.",
     )
     parser.add_argument(
         "--wake-acknowledgement",
@@ -257,6 +262,7 @@ def build_config(args: argparse.Namespace) -> ClientConfig:
         location=env_config.location,
         debug_show_prompt=env_config.debug_show_prompt,
         stream_runs=args.stream_runs or env_config.stream_runs,
+        show_tool_results=args.show_tool_results or env_config.show_tool_results,
         chat_submit_mode=args.chat_submit_mode or env_config.chat_submit_mode,
         wake_acknowledgement=args.wake_acknowledgement or env_config.wake_acknowledgement,
         wake_acknowledgement_sound=env_config.wake_acknowledgement_sound,

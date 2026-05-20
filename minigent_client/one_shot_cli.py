@@ -101,6 +101,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use the NDJSON streaming run endpoint and print progress in text mode.",
     )
+    chat_parser.add_argument(
+        "--show-tool-results",
+        action="store_true",
+        help="In streaming text mode, print expanded tool result bodies to stderr.",
+    )
 
     resume_parser = subparsers.add_parser(
         "resume", help="Show and remember the latest or selected local thread."
@@ -398,6 +403,7 @@ def build_client(args: argparse.Namespace, trace_id: str | None) -> MinigentAPIC
         build_config(args, trace_id),
         progress_stream=sys.stderr,
         progress_verbose=args.verbose,
+        show_tool_results=getattr(args, "show_tool_results", False),
     )
 
 
@@ -448,8 +454,14 @@ def _title_from_thread_messages(messages: object) -> str | None:
     return None
 
 
-def _make_stream_progress_printer(*, verbose: bool = False) -> Any:
-    renderer = StreamProgressRenderer(sys.stderr, verbose=verbose)
+def _make_stream_progress_printer(
+    *, verbose: bool = False, show_tool_results: bool = False
+) -> Any:
+    renderer = StreamProgressRenderer(
+        sys.stderr,
+        verbose=verbose,
+        show_tool_results=show_tool_results,
+    )
     return renderer.render
 
 
@@ -1119,7 +1131,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     trace_id = secrets.token_hex(16) if args.trace else None
     config = build_config(args, trace_id)
     base_url = config.base_url
-    client = MinigentAPIClient(config, progress_stream=sys.stderr, progress_verbose=args.verbose)
+    client = MinigentAPIClient(
+        config,
+        progress_stream=sys.stderr,
+        progress_verbose=args.verbose,
+        show_tool_results=getattr(args, "show_tool_results", False),
+    )
 
     try:
         if args.command == "chat":

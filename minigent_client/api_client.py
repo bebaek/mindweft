@@ -19,6 +19,7 @@ class MinigentAPIClient:
         output_stream: TextIO | None = None,
         progress_stream: TextIO | None = None,
         progress_verbose: bool = False,
+        show_tool_results: bool | None = None,
     ) -> None:
         self._config = config
         self._thread_id = config.thread_id
@@ -27,6 +28,11 @@ class MinigentAPIClient:
         self._stream_progress_renderer = StreamProgressRenderer(
             self._progress_stream,
             verbose=progress_verbose,
+            show_tool_results=(
+                bool(getattr(config, "show_tool_results", False))
+                if show_tool_results is None
+                else show_tool_results
+            ),
         )
 
     def health(self) -> dict[str, Any]:

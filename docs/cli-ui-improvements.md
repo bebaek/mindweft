@@ -17,11 +17,9 @@ Show clear phases such as:
 
 Avoid dumping raw event noise unless `--debug` is enabled.
 
-## [~] 2. Structured tool call output
+## [x] 2. Structured tool call output
 
-Partially covered by `0fed3f4 feat(cli): improve streaming status output`: streaming runs render compact tool-call status lines such as `🔧 name(args) ...` and `🔧 name(args) done`.
-
-Still open: an explicit `--show-tool-results` mode for expanded tool output.
+Implemented by compact streaming tool-call status lines plus opt-in expanded tool result output with `--show-tool-results`, including forwarded peer-agent tool details when available.
 
 Render tool calls as compact blocks:
 

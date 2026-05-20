@@ -1722,6 +1722,152 @@ def test_minigent_client_can_run_thread_with_ndjson_stream(
     )
 
 
+def test_minigent_client_can_show_stream_tool_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeStreamResponse:
+        def __iter__(self):
+            lines = [
+                {"type": "tool.call", "name": "echo", "arguments": {"text": "hi"}},
+                {
+                    "type": "tool.result",
+                    "name": "echo",
+                    "is_error": False,
+                    "result": {"text": "hi"},
+                },
+                {"type": "assistant.message", "content": "streamed reply"},
+                {"type": "run.completed"},
+            ]
+            return iter((json.dumps(line) + "\n").encode("utf-8") for line in lines)
+
+        def __enter__(self) -> "FakeStreamResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request: FakeStreamResponse())
+    progress_stream = StringIO()
+    client = MinigentAPIClient(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            thread_id="thread-123",
+            stream_runs=True,
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        ),
+        progress_stream=progress_stream,
+        show_tool_results=True,
+    )
+
+    assert client.run_thread() == "streamed reply"
+    progress = progress_stream.getvalue()
+    assert '🔧 echo(text="hi") done' in progress
+    assert "   result:" in progress
+    assert '"text": "hi"' in progress
+
+
+def test_minigent_client_can_show_peer_stream_tool_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeStreamResponse:
+        def __iter__(self):
+            lines = [
+                {
+                    "type": "peer.task.event",
+                    "task_id": "task-1",
+                    "event": {
+                        "type": "tool_execution_update",
+                        "toolName": "temperature",
+                        "toolCallId": "call-1",
+                        "status": "completed",
+                        "partialResult": {"indoor": "72 F"},
+                        "result": {"indoor": "72 F", "outdoor": "84 F"},
+                    },
+                },
+                {"type": "assistant.message", "content": "streamed reply"},
+                {"type": "run.completed"},
+            ]
+            return iter((json.dumps(line) + "\n").encode("utf-8") for line in lines)
+
+        def __enter__(self) -> "FakeStreamResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request: FakeStreamResponse())
+    progress_stream = StringIO()
+    client = MinigentAPIClient(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            thread_id="thread-123",
+            stream_runs=True,
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        ),
+        progress_stream=progress_stream,
+        show_tool_results=True,
+    )
+
+    assert client.run_thread() == "streamed reply"
+    progress = progress_stream.getvalue()
+    assert "[peer] tool update temperature status=completed" in progress
+    assert "   details:" in progress
+    assert '"partialResult": {' in progress
+    assert '"indoor": "72 F"' in progress
+    assert '"outdoor": "84 F"' in progress
+    assert "toolCallId" not in progress
+
+
+def test_minigent_client_can_show_nested_peer_stream_tool_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeStreamResponse:
+        def __iter__(self):
+            lines = [
+                {
+                    "type": "peer.task.event",
+                    "task_id": "task-1",
+                    "event": {
+                        "type": "tool_execution_end",
+                        "toolCall": {"name": "current_time", "arguments": {}},
+                        "resultPayload": {"time": "9:55 PM", "timezone": "CDT"},
+                    },
+                },
+                {"type": "assistant.message", "content": "streamed reply"},
+                {"type": "run.completed"},
+            ]
+            return iter((json.dumps(line) + "\n").encode("utf-8") for line in lines)
+
+        def __enter__(self) -> "FakeStreamResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request: FakeStreamResponse())
+    progress_stream = StringIO()
+    client = MinigentAPIClient(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            thread_id="thread-123",
+            stream_runs=True,
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        ),
+        progress_stream=progress_stream,
+        show_tool_results=True,
+    )
+
+    assert client.run_thread() == "streamed reply"
+    progress = progress_stream.getvalue()
+    assert "[peer] tool end current_time" in progress
+    assert "resultPayload" in progress
+    assert '"time": "9:55 PM"' in progress
+
+
+
 def test_minigent_client_stream_run_errors_raise_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

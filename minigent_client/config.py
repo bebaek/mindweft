@@ -29,6 +29,7 @@ class ClientConfig:
     location: str | None = None
     debug_show_prompt: bool = False
     stream_runs: bool = False
+    show_tool_results: bool = False
     chat_submit_mode: str = "enter"
     wake_acknowledgement: str | None = None
     wake_acknowledgement_sound: str | None = None
@@ -91,6 +92,7 @@ class ClientConfig:
             location=_clean_optional(os.getenv("MINIGENT_VOICE_LOCATION")),
             debug_show_prompt=_bool_from_env("MINIGENT_VOICE_DEBUG_SHOW_PROMPT", False),
             stream_runs=_bool_from_env("MINIGENT_CLIENT_STREAM_RUNS", False),
+            show_tool_results=_bool_from_env("MINIGENT_CLIENT_SHOW_TOOL_RESULTS", False),
             chat_submit_mode=os.getenv("MINIGENT_CLIENT_CHAT_SUBMIT_MODE", "enter").strip().lower(),
             wake_acknowledgement=_clean_optional(os.getenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT")),
             wake_acknowledgement_sound=_clean_optional(

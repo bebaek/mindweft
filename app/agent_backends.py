@@ -340,20 +340,58 @@ def _sanitize_peer_task_event(event: dict[object, object]) -> dict[str, object]:
     tool_name = _peer_event_tool_name(event)
     if tool_name:
         sanitized["tool_name"] = tool_name
+    if isinstance(event_type, str) and event_type.startswith("tool_execution_"):
+        sanitized.update(_sanitize_peer_tool_event_details(event))
     return sanitized or {"type": "event"}
 
 
+def _sanitize_peer_tool_event_details(event: dict[object, object]) -> dict[str, object]:
+    omitted_keys = {
+        "index",
+        "type",
+        "event",
+        "status",
+        "tool_call_id",
+        "toolCallId",
+        "tool_name",
+        "toolName",
+        "name",
+        "tool",
+        # These Pi message containers can contain assistant draft/thinking text.
+        "message",
+        "messages",
+        "assistantMessageEvent",
+        "partial",
+    }
+    return {
+        str(key): value
+        for key, value in event.items()
+        if isinstance(key, str) and key not in omitted_keys and _is_json_like(value)
+    }
+
+
+def _is_json_like(value: object) -> bool:
+    if value is None or isinstance(value, str | int | float | bool):
+        return True
+    if isinstance(value, list):
+        return all(_is_json_like(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _is_json_like(item) for key, item in value.items())
+    return False
+
+
 def _peer_event_tool_name(event: dict[object, object]) -> str:
-    for key in ("tool_name", "name", "tool"):
+    for key in ("tool_name", "toolName", "name", "tool"):
         value = event.get(key)
         if isinstance(value, str) and value:
             return value
-    tool_call = event.get("tool_call")
-    if isinstance(tool_call, dict):
-        for key in ("name", "tool_name"):
-            value = tool_call.get(key)
-            if isinstance(value, str) and value:
-                return value
+    for nested_key in ("tool_call", "toolCall", "tool_result", "toolResult"):
+        nested = event.get(nested_key)
+        if isinstance(nested, dict):
+            for key in ("name", "tool_name", "toolName", "tool"):
+                value = nested.get(key)
+                if isinstance(value, str) and value:
+                    return value
     return ""
 
 

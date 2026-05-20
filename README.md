@@ -660,8 +660,10 @@ use `POST /threads/{thread_id}/run/stream` and print live run/tool/peer progress
 before printing or speaking the final assistant reply. The one-shot CLI also supports
 `minigent chat --stream ...`; in text mode it keeps the assistant reply on stdout and
 prints compact status/tool lines such as `● preparing`, `● sending`, `🔧 echo(...) done`,
-and `● done` to stderr. Use global `--verbose` with one-shot streaming commands to include
-extra progress metadata such as LLM iteration numbers.
+and `● done` to stderr. Add `--show-tool-results`, or set
+`MINIGENT_CLIENT_SHOW_TOOL_RESULTS=true` for `minigent-client`, to include indented tool
+result bodies in the streaming progress output. Use global `--verbose` with one-shot
+streaming commands to include extra progress metadata such as LLM iteration numbers.
 
 Use `minigent threads` or `minigent-client threads` to list locally remembered recent
 threads for the current server and principal. `minigent resume` and `minigent-client
@@ -992,6 +994,7 @@ Daemon-related env vars:
 - `MINIGENT_VOICE_LOCATION`
 - `MINIGENT_VOICE_DEBUG_SHOW_PROMPT`
 - `MINIGENT_CLIENT_STREAM_RUNS`
+- `MINIGENT_CLIENT_SHOW_TOOL_RESULTS`
 - `MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT`
 - `MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND`
 - `MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT`

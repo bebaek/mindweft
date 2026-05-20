@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from jwt.algorithms import RSAAlgorithm
 
 from app import auth as auth_module
+from app.agent_backends import _sanitize_peer_task_event
 from app.execution import InMemoryTenantExecutionResolver, parse_tenant_execution_config
 from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter
 from app.main import create_app
@@ -509,6 +510,57 @@ def test_run_stream_endpoint_emits_peer_task_events() -> None:
     assert "message" not in events[4]["event"]
     assert "sensitive draft" not in "\n".join(json.dumps(event) for event in events)
     assert events[6]["content"] == "Pi result"
+
+
+def test_peer_task_event_sanitizer_preserves_tool_details_without_messages() -> None:
+    sanitized = _sanitize_peer_task_event(
+        {
+            "index": 4,
+            "type": "tool_execution_update",
+            "toolName": "temperature",
+            "toolCallId": "call-1",
+            "status": "completed",
+            "partialResult": {"indoor": "72 F"},
+            "result": {"indoor": "72 F", "outdoor": "84 F"},
+            "isError": False,
+            "debugPayload": {"source": "thermostat"},
+            "message": {"role": "assistant", "content": "sensitive draft"},
+            "assistantMessageEvent": {"partial": {"content": "sensitive thinking"}},
+        }
+    )
+
+    assert sanitized == {
+        "index": 4,
+        "type": "tool_execution_update",
+        "status": "completed",
+        "tool_name": "temperature",
+        "partialResult": {"indoor": "72 F"},
+        "result": {"indoor": "72 F", "outdoor": "84 F"},
+        "isError": False,
+        "debugPayload": {"source": "thermostat"},
+    }
+
+
+
+def test_peer_task_event_sanitizer_preserves_nested_tool_name_and_result_payload() -> None:
+    sanitized = _sanitize_peer_task_event(
+        {
+            "index": 2,
+            "type": "tool_execution_end",
+            "toolCall": {"name": "current_time", "arguments": {"timezone": "America/Chicago"}},
+            "resultPayload": {"time": "9:55 PM", "timezone": "CDT"},
+            "messages": [{"role": "assistant", "content": "sensitive draft"}],
+        }
+    )
+
+    assert sanitized == {
+        "index": 2,
+        "type": "tool_execution_end",
+        "tool_name": "current_time",
+        "toolCall": {"name": "current_time", "arguments": {"timezone": "America/Chicago"}},
+        "resultPayload": {"time": "9:55 PM", "timezone": "CDT"},
+    }
+
 
 
 def test_run_stream_endpoint_emits_error_event() -> None:

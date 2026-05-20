@@ -5,6 +5,7 @@ import sys
 from typing import Any, TextIO
 
 _MAX_INLINE_ARGUMENT_CHARS = 80
+_MAX_TOOL_RESULT_CHARS = 2000
 
 
 def format_message(message: dict[str, Any]) -> str:
@@ -20,9 +21,16 @@ def print_json(data: object, *, stream: TextIO | None = None) -> None:
 
 
 class StreamProgressRenderer:
-    def __init__(self, stream: TextIO | None = None, *, verbose: bool = False) -> None:
+    def __init__(
+        self,
+        stream: TextIO | None = None,
+        *,
+        verbose: bool = False,
+        show_tool_results: bool = False,
+    ) -> None:
         self._stream = stream or sys.stderr
         self._verbose = verbose
+        self._show_tool_results = show_tool_results
         self._seen_peer_update_tasks: set[str] = set()
         self._peer_task_statuses: dict[str, str] = {}
         self._tool_call_arguments: dict[str, str] = {}
@@ -75,6 +83,19 @@ class StreamProgressRenderer:
         status = "error" if event.get("is_error") else "done"
         suffix = f" ({status})" if status == "error" else " done"
         self._write(f"🔧 {name}({arguments}){suffix}")
+        if self._show_tool_results and "result" in event:
+            self._write_tool_result_block(event["result"])
+
+    def _write_tool_result_block(self, result: object) -> None:
+        self._write_tool_detail_block(result, label="result")
+
+    def _write_tool_detail_block(self, detail: object, *, label: str = "details") -> None:
+        text = _format_tool_result(detail)
+        if not self._verbose and len(text) > _MAX_TOOL_RESULT_CHARS:
+            text = text[: _MAX_TOOL_RESULT_CHARS - 1].rstrip() + "…"
+        self._write(f"   {label}:")
+        for line in text.splitlines() or [""]:
+            self._write(f"     {line}")
 
     def _write_peer_task_status(self, event: dict[str, Any], *, label: str) -> None:
         peer = event.get("peer")
@@ -111,11 +132,23 @@ class StreamProgressRenderer:
         if peer_event_type == "agent_end":
             self._write("[peer] agent finished")
             return
-        if peer_event_type in {"tool_execution_start", "tool_execution_end"}:
+        if peer_event_type in {
+            "tool_execution_start",
+            "tool_execution_update",
+            "tool_execution_end",
+        }:
             tool_name = peer_event_tool_name(peer_event)
-            action = "start" if peer_event_type.endswith("start") else "end"
+            action = peer_event_type.removeprefix("tool_execution_")
+            if action == "end":
+                action = "end"
             suffix = f" {tool_name}" if tool_name else ""
-            self._write(f"[peer] tool {action}{suffix}")
+            status = peer_event.get("status")
+            status_suffix = f" status={status}" if isinstance(status, str) and status else ""
+            self._write(f"[peer] tool {action}{suffix}{status_suffix}")
+            if self._show_tool_results:
+                details = _peer_event_details(peer_event)
+                if details:
+                    self._write_tool_detail_block(details)
             return
         self._write(f"[peer] event {peer_event_type}")
 
@@ -149,6 +182,28 @@ def _format_argument_value(value: object) -> str:
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=False)
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _format_tool_result(result: object) -> str:
+    if isinstance(result, str):
+        return result
+    return json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True, default=str)
+
+
+def _peer_event_details(peer_event: dict[str, Any]) -> dict[str, Any]:
+    omitted_keys = {
+        "index",
+        "type",
+        "event",
+        "tool_call_id",
+        "toolCallId",
+        "tool_name",
+        "toolName",
+        "name",
+        "tool",
+        "status",
+    }
+    return {key: value for key, value in peer_event.items() if key not in omitted_keys}
 
 
 def _format_usage_summary(event: dict[str, Any]) -> str | None:
@@ -187,14 +242,15 @@ def _format_token_count(value: int) -> str:
 
 
 def peer_event_tool_name(peer_event: dict[str, Any]) -> str:
-    for key in ("tool_name", "name", "tool"):
+    for key in ("tool_name", "toolName", "name", "tool"):
         value = peer_event.get(key)
         if isinstance(value, str) and value:
             return value
-    tool_call = peer_event.get("tool_call")
-    if isinstance(tool_call, dict):
-        for key in ("name", "tool_name"):
-            value = tool_call.get(key)
-            if isinstance(value, str) and value:
-                return value
+    for nested_key in ("tool_call", "toolCall", "tool_result", "toolResult"):
+        nested = peer_event.get(nested_key)
+        if isinstance(nested, dict):
+            for key in ("name", "tool_name", "toolName", "tool"):
+                value = nested.get(key)
+                if isinstance(value, str) and value:
+                    return value
     return ""

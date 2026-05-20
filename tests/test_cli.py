@@ -74,7 +74,13 @@ def test_chat_stream_text_prints_progress_to_stderr(
     stream_events = [
         {"type": "run.started", "thread_id": "thread-1"},
         {"type": "tool.call", "thread_id": "thread-1", "name": "echo", "arguments": {"text": "hi"}},
-        {"type": "tool.result", "thread_id": "thread-1", "name": "echo", "is_error": False},
+        {
+            "type": "tool.result",
+            "thread_id": "thread-1",
+            "name": "echo",
+            "is_error": False,
+            "result": {"text": "hi"},
+        },
         {"type": "assistant.message", "thread_id": "thread-1", "content": "done"},
         {
             "type": "run.completed",
@@ -103,7 +109,48 @@ def test_chat_stream_text_prints_progress_to_stderr(
     assert "● preparing" in captured.err
     assert '🔧 echo(text="hi") ...' in captured.err
     assert '🔧 echo(text="hi") done' in captured.err
+    assert "result:" not in captured.err
+    assert '"text": "hi"' not in captured.err
     assert "● done · tokens: prompt 1.8k · completion 420 · total 2.2k" in captured.err
+
+
+def test_chat_stream_text_can_show_tool_results(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    stream_events = [
+        {"type": "run.started", "thread_id": "thread-1"},
+        {"type": "tool.call", "thread_id": "thread-1", "name": "echo", "arguments": {"text": "hi"}},
+        {
+            "type": "tool.result",
+            "thread_id": "thread-1",
+            "name": "echo",
+            "is_error": False,
+            "result": {"text": "hi"},
+        },
+        {"type": "assistant.message", "thread_id": "thread-1", "content": "done"},
+        {"type": "run.completed", "thread_id": "thread-1"},
+    ]
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run/stream"):
+            return _Response(lines=stream_events)
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["chat", "--stream", "--show-tool-results", "hello"])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert captured.out == "done\n"
+    assert '🔧 echo(text="hi") done' in captured.err
+    assert "   result:" in captured.err
+    assert '"text": "hi"' in captured.err
 
 
 def test_chat_stream_text_coalesces_peer_message_updates(
