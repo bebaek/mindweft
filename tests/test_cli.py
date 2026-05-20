@@ -10,7 +10,9 @@ from app import cli
 
 
 class _Response:
-    def __init__(self, *, body: object | None = None, lines: Sequence[Mapping[str, object]] | None = None) -> None:
+    def __init__(
+        self, *, body: object | None = None, lines: Sequence[Mapping[str, object]] | None = None
+    ) -> None:
         self._body = body
         self._lines = lines or []
 
@@ -74,7 +76,11 @@ def test_chat_stream_text_prints_progress_to_stderr(
         {"type": "tool.call", "thread_id": "thread-1", "name": "echo", "arguments": {"text": "hi"}},
         {"type": "tool.result", "thread_id": "thread-1", "name": "echo", "is_error": False},
         {"type": "assistant.message", "thread_id": "thread-1", "content": "done"},
-        {"type": "run.completed", "thread_id": "thread-1", "usage": {"prompt_tokens": 1800, "completion_tokens": 420, "total_tokens": 2220}},
+        {
+            "type": "run.completed",
+            "thread_id": "thread-1",
+            "usage": {"prompt_tokens": 1800, "completion_tokens": 420, "total_tokens": 2220},
+        },
     ]
 
     def urlopen(request: Any) -> _Response:
@@ -105,10 +111,30 @@ def test_chat_stream_text_coalesces_peer_message_updates(
 ) -> None:
     stream_events = [
         {"type": "run.started", "thread_id": "thread-1"},
-        {"type": "peer.task.event", "thread_id": "thread-1", "task_id": "task-1", "event": {"type": "agent_start"}},
-        {"type": "peer.task.event", "thread_id": "thread-1", "task_id": "task-1", "event": {"type": "message_update"}},
-        {"type": "peer.task.event", "thread_id": "thread-1", "task_id": "task-1", "event": {"type": "message_update"}},
-        {"type": "peer.task.event", "thread_id": "thread-1", "task_id": "task-1", "event": {"type": "tool_execution_start", "name": "read"}},
+        {
+            "type": "peer.task.event",
+            "thread_id": "thread-1",
+            "task_id": "task-1",
+            "event": {"type": "agent_start"},
+        },
+        {
+            "type": "peer.task.event",
+            "thread_id": "thread-1",
+            "task_id": "task-1",
+            "event": {"type": "message_update"},
+        },
+        {
+            "type": "peer.task.event",
+            "thread_id": "thread-1",
+            "task_id": "task-1",
+            "event": {"type": "message_update"},
+        },
+        {
+            "type": "peer.task.event",
+            "thread_id": "thread-1",
+            "task_id": "task-1",
+            "event": {"type": "tool_execution_start", "name": "read"},
+        },
         {"type": "assistant.message", "thread_id": "thread-1", "content": "done"},
         {"type": "run.completed", "thread_id": "thread-1"},
     ]
@@ -139,11 +165,41 @@ def test_chat_stream_text_coalesces_repeated_peer_poll_statuses(
 ) -> None:
     stream_events = [
         {"type": "run.started", "thread_id": "thread-1"},
-        {"type": "peer.task.created", "thread_id": "thread-1", "peer": "pi", "task_id": "task-1", "status": "pending"},
-        {"type": "peer.task.poll", "thread_id": "thread-1", "peer": "pi", "task_id": "task-1", "status": "running"},
-        {"type": "peer.task.poll", "thread_id": "thread-1", "peer": "pi", "task_id": "task-1", "status": "running"},
-        {"type": "peer.task.poll", "thread_id": "thread-1", "peer": "pi", "task_id": "task-1", "status": "completed"},
-        {"type": "peer.task.completed", "thread_id": "thread-1", "peer": "pi", "task_id": "task-1", "status": "completed"},
+        {
+            "type": "peer.task.created",
+            "thread_id": "thread-1",
+            "peer": "pi",
+            "task_id": "task-1",
+            "status": "pending",
+        },
+        {
+            "type": "peer.task.poll",
+            "thread_id": "thread-1",
+            "peer": "pi",
+            "task_id": "task-1",
+            "status": "running",
+        },
+        {
+            "type": "peer.task.poll",
+            "thread_id": "thread-1",
+            "peer": "pi",
+            "task_id": "task-1",
+            "status": "running",
+        },
+        {
+            "type": "peer.task.poll",
+            "thread_id": "thread-1",
+            "peer": "pi",
+            "task_id": "task-1",
+            "status": "completed",
+        },
+        {
+            "type": "peer.task.completed",
+            "thread_id": "thread-1",
+            "peer": "pi",
+            "task_id": "task-1",
+            "status": "completed",
+        },
         {"type": "assistant.message", "thread_id": "thread-1", "content": "done"},
         {"type": "run.completed", "thread_id": "thread-1"},
     ]
@@ -247,6 +303,43 @@ def test_resume_thread_id_remembers_selected_thread(
     assert output["threads"][0]["title"] == "second thread"
 
 
+def test_export_thread_as_markdown(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads/thread-2/messages"):
+            return _Response(
+                body=[
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "hi"},
+                ]
+            )
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    assert cli.main(["export", "thread-2"]) == 0
+
+    assert capsys.readouterr().out == (
+        "# Minigent transcript\n\nThread: `thread-2`\n\n## User\n\nhello\n\n## Assistant\n\nhi\n"
+    )
+
+
+def test_export_thread_as_json(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    messages = [{"role": "user", "content": "hello"}]
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads/thread-2/messages"):
+            return _Response(body=messages)
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    assert cli.main(["--json", "export", "thread-2", "--format", "json"]) == 0
+
+    assert json.loads(capsys.readouterr().out) == {"thread_id": "thread-2", "messages": messages}
+
+
 def test_cli_prints_friendly_auth_errors(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     def urlopen(request: Any) -> _Response:
         raise urllib.error.HTTPError(
@@ -288,7 +381,10 @@ def test_cli_verbose_errors_include_technical_detail(
 
     assert exit_code == 1
     captured = capsys.readouterr()
-    assert "Error: Minigent server error (502). LLM provider returned no message content" in captured.err
+    assert (
+        "Error: Minigent server error (502). LLM provider returned no message content"
+        in captured.err
+    )
     assert "Detail: POST http://127.0.0.1:8000/threads failed: 502" in captured.err
 
 
@@ -342,7 +438,9 @@ def test_config_doctor_reports_local_and_server_checks(monkeypatch: Any, capsys:
     assert captured.err == ""
     assert "Minigent config doctor" in captured.out
     assert "✓ Base URL configured: http://127.0.0.1:8000" in captured.out
-    assert "✓ Trusted principal headers configured: user=demo-user tenant=demo-tenant" in captured.out
+    assert (
+        "✓ Trusted principal headers configured: user=demo-user tenant=demo-tenant" in captured.out
+    )
     assert "✓ API reachable: ok" in captured.out
     assert "✓ Backend mode: native" in captured.out
     assert "✓ Default model configured: mock-model" in captured.out
@@ -693,7 +791,9 @@ def test_admin_threads_show_text(monkeypatch: Any, capsys: Any) -> None:
 
     monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
 
-    assert cli.main(["--admin", "admin", "threads", "show", "thread-1", "--tenant", "tenant-a"]) == 0
+    assert (
+        cli.main(["--admin", "admin", "threads", "show", "thread-1", "--tenant", "tenant-a"]) == 0
+    )
 
     output = capsys.readouterr().out
     assert "thread_id=thread-1" in output

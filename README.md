@@ -602,6 +602,8 @@ uv run minigent chat --resume-last "continue"
 uv run minigent threads
 uv run minigent resume
 uv run minigent resume <thread-id>
+uv run minigent export --format markdown
+uv run minigent export <thread-id> --format json
 uv run minigent ping
 uv run minigent config doctor
 uv run minigent threads show <thread-id>
@@ -644,6 +646,8 @@ minigent-client threads show THREAD_ID
 minigent-client threads delete THREAD_ID
 minigent-client resume
 minigent-client resume THREAD_ID
+minigent-client export --format markdown
+minigent-client export THREAD_ID --format json
 minigent-client chat --resume-last
 minigent-client stdin --resume-last --once
 minigent-client --admin admin threads list --tenant TENANT_ID
@@ -664,6 +668,8 @@ threads for the current server and principal. `minigent resume` and `minigent-cl
 resume` print the latest remembered thread transcript, while `resume THREAD_ID` selects
 and prints a specific thread so later `chat --resume-last ...`, `stdin --resume-last`,
 `manual-audio --resume-last`, or `passive-audio --resume-last` calls continue from it.
+Use `minigent export` or `minigent-client export` to write the latest remembered
+transcript as Markdown, or pass a thread ID and `--format json` for a structured export.
 The interactive and voice `minigent-client` modes remember the thread after each
 successful user turn; scripted modes only resume local history when `--resume-last` is
 provided explicitly.

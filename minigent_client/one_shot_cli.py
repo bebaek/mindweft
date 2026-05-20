@@ -61,7 +61,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    chat_parser = subparsers.add_parser("chat", help="Send a user message and print the assistant reply.")
+    chat_parser = subparsers.add_parser(
+        "chat", help="Send a user message and print the assistant reply."
+    )
     chat_parser.add_argument("message", help="User message content to send.")
     chat_target_group = chat_parser.add_mutually_exclusive_group()
     chat_target_group.add_argument("--thread", default=None, help="Existing thread ID to continue.")
@@ -70,7 +72,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Resume the last locally remembered thread for this server and principal.",
     )
-    chat_parser.add_argument("--skill", default=None, help="Skill to apply when creating a new thread.")
+    chat_parser.add_argument(
+        "--skill", default=None, help="Skill to apply when creating a new thread."
+    )
     chat_parser.add_argument(
         "--skills",
         nargs="+",
@@ -111,6 +115,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--print-thread-id",
         action="store_true",
         help="Print the selected thread ID before the transcript in text mode.",
+    )
+
+    export_parser = subparsers.add_parser("export", help="Export a thread transcript.")
+    export_parser.add_argument(
+        "thread_id",
+        nargs="?",
+        default=None,
+        help="Thread ID to export. Defaults to the latest locally remembered thread.",
+    )
+    export_parser.add_argument(
+        "--format",
+        choices=["markdown", "json"],
+        default="markdown",
+        help="Transcript output format.",
     )
 
     threads_parser = subparsers.add_parser("threads", help="Manage conversation threads.")
@@ -303,11 +321,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("health", help="Check API health.")
     subparsers.add_parser("ping", help="Check API reachability and basic server config.")
 
-    config_parser = subparsers.add_parser("config", help="Show or inspect resolved API configuration.")
+    config_parser = subparsers.add_parser(
+        "config", help="Show or inspect resolved API configuration."
+    )
     config_subparsers = config_parser.add_subparsers(dest="config_command")
     config_subparsers.add_parser("show", help="Show resolved API configuration as JSON.")
     config_subparsers.add_parser("doctor", help="Check common CLI/API configuration issues.")
-
 
     return parser
 
@@ -525,7 +544,9 @@ def run_resume(
 ) -> int:
     thread_id = args.thread_id or load_remembered_thread(base_url, args)
     thread = client.get_thread(thread_id)
-    remember_thread(base_url, args, thread_id, title=_title_from_thread_messages(thread["messages"]))
+    remember_thread(
+        base_url, args, thread_id, title=_title_from_thread_messages(thread["messages"])
+    )
     messages = thread["messages"]
     if args.json:
         output: dict[str, Any] = {"thread_id": thread_id, "messages": messages}
@@ -539,6 +560,39 @@ def run_resume(
         print(f"thread_id={thread_id}")
     for message in messages:
         print(format_message(message))
+    return 0
+
+
+def _format_markdown_transcript(thread_id: str, messages: list[dict[str, Any]]) -> str:
+    lines = ["# Minigent transcript", "", f"Thread: `{thread_id}`", ""]
+    for message in messages:
+        role = str(message.get("role") or "message").replace("_", " ").title()
+        tool_name = message.get("tool_name")
+        heading = role if not tool_name else f"{role} ({tool_name})"
+        content = str(message.get("content") or "")
+        lines.extend([f"## {heading}", "", content, ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def run_export(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    base_url: str,
+    trace_id: str | None,
+) -> int:
+    thread_id = args.thread_id or load_remembered_thread(base_url, args)
+    thread = client.get_thread(thread_id)
+    messages = thread["messages"]
+    remember_thread(base_url, args, thread_id, title=_title_from_thread_messages(messages))
+    if args.format == "json":
+        output: dict[str, Any] = {"thread_id": thread_id, "messages": messages}
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"<!-- trace_id={trace_id} -->")
+    print(_format_markdown_transcript(thread_id, messages), end="")
     return 0
 
 
@@ -811,9 +865,7 @@ def run_admin_threads_show(
     return 0
 
 
-def run_health(
-    client: MinigentAPIClient, as_json: bool, trace_id: str | None
-) -> int:
+def run_health(client: MinigentAPIClient, as_json: bool, trace_id: str | None) -> int:
     response = client.health()
     if as_json:
         output: dict[str, Any] = dict(response)
@@ -1074,6 +1126,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_chat(args, client, base_url, trace_id)
         if args.command == "resume":
             return run_resume(args, client, base_url, trace_id)
+        if args.command == "export":
+            return run_export(args, client, base_url, trace_id)
         if args.command == "threads":
             if args.threads_command in {None, "list"}:
                 return run_threads_list(args, base_url, trace_id)

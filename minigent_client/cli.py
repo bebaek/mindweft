@@ -53,9 +53,7 @@ class ChatPromptSession(Protocol):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Run the Minigent client for chat and voice."
-    )
+    parser = argparse.ArgumentParser(description="Run the Minigent client for chat and voice.")
     parser.add_argument(
         "--backend",
         choices=("chat", "stdin", "manual-audio", "passive-audio"),
@@ -461,7 +459,9 @@ def _consume_backend_subcommand(argv: list[str]) -> tuple[str | None, list[str]]
 def main(argv: list[str] | None = None) -> int:
     load_environment()
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
-    one_shot_command = _first_cli_command(raw_argv, {"threads", "resume", "health", "config", "admin"})
+    one_shot_command = _first_cli_command(
+        raw_argv, {"threads", "resume", "export", "health", "config", "admin"}
+    )
     if one_shot_command is not None:
         from minigent_client.one_shot_cli import main as one_shot_main
 
@@ -693,12 +693,7 @@ def build_activation_source(
             preroll_buffer=AudioRingBuffer(
                 max_bytes=max(
                     1,
-                    int(
-                        config.audio_sample_rate
-                        * 2
-                        * config.wakeword_preroll_ms
-                        / 1000.0
-                    ),
+                    int(config.audio_sample_rate * 2 * config.wakeword_preroll_ms / 1000.0),
                 )
             ),
             activation_feedback=activation_feedback,
@@ -847,9 +842,7 @@ def _emit_terminal_bell(configured_sound_path: str | None = None) -> None:
                     check=False,
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
-                sys.stdout.write(
-                    f"[warning] acknowledgement player failed: {command[0]}: {exc}\n"
-                )
+                sys.stdout.write(f"[warning] acknowledgement player failed: {command[0]}: {exc}\n")
                 sys.stdout.flush()
                 continue
             if result.returncode == 0:
