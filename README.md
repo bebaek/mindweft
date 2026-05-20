@@ -644,6 +644,8 @@ minigent-client threads show THREAD_ID
 minigent-client threads delete THREAD_ID
 minigent-client resume
 minigent-client resume THREAD_ID
+minigent-client chat --resume-last
+minigent-client stdin --resume-last --once
 minigent-client --admin admin threads list --tenant TENANT_ID
 minigent-client --admin admin threads show THREAD_ID --tenant TENANT_ID
 minigent-client --admin admin threads delete THREAD_ID --tenant TENANT_ID
@@ -657,10 +659,14 @@ prints compact status/tool lines such as `● preparing`, `● sending`, `🔧 e
 and `● done` to stderr. Use global `--verbose` with one-shot streaming commands to include
 extra progress metadata such as LLM iteration numbers.
 
-Use `minigent threads` to list locally remembered recent threads for the current server
-and principal. `minigent resume` prints the latest remembered thread transcript, while
-`minigent resume THREAD_ID` selects and prints a specific thread so later
-`minigent chat --resume-last ...` calls continue from it.
+Use `minigent threads` or `minigent-client threads` to list locally remembered recent
+threads for the current server and principal. `minigent resume` and `minigent-client
+resume` print the latest remembered thread transcript, while `resume THREAD_ID` selects
+and prints a specific thread so later `chat --resume-last ...`, `stdin --resume-last`,
+`manual-audio --resume-last`, or `passive-audio --resume-last` calls continue from it.
+The interactive and voice `minigent-client` modes remember the thread after each
+successful user turn; scripted modes only resume local history when `--resume-last` is
+provided explicitly.
 
 Use `minigent ping` for a short API reachability check, and `minigent config doctor` for
 a fuller local/server diagnostic that reports the base URL, configured principal/token,

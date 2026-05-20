@@ -185,6 +185,10 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent admin audit-record-list response must be an object")
         return cast(dict[str, Any], response)
 
+    @property
+    def thread_id(self) -> str | None:
+        return self._thread_id
+
     def add_message(self, thread_id: str, content: str) -> dict[str, Any]:
         response = self.request_json(
             "POST",

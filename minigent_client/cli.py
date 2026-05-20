@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from dataclasses import replace
 from importlib import import_module
 from pathlib import Path
 from typing import Callable, Protocol
@@ -27,7 +28,8 @@ from minigent_client.speech import (
     PiperSpeechOutput,
     SilentSpeechOutput,
 )
-from minigent_client.state import STATE_DIR_NAME
+from minigent_client.state import STATE_DIR_NAME, ClientState as PersistentClientState
+from minigent_client.state import state_scope_key
 from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
 from minigent_client.vad import SileroVoiceActivityDetector
 from minigent_client.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
@@ -90,10 +92,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional skill name when creating a new thread.",
     )
-    parser.add_argument(
+    thread_target_group = parser.add_mutually_exclusive_group()
+    thread_target_group.add_argument(
         "--thread-id",
         default=None,
         help="Existing thread to continue instead of creating one on first activation.",
+    )
+    thread_target_group.add_argument(
+        "--resume-last",
+        action="store_true",
+        help="Resume the last locally remembered thread for this server and principal.",
     )
     parser.add_argument(
         "--api-token",
@@ -235,7 +243,7 @@ def build_config(args: argparse.Namespace) -> ClientConfig:
         wake_phrase=args.wake_phrase,
     )
     principal = env_config.principal
-    return ClientConfig(
+    config = ClientConfig(
         base_url=env_config.base_url,
         wake_phrase=env_config.wake_phrase,
         prompt_preamble=env_config.prompt_preamble,
@@ -308,6 +316,64 @@ def build_config(args: argparse.Namespace) -> ClientConfig:
         openwakeword_threshold=env_config.openwakeword_threshold,
         principal=principal,
     )
+    if args.resume_last:
+        config = replace(config, thread_id=load_remembered_client_thread(config))
+    return config
+
+
+def client_state_scope_key(config: ClientConfig) -> str:
+    return state_scope_key(
+        config.base_url,
+        api_token=config.principal.api_token,
+        user_id=config.principal.user_id,
+        tenant_id=config.principal.tenant_id,
+        is_admin=config.principal.is_admin,
+    )
+
+
+def load_remembered_client_thread(config: ClientConfig) -> str:
+    thread_id = PersistentClientState.load().get_last_thread(client_state_scope_key(config))
+    if thread_id is None:
+        raise SystemExit("No remembered thread for this server and principal. Start a chat first.")
+    return thread_id
+
+
+def remember_client_thread(
+    config: ClientConfig,
+    thread_id: str,
+    *,
+    title: str | None = None,
+) -> None:
+    state = PersistentClientState.load()
+    state.set_last_thread(client_state_scope_key(config), thread_id, title=title)
+    state.save()
+
+
+def _thread_title_from_message(message: str) -> str:
+    normalized = " ".join(message.split())
+    if len(normalized) <= 60:
+        return normalized or "Thread"
+    return f"{normalized[:57]}..."
+
+
+class RememberingMinigentAPIClient:
+    def __init__(self, client: object, config: ClientConfig) -> None:
+        self._client = client
+        self._remembering_config = config
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._client, name)
+
+    def send_user_message(self, content: str) -> object:
+        message = self._client.send_user_message(content)  # type: ignore[attr-defined]
+        thread_id = getattr(self._client, "thread_id", None)
+        if isinstance(thread_id, str) and thread_id:
+            remember_client_thread(
+                self._remembering_config,
+                thread_id,
+                title=_thread_title_from_message(content),
+            )
+        return message
 
 
 def _first_cli_command(argv: list[str], commands: set[str]) -> str | None:
@@ -395,7 +461,7 @@ def _consume_backend_subcommand(argv: list[str]) -> tuple[str | None, list[str]]
 def main(argv: list[str] | None = None) -> int:
     load_environment()
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
-    one_shot_command = _first_cli_command(raw_argv, {"threads", "health", "config", "admin"})
+    one_shot_command = _first_cli_command(raw_argv, {"threads", "resume", "health", "config", "admin"})
     if one_shot_command is not None:
         from minigent_client.one_shot_cli import main as one_shot_main
 
@@ -441,7 +507,10 @@ def run_backend(backend: str, config: ClientConfig, *, once: bool = False) -> in
     client_runtime = MinigentClientRuntime(
         wake_phrase=config.wake_phrase,
         activation_source=activation_source,
-        minigent_client=MinigentAPIClient(config, output_stream=sys.stdout),
+        minigent_client=RememberingMinigentAPIClient(
+            MinigentAPIClient(config, output_stream=sys.stdout),
+            config,
+        ),
         speech_output=speech_output,
         activation_feedback=None if backend == "passive-audio" else activation_feedback,
         follow_up_timeout_ms=config.follow_up_timeout_ms,
@@ -473,7 +542,10 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         input_stream=input_stream,
         output_stream=output_stream,
     )
-    client = MinigentAPIClient(config, output_stream=output_stream)
+    client = RememberingMinigentAPIClient(
+        MinigentAPIClient(config, output_stream=output_stream),
+        config,
+    )
     speech_output = ConsoleSpeechOutput(output_stream=output_stream)
 
     turns_completed = 0

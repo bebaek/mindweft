@@ -3206,6 +3206,71 @@ def test_run_chat_loop_continues_after_backend_error(
     assert "[assistant] good reply\n" in output_stream.getvalue()
 
 
+def test_run_chat_loop_remembers_thread_after_successful_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("remember this\n")
+
+    class FakeChatClient:
+        thread_id = "thread-remembered"
+
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            assert content == "remember this"
+            return {"id": "message-1"}
+
+        def run_thread(self) -> str:
+            return "reply"
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+        once=True,
+    )
+
+    key = state_scope_key(
+        "http://127.0.0.1:8000",
+        api_token=None,
+        user_id="demo-user",
+        tenant_id="demo-tenant",
+        is_admin=False,
+    )
+    state = PersistentClientState.load()
+    assert exit_code == 0
+    assert state.get_last_thread(key) == "thread-remembered"
+    assert state.list_threads(key)[0].title == "remember this"
+
+
+def test_build_config_resolves_resume_last(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    key = state_scope_key(
+        "http://127.0.0.1:8000",
+        api_token=None,
+        user_id="demo-user",
+        tenant_id="demo-tenant",
+        is_admin=False,
+    )
+    state = PersistentClientState.load()
+    state.set_last_thread(key, "thread-last")
+    state.save()
+
+    args = build_parser().parse_args(["--resume-last"])
+    config = build_config(args)
+
+    assert config.thread_id == "thread-last"
+
+
 def test_run_chat_loop_honors_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3412,6 +3477,7 @@ def test_minigent_client_cli_delegates_one_shot_commands_to_one_shot_cli(
     monkeypatch.setattr(one_shot_cli, "main", fake_one_shot_main)
 
     thread_exit_code = voice_cli.main(["--base-url", "http://example.test", "threads", "create"])
+    resume_exit_code = voice_cli.main(["resume"])
     admin_exit_code = voice_cli.main([
         "--admin",
         "admin",
@@ -3422,9 +3488,11 @@ def test_minigent_client_cli_delegates_one_shot_commands_to_one_shot_cli(
     ])
 
     assert thread_exit_code == 9
+    assert resume_exit_code == 9
     assert admin_exit_code == 9
     assert calls == [
         ["--base-url", "http://example.test", "threads", "create"],
+        ["resume"],
         ["--admin", "admin", "threads", "list", "--tenant", "tenant-a"],
     ]
 
