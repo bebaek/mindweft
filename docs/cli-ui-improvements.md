@@ -118,7 +118,9 @@ In interactive mode:
 - `Alt+Enter` / `Ctrl+J` inserts a newline.
 - `/editor` opens `$EDITOR` for long prompts.
 
-## [ ] 11. Shell-friendly non-interactive mode
+## [x] 11. Shell-friendly non-interactive mode
+
+Implemented by `minigent run` / `minigent-client run`, with stdin prompt input, plain stdout replies by default, structured `--json`, explicit `--plain`, `--no-stream`, `--stream`, and `--quiet` for suppressing streaming progress.
 
 Make piping clean:
 

@@ -107,6 +107,73 @@ def build_parser() -> argparse.ArgumentParser:
         help="In streaming text mode, print expanded tool result bodies to stderr.",
     )
 
+    run_parser = subparsers.add_parser(
+        "run", help="Run one non-interactive prompt, reading stdin when no prompt is provided."
+    )
+    run_parser.add_argument(
+        "message",
+        nargs="?",
+        default=None,
+        help="Prompt text. If omitted, prompt text is read from stdin.",
+    )
+    run_target_group = run_parser.add_mutually_exclusive_group()
+    run_target_group.add_argument("--thread", default=None, help="Existing thread ID to continue.")
+    run_target_group.add_argument(
+        "--resume-last",
+        action="store_true",
+        help="Resume the last locally remembered thread for this server and principal.",
+    )
+    run_parser.add_argument("--skill", default=None, help="Skill to apply when creating a thread.")
+    run_parser.add_argument(
+        "--skills",
+        nargs="+",
+        default=None,
+        help="Ordered list of prompt-overlay skills to apply when creating a thread.",
+    )
+    run_parser.add_argument(
+        "--capability-profile",
+        default=None,
+        help="Capability profile to apply when creating a thread.",
+    )
+    run_parser.add_argument(
+        "--plain",
+        action="store_true",
+        help="Print only the assistant reply to stdout (default for text output).",
+    )
+    run_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON output for this run.",
+    )
+    run_parser.add_argument(
+        "--no-stream",
+        dest="stream",
+        action="store_false",
+        default=False,
+        help="Use the non-streaming run endpoint (default; explicit for scripts).",
+    )
+    run_parser.add_argument(
+        "--stream",
+        dest="stream",
+        action="store_true",
+        help="Use the streaming run endpoint; progress is written to stderr unless --quiet is set.",
+    )
+    run_parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress non-essential stderr progress for this run.",
+    )
+    run_parser.add_argument(
+        "--show-tool-results",
+        action="store_true",
+        help="With --stream, print expanded tool result bodies to stderr unless --quiet is set.",
+    )
+    run_parser.set_defaults(
+        print_thread_id=False,
+        transcript=False,
+        quiet=False,
+    )
+
     resume_parser = subparsers.add_parser(
         "resume", help="Show and remember the latest or selected local thread."
     )
@@ -470,12 +537,21 @@ def build_config(args: argparse.Namespace, trace_id: str | None) -> ClientConfig
     )
 
 
+class _QuietProgressStream:
+    def write(self, _text: str) -> int:
+        return 0
+
+    def flush(self) -> None:
+        return None
+
+
 def build_client(args: argparse.Namespace, trace_id: str | None) -> MinigentAPIClient:
     return MinigentAPIClient(
         build_config(args, trace_id),
-        progress_stream=sys.stderr,
-        progress_verbose=args.verbose,
-        show_tool_results=getattr(args, "show_tool_results", False),
+        progress_stream=_QuietProgressStream() if getattr(args, "quiet", False) else sys.stderr,
+        progress_verbose=args.verbose and not getattr(args, "quiet", False),
+        show_tool_results=getattr(args, "show_tool_results", False)
+        and not getattr(args, "quiet", False),
     )
 
 
@@ -547,6 +623,17 @@ def _reply_from_run_stream(events: list[dict[str, Any]]) -> str:
             if isinstance(content, str):
                 return content
     raise SystemExit("run stream ended without an assistant.message event")
+
+
+def _read_run_message(args: argparse.Namespace) -> str:
+    if args.message is not None:
+        return str(args.message)
+    if sys.stdin.isatty():
+        raise SystemExit("Provide a prompt argument or pipe prompt text on stdin.")
+    message = sys.stdin.read()
+    if not message.strip():
+        raise SystemExit("No prompt text received on stdin.")
+    return message.rstrip("\n")
 
 
 def run_chat(
@@ -1212,17 +1299,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     trace_id = secrets.token_hex(16) if args.trace else None
+    if args.command == "run":
+        args.message = _read_run_message(args)
     config = build_config(args, trace_id)
     base_url = config.base_url
-    client = MinigentAPIClient(
-        config,
-        progress_stream=sys.stderr,
-        progress_verbose=args.verbose,
-        show_tool_results=getattr(args, "show_tool_results", False),
-    )
+    client = build_client(args, trace_id)
 
     try:
-        if args.command == "chat":
+        if args.command in {"chat", "run"}:
             return run_chat(args, client, base_url, trace_id)
         if args.command == "resume":
             return run_resume(args, client, base_url, trace_id)

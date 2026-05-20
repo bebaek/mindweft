@@ -2,7 +2,7 @@ import json
 import urllib.error
 from collections.abc import Iterator, Mapping, Sequence
 from email.message import Message
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +66,92 @@ def test_chat_stream_json_prints_events(monkeypatch: Any, tmp_path: Path, capsys
     assert output["thread_id"] == "thread-1"
     assert output["reply"] == "streamed reply"
     assert output["events"] == stream_events
+
+
+def test_run_reads_prompt_from_stdin_and_prints_plain_reply(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def urlopen(request: Any) -> _Response:
+        calls.append((request.get_method(), request.full_url))
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            body = json.loads(request.data.decode("utf-8"))
+            assert body == {"content": "summarize this"}
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run"):
+            return _Response(body={"reply": "summary"})
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr("sys.stdin", StringIO("summarize this\n"))
+
+    exit_code = cli.main(["run"])
+
+    assert exit_code == 0
+    assert calls == [
+        ("POST", "http://127.0.0.1:8000/threads"),
+        ("POST", "http://127.0.0.1:8000/threads/thread-1/messages"),
+        ("POST", "http://127.0.0.1:8000/threads/thread-1/run"),
+    ]
+    captured = capsys.readouterr()
+    assert captured.out == "summary\n"
+    assert captured.err == ""
+
+
+def test_run_json_outputs_structured_reply(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run"):
+            return _Response(body={"reply": "pong"})
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["run", "--json", "ping"])
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output == {"thread_id": "thread-1", "created_thread": True, "reply": "pong"}
+
+
+def test_run_quiet_suppresses_streaming_progress(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    stream_events = [
+        {"type": "run.started", "thread_id": "thread-1"},
+        {"type": "tool.call", "thread_id": "thread-1", "name": "echo", "arguments": {"text": "hi"}},
+        {"type": "assistant.message", "thread_id": "thread-1", "content": "done"},
+        {"type": "run.completed", "thread_id": "thread-1"},
+    ]
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run/stream"):
+            return _Response(lines=stream_events)
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["run", "--stream", "--quiet", "hello"])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert captured.out == "done\n"
+    assert captured.err == ""
 
 
 def test_chat_stream_text_prints_progress_to_stderr(

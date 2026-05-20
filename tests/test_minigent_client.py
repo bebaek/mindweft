@@ -3804,6 +3804,7 @@ def test_minigent_client_cli_delegates_one_shot_commands_to_one_shot_cli(
 
     thread_exit_code = voice_cli.main(["--base-url", "http://example.test", "threads", "create"])
     resume_exit_code = voice_cli.main(["resume"])
+    run_exit_code = voice_cli.main(["run", "hello"])
     admin_exit_code = voice_cli.main([
         "--admin",
         "admin",
@@ -3815,10 +3816,12 @@ def test_minigent_client_cli_delegates_one_shot_commands_to_one_shot_cli(
 
     assert thread_exit_code == 9
     assert resume_exit_code == 9
+    assert run_exit_code == 9
     assert admin_exit_code == 9
     assert calls == [
         ["--base-url", "http://example.test", "threads", "create"],
         ["resume"],
+        ["run", "hello"],
         ["--admin", "admin", "threads", "list", "--tenant", "tenant-a"],
     ]
 

@@ -595,6 +595,9 @@ uv sync --dev --extra voice
 For the simplest client flow against a running server, use the packaged CLI:
 
 ```bash
+uv run minigent run "hello"
+echo "summarize this" | uv run minigent run
+uv run minigent run --json "hello"
 uv run minigent chat "hello"
 uv run minigent chat --stream "hello with progress"
 uv run minigent chat --thread <thread-id> "continue"
@@ -648,6 +651,9 @@ minigent-client resume
 minigent-client resume THREAD_ID
 minigent-client export --format markdown
 minigent-client export THREAD_ID --format json
+minigent-client run "hello"
+echo "summarize this" | minigent-client run --plain
+minigent-client run --json "hello"
 minigent-client chat --resume-last
 minigent-client stdin --resume-last --once
 minigent-client --admin admin threads list --tenant TENANT_ID
@@ -655,12 +661,19 @@ minigent-client --admin admin threads show THREAD_ID --tenant TENANT_ID
 minigent-client --admin admin threads delete THREAD_ID --tenant TENANT_ID
 ```
 
+Use `minigent run` or `minigent-client run` for shell-friendly one-shot prompts. If no
+prompt argument is provided, `run` reads the prompt from stdin, so commands like
+`echo "summarize this" | minigent run` keep the assistant reply alone on stdout by default.
+Pass `--json` for structured output, `--plain` to make plain reply output explicit,
+`--no-stream` to force the non-streaming endpoint, `--stream` for live run progress, and
+`--quiet` to suppress streaming progress on stderr.
+
 Add `--stream-runs`, or set `MINIGENT_CLIENT_STREAM_RUNS=true`, to have `minigent-client`
 use `POST /threads/{thread_id}/run/stream` and print live run/tool/peer progress to stderr
 before printing or speaking the final assistant reply. The one-shot CLI also supports
-`minigent chat --stream ...`; in text mode it keeps the assistant reply on stdout and
-prints compact status/tool lines such as `● preparing`, `● sending`, `🔧 echo(...) done`,
-and `● done` to stderr. Add `--show-tool-results`, or set
+`minigent chat --stream ...` and `minigent run --stream ...`; in text mode it keeps the
+assistant reply on stdout and prints compact status/tool lines such as `● preparing`,
+`● sending`, `🔧 echo(...) done`, and `● done` to stderr. Add `--show-tool-results`, or set
 `MINIGENT_CLIENT_SHOW_TOOL_RESULTS=true` for `minigent-client`, to include indented tool
 result bodies in the streaming progress output. Use global `--verbose` with one-shot
 streaming commands to include extra progress metadata such as LLM iteration numbers.
