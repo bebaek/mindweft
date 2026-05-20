@@ -13,7 +13,13 @@ from tempfile import NamedTemporaryFile
 from typing import TextIO
 
 from minigent_client.audio import AudioDependencyError, load_recorded_audio_from_wav
+from minigent_client.output import style_line
 from minigent_client.runtime import SpeechOutput
+
+
+def _write_assistant_line(output_stream: TextIO, text: str) -> None:
+    output_stream.write(f"{style_line(f'[assistant] {text}', stream=output_stream)}\n")
+    output_stream.flush()
 
 
 @dataclass
@@ -27,8 +33,7 @@ class ConsoleSpeechOutput(SpeechOutput):
 
     def start(self, text: str) -> None:
         self._speaking = True
-        self.output_stream.write(f"[assistant] {text}\n")
-        self.output_stream.flush()
+        _write_assistant_line(self.output_stream, text)
         self._speaking = False
 
     def stop(self) -> None:
@@ -52,8 +57,7 @@ class SilentSpeechOutput(SpeechOutput):
 
     def start(self, text: str) -> None:
         self._speaking = True
-        self.output_stream.write(f"[assistant] {text}\n")
-        self.output_stream.flush()
+        _write_assistant_line(self.output_stream, text)
         self._speaking = False
 
     def stop(self) -> None:
@@ -78,8 +82,7 @@ class MacOsSaySpeechOutput(SpeechOutput):
         self.wait()
 
     def start(self, text: str) -> None:
-        self.output_stream.write(f"[assistant] {text}\n")
-        self.output_stream.flush()
+        _write_assistant_line(self.output_stream, text)
         spoken_text = _sanitize_text_for_tts(text)
         command = ["say"]
         if self.voice:
@@ -133,8 +136,7 @@ class PiperSpeechOutput(SpeechOutput):
         self.wait()
 
     def start(self, text: str) -> None:
-        self.output_stream.write(f"[assistant] {text}\n")
-        self.output_stream.flush()
+        _write_assistant_line(self.output_stream, text)
         self._interrupted = False
         self._playback_error = None
         self._playback_process = None

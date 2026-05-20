@@ -38,6 +38,7 @@ from minigent_client.cli import (
 from minigent_client.config import ClientConfig, PrincipalConfig
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker, should_duck_for_state
+from minigent_client.output import style_line
 from minigent_client.ring_buffer import AudioRingBuffer
 from minigent_client.runtime import Activation, ClientState, MinigentClientRuntime
 from minigent_client.speech import (
@@ -72,6 +73,11 @@ class FakeMinigentClient:
 
     def run_thread(self) -> str:
         return self.reply
+
+
+class TtyStringIO(StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 class FakeActivationSource:
@@ -466,6 +472,22 @@ def test_console_speech_output_prints_reply() -> None:
     ConsoleSpeechOutput(output_stream=output_stream).speak("done")
 
     assert output_stream.getvalue() == "[assistant] done\n"
+
+
+def test_console_speech_output_styles_tty_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output_stream = TtyStringIO()
+
+    ConsoleSpeechOutput(output_stream=output_stream).speak("done")
+
+    assert output_stream.getvalue() == "\033[32m[assistant]\033[0m done\n"
+
+
+def test_cli_style_line_respects_no_color(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    output_stream = TtyStringIO()
+
+    assert style_line("[warning] careful", stream=output_stream) == "[warning] careful"
 
 
 def test_silent_speech_output_prints_reply_without_audio() -> None:
@@ -3313,6 +3335,39 @@ def test_read_chat_line_uses_interactive_input_when_enabled(
 
     assert line == "hello"
     assert prompts == ["[user] "]
+
+
+def test_read_chat_line_wraps_colored_interactive_prompt_as_ansi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    prompts: list[object] = []
+
+    class FakeAnsi:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    def fake_import(name: str) -> object:
+        if name == "prompt_toolkit.formatted_text":
+            return type("FakeFormattedTextModule", (), {"ANSI": FakeAnsi})()
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(voice_cli, "import_module", fake_import)
+
+    line = voice_cli._read_chat_line(
+        input_stream=StringIO(),
+        output_stream=TtyStringIO(),
+        prompt_session=type(
+            "FakePromptSession",
+            (),
+            {"prompt": lambda self, prompt: prompts.append(prompt) or "hello"},
+        )(),
+    )
+
+    assert line == "hello"
+    assert len(prompts) == 1
+    assert isinstance(prompts[0], FakeAnsi)
+    assert prompts[0].value == "\033[34m[user]\033[0m "
 
 
 def test_read_chat_line_uses_plain_readline_when_not_interactive() -> None:

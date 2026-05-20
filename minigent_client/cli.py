@@ -24,6 +24,7 @@ from minigent_client.config import ClientConfig, build_client_config
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker
 from minigent_client.one_shot_cli import _format_markdown_transcript
+from minigent_client.output import style_text
 from minigent_client.ring_buffer import AudioRingBuffer
 from minigent_client.runtime import MinigentClientRuntime
 from minigent_client.speech import (
@@ -53,7 +54,7 @@ class ChatOutputStream(Protocol):
 
 
 class ChatPromptSession(Protocol):
-    def prompt(self, message: str) -> str: ...
+    def prompt(self, message: object) -> str: ...
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -972,12 +973,26 @@ def _read_chat_line(
     output_stream: ChatOutputStream,
     prompt_session: ChatPromptSession | None,
 ) -> str:
+    prompt_label = style_text("[user]", "user", stream=output_stream) + " "
     if prompt_session is not None:
         prompt = prompt_session.prompt
-        return prompt("[user] ")
-    output_stream.write("[user] ")
+        return prompt(_prompt_toolkit_label(prompt_label))
+    output_stream.write(prompt_label)
     output_stream.flush()
     return input_stream.readline()
+
+
+def _prompt_toolkit_label(prompt_label: str) -> object:
+    if "\033[" not in prompt_label:
+        return prompt_label
+    try:
+        formatted_text_module = import_module("prompt_toolkit.formatted_text")
+    except ImportError:
+        return prompt_label
+    ansi = getattr(formatted_text_module, "ANSI", None)
+    if ansi is None:
+        return prompt_label
+    return ansi(prompt_label)
 
 
 def chat_history_file_path() -> Path:

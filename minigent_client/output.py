@@ -1,11 +1,23 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from typing import Any, TextIO
 
 _MAX_INLINE_ARGUMENT_CHARS = 80
 _MAX_TOOL_RESULT_CHARS = 2000
+_RESET = "\033[0m"
+_STYLES = {
+    "assistant": "\033[32m",
+    "error": "\033[31m",
+    "idle": "\033[2m",
+    "peer": "\033[35m",
+    "status": "\033[2m",
+    "tool": "\033[36m",
+    "user": "\033[34m",
+    "warning": "\033[33m",
+}
 
 
 def format_message(message: dict[str, Any]) -> str:
@@ -18,6 +30,44 @@ def format_message(message: dict[str, Any]) -> str:
 def print_json(data: object, *, stream: TextIO | None = None) -> None:
     output_stream = stream or sys.stdout
     print(json.dumps(data, indent=2, sort_keys=True), file=output_stream)
+
+
+def color_enabled(stream: TextIO) -> bool:
+    isatty = getattr(stream, "isatty", None)
+    return bool(callable(isatty) and isatty() and "NO_COLOR" not in os.environ)
+
+
+def style_text(text: str, style: str, *, stream: TextIO) -> str:
+    if not color_enabled(stream):
+        return text
+    code = _STYLES.get(style)
+    if code is None:
+        return text
+    return f"{code}{text}{_RESET}"
+
+
+def style_line(line: str, *, stream: TextIO) -> str:
+    if line.startswith("[assistant]"):
+        return _style_prefix(line, "[assistant]", "assistant", stream=stream)
+    if line.startswith("[user]"):
+        return _style_prefix(line, "[user]", "user", stream=stream)
+    if line.startswith("[warning]"):
+        return _style_prefix(line, "[warning]", "warning", stream=stream)
+    if line.startswith("[idle]"):
+        return _style_prefix(line, "[idle]", "idle", stream=stream)
+    if line.startswith("[peer]"):
+        return _style_prefix(line, "[peer]", "peer", stream=stream)
+    if line.startswith("✖"):
+        return _style_prefix(line, "✖", "error", stream=stream)
+    if line.startswith("🔧"):
+        return _style_prefix(line, "🔧", "tool", stream=stream)
+    if line.startswith("●"):
+        return _style_prefix(line, "●", "status", stream=stream)
+    return line
+
+
+def _style_prefix(line: str, prefix: str, style: str, *, stream: TextIO) -> str:
+    return line.replace(prefix, style_text(prefix, style, stream=stream), 1)
 
 
 class StreamProgressRenderer:
@@ -156,7 +206,7 @@ class StreamProgressRenderer:
         self._write(f"[peer] event {peer_event_type}")
 
     def _write(self, line: str) -> None:
-        self._stream.write(f"{line}\n")
+        self._stream.write(f"{style_line(line, stream=self._stream)}\n")
         self._stream.flush()
 
 

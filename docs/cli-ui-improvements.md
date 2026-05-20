@@ -166,7 +166,7 @@ minigent debug-bundle
 Include thread ID, config minus secrets, recent events, backend mode, MCP status, and
 version info.
 
-## [ ] 14. CLI visual polish
+## [x] 14. CLI visual polish
 
 Use subtle ANSI formatting when a TTY is detected. Disable color automatically for pipes
 or with `NO_COLOR`. Clearly distinguish:

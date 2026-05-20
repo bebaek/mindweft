@@ -703,6 +703,10 @@ masked bug-report bundle with platform/version info, local config, API checks, s
 config summary, MCP status, and recent local thread IDs; add global `--json` for structured
 output or `--output debug-bundle.json` to write it to a file.
 
+When stderr/stdout is connected to a TTY, the CLI uses subtle ANSI styling for interactive
+prompts, assistant replies, progress, tool calls, peer events, warnings, and errors. Color
+is disabled automatically for pipes and can be disabled with `NO_COLOR=1`.
+
 The CLI reports common API failures with short friendly errors on stderr while keeping
 technical request/response detail hidden unless `--verbose` is set. For example, auth
 failures prompt you to check `MINIGENT_API_TOKEN`, connection failures suggest checking
