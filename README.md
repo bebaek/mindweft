@@ -441,24 +441,27 @@ Log in with a GitHub personal access token that can push packages:
 echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
 ```
 
-Then publish an image with the helper script in this repo:
+Then set your package namespace once in `.env`:
 
-```bash
-IMAGE_NAMESPACE=<github-user-or-org> \
-IMAGE_TAG=latest \
-./scripts/docker-build-push.sh
+```dotenv
+IMAGE_NAMESPACE=<github-user-or-org>
 ```
 
-Useful overrides:
+Publish an image with the helper script in this repo:
 
 ```bash
-IMAGE_NAMESPACE=<github-user-or-org> \
+IMAGE_TAG=latest ./scripts/docker-build-push.sh
+```
+
+Useful overrides can still be passed in the shell when they are not already set in `.env`:
+
+```bash
 IMAGE_TAG=sha-$(git rev-parse --short HEAD) \
 PLATFORMS=linux/amd64,linux/arm64 \
 ./scripts/docker-build-push.sh
 ```
 
-The script reads these environment variables:
+The script sources `.env` with `set -a` before applying defaults, then reads these environment variables:
 
 - `IMAGE_NAMESPACE` (required): GitHub user or organization that owns the package
 - `IMAGE_NAME` (default `minigent`): package/image name

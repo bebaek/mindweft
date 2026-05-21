@@ -1867,6 +1867,73 @@ def test_minigent_client_can_show_stream_tool_results(
     assert '"text": "hi"' in progress
 
 
+def test_minigent_client_shows_limited_peer_stream_tool_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeStreamResponse:
+        def __iter__(self):
+            lines = [
+                {
+                    "type": "peer.task.event",
+                    "task_id": "task-1",
+                    "event": {
+                        "type": "tool_execution_start",
+                        "tool_name": "read",
+                        "toolCallId": "call-1",
+                        "arguments": {"path": "README.md", "limit": 20},
+                    },
+                },
+                {
+                    "type": "peer.task.event",
+                    "task_id": "task-1",
+                    "event": {
+                        "type": "tool_execution_end",
+                        "tool_name": "read",
+                        "toolCallId": "call-1",
+                    },
+                },
+                {
+                    "type": "peer.task.event",
+                    "task_id": "task-1",
+                    "event": {
+                        "type": "tool_execution_start",
+                        "toolCall": {
+                            "name": "grep",
+                            "arguments": {"pattern": "tool_execution", "path": "."},
+                        },
+                    },
+                },
+                {"type": "assistant.message", "content": "streamed reply"},
+                {"type": "run.completed"},
+            ]
+            return iter((json.dumps(line) + "\n").encode("utf-8") for line in lines)
+
+        def __enter__(self) -> "FakeStreamResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request: FakeStreamResponse())
+    progress_stream = StringIO()
+    client = MinigentAPIClient(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            thread_id="thread-123",
+            stream_runs=True,
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        ),
+        progress_stream=progress_stream,
+    )
+
+    assert client.run_thread() == "streamed reply"
+    progress = progress_stream.getvalue()
+    assert '[peer] tool start read(path="README.md", limit=20)' in progress
+    assert '[peer] tool end read(path="README.md", limit=20)' in progress
+    assert '[peer] tool start grep(pattern="tool_execution", path=".")' in progress
+
+
 def test_minigent_client_can_show_peer_stream_tool_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

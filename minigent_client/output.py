@@ -89,6 +89,8 @@ class StreamProgressRenderer:
         self._peer_task_statuses: dict[str, str] = {}
         self._tool_call_arguments: dict[str, str] = {}
         self._tool_name_arguments: dict[str, str] = {}
+        self._peer_tool_call_arguments: dict[str, str] = {}
+        self._peer_tool_name_arguments: dict[str, str] = {}
         self._last_usage_summary: str | None = None
         self._saw_peer_event = False
 
@@ -207,10 +209,23 @@ class StreamProgressRenderer:
             "tool_execution_end",
         }:
             tool_name = peer_event_tool_name(peer_event)
+            arguments = _format_peer_tool_arguments(peer_event)
+            call_id = _peer_event_tool_call_id(peer_event)
+            if arguments:
+                if call_id:
+                    self._peer_tool_call_arguments[call_id] = arguments
+                if tool_name:
+                    self._peer_tool_name_arguments[tool_name] = arguments
+            elif call_id:
+                arguments = self._peer_tool_call_arguments.get(call_id, "")
+            if not arguments and tool_name:
+                arguments = self._peer_tool_name_arguments.get(tool_name, "")
             action = peer_event_type.removeprefix("tool_execution_")
             if action == "end":
                 action = "end"
             suffix = f" {tool_name}" if tool_name else ""
+            if suffix and arguments:
+                suffix += f"({arguments})"
             status = peer_event.get("status")
             status_suffix = f" status={status}" if isinstance(status, str) and status else ""
             self._write(f"[peer] tool {action}{suffix}{status_suffix}")
@@ -257,6 +272,32 @@ def _format_tool_result(result: object) -> str:
     if isinstance(result, str):
         return result
     return json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True, default=str)
+
+
+def _format_peer_tool_arguments(peer_event: dict[str, Any]) -> str:
+    for container in _peer_tool_argument_containers(peer_event):
+        for key in ("arguments", "args", "input", "params"):
+            if key in container:
+                return _format_tool_arguments(container.get(key))
+    return ""
+
+
+def _peer_tool_argument_containers(peer_event: dict[str, Any]) -> list[dict[str, Any]]:
+    containers = [peer_event]
+    for nested_key in ("tool_call", "toolCall", "tool_result", "toolResult"):
+        nested = peer_event.get(nested_key)
+        if isinstance(nested, dict):
+            containers.append(nested)
+    return containers
+
+
+def _peer_event_tool_call_id(peer_event: dict[str, Any]) -> str:
+    for container in _peer_tool_argument_containers(peer_event):
+        for key in ("tool_call_id", "toolCallId", "id"):
+            value = container.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return ""
 
 
 def _peer_event_details(peer_event: dict[str, Any]) -> dict[str, Any]:
