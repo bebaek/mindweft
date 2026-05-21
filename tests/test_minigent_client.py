@@ -1880,7 +1880,7 @@ def test_minigent_client_shows_limited_peer_stream_tool_arguments(
                         "type": "tool_execution_start",
                         "tool_name": "read",
                         "toolCallId": "call-1",
-                        "arguments": {"path": "README.md", "limit": 20},
+                        "args_summary": 'path="README.md", limit=20',
                     },
                 },
                 {
@@ -1897,10 +1897,8 @@ def test_minigent_client_shows_limited_peer_stream_tool_arguments(
                     "task_id": "task-1",
                     "event": {
                         "type": "tool_execution_start",
-                        "toolCall": {
-                            "name": "grep",
-                            "arguments": {"pattern": "tool_execution", "path": "."},
-                        },
+                        "toolCall": {"name": "grep"},
+                        "args_summary": 'pattern="tool_execution", path="."',
                     },
                 },
                 {"type": "assistant.message", "content": "streamed reply"},

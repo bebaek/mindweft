@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from abc import ABC, abstractmethod
@@ -26,10 +27,21 @@ from app.mcp_broker import (
 )
 from app.models import Message, MessageRole, Principal, ThreadStatus
 from app.peer_agents import PeerAgentRegistry
+from app.redaction import sanitize_value_for_logging
 from app.runtime import AgentRuntime
 from app.store import ThreadStore
 
 _TERMINAL_PEER_STATUSES = {"completed", "failed", "canceled"}
+PEER_TOOL_ARG_ALLOWLIST_ENV = "MINIGENT_PEER_TOOL_ARG_ALLOWLIST"
+_MAX_PEER_TOOL_ARGS_SUMMARY_CHARS = 80
+_DEFAULT_SAFE_PEER_TOOL_ARG_FIELDS: dict[str, tuple[str, ...]] = {
+    "read": ("path", "limit", "offset"),
+    "grep": ("pattern", "path", "glob", "limit"),
+    "find": ("pattern", "path", "limit"),
+    "ls": ("path", "limit"),
+}
+_PEER_TOOL_ARG_ALLOW_ALL = "*"
+_PEER_TOOL_ARGUMENT_KEYS = {"arguments", "args", "input", "params"}
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
 
 
@@ -347,6 +359,9 @@ def _sanitize_peer_task_event(event: dict[object, object]) -> dict[str, object]:
     if tool_name:
         sanitized["tool_name"] = tool_name
     if isinstance(event_type, str) and event_type.startswith("tool_execution_"):
+        args_summary = _safe_peer_tool_args_summary(tool_name, event)
+        if args_summary:
+            sanitized["args_summary"] = args_summary
         sanitized.update(_sanitize_peer_tool_event_details(event))
     return sanitized or {"type": "event"}
 
@@ -368,12 +383,124 @@ def _sanitize_peer_tool_event_details(event: dict[object, object]) -> dict[str, 
         "messages",
         "assistantMessageEvent",
         "partial",
+        "args_summary",
+        *_PEER_TOOL_ARGUMENT_KEYS,
     }
     return {
-        str(key): value
+        str(key): _strip_peer_tool_arguments(value)
         for key, value in event.items()
         if isinstance(key, str) and key not in omitted_keys and _is_json_like(value)
     }
+
+
+def _strip_peer_tool_arguments(value: object) -> object:
+    if isinstance(value, list):
+        return [_strip_peer_tool_arguments(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _strip_peer_tool_arguments(item)
+            for key, item in value.items()
+            if isinstance(key, str) and key not in _PEER_TOOL_ARGUMENT_KEYS
+        }
+    return value
+
+
+def _safe_peer_tool_args_summary(tool_name: str, event: dict[object, object]) -> str:
+    configured_fields = _safe_peer_tool_arg_fields()
+    safe_fields = configured_fields.get(tool_name) or configured_fields.get(_PEER_TOOL_ARG_ALLOW_ALL)
+    if not safe_fields:
+        return ""
+    arguments = _peer_event_tool_arguments(event)
+    if not isinstance(arguments, dict):
+        return ""
+    fields = tuple(str(field) for field in arguments) if _PEER_TOOL_ARG_ALLOW_ALL in safe_fields else safe_fields
+    parts: list[str] = []
+    for field in fields:
+        if field not in arguments:
+            continue
+        value = sanitize_value_for_logging(field, arguments[field])
+        parts.append(f"{field}={_format_peer_tool_arg_value(value)}")
+    text = ", ".join(parts)
+    if len(text) <= _MAX_PEER_TOOL_ARGS_SUMMARY_CHARS:
+        return text
+    return text[: _MAX_PEER_TOOL_ARGS_SUMMARY_CHARS - 1] + "…"
+
+
+def _safe_peer_tool_arg_fields() -> dict[str, tuple[str, ...]]:
+    raw = os.getenv(PEER_TOOL_ARG_ALLOWLIST_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_SAFE_PEER_TOOL_ARG_FIELDS
+    if raw.lower() in {"off", "none", "false", "0"}:
+        return {}
+    if raw.lower() in {"all", "*"}:
+        return {_PEER_TOOL_ARG_ALLOW_ALL: (_PEER_TOOL_ARG_ALLOW_ALL,)}
+    parsed = _parse_peer_tool_arg_allowlist_json(raw)
+    if parsed is not None:
+        return parsed
+    parsed = _parse_peer_tool_arg_allowlist_spec(raw)
+    if parsed is not None:
+        return parsed
+    return _DEFAULT_SAFE_PEER_TOOL_ARG_FIELDS
+
+
+def _parse_peer_tool_arg_allowlist_json(raw: str) -> dict[str, tuple[str, ...]] | None:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict):
+        return None
+    parsed: dict[str, tuple[str, ...]] = {}
+    for tool_name, fields in value.items():
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            return None
+        if not isinstance(fields, list):
+            return None
+        safe_fields: list[str] = []
+        for field in fields:
+            if not isinstance(field, str) or not field.strip():
+                return None
+            safe_fields.append(field.strip())
+        parsed[tool_name.strip()] = tuple(safe_fields)
+    return parsed
+
+
+def _parse_peer_tool_arg_allowlist_spec(raw: str) -> dict[str, tuple[str, ...]] | None:
+    parsed: dict[str, tuple[str, ...]] = {}
+    for entry in raw.split(";"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if ":" not in entry:
+            return None
+        tool_name, raw_fields = entry.split(":", 1)
+        tool_name = tool_name.strip()
+        if not tool_name:
+            return None
+        fields = tuple(field.strip() for field in raw_fields.split(",") if field.strip())
+        parsed[tool_name] = fields
+    return parsed
+
+
+def _peer_event_tool_arguments(event: dict[object, object]) -> object:
+    for container in _peer_tool_argument_containers(event):
+        for key in _PEER_TOOL_ARGUMENT_KEYS:
+            if key in container:
+                return container.get(key)
+    return None
+
+
+def _peer_tool_argument_containers(event: dict[object, object]) -> list[dict[object, object]]:
+    containers = [event]
+    for nested_key in ("tool_call", "toolCall", "tool_result", "toolResult"):
+        nested = event.get(nested_key)
+        if isinstance(nested, dict):
+            containers.append(nested)
+    return containers
+
+
+def _format_peer_tool_arg_value(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def _is_json_like(value: object) -> bool:

@@ -275,10 +275,11 @@ def _format_tool_result(result: object) -> str:
 
 
 def _format_peer_tool_arguments(peer_event: dict[str, Any]) -> str:
-    for container in _peer_tool_argument_containers(peer_event):
-        for key in ("arguments", "args", "input", "params"):
-            if key in container:
-                return _format_tool_arguments(container.get(key))
+    args_summary = peer_event.get("args_summary")
+    if isinstance(args_summary, str):
+        if len(args_summary) > _MAX_INLINE_ARGUMENT_CHARS:
+            return args_summary[: _MAX_INLINE_ARGUMENT_CHARS - 1] + "…"
+        return args_summary
     return ""
 
 

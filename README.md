@@ -53,9 +53,15 @@ with `Content-Type: application/x-ndjson`. The stream emits `run.started`, nativ
 progress such as `llm.request`, `tool.call`, and `tool.result`, peer-backend progress such
 as `peer.task.created`/`peer.task.poll`/`peer.task.event`/`peer.task.completed`, then either
 `assistant.message` and `run.completed`, or `run.error`. Peer task events are sanitized before
-streaming: Minigent forwards event type/status/tool metadata but strips nested message content
-from peer agent JSON events. The existing
-`POST /threads/{thread_id}/run` endpoint remains unchanged.
+streaming: Minigent forwards event type/status/tool metadata, emits only allowlisted tool
+argument summaries, and strips raw tool arguments plus nested message content from peer agent
+JSON events. Configure the peer tool argument summary allowlist with
+`MINIGENT_PEER_TOOL_ARG_ALLOWLIST`, either as JSON such as
+`{"read":["path","limit"],"grep":["pattern","path"]}` or as
+`read:path,limit;grep:pattern,path`; set it to `off` to suppress argument summaries.
+For local development only, set it to `all` or `*` to summarize every argument key after
+redaction/truncation while still stripping raw arguments from streamed events.
+The existing `POST /threads/{thread_id}/run` endpoint remains unchanged.
 
 The API also serves a small static browser client at `/web` for quick manual testing from
 desktop and mobile browsers. It uses the NDJSON run stream to display live run/tool/peer

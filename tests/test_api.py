@@ -552,7 +552,9 @@ def test_peer_task_event_sanitizer_preserves_tool_details_without_messages() -> 
 
 
 
-def test_peer_task_event_sanitizer_preserves_nested_tool_name_and_result_payload() -> None:
+def test_peer_task_event_sanitizer_strips_nested_tool_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MINIGENT_PEER_TOOL_ARG_ALLOWLIST", raising=False)
+
     sanitized = _sanitize_peer_task_event(
         {
             "index": 2,
@@ -567,8 +569,109 @@ def test_peer_task_event_sanitizer_preserves_nested_tool_name_and_result_payload
         "index": 2,
         "type": "tool_execution_end",
         "tool_name": "current_time",
-        "toolCall": {"name": "current_time", "arguments": {"timezone": "America/Chicago"}},
+        "toolCall": {"name": "current_time"},
         "resultPayload": {"time": "9:55 PM", "timezone": "CDT"},
+    }
+
+
+def test_peer_task_event_sanitizer_adds_allowlisted_args_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MINIGENT_PEER_TOOL_ARG_ALLOWLIST", raising=False)
+
+    sanitized = _sanitize_peer_task_event(
+        {
+            "type": "tool_execution_start",
+            "tool_name": "read",
+            "toolCallId": "call-1",
+            "arguments": {
+                "path": "README.md",
+                "limit": 20,
+                "token": "secret-token",
+                "content": "private prompt",
+            },
+        }
+    )
+
+    assert sanitized == {
+        "type": "tool_execution_start",
+        "tool_name": "read",
+        "args_summary": 'path="README.md", limit=20',
+    }
+
+
+def test_peer_task_event_sanitizer_redacts_allowlisted_sensitive_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MINIGENT_PEER_TOOL_ARG_ALLOWLIST", raising=False)
+
+    sanitized = _sanitize_peer_task_event(
+        {
+            "type": "tool_execution_start",
+            "tool_name": "grep",
+            "arguments": {
+                "pattern": "https://example.com/?token=abc123",
+                "path": ".",
+                "glob": "*.py",
+            },
+        }
+    )
+
+    assert sanitized["args_summary"] == (
+        'pattern="https://example.com/?token=%3Credacted%3E", path=".", glob="*.py"'
+    )
+    assert "arguments" not in sanitized
+
+
+def test_peer_task_event_sanitizer_uses_configured_arg_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_PEER_TOOL_ARG_ALLOWLIST", '{"read":["path"]}')
+
+    sanitized = _sanitize_peer_task_event(
+        {
+            "type": "tool_execution_start",
+            "tool_name": "read",
+            "arguments": {"path": "README.md", "limit": 20},
+        }
+    )
+
+    assert sanitized == {
+        "type": "tool_execution_start",
+        "tool_name": "read",
+        "args_summary": 'path="README.md"',
+    }
+
+
+def test_peer_task_event_sanitizer_can_disable_arg_summaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_PEER_TOOL_ARG_ALLOWLIST", "off")
+
+    sanitized = _sanitize_peer_task_event(
+        {
+            "type": "tool_execution_start",
+            "tool_name": "read",
+            "arguments": {"path": "README.md", "limit": 20},
+        }
+    )
+
+    assert sanitized == {"type": "tool_execution_start", "tool_name": "read"}
+
+
+def test_peer_task_event_sanitizer_can_allow_all_args_for_dev(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_PEER_TOOL_ARG_ALLOWLIST", "all")
+
+    sanitized = _sanitize_peer_task_event(
+        {
+            "type": "tool_execution_start",
+            "tool_name": "custom_tool",
+            "arguments": {
+                "path": "README.md",
+                "limit": 20,
+                "token": "secret-token",
+            },
+        }
+    )
+
+    assert sanitized == {
+        "type": "tool_execution_start",
+        "tool_name": "custom_tool",
+        "args_summary": 'path="README.md", limit=20, token="<redacted>"',
     }
 
 
