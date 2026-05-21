@@ -227,10 +227,13 @@ from the task workspace and extracts assistant `message_end` events as the task
 `final_output`. This keeps the default Pi peer profile read-only. When Minigent passes MCP
 broker environment variables, the wrapper adds a generated Pi extension that registers
 brokered Minigent tools and activates them alongside the read-only file-inspection tools.
-Those brokered tools are exposed to Pi with a sanitized `minigent_` prefix. Override with
+Those brokered tools are exposed to Pi with a sanitized `minigent_` prefix. Set
+`AGENT_PI_TOOLS` as a comma-separated list to change the local Pi tools passed through
+`--tools` while preserving automatic MCP broker extension injection. Override with
 `AGENT_ARGS_TEMPLATE` when you want persistent Pi sessions, explicit
-model/provider flags, write-capable tools, different tool narrowing, or custom Pi
-skills/extensions for a specific peer deployment.
+model/provider flags, fully custom tool narrowing, or custom Pi skills/extensions for a
+specific peer deployment; a custom args template replaces the built-in Pi profile and
+therefore must include any desired MCP extension wiring itself.
 
 Set `MINIGENT_MCP_BROKER_ENABLED=false` or `agent_backend.mcp_broker_enabled=false` if
 the peer agent should run without Minigent-brokered MCP tools.
@@ -310,8 +313,9 @@ AGENT_ALLOWED_WORKSPACES="/Users/burm/code/minigent:/Users/burm/code/some-projec
 ```
 
 Other useful overrides are `MINIGENT_HOST`, `MINIGENT_PORT`,
-`MINIGENT_PI_WRAPPER_PORT`, `MINIGENT_PI_PEER_NAME`, `AGENT_COMMAND`, and
-`AGENT_RUNTIME`.
+`MINIGENT_PI_WRAPPER_PORT`, `MINIGENT_PI_PEER_NAME`, `AGENT_COMMAND`,
+`AGENT_RUNTIME`, and `AGENT_PI_TOOLS`. The development stack defaults
+`AGENT_PI_TOOLS` to `read,grep,find,ls,write,edit,bash`.
 
 To smoke-test brokered MCP tool use, run the demo for the configured peer:
 

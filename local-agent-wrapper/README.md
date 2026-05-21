@@ -79,6 +79,7 @@ Override these if needed:
 - `AGENT_COMMAND`: executable command, default `pi`, `opencode` when `AGENT_RUNTIME=opencode`, or `codex` when `AGENT_RUNTIME=codex`
 - `AGENT_ALLOWED_WORKSPACES`: path-list of allowed roots, required for task execution
 - `AGENT_ARGS_TEMPLATE`: optional shell-style argv template. Supports `{cwd}` and `{prompt}` placeholders and overrides the built-in runtime argv.
+- `AGENT_PI_TOOLS`: comma-separated local Pi tools for the built-in Pi profile. Defaults to `read,grep,find,ls`.
 - `AGENT_TAIL_CHARS`: captured stdout/stderr tail size, default `20000`
 - `AGENT_EVENT_LIMIT`: parsed JSON event tail size, default `50`
 - `AGENT_CANCEL_GRACE_SECONDS`: signal grace period, default `5`
@@ -109,9 +110,12 @@ registers brokered Minigent tools with Pi and activates them alongside the read-
 file-inspection tools. Brokered tool names are exposed to Pi with a `minigent_` prefix
 and sanitized to provider-compatible characters. The wrapper parses Pi JSONL
 `message_end` assistant events for
-`final_output`. Use `AGENT_ARGS_TEMPLATE` if you want persistent Pi sessions, a specific
-model/provider, write-capable tools, different tool narrowing, or explicit Pi resources
-like `--skill` or `--extension`.
+`final_output`. Set `AGENT_PI_TOOLS=read,grep,find,ls,write,edit,bash` if you want the
+built-in Pi profile to allow local edits while preserving automatic MCP broker extension
+injection. Use `AGENT_ARGS_TEMPLATE` if you want persistent Pi sessions, a specific
+model/provider, fully custom tool narrowing, or explicit Pi resources like `--skill` or
+`--extension`; a custom template replaces the built-in Pi profile and must wire any MCP
+extension itself.
 
 Custom CLI example:
 

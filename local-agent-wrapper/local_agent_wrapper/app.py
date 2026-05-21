@@ -40,6 +40,7 @@ class Settings(BaseModel):
     allowed_workspaces: tuple[Path, ...] = ()
     agent_runtime: str = "pi"
     agent_args_template: tuple[str, ...] = ()
+    pi_tools: tuple[str, ...] = ("read", "grep", "find", "ls")
     codex_sandbox: str = "read-only"
     codex_json: bool = True
     tail_chars: int = 20_000
@@ -470,7 +471,7 @@ def _agent_command(
     if runtime == "opencode":
         return [*settings.agent_command, "run", "--format", "json", "--dir", str(cwd), prompt]
     if runtime == "pi":
-        pi_tools = ["read", "grep", "find", "ls"]
+        pi_tools = list(settings.pi_tools)
         command = [*settings.agent_command, "--mode", "json", "--no-session"]
         if _has_mcp_broker_env(task_env or os.environ):
             pi_tools.extend(_pi_mcp_broker_tool_names(task_env or os.environ))
@@ -723,6 +724,11 @@ def settings_from_env() -> Settings:
         Path(item) for item in os.getenv("AGENT_ALLOWED_WORKSPACES", "").split(os.pathsep) if item
     )
     args_template = tuple(shlex.split(os.getenv("AGENT_ARGS_TEMPLATE", "")))
+    pi_tools = tuple(
+        item.strip()
+        for item in os.getenv("AGENT_PI_TOOLS", "read,grep,find,ls").split(",")
+        if item.strip()
+    )
     tail_chars = int(os.getenv("AGENT_TAIL_CHARS", "20000"))
     cancel_grace_seconds = float(os.getenv("AGENT_CANCEL_GRACE_SECONDS", "5"))
     event_limit = int(os.getenv("AGENT_EVENT_LIMIT", "50"))
@@ -739,6 +745,7 @@ def settings_from_env() -> Settings:
         allowed_workspaces=allowed,
         agent_runtime=runtime,
         agent_args_template=args_template,
+        pi_tools=pi_tools,
         codex_sandbox=os.getenv("CODEX_AGENT_SANDBOX", "read-only"),
         codex_json=codex_json,
         tail_chars=tail_chars,

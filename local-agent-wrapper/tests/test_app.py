@@ -133,6 +133,37 @@ def test_pi_runtime_uses_json_mode_argv(tmp_path: Path) -> None:
         ]
 
 
+def test_pi_runtime_uses_configured_local_tools(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    argv_file = tmp_path / "argv.json"
+    fake_agent.write_text(
+        "import json\n"
+        "import sys\n"
+        f"open({str(argv_file)!r}, 'w', encoding='utf-8').write(json.dumps(sys.argv[1:]))\n"
+        "print('done')\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+        agent_runtime="pi",
+        pi_tools=("read", "grep", "write", "edit", "bash"),
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "hello"})
+
+        assert create_response.status_code == 200
+        _wait_for_terminal_task(client, create_response.json()["task_id"])
+        assert json.loads(argv_file.read_text(encoding="utf-8")) == [
+            "--mode",
+            "json",
+            "--no-session",
+            "--tools",
+            "read,grep,write,edit,bash",
+            "hello",
+        ]
+
+
 def test_pi_runtime_adds_mcp_broker_extension_when_env_is_present(tmp_path: Path) -> None:
     fake_agent = tmp_path / "fake_agent.py"
     argv_file = tmp_path / "argv.json"
