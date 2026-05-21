@@ -678,7 +678,10 @@ before printing or speaking the final assistant reply. The one-shot CLI also sup
 assistant reply on stdout and prints compact status/tool lines such as `● preparing`,
 `● sending`, `🔧 echo(...) done`, and `● done` to stderr. Add `--show-tool-results`, or set
 `MINIGENT_CLIENT_SHOW_TOOL_RESULTS=true` for `minigent-client`, to include indented tool
-result bodies in the streaming progress output. Use global `--verbose` with one-shot
+result bodies in the streaming progress output. Token display defaults to compact final
+provider usage when available; use `--tokens live` to print usage events as they arrive or
+`--tokens off` to hide token summaries. Streaming `--json` output includes a structured
+`usage` object when the API reports token metadata. Use global `--verbose` with one-shot
 streaming commands to include extra progress metadata such as LLM iteration numbers.
 
 Use `minigent threads` or `minigent-client threads` to list locally remembered recent
@@ -727,7 +730,7 @@ message, or use `Esc+Enter`/`Ctrl+J` to insert a newline before submitting. Set
 plain `Enter` insert newlines and `Esc+Enter` submit instead. Use `/editor` to compose a
 long prompt in `$VISUAL` or `$EDITOR`. Interactive chat also supports thread-shell
 commands: `/new`, `/threads [selector]`, `/switch <id>`, `/rename <title>`, `/copy-id`,
-`/export [markdown|json]`, and `/debug`; in a TTY, `/threads` opens the same thread
+`/export [markdown|json]`, `/tokens`, and `/debug`; in a TTY, `/threads` opens the same thread
 picker and switches to the selected thread. Pass a thread ID or unique search text as
 `/threads <selector>` to switch directly. The history file is stored at
 `~/.minigent/client-chat-history`. Piped or otherwise non-interactive stdin keeps the

@@ -10,7 +10,15 @@ from typing import Any, Iterator, TextIO, cast
 
 from minigent_client.config import ClientConfig
 from minigent_client.errors import MinigentAPIError
-from minigent_client.output import StreamProgressRenderer
+from minigent_client.output import StreamProgressRenderer, TokenMode
+
+
+def _resolve_token_mode(config_value: object, override: TokenMode | None) -> TokenMode:
+    if override is not None:
+        return override
+    if config_value in {"auto", "live", "off"}:
+        return cast(TokenMode, config_value)
+    return "auto"
 
 
 class MinigentAPIClient:
@@ -21,6 +29,7 @@ class MinigentAPIClient:
         progress_stream: TextIO | None = None,
         progress_verbose: bool = False,
         show_tool_results: bool | None = None,
+        token_mode: TokenMode | None = None,
     ) -> None:
         self._config = config
         self._thread_id = config.thread_id
@@ -34,6 +43,7 @@ class MinigentAPIClient:
                 if show_tool_results is None
                 else show_tool_results
             ),
+            token_mode=_resolve_token_mode(getattr(config, "token_mode", "auto"), token_mode),
         )
 
     def health(self) -> dict[str, Any]:

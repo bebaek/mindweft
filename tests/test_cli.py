@@ -264,6 +264,72 @@ def test_chat_stream_text_prints_progress_to_stderr(
     assert "● done · tokens: prompt 1.8k · completion 420 · total 2.2k" in captured.err
 
 
+def test_chat_stream_text_can_hide_token_summary(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    stream_events = [
+        {"type": "run.started", "thread_id": "thread-1"},
+        {"type": "assistant.message", "thread_id": "thread-1", "content": "done"},
+        {
+            "type": "run.completed",
+            "thread_id": "thread-1",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        },
+    ]
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run/stream"):
+            return _Response(lines=stream_events)
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["chat", "--stream", "--tokens", "off", "hello"])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert captured.out == "done\n"
+    assert "● done\n" in captured.err
+    assert "tokens:" not in captured.err
+
+
+def test_chat_stream_json_includes_usage(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    stream_events = [
+        {"type": "run.started", "thread_id": "thread-1"},
+        {"type": "assistant.message", "thread_id": "thread-1", "content": "done"},
+        {
+            "type": "run.completed",
+            "thread_id": "thread-1",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        },
+    ]
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run/stream"):
+            return _Response(lines=stream_events)
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["--json", "chat", "--stream", "hello"])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["usage"] == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+
+
 def test_chat_stream_text_can_show_tool_results(
     monkeypatch: Any, tmp_path: Path, capsys: Any
 ) -> None:

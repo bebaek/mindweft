@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import sys
-from typing import Any, TextIO
+from typing import Any, Literal, TextIO
+
+TokenMode = Literal["auto", "live", "off"]
 
 _MAX_INLINE_ARGUMENT_CHARS = 80
 _MAX_TOOL_RESULT_CHARS = 2000
@@ -77,10 +79,12 @@ class StreamProgressRenderer:
         *,
         verbose: bool = False,
         show_tool_results: bool = False,
+        token_mode: TokenMode = "auto",
     ) -> None:
         self._stream = stream or sys.stderr
         self._verbose = verbose
         self._show_tool_results = show_tool_results
+        self._token_mode = token_mode
         self._seen_peer_update_tasks: set[str] = set()
         self._peer_task_statuses: dict[str, str] = {}
         self._tool_call_arguments: dict[str, str] = {}
@@ -91,9 +95,11 @@ class StreamProgressRenderer:
         self._verbose = verbose
 
     def render(self, event: dict[str, Any]) -> None:
-        usage = _format_usage_summary(event)
+        usage = format_usage_summary(event)
         if usage is not None:
             self._last_usage_summary = usage
+            if self._token_mode == "live" and event.get("type") != "run.completed":
+                self._write(f"● {usage}")
         event_type = event.get("type")
         if event_type == "run.started":
             self._write("● preparing")
@@ -117,7 +123,7 @@ class StreamProgressRenderer:
         elif event_type == "run.error":
             self._write(f"✖ error {event.get('status_code')}: {event.get('detail')}")
         elif event_type == "run.completed":
-            usage = self._last_usage_summary
+            usage = None if self._token_mode == "off" else self._last_usage_summary
             self._write("● done" if usage is None else f"● done · {usage}")
 
     def _write_tool_call(self, event: dict[str, Any]) -> None:
@@ -259,7 +265,7 @@ def _peer_event_details(peer_event: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in peer_event.items() if key not in omitted_keys}
 
 
-def _format_usage_summary(event: dict[str, Any]) -> str | None:
+def token_usage_from_event(event: dict[str, Any]) -> dict[str, int] | None:
     usage = event.get("usage")
     if not isinstance(usage, dict):
         usage = event
@@ -268,7 +274,24 @@ def _format_usage_summary(event: dict[str, Any]) -> str | None:
     total_tokens = _usage_int(usage, "total_tokens")
     if total_tokens is None and (prompt_tokens is not None or completion_tokens is not None):
         total_tokens = (prompt_tokens or 0) + (completion_tokens or 0)
+    result: dict[str, int] = {}
+    if prompt_tokens is not None:
+        result["prompt_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        result["completion_tokens"] = completion_tokens
+    if total_tokens is not None:
+        result["total_tokens"] = total_tokens
+    return result or None
+
+
+def format_usage_summary(event_or_usage: dict[str, Any]) -> str | None:
+    usage = token_usage_from_event(event_or_usage)
+    if usage is None:
+        return None
     parts: list[str] = []
+    prompt_tokens = usage.get("prompt_tokens")
+    completion_tokens = usage.get("completion_tokens")
+    total_tokens = usage.get("total_tokens")
     if prompt_tokens is not None:
         parts.append(f"prompt {_format_token_count(prompt_tokens)}")
     if completion_tokens is not None:
@@ -278,6 +301,33 @@ def _format_usage_summary(event: dict[str, Any]) -> str | None:
     if not parts:
         return None
     return "tokens: " + " · ".join(parts)
+
+
+def estimate_message_tokens(message: dict[str, Any]) -> int:
+    total = _estimate_text_tokens(str(message.get("content") or ""))
+    tool_name = message.get("tool_name")
+    if isinstance(tool_name, str):
+        total += _estimate_text_tokens(tool_name)
+    tool_arguments = message.get("tool_arguments")
+    if tool_arguments:
+        total += _estimate_text_tokens(
+            json.dumps(tool_arguments, ensure_ascii=True, sort_keys=True, default=str)
+        )
+    return total + 6
+
+
+def estimate_thread_token_usage(messages: list[dict[str, Any]]) -> dict[str, int | bool]:
+    total = 0
+    for message in messages:
+        if isinstance(message, dict):
+            total += estimate_message_tokens(message)
+    return {"estimated": True, "total_tokens": total, "message_count": len(messages)}
+
+
+def _estimate_text_tokens(text: str) -> int:
+    if not text:
+        return 1
+    return max(1, (len(text) + 3) // 4)
 
 
 def _usage_int(mapping: dict[str, Any], *keys: str) -> int | None:

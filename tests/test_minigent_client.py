@@ -3624,7 +3624,7 @@ def test_run_chat_loop_handles_local_chat_commands(
     assert exit_code == 0
     assert output_stream.getvalue() == (
         "[user] [idle] chat commands: /help, /new, /threads, /switch <id>, "
-        "/rename <title>, /copy-id, /export [markdown|json], /debug, /editor, "
+        "/rename <title>, /copy-id, /export [markdown|json], /tokens, /debug, /editor, "
         "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
         "[user] [idle] shutting down\n"

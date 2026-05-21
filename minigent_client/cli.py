@@ -24,7 +24,7 @@ from minigent_client.config import ClientConfig, build_client_config
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker
 from minigent_client.one_shot_cli import _format_markdown_transcript
-from minigent_client.output import style_text
+from minigent_client.output import estimate_thread_token_usage, format_usage_summary, style_text
 from minigent_client.ring_buffer import AudioRingBuffer
 from minigent_client.runtime import MinigentClientRuntime
 from minigent_client.speech import (
@@ -84,6 +84,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--show-tool-results",
         action="store_true",
         help="With streaming runs, print expanded tool result bodies to stderr.",
+    )
+    parser.add_argument(
+        "--tokens",
+        choices=("auto", "live", "off"),
+        default=None,
+        help="Token display mode for streaming progress and the interactive /tokens command.",
     )
     parser.add_argument(
         "--wake-acknowledgement",
@@ -265,6 +271,7 @@ def build_config(args: argparse.Namespace) -> ClientConfig:
         debug_show_prompt=env_config.debug_show_prompt,
         stream_runs=args.stream_runs or env_config.stream_runs,
         show_tool_results=args.show_tool_results or env_config.show_tool_results,
+        token_mode=args.tokens or env_config.token_mode,
         chat_submit_mode=args.chat_submit_mode or env_config.chat_submit_mode,
         wake_acknowledgement=args.wake_acknowledgement or env_config.wake_acknowledgement,
         wake_acknowledgement_sound=env_config.wake_acknowledgement_sound,
@@ -649,6 +656,9 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         if utterance.startswith("/export"):
             _handle_chat_export(utterance, client, output_stream)
             continue
+        if utterance == "/tokens":
+            _handle_chat_tokens(client, output_stream)
+            continue
         if utterance == "/debug":
             debug_enabled = not getattr(client, "_chat_debug_enabled", config.debug_show_prompt)
             client._chat_debug_enabled = debug_enabled  # type: ignore[attr-defined]
@@ -703,7 +713,7 @@ def _chat_abort_message(config: ClientConfig) -> str:
 def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
         "[idle] chat commands: /help, /new, /threads, /switch <id>, /rename <title>, "
-        "/copy-id, /export [markdown|json], /debug, /editor, /exit, /quit. "
+        "/copy-id, /export [markdown|json], /tokens, /debug, /editor, /exit, /quit. "
         "Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
     )
@@ -919,6 +929,32 @@ def _handle_chat_copy_id(
             output_stream.write(f"[idle] copied {thread_id}\n")
     else:
         output_stream.write(f"[idle] {thread_id} (clipboard unavailable)\n")
+    output_stream.flush()
+
+
+def _handle_chat_tokens(
+    client: RememberingMinigentAPIClient,
+    output_stream: ChatOutputStream,
+) -> None:
+    thread_id = client.thread_id
+    if not thread_id:
+        output_stream.write("[idle] no current thread\n")
+        output_stream.flush()
+        return
+    try:
+        thread = client.get_thread(thread_id)
+    except RuntimeError as exc:
+        output_stream.write(f"[idle] tokens unavailable: {exc}\n")
+        output_stream.flush()
+        return
+    messages = thread.get("messages") if isinstance(thread, dict) else None
+    if not isinstance(messages, list):
+        output_stream.write("[idle] tokens unavailable: thread messages missing\n")
+        output_stream.flush()
+        return
+    usage = estimate_thread_token_usage(messages)
+    summary = format_usage_summary({"usage": usage}) or "tokens unavailable"
+    output_stream.write(f"[idle] {summary} · estimated from {len(messages)} messages\n")
     output_stream.flush()
 
 

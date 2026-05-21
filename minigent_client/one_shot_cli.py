@@ -17,7 +17,12 @@ from typing import Any, Sequence
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.config import ClientConfig, build_client_config
 from minigent_client.errors import MinigentAPIError
-from minigent_client.output import StreamProgressRenderer, format_message, print_json
+from minigent_client.output import (
+    StreamProgressRenderer,
+    format_message,
+    print_json,
+    token_usage_from_event,
+)
 from minigent_client.state import ClientState, ThreadHistoryItem
 from minigent_client.state import state_scope_key as build_state_scope_key
 
@@ -112,6 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="In streaming text mode, print expanded tool result bodies to stderr.",
     )
+    chat_parser.add_argument(
+        "--tokens",
+        choices=["auto", "live", "off"],
+        default="auto",
+        help="Token display mode for streaming progress and JSON output.",
+    )
 
     run_parser = subparsers.add_parser(
         "run", help="Run one non-interactive prompt, reading stdin when no prompt is provided."
@@ -173,6 +184,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--show-tool-results",
         action="store_true",
         help="With --stream, print expanded tool result bodies to stderr unless --quiet is set.",
+    )
+    run_parser.add_argument(
+        "--tokens",
+        choices=["auto", "live", "off"],
+        default="auto",
+        help="Token display mode for streaming progress and JSON output.",
     )
     run_parser.set_defaults(
         print_thread_id=False,
@@ -571,6 +588,7 @@ def build_client(args: argparse.Namespace, trace_id: str | None) -> MinigentAPIC
         progress_verbose=args.verbose and not getattr(args, "quiet", False),
         show_tool_results=getattr(args, "show_tool_results", False)
         and not getattr(args, "quiet", False),
+        token_mode="off" if getattr(args, "quiet", False) else getattr(args, "tokens", "auto"),
     )
 
 
@@ -622,14 +640,24 @@ def _title_from_thread_messages(messages: object) -> str | None:
 
 
 def _make_stream_progress_printer(
-    *, verbose: bool = False, show_tool_results: bool = False
+    *, verbose: bool = False, show_tool_results: bool = False, token_mode: str = "auto"
 ) -> Any:
     renderer = StreamProgressRenderer(
         sys.stderr,
         verbose=verbose,
         show_tool_results=show_tool_results,
+        token_mode=token_mode,
     )
     return renderer.render
+
+
+def _usage_from_run_stream(events: list[dict[str, Any]]) -> dict[str, int] | None:
+    usage: dict[str, int] | None = None
+    for event in events:
+        event_usage = token_usage_from_event(event)
+        if event_usage is not None:
+            usage = event_usage
+    return usage
 
 
 def _reply_from_run_stream(events: list[dict[str, Any]]) -> str:
@@ -681,6 +709,9 @@ def run_chat(
         }
         if events is not None:
             output["events"] = events
+            usage = _usage_from_run_stream(events)
+            if usage is not None:
+                output["usage"] = usage
         if trace_id is not None:
             output["trace_id"] = trace_id
         if args.transcript:

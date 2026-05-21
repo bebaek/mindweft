@@ -188,11 +188,11 @@ Print whether the run was locally aborted or server-cancelled. Streaming cancell
 uses an explicit API cancel request and resets stale running thread state so the next prompt
 can run immediately.
 
-## [~] 16. Token count display
+## [x] 16. Token count display
 
-Partially covered by `0fed3f4 feat(cli): improve streaming status output`: streaming runs print a compact final token summary when usage metadata is available.
+Streaming runs print a compact final token summary when usage metadata is available. The CLI now supports `--tokens auto|live|off`, includes structured `usage` fields in streaming `--json` output, and interactive chat has `/tokens` for an estimated current thread size.
 
-Still open: `--tokens live`, `--tokens off`, JSON fields, context-window percentage, and interactive `/tokens`.
+Still future polish: context-window percentage when model context metadata is available.
 
 Show lightweight token usage in both interactive and one-shot runs:
 
