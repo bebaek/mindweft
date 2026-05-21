@@ -680,6 +680,7 @@ assistant reply on stdout and prints compact status/tool lines such as `● prep
 `MINIGENT_CLIENT_SHOW_TOOL_RESULTS=true` for `minigent-client`, to include indented tool
 result bodies in the streaming progress output. Token display defaults to compact final
 provider usage when available; use `--tokens live` to print usage events as they arrive or
+print a final unavailable note for peer backends that do not report usage metadata, or
 `--tokens off` to hide token summaries. Streaming `--json` output includes a structured
 `usage` object when the API reports token metadata. Use global `--verbose` with one-shot
 streaming commands to include extra progress metadata such as LLM iteration numbers.

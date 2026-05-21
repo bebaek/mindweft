@@ -190,7 +190,7 @@ can run immediately.
 
 ## [x] 16. Token count display
 
-Streaming runs print a compact final token summary when usage metadata is available. The CLI now supports `--tokens auto|live|off`, includes structured `usage` fields in streaming `--json` output, and interactive chat has `/tokens` for an estimated current thread size.
+Streaming runs print a compact final token summary when usage metadata is available. The CLI now supports `--tokens auto|live|off`, includes structured `usage` fields in streaming `--json` output, and interactive chat has `/tokens` for an estimated current thread size. With `--tokens live`, peer-backend runs that do not emit usage metadata print a final unavailable note instead of silently omitting token output.
 
 Still future polish: context-window percentage when model context metadata is available.
 

@@ -1784,6 +1784,44 @@ def test_minigent_client_can_run_thread_with_ndjson_stream(
     )
 
 
+def test_minigent_client_notes_peer_token_usage_unavailable_for_live_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeStreamResponse:
+        def __iter__(self):
+            lines = [
+                {"type": "run.started"},
+                {"type": "peer.task.created", "peer": "pi", "task_id": "task-1", "status": "queued"},
+                {"type": "assistant.message", "content": "streamed reply"},
+                {"type": "run.completed"},
+            ]
+            return iter((json.dumps(line) + "\n").encode("utf-8") for line in lines)
+
+        def __enter__(self) -> "FakeStreamResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request: FakeStreamResponse())
+    progress_stream = StringIO()
+    client = MinigentAPIClient(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            thread_id="thread-123",
+            stream_runs=True,
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        ),
+        progress_stream=progress_stream,
+        token_mode="live",
+    )
+
+    assert client.run_thread() == "streamed reply"
+    assert "● done · tokens unavailable for peer backend" in progress_stream.getvalue()
+
+
+
 def test_minigent_client_can_show_stream_tool_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -90,6 +90,7 @@ class StreamProgressRenderer:
         self._tool_call_arguments: dict[str, str] = {}
         self._tool_name_arguments: dict[str, str] = {}
         self._last_usage_summary: str | None = None
+        self._saw_peer_event = False
 
     def set_verbose(self, verbose: bool) -> None:
         self._verbose = verbose
@@ -113,18 +114,27 @@ class StreamProgressRenderer:
         elif event_type == "quality.remote_request":
             self._write("● reviewing")
         elif event_type == "peer.task.created":
+            self._saw_peer_event = True
             self._write_peer_task_status(event, label="created")
         elif event_type == "peer.task.poll":
+            self._saw_peer_event = True
             self._write_peer_task_status(event, label="status")
         elif event_type == "peer.task.completed":
+            self._saw_peer_event = True
             self._write_peer_task_status(event, label="completed")
         elif event_type == "peer.task.event":
+            self._saw_peer_event = True
             self._write_peer_task_event(event)
         elif event_type == "run.error":
             self._write(f"✖ error {event.get('status_code')}: {event.get('detail')}")
         elif event_type == "run.completed":
             usage = None if self._token_mode == "off" else self._last_usage_summary
-            self._write("● done" if usage is None else f"● done · {usage}")
+            if usage is not None:
+                self._write(f"● done · {usage}")
+            elif self._token_mode == "live" and self._saw_peer_event:
+                self._write("● done · tokens unavailable for peer backend")
+            else:
+                self._write("● done")
 
     def _write_tool_call(self, event: dict[str, Any]) -> None:
         name = _event_name(event)
