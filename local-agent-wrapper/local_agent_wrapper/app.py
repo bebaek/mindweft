@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from collections import deque
 from collections.abc import Mapping
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -195,16 +196,27 @@ class TaskStore:
 
     async def cancel(self, task_id: str) -> TaskRecord:
         record = await self.get(task_id)
+        await self._cancel_record(record)
+        return record
+
+    async def shutdown(self) -> None:
+        async with self._lock:
+            records = list(self._tasks.values())
+        await asyncio.gather(*(self._cancel_record(record) for record in records))
+
+    async def _cancel_record(self, record: TaskRecord) -> None:
         if record.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED}:
-            return record
+            return
         record.status = TaskStatus.CANCELING
         if record.process is None:
             worker = record.worker
             if worker is not None:
                 worker.cancel()
+                with suppress(asyncio.CancelledError):
+                    await worker
             record.status = TaskStatus.CANCELED
             record.finished_at = utc_now()
-            return record
+            return
 
         await _terminate_process_group(
             record.process,
@@ -213,7 +225,11 @@ class TaskStore:
         record.exit_code = record.process.returncode
         record.status = TaskStatus.CANCELED
         record.finished_at = utc_now()
-        return record
+        worker = record.worker
+        if worker is not None and not worker.done():
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
 
     async def _run(self, record: TaskRecord) -> None:
         record.started_at = utc_now()
@@ -492,7 +508,9 @@ def _merge_usage(
     for key, value in usage.items():
         if isinstance(value, int) and not isinstance(value, bool):
             existing = merged.get(key)
-            merged[key] = (existing if isinstance(existing, int) and not isinstance(existing, bool) else 0) + value
+            merged[key] = (
+                existing if isinstance(existing, int) and not isinstance(existing, bool) else 0
+            ) + value
         else:
             merged[key] = value
     return merged
@@ -846,9 +864,19 @@ def get_store(request: Request) -> TaskStore:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or settings_from_env()
-    app = FastAPI(title="Minigent Local Agent Wrapper", version="0.1.0")
+    task_store = TaskStore(resolved_settings)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        del app
+        try:
+            yield
+        finally:
+            await task_store.shutdown()
+
+    app = FastAPI(title="Minigent Local Agent Wrapper", version="0.1.0", lifespan=lifespan)
     app.state.settings = resolved_settings
-    app.state.task_store = TaskStore(resolved_settings)
+    app.state.task_store = task_store
 
     @app.get("/health")
     async def health() -> dict[str, str]:

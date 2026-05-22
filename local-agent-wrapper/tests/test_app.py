@@ -623,6 +623,39 @@ def test_task_rejects_workspace_outside_allowlist(tmp_path: Path) -> None:
         assert response.status_code == 403
 
 
+def test_shutdown_cancels_running_tasks(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    marker = tmp_path / "interrupted"
+    ready = tmp_path / "ready"
+    fake_agent.write_text(
+        "import signal\n"
+        "import sys\n"
+        "import time\n"
+        f"marker = {str(marker)!r}\n"
+        f"ready = {str(ready)!r}\n"
+        "def handle_sigint(signum, frame):\n"
+        "    open(marker, 'w', encoding='utf-8').write('interrupted')\n"
+        "    sys.exit(130)\n"
+        "signal.signal(signal.SIGINT, handle_sigint)\n"
+        "open(ready, 'w', encoding='utf-8').write('ready')\n"
+        "while True:\n"
+        "    time.sleep(0.1)\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+        cancel_grace_seconds=0.1,
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "sleep"})
+        assert create_response.status_code == 200
+        _wait_for_status(client, create_response.json()["task_id"], "running")
+        _wait_for_file(ready)
+
+    assert marker.read_text(encoding="utf-8") == "interrupted"
+
+
 def test_task_cancel_sends_signal(tmp_path: Path) -> None:
     fake_agent = tmp_path / "fake_agent.py"
     marker = tmp_path / "interrupted"
