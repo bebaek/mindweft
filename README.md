@@ -133,10 +133,11 @@ MINIGENT_MCP_BROKER_ENABLED=true
 ```
 
 With this mode, `POST /threads/{thread_id}/run` sends the Minigent thread context to the
-peer agent, polls until the task completes, stores the peer `final_output` as the
-assistant message, and returns it as the run reply. Streamed peer runs forward task
-`usage` on `peer.task.completed` when the peer reports actual token counts. Per-tenant execution config can use
-the same backend shape:
+peer agent, including retained assistant tool-call records and tool results, polls until
+the task completes, stores sanitized peer tool-execution events as retained tool-call/tool-result
+messages, stores the peer `final_output` as the assistant message, and returns it as the run
+reply. Streamed peer runs forward task `usage` on `peer.task.completed` when the peer reports
+actual token counts. Per-tenant execution config can use the same backend shape:
 
 ```json
 {
@@ -379,7 +380,15 @@ reverse proxy.
 
 Thread history is compacted in memory as conversations grow. Older turns are folded into
 the thread summary and removed from the raw message list, so `GET /threads/{thread_id}/messages`
-returns the retained recent tail instead of an unbounded full transcript.
+returns the retained recent tail instead of an unbounded full transcript. Tool-call turns
+are stored as assistant messages with `tool_name`, `tool_call_id`, and `tool_arguments`,
+followed by `tool` result messages. Peer-agent backend tool events are retained the same
+way using sanitized event data: raw peer arguments are stripped, allowlisted argument
+summaries may be stored in `tool_arguments.summary`, and sanitized result fields are stored
+as the tool result content. For debugging the exact retained model-facing thread context,
+`GET /threads/{thread_id}/context/raw` returns the current summary, raw retained messages,
+a rendered transcript that includes tool calls/results, and the same estimated thread-context
+token usage reported by streaming run events.
 
 Start from [.env.template](/Users/burm/code/minigent/.env.template), then set at least:
 

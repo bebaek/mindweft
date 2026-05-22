@@ -529,6 +529,44 @@ def _merge_summaries(existing: str, new_chunk: str, *, max_chars: int) -> str:
     ).strip()
 
 
+def render_raw_thread_context(
+    messages: list[Message],
+    *,
+    context: ThreadContext | None = None,
+) -> str:
+    sections: list[str] = []
+    if context is not None and context.summary:
+        sections.append(f"[thread_summary]\n{context.summary}")
+    summarized_message_count = context.summarized_message_count if context is not None else 0
+    for message in messages[summarized_message_count:]:
+        sections.append(_render_raw_context_message(message))
+    return "\n\n".join(sections)
+
+
+def _render_raw_context_message(message: Message) -> str:
+    if message.role == MessageRole.ASSISTANT and message.tool_name:
+        lines = ["[assistant tool_call]", f"name: {message.tool_name}"]
+        if message.tool_call_id:
+            lines.append(f"id: {message.tool_call_id}")
+        arguments = json.dumps(
+            message.tool_arguments or {},
+            ensure_ascii=True,
+            sort_keys=True,
+            default=str,
+        )
+        lines.append(f"arguments: {arguments}")
+        if message.content:
+            lines.append(f"content: {message.content}")
+        return "\n".join(lines)
+    if message.role == MessageRole.TOOL:
+        lines = ["[tool_result]", f"name: {message.tool_name or 'unknown'}"]
+        if message.tool_call_id:
+            lines.append(f"id: {message.tool_call_id}")
+        lines.append(message.content)
+        return "\n".join(lines)
+    return f"[{message.role.value}]\n{message.content}"
+
+
 def estimate_thread_context_usage(
     messages: list[Message],
     *,

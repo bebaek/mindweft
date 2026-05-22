@@ -160,12 +160,16 @@ class AgentBackendRouter(AgentBackend):
                     status_code=502,
                     detail="peer_agent backend returned task response without task_id",
                 )
-            last_peer_event_index = await self._emit_peer_task_events(
-                event_sink,
-                peer=peer,
-                task_id=task_id,
-                after=None,
-            )
+            last_peer_event_index = None
+            if event_sink is not None:
+                last_peer_event_index = await self._emit_peer_task_events(
+                    event_sink,
+                    principal=principal,
+                    thread_id=thread_id,
+                    peer=peer,
+                    task_id=task_id,
+                    after=None,
+                )
             deadline = time.monotonic() + timeout_seconds
             while str(task.get("status", "")) not in _TERMINAL_PEER_STATUSES:
                 if time.monotonic() >= deadline:
@@ -185,18 +189,32 @@ class AgentBackendRouter(AgentBackend):
                         "status": str(task.get("status", "")),
                     },
                 )
+                if event_sink is not None:
+                    last_peer_event_index = await self._emit_peer_task_events(
+                        event_sink,
+                        principal=principal,
+                        thread_id=thread_id,
+                        peer=peer,
+                        task_id=task_id,
+                        after=last_peer_event_index,
+                    )
+            if event_sink is not None:
                 last_peer_event_index = await self._emit_peer_task_events(
                     event_sink,
+                    principal=principal,
+                    thread_id=thread_id,
                     peer=peer,
                     task_id=task_id,
                     after=last_peer_event_index,
                 )
-            last_peer_event_index = await self._emit_peer_task_events(
-                event_sink,
-                peer=peer,
-                task_id=task_id,
-                after=last_peer_event_index,
-            )
+            else:
+                self._persist_peer_task_events_tail(
+                    principal,
+                    thread_id,
+                    peer=peer,
+                    task_id=task_id,
+                    task=task,
+                )
             reply = self._reply_from_task(task)
             completed_event: dict[str, object] = {
                 "type": "peer.task.completed",
@@ -283,13 +301,7 @@ class AgentBackendRouter(AgentBackend):
         ]
         if context.summary:
             sections.append(f"Thread summary:\n{context.summary}")
-        rendered_messages = []
-        for message in messages:
-            if message.role == MessageRole.TOOL:
-                label = f"tool:{message.tool_name or 'unknown'}"
-            else:
-                label = message.role.value
-            rendered_messages.append(f"[{label}]\n{message.content}")
+        rendered_messages = [_render_peer_context_message(message) for message in messages]
         sections.append("Conversation:\n" + "\n\n".join(rendered_messages))
         sections.append(
             "Return only the final response text. If files were changed, summarize changed paths and verification."
@@ -300,12 +312,12 @@ class AgentBackendRouter(AgentBackend):
         self,
         event_sink: RunEventSink | None,
         *,
+        principal: Principal,
+        thread_id: str,
         peer: str,
         task_id: str,
         after: int | None,
     ) -> int | None:
-        if event_sink is None:
-            return after
         try:
             response = await self._peer_agent_registry.task_events(peer, task_id, after=after)
         except HTTPException:
@@ -314,21 +326,119 @@ class AgentBackendRouter(AgentBackend):
         if not isinstance(events, list):
             return after
         next_index = response.get("next_index")
-        for event in events:
-            if not isinstance(event, dict):
-                continue
+        for _, sanitized_event in self._persist_peer_task_events(
+            principal,
+            thread_id,
+            peer=peer,
+            task_id=task_id,
+            events=events,
+        ):
             await _emit_run_event(
                 event_sink,
                 {
                     "type": "peer.task.event",
                     "peer": peer,
                     "task_id": task_id,
-                    "event": _sanitize_peer_task_event(event),
+                    "event": sanitized_event,
                 },
             )
         if isinstance(next_index, int) and next_index > 0:
             return next_index - 1
         return after
+
+    def _persist_peer_task_events_tail(
+        self,
+        principal: Principal,
+        thread_id: str,
+        *,
+        peer: str,
+        task_id: str,
+        task: dict[str, object],
+    ) -> None:
+        events = task.get("events_tail")
+        if isinstance(events, list):
+            self._persist_peer_task_events(
+                principal,
+                thread_id,
+                peer=peer,
+                task_id=task_id,
+                events=events,
+            )
+
+    def _persist_peer_task_events(
+        self,
+        principal: Principal,
+        thread_id: str,
+        *,
+        peer: str,
+        task_id: str,
+        events: list[object],
+    ) -> list[tuple[dict[object, object], dict[str, object]]]:
+        persisted: list[tuple[dict[object, object], dict[str, object]]] = []
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            sanitized_event = _sanitize_peer_task_event(event)
+            self._persist_peer_tool_event(
+                principal,
+                thread_id,
+                peer=peer,
+                task_id=task_id,
+                event=event,
+                sanitized_event=sanitized_event,
+            )
+            persisted.append((event, sanitized_event))
+        return persisted
+
+    def _persist_peer_tool_event(
+        self,
+        principal: Principal,
+        thread_id: str,
+        *,
+        peer: str,
+        task_id: str,
+        event: dict[object, object],
+        sanitized_event: dict[str, object],
+    ) -> None:
+        event_type = str(sanitized_event.get("type") or "")
+        if not event_type.startswith("tool_execution_"):
+            return
+        tool_name = str(sanitized_event.get("tool_name") or "").strip()
+        if not tool_name:
+            return
+        tool_call_id = _peer_event_tool_call_id(event) or _peer_event_tool_call_id(sanitized_event)
+        event_index = sanitized_event.get("index")
+        if not tool_call_id:
+            index_suffix = event_index if isinstance(event_index, int) else len(
+                self._store.list_messages(principal.tenant_id, thread_id)
+            )
+            tool_call_id = f"peer-{task_id}-{index_suffix}"
+        if event_type.endswith("_start"):
+            self._store.append_message(
+                principal.tenant_id,
+                Message(
+                    thread_id=thread_id,
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    metadata={"source": "peer_agent", "peer": peer, "task_id": task_id},
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    tool_arguments=_peer_tool_arguments_for_context(sanitized_event),
+                ),
+            )
+            return
+        if event_type.endswith("_end") or sanitized_event.get("status") in {"completed", "failed", "error"}:
+            self._store.append_message(
+                principal.tenant_id,
+                Message(
+                    thread_id=thread_id,
+                    role=MessageRole.TOOL,
+                    content=_peer_tool_result_for_context(sanitized_event),
+                    metadata={"source": "peer_agent", "peer": peer, "task_id": task_id},
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                ),
+            )
 
     def _reply_from_task(self, task: dict[str, object]) -> str:
         status = str(task.get("status", ""))
@@ -343,6 +453,30 @@ class AgentBackendRouter(AgentBackend):
             await self._peer_agent_registry.cancel_task(peer, task_id)
         except HTTPException:
             return
+
+
+def _render_peer_context_message(message: Message) -> str:
+    if message.role == MessageRole.ASSISTANT and message.tool_name:
+        lines = ["[assistant tool_call]", f"name: {message.tool_name}"]
+        if message.tool_call_id:
+            lines.append(f"id: {message.tool_call_id}")
+        arguments = json.dumps(
+            message.tool_arguments or {},
+            ensure_ascii=True,
+            sort_keys=True,
+            default=str,
+        )
+        lines.append(f"arguments: {arguments}")
+        if message.content:
+            lines.append(f"content: {message.content}")
+        return "\n".join(lines)
+    if message.role == MessageRole.TOOL:
+        lines = ["[tool_result]", f"name: {message.tool_name or 'unknown'}"]
+        if message.tool_call_id:
+            lines.append(f"id: {message.tool_call_id}")
+        lines.append(message.content)
+        return "\n".join(lines)
+    return f"[{message.role.value}]\n{message.content}"
 
 
 def _usage_from_peer_task(task: dict[str, object]) -> dict[str, int] | None:
@@ -527,6 +661,34 @@ def _peer_event_tool_arguments(event: dict[object, object]) -> object:
             if key in container:
                 return container.get(key)
     return None
+
+
+def _peer_event_tool_call_id(event: dict[object, object]) -> str:
+    for container in _peer_tool_argument_containers(event):
+        for key in ("tool_call_id", "toolCallId", "id", "call_id", "callId"):
+            value = container.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return ""
+
+
+def _peer_tool_arguments_for_context(sanitized_event: dict[str, object]) -> dict[str, object]:
+    arguments: dict[str, object] = {}
+    args_summary = sanitized_event.get("args_summary")
+    if isinstance(args_summary, str) and args_summary:
+        arguments["summary"] = args_summary
+    return arguments
+
+
+def _peer_tool_result_for_context(sanitized_event: dict[str, object]) -> str:
+    result_fields = {
+        key: value
+        for key, value in sanitized_event.items()
+        if key not in {"index", "type", "tool_name", "args_summary"}
+    }
+    if not result_fields:
+        result_fields = {"event": sanitized_event}
+    return json.dumps(result_fields, ensure_ascii=True, sort_keys=True, default=str)
 
 
 def _peer_tool_argument_containers(event: dict[object, object]) -> list[dict[object, object]]:

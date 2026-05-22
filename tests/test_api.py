@@ -595,6 +595,85 @@ def test_run_stream_endpoint_emits_peer_task_usage() -> None:
     }
 
 
+def test_peer_agent_backend_persists_peer_tool_events_in_raw_context() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/tasks":
+            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": "task_123",
+                    "status": "completed",
+                    "final_output": "Pi result",
+                    "events_tail": [
+                        {
+                            "index": 0,
+                            "type": "tool_execution_start",
+                            "tool_name": "read",
+                            "toolCallId": "call-read-1",
+                            "arguments": {"path": "README.md", "limit": 20},
+                        },
+                        {
+                            "index": 1,
+                            "type": "tool_execution_end",
+                            "tool_name": "read",
+                            "toolCallId": "call-read-1",
+                            "status": "completed",
+                            "result": {"content": "# Minigent"},
+                        },
+                    ],
+                },
+            )
+        return httpx.Response(404, json={"detail": "missing"})
+
+    config = parse_tenant_execution_config(
+        "tenant-1",
+        {
+            "agent_backend": {
+                "type": "peer_agent",
+                "peer": "pi",
+                "cwd": "/workspace/project",
+                "poll_interval_seconds": 0.001,
+                "mcp_broker_enabled": False,
+            }
+        },
+    )
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "pi", "base_url": "http://pi-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    client = TestClient(
+        create_app(
+            execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
+            peer_agent_registry=registry,
+        )
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "read the README"},
+        headers=AUTH_HEADERS,
+    )
+
+    response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    raw_context = client.get(f"/threads/{thread_id}/context/raw", headers=AUTH_HEADERS).json()
+    assert raw_context["messages"][1]["tool_name"] == "read"
+    assert raw_context["messages"][1]["tool_call_id"] == "call-read-1"
+    assert raw_context["messages"][1]["tool_arguments"] == {
+        "summary": 'path="README.md", limit=20'
+    }
+    assert raw_context["messages"][2]["role"] == "tool"
+    assert raw_context["messages"][2]["tool_name"] == "read"
+    assert raw_context["messages"][2]["tool_call_id"] == "call-read-1"
+    assert "# Minigent" in raw_context["messages"][2]["content"]
+    assert "[assistant tool_call]\nname: read\nid: call-read-1" in raw_context["rendered"]
+    assert "[tool_result]\nname: read\nid: call-read-1" in raw_context["rendered"]
+
+
+
 def test_peer_task_event_sanitizer_preserves_tool_details_without_messages() -> None:
     sanitized = _sanitize_peer_task_event(
         {
@@ -849,6 +928,14 @@ def test_run_endpoint_handles_tool_call_flow() -> None:
         MessageRole.ASSISTANT,
     ]
 
+    raw_context = client.get(f"/threads/{thread_id}/context/raw", headers=AUTH_HEADERS).json()
+    assert raw_context["usage"]["estimated"] is True
+    assert raw_context["messages"][1]["tool_name"] == "echo"
+    assert raw_context["messages"][1]["tool_arguments"] == {"text": "hello from api"}
+    assert "[assistant tool_call]\nname: echo" in raw_context["rendered"]
+    assert 'arguments: {"text": "hello from api"}' in raw_context["rendered"]
+    assert "[tool_result]\nname: echo" in raw_context["rendered"]
+
 
 def test_run_endpoint_can_use_peer_agent_backend() -> None:
     requests: list[tuple[str, str, dict[str, object] | None]] = []
@@ -915,6 +1002,85 @@ def test_run_endpoint_can_use_peer_agent_backend() -> None:
     assert [message["role"] for message in messages] == [MessageRole.USER, MessageRole.ASSISTANT]
     assert messages[-1]["content"] == "OpenCode result"
     assert [request[:2] for request in requests] == [("POST", "/tasks"), ("GET", "/tasks/task_123")]
+
+
+def test_peer_agent_backend_prompt_includes_tool_call_context() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content) if request.content else None
+        if request.method == "POST" and request.url.path == "/tasks":
+            assert payload is not None
+            prompt = str(payload["prompt"])
+            assert "[assistant tool_call]\nname: echo\nid: call-1" in prompt
+            assert 'arguments: {"text": "hello from peer context"}' in prompt
+            assert "[tool_result]\nname: echo\nid: call-1" in prompt
+            assert '{"echo": "hello from peer context"}' in prompt
+            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": "task_123",
+                    "status": "completed",
+                    "final_output": "Peer result",
+                },
+            )
+        return httpx.Response(404, json={"detail": "missing"})
+
+    config = parse_tenant_execution_config(
+        "tenant-1",
+        {
+            "agent_backend": {
+                "type": "peer_agent",
+                "peer": "opencode",
+                "cwd": "/workspace/project",
+                "poll_interval_seconds": 0.001,
+                "mcp_broker_enabled": False,
+            }
+        },
+    )
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "opencode", "base_url": "http://opencode.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    store = InMemoryThreadStore()
+    client = TestClient(
+        create_app(
+            execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
+            peer_agent_registry=registry,
+            thread_store=store,
+        )
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    store.append_message(
+        "tenant-1",
+        Message(thread_id=thread_id, role=MessageRole.USER, content="use the tool result"),
+    )
+    store.append_message(
+        "tenant-1",
+        Message(
+            thread_id=thread_id,
+            role=MessageRole.ASSISTANT,
+            content="",
+            tool_name="echo",
+            tool_call_id="call-1",
+            tool_arguments={"text": "hello from peer context"},
+        ),
+    )
+    store.append_message(
+        "tenant-1",
+        Message(
+            thread_id=thread_id,
+            role=MessageRole.TOOL,
+            content='{"echo": "hello from peer context"}',
+            tool_name="echo",
+            tool_call_id="call-1",
+        ),
+    )
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert run_response.status_code == 200
+    assert run_response.json() == {"reply": "Peer result"}
 
 
 def test_peer_agent_backend_cancellation_cancels_peer_task_and_resets_thread() -> None:

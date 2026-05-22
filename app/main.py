@@ -51,7 +51,12 @@ from app.observability import configure_logging, configure_tracing
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_env
 from app.quality import QualityEnhancer
 from app.redaction import install_log_redaction
-from app.runtime import AgentRuntime, estimate_thread_context_usage, max_iterations_from_env
+from app.runtime import (
+    AgentRuntime,
+    estimate_thread_context_usage,
+    max_iterations_from_env,
+    render_raw_thread_context,
+)
 from app.store import ThreadStore, build_thread_store_from_env
 from app.tools import ToolRegistry, build_tool_registry_from_env
 
@@ -75,7 +80,11 @@ async def _run_thread_ndjson_stream(
         await queue.put({"thread_id": thread_id, **event})
 
     async def run() -> None:
-        await emit({"type": "run.started", "thread_context": _thread_context_usage(request, principal, thread_id)})
+        started_event: dict[str, object] = {"type": "run.started"}
+        started_context = _thread_context_usage(request, principal, thread_id)
+        if started_context is not None:
+            started_event["thread_context"] = started_context
+        await emit(started_event)
         try:
             reply = await request.app.state.agent_backend.run_thread(
                 principal,
@@ -375,6 +384,24 @@ def create_app(
         principal: Principal = Depends(require_principal),
     ) -> list[Message]:
         return request.app.state.store.list_messages(principal.tenant_id, thread_id)
+
+    @app.get("/threads/{thread_id}/context/raw")
+    async def get_raw_thread_context(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_principal),
+    ) -> dict[str, object]:
+        store = request.app.state.store
+        messages = store.list_messages(principal.tenant_id, thread_id)
+        context = store.get_thread_context(principal.tenant_id, thread_id)
+        return {
+            "thread_id": thread_id,
+            "summary": context.summary,
+            "summarized_message_count": context.summarized_message_count,
+            "messages": [message.model_dump(mode="json") for message in messages],
+            "rendered": render_raw_thread_context(messages, context=context),
+            "usage": estimate_thread_context_usage(messages, context=context),
+        }
 
     @app.post("/threads/{thread_id}/run", response_model=RunThreadResponse)
     async def run_thread(
