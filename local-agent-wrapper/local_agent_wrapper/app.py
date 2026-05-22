@@ -63,6 +63,7 @@ class TaskResponse(BaseModel):
     finished_at: datetime | None = None
     exit_code: int | None = None
     final_output: str = ""
+    usage: dict[str, object] | None = None
     events_tail: list[dict[str, object]] = Field(default_factory=list)
     stdout_tail: str = ""
     stderr_tail: str = ""
@@ -126,6 +127,7 @@ class TaskRecord:
     finished_at: datetime | None = None
     exit_code: int | None = None
     final_output: str = ""
+    usage: dict[str, object] | None = None
     all_events: list[dict[str, object]] = field(default_factory=list)
     events: deque[dict[str, object]] = field(default_factory=deque)
     stdout: OutputTail = field(default_factory=lambda: OutputTail(20_000))
@@ -142,6 +144,7 @@ class TaskRecord:
             finished_at=self.finished_at,
             exit_code=self.exit_code,
             final_output=self.final_output,
+            usage=self.usage,
             events_tail=list(self.events),
             stdout_tail=self.stdout.text(),
             stderr_tail=self.stderr.text(),
@@ -317,6 +320,12 @@ def _capture_json_event(line: str, record: TaskRecord) -> None:
     final_output = _extract_final_output(indexed_event)
     if final_output is not None:
         record.final_output = final_output
+    usage = _extract_usage(indexed_event)
+    if usage is not None:
+        if _looks_like_turn_usage_event(indexed_event):
+            record.usage = usage
+        else:
+            record.usage = _merge_usage(record.usage, usage)
 
 
 def _task_links(task_id: str) -> dict[str, str]:
@@ -411,6 +420,82 @@ def _looks_like_final_event(event_type: str, event: dict[str, object]) -> bool:
         return False
     status = str(event.get("status") or message.get("status") or "").lower()
     return status in {"completed", "complete", "done", "final"}
+
+
+def _extract_usage(event: dict[str, object]) -> dict[str, object] | None:
+    usage = event.get("usage")
+    if not isinstance(usage, dict):
+        message = _event_message(event)
+        usage = message.get("usage") if message is not None else None
+    if not isinstance(usage, dict):
+        return None
+    normalized = _normalize_usage(usage)
+    return normalized or None
+
+
+def _normalize_usage(usage: dict[object, object]) -> dict[str, object]:
+    normalized: dict[str, object] = {}
+    prompt_tokens = _usage_int(usage, "prompt_tokens", "input_tokens", "input")
+    completion_tokens = _usage_int(usage, "completion_tokens", "output_tokens", "output")
+    total_tokens = _usage_int(usage, "total_tokens", "totalTokens", "total")
+    cache_read_tokens = _usage_int(usage, "cache_read_tokens", "cacheRead", "cache_read")
+    cache_write_tokens = _usage_int(usage, "cache_write_tokens", "cacheWrite", "cache_write")
+    if prompt_tokens is not None:
+        normalized["prompt_tokens"] = prompt_tokens
+        normalized["input_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        normalized["completion_tokens"] = completion_tokens
+        normalized["output_tokens"] = completion_tokens
+    if total_tokens is not None:
+        normalized["total_tokens"] = total_tokens
+    elif prompt_tokens is not None and completion_tokens is not None:
+        normalized["total_tokens"] = prompt_tokens + completion_tokens
+    if cache_read_tokens is not None:
+        normalized["cache_read_tokens"] = cache_read_tokens
+    if cache_write_tokens is not None:
+        normalized["cache_write_tokens"] = cache_write_tokens
+    cost = usage.get("cost")
+    if isinstance(cost, int | float):
+        normalized["cost"] = cost
+    return normalized
+
+
+def _usage_int(usage: dict[object, object], *keys: str) -> int | None:
+    for key in keys:
+        value = usage.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                continue
+    return None
+
+
+def _looks_like_turn_usage_event(event: dict[str, object]) -> bool:
+    event_type = str(event.get("type") or event.get("event") or "").lower()
+    return event_type in {"turn_end", "turn.completed", "turn_complete", "turn.done"}
+
+
+def _merge_usage(
+    current: dict[str, object] | None,
+    usage: dict[str, object],
+) -> dict[str, object]:
+    if current is None:
+        return dict(usage)
+    merged = dict(current)
+    for key, value in usage.items():
+        if isinstance(value, int) and not isinstance(value, bool):
+            existing = merged.get(key)
+            merged[key] = (existing if isinstance(existing, int) and not isinstance(existing, bool) else 0) + value
+        else:
+            merged[key] = value
+    return merged
 
 
 async def _terminate_process_group(

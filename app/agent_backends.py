@@ -198,15 +198,16 @@ class AgentBackendRouter(AgentBackend):
                 after=last_peer_event_index,
             )
             reply = self._reply_from_task(task)
-            await _emit_run_event(
-                event_sink,
-                {
-                    "type": "peer.task.completed",
-                    "peer": peer,
-                    "task_id": task_id,
-                    "status": str(task.get("status", "")),
-                },
-            )
+            completed_event: dict[str, object] = {
+                "type": "peer.task.completed",
+                "peer": peer,
+                "task_id": task_id,
+                "status": str(task.get("status", "")),
+            }
+            usage = _usage_from_peer_task(task)
+            if usage is not None:
+                completed_event["usage"] = usage
+            await _emit_run_event(event_sink, completed_event)
             self._store.append_message(
                 principal.tenant_id,
                 Message(thread_id=thread_id, role=MessageRole.ASSISTANT, content=reply),
@@ -342,6 +343,44 @@ class AgentBackendRouter(AgentBackend):
             await self._peer_agent_registry.cancel_task(peer, task_id)
         except HTTPException:
             return
+
+
+def _usage_from_peer_task(task: dict[str, object]) -> dict[str, int] | None:
+    usage = task.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    normalized: dict[str, int] = {}
+    prompt_tokens = _usage_int(usage, "prompt_tokens", "input_tokens", "input")
+    completion_tokens = _usage_int(usage, "completion_tokens", "output_tokens", "output")
+    total_tokens = _usage_int(usage, "total_tokens", "totalTokens", "total")
+    if prompt_tokens is not None:
+        normalized["prompt_tokens"] = prompt_tokens
+        normalized["input_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        normalized["completion_tokens"] = completion_tokens
+        normalized["output_tokens"] = completion_tokens
+    if total_tokens is not None:
+        normalized["total_tokens"] = total_tokens
+    elif prompt_tokens is not None and completion_tokens is not None:
+        normalized["total_tokens"] = prompt_tokens + completion_tokens
+    return normalized or None
+
+
+def _usage_int(usage: dict[object, object], *keys: str) -> int | None:
+    for key in keys:
+        value = usage.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                continue
+    return None
 
 
 def _sanitize_peer_task_event(event: dict[object, object]) -> dict[str, object]:

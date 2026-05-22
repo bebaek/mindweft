@@ -529,6 +529,27 @@ def _merge_summaries(existing: str, new_chunk: str, *, max_chars: int) -> str:
     ).strip()
 
 
+def estimate_thread_context_usage(
+    messages: list[Message],
+    *,
+    context: ThreadContext | None = None,
+) -> dict[str, int | bool]:
+    summarized_message_count = context.summarized_message_count if context is not None else 0
+    summary = context.summary if context is not None else ""
+    unsummarized_messages = messages[summarized_message_count:]
+    summary_tokens = _estimate_text_tokens(f"Thread summary:\n{summary}") if summary else 0
+    message_tokens = sum(_estimate_message_tokens(message) for message in unsummarized_messages)
+    return {
+        "estimated": True,
+        "total_tokens": summary_tokens + message_tokens,
+        "summary_tokens": summary_tokens,
+        "message_tokens": message_tokens,
+        "message_count": len(messages),
+        "summarized_message_count": summarized_message_count,
+        "unsummarized_message_count": len(unsummarized_messages),
+    }
+
+
 def _estimate_prompt_tokens(messages: list[Message], *, summary: str = "") -> int:
     total = _estimate_text_tokens(RUNTIME_SYSTEM_PROMPT)
     if summary:

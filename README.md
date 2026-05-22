@@ -108,7 +108,8 @@ AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
 The POC supports `GET /agent-card`, `POST /tasks`, `GET /tasks/{task_id}`,
 `GET /tasks/{task_id}/events`, read-only task artifact endpoints, and
 `POST /tasks/{task_id}/cancel`. It runs `pi --mode json --no-session --tools read,grep,find,ls <prompt>` by default, parses
-JSONL events when present, falls back to stdout for `final_output`, and captures
+JSONL events when present, extracts Pi/OpenAI-style token usage when emitted by the
+agent, falls back to stdout for `final_output`, and captures
 stdout/stderr tails separately. With the
 wrapper running, use `uv run python scripts/demo_task.py` from `local-agent-wrapper` for
 a simple submit-and-poll demo. The demo prints `final_output` and hides the agent's
@@ -133,7 +134,8 @@ MINIGENT_MCP_BROKER_ENABLED=true
 
 With this mode, `POST /threads/{thread_id}/run` sends the Minigent thread context to the
 peer agent, polls until the task completes, stores the peer `final_output` as the
-assistant message, and returns it as the run reply. Per-tenant execution config can use
+assistant message, and returns it as the run reply. Streamed peer runs forward task
+`usage` on `peer.task.completed` when the peer reports actual token counts. Per-tenant execution config can use
 the same backend shape:
 
 ```json
@@ -692,11 +694,13 @@ assistant reply on stdout and prints compact status/tool lines such as `● prep
 `● sending`, `🔧 echo(...) done`, and `● done` to stderr. Add `--show-tool-results`, or set
 `MINIGENT_CLIENT_SHOW_TOOL_RESULTS=true` for `minigent-client`, to include indented tool
 result bodies in the streaming progress output. Token display defaults to compact final
-provider usage when available; use `--tokens live` to print usage events as they arrive or
-print a final unavailable note for peer backends that do not report usage metadata, or
-`--tokens off` to hide token summaries. Streaming `--json` output includes a structured
-`usage` object when the API reports token metadata. Use global `--verbose` with one-shot
-streaming commands to include extra progress metadata such as LLM iteration numbers.
+thread-context size estimates plus provider usage when available; use `--tokens live` to
+print provider usage events as they arrive or print a final unavailable note for peer
+backends that do not report usage metadata, or `--tokens off` to hide token summaries.
+Streaming events include a structured `thread_context` estimate on `run.started` and
+`run.completed`; streaming `--json` output includes a structured `usage` object when the
+API reports provider token metadata. Use global `--verbose` with one-shot streaming
+commands to include extra progress metadata such as LLM iteration numbers.
 
 Use `minigent threads` or `minigent-client threads` to list locally remembered recent
 threads for the current server and principal, including title, last updated time, and

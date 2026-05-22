@@ -51,7 +51,7 @@ from app.observability import configure_logging, configure_tracing
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_env
 from app.quality import QualityEnhancer
 from app.redaction import install_log_redaction
-from app.runtime import AgentRuntime, max_iterations_from_env
+from app.runtime import AgentRuntime, estimate_thread_context_usage, max_iterations_from_env
 from app.store import ThreadStore, build_thread_store_from_env
 from app.tools import ToolRegistry, build_tool_registry_from_env
 
@@ -75,7 +75,7 @@ async def _run_thread_ndjson_stream(
         await queue.put({"thread_id": thread_id, **event})
 
     async def run() -> None:
-        await emit({"type": "run.started"})
+        await emit({"type": "run.started", "thread_context": _thread_context_usage(request, principal, thread_id)})
         try:
             reply = await request.app.state.agent_backend.run_thread(
                 principal,
@@ -95,7 +95,7 @@ async def _run_thread_ndjson_stream(
             await emit({"type": "run.error", "status_code": 500, "detail": str(exc)})
             return
         await emit({"type": "assistant.message", "content": reply})
-        await emit({"type": "run.completed"})
+        await emit({"type": "run.completed", "thread_context": _thread_context_usage(request, principal, thread_id)})
 
     run_key = (principal.tenant_id, thread_id)
     task = asyncio.create_task(run())
@@ -120,6 +120,21 @@ async def _run_thread_ndjson_stream(
 
 def _ndjson_event(event: dict[str, object]) -> str:
     return json.dumps(event, ensure_ascii=True) + "\n"
+
+
+def _thread_context_usage(
+    request: Request,
+    principal: Principal,
+    thread_id: str,
+) -> dict[str, int | bool] | None:
+    try:
+        store = request.app.state.store
+        return estimate_thread_context_usage(
+            store.list_messages(principal.tenant_id, thread_id),
+            context=store.get_thread_context(principal.tenant_id, thread_id),
+        )
+    except HTTPException:
+        return None
 
 
 def create_app(

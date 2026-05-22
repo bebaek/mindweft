@@ -92,6 +92,7 @@ class StreamProgressRenderer:
         self._peer_tool_call_arguments: dict[str, str] = {}
         self._peer_tool_name_arguments: dict[str, str] = {}
         self._last_usage_summary: str | None = None
+        self._last_thread_context_summary: str | None = None
         self._saw_peer_event = False
 
     def set_verbose(self, verbose: bool) -> None:
@@ -103,6 +104,9 @@ class StreamProgressRenderer:
             self._last_usage_summary = usage
             if self._token_mode == "live" and event.get("type") != "run.completed":
                 self._write(f"● {usage}")
+        thread_context = format_thread_context_summary(event)
+        if thread_context is not None:
+            self._last_thread_context_summary = thread_context
         event_type = event.get("type")
         if event_type == "run.started":
             self._write("● preparing")
@@ -130,9 +134,14 @@ class StreamProgressRenderer:
         elif event_type == "run.error":
             self._write(f"✖ error {event.get('status_code')}: {event.get('detail')}")
         elif event_type == "run.completed":
-            usage = None if self._token_mode == "off" else self._last_usage_summary
-            if usage is not None:
-                self._write(f"● done · {usage}")
+            summaries = []
+            if self._token_mode != "off":
+                if self._last_thread_context_summary is not None:
+                    summaries.append(self._last_thread_context_summary)
+                if self._last_usage_summary is not None:
+                    summaries.append(self._last_usage_summary)
+            if summaries:
+                self._write(f"● done · {' · '.join(summaries)}")
             elif self._token_mode == "live" and self._saw_peer_event:
                 self._write("● done · tokens unavailable for peer backend")
             else:
@@ -353,6 +362,17 @@ def format_usage_summary(event_or_usage: dict[str, Any]) -> str | None:
     if not parts:
         return None
     return "tokens: " + " · ".join(parts)
+
+
+def format_thread_context_summary(event: dict[str, Any]) -> str | None:
+    thread_context = event.get("thread_context")
+    if not isinstance(thread_context, dict):
+        return None
+    total_tokens = _usage_int(thread_context, "total_tokens")
+    if total_tokens is None:
+        return None
+    estimated = " est." if thread_context.get("estimated") is True else ""
+    return f"thread context{estimated}: {_format_token_count(total_tokens)}"
 
 
 def estimate_message_tokens(message: dict[str, Any]) -> int:

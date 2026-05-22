@@ -38,7 +38,7 @@ from minigent_client.cli import (
 from minigent_client.config import ClientConfig, PrincipalConfig
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker, should_duck_for_state
-from minigent_client.output import style_line
+from minigent_client.output import format_thread_context_summary, style_line
 from minigent_client.ring_buffer import AudioRingBuffer
 from minigent_client.runtime import Activation, ClientState, MinigentClientRuntime
 from minigent_client.speech import (
@@ -1825,6 +1825,16 @@ def test_minigent_client_notes_peer_token_usage_unavailable_for_live_tokens(
 
     assert client.run_thread() == "streamed reply"
     assert "● done · tokens unavailable for peer backend" in progress_stream.getvalue()
+
+
+def test_format_thread_context_summary() -> None:
+    assert (
+        format_thread_context_summary(
+            {"type": "run.completed", "thread_context": {"estimated": True, "total_tokens": 42}}
+        )
+        == "thread context est.: 42"
+    )
+    assert format_thread_context_summary({"type": "run.completed"}) is None
 
 
 

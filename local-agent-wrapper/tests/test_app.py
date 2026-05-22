@@ -429,7 +429,7 @@ def test_task_extracts_pi_message_end_events_as_final_output(tmp_path: Path) -> 
     fake_agent.write_text(
         "import json\n"
         "print(json.dumps({'type': 'session', 'version': 3}))\n"
-        "print(json.dumps({'type': 'message_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': 'pi final'}]}}))\n",
+        "print(json.dumps({'type': 'message_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': 'pi final'}], 'usage': {'input': 10, 'output': 4, 'cacheRead': 3, 'cacheWrite': 2, 'totalTokens': 14, 'cost': 0.001}}}))\n",
         encoding="utf-8",
     )
     settings = Settings(
@@ -444,6 +444,39 @@ def test_task_extracts_pi_message_end_events_as_final_output(tmp_path: Path) -> 
         result = _wait_for_terminal_task(client, create_response.json()["task_id"])
         assert result["status"] == "completed"
         assert result["final_output"] == "pi final"
+        assert result["usage"] == {
+            "prompt_tokens": 10,
+            "input_tokens": 10,
+            "completion_tokens": 4,
+            "output_tokens": 4,
+            "total_tokens": 14,
+            "cache_read_tokens": 3,
+            "cache_write_tokens": 2,
+            "cost": 0.001,
+        }
+
+
+def test_task_extracts_pi_turn_usage_as_total_usage(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    fake_agent.write_text(
+        "import json\n"
+        "print(json.dumps({'type': 'message_end', 'message': {'role': 'assistant', 'content': 'pi final', 'usage': {'input': 10, 'output': 4, 'totalTokens': 14}}}))\n"
+        "print(json.dumps({'type': 'turn_end', 'usage': {'input': 12, 'output': 5, 'totalTokens': 17}}))\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+        agent_runtime="pi",
+    )
+    with TestClient(create_app(settings)) as client:
+        create_response = client.post("/tasks", json={"cwd": str(tmp_path), "prompt": "hello"})
+
+        assert create_response.status_code == 200
+        result = _wait_for_terminal_task(client, create_response.json()["task_id"])
+        assert result["status"] == "completed"
+        assert result["final_output"] == "pi final"
+        assert result["usage"]["total_tokens"] == 17
 
 
 def test_task_extracts_opencode_text_events_as_final_output(tmp_path: Path) -> None:

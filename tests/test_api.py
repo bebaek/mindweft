@@ -394,10 +394,13 @@ def test_run_stream_endpoint_emits_ndjson_events() -> None:
         "run.completed",
     ]
     assert all(event["thread_id"] == thread_id for event in events)
+    assert events[0]["thread_context"]["estimated"] is True
+    assert events[0]["thread_context"]["total_tokens"] > 0
     assert events[1]["iteration"] == 1
     assert events[1]["message_count"] >= 2
     assert events[1]["tool_count"] >= 1
     assert events[2]["content"] == "Mock reply: hello stream"
+    assert events[3]["thread_context"]["total_tokens"] > events[0]["thread_context"]["total_tokens"]
 
 
 def test_run_stream_endpoint_emits_tool_events() -> None:
@@ -526,6 +529,70 @@ def test_run_stream_endpoint_emits_peer_task_events() -> None:
     assert "message" not in events[4]["event"]
     assert "sensitive draft" not in "\n".join(json.dumps(event) for event in events)
     assert events[6]["content"] == "Pi result"
+
+
+def test_run_stream_endpoint_emits_peer_task_usage() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/tasks":
+            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": "task_123",
+                    "status": "completed",
+                    "final_output": "Pi result",
+                    "usage": {"input": 12, "output": 5, "totalTokens": 17},
+                },
+            )
+        if request.method == "GET" and request.url.path == "/tasks/task_123/events":
+            return httpx.Response(200, json={"task_id": "task_123", "next_index": 0, "events": []})
+        return httpx.Response(404, json={"detail": "missing"})
+
+    config = parse_tenant_execution_config(
+        "tenant-1",
+        {
+            "agent_backend": {
+                "type": "peer_agent",
+                "peer": "pi",
+                "cwd": "/workspace/project",
+                "poll_interval_seconds": 0.001,
+                "mcp_broker_enabled": False,
+            }
+        },
+    )
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "pi", "base_url": "http://pi-agent.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    client = TestClient(
+        create_app(
+            execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
+            peer_agent_registry=registry,
+        )
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "please inspect the repo"},
+        headers=AUTH_HEADERS,
+    )
+
+    with client.stream("POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS) as response:
+        assert response.status_code == 200
+        events = [json.loads(line) for line in response.iter_lines() if line]
+
+    run_started = next(event for event in events if event["type"] == "run.started")
+    assert run_started["thread_context"]["estimated"] is True
+    assert run_started["thread_context"]["total_tokens"] > 0
+    completed = next(event for event in events if event["type"] == "peer.task.completed")
+    assert completed["usage"] == {
+        "prompt_tokens": 12,
+        "input_tokens": 12,
+        "completion_tokens": 5,
+        "output_tokens": 5,
+        "total_tokens": 17,
+    }
 
 
 def test_peer_task_event_sanitizer_preserves_tool_details_without_messages() -> None:
