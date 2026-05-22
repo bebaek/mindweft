@@ -81,12 +81,13 @@ def test_thread_lifecycle_endpoints() -> None:
 
     add_response = client.post(
         f"/threads/{thread_id}/messages",
-        json={"content": "hello"},
+        json={"content": "hello", "metadata": {"raw_user_prompt": "hello"}},
         headers=AUTH_HEADERS,
     )
     assert add_response.status_code == 200
     assert add_response.json()["role"] == MessageRole.USER
     assert add_response.json()["created_by"] == "user-1"
+    assert add_response.json()["metadata"] == {"raw_user_prompt": "hello"}
 
     run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
     assert run_response.status_code == 200
@@ -96,6 +97,7 @@ def test_thread_lifecycle_endpoints() -> None:
     assert messages_response.status_code == 200
     messages = messages_response.json()
     assert [message["role"] for message in messages] == [MessageRole.USER, MessageRole.ASSISTANT]
+    assert messages[0]["metadata"] == {"raw_user_prompt": "hello"}
 
     delete_response = client.delete(f"/threads/{thread_id}", headers=AUTH_HEADERS)
     assert delete_response.status_code == 204
@@ -116,7 +118,10 @@ def test_sqlite_thread_store_persists_threads_and_messages(tmp_path: Path) -> No
     thread_id = first_client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
     first_client.post(
         f"/threads/{thread_id}/messages",
-        json={"content": "hello before restart"},
+        json={
+            "content": "hello before restart",
+            "metadata": {"raw_user_prompt": "hello before restart"},
+        },
         headers=AUTH_HEADERS,
     )
     run_response = first_client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
@@ -136,6 +141,7 @@ def test_sqlite_thread_store_persists_threads_and_messages(tmp_path: Path) -> No
     messages = messages_response.json()
     assert [message["role"] for message in messages] == [MessageRole.USER, MessageRole.ASSISTANT]
     assert messages[0]["content"] == "hello before restart"
+    assert messages[0]["metadata"] == {"raw_user_prompt": "hello before restart"}
     assert messages[1]["content"] == "Mock reply: hello before restart"
 
 

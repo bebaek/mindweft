@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import platform
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import replace
 from importlib import import_module
 from pathlib import Path
@@ -40,6 +43,7 @@ from minigent_client.vad import SileroVoiceActivityDetector
 from minigent_client.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
 
 CHAT_HISTORY_FILE_NAME = "client-chat-history"
+CHAT_HISTORY_DIR_NAME = f"{CHAT_HISTORY_FILE_NAME}.d"
 
 
 class ChatInputStream(Protocol):
@@ -597,19 +601,35 @@ def run_backend(backend: str, config: ClientConfig, *, once: bool = False) -> in
 def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
     output_stream = sys.stdout
     input_stream = sys.stdin
-    prompt_session = _build_chat_prompt_session(
-        input_stream=input_stream,
-        output_stream=output_stream,
-        submit_mode=config.chat_submit_mode,
-    )
     client = RememberingMinigentAPIClient(
         MinigentAPIClient(config, output_stream=output_stream),
         config,
     )
+    prompt_session: ChatPromptSession | None = None
+    prompt_session_thread_id: str | None | object = object()
+    synced_prompt_history_thread_id: str | None = None
     speech_output = ConsoleSpeechOutput(output_stream=output_stream)
 
     turns_completed = 0
     while True:
+        if prompt_session is None or client.thread_id != prompt_session_thread_id:
+            _ensure_chat_thread_for_prompt_history(
+                client,
+                config,
+                input_stream=input_stream,
+                output_stream=output_stream,
+            )
+            if client.thread_id and client.thread_id != synced_prompt_history_thread_id:
+                _sync_chat_prompt_history_from_thread(client, config)
+                synced_prompt_history_thread_id = client.thread_id
+            prompt_session = _build_chat_prompt_session(
+                input_stream=input_stream,
+                output_stream=output_stream,
+                submit_mode=config.chat_submit_mode,
+                history_thread_id=client.thread_id,
+                history_scope_key=client_state_scope_key(config),
+            )
+            prompt_session_thread_id = client.thread_id
         try:
             line = _read_chat_line(
                 input_stream=input_stream,
@@ -880,6 +900,10 @@ def _switch_to_thread(
         return
     client.set_thread_id(thread_id)
     messages = thread.get("messages") if isinstance(thread, dict) else None
+    _append_missing_user_messages_to_chat_history(
+        chat_history_file_path(thread_id=thread_id, scope_key=client_state_scope_key(config)),
+        messages,
+    )
     title = _title_from_thread_messages(messages)
     remember_client_thread(
         config,
@@ -1062,8 +1086,143 @@ def _prompt_toolkit_label(prompt_label: str) -> object:
     return ansi(prompt_label)
 
 
-def chat_history_file_path() -> Path:
-    return Path.home() / STATE_DIR_NAME / CHAT_HISTORY_FILE_NAME
+def chat_history_file_path(
+    *,
+    thread_id: str | None = None,
+    scope_key: str | None = None,
+) -> Path:
+    legacy_file_path = Path.home() / STATE_DIR_NAME / CHAT_HISTORY_FILE_NAME
+    if not thread_id:
+        return legacy_file_path
+    history_dir_path = Path.home() / STATE_DIR_NAME / CHAT_HISTORY_DIR_NAME
+    scope_digest = hashlib.sha256((scope_key or "default").encode("utf-8")).hexdigest()[:16]
+    safe_thread_id = re.sub(r"[^A-Za-z0-9_.-]", "_", thread_id).strip("._") or "thread"
+    return history_dir_path / scope_digest / safe_thread_id
+
+
+def _extract_user_prompt_history_entries(messages: object) -> list[str]:
+    if not isinstance(messages, list):
+        return []
+    entries: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        entry = _prompt_history_entry_from_stored_user_message(message)
+        if entry:
+            entries.append(entry)
+    return entries
+
+
+def _prompt_history_entry_from_stored_user_message(message: dict[str, object]) -> str | None:
+    metadata = message.get("metadata")
+    if isinstance(metadata, dict):
+        raw_user_prompt = metadata.get("raw_user_prompt")
+        if isinstance(raw_user_prompt, str) and raw_user_prompt:
+            return raw_user_prompt
+    return _prompt_history_entry_from_stored_user_content(message.get("content"))
+
+
+def _prompt_history_entry_from_stored_user_content(content: object) -> str | None:
+    if not isinstance(content, str) or not content:
+        return None
+    context_prefix = "Client context:\n"
+    if not content.startswith(context_prefix):
+        return content
+    _, separator, prompt = content.partition("\n\n")
+    if not separator:
+        return content
+    return prompt or None
+
+
+def _read_prompt_toolkit_history_entries(history_path: Path) -> list[str]:
+    if not history_path.exists():
+        return []
+    try:
+        lines = history_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    entries: list[str] = []
+    current: list[str] | None = None
+    for line in lines:
+        if line.startswith("#"):
+            if current:
+                entries.append("\n".join(current))
+            current = []
+        elif line.startswith("+"):
+            if current is None:
+                current = []
+            current.append(line[1:])
+    if current:
+        entries.append("\n".join(current))
+    return entries
+
+
+def _append_prompt_toolkit_history_entry(history_path: Path, entry: str) -> None:
+    try:
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        with history_path.open("a", encoding="utf-8") as history_file:
+            history_file.write(f"\n# {time.time()}\n")
+            for line in entry.split("\n"):
+                history_file.write(f"+{line}\n")
+    except OSError:
+        return
+
+
+def _append_missing_user_messages_to_chat_history(history_path: Path, messages: object) -> None:
+    entries = _extract_user_prompt_history_entries(messages)
+    if not entries:
+        return
+    existing_entries = set(_read_prompt_toolkit_history_entries(history_path))
+    for entry in entries:
+        if entry in existing_entries:
+            continue
+        _append_prompt_toolkit_history_entry(history_path, entry)
+        existing_entries.add(entry)
+
+
+def _sync_chat_prompt_history_from_thread(
+    client: RememberingMinigentAPIClient,
+    config: ClientConfig,
+) -> None:
+    thread_id = client.thread_id
+    if not thread_id:
+        return
+    try:
+        thread = client.get_thread(thread_id)
+    except (AttributeError, RuntimeError):
+        return
+    messages = thread.get("messages") if isinstance(thread, dict) else None
+    _append_missing_user_messages_to_chat_history(
+        chat_history_file_path(thread_id=thread_id, scope_key=client_state_scope_key(config)),
+        messages,
+    )
+    if isinstance(messages, list):
+        remember_client_thread(
+            config,
+            thread_id,
+            title=_title_from_thread_messages(messages),
+            message_count=len(messages),
+        )
+
+
+def _ensure_chat_thread_for_prompt_history(
+    client: RememberingMinigentAPIClient,
+    config: ClientConfig,
+    *,
+    input_stream: ChatInputStream,
+    output_stream: ChatOutputStream,
+) -> None:
+    input_is_tty = getattr(input_stream, "isatty", lambda: False)
+    output_is_tty = getattr(output_stream, "isatty", lambda: False)
+    if client.thread_id or not input_is_tty() or not output_is_tty():
+        return
+    try:
+        response = client.create_thread(skill_name=config.skill_name)
+    except RuntimeError:
+        return
+    thread_id = response.get("thread_id") if isinstance(response, dict) else None
+    if isinstance(thread_id, str) and thread_id:
+        remember_client_thread(config, thread_id, title="New thread")
 
 
 def _build_chat_prompt_session(
@@ -1071,6 +1230,8 @@ def _build_chat_prompt_session(
     input_stream: ChatInputStream,
     output_stream: ChatOutputStream,
     submit_mode: str = "enter",
+    history_thread_id: str | None = None,
+    history_scope_key: str | None = None,
 ) -> ChatPromptSession | None:
     input_is_tty = getattr(input_stream, "isatty", lambda: False)
     output_is_tty = getattr(output_stream, "isatty", lambda: False)
@@ -1086,7 +1247,14 @@ def _build_chat_prompt_session(
     FileHistory = history_module.FileHistory
     KeyBindings = key_binding_module.KeyBindings
     try:
-        history_path = chat_history_file_path()
+        history_path = (
+            chat_history_file_path()
+            if history_thread_id is None and history_scope_key is None
+            else chat_history_file_path(
+                thread_id=history_thread_id,
+                scope_key=history_scope_key,
+            )
+        )
         history_path.parent.mkdir(parents=True, exist_ok=True)
         key_bindings = KeyBindings()
 

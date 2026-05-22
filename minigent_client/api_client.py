@@ -213,11 +213,20 @@ class MinigentAPIClient:
         self._config = replace(self._config, debug_show_prompt=enabled)
         self._stream_progress_renderer.set_verbose(enabled)
 
-    def add_message(self, thread_id: str, content: str) -> dict[str, Any]:
+    def add_message(
+        self,
+        thread_id: str,
+        content: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"content": content}
+        if metadata is not None:
+            payload["metadata"] = metadata
         response = self.request_json(
             "POST",
             f"{self._config.base_url}/threads/{thread_id}/messages",
-            payload={"content": content},
+            payload=payload,
         )
         if not isinstance(response, dict):
             raise RuntimeError("Minigent add-message response must be an object")
@@ -236,7 +245,11 @@ class MinigentAPIClient:
         thread_id = self.ensure_thread()
         formatted_content = self._format_user_message(content)
         self._maybe_log_prompt(formatted_content)
-        return self.add_message(thread_id, formatted_content)
+        return self.add_message(
+            thread_id,
+            formatted_content,
+            metadata={"raw_user_prompt": content},
+        )
 
     def run_thread(self, thread_id: str | None = None, *, stream: bool | None = None) -> str:
         resolved_thread_id = thread_id or self.ensure_thread()

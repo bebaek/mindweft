@@ -31,6 +31,7 @@ class Message(BaseModel):
     role: MessageRole
     content: str
     created_by: str | None = None
+    metadata: dict[str, Any] | None = None
     tool_name: str | None = None
     tool_call_id: str | None = None
     tool_arguments: dict[str, Any] | None = None
@@ -84,6 +85,7 @@ class CreateThreadRequest(BaseModel):
 
 class AddMessageRequest(BaseModel):
     content: str
+    metadata: dict[str, Any] | None = None
 
 
 class RunThreadResponse(BaseModel):

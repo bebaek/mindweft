@@ -349,6 +349,7 @@ def create_app(
                 role=MessageRole.USER,
                 content=request.content,
                 created_by=principal.user_id,
+                metadata=request.metadata,
             ),
         )
 

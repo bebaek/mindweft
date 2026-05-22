@@ -1410,7 +1410,10 @@ def test_minigent_client_sends_raw_message_when_location_is_unset(
         {
             "method": "POST",
             "url": "http://127.0.0.1:8000/threads/thread-123/messages",
-            "payload": {"content": "what time is it"},
+            "payload": {
+                "content": "what time is it",
+                "metadata": {"raw_user_prompt": "what time is it"},
+            },
             "headers": {
                 "X-minigent-user-id": "user-1",
                 "X-minigent-tenant-id": "tenant-1",
@@ -1504,7 +1507,8 @@ def test_minigent_client_uses_location_as_compatibility_preamble_when_configured
                 "Client context:\n"
                 "location=Austin, TX, US; timezone=America/Chicago\n\n"
                 "find coffee nearby"
-            )
+            ),
+            "metadata": {"raw_user_prompt": "find coffee nearby"},
         }
     ]
 
@@ -1554,7 +1558,8 @@ def test_minigent_client_prefers_explicit_prompt_preamble_over_location(
                 "timezone=America/Chicago\n"
                 "note=prefer local context\n\n"
                 "What's my location?"
-            )
+            ),
+            "metadata": {"raw_user_prompt": "What's my location?"},
         }
     ]
 
@@ -1605,7 +1610,8 @@ def test_minigent_client_can_log_full_prompt_for_diagnostics(
                 "Client context:\n"
                 "location=Austin, TX, US; timezone=America/Chicago\n\n"
                 "What's my location?"
-            )
+            ),
+            "metadata": {"raw_user_prompt": "What's my location?"},
         }
     ]
     assert output_stream.getvalue() == (
@@ -3359,6 +3365,218 @@ def test_build_chat_prompt_session_for_tty_streams(
     assert session_kwargs["multiline"] is True
 
 
+def test_build_chat_prompt_session_uses_thread_scoped_history(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[object] = []
+
+    class TtyStream(StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    class FakeFileHistory:
+        def __init__(self, path: str) -> None:
+            self.path = path
+            calls.append(("history", path))
+
+    class FakePromptSession:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append(("session", kwargs))
+
+    class FakeKeyBindings:
+        def add(self, *keys: str):
+            del keys
+
+            def decorator(handler):
+                return handler
+
+            return decorator
+
+    prompt_toolkit_module = type(
+        "FakePromptToolkitModule",
+        (),
+        {"PromptSession": FakePromptSession},
+    )()
+    history_module = type("FakeHistoryModule", (), {"FileHistory": FakeFileHistory})()
+    key_binding_module = type("FakeKeyBindingModule", (), {"KeyBindings": FakeKeyBindings})()
+
+    def fake_import(name: str) -> object:
+        if name == "prompt_toolkit":
+            return prompt_toolkit_module
+        if name == "prompt_toolkit.history":
+            return history_module
+        if name == "prompt_toolkit.key_binding":
+            return key_binding_module
+        raise ImportError(name)
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(voice_cli, "import_module", fake_import)
+
+    session = voice_cli._build_chat_prompt_session(
+        input_stream=TtyStream(),
+        output_stream=TtyStream(),
+        history_thread_id="thread/one",
+        history_scope_key="http://server|tenant|user",
+    )
+
+    assert isinstance(session, FakePromptSession)
+    history_calls = [call for call in calls if isinstance(call, tuple) and call[0] == "history"]
+    assert len(history_calls) == 1
+    history_path = history_calls[0][1]
+    assert isinstance(history_path, str)
+    assert history_path.startswith(str(tmp_path / ".minigent" / "client-chat-history.d"))
+    assert history_path.endswith("thread_one")
+
+
+def test_append_missing_user_messages_to_chat_history_seeds_resumed_thread(
+    tmp_path: Path,
+) -> None:
+    history_path = tmp_path / "history"
+    messages = [
+        {"role": "user", "content": "first prompt"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "multi\nline prompt"},
+    ]
+
+    voice_cli._append_missing_user_messages_to_chat_history(history_path, messages)
+
+    entries = voice_cli._read_prompt_toolkit_history_entries(history_path)
+    assert entries == ["first prompt", "multi\nline prompt"]
+
+
+def test_append_missing_user_messages_to_chat_history_prefers_raw_user_prompt_metadata(
+    tmp_path: Path,
+) -> None:
+    history_path = tmp_path / "history"
+    messages = [
+        {
+            "role": "user",
+            "content": "Client context format may change someday: raw prompt should win",
+            "metadata": {"raw_user_prompt": "actual prompt"},
+        },
+    ]
+
+    voice_cli._append_missing_user_messages_to_chat_history(history_path, messages)
+
+    entries = voice_cli._read_prompt_toolkit_history_entries(history_path)
+    assert entries == ["actual prompt"]
+
+
+def test_append_missing_user_messages_to_chat_history_strips_client_context_preamble(
+    tmp_path: Path,
+) -> None:
+    history_path = tmp_path / "history"
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "Client context:\n"
+                "location=Austin, TX, US; timezone=America/Chicago\n\n"
+                "find coffee nearby"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Client context:\n"
+                "timezone=America/Chicago\n"
+                "note=prefer local context\n\n"
+                "What's my location?"
+            ),
+        },
+    ]
+
+    voice_cli._append_missing_user_messages_to_chat_history(history_path, messages)
+
+    entries = voice_cli._read_prompt_toolkit_history_entries(history_path)
+    assert entries == ["find coffee nearby", "What's my location?"]
+
+
+def test_append_missing_user_messages_to_chat_history_keeps_existing_entries(
+    tmp_path: Path,
+) -> None:
+    history_path = tmp_path / "history"
+    voice_cli._append_prompt_toolkit_history_entry(history_path, "local only")
+    voice_cli._append_prompt_toolkit_history_entry(history_path, "remote prompt")
+
+    voice_cli._append_missing_user_messages_to_chat_history(
+        history_path,
+        [
+            {"role": "user", "content": "remote prompt"},
+            {"role": "user", "content": "new remote prompt"},
+        ],
+    )
+
+    entries = voice_cli._read_prompt_toolkit_history_entries(history_path)
+    assert entries == ["local only", "remote prompt", "new remote prompt"]
+
+
+def test_build_chat_prompt_session_uses_thread_history_dir_when_legacy_history_file_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[object] = []
+
+    class TtyStream(StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    class FakeFileHistory:
+        def __init__(self, path: str) -> None:
+            self.path = path
+            calls.append(("history", path))
+
+    class FakePromptSession:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append(("session", kwargs))
+
+    class FakeKeyBindings:
+        def add(self, *keys: str):
+            del keys
+
+            def decorator(handler):
+                return handler
+
+            return decorator
+
+    prompt_toolkit_module = type(
+        "FakePromptToolkitModule",
+        (),
+        {"PromptSession": FakePromptSession},
+    )()
+    history_module = type("FakeHistoryModule", (), {"FileHistory": FakeFileHistory})()
+    key_binding_module = type("FakeKeyBindingModule", (), {"KeyBindings": FakeKeyBindings})()
+
+    def fake_import(name: str) -> object:
+        if name == "prompt_toolkit":
+            return prompt_toolkit_module
+        if name == "prompt_toolkit.history":
+            return history_module
+        if name == "prompt_toolkit.key_binding":
+            return key_binding_module
+        raise ImportError(name)
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(voice_cli, "import_module", fake_import)
+    legacy_history_path = tmp_path / ".minigent" / "client-chat-history"
+    legacy_history_path.parent.mkdir(parents=True)
+    legacy_history_path.write_text("old shared prompt history\n", encoding="utf-8")
+
+    session = voice_cli._build_chat_prompt_session(
+        input_stream=TtyStream(),
+        output_stream=TtyStream(),
+        history_thread_id="thread-one",
+        history_scope_key="scope",
+    )
+
+    assert isinstance(session, FakePromptSession)
+    history_calls = [call for call in calls if isinstance(call, tuple) and call[0] == "history"]
+    assert len(history_calls) == 1
+    history_path = history_calls[0][1]
+    assert isinstance(history_path, str)
+    assert history_path.startswith(str(tmp_path / ".minigent" / "client-chat-history.d"))
+    assert history_path.endswith("thread-one")
+
+
 def test_build_config_accepts_chat_submit_mode() -> None:
     args = build_parser().parse_args(["--chat-submit-mode", "alt-enter"])
 
@@ -3703,6 +3921,65 @@ def test_run_chat_loop_ignores_blank_interactive_submit(
     assert output_stream.getvalue() == "[assistant] reply\n[idle] shutting down\n"
 
 
+def test_run_chat_loop_rebuilds_prompt_history_after_thread_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+    sessions: list[object] = []
+    history_thread_ids: list[str | None] = []
+    responses = iter(["/switch existing-thread", "hello"])
+    messages: list[tuple[str | None, str]] = []
+
+    class FakePromptSession:
+        def __init__(self, history_thread_id: str | None) -> None:
+            self.history_thread_id = history_thread_id
+            sessions.append(self)
+
+        def prompt(self, prompt: str) -> str:
+            del prompt
+            try:
+                return next(responses)
+            except StopIteration as exc:
+                raise EOFError from exc
+
+    class FakeChatClient:
+        thread_id: str | None = None
+
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def get_thread(self, thread_id: str) -> dict[str, object]:
+            return {"thread_id": thread_id, "messages": []}
+
+        def set_thread_id(self, thread_id: str | None) -> None:
+            self.thread_id = thread_id
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            messages.append((self.thread_id, content))
+            return {"id": "message-1"}
+
+        def run_thread(self) -> str:
+            return "reply"
+
+    def fake_build_chat_prompt_session(**kwargs: object) -> FakePromptSession:
+        history_thread_id = kwargs.get("history_thread_id")
+        assert history_thread_id is None or isinstance(history_thread_id, str)
+        history_thread_ids.append(history_thread_id)
+        return FakePromptSession(history_thread_id)
+
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "_build_chat_prompt_session", fake_build_chat_prompt_session)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+    )
+
+    assert exit_code == 0
+    assert history_thread_ids[:2] == [None, "existing-thread"]
+    assert messages == [("existing-thread", "hello")]
+
+
 def test_run_chat_loop_handles_local_chat_commands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3808,7 +4085,7 @@ def test_run_chat_loop_handles_thread_shell_commands(
     output = output_stream.getvalue()
     assert exit_code == 0
     assert "[idle] created thread new-thread\n" in output
-    assert "[idle] * new-thread  New thread" in output
+    assert "[idle] * new-thread  question for new-thread" in output
     assert "[idle] renamed new-thread to \"renamed thread\"\n" in output
     assert "[idle] new-thread (clipboard unavailable)\n" in output
     assert "# Minigent transcript\n\nThread: `new-thread`" in output

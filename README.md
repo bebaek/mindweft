@@ -709,7 +709,9 @@ Use `minigent export` or `minigent-client export` to write the latest remembered
 transcript as Markdown, or pass a thread ID and `--format json` for a structured export.
 The interactive and voice `minigent-client` modes remember the thread after each
 successful user turn; scripted modes only resume local history when `--resume-last` is
-provided explicitly.
+provided explicitly. In interactive chat, prompt navigation history is stored per server,
+principal, and thread, so switching threads also switches the prompts available via
+history navigation.
 
 Use `minigent ping` for a short API reachability check, and `minigent config doctor` for
 a fuller local/server diagnostic that reports the base URL, configured principal/token,
@@ -746,10 +748,15 @@ long prompt in `$VISUAL` or `$EDITOR`. Interactive chat also supports thread-she
 commands: `/new`, `/threads [selector]`, `/switch <id>`, `/rename <title>`, `/copy-id`,
 `/export [markdown|json]`, `/tokens`, and `/debug`; in a TTY, `/threads` opens the same thread
 picker and switches to the selected thread. Pass a thread ID or unique search text as
-`/threads <selector>` to switch directly. The history file is stored at
-`~/.minigent/client-chat-history`. Piped or otherwise non-interactive stdin keeps the
-existing plain line-read behavior. In chat mode, pressing Enter on an empty line is
-ignored; use `Ctrl-D`, `Ctrl-C`, `/exit`, or `/quit` to exit.
+`/threads <selector>` to switch directly. Per-thread prompt history is stored under
+`~/.minigent/client-chat-history.d`; when resuming or switching to an existing thread,
+the client seeds that local history from the thread's server-side user message metadata
+(`metadata.raw_user_prompt`) so history contains only prompts, even when model-facing
+messages include client context. Older messages fall back to stripping Minigent's legacy
+client-context preamble. A thread resumed on another machine still has prompt history for
+that thread. Older shared history may remain at `~/.minigent/client-chat-history`. Piped or otherwise
+non-interactive stdin keeps the existing plain line-read behavior. In chat mode, pressing
+Enter on an empty line is ignored; use `Ctrl-D`, `Ctrl-C`, `/exit`, or `/quit` to exit.
 
 You can also enable local TTS on macOS with:
 
