@@ -1309,6 +1309,15 @@ MINIGENT_TENANT_EXECUTION_CONFIGS={
         {"name":"fs-workspace","url":"http://127.0.0.1:8765/mcp","headers":{}}
       ]
     },
+    "skills":{
+      "default_skill":"coding-workspace",
+      "items":[
+        {
+          "name":"coding-workspace",
+          "system_prompt":"You are assisting with a code workspace. When the user says current directory, workspace, repo, or repository root, use its absolute path. Filesystem MCP tools require explicit absolute paths; always pass the path argument for directory and file operations."
+        }
+      ]
+    },
     "capability_profiles":{
       "default_profile":"inspect",
       "items":[
@@ -1335,9 +1344,24 @@ uv run python scripts/demo_client.py \
 For stricter read/edit separation, run separate MCP servers or a filtering bridge and map
 them to separate profiles such as `inspect`, `edit`, and `test`.
 
-To smoke-test this flow end to end, run the filesystem MCP demo script. It starts the
-stdio bridge and a local Minigent API process, creates an `inspect` thread, then calls the
-filesystem MCP `list_directory` and `read_file` tools through Minigent's mock adapter:
+To run this as a reusable local coding-assistant stack, copy the coding env template and
+start the convenience runner. It loads `.env.coding`, starts the filesystem stdio bridge,
+starts the Minigent API, and prints a ready-to-run demo client command:
+
+```bash
+cp .env.coding.template .env.coding
+# edit MINIGENT_CODING_WORKSPACE=/path/to/workspace
+uv run python scripts/run_coding_workspace.py --env-file .env.coding
+```
+
+`.env.coding.template` also includes a commented Generic OAuth LLM example for coding
+profiles. Uncomment it, fill in the OAuth/provider values, start the runner, then open
+`http://127.0.0.1:8000/oauth/generic/open` to authorize the LLM provider.
+
+To smoke-test the flow without creating an env file, run the one-shot filesystem MCP demo
+script. It starts the same bridge and a local Minigent API process, creates an `inspect`
+thread, then calls the filesystem MCP `list_directory` and `read_file` tools through
+Minigent's mock adapter:
 
 ```bash
 uv run python scripts/demo_filesystem_mcp.py --workspace /path/to/workspace

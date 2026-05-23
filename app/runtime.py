@@ -18,8 +18,16 @@ from app.execution import (
     get_capability_profile,
     get_skill_configs,
 )
-from app.llm import LLMAdapter, serialize_tool_result
-from app.models import LLMResponse, Message, MessageRole, Principal, ThreadContext, ThreadStatus
+from app.llm import LLMAdapter, MockLLMAdapter, serialize_tool_result
+from app.models import (
+    LLMResponse,
+    Message,
+    MessageRole,
+    Principal,
+    ThreadContext,
+    ThreadStatus,
+    ToolCall,
+)
 from app.quality import QualityEnhancer
 from app.store import ThreadStore
 from app.tools import ToolExecutionContext, ToolRegistry
@@ -120,16 +128,21 @@ class AgentRuntime:
                     skill_prompts=[skill.system_prompt for skill in skills],
                     skill_names=[skill.name for skill in skills],
                 )
-                await _emit_run_event(
-                    event_sink,
-                    {
-                        "type": "llm.request",
-                        "iteration": iteration,
-                        "message_count": len(messages),
-                        "tool_count": len(tool_registry.specs()),
-                    },
-                )
-                response = await execution.llm_adapter.generate(messages, tool_registry.specs())
+                tool_specs = tool_registry.specs()
+                response = None
+                if not isinstance(execution.llm_adapter, MockLLMAdapter):
+                    response = _direct_tool_command_response(messages, tool_specs)
+                if response is None:
+                    await _emit_run_event(
+                        event_sink,
+                        {
+                            "type": "llm.request",
+                            "iteration": iteration,
+                            "message_count": len(messages),
+                            "tool_count": len(tool_specs),
+                        },
+                    )
+                    response = await execution.llm_adapter.generate(messages, tool_specs)
                 if response.tool_call is not None:
                     await self._handle_tool_call(
                         principal,
@@ -422,6 +435,38 @@ def _serialize_tool_error(
             **error,
         }
     }
+
+
+def _direct_tool_command_response(messages: list[Message], tools: list[Any]) -> LLMResponse | None:
+    if not messages or messages[-1].role != MessageRole.USER:
+        return None
+    content = messages[-1].content
+    if not content.startswith("/tool "):
+        return None
+    _, tool_name, *rest = content.split(" ", 2)
+    tool_names = {tool.name for tool in tools}
+    if tool_name not in tool_names:
+        return None
+    payload = rest[0].strip() if rest else ""
+    arguments: dict[str, Any] = {}
+    if payload:
+        if payload.startswith("{"):
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=400, detail="direct tool payload is invalid JSON") from exc
+            if not isinstance(parsed, dict):
+                raise HTTPException(status_code=400, detail="direct tool payload must be a JSON object")
+            arguments = parsed
+        else:
+            arguments = {"text": payload}
+    return LLMResponse(
+        tool_call=ToolCall(
+            id=f"direct-{tool_name}-call",
+            name=tool_name,
+            arguments=arguments,
+        )
+    )
 
 
 def _tool_call_signature(tool_name: str, arguments: dict[str, Any]) -> str:

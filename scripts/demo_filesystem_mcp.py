@@ -176,6 +176,20 @@ def build_tenant_config(tenant_id: str, bridge_url: str) -> dict[str, Any]:
                     {"name": "fs-workspace", "url": bridge_url, "headers": {}},
                 ],
             },
+            "skills": {
+                "default_skill": "coding-workspace",
+                "items": [
+                    {
+                        "name": "coding-workspace",
+                        "system_prompt": (
+                            "You are assisting with a code workspace. When the user says current directory, "
+                            "workspace, repo, or repository root, use its absolute path. Filesystem MCP tools "
+                            "require explicit absolute paths; always pass the path argument for directory and "
+                            "file operations."
+                        ),
+                    }
+                ],
+            },
             "capability_profiles": {
                 "default_profile": "inspect",
                 "items": [

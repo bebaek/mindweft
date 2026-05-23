@@ -293,6 +293,46 @@ def test_runtime_executes_tool_and_stores_tool_message() -> None:
     assert messages[2].content == '{"echo": "hello from tool"}'
 
 
+def test_runtime_executes_direct_tool_command_without_llm_tool_planning() -> None:
+    seen_user_prompts: list[str] = []
+
+    class NonMockLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            seen_user_prompts.extend(
+                message.content for message in messages if message.role == MessageRole.USER
+            )
+            if messages[-1].role == MessageRole.TOOL:
+                return LLMResponse(content=f"Tool result: {messages[-1].content}")
+            raise AssertionError("direct /tool command should be executed before LLM planning")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store, llm_adapter=NonMockLLM(), tool_registry=build_local_tool_registry()
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content='/tool echo {"text":"hello from direct tool"}',
+            created_by=PRINCIPAL.user_id,
+        ),
+    )
+
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    assert reply == 'Tool result: {"echo": "hello from direct tool"}'
+    assert messages[1].tool_name == "echo"
+    assert messages[1].tool_arguments == {"text": "hello from direct tool"}
+    assert messages[1].tool_call_id == "direct-echo-call"
+    assert seen_user_prompts == ['/tool echo {"text":"hello from direct tool"}']
+
+
 def test_runtime_executes_current_time_tool() -> None:
     store = InMemoryThreadStore()
     runtime = AgentRuntime(

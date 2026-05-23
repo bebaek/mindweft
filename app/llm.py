@@ -249,8 +249,12 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
             "model": self._model,
             "store": False,
             "stream": True,
-            "instructions": "You are a helpful assistant.",
-            "input": [_message_to_responses_payload(message, tool_name_map) for message in messages],
+            "instructions": _responses_instructions(messages),
+            "input": [
+                _message_to_responses_payload(message, tool_name_map)
+                for message in messages
+                if message.role != MessageRole.SYSTEM
+            ],
             "tools": [_tool_to_responses_payload(tool, tool_name_map) for tool in tools],
             "tool_choice": "auto",
             "parallel_tool_calls": True,
@@ -423,6 +427,13 @@ def _tool_to_payload(tool: ToolSpec, tool_name_map: dict[str, str]) -> dict[str,
     }
 
 
+def _responses_instructions(messages: list[Message]) -> str:
+    system_parts = [message.content for message in messages if message.role == MessageRole.SYSTEM]
+    if not system_parts:
+        return "You are a helpful assistant."
+    return "\n\n".join(system_parts)
+
+
 def _message_to_responses_payload(message: Message, tool_name_map: dict[str, str]) -> dict[str, Any]:
     if message.role == MessageRole.TOOL:
         return {
@@ -535,7 +546,10 @@ def _looks_like_sse(body: str) -> bool:
 def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMResponse:
     text_parts: list[str] = []
     final_response: dict[str, Any] | None = None
-    output_items: list[dict[str, Any]] = []
+    output_items_by_key: dict[str, dict[str, Any]] = {}
+    output_item_order: list[str] = []
+    argument_deltas_by_key: dict[str, list[str]] = {}
+    done_arguments_by_key: dict[str, str] = {}
     for raw_line in body.splitlines():
         line = raw_line.strip()
         if not line.startswith("data:"):
@@ -549,24 +563,52 @@ def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMRespons
             continue
         if not isinstance(event, dict):
             continue
+        event_type = event.get("type")
         delta = event.get("delta")
-        if event.get("type") == "response.output_text.delta" and isinstance(delta, str):
+        if event_type == "response.output_text.delta" and isinstance(delta, str):
             text_parts.append(delta)
         response_payload = event.get("response")
         if isinstance(response_payload, dict):
             final_response = response_payload
         item = event.get("item")
-        if isinstance(item, dict):
-            output_items.append(item)
+        item_key = _responses_sse_item_key(event, item)
+        if isinstance(item, dict) and item_key is not None:
+            existing = output_items_by_key.get(item_key, {})
+            merged = {**existing, **item}
+            output_items_by_key[item_key] = merged
+            if item_key not in output_item_order:
+                output_item_order.append(item_key)
+        if event_type in {
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+        }:
+            argument_key = item_key or _responses_sse_argument_key(event)
+            if argument_key is not None:
+                if event_type == "response.function_call_arguments.done":
+                    arguments = event.get("arguments")
+                    if isinstance(arguments, str):
+                        done_arguments_by_key[argument_key] = arguments
+                elif isinstance(delta, str):
+                    argument_deltas_by_key.setdefault(argument_key, []).append(delta)
 
+    output_items = _responses_sse_output_items(
+        output_items_by_key,
+        output_item_order,
+        argument_deltas_by_key,
+        done_arguments_by_key,
+    )
     if final_response is not None:
         try:
-            return _parse_responses_payload(final_response, tool_name_map)
+            return _parse_responses_payload(final_response, tool_name_map, log_missing_output=False)
         except HTTPException:
             if text_parts:
                 return LLMResponse(content="".join(text_parts))
             if output_items:
                 return _parse_responses_payload({"output": output_items}, tool_name_map)
+            logger.error(
+                "Responses SSE final response missing message/function output: %s",
+                _truncate_json(final_response),
+            )
             raise
     if output_items:
         return _parse_responses_payload({"output": output_items}, tool_name_map)
@@ -576,7 +618,55 @@ def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMRespons
     raise HTTPException(status_code=502, detail="Generic OAuth LLM returned no assistant output")
 
 
-def _parse_responses_payload(payload: dict[str, Any], tool_name_map: dict[str, str]) -> LLMResponse:
+def _responses_sse_item_key(event: dict[str, Any], item: Any) -> str | None:
+    item_id = event.get("item_id")
+    if isinstance(item_id, str):
+        return item_id
+    if isinstance(item, dict):
+        item_item_id = item.get("id")
+        if isinstance(item_item_id, str):
+            return item_item_id
+        call_id = item.get("call_id")
+        if isinstance(call_id, str):
+            return call_id
+    return _responses_sse_argument_key(event)
+
+
+def _responses_sse_argument_key(event: dict[str, Any]) -> str | None:
+    for key_name in ("item_id", "call_id", "output_index"):
+        value = event.get(key_name)
+        if isinstance(value, str):
+            return value
+        if isinstance(value, int):
+            return str(value)
+    return None
+
+
+def _responses_sse_output_items(
+    output_items_by_key: dict[str, dict[str, Any]],
+    output_item_order: list[str],
+    argument_deltas_by_key: dict[str, list[str]],
+    done_arguments_by_key: dict[str, str],
+) -> list[dict[str, Any]]:
+    output_items: list[dict[str, Any]] = []
+    for key in output_item_order:
+        item = dict(output_items_by_key[key])
+        if item.get("type") == "function_call":
+            arguments = done_arguments_by_key.get(key)
+            if arguments is None and key in argument_deltas_by_key:
+                arguments = "".join(argument_deltas_by_key[key])
+            if arguments is not None:
+                item["arguments"] = arguments
+        output_items.append(item)
+    return output_items
+
+
+def _parse_responses_payload(
+    payload: dict[str, Any],
+    tool_name_map: dict[str, str],
+    *,
+    log_missing_output: bool = True,
+) -> LLMResponse:
     output = payload.get("output") or []
     if not isinstance(output, list):
         logger.error("Responses payload output is not a list: %s", _truncate_json(payload))
@@ -618,7 +708,8 @@ def _parse_responses_payload(payload: dict[str, Any], tool_name_map: dict[str, s
                     text_parts.append(text)
     if text_parts:
         return LLMResponse(content="".join(text_parts))
-    logger.error("Responses payload missing message/function output: %s", _truncate_json(payload))
+    if log_missing_output:
+        logger.error("Responses payload missing message/function output: %s", _truncate_json(payload))
     raise HTTPException(status_code=502, detail="Generic OAuth LLM returned no assistant output")
 
 

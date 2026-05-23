@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.llm import GenericOAuthResponsesAdapter, build_llm_adapter_from_env
 from app.main import create_app
-from app.models import Message, MessageRole
+from app.models import Message, MessageRole, ToolSpec
 from app.oauth import (
     GENERIC_OAUTH_PROVIDER,
     FileOAuthCredentialStore,
@@ -110,6 +110,57 @@ def test_generic_oauth_adapter_sends_headers_and_parses_text(tmp_path: Path) -> 
     assert seen_payload["stream"] is True
 
 
+def test_generic_oauth_adapter_sends_system_messages_as_instructions(tmp_path: Path) -> None:
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_payload
+        if request.url.path.endswith("/token"):
+            return httpx.Response(200, json={"access_token": _token("acct_test"), "expires_in": 3600})
+        seen_payload = json.loads(request.content.decode("utf-8"))
+        return httpx.Response(
+            200,
+            json={"output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]},
+        )
+
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://example.test/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(thread_id="thread", role=MessageRole.SYSTEM, content="system rules"),
+                Message(thread_id="thread", role=MessageRole.SYSTEM, content="workspace rules"),
+                Message(thread_id="thread", role=MessageRole.USER, content="hello"),
+            ],
+            [],
+        )
+    )
+
+    assert response.content == "ok"
+    assert seen_payload["instructions"] == "system rules\n\nworkspace rules"
+    assert seen_payload["input"] == [{"role": "user", "content": "hello"}]
+
+
 def test_generic_oauth_adapter_parses_sse_with_event_prefix(tmp_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -157,6 +208,54 @@ def test_generic_oauth_adapter_parses_sse_with_event_prefix(tmp_path: Path) -> N
     )
 
     assert response.content == "hello from event-prefixed sse"
+
+
+def test_generic_oauth_adapter_accumulates_streamed_function_arguments(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=(
+                'data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"echo","arguments":""}}\n\n'
+                'data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\\\"text\\\":"}\n\n'
+                'data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"\\\"hello\\\"}"}\n\n'
+                'data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"echo","arguments":"{\\\"text\\\":\\\"hello\\\"}"}}\n\n'
+                'data: [DONE]\n\n'
+            ),
+        )
+
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://example.test/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="echo hello")],
+            [ToolSpec(name="echo", description="Echo text", input_schema={"type": "object"})],
+        )
+    )
+
+    assert response.tool_call is not None
+    assert response.tool_call.name == "echo"
+    assert response.tool_call.arguments == {"text": "hello"}
 
 
 def test_build_llm_adapter_from_env_supports_generic_oauth(monkeypatch) -> None:
