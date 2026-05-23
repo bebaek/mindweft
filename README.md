@@ -12,6 +12,7 @@ Minimal AI agent runtime POC from `DESIGN.md`.
 - Pluggable tool registry
 - Replaceable LLM adapter boundary
 - OpenAI and OpenRouter support via one OpenAI-compatible adapter
+- Optional generic OAuth login for provider-specific LLM integrations
 - Optional MCP tool discovery and invocation over HTTP
 - Optional local agent wrapper for Pi-first peer-agent task execution
 - Deterministic mock adapter for local testing
@@ -68,6 +69,44 @@ desktop and mobile browsers. It uses the NDJSON run stream to display live run/t
 progress before appending the final assistant reply. The client adjusts to mobile visual
 viewport changes so the composer remains usable when the screen keyboard is open. It has
 no frontend build step or extra dependencies.
+
+## Generic OAuth LLM Provider
+
+Minigent can use a user-configured OAuth authorization-code + PKCE flow for LLM endpoints
+that accept bearer tokens. There are no provider defaults; all OAuth and LLM parameters
+must be supplied explicitly.
+
+```dotenv
+MINIGENT_LLM_PROVIDER=generic-oauth
+MINIGENT_LLM_MODEL=your-model-id
+MINIGENT_LLM_URL=https://provider.example/v1/responses
+MINIGENT_LLM_EXTRA_HEADERS='{"x-provider-feature":"enabled"}'
+# Optional: set when the provider requires an account/org header populated from a JWT claim.
+MINIGENT_LLM_ACCOUNT_ID_HEADER=x-provider-account-id
+
+MINIGENT_OAUTH_STORE_PATH=/path/to/oauth.json
+MINIGENT_OAUTH_PROVIDER_ID=your-provider-id
+MINIGENT_OAUTH_CLIENT_ID=your-client-id
+MINIGENT_OAUTH_AUTHORIZE_URL=https://provider.example/oauth/authorize
+MINIGENT_OAUTH_TOKEN_URL=https://provider.example/oauth/token
+MINIGENT_OAUTH_REDIRECT_URI=http://127.0.0.1:8000/oauth/generic/callback
+MINIGENT_OAUTH_SCOPE="openid profile offline_access"
+MINIGENT_OAUTH_AUTH_PARAMS='{"prompt":"login"}'
+# Optional: dot-separated path inside the access-token JWT, used with MINIGENT_LLM_ACCOUNT_ID_HEADER.
+MINIGENT_OAUTH_ACCOUNT_ID_JWT_CLAIM=auth.account_id
+```
+
+Start Minigent, then begin login from a browser:
+
+```text
+http://127.0.0.1:8000/oauth/generic/open
+```
+
+Alternatively, `GET /oauth/generic/login` returns an `authorization_url` JSON field that
+can be opened manually. The callback exchanges the code for access/refresh tokens, stores
+them in `MINIGENT_OAUTH_STORE_PATH`, and the `generic-oauth` adapter refreshes expired
+tokens automatically. Minigent accepts callbacks at both `/oauth/generic/callback` and
+`/auth/callback` for providers with fixed redirect path requirements.
 
 For same-machine testing, start the API and open:
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.admin_api import (
@@ -47,6 +47,7 @@ from app.models import (
     RunThreadResponse,
     ThreadStatus,
 )
+from app.oauth import GenericOAuthProvider, OAuthFlowStore
 from app.observability import configure_logging, configure_tracing
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_env
 from app.quality import QualityEnhancer
@@ -176,6 +177,7 @@ def create_app(
     app.state.store = thread_store or build_thread_store_from_env()
     app.state.mcp_manager = mcp_manager
     app.state.mcp_broker_sessions = MCPBrokerSessionStore()
+    app.state.oauth_flows = OAuthFlowStore()
     admin_encryption_key = admin_encryption_key_from_env()
     if admin_store is None:
         admin_db_path = admin_store_path_from_env()
@@ -256,6 +258,56 @@ def create_app(
     @app.get("/config")
     async def config(request: Request) -> dict[str, object]:
         return request.app.state.execution_resolver.describe()
+
+    @app.get("/oauth/generic/login")
+    async def generic_oauth_login(request: Request) -> dict[str, str]:
+        oauth_provider = GenericOAuthProvider()
+        login, flow = oauth_provider.start_login()
+        request.app.state.oauth_flows.put(login.state, flow)
+        return {
+            "provider": oauth_provider.provider_id,
+            "authorization_url": login.authorization_url,
+            "state": login.state,
+            "instructions": "Open authorization_url in a browser, complete OAuth login, then return to Minigent.",
+        }
+
+    @app.get("/oauth/generic/callback", response_class=HTMLResponse)
+    @app.get("/auth/callback", response_class=HTMLResponse)
+    async def generic_oauth_callback(
+        request: Request,
+        code: str | None = None,
+        state: str | None = None,
+        error: str | None = None,
+    ) -> HTMLResponse:
+        if error:
+            return HTMLResponse(f"<h1>OAuth login failed</h1><p>{error}</p>", status_code=400)
+        if not code or not state:
+            return HTMLResponse(
+                "<h1>OAuth login failed</h1><p>Missing code or state.</p>",
+                status_code=400,
+            )
+        flow = request.app.state.oauth_flows.pop(state)
+        if flow is None:
+            return HTMLResponse(
+                "<h1>OAuth login failed</h1><p>Unknown or expired OAuth state.</p>",
+                status_code=400,
+            )
+        try:
+            await GenericOAuthProvider().complete_login(code=code, flow=flow)
+        except Exception as exc:
+            logger.warning("Generic OAuth callback failed: %s", exc)
+            return HTMLResponse(
+                "<h1>OAuth login failed</h1><p>Token exchange failed.</p>",
+                status_code=502,
+            )
+        return HTMLResponse("<h1>OAuth login complete</h1><p>You can close this tab.</p>")
+
+    @app.get("/oauth/generic/open")
+    async def generic_oauth_open(request: Request) -> RedirectResponse:
+        oauth_provider = GenericOAuthProvider()
+        login, flow = oauth_provider.start_login()
+        request.app.state.oauth_flows.put(login.state, flow)
+        return RedirectResponse(login.authorization_url)
 
     @app.get("/peer-agents")
     async def peer_agents(request: Request) -> dict[str, object]:

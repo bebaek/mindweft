@@ -9,7 +9,13 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.admin_store import SQLiteTenantConfigStore
-from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter, build_llm_adapter_from_env
+from app.llm import (
+    GenericOAuthResponsesAdapter,
+    LLMAdapter,
+    MockLLMAdapter,
+    OpenAICompatibleAdapter,
+    build_llm_adapter_from_env,
+)
 from app.mcp import MCPHTTPClient, MCPServerConfig, load_mcp_server_configs_from_env
 from app.mcp_manager import MCPServerManager
 from app.tools import LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry
@@ -924,6 +930,17 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
 def _build_llm_adapter(config: TenantLLMConfig) -> LLMAdapter:
     if config.provider == "mock":
         return MockLLMAdapter()
+    if config.provider == "generic-oauth":
+        if not config.model:
+            raise RuntimeError("Tenant LLM provider 'generic-oauth' requires model")
+        if not config.base_url:
+            raise RuntimeError("Tenant LLM provider 'generic-oauth' requires base_url")
+        return GenericOAuthResponsesAdapter(
+            url=config.base_url,
+            model=config.model,
+            extra_headers=config.extra_headers,
+            timeout=config.timeout,
+        )
     if config.provider in {"openai", "openrouter", "openai-compatible"}:
         if not config.api_key:
             raise RuntimeError(f"Tenant LLM provider '{config.provider}' requires api_key")

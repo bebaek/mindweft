@@ -13,6 +13,7 @@ import httpx
 from fastapi import HTTPException
 
 from app.models import LLMResponse, Message, MessageRole, ToolCall, ToolSpec
+from app.oauth import GENERIC_OAUTH_PROVIDER, GenericOAuthProvider
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +207,90 @@ class OpenAICompatibleAdapter(LLMAdapter):
         )
 
 
+class GenericOAuthResponsesAdapter(LLMAdapter):
+    def __init__(
+        self,
+        *,
+        model: str,
+        url: str,
+        oauth_provider: GenericOAuthProvider | None = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float = 30.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._model = model
+        self._url = url
+        self._oauth_provider = oauth_provider or GenericOAuthProvider()
+        self._extra_headers = extra_headers or {}
+        self._timeout = timeout
+        self._transport = transport
+
+    async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+        credentials = await self._oauth_provider.get_credentials()
+        if credentials is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Generic OAuth credentials are missing. Start login at /oauth/generic/login.",
+            )
+        account_id_header = os.getenv("MINIGENT_LLM_ACCOUNT_ID_HEADER", "").strip()
+        if account_id_header and not credentials.account_id:
+            raise HTTPException(status_code=401, detail="OAuth credentials are missing account_id")
+
+        tool_name_map = _build_provider_tool_name_map(tools)
+        headers = {
+            "Authorization": f"Bearer {credentials.access_token}",
+            "Accept": "text/event-stream, application/json",
+            "Content-Type": "application/json",
+            **self._extra_headers,
+        }
+        if account_id_header and credentials.account_id:
+            headers[account_id_header] = credentials.account_id
+        payload = {
+            "model": self._model,
+            "store": False,
+            "stream": True,
+            "instructions": "You are a helpful assistant.",
+            "input": [_message_to_responses_payload(message, tool_name_map) for message in messages],
+            "tools": [_tool_to_responses_payload(tool, tool_name_map) for tool in tools],
+            "tool_choice": "auto",
+            "parallel_tool_calls": True,
+        }
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+            try:
+                response = await client.post(
+                    self._url,
+                    json=payload,
+                    headers=headers,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                detail = exc.response.text or str(exc)
+                raise HTTPException(status_code=502, detail=f"Generic OAuth LLM error: {detail}") from exc
+            except httpx.HTTPError as exc:
+                raise HTTPException(status_code=502, detail=f"Generic OAuth LLM request failed: {exc}") from exc
+        body = response.text
+        content_type = response.headers.get("content-type", "")
+        if "text/event-stream" in content_type or _looks_like_sse(body):
+            return _parse_responses_sse(body, tool_name_map)
+        try:
+            return _parse_responses_payload(response.json(), tool_name_map)
+        except json.JSONDecodeError as exc:
+            logger.error("Generic OAuth LLM returned non-JSON body: %s", body[:2000])
+            raise HTTPException(
+                status_code=502,
+                detail="Generic OAuth LLM returned a non-JSON, non-SSE response",
+            ) from exc
+
+    def describe(self) -> dict[str, Any]:
+        return {
+            "provider": GENERIC_OAUTH_PROVIDER,
+            "model": self._model,
+            "url": self._url,
+            "headers": sorted(self._extra_headers.keys()),
+            "adapter": "GenericOAuthResponsesAdapter",
+        }
+
+
 @dataclass(frozen=True)
 class ProviderConfig:
     provider: str
@@ -220,6 +305,12 @@ def build_llm_adapter_from_env() -> LLMAdapter:
     if provider == "mock":
         logger.info("LLM config: provider=mock adapter=MockLLMAdapter")
         return MockLLMAdapter()
+    if provider == GENERIC_OAUTH_PROVIDER:
+        model = _required_env("MINIGENT_LLM_MODEL")
+        url = _required_env("MINIGENT_LLM_URL")
+        extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS")
+        logger.info("LLM config: provider=%s model=%s url=%s", provider, model, url)
+        return GenericOAuthResponsesAdapter(model=model, url=url, extra_headers=extra_headers)
 
     config = load_provider_config(provider)
     logger.info(
@@ -332,6 +423,52 @@ def _tool_to_payload(tool: ToolSpec, tool_name_map: dict[str, str]) -> dict[str,
     }
 
 
+def _message_to_responses_payload(message: Message, tool_name_map: dict[str, str]) -> dict[str, Any]:
+    if message.role == MessageRole.TOOL:
+        return {
+            "type": "function_call_output",
+            "call_id": message.tool_call_id or "unknown-call",
+            "output": message.content,
+        }
+    if message.role == MessageRole.ASSISTANT and message.tool_call_id and message.tool_name:
+        return {
+            "type": "function_call",
+            "call_id": message.tool_call_id,
+            "name": tool_name_map.get(message.tool_name, _sanitize_tool_name(message.tool_name)),
+            "arguments": json.dumps(message.tool_arguments or {}, ensure_ascii=True),
+        }
+    role = "assistant" if message.role == MessageRole.ASSISTANT else "user"
+    return {"role": role, "content": message.content}
+
+
+def _tool_to_responses_payload(tool: ToolSpec, tool_name_map: dict[str, str]) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "name": tool_name_map[tool.name],
+        "description": tool.description,
+        "parameters": tool.input_schema,
+    }
+
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is required")
+    return value
+
+
+def _json_string_map_env(name: str) -> dict[str, str]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return {}
+    payload = json.loads(raw)
+    if not isinstance(payload, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in payload.items()
+    ):
+        raise RuntimeError(f"{name} must be a JSON object of string values")
+    return dict(payload)
+
+
 def _is_azure_openai_base_url(base_url: str) -> bool:
     parsed = urlparse(base_url)
     host = (parsed.hostname or "").lower()
@@ -388,6 +525,101 @@ def _should_drop_historical_tool_message(message: Message, active_tool_call_id: 
     if message.role == MessageRole.TOOL:
         return True
     return message.role == MessageRole.ASSISTANT and bool(message.tool_name)
+
+
+def _looks_like_sse(body: str) -> bool:
+    stripped = body.lstrip()
+    return stripped.startswith("data:") or stripped.startswith("event:")
+
+
+def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMResponse:
+    text_parts: list[str] = []
+    final_response: dict[str, Any] | None = None
+    output_items: list[dict[str, Any]] = []
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line.removeprefix("data:").strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        delta = event.get("delta")
+        if event.get("type") == "response.output_text.delta" and isinstance(delta, str):
+            text_parts.append(delta)
+        response_payload = event.get("response")
+        if isinstance(response_payload, dict):
+            final_response = response_payload
+        item = event.get("item")
+        if isinstance(item, dict):
+            output_items.append(item)
+
+    if final_response is not None:
+        try:
+            return _parse_responses_payload(final_response, tool_name_map)
+        except HTTPException:
+            if text_parts:
+                return LLMResponse(content="".join(text_parts))
+            if output_items:
+                return _parse_responses_payload({"output": output_items}, tool_name_map)
+            raise
+    if output_items:
+        return _parse_responses_payload({"output": output_items}, tool_name_map)
+    if text_parts:
+        return LLMResponse(content="".join(text_parts))
+    logger.error("Responses SSE missing message/function output: %s", body[:2000])
+    raise HTTPException(status_code=502, detail="Generic OAuth LLM returned no assistant output")
+
+
+def _parse_responses_payload(payload: dict[str, Any], tool_name_map: dict[str, str]) -> LLMResponse:
+    output = payload.get("output") or []
+    if not isinstance(output, list):
+        logger.error("Responses payload output is not a list: %s", _truncate_json(payload))
+        raise HTTPException(status_code=502, detail="Generic OAuth LLM returned invalid output")
+
+    reverse_tool_name_map = {value: key for key, value in tool_name_map.items()}
+    text_parts: list[str] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "function_call":
+            raw_name = item.get("name")
+            raw_arguments = item.get("arguments") or "{}"
+            call_id = item.get("call_id") or item.get("id") or "generic-oauth-tool-call"
+            if not isinstance(raw_name, str) or not isinstance(call_id, str):
+                continue
+            try:
+                arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else {}
+            except json.JSONDecodeError:
+                arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            return LLMResponse(
+                tool_call=ToolCall(
+                    id=call_id,
+                    name=reverse_tool_name_map.get(raw_name, raw_name),
+                    arguments=arguments,
+                )
+            )
+        if item.get("type") == "message":
+            content = item.get("content") or []
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                text = part.get("text") or part.get("output_text")
+                if isinstance(text, str):
+                    text_parts.append(text)
+    if text_parts:
+        return LLMResponse(content="".join(text_parts))
+    logger.error("Responses payload missing message/function output: %s", _truncate_json(payload))
+    raise HTTPException(status_code=502, detail="Generic OAuth LLM returned no assistant output")
 
 
 def _parse_chat_completion(payload: dict[str, Any], tool_name_map: dict[str, str]) -> LLMResponse:
