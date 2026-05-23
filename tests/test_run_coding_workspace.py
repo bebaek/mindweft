@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+from types import ModuleType
+
+
+def _load_runner() -> ModuleType:
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "run_coding_workspace.py"
+    spec = importlib.util.spec_from_file_location("run_coding_workspace", script_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+runner = _load_runner()
+
+
+def test_bridge_command_uses_default_read_only_tools(tmp_path: Path) -> None:
+    command = runner.build_bridge_command(
+        {}, "demo-tenant", "fs-workspace", "127.0.0.1", 8765, tmp_path
+    )
+
+    allowed_tool_indexes = [
+        index for index, value in enumerate(command) if value == "--allowed-tool"
+    ]
+    assert [command[index + 1] for index in allowed_tool_indexes] == [
+        "list_allowed_directories",
+        "list_directory",
+        "read_file",
+    ]
+
+
+def test_bridge_command_uses_tenant_config_allowed_tools(tmp_path: Path) -> None:
+    env = {
+        "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(
+            {
+                "demo-tenant": {
+                    "tools": {
+                        "mcp_servers": [
+                            {
+                                "name": "fs-workspace",
+                                "url": "http://127.0.0.1:8765/mcp",
+                                "allowed_tools": [
+                                    "list_allowed_directories",
+                                    "list_directory",
+                                    "read_file",
+                                    "read_multiple_files",
+                                    "write_file",
+                                    "edit_file",
+                                    "create_directory",
+                                    "directory_tree",
+                                    "move_file",
+                                    "search_files",
+                                    "get_file_info",
+                                ],
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+    }
+
+    command = runner.build_bridge_command(
+        env, "demo-tenant", "fs-workspace", "127.0.0.1", 8765, tmp_path
+    )
+
+    allowed_tool_indexes = [
+        index for index, value in enumerate(command) if value == "--allowed-tool"
+    ]
+    assert [command[index + 1] for index in allowed_tool_indexes] == [
+        "list_allowed_directories",
+        "list_directory",
+        "read_file",
+        "read_multiple_files",
+        "write_file",
+        "edit_file",
+        "create_directory",
+        "directory_tree",
+        "move_file",
+        "search_files",
+        "get_file_info",
+    ]
+
+
+def test_bridge_allowed_tools_allows_unfiltered_explicit_null() -> None:
+    env = {
+        "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(
+            {
+                "demo-tenant": {
+                    "tools": {
+                        "mcp_servers": [
+                            {
+                                "name": "fs-workspace",
+                                "url": "http://127.0.0.1:8765/mcp",
+                                "allowed_tools": None,
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+    }
+
+    assert runner.bridge_allowed_tools_from_config(env, "demo-tenant", "fs-workspace") == []

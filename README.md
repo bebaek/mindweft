@@ -1472,6 +1472,11 @@ cp .env.coding.template .env.coding
 uv run python scripts/run_coding_workspace.py --env-file .env.coding
 ```
 
+The runner starts the bridge with read-only filesystem tools by default. If you provide
+`MINIGENT_TENANT_EXECUTION_CONFIGS` with an `allowed_tools` list for the configured
+`fs-workspace` server, the runner mirrors that list into the bridge's `--allowed-tool`
+filter so fuller coding profiles can expose additional filesystem MCP tools.
+
 `.env.coding.template` also includes a commented Generic OAuth LLM example for coding
 profiles. Uncomment it, fill in the OAuth/provider values, start the runner, then open
 `http://127.0.0.1:8000/oauth/generic/open` to authorize the LLM provider.

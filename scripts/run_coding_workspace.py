@@ -19,6 +19,11 @@ DEFAULT_BRIDGE_HOST = "127.0.0.1"
 DEFAULT_BRIDGE_PORT = 8765
 DEFAULT_BRIDGE_NAME = "fs-workspace"
 DEFAULT_TENANT_ID = "demo-tenant"
+DEFAULT_BRIDGE_ALLOWED_TOOLS = (
+    "list_allowed_directories",
+    "list_directory",
+    "read_file",
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -111,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.skip_bridge:
             processes.append(
                 start_process(
-                    build_bridge_command(env, bridge_name, bridge_host, bridge_port, workspace),
+                    build_bridge_command(env, tenant_id, bridge_name, bridge_host, bridge_port, workspace),
                     env=env,
                     label="filesystem MCP bridge",
                 )
@@ -240,8 +245,46 @@ def coding_workspace_skill() -> dict[str, str]:
     }
 
 
+def bridge_allowed_tools_from_config(
+    env: dict[str, str],
+    tenant_id: str,
+    bridge_name: str,
+) -> list[str]:
+    raw_config = env.get("MINIGENT_TENANT_EXECUTION_CONFIGS")
+    if not raw_config:
+        return list(DEFAULT_BRIDGE_ALLOWED_TOOLS)
+
+    payload = json.loads(raw_config)
+    if not isinstance(payload, dict):
+        raise RuntimeError("MINIGENT_TENANT_EXECUTION_CONFIGS must be a JSON object")
+    tenant = payload.get(tenant_id)
+    if not isinstance(tenant, dict):
+        return list(DEFAULT_BRIDGE_ALLOWED_TOOLS)
+    tools = tenant.get("tools")
+    if not isinstance(tools, dict):
+        return list(DEFAULT_BRIDGE_ALLOWED_TOOLS)
+    mcp_servers = tools.get("mcp_servers", tools.get("mcpServers"))
+    if not isinstance(mcp_servers, list):
+        return list(DEFAULT_BRIDGE_ALLOWED_TOOLS)
+
+    for server in mcp_servers:
+        if not isinstance(server, dict) or server.get("name") != bridge_name:
+            continue
+        allowed_tools = server.get("allowed_tools", server.get("allowedTools"))
+        if allowed_tools is None:
+            return []
+        if not isinstance(allowed_tools, list) or not all(
+            isinstance(item, str) and item for item in allowed_tools
+        ):
+            raise RuntimeError(f"MCP server '{bridge_name}' has invalid allowed_tools")
+        return list(allowed_tools)
+
+    return list(DEFAULT_BRIDGE_ALLOWED_TOOLS)
+
+
 def build_bridge_command(
     env: dict[str, str],
+    tenant_id: str,
     bridge_name: str,
     bridge_host: str,
     bridge_port: int,
@@ -254,6 +297,9 @@ def build_bridge_command(
         "@modelcontextprotocol/server-filesystem",
         str(workspace),
     ]
+    allowed_tool_args: list[str] = []
+    for tool_name in bridge_allowed_tools_from_config(env, tenant_id, bridge_name):
+        allowed_tool_args.extend(["--allowed-tool", tool_name])
     return [
         sys.executable,
         "-c",
@@ -264,12 +310,7 @@ def build_bridge_command(
         bridge_host,
         "--port",
         str(bridge_port),
-        "--allowed-tool",
-        "list_allowed_directories",
-        "--allowed-tool",
-        "list_directory",
-        "--allowed-tool",
-        "read_file",
+        *allowed_tool_args,
         "--deny-glob",
         "**/.env*",
         "--deny-glob",
