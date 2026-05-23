@@ -9,9 +9,15 @@ from contextlib import asynccontextmanager
 from typing import Any, Sequence
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.mcp import DEFAULT_MCP_PROTOCOL_VERSION
+from app.mcp import (
+    DEFAULT_MCP_PROTOCOL_VERSION,
+    MCPPathPolicy,
+    _filter_directory_listing_text,
+    _iter_path_arguments,
+    _path_denied,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +34,8 @@ class BridgeSettings(BaseModel):
     port: int = DEFAULT_PORT
     path: str = DEFAULT_PATH
     request_timeout: float = DEFAULT_TIMEOUT_SECONDS
+    allowed_tools: list[str] | None = None
+    path_policy: MCPPathPolicy = Field(default_factory=MCPPathPolicy)
 
 
 class StdioMCPBridge:
@@ -92,7 +100,9 @@ class StdioMCPBridge:
                 await self._write_json(payload)
             return Response(status_code=202)
 
+        self._validate_request_policy(payload)
         response_payload = await self._request(payload)
+        response_payload = self._filter_response_payload(method, response_payload, payload)
         response_headers = {"content-type": "application/json"}
         if method == "initialize":
             self._session_id = secrets.token_urlsafe(24)
@@ -107,6 +117,91 @@ class StdioMCPBridge:
             media_type="application/json",
             headers=response_headers,
         )
+
+    def _validate_request_policy(self, payload: dict[str, Any]) -> None:
+        method = payload.get("method")
+        if method != "tools/call":
+            return
+        params = payload.get("params")
+        if not isinstance(params, dict):
+            raise HTTPException(status_code=400, detail="MCP tools/call params must be an object")
+        tool_name = params.get("name")
+        if not isinstance(tool_name, str) or not tool_name:
+            raise HTTPException(status_code=400, detail="MCP tools/call requires tool name")
+        if self._settings.allowed_tools is not None and tool_name not in self._settings.allowed_tools:
+            raise HTTPException(
+                status_code=403,
+                detail=f"MCP tool '{tool_name}' is not allowed by bridge '{self._settings.name}'",
+            )
+        arguments = params.get("arguments") or {}
+        if not isinstance(arguments, dict):
+            raise HTTPException(status_code=400, detail="MCP tools/call arguments must be an object")
+        for path in _iter_path_arguments(arguments):
+            if _path_denied(path, self._settings.path_policy):
+                logger.warning(
+                    "MCP bridge denied path: name=%s tool=%s path=%s",
+                    self._settings.name,
+                    tool_name,
+                    path,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"MCP path '{path}' is denied by bridge '{self._settings.name}' policy",
+                )
+
+    def _filter_response_payload(
+        self,
+        method: str,
+        payload: dict[str, Any],
+        request_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            return payload
+        if method == "tools/list":
+            return self._filter_tools_list(payload, result)
+        if method == "tools/call":
+            return self._filter_tools_call(payload, result, request_payload)
+        return payload
+
+    def _filter_tools_list(self, payload: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+        if self._settings.allowed_tools is None:
+            return payload
+        tools = result.get("tools")
+        if not isinstance(tools, list):
+            return payload
+        allowed = set(self._settings.allowed_tools)
+        filtered_tools = [
+            tool for tool in tools if isinstance(tool, dict) and tool.get("name") in allowed
+        ]
+        return {**payload, "result": {**result, "tools": filtered_tools}}
+
+    def _filter_tools_call(
+        self,
+        payload: dict[str, Any],
+        result: dict[str, Any],
+        request_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        params = request_payload.get("params")
+        tool_name = params.get("name") if isinstance(params, dict) else None
+        if tool_name != "list_directory" or not self._settings.path_policy.deny_globs:
+            return payload
+        content = result.get("content")
+        if not isinstance(content, list):
+            return payload
+        filtered_content: list[Any] = []
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "text":
+                filtered_content.append(item)
+                continue
+            text = item.get("text")
+            if not isinstance(text, str):
+                filtered_content.append(item)
+                continue
+            filtered_content.append(
+                {**item, "text": _filter_directory_listing_text(text, self._settings.path_policy)}
+            )
+        return {**payload, "result": {**result, "content": filtered_content}}
 
     def _require_session(self, headers: dict[str, str]) -> None:
         if self._session_id is None:
@@ -229,6 +324,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read/write timeout for stdio MCP requests in seconds.",
     )
     parser.add_argument(
+        "--allowed-tool",
+        action="append",
+        default=None,
+        help="Allow only this MCP tool name. Repeat to allow multiple tools.",
+    )
+    parser.add_argument(
+        "--deny-glob",
+        action="append",
+        default=[],
+        help="Deny path glob for path-like tool arguments. Repeat for multiple patterns.",
+    )
+    parser.add_argument(
+        "--allow-glob",
+        action="append",
+        default=[],
+        help="Allow path glob that overrides denied path globs. Repeat for multiple patterns.",
+    )
+    parser.add_argument(
         "command",
         nargs=argparse.REMAINDER,
         help="Command argv for the stdio MCP server. Prefix with -- before the command.",
@@ -252,6 +365,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         port=args.port,
         path=args.path,
         request_timeout=args.request_timeout,
+        allowed_tools=args.allowed_tool,
+        path_policy=MCPPathPolicy(
+            deny_globs=list(args.deny_glob),
+            allow_globs=list(args.allow_glob),
+        ),
     )
     app = create_bridge_app(settings)
 

@@ -1293,7 +1293,17 @@ That server is stdio-based, while Minigent consumes MCP over Streamable HTTP. Ru
 an HTTP bridge, restricted to the intended workspace root:
 
 ```bash
-minigent-mcp-stdio-bridge --name fs-workspace --port 8765 -- \
+minigent-mcp-stdio-bridge \
+  --name fs-workspace \
+  --port 8765 \
+  --allowed-tool list_allowed_directories \
+  --allowed-tool list_directory \
+  --allowed-tool read_file \
+  --deny-glob '**/.env*' \
+  --deny-glob '**/.git/**' \
+  --deny-glob '**/.venv/**' \
+  --allow-glob '**/.env*.template' \
+  -- \
   npx -y @modelcontextprotocol/server-filesystem /path/to/workspace
 ```
 

@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.mcp import MCPPathPolicy
 from app.mcp_stdio_bridge import BridgeSettings, build_parser, create_bridge_app
 
 FAKE_STDIO_MCP_SERVER = r'''
@@ -38,15 +39,36 @@ for line in sys.stdin:
                         "type": "object",
                         "properties": {"text": {"type": "string"}},
                     },
+                },
+                {
+                    "name": "read_file",
+                    "description": "Read file",
+                    "inputSchema": {"type": "object"},
+                },
+                {
+                    "name": "write_file",
+                    "description": "Write file",
+                    "inputSchema": {"type": "object"},
+                },
+                {
+                    "name": "list_directory",
+                    "description": "List directory",
+                    "inputSchema": {"type": "object"},
                 }
             ]
         }
     elif method == "tools/call":
+        tool_name = payload["params"]["name"]
         arguments = payload["params"]["arguments"]
-        result = {
-            "structuredContent": {"echo": arguments["text"]},
-            "content": [{"type": "text", "text": arguments["text"]}],
-        }
+        if tool_name == "list_directory":
+            result = {
+                "content": [{"type": "text", "text": "[FILE] README.md\n[FILE] .env\n[FILE] .env.template\n[DIR] .git"}],
+            }
+        else:
+            result = {
+                "structuredContent": {"echo": arguments.get("text", "")},
+                "content": [{"type": "text", "text": arguments.get("text", "")}],
+            }
     else:
         print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "error": {"code": -32601, "message": "not found"}}), flush=True)
         continue
@@ -157,24 +179,141 @@ def test_stdio_bridge_reports_exited_subprocess(tmp_path: Path) -> None:
     }
 
 
+def test_stdio_bridge_filters_tools_and_denies_disallowed_calls(tmp_path: Path) -> None:
+    client = _client(tmp_path, "ok", allowed_tools=["read_file"])
+
+    with client:
+        initialize = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        session_id = initialize.headers["mcp-session-id"]
+        tools = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": session_id},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        )
+        call = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": session_id},
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "write_file", "arguments": {"path": "/tmp/x"}},
+            },
+        )
+
+    assert [tool["name"] for tool in tools.json()["result"]["tools"]] == ["read_file"]
+    assert call.status_code == 403
+    assert "not allowed" in call.json()["detail"]
+
+
+def test_stdio_bridge_denies_paths_and_filters_directory_listing(tmp_path: Path) -> None:
+    client = _client(
+        tmp_path,
+        "ok",
+        allowed_tools=["read_file", "list_directory"],
+        path_policy=MCPPathPolicy(
+            deny_globs=["**/.env*", "**/.git/**"],
+            allow_globs=["**/.env*.template"],
+        ),
+    )
+
+    with client:
+        initialize = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        session_id = initialize.headers["mcp-session-id"]
+        denied = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": session_id},
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {"path": "/repo/.env"}},
+            },
+        )
+        allowed = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": session_id},
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "read_file",
+                    "arguments": {"path": "/repo/.env.coding.template"},
+                },
+            },
+        )
+        listing = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": session_id},
+            json={
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {"name": "list_directory", "arguments": {"path": "/repo"}},
+            },
+        )
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    text = listing.json()["result"]["content"][0]["text"]
+    assert "README.md" in text
+    assert ".env.template" in text
+    assert "[FILE] .env\n" not in text
+    assert ".git" not in text
+
+
 def test_stdio_bridge_parser_preserves_command_argv() -> None:
     parser = build_parser()
 
     args = parser.parse_args(
-        ["--name", "demo", "--port", "9000", "--", "python", "server.py", "--token", "abc"]
+        [
+            "--name",
+            "demo",
+            "--port",
+            "9000",
+            "--allowed-tool",
+            "read_file",
+            "--deny-glob",
+            "**/.env*",
+            "--allow-glob",
+            "**/.env*.template",
+            "--",
+            "python",
+            "server.py",
+            "--token",
+            "abc",
+        ]
     )
 
     assert args.name == "demo"
     assert args.port == 9000
+    assert args.allowed_tool == ["read_file"]
+    assert args.deny_glob == ["**/.env*"]
+    assert args.allow_glob == ["**/.env*.template"]
     assert args.command == ["--", "python", "server.py", "--token", "abc"]
 
 
-def _client(tmp_path: Path, mode: str) -> TestClient:
+def _client(
+    tmp_path: Path,
+    mode: str,
+    *,
+    allowed_tools: list[str] | None = None,
+    path_policy: MCPPathPolicy | None = None,
+) -> TestClient:
     script = tmp_path / "fake_stdio_mcp.py"
     script.write_text(FAKE_STDIO_MCP_SERVER)
     settings = BridgeSettings(
         name="fake",
         command=[sys.executable, str(script), mode],
         request_timeout=2.0,
+        allowed_tools=allowed_tools,
+        path_policy=path_policy or MCPPathPolicy(),
     )
     return TestClient(create_bridge_app(settings))
