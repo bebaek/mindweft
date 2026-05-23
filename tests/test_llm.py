@@ -56,7 +56,7 @@ def test_mock_llm_adapter_supports_json_tool_arguments() -> None:
                     content='/tool retrieve_knowledge {"query":"token refresh","top_k":3}',
                 )
             ],
-            build_local_tool_registry().specs(),
+            build_local_tool_registry(allowed_tools=["retrieve_knowledge"]).specs(),
         )
     )
 
@@ -78,7 +78,7 @@ def test_mock_llm_adapter_maps_plain_retrieve_knowledge_payload_to_query() -> No
                     content="/tool retrieve_knowledge token refresh",
                 )
             ],
-            build_local_tool_registry().specs(),
+            build_local_tool_registry(allowed_tools=["retrieve_knowledge"]).specs(),
         )
     )
 

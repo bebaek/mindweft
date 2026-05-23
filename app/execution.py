@@ -18,7 +18,7 @@ from app.llm import (
 )
 from app.mcp import MCPHTTPClient, MCPServerConfig, load_mcp_server_configs_from_env
 from app.mcp_manager import MCPServerManager
-from app.tools import LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry
+from app.tools import DEFAULT_LOCAL_TOOL_NAMES, LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry
 
 TENANT_EXECUTION_CONFIGS_ENV = "MINIGENT_TENANT_EXECUTION_CONFIGS"
 TENANT_CONFIG_SOURCE_ENV = "MINIGENT_TENANT_CONFIG_SOURCE"
@@ -1130,7 +1130,7 @@ def _validate_llm_config(config: TenantExecutionConfig) -> dict[str, Any]:
 
 
 async def _validate_tool_config(config: TenantExecutionConfig) -> dict[str, Any]:
-    local_tools = sorted(config.tools.allowed_local_tools or list(LOCAL_TOOL_NAMES))
+    local_tools = sorted(config.tools.allowed_local_tools or list(DEFAULT_LOCAL_TOOL_NAMES))
     unknown_local_tools = sorted(
         tool for tool in (config.tools.allowed_local_tools or []) if tool not in LOCAL_TOOL_NAMES
     )

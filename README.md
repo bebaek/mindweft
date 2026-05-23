@@ -28,7 +28,7 @@ The local tool registry includes:
   redirect, and response-size controls
 - `sleep`: pauses execution
 - `calculator`: evaluates basic arithmetic
-- `retrieve_knowledge`: searches tenant-scoped MiniRAG knowledge when configured
+- `retrieve_knowledge`: opt-in tool that searches tenant-scoped MiniRAG knowledge when configured
 - `peer_agent_task`: submits a task to a configured federated peer agent and optionally
   polls for completion when `MINIGENT_ENABLE_PEER_AGENT_TOOL=true`
 
@@ -1277,9 +1277,11 @@ Supported fields:
 For a developer-oriented example that combines multiple skills with explicit capability profiles,
 see the commented block in [.env.template](/Users/burm/code/minigent/.env.template).
 
-The local tool `retrieve_knowledge` is available when Minigent is run with the `minirag`
-extra installed and `MINIGENT_MINIRAG_DB_PATH` set to a SQLite database created by
-`minirag ingest`.
+The local tool `retrieve_knowledge` is not enabled by default because it requires a
+MiniRAG database and related backend setup. Enable it explicitly with
+`tools.allowed_local_tools` (or a skill/capability profile allowlist), and run Minigent
+with the `minirag` extra installed plus `MINIGENT_MINIRAG_DB_PATH` set to a SQLite
+database created by `minirag ingest`.
 
 Recommended setup today:
 

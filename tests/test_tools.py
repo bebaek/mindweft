@@ -34,7 +34,7 @@ def test_local_registry_exposes_expected_tools() -> None:
     assert "fetch_url" in specs
     assert "sleep" in specs
     assert "calculator" in specs
-    assert "retrieve_knowledge" in specs
+    assert "retrieve_knowledge" not in specs
     assert "peer_agent_task" not in specs
     assert specs["current_time"].description == "Return the current UTC time in ISO 8601 format."
 
@@ -450,7 +450,7 @@ def test_retrieve_knowledge_tool_uses_tenant_context(monkeypatch: pytest.MonkeyP
         return {"chunks": [{"chunk_id": "chk_1"}]}
 
     monkeypatch.setattr("app.tools._execute_retrieve_knowledge", fake_execute)
-    registry = build_local_tool_registry()
+    registry = build_local_tool_registry(allowed_tools=["retrieve_knowledge"])
 
     result = asyncio.run(
         registry.execute(
@@ -760,7 +760,7 @@ def test_peer_agent_task_tool_cancels_peer_when_coroutine_is_canceled(
 
 def test_retrieve_knowledge_requires_minirag_db_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(MINIGENT_MINIRAG_DB_PATH_ENV, raising=False)
-    registry = build_local_tool_registry()
+    registry = build_local_tool_registry(allowed_tools=["retrieve_knowledge"])
 
     with pytest.raises(HTTPException, match=MINIGENT_MINIRAG_DB_PATH_ENV):
         asyncio.run(
@@ -850,7 +850,7 @@ def test_retrieve_knowledge_uses_backend_configuration(
         monkeypatch.delenv(MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV, raising=False)
     monkeypatch.setattr("app.tools.importlib.import_module", fake_import_module)
 
-    registry = build_local_tool_registry()
+    registry = build_local_tool_registry(allowed_tools=["retrieve_knowledge"])
     result = asyncio.run(
         registry.execute(
             "retrieve_knowledge",

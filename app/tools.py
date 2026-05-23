@@ -33,12 +33,15 @@ MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV = "MINIGENT_MINIRAG_EMBEDDING_PROVIDER"
 MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV = "MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT"
 MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV = "MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT"
 MINIGENT_ENABLE_PEER_AGENT_TOOL_ENV = "MINIGENT_ENABLE_PEER_AGENT_TOOL"
-LOCAL_TOOL_NAMES = {
+DEFAULT_LOCAL_TOOL_NAMES = {
     "echo",
     "current_time",
     "fetch_url",
     "sleep",
     "calculator",
+}
+LOCAL_TOOL_NAMES = {
+    *DEFAULT_LOCAL_TOOL_NAMES,
     "retrieve_knowledge",
     "peer_agent_task",
 }
@@ -148,7 +151,12 @@ def build_local_tool_registry(
     enable_peer_agent_tool: bool | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
-    allowed_tool_set = set(allowed_tools) if allowed_tools is not None else None
+    peer_agent_tool_enabled = _peer_agent_tool_enabled(enable_peer_agent_tool)
+    allowed_tool_set = (
+        set(allowed_tools) if allowed_tools is not None else set(DEFAULT_LOCAL_TOOL_NAMES)
+    )
+    if allowed_tools is None and peer_agent_tool_enabled:
+        allowed_tool_set.add("peer_agent_task")
 
     def register_local_tool(
         *,
@@ -412,7 +420,7 @@ def build_local_tool_registry(
                 await _cancel_peer_agent_task(registry, peer, task_id)
             raise
 
-    if _peer_agent_tool_enabled(enable_peer_agent_tool):
+    if peer_agent_tool_enabled:
         register_local_tool(
             name="peer_agent_task",
             description=_peer_agent_task_description(peer_agent_registry),
