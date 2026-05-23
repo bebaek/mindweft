@@ -23,6 +23,9 @@ for line in sys.stdin:
     if mode == "invalid-json" and method == "tools/list":
         print("not json", flush=True)
         continue
+    if mode == "large-line" and method == "tools/list":
+        print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": {"content": "x" * 200000}}), flush=True)
+        continue
     if method == "initialize":
         result = {
             "protocolVersion": "2025-11-25",
@@ -162,6 +165,42 @@ def test_stdio_bridge_reports_invalid_subprocess_json(tmp_path: Path) -> None:
     assert response.json()["detail"] == "MCP stdio server returned invalid JSON"
 
 
+def test_stdio_bridge_reads_large_subprocess_response_lines(tmp_path: Path) -> None:
+    client = _client(tmp_path, "large-line", stdio_stream_limit=256000)
+
+    with client:
+        initialize = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        response = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": initialize.headers["mcp-session-id"]},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        )
+
+    assert response.status_code == 200
+    assert len(response.json()["result"]["content"]) == 200000
+
+
+def test_stdio_bridge_reports_oversized_subprocess_response_lines(tmp_path: Path) -> None:
+    client = _client(tmp_path, "large-line", stdio_stream_limit=1024)
+
+    with client:
+        initialize = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        response = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": initialize.headers["mcp-session-id"]},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "MCP stdio server response exceeded stream buffer limit"
+
+
 def test_stdio_bridge_reports_exited_subprocess(tmp_path: Path) -> None:
     client = _client(tmp_path, "exit")
 
@@ -278,6 +317,8 @@ def test_stdio_bridge_parser_preserves_command_argv() -> None:
             "demo",
             "--port",
             "9000",
+            "--stdio-stream-limit",
+            "123456",
             "--allowed-tool",
             "read_file",
             "--deny-glob",
@@ -294,6 +335,7 @@ def test_stdio_bridge_parser_preserves_command_argv() -> None:
 
     assert args.name == "demo"
     assert args.port == 9000
+    assert args.stdio_stream_limit == 123456
     assert args.allowed_tool == ["read_file"]
     assert args.deny_glob == ["**/.env*"]
     assert args.allow_glob == ["**/.env*.template"]
@@ -306,6 +348,7 @@ def _client(
     *,
     allowed_tools: list[str] | None = None,
     path_policy: MCPPathPolicy | None = None,
+    stdio_stream_limit: int | None = None,
 ) -> TestClient:
     script = tmp_path / "fake_stdio_mcp.py"
     script.write_text(FAKE_STDIO_MCP_SERVER)
@@ -313,6 +356,7 @@ def _client(
         name="fake",
         command=[sys.executable, str(script), mode],
         request_timeout=2.0,
+        stdio_stream_limit=stdio_stream_limit or 16 * 1024 * 1024,
         allowed_tools=allowed_tools,
         path_policy=path_policy or MCPPathPolicy(),
     )

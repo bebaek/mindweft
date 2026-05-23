@@ -107,3 +107,4 @@ class ToolCall(BaseModel):
 class LLMResponse(BaseModel):
     content: str | None = None
     tool_call: ToolCall | None = None
+    usage: dict[str, int] | None = None

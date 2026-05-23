@@ -54,6 +54,7 @@ from app.quality import QualityEnhancer
 from app.redaction import install_log_redaction
 from app.runtime import (
     AgentRuntime,
+    context_compaction_enabled_from_env,
     estimate_thread_context_usage,
     max_iterations_from_env,
     render_raw_thread_context,
@@ -237,6 +238,7 @@ def create_app(
         execution_resolver=execution_resolver,
         max_iterations=max_iterations_from_env(),
         quality_enhancer=app.state.quality_enhancer,
+        context_compaction_enabled=context_compaction_enabled_from_env(),
     )
     app.state.peer_agent_registry = peer_agent_registry or build_peer_agent_registry_from_env()
     app.state.active_run_tasks = {}

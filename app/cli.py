@@ -5,6 +5,5 @@ import urllib.request  # noqa: F401 - exposed for existing CLI tests that monkey
 
 from minigent_client.one_shot_cli import main
 
-
 if __name__ == "__main__":
     sys.exit(main())

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -106,8 +107,274 @@ def test_generic_oauth_adapter_sends_headers_and_parses_text(tmp_path: Path) -> 
     assert seen_headers["authorization"].startswith("Bearer ")
     assert seen_headers["accept"] == "text/event-stream, application/json"
     assert seen_headers["x-extra"] == "yes"
+    assert seen_headers["session_id"] == "thread"
+    assert seen_headers["session-id"] == "thread"
+    assert seen_headers["thread-id"] == "thread"
+    assert seen_headers["x-client-request-id"] == "thread"
     assert seen_payload["model"] == "test-model"
     assert seen_payload["stream"] is True
+    assert seen_payload["prompt_cache_key"] == "thread"
+
+
+def test_generic_oauth_adapter_sends_prompt_cache_key(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_payload
+        if request.url.path.endswith("/token"):
+            return httpx.Response(200, json={"access_token": _token("acct_test"), "expires_in": 3600})
+        seen_payload = json.loads(request.read().decode())
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/plain"},
+            text='data: {"type":"response.output_text.delta","delta":"ok"}\n\ndata: [DONE]\n\n',
+        )
+
+    monkeypatch.setenv("MINIGENT_LLM_PROMPT_CACHE_KEY", "minigent-debug-cache")
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://example.test/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.content == "ok"
+    assert seen_payload["prompt_cache_key"] == "minigent-debug-cache"
+
+
+def test_generic_oauth_adapter_supports_thread_prompt_cache_key_mode(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_payload
+        if request.url.path.endswith("/token"):
+            return httpx.Response(200, json={"access_token": _token("acct_test"), "expires_in": 3600})
+        seen_payload = json.loads(request.read().decode())
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/plain"},
+            text='data: {"type":"response.output_text.delta","delta":"ok"}\n\ndata: [DONE]\n\n',
+        )
+
+    monkeypatch.setenv("MINIGENT_LLM_PROMPT_CACHE_KEY", "thread")
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://example.test/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread-123", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.content == "ok"
+    assert seen_payload["prompt_cache_key"] == "thread-123"
+
+
+def test_generic_oauth_adapter_matches_pi_codex_include_for_chatgpt_codex_url(
+    tmp_path: Path,
+) -> None:
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_payload
+        if request.url.path.endswith("/token"):
+            return httpx.Response(200, json={"access_token": _token("acct_test"), "expires_in": 3600})
+        seen_payload = json.loads(request.read().decode())
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/plain"},
+            text='data: {"type":"response.output_text.delta","delta":"ok"}\n\ndata: [DONE]\n\n',
+        )
+
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://chatgpt.com/backend-api/codex/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread-123", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.content == "ok"
+    assert seen_payload["include"] == ["reasoning.encrypted_content"]
+
+
+def test_generic_oauth_adapter_can_log_raw_response_for_debugging(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/token"):
+            return httpx.Response(200, json={"access_token": _token("acct_test"), "expires_in": 3600})
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": "debug ok"}]}
+                ],
+                "usage": {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15},
+            },
+        )
+
+    monkeypatch.setenv("MINIGENT_LLM_DEBUG_LOG_RESPONSES", "true")
+    monkeypatch.setenv("MINIGENT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS", "60")
+    caplog.set_level(logging.INFO, logger="app.llm")
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://example.test/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.content == "debug ok"
+    assert "LLM raw response adapter=generic-oauth" in caplog.text
+    assert "truncated=True" in caplog.text
+
+
+def test_generic_oauth_adapter_can_write_raw_response_debug_jsonl(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/token"):
+            return httpx.Response(200, json={"access_token": _token("acct_test"), "expires_in": 3600})
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": "debug file"}]}
+                ],
+                "usage": {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15},
+            },
+        )
+
+    debug_path = tmp_path / "raw.jsonl"
+    monkeypatch.setenv("MINIGENT_LLM_DEBUG_LOG_RESPONSES", "true")
+    monkeypatch.setenv("MINIGENT_LLM_DEBUG_RESPONSE_LOG_PATH", str(debug_path))
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://example.test/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.content == "debug file"
+    records = [json.loads(line) for line in debug_path.read_text(encoding="utf-8").splitlines()]
+    assert records[0]["adapter"] == "generic-oauth"
+    assert "debug file" in records[0]["body"]
 
 
 def test_generic_oauth_adapter_sends_system_messages_as_instructions(tmp_path: Path) -> None:
@@ -208,6 +475,58 @@ def test_generic_oauth_adapter_parses_sse_with_event_prefix(tmp_path: Path) -> N
     )
 
     assert response.content == "hello from event-prefixed sse"
+
+
+def test_generic_oauth_adapter_parses_sse_usage(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=(
+                'data: {"type":"response.output_text.delta","delta":"hello"}\n\n'
+                'data: {"type":"response.completed","response":{"usage":{"input_tokens":1200,"output_tokens":25,"total_tokens":1225,"input_tokens_details":{"cached_tokens":900}}}}\n\n'
+                'data: [DONE]\n\n'
+            ),
+        )
+
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://example.test/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            build_local_tool_registry().specs(),
+        )
+    )
+
+    assert response.content == "hello"
+    assert response.usage == {
+        "prompt_tokens": 1200,
+        "input_tokens": 1200,
+        "completion_tokens": 25,
+        "output_tokens": 25,
+        "total_tokens": 1225,
+        "cache_read_tokens": 900,
+    }
 
 
 def test_generic_oauth_adapter_accumulates_streamed_function_arguments(tmp_path: Path) -> None:

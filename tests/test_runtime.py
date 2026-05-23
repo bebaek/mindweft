@@ -169,6 +169,53 @@ def test_runtime_summarizes_older_messages_and_keeps_recent_tail_verbatim() -> N
     ]
 
 
+def test_runtime_can_disable_context_compaction_for_append_only_cache_prefixes() -> None:
+    seen_messages: list[list[Message]] = []
+
+    class InspectingLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            seen_messages.append(messages)
+            return LLMResponse(content="ok")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=InspectingLLM(),
+        tool_registry=build_local_tool_registry(),
+        recent_message_limit=2,
+        target_prompt_tokens=80,
+        context_compaction_enabled=False,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    for index in range(4):
+        store.append_message(
+            PRINCIPAL.tenant_id,
+            Message(
+                thread_id=thread.thread_id,
+                role=MessageRole.USER,
+                content=f"user-{index} " + ("x" * 160),
+                created_by=PRINCIPAL.user_id,
+            ),
+        )
+        asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    context = store.get_thread_context(PRINCIPAL.tenant_id, thread.thread_id)
+    assert context.summary == ""
+    assert context.summarized_message_count == 0
+    stored_messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    assert len(stored_messages) == 8
+    assert [message.content for message in stored_messages[:2]] == [
+        "user-0 " + ("x" * 160),
+        "ok",
+    ]
+    assert [message.content for message in seen_messages[-1][1:]] == [
+        message.content for message in stored_messages[:-1]
+    ]
+
+
 def test_runtime_uses_prompt_budget_to_compact_more_than_default_tail() -> None:
     seen_messages: list[Message] = []
 

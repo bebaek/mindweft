@@ -6,8 +6,8 @@ Minimal AI agent runtime POC from `DESIGN.md`.
 
 - FastAPI service
 - In-memory thread/message store by default, with optional SQLite persistence
-- Thread context compaction with rolling summary + token-budgeted recent-message tail
-  that also drops summarized raw turns from the in-memory transcript to keep memory bounded
+- Optional thread context compaction with rolling summary + token-budgeted recent-message tail
+  that can drop summarized raw turns from the in-memory transcript to keep memory bounded
 - Simple agent execution loop
 - Pluggable tool registry
 - Replaceable LLM adapter boundary
@@ -63,12 +63,114 @@ JSON events. Configure the peer tool argument summary allowlist with
 For local development only, set it to `all` or `*` to summarize every argument key after
 redaction/truncation while still stripping raw arguments from streamed events.
 The existing `POST /threads/{thread_id}/run` endpoint remains unchanged.
+When the configured LLM provider returns token usage, streamed native runs emit an
+`llm.response` event with normalized `usage` fields such as `prompt_tokens`,
+`completion_tokens`, `total_tokens`, and, when reported by the provider,
+`cache_read_tokens` / `cache_write_tokens` for prompt-cache diagnostics.
 
 The API also serves a small static browser client at `/web` for quick manual testing from
 desktop and mobile browsers. It uses the NDJSON run stream to display live run/tool/peer
 progress before appending the final assistant reply. The client adjusts to mobile visual
 viewport changes so the composer remains usable when the screen keyboard is open. It has
 no frontend build step or extra dependencies.
+
+## Prompt Cache Diagnostics
+
+By default, Minigent keeps thread history append-only and disables context compaction so
+provider-side prompt caches can reuse stable prefixes across turns. Set
+`MINIGENT_CONTEXT_COMPACTION_ENABLED=true` to re-enable rolling summaries and old-message
+compaction for smaller prompts at the cost of resetting/changing the cacheable prefix.
+
+Minigent does not cache model replies locally. Native LLM adapters do preserve and report
+provider-side prompt-cache usage when the provider includes it in response metadata.
+For provider debugging, set `MINIGENT_LLM_DEBUG_LOG_RESPONSES=true` to log raw LLM
+response bodies through the Minigent logger; responses may contain prompts, assistant
+content, tool outputs, and usage metadata, so enable this only in trusted local/debug
+environments. Logs are truncated to 20000 characters by default; override with
+`MINIGENT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS`. Because normal logs redact/truncate long
+fields, set `MINIGENT_LLM_DEBUG_RESPONSE_LOG_PATH=/tmp/minigent-llm-raw.jsonl` to also
+write raw response bodies as JSONL records for detailed inspection. To inspect outbound
+LLM request stability, set `MINIGENT_LLM_DEBUG_REQUEST_LOG_PATH=/tmp/minigent-llm-requests.jsonl`;
+Minigent writes raw/canonical SHA-256 hashes, message/tool counts, and the full request
+payload for each provider call. Request logs can expose prompts and tool data, so only
+enable them in trusted debug environments.
+
+To run a repeatable cache probe against a running API and print the streamed usage/cache
+counters, use:
+
+```bash
+MINIGENT_LLM_DEBUG_LOG_RESPONSES=true \
+MINIGENT_LLM_DEBUG_RESPONSE_LOG_PATH=/tmp/minigent-llm-raw.jsonl \
+  uv run uvicorn app.main:app --reload
+
+uv run python scripts/investigate_prompt_cache.py --trace
+```
+
+For the workspace-coding setup that can read local files, put the debug/cache settings in
+`.env.coding` and start Minigent with the workspace runner instead:
+
+```bash
+MINIGENT_LLM_PROMPT_CACHE_KEY=thread
+MINIGENT_LLM_DEBUG_LOG_RESPONSES=true
+MINIGENT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS=200000
+MINIGENT_LLM_DEBUG_RESPONSE_LOG_PATH=/tmp/minigent-llm-raw.jsonl
+MINIGENT_LLM_DEBUG_REQUEST_LOG_PATH=/tmp/minigent-llm-requests.jsonl
+```
+
+```bash
+uv run python scripts/run_coding_workspace.py --env-file .env.coding
+uv run python scripts/investigate_prompt_cache.py --trace --pause 2 \
+  --tenant-id demo-tenant --capability-profile inspect
+```
+
+The script creates a thread, runs several related README prompts, prints each run's
+`prompt`/`completion`/`total`/`cache_read`/`cache_write` counters, and emits a trace ID
+that can be used to correlate with raw `app.llm` response logs.
+
+To bypass Minigent entirely and inspect direct OpenRouter responses, use:
+
+```bash
+OPENROUTER_API_KEY=... \
+  uv run python scripts/openrouter_raw_probe.py \
+  --model openai/gpt-5.1-codex-mini \
+  --output /tmp/openrouter-raw-probe.jsonl
+```
+
+The direct probe sends sequential `/chat/completions` requests with a repeated static
+prefix above the documented prompt-cache threshold, requests OpenRouter usage metadata
+with `usage: {"include": true}`, prints usage/cache summaries, and writes full request
+and raw response JSONL records for inspection. Add `--mock-tool-count 1` to include a
+stable mock function tool in each direct request.
+
+To keep Minigent's OpenAI-compatible adapter in the path while bypassing the full
+agent/runtime/tool loop, use:
+
+```bash
+OPENROUTER_API_KEY=... \
+  uv run python scripts/minigent_openrouter_adapter_probe.py \
+  --model openai/gpt-5.1-codex-mini \
+  --output /tmp/minigent-openrouter-adapter-probe.jsonl \
+  --raw-output /tmp/minigent-openrouter-adapter-raw.jsonl
+```
+
+If the direct OpenRouter probe gets cache hits and this adapter probe also gets cache
+hits, Minigent's adapter request shape is cache-compatible and full agent runs are likely
+missing cache hits because their long prefix is not stable enough. Add `--mock-tool-count 1`
+to test the adapter path with a stable mock function tool included in every request.
+OpenAI-compatible cache counters such as `prompt_tokens_details.cached_tokens` and
+Responses-style `input_tokens_details.cached_tokens` are normalized to
+`cache_read_tokens`; provider cache-creation counters are normalized to
+`cache_write_tokens`. These counters are informational and depend on the selected model
+and provider enabling prompt caching for stable prompt prefixes. For generic OAuth
+Responses endpoints that support caller-selected cache buckets, Minigent sends the current
+thread ID as `prompt_cache_key` and also sends Codex/Pi-style `session_id`, `session-id`,
+`thread-id`, and `x-client-request-id` headers. For the ChatGPT Codex Responses endpoint,
+Minigent also sends `include: ["reasoning.encrypted_content"]` to match Pi's request shape.
+Set `MINIGENT_LLM_PROMPT_CACHE_KEY` to a literal value to
+override the cache key, or to `thread`/`auto` to explicitly use thread-ID mode.
+For OpenRouter,
+Minigent requests usage metadata with `usage: {"include": true}` so compatible models
+can report usage and cache counters.
 
 ## Generic OAuth LLM Provider
 
@@ -81,6 +183,10 @@ MINIGENT_LLM_PROVIDER=generic-oauth
 MINIGENT_LLM_MODEL=your-model-id
 MINIGENT_LLM_URL=https://provider.example/v1/responses
 MINIGENT_LLM_EXTRA_HEADERS='{"x-provider-feature":"enabled"}'
+# Optional: set a stable provider-side prompt-cache bucket for compatible Responses APIs.
+# By default, generic-oauth uses the Minigent thread ID, matching Codex's behavior.
+# Set to a literal value to override, or to "thread"/"auto" to force thread-ID mode.
+MINIGENT_LLM_PROMPT_CACHE_KEY=thread
 # Optional: set when the provider requires an account/org header populated from a JWT claim.
 MINIGENT_LLM_ACCOUNT_ID_HEADER=x-provider-account-id
 
@@ -1731,9 +1837,12 @@ MINIGENT_MCP_SERVERS=[{"name":"filesystem","url":"http://127.0.0.1:8765/mcp","he
 ```
 
 The bridge binds to `127.0.0.1` by default and accepts the stdio server command as an
-argv array after `--`; it does not run commands through a shell. The v1 bridge starts one
-stdio MCP server per bridge process and supports the same tools-only MCP scope Minigent
-uses today: `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`.
+argv array after `--`; it does not run commands through a shell. It buffers stdio MCP
+responses up to 16 MiB by default so large single-line JSON tool results such as file reads
+can be forwarded; override this with `--stdio-stream-limit <bytes>` if a deployment needs a
+different cap. The v1 bridge starts one stdio MCP server per bridge process and supports
+the same tools-only MCP scope Minigent uses today: `initialize`,
+`notifications/initialized`, `tools/list`, and `tools/call`.
 
 ## Observability
 

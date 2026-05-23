@@ -340,8 +340,14 @@ def token_usage_from_event(event: dict[str, Any]) -> dict[str, int] | None:
         result["prompt_tokens"] = prompt_tokens
     if completion_tokens is not None:
         result["completion_tokens"] = completion_tokens
+    cache_read_tokens = _usage_int(usage, "cache_read_tokens", "cacheRead", "cache_read")
+    cache_write_tokens = _usage_int(usage, "cache_write_tokens", "cacheWrite", "cache_write")
     if total_tokens is not None:
         result["total_tokens"] = total_tokens
+    if cache_read_tokens is not None:
+        result["cache_read_tokens"] = cache_read_tokens
+    if cache_write_tokens is not None:
+        result["cache_write_tokens"] = cache_write_tokens
     return result or None
 
 
@@ -353,12 +359,18 @@ def format_usage_summary(event_or_usage: dict[str, Any]) -> str | None:
     prompt_tokens = usage.get("prompt_tokens")
     completion_tokens = usage.get("completion_tokens")
     total_tokens = usage.get("total_tokens")
+    cache_read_tokens = usage.get("cache_read_tokens")
+    cache_write_tokens = usage.get("cache_write_tokens")
     if prompt_tokens is not None:
         parts.append(f"prompt {_format_token_count(prompt_tokens)}")
     if completion_tokens is not None:
         parts.append(f"completion {_format_token_count(completion_tokens)}")
     if total_tokens is not None:
         parts.append(f"total {_format_token_count(total_tokens)}")
+    if cache_read_tokens is not None:
+        parts.append(f"cache read {_format_token_count(cache_read_tokens)}")
+    if cache_write_tokens is not None:
+        parts.append(f"cache write {_format_token_count(cache_write_tokens)}")
     if not parts:
         return None
     return "tokens: " + " · ".join(parts)

@@ -28,6 +28,7 @@ from app.models import (
     Principal,
     ThreadStatus,
     ToolCall,
+    ToolSpec,
 )
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
 from app.runtime import AgentRuntime
@@ -401,6 +402,54 @@ def test_run_stream_endpoint_emits_ndjson_events() -> None:
     assert events[1]["tool_count"] >= 1
     assert events[2]["content"] == "Mock reply: hello stream"
     assert events[3]["thread_context"]["total_tokens"] > events[0]["thread_context"]["total_tokens"]
+
+
+def test_run_stream_endpoint_emits_llm_usage() -> None:
+    class UsageLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            del messages, tools
+            return LLMResponse(
+                content="usage reply",
+                usage={
+                    "prompt_tokens": 100,
+                    "input_tokens": 100,
+                    "completion_tokens": 12,
+                    "output_tokens": 12,
+                    "total_tokens": 112,
+                    "cache_read_tokens": 80,
+                },
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "usage-test"}
+
+    client = TestClient(create_app(llm_adapter=UsageLLM(), tool_registry=build_local_tool_registry()))
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "hello usage"},
+        headers=AUTH_HEADERS,
+    )
+
+    with client.stream("POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS) as response:
+        assert response.status_code == 200
+        events = [json.loads(line) for line in response.iter_lines() if line]
+
+    assert [event["type"] for event in events] == [
+        "run.started",
+        "llm.request",
+        "llm.response",
+        "assistant.message",
+        "run.completed",
+    ]
+    assert events[2]["usage"] == {
+        "prompt_tokens": 100,
+        "input_tokens": 100,
+        "completion_tokens": 12,
+        "output_tokens": 12,
+        "total_tokens": 112,
+        "cache_read_tokens": 80,
+    }
 
 
 def test_run_stream_endpoint_emits_tool_events() -> None:
@@ -1193,6 +1242,83 @@ def test_run_endpoint_can_disable_peer_agent_mcp_broker() -> None:
     assert run_response.status_code == 200
     assert run_response.json() == {"reply": "ok"}
     assert len(requests) == 1
+
+
+def test_openrouter_adapter_requests_usage_metadata() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        assert payload["usage"] == {"include": True}
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "usage reply"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13},
+            },
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://openrouter.ai/api/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread-1", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.usage == {
+        "prompt_tokens": 10,
+        "input_tokens": 10,
+        "completion_tokens": 3,
+        "output_tokens": 3,
+        "total_tokens": 13,
+    }
+
+
+def test_openai_adapter_normalizes_prompt_cache_usage() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        assert payload["model"] == "test-model"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "cached reply"}}],
+                "usage": {
+                    "prompt_tokens": 1200,
+                    "completion_tokens": 25,
+                    "total_tokens": 1225,
+                    "prompt_tokens_details": {"cached_tokens": 900},
+                },
+            },
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread-1", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.content == "cached reply"
+    assert response.usage == {
+        "prompt_tokens": 1200,
+        "input_tokens": 1200,
+        "completion_tokens": 25,
+        "output_tokens": 25,
+        "total_tokens": 1225,
+        "cache_read_tokens": 900,
+    }
 
 
 def test_run_endpoint_azure_adapter_allows_second_turn_after_tool_completion() -> None:

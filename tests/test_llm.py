@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -674,6 +675,151 @@ def test_openai_compatible_adapter_does_not_retry_unrelated_provider_errors() ->
         )
 
     assert len(seen_payloads) == 1
+
+
+def test_openai_compatible_adapter_normalizes_openrouter_cache_write_tokens() -> None:
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://openrouter.ai/api/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {
+                        "prompt_tokens": 1200,
+                        "completion_tokens": 12,
+                        "total_tokens": 1212,
+                        "prompt_tokens_details": {
+                            "cached_tokens": 1024,
+                            "cache_write_tokens": 0,
+                        },
+                    },
+                },
+            )
+        ),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.usage is not None
+    assert response.usage["cache_read_tokens"] == 1024
+    assert response.usage["cache_write_tokens"] == 0
+
+
+def test_openai_compatible_adapter_sorts_and_canonicalizes_tools() -> None:
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_payload
+        seen_payload = json.loads(request.read().decode())
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    tools = [
+        ToolSpec(
+            name="z.tool",
+            description="Z",
+            input_schema={
+                "type": "object",
+                "properties": {"z": {"type": "string"}, "a": {"type": "string"}},
+            },
+        ),
+        ToolSpec(
+            name="a.tool",
+            description="A",
+            input_schema={"type": "object", "properties": {}},
+        ),
+    ]
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            tools,
+        )
+    )
+
+    assert response.content == "ok"
+    sent_tools = seen_payload["tools"]
+    assert isinstance(sent_tools, list)
+    assert sent_tools[0]["function"]["name"] == "a_tool"
+    assert sent_tools[1]["function"]["name"] == "z_tool"
+    assert list(sent_tools[1]["function"]["parameters"]) == ["properties", "type"]
+    assert list(sent_tools[1]["function"]["parameters"]["properties"]) == ["a", "z"]
+
+
+def test_openai_compatible_adapter_writes_request_hash_debug_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_log = tmp_path / "requests.jsonl"
+    monkeypatch.setenv("MINIGENT_LLM_DEBUG_REQUEST_LOG_PATH", str(request_log))
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "ok"}}]},
+            )
+        ),
+    )
+
+    asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    record = json.loads(request_log.read_text().splitlines()[-1])
+    assert record["adapter"] == "openai-compatible"
+    assert record["model"] == "test-model"
+    assert record["message_count"] == 1
+    assert record["tool_count"] == 0
+    assert len(record["raw_sha256"]) == 64
+    assert len(record["canonical_sha256"]) == 64
+    assert record["payload"]["model"] == "test-model"
+
+
+def test_openai_compatible_adapter_omits_empty_tools_array() -> None:
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_payload
+        seen_payload = json.loads(request.read().decode())
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.content == "ok"
+    assert "tools" not in seen_payload
 
 
 def test_openai_compatible_adapter_sanitizes_provider_tool_names() -> None:

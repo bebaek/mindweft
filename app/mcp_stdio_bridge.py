@@ -25,6 +25,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 DEFAULT_PATH = "/mcp"
 DEFAULT_TIMEOUT_SECONDS = 30.0
+DEFAULT_STDIO_STREAM_LIMIT_BYTES = 16 * 1024 * 1024
 
 
 class BridgeSettings(BaseModel):
@@ -34,6 +35,7 @@ class BridgeSettings(BaseModel):
     port: int = DEFAULT_PORT
     path: str = DEFAULT_PATH
     request_timeout: float = DEFAULT_TIMEOUT_SECONDS
+    stdio_stream_limit: int = DEFAULT_STDIO_STREAM_LIMIT_BYTES
     allowed_tools: list[str] | None = None
     path_policy: MCPPathPolicy = Field(default_factory=MCPPathPolicy)
 
@@ -55,6 +57,7 @@ class StdioMCPBridge:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=self._settings.stdio_stream_limit,
         )
         self._stderr_task = asyncio.create_task(
             self._log_stderr(),
@@ -238,6 +241,11 @@ class StdioMCPBridge:
             line = await asyncio.wait_for(stdout.readline(), timeout=self._settings.request_timeout)
         except TimeoutError as exc:
             raise HTTPException(status_code=504, detail="Timed out reading from MCP stdio server") from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="MCP stdio server response exceeded stream buffer limit",
+            ) from exc
         if not line:
             raise HTTPException(status_code=502, detail="MCP stdio server closed stdout")
         try:
@@ -324,6 +332,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read/write timeout for stdio MCP requests in seconds.",
     )
     parser.add_argument(
+        "--stdio-stream-limit",
+        type=int,
+        default=DEFAULT_STDIO_STREAM_LIMIT_BYTES,
+        help="Maximum bytes buffered while reading one stdio MCP response line. Defaults to 16 MiB.",
+    )
+    parser.add_argument(
         "--allowed-tool",
         action="append",
         default=None,
@@ -365,6 +379,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         port=args.port,
         path=args.path,
         request_timeout=args.request_timeout,
+        stdio_stream_limit=args.stdio_stream_limit,
         allowed_tools=args.allowed_tool,
         path_policy=MCPPathPolicy(
             deny_globs=list(args.deny_glob),

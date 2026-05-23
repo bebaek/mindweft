@@ -40,7 +40,19 @@ RUNTIME_SYSTEM_PROMPT = (
 )
 DEFAULT_MAX_ITERATIONS = 16
 MAX_ITERATIONS_ENV = "MINIGENT_MAX_ITERATIONS"
+CONTEXT_COMPACTION_ENABLED_ENV = "MINIGENT_CONTEXT_COMPACTION_ENABLED"
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
+
+
+def context_compaction_enabled_from_env() -> bool:
+    raw = os.getenv(CONTEXT_COMPACTION_ENABLED_ENV, "").strip().lower()
+    if not raw:
+        return False
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{CONTEXT_COMPACTION_ENABLED_ENV} must be a boolean")
 
 
 def max_iterations_from_env() -> int:
@@ -69,6 +81,7 @@ class AgentRuntime:
         max_summary_chars: int = 4000,
         target_prompt_tokens: int = 3000,
         quality_enhancer: QualityEnhancer | None = None,
+        context_compaction_enabled: bool = True,
     ) -> None:
         self._store = store
         if execution_resolver is not None:
@@ -87,6 +100,7 @@ class AgentRuntime:
         self._max_summary_chars = max(256, max_summary_chars)
         self._target_prompt_tokens = max(256, target_prompt_tokens)
         self._quality_enhancer = quality_enhancer
+        self._context_compaction_enabled = context_compaction_enabled
 
     async def run_thread(
         self,
@@ -143,6 +157,15 @@ class AgentRuntime:
                         },
                     )
                     response = await execution.llm_adapter.generate(messages, tool_specs)
+                    if response.usage is not None:
+                        await _emit_run_event(
+                            event_sink,
+                            {
+                                "type": "llm.response",
+                                "iteration": iteration,
+                                "usage": response.usage,
+                            },
+                        )
                 if response.tool_call is not None:
                     await self._handle_tool_call(
                         principal,
@@ -360,7 +383,7 @@ class AgentRuntime:
         prompt_messages = [
             Message(thread_id=thread_id, role=MessageRole.SYSTEM, content=system_prompt),
         ]
-        if context.summary:
+        if self._context_compaction_enabled and context.summary:
             prompt_messages.append(
                 Message(
                     thread_id=thread_id,
@@ -378,6 +401,8 @@ class AgentRuntime:
     def _refresh_thread_context(self, principal: Principal, thread_id: str) -> ThreadContext:
         messages = self._store.list_messages(principal.tenant_id, thread_id)
         context = self._store.get_thread_context(principal.tenant_id, thread_id)
+        if not self._context_compaction_enabled:
+            return context
         summarize_upto = self._compute_summarize_upto(messages, context)
         if summarize_upto <= context.summarized_message_count:
             return context

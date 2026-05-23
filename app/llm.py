@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -16,6 +17,12 @@ from app.models import LLMResponse, Message, MessageRole, ToolCall, ToolSpec
 from app.oauth import GENERIC_OAUTH_PROVIDER, GenericOAuthProvider
 
 logger = logging.getLogger(__name__)
+LLM_DEBUG_LOG_RESPONSES_ENV = "MINIGENT_LLM_DEBUG_LOG_RESPONSES"
+LLM_DEBUG_LOG_RESPONSE_MAX_CHARS_ENV = "MINIGENT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS"
+LLM_DEBUG_RESPONSE_LOG_PATH_ENV = "MINIGENT_LLM_DEBUG_RESPONSE_LOG_PATH"
+LLM_DEBUG_REQUEST_LOG_PATH_ENV = "MINIGENT_LLM_DEBUG_REQUEST_LOG_PATH"
+LLM_PROMPT_CACHE_KEY_ENV = "MINIGENT_LLM_PROMPT_CACHE_KEY"
+DEFAULT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS = 20000
 
 
 class LLMAdapter(ABC):
@@ -91,6 +98,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
         self._transport = transport
 
     async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+        tools = _stable_tool_order(tools)
         tool_name_map = _build_provider_tool_name_map(tools)
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -166,6 +174,11 @@ class OpenAICompatibleAdapter(LLMAdapter):
                     ) from exc
             except httpx.HTTPError as exc:
                 raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}") from exc
+        _debug_log_raw_llm_response(
+            "openai-compatible",
+            response.text,
+            content_type=response.headers.get("content-type"),
+        )
         return _parse_chat_completion(response.json(), tool_name_map)
 
     def describe(self) -> dict[str, Any]:
@@ -198,8 +211,18 @@ class OpenAICompatibleAdapter(LLMAdapter):
             "messages": [
                 _message_to_chat_payload(message, tool_name_map) for message in request_messages
             ],
-            "tools": [_tool_to_payload(tool, tool_name_map) for tool in tools],
         }
+        if tools:
+            payload["tools"] = [_tool_to_payload(tool, tool_name_map) for tool in tools]
+        if "openrouter.ai" in self._base_url:
+            payload["usage"] = {"include": True}
+        _debug_log_llm_request(
+            "openai-compatible",
+            payload,
+            model=self._model,
+            message_count=len(request_messages),
+            tool_count=len(tools),
+        )
         return await client.post(
             f"{self._base_url}/chat/completions",
             json=payload,
@@ -236,6 +259,7 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
         if account_id_header and not credentials.account_id:
             raise HTTPException(status_code=401, detail="OAuth credentials are missing account_id")
 
+        tools = _stable_tool_order(tools)
         tool_name_map = _build_provider_tool_name_map(tools)
         headers = {
             "Authorization": f"Bearer {credentials.access_token}",
@@ -245,6 +269,12 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
         }
         if account_id_header and credentials.account_id:
             headers[account_id_header] = credentials.account_id
+        thread_id = _thread_id_for_prompt_cache(messages)
+        if thread_id:
+            headers.setdefault("session_id", thread_id)
+            headers.setdefault("session-id", thread_id)
+            headers.setdefault("thread-id", thread_id)
+            headers.setdefault("x-client-request-id", thread_id)
         payload = {
             "model": self._model,
             "store": False,
@@ -255,10 +285,23 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
                 for message in messages
                 if message.role != MessageRole.SYSTEM
             ],
-            "tools": [_tool_to_responses_payload(tool, tool_name_map) for tool in tools],
             "tool_choice": "auto",
             "parallel_tool_calls": True,
         }
+        if tools:
+            payload["tools"] = [_tool_to_responses_payload(tool, tool_name_map) for tool in tools]
+        if _is_chatgpt_codex_responses_url(self._url):
+            payload["include"] = ["reasoning.encrypted_content"]
+        prompt_cache_key = _prompt_cache_key_for_request(messages)
+        if prompt_cache_key:
+            payload["prompt_cache_key"] = prompt_cache_key
+        _debug_log_llm_request(
+            "generic-oauth-responses",
+            payload,
+            model=self._model,
+            message_count=len(messages),
+            tool_count=len(tools),
+        )
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             try:
                 response = await client.post(
@@ -274,6 +317,11 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
                 raise HTTPException(status_code=502, detail=f"Generic OAuth LLM request failed: {exc}") from exc
         body = response.text
         content_type = response.headers.get("content-type", "")
+        _debug_log_raw_llm_response(
+            GENERIC_OAUTH_PROVIDER,
+            body,
+            content_type=content_type,
+        )
         if "text/event-stream" in content_type or _looks_like_sse(body):
             return _parse_responses_sse(body, tool_name_map)
         try:
@@ -292,6 +340,7 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
             "url": self._url,
             "headers": sorted(self._extra_headers.keys()),
             "adapter": "GenericOAuthResponsesAdapter",
+            "prompt_cache_key_configured": bool(os.getenv(LLM_PROMPT_CACHE_KEY_ENV, "").strip()),
         }
 
 
@@ -377,6 +426,99 @@ def serialize_tool_result(result: object) -> str:
     return json.dumps(result, ensure_ascii=True, default=str)
 
 
+def _debug_log_llm_request(
+    adapter: str,
+    payload: dict[str, Any],
+    *,
+    model: str,
+    message_count: int,
+    tool_count: int,
+) -> None:
+    log_path = os.getenv(LLM_DEBUG_REQUEST_LOG_PATH_ENV, "").strip()
+    if not log_path:
+        return
+    try:
+        raw_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        canonical_json = json.dumps(
+            _canonical_jsonish(payload),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        record = {
+            "adapter": adapter,
+            "model": model,
+            "message_count": message_count,
+            "tool_count": tool_count,
+            "raw_sha256": hashlib.sha256(raw_json.encode("utf-8")).hexdigest(),
+            "canonical_sha256": hashlib.sha256(canonical_json.encode("utf-8")).hexdigest(),
+            "raw_chars": len(raw_json),
+            "canonical_chars": len(canonical_json),
+            "payload": payload,
+        }
+        with open(log_path, "a", encoding="utf-8") as file:
+            file.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError:
+        logger.exception("Failed to write raw LLM request debug log")
+
+
+def _debug_log_raw_llm_response(
+    adapter: str,
+    body: str,
+    *,
+    content_type: str | None = None,
+) -> None:
+    if not _env_bool(LLM_DEBUG_LOG_RESPONSES_ENV):
+        return
+    max_chars = _env_int(
+        LLM_DEBUG_LOG_RESPONSE_MAX_CHARS_ENV,
+        DEFAULT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS,
+    )
+    truncated = max_chars >= 0 and len(body) > max_chars
+    logged_body = body[:max_chars] if truncated else body
+    logger.info(
+        "LLM raw response adapter=%s content_type=%s chars=%s truncated=%s body=%s",
+        adapter,
+        content_type or "",
+        len(body),
+        truncated,
+        logged_body,
+    )
+    log_path = os.getenv(LLM_DEBUG_RESPONSE_LOG_PATH_ENV, "").strip()
+    if log_path:
+        try:
+            with open(log_path, "a", encoding="utf-8") as file:
+                file.write(
+                    json.dumps(
+                        {
+                            "adapter": adapter,
+                            "content_type": content_type or "",
+                            "chars": len(body),
+                            "truncated": truncated,
+                            "body": logged_body,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        except OSError:
+            logger.exception("Failed to write raw LLM response debug log")
+
+
+def _env_bool(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid integer value for %s", name)
+        return default
+
+
 def _parse_mock_tool_arguments(tool_name: str, payload: str) -> dict[str, Any]:
     stripped = payload.strip()
     if not stripped:
@@ -406,7 +548,11 @@ def _message_to_chat_payload(message: Message, tool_name_map: dict[str, str]) ->
                     "name": tool_name_map.get(
                         message.tool_name, _sanitize_tool_name(message.tool_name)
                     ),
-                    "arguments": json.dumps(message.tool_arguments or {}, ensure_ascii=True),
+                    "arguments": json.dumps(
+                        message.tool_arguments or {},
+                        ensure_ascii=True,
+                        sort_keys=True,
+                    ),
                 },
             }
         ]
@@ -422,9 +568,26 @@ def _tool_to_payload(tool: ToolSpec, tool_name_map: dict[str, str]) -> dict[str,
         "function": {
             "name": tool_name_map[tool.name],
             "description": tool.description,
-            "parameters": tool.input_schema,
+            "parameters": _canonical_jsonish(tool.input_schema),
         },
     }
+
+
+def _is_chatgpt_codex_responses_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.netloc == "chatgpt.com" and parsed.path.rstrip("/") == "/backend-api/codex/responses"
+
+
+def _thread_id_for_prompt_cache(messages: list[Message]) -> str | None:
+    message = next((item for item in messages if item.thread_id), None)
+    return message.thread_id if message is not None else None
+
+
+def _prompt_cache_key_for_request(messages: list[Message]) -> str | None:
+    configured = os.getenv(LLM_PROMPT_CACHE_KEY_ENV, "").strip()
+    if configured and configured.lower() not in {"thread", "thread_id", "auto"}:
+        return configured
+    return _thread_id_for_prompt_cache(messages)
 
 
 def _responses_instructions(messages: list[Message]) -> str:
@@ -446,7 +609,11 @@ def _message_to_responses_payload(message: Message, tool_name_map: dict[str, str
             "type": "function_call",
             "call_id": message.tool_call_id,
             "name": tool_name_map.get(message.tool_name, _sanitize_tool_name(message.tool_name)),
-            "arguments": json.dumps(message.tool_arguments or {}, ensure_ascii=True),
+            "arguments": json.dumps(
+                message.tool_arguments or {},
+                ensure_ascii=True,
+                sort_keys=True,
+            ),
         }
     role = "assistant" if message.role == MessageRole.ASSISTANT else "user"
     return {"role": role, "content": message.content}
@@ -457,7 +624,7 @@ def _tool_to_responses_payload(tool: ToolSpec, tool_name_map: dict[str, str]) ->
         "type": "function",
         "name": tool_name_map[tool.name],
         "description": tool.description,
-        "parameters": tool.input_schema,
+        "parameters": _canonical_jsonish(tool.input_schema),
     }
 
 
@@ -546,6 +713,7 @@ def _looks_like_sse(body: str) -> bool:
 def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMResponse:
     text_parts: list[str] = []
     final_response: dict[str, Any] | None = None
+    usage: dict[str, int] | None = None
     output_items_by_key: dict[str, dict[str, Any]] = {}
     output_item_order: list[str] = []
     argument_deltas_by_key: dict[str, list[str]] = {}
@@ -563,6 +731,9 @@ def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMRespons
             continue
         if not isinstance(event, dict):
             continue
+        event_usage = _normalized_usage_from_event(event)
+        if event_usage is not None:
+            usage = event_usage
         event_type = event.get("type")
         delta = event.get("delta")
         if event_type == "response.output_text.delta" and isinstance(delta, str):
@@ -599,23 +770,50 @@ def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMRespons
     )
     if final_response is not None:
         try:
-            return _parse_responses_payload(final_response, tool_name_map, log_missing_output=False)
+            response = _parse_responses_payload(
+                final_response,
+                tool_name_map,
+                log_missing_output=False,
+            )
+            if response.usage is None and usage is not None:
+                response.usage = usage
+            return response
         except HTTPException:
             if text_parts:
-                return LLMResponse(content="".join(text_parts))
+                return LLMResponse(content="".join(text_parts), usage=usage)
             if output_items:
-                return _parse_responses_payload({"output": output_items}, tool_name_map)
+                payload: dict[str, Any] = {"output": output_items}
+                if usage is not None:
+                    payload["usage"] = usage
+                return _parse_responses_payload(payload, tool_name_map)
             logger.error(
                 "Responses SSE final response missing message/function output: %s",
                 _truncate_json(final_response),
             )
             raise
     if output_items:
-        return _parse_responses_payload({"output": output_items}, tool_name_map)
+        payload = {"output": output_items}
+        if usage is not None:
+            payload["usage"] = usage
+        return _parse_responses_payload(payload, tool_name_map)
     if text_parts:
-        return LLMResponse(content="".join(text_parts))
+        return LLMResponse(content="".join(text_parts), usage=usage)
     logger.error("Responses SSE missing message/function output: %s", body[:2000])
     raise HTTPException(status_code=502, detail="Generic OAuth LLM returned no assistant output")
+
+
+def _normalized_usage_from_event(event: dict[str, Any]) -> dict[str, int] | None:
+    for candidate in (
+        event.get("usage"),
+        event.get("response"),
+        event.get("message"),
+    ):
+        if not isinstance(candidate, dict):
+            continue
+        usage = _normalize_llm_usage(candidate.get("usage") if "usage" in candidate else candidate)
+        if usage is not None:
+            return usage
+    return None
 
 
 def _responses_sse_item_key(event: dict[str, Any], item: Any) -> str | None:
@@ -694,7 +892,8 @@ def _parse_responses_payload(
                     id=call_id,
                     name=reverse_tool_name_map.get(raw_name, raw_name),
                     arguments=arguments,
-                )
+                ),
+                usage=_normalize_llm_usage(payload.get("usage")),
             )
         if item.get("type") == "message":
             content = item.get("content") or []
@@ -707,13 +906,17 @@ def _parse_responses_payload(
                 if isinstance(text, str):
                     text_parts.append(text)
     if text_parts:
-        return LLMResponse(content="".join(text_parts))
+        return LLMResponse(
+            content="".join(text_parts),
+            usage=_normalize_llm_usage(payload.get("usage")),
+        )
     if log_missing_output:
         logger.error("Responses payload missing message/function output: %s", _truncate_json(payload))
     raise HTTPException(status_code=502, detail="Generic OAuth LLM returned no assistant output")
 
 
 def _parse_chat_completion(payload: dict[str, Any], tool_name_map: dict[str, str]) -> LLMResponse:
+    usage = _normalize_llm_usage(payload.get("usage"))
     choices = payload.get("choices") or []
     if not choices:
         logger.error("LLM response missing choices: %s", _truncate_json(payload))
@@ -738,14 +941,93 @@ def _parse_chat_completion(payload: dict[str, Any], tool_name_map: dict[str, str
                 id=tool_calls[0].get("id"),
                 name=_resolve_internal_tool_name(function.get("name", ""), tool_name_map),
                 arguments=parsed_arguments,
-            )
+            ),
+            usage=usage,
         )
 
     content = _extract_text_content(message)
     if content is None:
         logger.error("LLM response missing message content: %s", _truncate_json(payload))
         raise HTTPException(status_code=502, detail="LLM provider returned no message content")
-    return LLMResponse(content=str(content))
+    return LLMResponse(content=str(content), usage=usage)
+
+
+def _normalize_llm_usage(raw_usage: Any) -> dict[str, int] | None:
+    if not isinstance(raw_usage, dict):
+        return None
+
+    usage: dict[str, int] = {}
+    prompt_tokens = _usage_int(raw_usage, "prompt_tokens", "input_tokens", "input")
+    completion_tokens = _usage_int(
+        raw_usage,
+        "completion_tokens",
+        "output_tokens",
+        "output",
+    )
+    total_tokens = _usage_int(raw_usage, "total_tokens", "totalTokens", "total")
+    if prompt_tokens is not None:
+        usage["prompt_tokens"] = prompt_tokens
+        usage["input_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        usage["completion_tokens"] = completion_tokens
+        usage["output_tokens"] = completion_tokens
+    if total_tokens is not None:
+        usage["total_tokens"] = total_tokens
+    elif prompt_tokens is not None and completion_tokens is not None:
+        usage["total_tokens"] = prompt_tokens + completion_tokens
+
+    prompt_details = raw_usage.get("prompt_tokens_details")
+    input_details = raw_usage.get("input_tokens_details")
+    cache_read_tokens = _usage_int(
+        raw_usage,
+        "cache_read_tokens",
+        "cacheRead",
+        "cache_read",
+        "cache_read_input_tokens",
+    )
+    cache_write_tokens = _usage_int(
+        raw_usage,
+        "cache_write_tokens",
+        "cacheWrite",
+        "cache_write",
+        "cache_creation_input_tokens",
+    )
+    if cache_read_tokens is None:
+        cache_read_tokens = _usage_int(prompt_details, "cached_tokens")
+    if cache_read_tokens is None:
+        cache_read_tokens = _usage_int(input_details, "cached_tokens")
+    if cache_write_tokens is None:
+        cache_write_tokens = _usage_int(
+            prompt_details,
+            "cache_write_tokens",
+            "cache_creation_tokens",
+        )
+    if cache_write_tokens is None:
+        cache_write_tokens = _usage_int(
+            input_details,
+            "cache_write_tokens",
+            "cache_creation_tokens",
+        )
+    if cache_read_tokens is not None:
+        usage["cache_read_tokens"] = cache_read_tokens
+    if cache_write_tokens is not None:
+        usage["cache_write_tokens"] = cache_write_tokens
+
+    return usage or None
+
+
+def _usage_int(usage: Any, *keys: str) -> int | None:
+    if not isinstance(usage, dict):
+        return None
+    for key in keys:
+        value = usage.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+    return None
 
 
 def _extract_text_content(message: dict[str, Any]) -> str | None:
@@ -790,6 +1072,18 @@ def _truncate_json(payload: dict[str, Any], limit: int = 1200) -> str:
     if len(serialized) <= limit:
         return serialized
     return serialized[:limit] + "...<truncated>"
+
+
+def _stable_tool_order(tools: list[ToolSpec]) -> list[ToolSpec]:
+    return sorted(tools, key=lambda tool: (_sanitize_tool_name(tool.name), tool.name))
+
+
+def _canonical_jsonish(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _canonical_jsonish(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_canonical_jsonish(item) for item in value]
+    return value
 
 
 def _build_provider_tool_name_map(tools: list[ToolSpec]) -> dict[str, str]:
