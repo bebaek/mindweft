@@ -1277,6 +1277,72 @@ Supported fields:
 For a developer-oriented example that combines multiple skills with explicit capability profiles,
 see the commented block in [.env.template](/Users/burm/code/minigent/.env.template).
 
+### Code assistant filesystem access
+
+Prefer filesystem access through MCP servers instead of built-in Minigent local tools. File
+access is workspace-specific and high-risk, so keep it behind explicit MCP server config,
+workspace-root restrictions, and capability profiles.
+
+A good first filesystem server is the reference package:
+
+```bash
+npx -y @modelcontextprotocol/server-filesystem /path/to/workspace
+```
+
+That server is stdio-based, while Minigent consumes MCP over Streamable HTTP. Run it behind
+an HTTP bridge, restricted to the intended workspace root:
+
+```bash
+minigent-mcp-stdio-bridge --name fs-workspace --port 8765 -- \
+  npx -y @modelcontextprotocol/server-filesystem /path/to/workspace
+```
+
+Then expose it to only the profiles that need codebase access:
+
+```dotenv
+MINIGENT_TENANT_EXECUTION_CONFIGS={
+  "demo-tenant":{
+    "llm":{"provider":"mock"},
+    "tools":{
+      "allowed_local_tools":["current_time","calculator"],
+      "mcp_servers":[
+        {"name":"fs-workspace","url":"http://127.0.0.1:8765/mcp","headers":{}}
+      ]
+    },
+    "capability_profiles":{
+      "default_profile":"inspect",
+      "items":[
+        {
+          "name":"inspect",
+          "allowed_local_tools":["current_time","calculator"],
+          "mcp_server_names":["fs-workspace"]
+        }
+      ]
+    }
+  }
+}
+```
+
+Create a thread with that profile:
+
+```bash
+uv run python scripts/demo_client.py \
+  --tenant-id demo-tenant \
+  --capability-profile inspect \
+  "list the files in this workspace"
+```
+
+For stricter read/edit separation, run separate MCP servers or a filtering bridge and map
+them to separate profiles such as `inspect`, `edit`, and `test`.
+
+To smoke-test this flow end to end, run the filesystem MCP demo script. It starts the
+stdio bridge and a local Minigent API process, creates an `inspect` thread, then calls the
+filesystem MCP `list_directory` and `read_file` tools through Minigent's mock adapter:
+
+```bash
+uv run python scripts/demo_filesystem_mcp.py --workspace /path/to/workspace
+```
+
 The local tool `retrieve_knowledge` is not enabled by default because it requires a
 MiniRAG database and related backend setup. Enable it explicitly with
 `tools.allowed_local_tools` (or a skill/capability profile allowlist), and run Minigent
