@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -18,12 +19,19 @@ DEFAULT_MCP_PROTOCOL_VERSION = "2025-11-25"
 
 
 @dataclass(frozen=True)
+class MCPPathPolicy:
+    deny_globs: list[str] = field(default_factory=list)
+    allow_globs: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class MCPServerConfig:
     name: str
     url: str
     headers: dict[str, str]
     protocol_version: str = DEFAULT_MCP_PROTOCOL_VERSION
     allowed_tools: list[str] | None = None
+    path_policy: MCPPathPolicy = field(default_factory=MCPPathPolicy)
 
 
 @dataclass(frozen=True)
@@ -95,6 +103,7 @@ class MCPHTTPClient:
                 status_code=403,
                 detail=f"MCP tool '{self._config.name}.{tool_name}' is not allowed",
             )
+        self._validate_path_policy(tool_name, arguments)
         await self._ensure_initialized()
         result = await self._request(
             "tools/call",
@@ -108,11 +117,37 @@ class MCPHTTPClient:
         if "structuredContent" in result:
             return result["structuredContent"]
         if "content" in result:
-            return {"content": result["content"]}
+            return {"content": self._filter_content(tool_name, result["content"])}
         return result
 
     def _is_tool_allowed(self, tool_name: str) -> bool:
         return self._config.allowed_tools is None or tool_name in self._config.allowed_tools
+
+    def _validate_path_policy(self, tool_name: str, arguments: dict[str, Any]) -> None:
+        _ = tool_name
+        for path in _iter_path_arguments(arguments):
+            if _path_denied(path, self._config.path_policy):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"MCP path '{path}' is denied by server '{self._config.name}' policy",
+                )
+
+    def _filter_content(self, tool_name: str, content: Any) -> Any:
+        if tool_name != "list_directory" or not self._config.path_policy.deny_globs:
+            return content
+        if not isinstance(content, list):
+            return content
+        filtered: list[Any] = []
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "text":
+                filtered.append(item)
+                continue
+            text = item.get("text")
+            if not isinstance(text, str):
+                filtered.append(item)
+                continue
+            filtered.append({**item, "text": _filter_directory_listing_text(text, self._config.path_policy)})
+        return filtered
 
     async def _ensure_initialized(self) -> None:
         if self._initialized:
@@ -316,6 +351,7 @@ def load_mcp_server_configs_from_env() -> list[MCPServerConfig]:
         headers = entry.get("headers") or {}
         protocol_version = entry.get("protocolVersion") or DEFAULT_MCP_PROTOCOL_VERSION
         allowed_tools = entry.get("allowed_tools", entry.get("allowedTools"))
+        path_policy = _parse_path_policy(name, entry.get("path_policy", entry.get("pathPolicy")))
         if not isinstance(name, str) or not name:
             raise RuntimeError("Each MINIGENT_MCP_SERVERS entry must include a non-empty 'name'")
         if not isinstance(url, str) or not url:
@@ -336,9 +372,89 @@ def load_mcp_server_configs_from_env() -> list[MCPServerConfig]:
                 headers=headers,
                 protocol_version=str(protocol_version),
                 allowed_tools=list(allowed_tools) if allowed_tools is not None else None,
+                path_policy=path_policy,
             )
         )
     return configs
+
+
+def _parse_path_policy(server_name: object, raw: object) -> MCPPathPolicy:
+    if raw is None:
+        return MCPPathPolicy()
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"MCP server '{server_name}' has invalid path_policy")
+    deny_globs = raw.get("deny_globs", raw.get("denyGlobs")) or []
+    allow_globs = raw.get("allow_globs", raw.get("allowGlobs")) or []
+    if not isinstance(deny_globs, list) or not all(
+        isinstance(item, str) and item for item in deny_globs
+    ):
+        raise RuntimeError(f"MCP server '{server_name}' has invalid path_policy.deny_globs")
+    if not isinstance(allow_globs, list) or not all(
+        isinstance(item, str) and item for item in allow_globs
+    ):
+        raise RuntimeError(f"MCP server '{server_name}' has invalid path_policy.allow_globs")
+    return MCPPathPolicy(deny_globs=list(deny_globs), allow_globs=list(allow_globs))
+
+
+def _iter_path_arguments(value: Any) -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key in {"path", "paths", "source", "destination", "target"}:
+                paths.extend(_coerce_paths(nested))
+            elif isinstance(nested, dict | list):
+                paths.extend(_iter_path_arguments(nested))
+    elif isinstance(value, list):
+        for item in value:
+            paths.extend(_iter_path_arguments(item))
+    return paths
+
+
+def _coerce_paths(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str)]
+    return []
+
+
+def _path_denied(path: str, policy: MCPPathPolicy) -> bool:
+    normalized = path.replace("\\", "/").rstrip("/")
+    parts = [part for part in normalized.split("/") if part]
+    if _matches_path_globs(normalized, parts, policy.allow_globs):
+        return False
+    return _matches_path_globs(normalized, parts, policy.deny_globs)
+
+
+def _matches_path_globs(normalized: str, parts: list[str], patterns: list[str]) -> bool:
+    candidates = {normalized, normalized.lstrip("/")}
+    candidates.update(parts)
+    candidates.update("/".join(parts[index:]) for index in range(len(parts)))
+    expanded_patterns = set(patterns)
+    expanded_patterns.update(
+        pattern.removesuffix("/**") for pattern in patterns if pattern.endswith("/**")
+    )
+    return any(
+        fnmatch.fnmatch(candidate, pattern) or fnmatch.fnmatch(f"/{candidate}", pattern)
+        for pattern in expanded_patterns
+        for candidate in candidates
+    )
+
+
+def _filter_directory_listing_text(text: str, policy: MCPPathPolicy) -> str:
+    kept_lines: list[str] = []
+    hidden_count = 0
+    for line in text.splitlines():
+        name = line.rsplit(" ", 1)[-1].strip()
+        if name and _path_denied(name, policy):
+            hidden_count += 1
+            continue
+        kept_lines.append(line)
+    if hidden_count:
+        kept_lines.append(
+            f"[hidden {hidden_count} entr{'y' if hidden_count == 1 else 'ies'} by path policy]"
+        )
+    return "\n".join(kept_lines)
 
 
 def _parse_sse_jsonrpc_response(

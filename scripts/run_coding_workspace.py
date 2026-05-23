@@ -177,6 +177,17 @@ def default_tenant_config(
                             "list_directory",
                             "read_file",
                         ],
+                        "path_policy": {
+                            "deny_globs": [
+                                "**/.env*",
+                                "**/.git/**",
+                                "**/.venv/**",
+                                "**/.pytest_cache/**",
+                                "**/.ruff_cache/**",
+                                "**/.uv-cache/**",
+                            ],
+                            "allow_globs": ["**/.env*.template"],
+                        },
                     }
                 ],
             },

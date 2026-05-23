@@ -487,6 +487,10 @@ def _serialize_config_payload(config: TenantExecutionConfig) -> dict[str, Any]:
                     "headers": dict(server.headers),
                     "protocolVersion": server.protocol_version,
                     "allowed_tools": server.allowed_tools,
+                    "path_policy": {
+                        "deny_globs": list(server.path_policy.deny_globs),
+                        "allow_globs": list(server.path_policy.allow_globs),
+                    },
                 }
                 for server in config.tools.mcp_servers
             ],

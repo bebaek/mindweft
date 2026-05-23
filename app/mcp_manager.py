@@ -47,6 +47,10 @@ class MCPServerRuntimeState:
             "server_version": info.server_version if info is not None else None,
             "tool_count": len(self.tools),
             "allowed_tools": self.config.allowed_tools,
+            "path_policy": {
+                "deny_globs": list(self.config.path_policy.deny_globs),
+                "allow_globs": list(self.config.path_policy.allow_globs),
+            },
             "status": self.status,
             "last_error": self.last_error,
             "last_checked_at": _format_datetime(self.last_checked_at),
@@ -210,7 +214,17 @@ class MCPServerManager:
 
 def _state_key(config: MCPServerConfig) -> str:
     header_items = tuple(sorted(config.headers.items()))
-    return repr((config.name, config.url, header_items, config.protocol_version, config.allowed_tools))
+    return repr(
+        (
+            config.name,
+            config.url,
+            header_items,
+            config.protocol_version,
+            config.allowed_tools,
+            config.path_policy.deny_globs,
+            config.path_policy.allow_globs,
+        )
+    )
 
 
 def _pending_state(

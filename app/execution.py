@@ -16,7 +16,7 @@ from app.llm import (
     OpenAICompatibleAdapter,
     build_llm_adapter_from_env,
 )
-from app.mcp import MCPHTTPClient, MCPServerConfig, load_mcp_server_configs_from_env
+from app.mcp import MCPHTTPClient, MCPPathPolicy, MCPServerConfig, load_mcp_server_configs_from_env
 from app.mcp_manager import MCPServerManager
 from app.tools import DEFAULT_LOCAL_TOOL_NAMES, LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry
 
@@ -916,6 +916,11 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         entry.get("allowed_tools") or entry.get("allowedTools"),
         f"mcp server '{name}' allowed_tools",
     )
+    path_policy = _parse_mcp_path_policy(
+        tenant_id,
+        name,
+        entry.get("path_policy") or entry.get("pathPolicy"),
+    )
     if not isinstance(name, str) or not name:
         raise RuntimeError(f"Tenant '{tenant_id}' mcp server name must be a non-empty string")
     if not isinstance(url, str) or not url:
@@ -930,7 +935,30 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         headers=headers,
         protocol_version=str(protocol_version),
         allowed_tools=allowed_tools,
+        path_policy=path_policy,
     )
+
+
+def _parse_mcp_path_policy(
+    tenant_id: str,
+    server_name: object,
+    raw: object,
+) -> MCPPathPolicy:
+    if raw is None:
+        return MCPPathPolicy()
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"Tenant '{tenant_id}' mcp server '{server_name}' path_policy must be an object")
+    deny_globs = _optional_str_list(
+        tenant_id,
+        raw.get("deny_globs") or raw.get("denyGlobs"),
+        f"mcp server '{server_name}' path_policy.deny_globs",
+    )
+    allow_globs = _optional_str_list(
+        tenant_id,
+        raw.get("allow_globs") or raw.get("allowGlobs"),
+        f"mcp server '{server_name}' path_policy.allow_globs",
+    )
+    return MCPPathPolicy(deny_globs=deny_globs or [], allow_globs=allow_globs or [])
 
 
 def _build_llm_adapter(config: TenantLLMConfig) -> LLMAdapter:
@@ -1165,6 +1193,10 @@ async def _validate_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
             "error": None,
             "tool_count": len(specs),
             "allowed_tools": server.allowed_tools,
+            "path_policy": {
+                "deny_globs": list(server.path_policy.deny_globs),
+                "allow_globs": list(server.path_policy.allow_globs),
+            },
             "protocol_version": info.protocol_version,
             "session": bool(info.session_id),
             "server_name": info.server_name,
@@ -1178,6 +1210,10 @@ async def _validate_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
             "error": str(exc.detail),
             "tool_count": 0,
             "allowed_tools": server.allowed_tools,
+            "path_policy": {
+                "deny_globs": list(server.path_policy.deny_globs),
+                "allow_globs": list(server.path_policy.allow_globs),
+            },
             "protocol_version": server.protocol_version,
             "session": False,
             "server_name": None,

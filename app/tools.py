@@ -492,6 +492,10 @@ def build_tool_registry(
                     "server_version": server_info.server_version,
                     "tool_count": len(specs),
                     "allowed_tools": config.allowed_tools,
+                    "path_policy": {
+                        "deny_globs": list(config.path_policy.deny_globs),
+                        "allow_globs": list(config.path_policy.allow_globs),
+                    },
                     "status": "connected",
                     "last_error": None,
                     "last_checked_at": None,
@@ -510,6 +514,10 @@ def build_tool_registry(
                     "server_version": None,
                     "tool_count": 0,
                     "allowed_tools": config.allowed_tools,
+                    "path_policy": {
+                        "deny_globs": list(config.path_policy.deny_globs),
+                        "allow_globs": list(config.path_policy.allow_globs),
+                    },
                     "status": "unavailable",
                     "last_error": _tool_error_detail(exc),
                     "last_checked_at": None,

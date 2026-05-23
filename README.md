@@ -1308,7 +1308,7 @@ MINIGENT_TENANT_EXECUTION_CONFIGS={
     "tools":{
       "allowed_local_tools":["current_time","calculator"],
       "mcp_servers":[
-        {"name":"fs-workspace","url":"http://127.0.0.1:8765/mcp","headers":{},"allowed_tools":["list_allowed_directories","list_directory","read_file"]}
+        {"name":"fs-workspace","url":"http://127.0.0.1:8765/mcp","headers":{},"allowed_tools":["list_allowed_directories","list_directory","read_file"],"path_policy":{"deny_globs":["**/.env*","**/.git/**","**/.venv/**","**/.pytest_cache/**","**/.ruff_cache/**","**/.uv-cache/**"],"allow_globs":["**/.env*.template"]}}
       ]
     },
     "skills":{

@@ -182,6 +182,17 @@ def build_tenant_config(tenant_id: str, bridge_url: str) -> dict[str, Any]:
                             "list_directory",
                             "read_file",
                         ],
+                        "path_policy": {
+                            "deny_globs": [
+                                "**/.env*",
+                                "**/.git/**",
+                                "**/.venv/**",
+                                "**/.pytest_cache/**",
+                                "**/.ruff_cache/**",
+                                "**/.uv-cache/**",
+                            ],
+                            "allow_globs": ["**/.env*.template"],
+                        },
                     },
                 ],
             },

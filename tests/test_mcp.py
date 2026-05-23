@@ -5,7 +5,7 @@ import logging
 import httpx
 import pytest
 
-from app.mcp import MCPHTTPClient, MCPServerConfig, load_mcp_server_configs_from_env
+from app.mcp import MCPHTTPClient, MCPPathPolicy, MCPServerConfig, load_mcp_server_configs_from_env
 from app.redaction import RedactingLogFilter, install_log_redaction
 
 
@@ -19,6 +19,10 @@ def test_load_mcp_server_configs_from_env(monkeypatch) -> None:
                     "url": "https://example.com/mcp",
                     "headers": {"Authorization": "Bearer token"},
                     "allowed_tools": ["list_directory", "read_file"],
+                    "path_policy": {
+                        "deny_globs": ["**/.env*", "**/.git/**"],
+                        "allow_globs": ["**/.env*.template"],
+                    },
                 }
             ]
         ),
@@ -31,6 +35,8 @@ def test_load_mcp_server_configs_from_env(monkeypatch) -> None:
     assert configs[0].url == "https://example.com/mcp"
     assert configs[0].headers == {"Authorization": "Bearer token"}
     assert configs[0].allowed_tools == ["list_directory", "read_file"]
+    assert configs[0].path_policy.deny_globs == ["**/.env*", "**/.git/**"]
+    assert configs[0].path_policy.allow_globs == ["**/.env*.template"]
 
 
 def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
@@ -181,6 +187,127 @@ def test_mcp_http_client_filters_disallowed_tools() -> None:
     ]
 
 
+def test_mcp_http_client_blocks_denied_path_arguments() -> None:
+    client = MCPHTTPClient(
+        config=MCPServerConfig(
+            name="fs",
+            url="https://example.com/mcp",
+            headers={},
+            allowed_tools=["read_file"],
+            path_policy=MCPPathPolicy(deny_globs=["**/.env*"]),
+        ),
+        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+    )
+
+    with pytest.raises(Exception, match="denied"):
+        asyncio.run(client.call_tool("read_file", {"path": "/workspace/.env"}))
+
+
+def test_mcp_http_client_allows_explicitly_allowed_path_over_denied_glob() -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read().decode())
+        method = body["method"]
+        requests.append(method)
+        if method == "initialize":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {"protocolVersion": "2025-11-25", "serverInfo": {}},
+                },
+            )
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        if method == "tools/call":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={"jsonrpc": "2.0", "id": body["id"], "result": {"content": []}},
+            )
+        raise AssertionError(f"Unexpected method {method}")
+
+    client = MCPHTTPClient(
+        config=MCPServerConfig(
+            name="fs",
+            url="https://example.com/mcp",
+            headers={},
+            allowed_tools=["read_file"],
+            path_policy=MCPPathPolicy(
+                deny_globs=["**/.env*"],
+                allow_globs=["**/.env*.template"],
+            ),
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    asyncio.run(client.call_tool("read_file", {"path": "/workspace/.env.coding.template"}))
+
+    assert requests == ["initialize", "notifications/initialized", "tools/call"]
+
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read().decode())
+        method = body["method"]
+        if method == "initialize":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {"protocolVersion": "2025-11-25", "serverInfo": {}},
+                },
+            )
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        if method == "tools/call":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "[FILE] README.md\n[FILE] .env\n[FILE] .env.template\n[DIR] .git\n[DIR] app",
+                            }
+                        ]
+                    },
+                },
+            )
+        raise AssertionError(f"Unexpected method {method}")
+
+    client = MCPHTTPClient(
+        config=MCPServerConfig(
+            name="fs",
+            url="https://example.com/mcp",
+            headers={},
+            allowed_tools=["list_directory"],
+            path_policy=MCPPathPolicy(
+                deny_globs=["**/.env*", "**/.git/**"],
+                allow_globs=["**/.env*.template"],
+            ),
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = asyncio.run(client.call_tool("list_directory", {"path": "/workspace"}))
+
+    text = result["content"][0]["text"]
+    assert "README.md" in text
+    assert ".env.template" in text
+    assert "[FILE] .env\n" not in text
+    assert ".git" not in text
+    assert "hidden 2 entries" in text
+
+
+def test_mcp_http_client_supports_sse_jsonrpc_responses() -> None:
     requests: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
