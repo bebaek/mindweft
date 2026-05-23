@@ -1297,7 +1297,9 @@ minigent-mcp-stdio-bridge --name fs-workspace --port 8765 -- \
   npx -y @modelcontextprotocol/server-filesystem /path/to/workspace
 ```
 
-Then expose it to only the profiles that need codebase access:
+Then expose it to only the profiles that need codebase access. The optional
+`allowed_tools` field on each MCP server narrows the tools Minigent registers and can call
+from that server; the example below keeps the workspace profile read-only:
 
 ```dotenv
 MINIGENT_TENANT_EXECUTION_CONFIGS={
@@ -1306,7 +1308,7 @@ MINIGENT_TENANT_EXECUTION_CONFIGS={
     "tools":{
       "allowed_local_tools":["current_time","calculator"],
       "mcp_servers":[
-        {"name":"fs-workspace","url":"http://127.0.0.1:8765/mcp","headers":{}}
+        {"name":"fs-workspace","url":"http://127.0.0.1:8765/mcp","headers":{},"allowed_tools":["list_allowed_directories","list_directory","read_file"]}
       ]
     },
     "skills":{

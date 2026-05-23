@@ -911,6 +911,11 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
     url = entry.get("url")
     headers = entry.get("headers") or {}
     protocol_version = entry.get("protocolVersion") or entry.get("protocol_version") or "2025-11-25"
+    allowed_tools = _optional_str_list(
+        tenant_id,
+        entry.get("allowed_tools") or entry.get("allowedTools"),
+        f"mcp server '{name}' allowed_tools",
+    )
     if not isinstance(name, str) or not name:
         raise RuntimeError(f"Tenant '{tenant_id}' mcp server name must be a non-empty string")
     if not isinstance(url, str) or not url:
@@ -924,6 +929,7 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         url=url,
         headers=headers,
         protocol_version=str(protocol_version),
+        allowed_tools=allowed_tools,
     )
 
 
@@ -1158,6 +1164,7 @@ async def _validate_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
             "ok": True,
             "error": None,
             "tool_count": len(specs),
+            "allowed_tools": server.allowed_tools,
             "protocol_version": info.protocol_version,
             "session": bool(info.session_id),
             "server_name": info.server_name,
@@ -1170,6 +1177,7 @@ async def _validate_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
             "ok": False,
             "error": str(exc.detail),
             "tool_count": 0,
+            "allowed_tools": server.allowed_tools,
             "protocol_version": server.protocol_version,
             "session": False,
             "server_name": None,

@@ -932,6 +932,7 @@ def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(
             "server_name": "demo-server",
             "server_version": "1.0.0",
             "tool_count": 1,
+            "allowed_tools": None,
             "status": "connected",
             "last_error": None,
             "last_checked_at": None,

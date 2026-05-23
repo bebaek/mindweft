@@ -173,7 +173,16 @@ def build_tenant_config(tenant_id: str, bridge_url: str) -> dict[str, Any]:
             "tools": {
                 "allowed_local_tools": ["current_time", "calculator"],
                 "mcp_servers": [
-                    {"name": "fs-workspace", "url": bridge_url, "headers": {}},
+                    {
+                        "name": "fs-workspace",
+                        "url": bridge_url,
+                        "headers": {},
+                        "allowed_tools": [
+                            "list_allowed_directories",
+                            "list_directory",
+                            "read_file",
+                        ],
+                    },
                 ],
             },
             "skills": {

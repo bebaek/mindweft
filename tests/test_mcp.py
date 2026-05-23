@@ -18,6 +18,7 @@ def test_load_mcp_server_configs_from_env(monkeypatch) -> None:
                     "name": "demo",
                     "url": "https://example.com/mcp",
                     "headers": {"Authorization": "Bearer token"},
+                    "allowed_tools": ["list_directory", "read_file"],
                 }
             ]
         ),
@@ -29,6 +30,7 @@ def test_load_mcp_server_configs_from_env(monkeypatch) -> None:
     assert configs[0].name == "demo"
     assert configs[0].url == "https://example.com/mcp"
     assert configs[0].headers == {"Authorization": "Bearer token"}
+    assert configs[0].allowed_tools == ["list_directory", "read_file"]
 
 
 def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
@@ -117,7 +119,68 @@ def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
     assert requests[3]["body"]["method"] == "tools/call"
 
 
-def test_mcp_http_client_supports_sse_jsonrpc_responses() -> None:
+def test_mcp_http_client_filters_disallowed_tools() -> None:
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read().decode())
+        requests.append({"headers": dict(request.headers), "body": body})
+        method = body["method"]
+        if method == "initialize":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "protocolVersion": "2025-11-25",
+                        "serverInfo": {"name": "demo-server", "version": "1.2.3"},
+                        "capabilities": {"tools": {}},
+                    },
+                },
+            )
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        if method == "tools/list":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "tools": [
+                            {"name": "read_file", "description": "Read", "inputSchema": {}},
+                            {"name": "write_file", "description": "Write", "inputSchema": {}},
+                        ]
+                    },
+                },
+            )
+        raise AssertionError(f"Unexpected method {method}")
+
+    client = MCPHTTPClient(
+        config=MCPServerConfig(
+            name="fs",
+            url="https://example.com/mcp",
+            headers={},
+            allowed_tools=["read_file"],
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    specs = asyncio.run(client.list_tools())
+
+    assert [spec.name for spec in specs] == ["fs.read_file"]
+    with pytest.raises(Exception, match="not allowed"):
+        asyncio.run(client.call_tool("write_file", {"path": "/tmp/x"}))
+    assert [request["body"]["method"] for request in requests] == [
+        "initialize",
+        "notifications/initialized",
+        "tools/list",
+    ]
+
+
     requests: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:

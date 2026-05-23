@@ -23,6 +23,7 @@ class MCPServerConfig:
     url: str
     headers: dict[str, str]
     protocol_version: str = DEFAULT_MCP_PROTOCOL_VERSION
+    allowed_tools: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -70,9 +71,12 @@ class MCPHTTPClient:
             params = {"cursor": cursor} if cursor else {}
             result = await self._request("tools/list", params or None)
             for tool in result.get("tools", []):
-                namespaced_name = f"{self._config.name}.{tool['name']}"
+                tool_name = tool["name"]
+                if not self._is_tool_allowed(tool_name):
+                    continue
+                namespaced_name = f"{self._config.name}.{tool_name}"
                 description = (
-                    tool.get("description") or f"MCP tool {tool['name']} from {self._config.name}"
+                    tool.get("description") or f"MCP tool {tool_name} from {self._config.name}"
                 )
                 tools.append(
                     ToolSpec(
@@ -86,6 +90,11 @@ class MCPHTTPClient:
                 return tools
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+        if not self._is_tool_allowed(tool_name):
+            raise HTTPException(
+                status_code=403,
+                detail=f"MCP tool '{self._config.name}.{tool_name}' is not allowed",
+            )
         await self._ensure_initialized()
         result = await self._request(
             "tools/call",
@@ -101,6 +110,9 @@ class MCPHTTPClient:
         if "content" in result:
             return {"content": result["content"]}
         return result
+
+    def _is_tool_allowed(self, tool_name: str) -> bool:
+        return self._config.allowed_tools is None or tool_name in self._config.allowed_tools
 
     async def _ensure_initialized(self) -> None:
         if self._initialized:
@@ -303,6 +315,7 @@ def load_mcp_server_configs_from_env() -> list[MCPServerConfig]:
         url = entry.get("url")
         headers = entry.get("headers") or {}
         protocol_version = entry.get("protocolVersion") or DEFAULT_MCP_PROTOCOL_VERSION
+        allowed_tools = entry.get("allowed_tools", entry.get("allowedTools"))
         if not isinstance(name, str) or not name:
             raise RuntimeError("Each MINIGENT_MCP_SERVERS entry must include a non-empty 'name'")
         if not isinstance(url, str) or not url:
@@ -311,12 +324,18 @@ def load_mcp_server_configs_from_env() -> list[MCPServerConfig]:
             isinstance(key, str) and isinstance(value, str) for key, value in headers.items()
         ):
             raise RuntimeError(f"MCP server '{name}' has invalid headers")
+        if allowed_tools is not None and (
+            not isinstance(allowed_tools, list)
+            or not all(isinstance(item, str) and item for item in allowed_tools)
+        ):
+            raise RuntimeError(f"MCP server '{name}' has invalid allowed_tools")
         configs.append(
             MCPServerConfig(
                 name=name,
                 url=url,
                 headers=headers,
                 protocol_version=str(protocol_version),
+                allowed_tools=list(allowed_tools) if allowed_tools is not None else None,
             )
         )
     return configs

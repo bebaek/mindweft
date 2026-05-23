@@ -486,6 +486,7 @@ def _serialize_config_payload(config: TenantExecutionConfig) -> dict[str, Any]:
                     "url": server.url,
                     "headers": dict(server.headers),
                     "protocolVersion": server.protocol_version,
+                    "allowed_tools": server.allowed_tools,
                 }
                 for server in config.tools.mcp_servers
             ],

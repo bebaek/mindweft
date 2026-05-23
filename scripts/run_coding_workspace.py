@@ -167,7 +167,18 @@ def default_tenant_config(
             "llm": {"provider": "mock"},
             "tools": {
                 "allowed_local_tools": ["current_time", "calculator"],
-                "mcp_servers": [{"name": bridge_name, "url": bridge_url, "headers": {}}],
+                "mcp_servers": [
+                    {
+                        "name": bridge_name,
+                        "url": bridge_url,
+                        "headers": {},
+                        "allowed_tools": [
+                            "list_allowed_directories",
+                            "list_directory",
+                            "read_file",
+                        ],
+                    }
+                ],
             },
             "skills": {
                 "default_skill": "coding-workspace",
