@@ -42,8 +42,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--workspace",
+        action="append",
         default=None,
-        help="Workspace root to expose. Defaults to MINIGENT_CODING_WORKSPACE or cwd.",
+        help=(
+            "Workspace root to expose. Repeat for multiple roots. Defaults to "
+            "MINIGENT_CODING_WORKSPACE or cwd."
+        ),
     )
     parser.add_argument("--tenant-id", default=None, help="Tenant ID for generated default config.")
     parser.add_argument(
@@ -101,14 +105,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     env = load_env_file(args.env_file)
 
-    workspace = (
-        Path(args.workspace or env.get("MINIGENT_CODING_WORKSPACE") or Path.cwd())
-        .expanduser()
-        .resolve()
-    )
-    if not workspace.exists() or not workspace.is_dir():
-        print(f"Workspace does not exist or is not a directory: {workspace}", file=sys.stderr)
-        return 2
+    workspace_roots = resolve_workspace_roots(args.workspace, env.get("MINIGENT_CODING_WORKSPACE"))
+    for workspace in workspace_roots:
+        if not workspace.exists() or not workspace.is_dir():
+            print(f"Workspace does not exist or is not a directory: {workspace}", file=sys.stderr)
+            return 2
 
     tenant_id = args.tenant_id or env.get("MINIGENT_CODING_TENANT_ID") or DEFAULT_TENANT_ID
     api_host = args.api_host or env.get("MINIGENT_HOST") or DEFAULT_API_HOST
@@ -155,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
 
     processes: list[subprocess.Popen[str]] = []
     print(f"env_file={args.env_file}")
-    print(f"workspace={workspace}")
+    print("workspaces=" + ", ".join(str(workspace) for workspace in workspace_roots))
     print(f"tenant_id={tenant_id}")
     print(f"bridge={bridge_url}")
     if shell_enabled:
@@ -167,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
             processes.append(
                 start_process(
                     build_bridge_command(
-                        env, tenant_id, bridge_name, bridge_host, bridge_port, workspace
+                        env, tenant_id, bridge_name, bridge_host, bridge_port, workspace_roots
                     ),
                     env=env,
                     label="filesystem MCP bridge",
@@ -180,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
                             shell_bridge_name,
                             bridge_host,
                             shell_bridge_port,
-                            workspace,
+                            workspace_roots,
                             allowed_command_prefixes=shell_allowed_command_prefixes_from_env(env),
                         ),
                         env=env,
@@ -208,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
                 api_host,
                 api_port,
                 tenant_id,
-                workspace,
+                workspace_roots[0],
                 bridge_name,
                 shell_bridge_name if shell_enabled else None,
             )
@@ -224,6 +225,19 @@ def main(argv: list[str] | None = None) -> int:
 
 def env_flag_enabled(value: str | None) -> bool:
     return value is not None and value.lower() not in {"", "0", "false", "no"}
+
+
+def resolve_workspace_roots(cli_workspaces: list[str] | None, env_workspace: str | None) -> list[Path]:
+    if cli_workspaces:
+        raw_workspaces = cli_workspaces
+    elif env_workspace:
+        separator = "," if "," in env_workspace else os.pathsep
+        raw_workspaces = [item for item in env_workspace.split(separator) if item.strip()]
+    else:
+        raw_workspaces = []
+    if not raw_workspaces:
+        raw_workspaces = [str(Path.cwd())]
+    return [Path(workspace).expanduser().resolve() for workspace in raw_workspaces]
 
 
 def load_env_file(env_file: str) -> dict[str, str]:
@@ -390,8 +404,9 @@ def build_bridge_command(
     bridge_name: str,
     bridge_host: str,
     bridge_port: int,
-    workspace: Path,
+    workspaces: Path | list[Path],
 ) -> list[str]:
+    workspace_roots = [workspaces] if isinstance(workspaces, Path) else list(workspaces)
     filesystem_command = env.get("MINIGENT_CODING_FILESYSTEM_COMMAND")
     command = (
         shlex.split(filesystem_command)
@@ -400,7 +415,7 @@ def build_bridge_command(
             "npx",
             "-y",
             "@modelcontextprotocol/server-filesystem",
-            str(workspace),
+            *(str(workspace) for workspace in workspace_roots),
         ]
     )
     allowed_tool_args: list[str] = []
@@ -445,10 +460,14 @@ def build_shell_bridge_command(
     shell_bridge_name: str,
     bridge_host: str,
     shell_bridge_port: int,
-    workspace: Path,
+    workspaces: Path | list[Path],
     *,
     allowed_command_prefixes: list[str] | None = None,
 ) -> list[str]:
+    workspace_roots = [workspaces] if isinstance(workspaces, Path) else list(workspaces)
+    workspace_args: list[str] = []
+    for workspace in workspace_roots:
+        workspace_args.extend(["--workspace", str(workspace)])
     allowed_command_args: list[str] = []
     for prefix in allowed_command_prefixes or []:
         allowed_command_args.extend(["--allowed-command-prefix", prefix])
@@ -468,8 +487,7 @@ def build_shell_bridge_command(
         sys.executable,
         "-c",
         "from app.shell_mcp_server import main; raise SystemExit(main())",
-        "--workspace",
-        str(workspace),
+        *workspace_args,
         *allowed_command_args,
     ]
 

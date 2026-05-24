@@ -121,6 +121,39 @@ def test_shell_bridge_command_runs_shell_mcp_server(tmp_path: Path) -> None:
     assert command[-2:] == ["--workspace", str(tmp_path)]
 
 
+def test_bridge_command_exposes_multiple_workspaces(tmp_path: Path) -> None:
+    other_workspace = tmp_path / "other"
+    other_workspace.mkdir()
+
+    command = runner.build_bridge_command(
+        {}, "demo-tenant", "fs-workspace", "127.0.0.1", 8765, [tmp_path, other_workspace]
+    )
+
+    assert command[-2:] == [str(tmp_path), str(other_workspace)]
+
+
+def test_shell_bridge_command_allows_multiple_workspaces(tmp_path: Path) -> None:
+    other_workspace = tmp_path / "other"
+    other_workspace.mkdir()
+
+    command = runner.build_shell_bridge_command(
+        "shell-workspace", "127.0.0.1", 8766, [tmp_path, other_workspace]
+    )
+
+    workspace_indexes = [index for index, value in enumerate(command) if value == "--workspace"]
+    assert [command[index + 1] for index in workspace_indexes] == [
+        str(tmp_path),
+        str(other_workspace),
+    ]
+
+
+def test_resolve_workspace_roots_splits_env_value(tmp_path: Path) -> None:
+    one = tmp_path / "one"
+    two = tmp_path / "two"
+
+    assert runner.resolve_workspace_roots(None, f"{one},{two}") == [one.resolve(), two.resolve()]
+
+
 def test_shell_bridge_command_passes_allowed_command_prefixes(tmp_path: Path) -> None:
     command = runner.build_shell_bridge_command(
         "shell-workspace",

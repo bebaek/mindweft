@@ -126,6 +126,21 @@ The template sets `MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db` so 
 survive runner/API restarts. Remove that setting only if you intentionally want in-memory,
 restart-discarded threads.
 
+To expose multiple roots through the same filesystem MCP server, set
+`MINIGENT_CODING_WORKSPACE` to a comma-separated list or repeat `--workspace` on the runner
+CLI:
+
+```dotenv
+MINIGENT_CODING_WORKSPACE=/path/to/repo1,/path/to/repo2
+```
+
+```bash
+uv run python scripts/run_coding_workspace.py --workspace /path/to/repo1 --workspace /path/to/repo2
+```
+
+When trusted-local shell support is enabled, shell `cwd` values may be under any configured
+workspace root and default to the first root.
+
 The runner starts the bridge with read-only filesystem tools by default. If you provide
 `MINIGENT_TENANT_EXECUTION_CONFIGS` with an `allowed_tools` list for the configured
 `fs-workspace` server, the runner mirrors that list into the bridge's `--allowed-tool` filter
@@ -144,8 +159,8 @@ uv run python scripts/demo_client.py \
   '/tool shell-workspace.run_command {"command":"uv run pytest","cwd":"/path/to/workspace"}'
 ```
 
-The shell MCP server requires command working directories to stay under the configured
-workspace root, passes through only a small environment allowlist, disables stdin, enforces a
+The shell MCP server requires command working directories to stay under one of the configured
+workspace roots, passes through only a small environment allowlist, disables stdin, enforces a
 timeout, and truncates stdout/stderr. You can also add a command-prefix allowlist:
 
 ```dotenv

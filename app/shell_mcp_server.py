@@ -35,7 +35,7 @@ RUN_COMMAND_TOOL = {
             "command": {"type": "string", "description": "Shell command to run."},
             "cwd": {
                 "type": "string",
-                "description": "Working directory. Must be inside the configured workspace root.",
+                "description": "Working directory. Must be inside one configured workspace root.",
             },
             "timeout_seconds": {
                 "type": "number",
@@ -55,14 +55,19 @@ class ShellMCPServer:
     def __init__(
         self,
         *,
-        workspace: Path,
-        shell: str,
+        workspace: Path | None = None,
+        workspaces: Sequence[Path] | None = None,
+        shell: str = "/bin/sh",
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
         env_allowlist: Sequence[str] = DEFAULT_ENV_ALLOWLIST,
         allowed_command_prefixes: Sequence[str] | None = None,
     ) -> None:
-        self.workspace = workspace.expanduser().resolve()
+        raw_workspaces = list(workspaces or ([] if workspace is None else [workspace]))
+        if not raw_workspaces:
+            raise RuntimeError("at least one workspace root is required")
+        self.workspaces = tuple(path.expanduser().resolve() for path in raw_workspaces)
+        self.workspace = self.workspaces[0]
         self.shell = shell
         self.timeout_seconds = timeout_seconds
         self.max_output_chars = max_output_chars
@@ -70,8 +75,11 @@ class ShellMCPServer:
         self.allowed_command_prefixes = tuple(
             prefix.strip() for prefix in (allowed_command_prefixes or ()) if prefix.strip()
         )
-        if not self.workspace.exists() or not self.workspace.is_dir():
-            raise RuntimeError(f"workspace does not exist or is not a directory: {self.workspace}")
+        for workspace_root in self.workspaces:
+            if not workspace_root.exists() or not workspace_root.is_dir():
+                raise RuntimeError(
+                    f"workspace does not exist or is not a directory: {workspace_root}"
+                )
 
     def handle(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         request_id = payload.get("id")
@@ -182,8 +190,9 @@ class ShellMCPServer:
             raise ValueError("cwd must be a string")
         if not cwd.exists() or not cwd.is_dir():
             raise ValueError(f"cwd does not exist or is not a directory: {cwd}")
-        if cwd != self.workspace and self.workspace not in cwd.parents:
-            raise ValueError(f"cwd must be inside workspace root: {self.workspace}")
+        if not any(cwd == workspace or workspace in cwd.parents for workspace in self.workspaces):
+            roots = ", ".join(str(workspace) for workspace in self.workspaces)
+            raise ValueError(f"cwd must be inside a workspace root: {roots}")
         return cwd
 
     @staticmethod
@@ -251,7 +260,12 @@ def serve_stdio(server: ShellMCPServer) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Workspace-scoped shell command MCP server.")
-    parser.add_argument("--workspace", required=True, help="Workspace root commands may run under.")
+    parser.add_argument(
+        "--workspace",
+        action="append",
+        required=True,
+        help="Workspace root commands may run under. Repeat to allow multiple roots.",
+    )
     parser.add_argument("--shell", default="/bin/sh", help="Shell executable.")
     parser.add_argument(
         "--timeout",
@@ -283,7 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     server = ShellMCPServer(
-        workspace=Path(args.workspace),
+        workspaces=[Path(workspace) for workspace in args.workspace],
         shell=args.shell,
         timeout_seconds=args.timeout,
         max_output_chars=args.max_output_chars,

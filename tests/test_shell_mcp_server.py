@@ -30,8 +30,19 @@ def test_run_command_executes_inside_workspace(tmp_path: Path) -> None:
 def test_run_command_rejects_cwd_outside_workspace(tmp_path: Path) -> None:
     server = ShellMCPServer(workspace=tmp_path, shell="/bin/sh")
 
-    with pytest.raises(ValueError, match="cwd must be inside workspace root"):
+    with pytest.raises(ValueError, match="cwd must be inside a workspace root"):
         server.run_command({"command": "pwd", "cwd": "/tmp"})
+
+
+def test_run_command_allows_cwd_inside_any_configured_workspace(tmp_path: Path) -> None:
+    other_workspace = tmp_path / "other"
+    other_workspace.mkdir()
+    server = ShellMCPServer(workspaces=[tmp_path, other_workspace], shell="/bin/sh")
+
+    result = server.run_command({"command": "pwd", "cwd": str(other_workspace)})
+
+    assert result["exit_code"] == 0
+    assert result["stdout"].strip() == str(other_workspace)
 
 
 def test_run_command_allows_configured_command_prefix(tmp_path: Path) -> None:
