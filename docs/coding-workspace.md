@@ -1,0 +1,147 @@
+# Coding workspace setup
+
+Minigent can run as a local coding assistant by combining tenant capability profiles with
+workspace-scoped MCP servers. The default stack is deliberately read-only; expand it only for
+trusted local workspaces.
+
+## Tool boundary: local tools vs MCP tools
+
+Keep Minigent's built-in local tools for low-risk, generic utilities such as `current_time`,
+`calculator`, and optional retrieval. Workspace tools should normally be exposed through MCP
+servers instead of Minigent local tools.
+
+Use MCP for coding capabilities because they are workspace-specific and high-risk:
+
+- filesystem inspection and editing
+- shell commands, test runs, builds, linters, and git operations
+- any tool that should be scoped to one workspace root or sandbox
+
+A shell command tool should therefore be an MCP capability, not a default Minigent local tool.
+Running shell commands from the Minigent API process would expose the API process environment
+and OS permissions. Running shell through a dedicated MCP server keeps the command runner
+separate, lets capability profiles decide who can use it, and leaves room for stronger
+isolation such as a restricted user, container, or other sandbox.
+
+Recommended profile split:
+
+- `inspect`: read-only filesystem MCP tools plus safe local utilities
+- `edit`: explicit filesystem write/edit MCP tools, if needed
+- `test` or `dev`: shell-command MCP tools for trusted local testing/build workflows
+
+Even with MCP, shell access is not a complete sandbox. Treat it as trusted-local-only unless
+its MCP server is independently sandboxed and stripped of sensitive environment variables.
+
+## Read-only filesystem access
+
+Prefer filesystem access through MCP servers instead of built-in Minigent local tools. File
+access is workspace-specific and high-risk, so keep it behind explicit MCP server config,
+workspace-root restrictions, and capability profiles.
+
+A good first filesystem server is the reference package:
+
+```bash
+npx -y @modelcontextprotocol/server-filesystem /path/to/workspace
+```
+
+That server is stdio-based, while Minigent consumes MCP over Streamable HTTP. Run it behind
+an HTTP bridge, restricted to the intended workspace root:
+
+```bash
+minigent-mcp-stdio-bridge \
+  --name fs-workspace \
+  --port 8765 \
+  --allowed-tool list_allowed_directories \
+  --allowed-tool list_directory \
+  --allowed-tool read_file \
+  --deny-glob '**/.env*' \
+  --deny-glob '**/.git/**' \
+  --deny-glob '**/.venv/**' \
+  --allow-glob '**/.env*.template' \
+  -- \
+  npx -y @modelcontextprotocol/server-filesystem /path/to/workspace
+```
+
+Then expose it to only the profiles that need codebase access. The optional `allowed_tools`
+field on each MCP server narrows the tools Minigent registers and can call from that server;
+the example below keeps the workspace profile read-only:
+
+```dotenv
+MINIGENT_TENANT_EXECUTION_CONFIGS={
+  "demo-tenant":{
+    "llm":{"provider":"mock"},
+    "tools":{
+      "allowed_local_tools":["current_time","calculator"],
+      "mcp_servers":[
+        {"name":"fs-workspace","url":"http://127.0.0.1:8765/mcp","headers":{},"allowed_tools":["list_allowed_directories","list_directory","read_file"],"path_policy":{"deny_globs":["**/.env*","**/.git/**","**/.venv/**","**/.pytest_cache/**","**/.ruff_cache/**","**/.uv-cache/**"],"allow_globs":["**/.env*.template"]}}
+      ]
+    },
+    "skills":{
+      "default_skill":"coding-workspace",
+      "items":[
+        {
+          "name":"coding-workspace",
+          "system_prompt":"You are assisting with a code workspace. When the user says current directory, workspace, repo, or repository root, use its absolute path. Filesystem MCP tools require explicit absolute paths; always pass the path argument for directory and file operations."
+        }
+      ]
+    },
+    "capability_profiles":{
+      "default_profile":"inspect",
+      "items":[
+        {
+          "name":"inspect",
+          "allowed_local_tools":["current_time","calculator"],
+          "mcp_server_names":["fs-workspace"]
+        }
+      ]
+    }
+  }
+}
+```
+
+Create a thread with that profile:
+
+```bash
+uv run python scripts/demo_client.py \
+  --tenant-id demo-tenant \
+  --capability-profile inspect \
+  "list the files in this workspace"
+```
+
+For stricter read/edit/test separation, run separate MCP servers or a filtering bridge and map
+them to separate profiles such as `inspect`, `edit`, and `test`.
+
+## Convenience runner
+
+To run this as a reusable local coding-assistant stack, copy the coding env template and start
+the convenience runner. It loads `.env.coding`, starts the filesystem stdio bridge, starts the
+Minigent API, and prints a ready-to-run demo client command:
+
+```bash
+cp .env.coding.template .env.coding
+# edit MINIGENT_CODING_WORKSPACE=/path/to/workspace
+uv run python scripts/run_coding_workspace.py --env-file .env.coding
+```
+
+The template sets `MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db` so coding threads
+survive runner/API restarts. Remove that setting only if you intentionally want in-memory,
+restart-discarded threads.
+
+The runner starts the bridge with read-only filesystem tools by default. If you provide
+`MINIGENT_TENANT_EXECUTION_CONFIGS` with an `allowed_tools` list for the configured
+`fs-workspace` server, the runner mirrors that list into the bridge's `--allowed-tool` filter
+so fuller coding profiles can expose additional filesystem MCP tools.
+
+`.env.coding.template` also includes a commented Generic OAuth LLM example for coding profiles.
+Uncomment it, fill in the OAuth/provider values, start the runner, then open
+`http://127.0.0.1:8000/oauth/generic/open` to authorize the LLM provider.
+
+## Smoke test
+
+To smoke-test the flow without creating an env file, run the one-shot filesystem MCP demo
+script. It starts the same bridge and a local Minigent API process, creates an `inspect`
+thread, then calls the filesystem MCP `list_directory` and `read_file` tools through
+Minigent's mock adapter:
+
+```bash
+uv run python scripts/demo_filesystem_mcp.py --workspace /path/to/workspace
+```

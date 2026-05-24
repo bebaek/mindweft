@@ -41,7 +41,8 @@ uv run minigent chat
 
 For the reusable coding-workspace runner, copy `.env.coding.template` to `.env.coding`.
 The template sets `MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db` so threads
-survive restarts.
+survive restarts. See [Coding workspace setup](docs/coding-workspace.md) for the MCP-based
+workspace tool model.
 
 ## Basic API flow
 
@@ -90,7 +91,10 @@ The local tool registry includes:
 - `retrieve_knowledge`, when MiniRAG is configured and allowed
 - `peer_agent_task`, when `MINIGENT_ENABLE_PEER_AGENT_TOOL=true` and allowed
 
-Tool availability can be narrowed per tenant, skill, and capability profile.
+Tool availability can be narrowed per tenant, skill, and capability profile. Workspace
+capabilities such as filesystem access, editing, shell commands, test runs, builds, and git
+operations should be exposed through MCP servers and capability profiles, not as default
+Minigent local tools.
 
 ## Clients
 
@@ -163,8 +167,9 @@ it deliberately.
 ## Documentation
 
 The previous long README now lives in [`docs/reference.md`](docs/reference.md). Additional
-planning notes are available in:
+focused docs and planning notes are available in:
 
+- [Coding workspace setup](docs/coding-workspace.md)
 - [CLI UI improvements](docs/cli-ui-improvements.md)
 - [CLI unification plan](docs/cli-unification-plan.md)
 
