@@ -1217,7 +1217,7 @@ def _extract_text_content(message: dict[str, Any]) -> str | None:
     return None
 
 
-def _truncate_json(payload: dict[str, Any], limit: int = 1200) -> str:
+def _truncate_json(payload: dict[str, Any], limit: int = 4000) -> str:
     serialized = json.dumps(payload, ensure_ascii=True, default=str)
     if len(serialized) <= limit:
         return serialized
