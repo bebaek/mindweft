@@ -144,7 +144,16 @@ workspace root and default to the first root.
 The runner starts the bridge with read-only filesystem tools by default. If you provide
 `MINIGENT_TENANT_EXECUTION_CONFIGS` with an `allowed_tools` list for the configured
 `fs-workspace` server, the runner mirrors that list into the bridge's `--allowed-tool` filter
-so fuller coding profiles can expose additional filesystem MCP tools.
+so fuller coding profiles can expose additional filesystem MCP tools. It also mirrors the
+server `path_policy` into the bridge's `--deny-glob` and `--allow-glob` filters. You can
+override the bridge path policy directly with comma-separated globs:
+
+```dotenv
+MINIGENT_CODING_BRIDGE_DENY_GLOBS=**/.env*,**/.git/**,**/.venv/**,**/.pytest_cache/**,**/.ruff_cache/**,**/.uv-cache/**
+MINIGENT_CODING_BRIDGE_ALLOW_GLOBS=**/.env*.template,**/.env*.driver.sh
+```
+
+Direct bridge env vars take precedence over the mirrored tenant path policy.
 
 To enable trusted-local shell commands, set `MINIGENT_CODING_SHELL_ENABLED=true` or pass
 `--enable-shell`. When the runner generates the tenant config, this starts a second MCP bridge

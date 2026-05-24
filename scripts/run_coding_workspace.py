@@ -26,6 +26,15 @@ DEFAULT_BRIDGE_ALLOWED_TOOLS = (
     "list_directory",
     "read_file",
 )
+DEFAULT_BRIDGE_DENY_GLOBS = (
+    "**/.env*",
+    "**/.git/**",
+    "**/.venv/**",
+    "**/.pytest_cache/**",
+    "**/.ruff_cache/**",
+    "**/.uv-cache/**",
+)
+DEFAULT_BRIDGE_ALLOW_GLOBS = ("**/.env*.template",)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -398,6 +407,55 @@ def bridge_allowed_tools_from_config(
     return list(DEFAULT_BRIDGE_ALLOWED_TOOLS)
 
 
+def bridge_path_globs(
+    env: dict[str, str],
+    tenant_id: str,
+    bridge_name: str,
+    *,
+    env_name: str,
+    policy_key: str,
+    policy_camel_key: str,
+    defaults: tuple[str, ...],
+) -> list[str]:
+    raw = env.get(env_name)
+    if raw is not None:
+        return [pattern.strip() for pattern in raw.split(",") if pattern.strip()]
+
+    raw_config = env.get("MINIGENT_TENANT_EXECUTION_CONFIGS")
+    if not raw_config:
+        return list(defaults)
+
+    payload = json.loads(raw_config)
+    if not isinstance(payload, dict):
+        raise RuntimeError("MINIGENT_TENANT_EXECUTION_CONFIGS must be a JSON object")
+    tenant = payload.get(tenant_id)
+    if not isinstance(tenant, dict):
+        return list(defaults)
+    tools = tenant.get("tools")
+    if not isinstance(tools, dict):
+        return list(defaults)
+    mcp_servers = tools.get("mcp_servers", tools.get("mcpServers"))
+    if not isinstance(mcp_servers, list):
+        return list(defaults)
+
+    for server in mcp_servers:
+        if not isinstance(server, dict) or server.get("name") != bridge_name:
+            continue
+        path_policy = server.get("path_policy", server.get("pathPolicy"))
+        if path_policy is None:
+            return list(defaults)
+        if not isinstance(path_policy, dict):
+            raise RuntimeError(f"MCP server '{bridge_name}' has invalid path_policy")
+        globs = path_policy.get(policy_key, path_policy.get(policy_camel_key))
+        if globs is None:
+            return []
+        if not isinstance(globs, list) or not all(isinstance(item, str) and item for item in globs):
+            raise RuntimeError(f"MCP server '{bridge_name}' has invalid path_policy.{policy_key}")
+        return list(globs)
+
+    return list(defaults)
+
+
 def build_bridge_command(
     env: dict[str, str],
     tenant_id: str,
@@ -421,6 +479,28 @@ def build_bridge_command(
     allowed_tool_args: list[str] = []
     for tool_name in bridge_allowed_tools_from_config(env, tenant_id, bridge_name):
         allowed_tool_args.extend(["--allowed-tool", tool_name])
+    deny_glob_args: list[str] = []
+    for pattern in bridge_path_globs(
+        env,
+        tenant_id,
+        bridge_name,
+        env_name="MINIGENT_CODING_BRIDGE_DENY_GLOBS",
+        policy_key="deny_globs",
+        policy_camel_key="denyGlobs",
+        defaults=DEFAULT_BRIDGE_DENY_GLOBS,
+    ):
+        deny_glob_args.extend(["--deny-glob", pattern])
+    allow_glob_args: list[str] = []
+    for pattern in bridge_path_globs(
+        env,
+        tenant_id,
+        bridge_name,
+        env_name="MINIGENT_CODING_BRIDGE_ALLOW_GLOBS",
+        policy_key="allow_globs",
+        policy_camel_key="allowGlobs",
+        defaults=DEFAULT_BRIDGE_ALLOW_GLOBS,
+    ):
+        allow_glob_args.extend(["--allow-glob", pattern])
     return [
         sys.executable,
         "-c",
@@ -432,20 +512,8 @@ def build_bridge_command(
         "--port",
         str(bridge_port),
         *allowed_tool_args,
-        "--deny-glob",
-        "**/.env*",
-        "--deny-glob",
-        "**/.git/**",
-        "--deny-glob",
-        "**/.venv/**",
-        "--deny-glob",
-        "**/.pytest_cache/**",
-        "--deny-glob",
-        "**/.ruff_cache/**",
-        "--deny-glob",
-        "**/.uv-cache/**",
-        "--allow-glob",
-        "**/.env*.template",
+        *deny_glob_args,
+        *allow_glob_args,
         "--",
         *command,
     ]

@@ -34,6 +34,66 @@ def test_bridge_command_uses_default_read_only_tools(tmp_path: Path) -> None:
     ]
 
 
+def test_bridge_command_mirrors_tenant_config_path_globs(tmp_path: Path) -> None:
+    env = {
+        "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(
+            {
+                "demo-tenant": {
+                    "tools": {
+                        "mcp_servers": [
+                            {
+                                "name": "fs-workspace",
+                                "url": "http://127.0.0.1:8765/mcp",
+                                "path_policy": {
+                                    "deny_globs": ["**/.env*", "**/.git/**"],
+                                    "allow_globs": [
+                                        "**/.env*.template",
+                                        "**/.env*.driver.sh",
+                                    ],
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+    }
+
+    command = runner.build_bridge_command(
+        env, "demo-tenant", "fs-workspace", "127.0.0.1", 8765, tmp_path
+    )
+
+    deny_indexes = [index for index, value in enumerate(command) if value == "--deny-glob"]
+    allow_indexes = [index for index, value in enumerate(command) if value == "--allow-glob"]
+    assert [command[index + 1] for index in deny_indexes] == ["**/.env*", "**/.git/**"]
+    assert [command[index + 1] for index in allow_indexes] == [
+        "**/.env*.template",
+        "**/.env*.driver.sh",
+    ]
+
+
+def test_bridge_command_uses_env_configured_path_globs(tmp_path: Path) -> None:
+    command = runner.build_bridge_command(
+        {
+            "MINIGENT_CODING_BRIDGE_DENY_GLOBS": "**/.env*, **/.git/**",
+            "MINIGENT_CODING_BRIDGE_ALLOW_GLOBS": "**/.env*.template, **/.env*.driver.sh",
+        },
+        "demo-tenant",
+        "fs-workspace",
+        "127.0.0.1",
+        8765,
+        tmp_path,
+    )
+
+    deny_indexes = [index for index, value in enumerate(command) if value == "--deny-glob"]
+    allow_indexes = [index for index, value in enumerate(command) if value == "--allow-glob"]
+    assert [command[index + 1] for index in deny_indexes] == ["**/.env*", "**/.git/**"]
+    assert [command[index + 1] for index in allow_indexes] == [
+        "**/.env*.template",
+        "**/.env*.driver.sh",
+    ]
+
+
 def test_bridge_command_uses_tenant_config_allowed_tools(tmp_path: Path) -> None:
     env = {
         "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(

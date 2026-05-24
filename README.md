@@ -43,7 +43,8 @@ For the reusable coding-workspace runner, copy `.env.coding.template` to `.env.c
 The template sets `MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db` so threads
 survive restarts. `MINIGENT_CODING_WORKSPACE` can be one path or a comma-separated list of
 workspace roots. See [Coding workspace setup](docs/coding-workspace.md) for the MCP-based
-workspace tool model, including optional trusted-local shell command support.
+workspace tool model, bridge path glob controls, and optional trusted-local shell command
+support.
 
 ## Basic API flow
 
