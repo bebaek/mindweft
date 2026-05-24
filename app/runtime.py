@@ -192,7 +192,12 @@ class AgentRuntime:
                 )
                 self._store.append_message(
                     principal.tenant_id,
-                    Message(thread_id=thread_id, role=MessageRole.ASSISTANT, content=final_content),
+                    Message(
+                        thread_id=thread_id,
+                        role=MessageRole.ASSISTANT,
+                        content=final_content,
+                        metadata=response.metadata,
+                    ),
                 )
                 self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
                 return final_content
@@ -305,6 +310,7 @@ class AgentRuntime:
                 tool_name=tool_call.name,
                 tool_call_id=tool_call.id,
                 tool_arguments=tool_call.arguments,
+                metadata=response.metadata,
             ),
         )
         if tool_call_signature in failed_tool_calls:
@@ -479,9 +485,13 @@ def _direct_tool_command_response(messages: list[Message], tools: list[Any]) -> 
             try:
                 parsed = json.loads(payload)
             except json.JSONDecodeError as exc:
-                raise HTTPException(status_code=400, detail="direct tool payload is invalid JSON") from exc
+                raise HTTPException(
+                    status_code=400, detail="direct tool payload is invalid JSON"
+                ) from exc
             if not isinstance(parsed, dict):
-                raise HTTPException(status_code=400, detail="direct tool payload must be a JSON object")
+                raise HTTPException(
+                    status_code=400, detail="direct tool payload must be a JSON object"
+                )
             arguments = parsed
         else:
             arguments = {"text": payload}

@@ -22,6 +22,7 @@ LLM_DEBUG_LOG_RESPONSE_MAX_CHARS_ENV = "MINIGENT_LLM_DEBUG_LOG_RESPONSE_MAX_CHAR
 LLM_DEBUG_RESPONSE_LOG_PATH_ENV = "MINIGENT_LLM_DEBUG_RESPONSE_LOG_PATH"
 LLM_DEBUG_REQUEST_LOG_PATH_ENV = "MINIGENT_LLM_DEBUG_REQUEST_LOG_PATH"
 LLM_PROMPT_CACHE_KEY_ENV = "MINIGENT_LLM_PROMPT_CACHE_KEY"
+RESPONSES_OUTPUT_ITEMS_METADATA_KEY = "generic_oauth_responses_output_items"
 DEFAULT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS = 20000
 
 
@@ -281,9 +282,10 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
             "stream": True,
             "instructions": _responses_instructions(messages),
             "input": [
-                _message_to_responses_payload(message, tool_name_map)
+                item
                 for message in messages
                 if message.role != MessageRole.SYSTEM
+                for item in _message_to_responses_payload(message, tool_name_map)
             ],
             "tool_choice": "auto",
             "parallel_tool_calls": True,
@@ -295,43 +297,51 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
         prompt_cache_key = _prompt_cache_key_for_request(messages)
         if prompt_cache_key:
             payload["prompt_cache_key"] = prompt_cache_key
-        _debug_log_llm_request(
-            "generic-oauth-responses",
-            payload,
-            model=self._model,
-            message_count=len(messages),
-            tool_count=len(tools),
-        )
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
-            try:
-                response = await client.post(
-                    self._url,
-                    json=payload,
-                    headers=headers,
+            for attempt in range(2):
+                _debug_log_llm_request(
+                    "generic-oauth-responses",
+                    payload,
+                    model=self._model,
+                    message_count=len(messages),
+                    tool_count=len(tools),
                 )
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                detail = exc.response.text or str(exc)
-                raise HTTPException(status_code=502, detail=f"Generic OAuth LLM error: {detail}") from exc
-            except httpx.HTTPError as exc:
-                raise HTTPException(status_code=502, detail=f"Generic OAuth LLM request failed: {exc}") from exc
-        body = response.text
-        content_type = response.headers.get("content-type", "")
-        _debug_log_raw_llm_response(
-            GENERIC_OAUTH_PROVIDER,
-            body,
-            content_type=content_type,
+                body, content_type = await _post_responses_request(
+                    client,
+                    self._url,
+                    payload,
+                    headers,
+                )
+                _debug_log_raw_llm_response(
+                    GENERIC_OAUTH_PROVIDER,
+                    body,
+                    content_type=content_type,
+                )
+                try:
+                    if "text/event-stream" in content_type or _looks_like_sse(body):
+                        return _parse_responses_sse(body, tool_name_map)
+                    return _parse_responses_payload(json.loads(body), tool_name_map)
+                except json.JSONDecodeError as exc:
+                    logger.error("Generic OAuth LLM returned non-JSON body: %s", body[:2000])
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Generic OAuth LLM returned a non-JSON, non-SSE response",
+                    ) from exc
+                except HTTPException as exc:
+                    if not _is_no_responses_output_error(exc) or attempt > 0:
+                        raise
+                    reasoning_items = _responses_reasoning_input_items_from_body(body)
+                    if not reasoning_items:
+                        raise
+                    logger.info(
+                        "Generic OAuth LLM returned reasoning-only output; retrying once with %s reasoning item(s)",
+                        len(reasoning_items),
+                    )
+                    payload["input"] = [*payload["input"], *reasoning_items]
+
+        raise HTTPException(
+            status_code=502, detail="Generic OAuth LLM returned no assistant output"
         )
-        if "text/event-stream" in content_type or _looks_like_sse(body):
-            return _parse_responses_sse(body, tool_name_map)
-        try:
-            return _parse_responses_payload(response.json(), tool_name_map)
-        except json.JSONDecodeError as exc:
-            logger.error("Generic OAuth LLM returned non-JSON body: %s", body[:2000])
-            raise HTTPException(
-                status_code=502,
-                detail="Generic OAuth LLM returned a non-JSON, non-SSE response",
-            ) from exc
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -342,6 +352,49 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
             "adapter": "GenericOAuthResponsesAdapter",
             "prompt_cache_key_configured": bool(os.getenv(LLM_PROMPT_CACHE_KEY_ENV, "").strip()),
         }
+
+
+async def _post_responses_request(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+) -> tuple[str, str]:
+    body_chunks: list[str] = []
+    content_type = ""
+    read_error: httpx.HTTPError | None = None
+    try:
+        async with client.stream(
+            "POST",
+            url,
+            json=payload,
+            headers=headers,
+        ) as response:
+            content_type = response.headers.get("content-type", "")
+            if response.is_error:
+                detail = await response.aread()
+                text = detail.decode(errors="replace") if detail else response.reason_phrase
+                raise HTTPException(status_code=502, detail=f"Generic OAuth LLM error: {text}")
+            try:
+                async for chunk in response.aiter_text():
+                    body_chunks.append(chunk)
+            except httpx.HTTPError as exc:
+                read_error = exc
+    except httpx.HTTPError as exc:
+        detail = str(exc) or exc.__class__.__name__
+        raise HTTPException(
+            status_code=502,
+            detail=f"Generic OAuth LLM request failed: {detail}",
+        ) from exc
+
+    body = "".join(body_chunks)
+    if read_error is not None and not body:
+        detail = str(read_error) or read_error.__class__.__name__
+        raise HTTPException(
+            status_code=502,
+            detail=f"Generic OAuth LLM request failed: {detail}",
+        ) from read_error
+    return body, content_type
 
 
 @dataclass(frozen=True)
@@ -527,7 +580,9 @@ def _parse_mock_tool_arguments(tool_name: str, payload: str) -> dict[str, Any]:
         try:
             parsed = json.loads(stripped)
         except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail="mock tool payload is invalid JSON") from exc
+            raise HTTPException(
+                status_code=400, detail="mock tool payload is invalid JSON"
+            ) from exc
         if not isinstance(parsed, dict):
             raise HTTPException(status_code=400, detail="mock tool payload must be a JSON object")
         return parsed
@@ -575,7 +630,9 @@ def _tool_to_payload(tool: ToolSpec, tool_name_map: dict[str, str]) -> dict[str,
 
 def _is_chatgpt_codex_responses_url(url: str) -> bool:
     parsed = urlparse(url)
-    return parsed.netloc == "chatgpt.com" and parsed.path.rstrip("/") == "/backend-api/codex/responses"
+    return (
+        parsed.netloc == "chatgpt.com" and parsed.path.rstrip("/") == "/backend-api/codex/responses"
+    )
 
 
 def _thread_id_for_prompt_cache(messages: list[Message]) -> str | None:
@@ -597,26 +654,65 @@ def _responses_instructions(messages: list[Message]) -> str:
     return "\n\n".join(system_parts)
 
 
-def _message_to_responses_payload(message: Message, tool_name_map: dict[str, str]) -> dict[str, Any]:
+def _message_to_responses_payload(
+    message: Message, tool_name_map: dict[str, str]
+) -> list[dict[str, Any]]:
     if message.role == MessageRole.TOOL:
-        return {
-            "type": "function_call_output",
-            "call_id": message.tool_call_id or "unknown-call",
-            "output": message.content,
-        }
+        return [
+            {
+                "type": "function_call_output",
+                "call_id": message.tool_call_id or "unknown-call",
+                "output": message.content,
+            }
+        ]
+
+    payload_items = _stored_responses_output_items(message)
     if message.role == MessageRole.ASSISTANT and message.tool_call_id and message.tool_name:
-        return {
-            "type": "function_call",
-            "call_id": message.tool_call_id,
-            "name": tool_name_map.get(message.tool_name, _sanitize_tool_name(message.tool_name)),
-            "arguments": json.dumps(
-                message.tool_arguments or {},
-                ensure_ascii=True,
-                sort_keys=True,
-            ),
-        }
+        payload_items.append(
+            {
+                "type": "function_call",
+                "call_id": message.tool_call_id,
+                "name": tool_name_map.get(
+                    message.tool_name, _sanitize_tool_name(message.tool_name)
+                ),
+                "arguments": json.dumps(
+                    message.tool_arguments or {},
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+            }
+        )
+        return payload_items
+
     role = "assistant" if message.role == MessageRole.ASSISTANT else "user"
-    return {"role": role, "content": message.content}
+    payload_items.append({"role": role, "content": message.content})
+    return payload_items
+
+
+def _stored_responses_output_items(message: Message) -> list[dict[str, Any]]:
+    metadata = message.metadata or {}
+    raw_items = metadata.get(RESPONSES_OUTPUT_ITEMS_METADATA_KEY)
+    if not isinstance(raw_items, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+        if raw_item.get("type") != "reasoning":
+            continue
+        encrypted_content = raw_item.get("encrypted_content")
+        if not isinstance(encrypted_content, str) or not encrypted_content:
+            continue
+        item: dict[str, Any] = {
+            "type": "reasoning",
+            "summary": _responses_reasoning_summary(raw_item),
+            "encrypted_content": encrypted_content,
+        }
+        item_id = raw_item.get("id")
+        if isinstance(item_id, str):
+            item["id"] = item_id
+        items.append(item)
+    return items
 
 
 def _tool_to_responses_payload(tool: ToolSpec, tool_name_map: dict[str, str]) -> dict[str, Any]:
@@ -871,6 +967,7 @@ def _parse_responses_payload(
         raise HTTPException(status_code=502, detail="Generic OAuth LLM returned invalid output")
 
     reverse_tool_name_map = {value: key for key, value in tool_name_map.items()}
+    metadata = _responses_metadata_from_output(output)
     text_parts: list[str] = []
     for item in output:
         if not isinstance(item, dict):
@@ -894,6 +991,7 @@ def _parse_responses_payload(
                     arguments=arguments,
                 ),
                 usage=_normalize_llm_usage(payload.get("usage")),
+                metadata=metadata,
             )
         if item.get("type") == "message":
             content = item.get("content") or []
@@ -909,10 +1007,62 @@ def _parse_responses_payload(
         return LLMResponse(
             content="".join(text_parts),
             usage=_normalize_llm_usage(payload.get("usage")),
+            metadata=metadata,
         )
     if log_missing_output:
-        logger.error("Responses payload missing message/function output: %s", _truncate_json(payload))
+        logger.error(
+            "Responses payload missing message/function output: %s", _truncate_json(payload)
+        )
     raise HTTPException(status_code=502, detail="Generic OAuth LLM returned no assistant output")
+
+
+def _is_no_responses_output_error(exc: HTTPException) -> bool:
+    return exc.status_code == 502 and exc.detail == "Generic OAuth LLM returned no assistant output"
+
+
+def _responses_reasoning_input_items_from_body(body: str) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    output = payload.get("output")
+    if not isinstance(output, list):
+        return []
+    return _responses_reasoning_items_from_output(output)
+
+
+def _responses_reasoning_summary(item: dict[str, Any]) -> list[Any]:
+    summary = item.get("summary")
+    return summary if isinstance(summary, list) else []
+
+
+def _responses_reasoning_items_from_output(output: list[Any]) -> list[dict[str, Any]]:
+    output_items: list[dict[str, Any]] = []
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "reasoning":
+            continue
+        encrypted_content = item.get("encrypted_content")
+        if not isinstance(encrypted_content, str) or not encrypted_content:
+            continue
+        stored_item: dict[str, Any] = {
+            "type": "reasoning",
+            "summary": _responses_reasoning_summary(item),
+            "encrypted_content": encrypted_content,
+        }
+        item_id = item.get("id")
+        if isinstance(item_id, str):
+            stored_item["id"] = item_id
+        output_items.append(stored_item)
+    return output_items
+
+
+def _responses_metadata_from_output(output: list[Any]) -> dict[str, Any] | None:
+    output_items = _responses_reasoning_items_from_output(output)
+    if not output_items:
+        return None
+    return {RESPONSES_OUTPUT_ITEMS_METADATA_KEY: output_items}
 
 
 def _parse_chat_completion(payload: dict[str, Any], tool_name_map: dict[str, str]) -> LLMResponse:

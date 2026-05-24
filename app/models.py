@@ -108,3 +108,4 @@ class LLMResponse(BaseModel):
     content: str | None = None
     tool_call: ToolCall | None = None
     usage: dict[str, int] | None = None
+    metadata: dict[str, Any] | None = None
