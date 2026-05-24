@@ -87,6 +87,61 @@ def test_bridge_command_uses_tenant_config_allowed_tools(tmp_path: Path) -> None
     ]
 
 
+def test_default_tenant_config_adds_shell_test_profile_when_enabled() -> None:
+    config = runner.default_tenant_config(
+        "demo-tenant",
+        "fs-workspace",
+        "http://127.0.0.1:8765/mcp",
+        shell_enabled=True,
+        shell_bridge_name="shell-workspace",
+        shell_bridge_url="http://127.0.0.1:8766/mcp",
+    )
+
+    tenant = config["demo-tenant"]
+    assert tenant["tools"]["mcp_servers"][1] == {
+        "name": "shell-workspace",
+        "url": "http://127.0.0.1:8766/mcp",
+        "headers": {},
+        "allowed_tools": ["run_command"],
+    }
+    assert tenant["capability_profiles"]["default_profile"] == "inspect"
+    assert tenant["capability_profiles"]["items"][1] == {
+        "name": "test",
+        "allowed_local_tools": ["current_time", "calculator"],
+        "mcp_server_names": ["fs-workspace", "shell-workspace"],
+    }
+
+
+def test_shell_bridge_command_runs_shell_mcp_server(tmp_path: Path) -> None:
+    command = runner.build_shell_bridge_command("shell-workspace", "127.0.0.1", 8766, tmp_path)
+
+    assert "--allowed-tool" in command
+    assert "run_command" in command
+    assert "from app.shell_mcp_server import main; raise SystemExit(main())" in command
+    assert command[-2:] == ["--workspace", str(tmp_path)]
+
+
+def test_shell_bridge_command_passes_allowed_command_prefixes(tmp_path: Path) -> None:
+    command = runner.build_shell_bridge_command(
+        "shell-workspace",
+        "127.0.0.1",
+        8766,
+        tmp_path,
+        allowed_command_prefixes=["git", "uv run pytest"],
+    )
+
+    prefix_indexes = [
+        index for index, value in enumerate(command) if value == "--allowed-command-prefix"
+    ]
+    assert [command[index + 1] for index in prefix_indexes] == ["git", "uv run pytest"]
+
+
+def test_shell_allowed_command_prefixes_from_env() -> None:
+    assert runner.shell_allowed_command_prefixes_from_env(
+        {"MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES": "git, uv run pytest, rg"}
+    ) == ["git", "uv run pytest", "rg"]
+
+
 def test_bridge_allowed_tools_allows_unfiltered_explicit_null() -> None:
     env = {
         "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(

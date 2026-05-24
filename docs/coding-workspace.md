@@ -80,7 +80,7 @@ MINIGENT_TENANT_EXECUTION_CONFIGS={
       "items":[
         {
           "name":"coding-workspace",
-          "system_prompt":"You are assisting with a code workspace. When the user says current directory, workspace, repo, or repository root, use its absolute path. Filesystem MCP tools require explicit absolute paths; always pass the path argument for directory and file operations."
+          "system_prompt":"You are assisting with a code workspace. When the user says current directory, workspace, repo, or repository root, use its absolute path. Filesystem MCP tools require explicit absolute paths; always pass the path argument for directory and file operations. Prefer working with git-tracked source files; use git status or git ls-files when needed to distinguish tracked, untracked, ignored, and generated files. Do not read or write secrets such as .env files unless the user explicitly asks and the active tool policy permits it."
         }
       ]
     },
@@ -130,6 +130,32 @@ The runner starts the bridge with read-only filesystem tools by default. If you 
 `MINIGENT_TENANT_EXECUTION_CONFIGS` with an `allowed_tools` list for the configured
 `fs-workspace` server, the runner mirrors that list into the bridge's `--allowed-tool` filter
 so fuller coding profiles can expose additional filesystem MCP tools.
+
+To enable trusted-local shell commands, set `MINIGENT_CODING_SHELL_ENABLED=true` or pass
+`--enable-shell`. When the runner generates the tenant config, this starts a second MCP bridge
+named `shell-workspace` on port `8766` and adds a non-default `test` capability profile that
+can call `shell-workspace.run_command`:
+
+```bash
+uv run python scripts/run_coding_workspace.py --env-file .env.coding --enable-shell
+uv run python scripts/demo_client.py \
+  --tenant-id demo-tenant \
+  --capability-profile test \
+  '/tool shell-workspace.run_command {"command":"uv run pytest","cwd":"/path/to/workspace"}'
+```
+
+The shell MCP server requires command working directories to stay under the configured
+workspace root, passes through only a small environment allowlist, disables stdin, enforces a
+timeout, and truncates stdout/stderr. You can also add a command-prefix allowlist:
+
+```dotenv
+MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES=git,rg,find,ls,pwd,uv run pytest,uv run ruff check,uv run basedpyright
+```
+
+That blocks commands whose strings do not exactly match or start with one of those prefixes,
+such as `cat .env`. Treat this as defense-in-depth, not a sandbox: broad prefixes such as
+`git` or `python` can still have surprising effects, and shell syntax is flexible. Only enable
+shell for trusted local workspaces or run the bridge/server inside a separate sandbox.
 
 `.env.coding.template` also includes a commented Generic OAuth LLM example for coding profiles.
 Uncomment it, fill in the OAuth/provider values, start the runner, then open
