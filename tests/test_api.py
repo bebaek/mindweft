@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from jwt.algorithms import RSAAlgorithm
 
 from app import auth as auth_module
+from app import store as store_module
 from app.agent_backends import _sanitize_peer_task_event
 from app.execution import InMemoryTenantExecutionResolver, parse_tenant_execution_config
 from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter
@@ -144,6 +145,46 @@ def test_sqlite_thread_store_persists_threads_and_messages(tmp_path: Path) -> No
     assert messages[0]["content"] == "hello before restart"
     assert messages[0]["metadata"] == {"raw_user_prompt": "hello before restart"}
     assert messages[1]["content"] == "Mock reply: hello before restart"
+
+
+def test_sqlite_thread_store_closes_connections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_connect = store_module.sqlite3.connect
+    close_count = 0
+    connect_count = 0
+
+    class TrackedConnection:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            nonlocal connect_count
+            connect_count += 1
+            self._connection = real_connect(*args, **kwargs)
+
+        def __enter__(self) -> object:
+            return self._connection.__enter__()
+
+        def __exit__(self, *args: object) -> object:
+            return self._connection.__exit__(*args)
+
+        def close(self) -> None:
+            nonlocal close_count
+            close_count += 1
+            self._connection.close()
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._connection, name)
+
+    monkeypatch.setattr(store_module.sqlite3, "connect", TrackedConnection)
+
+    thread_store = SQLiteThreadStore(tmp_path / "threads.db")
+    thread = thread_store.create_thread("tenant-1")
+    thread_store.append_message(
+        "tenant-1", Message(role=MessageRole.USER, thread_id=thread.thread_id, content="hello")
+    )
+    thread_store.list_messages("tenant-1", thread.thread_id)
+    thread_store.get_thread_context("tenant-1", thread.thread_id)
+
+    assert close_count == connect_count
 
 
 def test_web_client_static_files_are_served() -> None:

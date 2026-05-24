@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Protocol
+from typing import Iterator, Protocol
 
 from fastapi import HTTPException
 
@@ -430,7 +431,7 @@ class SQLiteThreadStore:
         skill_names: list[str] | None = None,
         capability_profile: str | None = None,
     ) -> Thread:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             normalized_skill_names = list(skill_names) if skill_names is not None else None
             thread = Thread(
                 tenant_id=tenant_id,
@@ -450,7 +451,7 @@ class SQLiteThreadStore:
             return thread
 
     def delete_thread(self, tenant_id: str, thread_id: str) -> None:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             self._require_thread(conn, tenant_id, thread_id)
             conn.execute("DELETE FROM threads WHERE thread_id = ?", (thread_id,))
 
@@ -463,7 +464,7 @@ class SQLiteThreadStore:
         capability_profile: str | None = None,
         skill: str | None = None,
     ) -> int:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             threads = self._load_prunable_threads(
                 conn,
                 tenant_id,
@@ -487,7 +488,7 @@ class SQLiteThreadStore:
         capability_profile: str | None = None,
         skill: str | None = None,
     ) -> list[Thread]:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             return self._load_prunable_threads(
                 conn,
                 tenant_id,
@@ -498,7 +499,7 @@ class SQLiteThreadStore:
             )
 
     def append_audit_record(self, record: AuditRecord) -> AuditRecord:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO audit_records (audit_id, tenant_id, created_at, payload)
@@ -524,7 +525,7 @@ class SQLiteThreadStore:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[AuditRecord]:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             records = self._load_matching_audit_records(
                 conn,
                 tenant_id,
@@ -544,7 +545,7 @@ class SQLiteThreadStore:
         created_after: datetime | None = None,
         created_before: datetime | None = None,
     ) -> int:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             return len(
                 self._load_matching_audit_records(
                     conn,
@@ -568,7 +569,7 @@ class SQLiteThreadStore:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[Thread]:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             threads = self._load_matching_threads(
                 conn,
                 tenant_id,
@@ -591,7 +592,7 @@ class SQLiteThreadStore:
         created_after: datetime | None = None,
         updated_after: datetime | None = None,
     ) -> int:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             return len(
                 self._load_matching_threads(
                     conn,
@@ -605,7 +606,7 @@ class SQLiteThreadStore:
             )
 
     def count_messages(self, tenant_id: str, thread_id: str) -> int:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             self._require_thread(conn, tenant_id, thread_id)
             row = conn.execute(
                 "SELECT COUNT(*) FROM messages WHERE thread_id = ?",
@@ -614,7 +615,7 @@ class SQLiteThreadStore:
             return int(row[0]) if row is not None else 0
 
     def list_messages(self, tenant_id: str, thread_id: str) -> list[Message]:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             self._require_thread(conn, tenant_id, thread_id)
             rows = conn.execute(
                 "SELECT payload FROM messages WHERE thread_id = ? ORDER BY position ASC",
@@ -623,7 +624,7 @@ class SQLiteThreadStore:
             return [Message.model_validate(json.loads(row[0])) for row in rows]
 
     def append_message(self, tenant_id: str, message: Message) -> Message:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             thread = self._require_thread(conn, tenant_id, message.thread_id)
             conn.execute(
                 "INSERT INTO messages (thread_id, payload) VALUES (?, ?)",
@@ -634,7 +635,7 @@ class SQLiteThreadStore:
             return message
 
     def set_thread_status(self, tenant_id: str, thread_id: str, status: ThreadStatus) -> Thread:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             thread = self._require_thread(conn, tenant_id, thread_id)
             thread.status = status
             thread.updated_at = utc_now()
@@ -642,11 +643,11 @@ class SQLiteThreadStore:
             return thread
 
     def get_thread(self, tenant_id: str, thread_id: str) -> Thread:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             return self._require_thread(conn, tenant_id, thread_id)
 
     def get_thread_context(self, tenant_id: str, thread_id: str) -> ThreadContext:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             self._require_thread(conn, tenant_id, thread_id)
             return self._require_context(conn, thread_id)
 
@@ -658,7 +659,7 @@ class SQLiteThreadStore:
         summary: str,
         summarized_message_count: int,
     ) -> ThreadContext:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             thread = self._require_thread(conn, tenant_id, thread_id)
             context = self._require_context(conn, thread_id)
             context.summary = summary
@@ -670,7 +671,7 @@ class SQLiteThreadStore:
             return context
 
     def compact_thread_messages(self, tenant_id: str, thread_id: str) -> ThreadContext:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             thread = self._require_thread(conn, tenant_id, thread_id)
             context = self._require_context(conn, thread_id)
             if context.summarized_message_count <= 0:
@@ -693,7 +694,7 @@ class SQLiteThreadStore:
             return context
 
     def start_run(self, tenant_id: str, thread_id: str) -> Thread:
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connection() as conn:
             thread = self._require_thread(conn, tenant_id, thread_id)
             if thread.status == ThreadStatus.RUNNING:
                 raise HTTPException(
@@ -705,7 +706,7 @@ class SQLiteThreadStore:
             return thread
 
     def _initialize(self) -> None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.executescript(
                 """
                 PRAGMA foreign_keys = ON;
@@ -736,6 +737,15 @@ class SQLiteThreadStore:
                     ON audit_records (tenant_id, created_at DESC);
                 """
             )
+
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        conn = self._connect()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)

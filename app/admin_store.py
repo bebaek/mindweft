@@ -3,9 +3,10 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
-from typing import Any, TypeGuard
+from typing import Any, Iterator, TypeGuard
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -20,14 +21,14 @@ class SQLiteTenantConfigStore:
         self._initialize()
 
     def list_tenants(self) -> list[str]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 "SELECT tenant_id FROM tenant_execution_configs ORDER BY tenant_id"
             ).fetchall()
         return [str(row[0]) for row in rows]
 
     def get_raw_config(self, tenant_id: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 "SELECT config_json FROM tenant_execution_configs WHERE tenant_id = ?",
                 (tenant_id,),
@@ -46,7 +47,7 @@ class SQLiteTenantConfigStore:
             sort_keys=True,
         )
         with self._lock:
-            with self._connect() as connection:
+            with self._connection() as connection:
                 connection.execute(
                     """
                     INSERT INTO tenant_execution_configs (tenant_id, config_json)
@@ -61,7 +62,7 @@ class SQLiteTenantConfigStore:
 
     def delete_config(self, tenant_id: str) -> bool:
         with self._lock:
-            with self._connect() as connection:
+            with self._connection() as connection:
                 cursor = connection.execute(
                     "DELETE FROM tenant_execution_configs WHERE tenant_id = ?",
                     (tenant_id,),
@@ -71,7 +72,7 @@ class SQLiteTenantConfigStore:
 
     def _initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tenant_execution_configs (
@@ -83,6 +84,15 @@ class SQLiteTenantConfigStore:
                 """
             )
             connection.commit()
+
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._db_path)
