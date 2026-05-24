@@ -267,14 +267,19 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent reply must be a string")
         return reply
 
-    def cancel_current_run(self, thread_id: str | None = None) -> None:
+    def cancel_current_run(self, thread_id: str | None = None) -> dict[str, Any] | None:
         resolved_thread_id = thread_id or self._thread_id
         if resolved_thread_id is None:
-            return
-        self.request_json(
+            return None
+        response = self.request_json(
             "POST",
             f"{self._config.base_url}/threads/{resolved_thread_id}/run/cancel",
         )
+        if response is None:
+            return None
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent cancel-run response must be an object")
+        return cast(dict[str, Any], response)
 
     def _run_thread_stream(self, thread_id: str) -> str:
         reply: str | None = None

@@ -4014,11 +4014,44 @@ def test_run_chat_loop_handles_local_chat_commands(
     assert exit_code == 0
     assert output_stream.getvalue() == (
         "[user] [idle] chat commands: /help, /new, /threads, /switch <id>, "
-        "/rename <title>, /copy-id, /export [markdown|json], /tokens, /debug, /editor, "
+        "/rename <title>, /copy-id, /cancel, /export [markdown|json], /tokens, /debug, /editor, "
         "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
         "[user] [idle] shutting down\n"
     )
+
+
+def test_run_chat_loop_handles_cancel_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("/cancel\n/exit\n")
+    calls: list[str] = []
+
+    class FakeChatClient:
+        thread_id = "thread-running"
+
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def cancel_current_run(self, thread_id: str | None = None) -> dict[str, object]:
+            calls.append(thread_id or "")
+            return {"cancelled": False, "thread_id": "thread-running"}
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            raise AssertionError(f"local chat command should not be sent: {content}")
+
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+    )
+
+    assert exit_code == 0
+    assert calls == ["thread-running"]
+    assert "[idle] cleared run state for thread-running\n" in output_stream.getvalue()
 
 
 def test_thread_history_selection_resolves_number_id_and_unique_search() -> None:

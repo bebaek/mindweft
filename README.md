@@ -111,6 +111,7 @@ Inside the repo:
 ```bash
 uv run minigent run "hello"
 uv run minigent chat --stream "hello with progress"
+uv run minigent-client --backend chat --resume-last  # supports /cancel for stale runs
 uv run minigent threads
 uv run minigent resume
 uv run minigent export --format markdown
