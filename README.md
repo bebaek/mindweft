@@ -179,6 +179,7 @@ The previous long README now lives in [`docs/reference.md`](docs/reference.md). 
 focused docs and planning notes are available in:
 
 - [Coding workspace setup](docs/coding-workspace.md)
+- [Layered MCP tool stack for coding agents](docs/layered-mcp-tool-stack.md)
 - [CLI UI improvements](docs/cli-ui-improvements.md)
 - [CLI unification plan](docs/cli-unification-plan.md)
 
