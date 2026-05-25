@@ -76,10 +76,13 @@ no frontend build step or extra dependencies.
 
 ## Prompt Cache Diagnostics
 
-By default, Minigent keeps thread history append-only and disables context compaction so
-provider-side prompt caches can reuse stable prefixes across turns. Set
-`MINIGENT_CONTEXT_COMPACTION_ENABLED=true` to re-enable rolling summaries and old-message
-compaction for smaller prompts at the cost of resetting/changing the cacheable prefix.
+By default, Minigent keeps thread history append-only and disables automatic context
+compaction so provider-side prompt caches can reuse stable prefixes across turns. Use
+`POST /threads/{thread_id}/compact` or the interactive CLI `/compact` command to manually
+fold older raw messages into a deterministic thread summary while retaining the recent
+message tail. Set `MINIGENT_CONTEXT_COMPACTION_ENABLED=true` to re-enable rolling summaries
+and old-message compaction during runs for smaller prompts at the cost of resetting/changing
+the cacheable prefix.
 
 Minigent does not cache model replies locally. Native LLM adapters do preserve and report
 provider-side prompt-cache usage when the provider includes it in response metadata.
@@ -904,8 +907,8 @@ message, or use `Esc+Enter`/`Ctrl+J` to insert a newline before submitting. Set
 plain `Enter` insert newlines and `Esc+Enter` submit instead. Use `/editor` to compose a
 long prompt in `$VISUAL` or `$EDITOR`. Interactive chat also supports thread-shell
 commands: `/new`, `/agent [current|preset]`, `/threads [selector]`, `/switch <id>`,
-`/rename <title>`, `/copy-id`,
-`/export [markdown|json]`, `/tokens`, and `/debug`; in a TTY, `/threads` opens the same thread
+`/rename <title>`, `/copy-id`, `/cancel`, `/compact`, `/export [markdown|json]`,
+`/tokens`, and `/debug`; in a TTY, `/threads` opens the same thread
 picker and switches to the selected thread. Pass a thread ID or unique search text as
 `/threads <selector>` to switch directly. Per-thread prompt history is stored under
 `~/.minigent/client-chat-history.d`; when resuming or switching to an existing thread,

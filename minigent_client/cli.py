@@ -441,6 +441,10 @@ class RememberingMinigentAPIClient:
         if callable(setter):
             setter(enabled)
 
+    def compact_thread(self, thread_id: str) -> dict[str, Any]:
+        response = self._client.compact_thread(thread_id)  # type: ignore[attr-defined]
+        return response if isinstance(response, dict) else {}
+
     def send_user_message(self, content: str) -> object:
         message = self._client.send_user_message(content)  # type: ignore[attr-defined]
         thread_id = getattr(self._client, "thread_id", None)
@@ -700,6 +704,9 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         if utterance.startswith("/export"):
             _handle_chat_export(utterance, client, output_stream)
             continue
+        if utterance == "/compact":
+            _handle_chat_compact(client, output_stream)
+            continue
         if utterance == "/tokens":
             _handle_chat_tokens(client, output_stream)
             continue
@@ -757,7 +764,7 @@ def _chat_abort_message(config: ClientConfig) -> str:
 def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
         "[idle] chat commands: /help, /new, /agent [current|preset], /threads, "
-        "/switch <id>, /rename <title>, /copy-id, /cancel, /export [markdown|json], "
+        "/switch <id>, /rename <title>, /copy-id, /cancel, /compact, /export [markdown|json], "
         "/tokens, /debug, /editor, /exit, /quit. "
         "Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
@@ -1104,6 +1111,32 @@ def _handle_chat_cancel(
         output_stream.write(f"[idle] cancelled active run for {thread_id}\n")
     else:
         output_stream.write(f"[idle] cleared run state for {thread_id}\n")
+    output_stream.flush()
+
+
+def _handle_chat_compact(
+    client: RememberingMinigentAPIClient,
+    output_stream: ChatOutputStream,
+) -> None:
+    thread_id = client.thread_id
+    if not thread_id:
+        output_stream.write("[idle] no current thread\n")
+        output_stream.flush()
+        return
+    try:
+        response = client.compact_thread(thread_id)
+    except Exception as exc:
+        output_stream.write(f"[idle] compact failed: {exc}\n")
+        output_stream.flush()
+        return
+    compacted = response.get("compacted_message_count") if isinstance(response, dict) else None
+    retained = response.get("message_count") if isinstance(response, dict) else None
+    if isinstance(compacted, int) and isinstance(retained, int):
+        output_stream.write(
+            f"[idle] compacted {compacted} messages; retained {retained} raw messages\n"
+        )
+    else:
+        output_stream.write(f"[idle] compacted thread {thread_id}\n")
     output_stream.flush()
 
 

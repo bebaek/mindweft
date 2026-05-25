@@ -389,7 +389,7 @@ class AgentRuntime:
         prompt_messages = [
             Message(thread_id=thread_id, role=MessageRole.SYSTEM, content=system_prompt),
         ]
-        if self._context_compaction_enabled and context.summary:
+        if context.summary:
             prompt_messages.append(
                 Message(
                     thread_id=thread_id,
@@ -426,12 +426,43 @@ class AgentRuntime:
         )
         return self._store.compact_thread_messages(principal.tenant_id, thread_id)
 
+    def compact_thread(self, principal: Principal, thread_id: str) -> ThreadContext:
+        messages = self._store.list_messages(principal.tenant_id, thread_id)
+        context = self._store.get_thread_context(principal.tenant_id, thread_id)
+        summarize_upto = _safe_compaction_boundary(
+            messages,
+            max(
+                context.summarized_message_count,
+                max(0, len(messages) - self._recent_message_limit),
+            ),
+            min_boundary=context.summarized_message_count,
+        )
+        if summarize_upto <= context.summarized_message_count:
+            return context
+
+        new_summary = _merge_summaries(
+            context.summary,
+            _summarize_messages(messages[context.summarized_message_count : summarize_upto]),
+            max_chars=self._max_summary_chars,
+        )
+        self._store.update_thread_context(
+            principal.tenant_id,
+            thread_id,
+            summary=new_summary,
+            summarized_message_count=summarize_upto,
+        )
+        return self._store.compact_thread_messages(principal.tenant_id, thread_id)
+
     def _compute_summarize_upto(self, messages: list[Message], context: ThreadContext) -> int:
         max_summarize_upto = max(0, len(messages) - self._min_recent_message_limit)
         default_summarize_upto = max(0, len(messages) - self._recent_message_limit)
         summarize_upto = max(context.summarized_message_count, default_summarize_upto)
         if summarize_upto >= max_summarize_upto:
-            return summarize_upto
+            return _safe_compaction_boundary(
+                messages,
+                summarize_upto,
+                min_boundary=context.summarized_message_count,
+            )
 
         estimated_tokens = _estimate_prompt_tokens(
             messages[summarize_upto:],
@@ -440,7 +471,11 @@ class AgentRuntime:
         while estimated_tokens > self._target_prompt_tokens and summarize_upto < max_summarize_upto:
             estimated_tokens -= _estimate_message_tokens(messages[summarize_upto])
             summarize_upto += 1
-        return summarize_upto
+        return _safe_compaction_boundary(
+            messages,
+            summarize_upto,
+            min_boundary=context.summarized_message_count,
+        )
 
 
 async def _emit_run_event(
@@ -535,6 +570,35 @@ def _normalize_tool_error_result(tool_name: str, result: object) -> dict[str, An
     if "documentation" in result:
         normalized_error["documentation"] = result["documentation"]
     return {"error": normalized_error}
+
+
+def _safe_compaction_boundary(
+    messages: list[Message],
+    boundary: int,
+    *,
+    min_boundary: int = 0,
+) -> int:
+    boundary = min(len(messages), max(min_boundary, boundary))
+    if boundary <= 0 or boundary >= len(messages):
+        return boundary
+
+    first_retained = messages[boundary]
+    last_summarized = messages[boundary - 1]
+    if not _is_completed_tool_pair(last_summarized, first_retained):
+        return boundary
+    if boundary - 1 >= min_boundary:
+        return boundary - 1
+    return min(len(messages), boundary + 1)
+
+
+def _is_completed_tool_pair(assistant_message: Message, tool_message: Message) -> bool:
+    return (
+        assistant_message.role == MessageRole.ASSISTANT
+        and tool_message.role == MessageRole.TOOL
+        and bool(assistant_message.tool_name)
+        and bool(assistant_message.tool_call_id)
+        and assistant_message.tool_call_id == tool_message.tool_call_id
+    )
 
 
 def _summarize_messages(messages: list[Message]) -> str:

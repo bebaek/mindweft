@@ -262,6 +262,11 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
 
         tools = _stable_tool_order(tools)
         tool_name_map = _build_provider_tool_name_map(tools)
+        request_messages = messages
+        pruned_for_responses_tool_history = False
+        if _is_chatgpt_codex_responses_url(self._url):
+            request_messages = _prune_historical_tool_messages_for_azure(messages)
+            pruned_for_responses_tool_history = request_messages != messages
         headers = {
             "Authorization": f"Bearer {credentials.access_token}",
             "Accept": "text/event-stream, application/json",
@@ -280,10 +285,10 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
             "model": self._model,
             "store": False,
             "stream": True,
-            "instructions": _responses_instructions(messages),
+            "instructions": _responses_instructions(request_messages),
             "input": [
                 item
-                for message in messages
+                for message in request_messages
                 if message.role != MessageRole.SYSTEM
                 for item in _message_to_responses_payload(message, tool_name_map)
             ],
@@ -303,9 +308,14 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
                     "generic-oauth-responses",
                     payload,
                     model=self._model,
-                    message_count=len(messages),
+                    message_count=len(request_messages),
                     tool_count=len(tools),
                 )
+                if pruned_for_responses_tool_history:
+                    logger.debug(
+                        "Pruned historical tool messages from ChatGPT Codex Responses payload url=%s",
+                        self._url,
+                    )
                 body, content_type = await _post_responses_request(
                     client,
                     self._url,

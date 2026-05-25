@@ -216,6 +216,119 @@ def test_runtime_can_disable_context_compaction_for_append_only_cache_prefixes()
     ]
 
 
+def test_runtime_manual_compaction_works_when_automatic_compaction_is_disabled() -> None:
+    seen_messages: list[Message] = []
+
+    class InspectingLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            nonlocal seen_messages
+            seen_messages = messages
+            return LLMResponse(content="ok")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=InspectingLLM(),
+        tool_registry=build_local_tool_registry(),
+        recent_message_limit=2,
+        context_compaction_enabled=False,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    for index in range(3):
+        store.append_message(
+            PRINCIPAL.tenant_id,
+            Message(
+                thread_id=thread.thread_id,
+                role=MessageRole.USER,
+                content=f"user-{index}",
+                created_by=PRINCIPAL.user_id,
+            ),
+        )
+        store.append_message(
+            PRINCIPAL.tenant_id,
+            Message(
+                thread_id=thread.thread_id,
+                role=MessageRole.ASSISTANT,
+                content=f"assistant-{index}",
+            ),
+        )
+
+    context = runtime.compact_thread(PRINCIPAL, thread.thread_id)
+
+    assert "user-0" in context.summary
+    assert "assistant-1" in context.summary
+    assert context.summarized_message_count == 0
+    assert [
+        message.content for message in store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    ] == ["user-2", "assistant-2"]
+
+    asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert seen_messages[1].role == MessageRole.SYSTEM
+    assert seen_messages[1].content.startswith("Thread summary:\n")
+    assert [message.content for message in seen_messages[2:]] == ["user-2", "assistant-2"]
+
+
+def test_runtime_manual_compaction_keeps_tool_call_pairs_together() -> None:
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=build_local_tool_registry(),
+        recent_message_limit=3,
+        context_compaction_enabled=False,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="old user"),
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.ASSISTANT,
+            content="",
+            tool_name="echo",
+            tool_call_id="call_1",
+            tool_arguments={"text": "hello"},
+        ),
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.TOOL,
+            content='{"echo":"hello"}',
+            tool_name="echo",
+            tool_call_id="call_1",
+        ),
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.ASSISTANT, content="old answer"),
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="new user"),
+    )
+
+    runtime.compact_thread(PRINCIPAL, thread.thread_id)
+
+    retained = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    assert [message.role for message in retained] == [
+        MessageRole.ASSISTANT,
+        MessageRole.TOOL,
+        MessageRole.ASSISTANT,
+        MessageRole.USER,
+    ]
+    assert retained[0].tool_call_id == "call_1"
+    assert retained[1].tool_call_id == "call_1"
+
+
 def test_runtime_uses_prompt_budget_to_compact_more_than_default_tail() -> None:
     seen_messages: list[Message] = []
 

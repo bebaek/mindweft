@@ -457,6 +457,28 @@ def create_app(
             "usage": estimate_thread_context_usage(messages, context=context),
         }
 
+    @app.post("/threads/{thread_id}/compact")
+    async def compact_thread_context(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_principal),
+    ) -> dict[str, object]:
+        store = request.app.state.store
+        before_messages = store.list_messages(principal.tenant_id, thread_id)
+        before_context = store.get_thread_context(principal.tenant_id, thread_id)
+        before_usage = estimate_thread_context_usage(before_messages, context=before_context)
+        context = request.app.state.runtime.compact_thread(principal, thread_id)
+        after_messages = store.list_messages(principal.tenant_id, thread_id)
+        after_usage = estimate_thread_context_usage(after_messages, context=context)
+        return {
+            "thread_id": thread_id,
+            "summary": context.summary,
+            "compacted_message_count": len(before_messages) - len(after_messages),
+            "message_count": len(after_messages),
+            "usage_before": before_usage,
+            "usage": after_usage,
+        }
+
     @app.post("/threads/{thread_id}/run", response_model=RunThreadResponse)
     async def run_thread(
         thread_id: str,

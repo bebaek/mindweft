@@ -267,6 +267,15 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent reply must be a string")
         return reply
 
+    def compact_thread(self, thread_id: str) -> dict[str, Any]:
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/threads/{thread_id}/compact",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent compact-thread response must be an object")
+        return cast(dict[str, Any], response)
+
     def cancel_current_run(self, thread_id: str | None = None) -> dict[str, Any] | None:
         resolved_thread_id = thread_id or self._thread_id
         if resolved_thread_id is None:

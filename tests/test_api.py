@@ -199,6 +199,34 @@ def test_web_client_static_files_are_served() -> None:
     assert "./app.js" in response.text
 
 
+def test_thread_manual_compact_endpoint_summarizes_older_messages() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    for index in range(10):
+        response = client.post(
+            f"/threads/{thread_id}/messages",
+            json={"content": f"message-{index}"},
+            headers=AUTH_HEADERS,
+        )
+        assert response.status_code == 200
+
+    compact_response = client.post(f"/threads/{thread_id}/compact", headers=AUTH_HEADERS)
+
+    assert compact_response.status_code == 200
+    compacted = compact_response.json()
+    assert compacted["compacted_message_count"] == 2
+    assert compacted["message_count"] == 8
+    assert "User: message-0" in compacted["summary"]
+    assert "User: message-1" in compacted["summary"]
+    raw_context = client.get(f"/threads/{thread_id}/context/raw", headers=AUTH_HEADERS).json()
+    assert raw_context["summary"] == compacted["summary"]
+    assert [message["content"] for message in raw_context["messages"]] == [
+        f"message-{index}" for index in range(2, 10)
+    ]
+
+
 def test_create_app_uses_runtime_max_iterations_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_MAX_ITERATIONS", "24")
 

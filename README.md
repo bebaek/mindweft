@@ -120,9 +120,10 @@ uv run minigent config doctor
 ```
 
 Interactive chat supports local slash commands such as `/new`, `/threads`, `/switch <id>`,
-and `/agent <preset>`. Configure `/agent` presets with `MINIGENT_CLIENT_AGENT_PRESETS`, a
-JSON object or array mapping user-facing agent names to Minigent `skill_name`/`skill_names`
-and `capability_profile` values; selecting a preset creates a new thread with that bundle.
+`/compact`, and `/agent <preset>`. Configure `/agent` presets with
+`MINIGENT_CLIENT_AGENT_PRESETS`, a JSON object or array mapping user-facing agent names to
+Minigent `skill_name`/`skill_names` and `capability_profile` values; selecting a preset
+creates a new thread with that bundle.
 
 Install as a reusable CLI app:
 

@@ -1802,6 +1802,8 @@ def test_minigent_api_client_exposes_shared_thread_methods(
             return FakeResponse({"id": "message-1"})
         if request.full_url.endswith("/threads/thread-1/messages") and request.get_method() == "GET":
             return FakeResponse([{"role": "user", "content": "hello"}])
+        if request.full_url.endswith("/threads/thread-1/compact"):
+            return FakeResponse({"compacted_message_count": 1, "message_count": 2})
         if request.full_url.endswith("/threads/thread-1/run"):
             return FakeResponse({"reply": "hi"})
         if request.full_url.endswith("/threads/thread-1"):
@@ -1828,6 +1830,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "messages": [{"role": "user", "content": "hello"}],
     }
     assert client.run_thread("thread-1", stream=False) == "hi"
+    assert client.compact_thread("thread-1") == {"compacted_message_count": 1, "message_count": 2}
     client.delete_thread("thread-1")
 
     assert [request["method"] for request in requests] == [
@@ -1836,6 +1839,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "POST",
         "POST",
         "GET",
+        "POST",
         "POST",
         "DELETE",
     ]
@@ -4155,7 +4159,7 @@ def test_run_chat_loop_handles_local_chat_commands(
     assert exit_code == 0
     assert output_stream.getvalue() == (
         "[user] [idle] chat commands: /help, /new, /agent [current|preset], /threads, "
-        "/switch <id>, /rename <title>, /copy-id, /cancel, /export [markdown|json], /tokens, "
+        "/switch <id>, /rename <title>, /copy-id, /cancel, /compact, /export [markdown|json], /tokens, "
         "/debug, /editor, /exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J "
         "inserts a newline. Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make "
         "Esc+Enter submit.\n"

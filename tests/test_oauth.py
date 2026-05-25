@@ -376,6 +376,73 @@ def test_generic_oauth_adapter_round_trips_encrypted_reasoning_items(tmp_path: P
     }
 
 
+def test_generic_oauth_adapter_prunes_orphaned_tool_outputs_for_chatgpt_codex(
+    tmp_path: Path,
+) -> None:
+    seen_payload: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payload.update(json.loads(request.read().decode()))
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "ok"}],
+                    }
+                ]
+            },
+        )
+
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://chatgpt.com/backend-api/codex/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(thread_id="thread", role=MessageRole.USER, content="old request"),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content='{"echo":"old result"}',
+                    tool_name="echo",
+                    tool_call_id="call_orphaned",
+                ),
+                Message(thread_id="thread", role=MessageRole.ASSISTANT, content="old answer"),
+                Message(thread_id="thread", role=MessageRole.USER, content="new request"),
+            ],
+            [ToolSpec(name="echo", description="Echo text", input_schema={"type": "object"})],
+        )
+    )
+
+    assert response.content == "ok"
+    assert seen_payload["input"] == [
+        {"role": "user", "content": "old request"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "new request"},
+    ]
+
+
 def test_generic_oauth_adapter_retries_once_after_reasoning_only_output(tmp_path: Path) -> None:
     requests: list[dict[str, Any]] = []
 
@@ -806,7 +873,9 @@ def test_generic_oauth_adapter_surfaces_sse_response_failure(tmp_path: Path) -> 
         )
 
     assert exc_info.value.status_code == 502
-    assert exc_info.value.detail == "Generic OAuth LLM response failed: server_error: upstream failed"
+    assert (
+        exc_info.value.detail == "Generic OAuth LLM response failed: server_error: upstream failed"
+    )
 
 
 class _BrokenAfterChunkStream(httpx.AsyncByteStream):
