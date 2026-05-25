@@ -257,9 +257,27 @@ def load_env_file(env_file: str) -> dict[str, str]:
         for key, value in values.items():
             if value is not None:
                 env[key] = value
+        apply_file_env_values(env, base_dir=path.parent)
     else:
         print(f"env file not found; continuing with current environment: {env_file}")
+        apply_file_env_values(env, base_dir=Path.cwd())
     return env
+
+
+def apply_file_env_values(env: dict[str, str], *, base_dir: Path) -> None:
+    """Expand FOO_FILE=/path/to/value-file entries into FOO=<file contents>.
+
+    Relative file paths are resolved from the dotenv file directory. This is useful for
+    long JSON-valued settings that are hard to edit safely on one dotenv line.
+    """
+    for file_key, raw_path in list(env.items()):
+        if not file_key.endswith("_FILE") or not raw_path.strip():
+            continue
+        target_key = file_key[: -len("_FILE")]
+        value_path = Path(raw_path).expanduser()
+        if not value_path.is_absolute():
+            value_path = base_dir / value_path
+        env[target_key] = value_path.read_text(encoding="utf-8").strip()
 
 
 def default_tenant_config(

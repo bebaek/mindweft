@@ -19,6 +19,22 @@ def _load_runner() -> ModuleType:
 runner = _load_runner()
 
 
+def test_load_env_file_reads_file_backed_values(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("MINIGENT_TENANT_EXECUTION_CONFIGS", raising=False)
+    config_path = tmp_path / "tenant-config.json"
+    config_path.write_text('{"demo-tenant":{"llm":{"provider":"mock"}}}\n', encoding="utf-8")
+    env_path = tmp_path / ".env.coding"
+    env_path.write_text(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS_FILE=tenant-config.json\n", encoding="utf-8"
+    )
+
+    env = runner.load_env_file(str(env_path))
+
+    assert env["MINIGENT_TENANT_EXECUTION_CONFIGS"] == (
+        '{"demo-tenant":{"llm":{"provider":"mock"}}}'
+    )
+
+
 def test_bridge_command_uses_default_read_only_tools(tmp_path: Path) -> None:
     command = runner.build_bridge_command(
         {}, "demo-tenant", "fs-workspace", "127.0.0.1", 8765, tmp_path
