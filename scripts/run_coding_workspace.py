@@ -20,6 +20,8 @@ DEFAULT_BRIDGE_PORT = 8765
 DEFAULT_BRIDGE_NAME = "fs-workspace"
 DEFAULT_SHELL_BRIDGE_NAME = "shell-workspace"
 DEFAULT_SHELL_BRIDGE_PORT = 8766
+DEFAULT_TEXT_BRIDGE_NAME = "text-workspace"
+DEFAULT_TEXT_BRIDGE_PORT = 8767
 DEFAULT_TENANT_ID = "demo-tenant"
 DEFAULT_BRIDGE_ALLOWED_TOOLS = (
     "list_allowed_directories",
@@ -98,6 +100,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Shell MCP server name. Defaults to MINIGENT_CODING_SHELL_BRIDGE_NAME or shell-workspace.",
     )
     parser.add_argument(
+        "--enable-text",
+        action="store_true",
+        help="Also start a workspace-scoped targeted text-read MCP server and add it to the inspect profile when generating config.",
+    )
+    parser.add_argument(
+        "--text-bridge-port",
+        type=int,
+        default=None,
+        help="Targeted text-read MCP bridge port. Defaults to MINIGENT_CODING_TEXT_BRIDGE_PORT or 8767.",
+    )
+    parser.add_argument(
+        "--text-bridge-name",
+        default=None,
+        help="Targeted text-read MCP server name. Defaults to MINIGENT_CODING_TEXT_BRIDGE_NAME or text-workspace.",
+    )
+    parser.add_argument(
         "--skip-api",
         action="store_true",
         help="Only run the filesystem MCP bridge; do not start Minigent API.",
@@ -129,6 +147,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     bridge_name = args.bridge_name or env.get("MINIGENT_CODING_BRIDGE_NAME") or DEFAULT_BRIDGE_NAME
     bridge_url = f"http://{bridge_host}:{bridge_port}/mcp"
+    text_enabled = args.enable_text or env_flag_enabled(env.get("MINIGENT_CODING_TEXT_ENABLED"))
+    text_bridge_name = (
+        args.text_bridge_name or env.get("MINIGENT_CODING_TEXT_BRIDGE_NAME") or DEFAULT_TEXT_BRIDGE_NAME
+    )
+    text_bridge_port = args.text_bridge_port or int(
+        env.get("MINIGENT_CODING_TEXT_BRIDGE_PORT") or DEFAULT_TEXT_BRIDGE_PORT
+    )
+    text_bridge_url = f"http://{bridge_host}:{text_bridge_port}/mcp"
     shell_enabled = args.enable_shell or env_flag_enabled(env.get("MINIGENT_CODING_SHELL_ENABLED"))
     shell_bridge_name = (
         args.shell_bridge_name
@@ -148,6 +174,9 @@ def main(argv: list[str] | None = None) -> int:
                 tenant_id,
                 bridge_name,
                 bridge_url,
+                text_enabled=text_enabled,
+                text_bridge_name=text_bridge_name,
+                text_bridge_url=text_bridge_url,
                 shell_enabled=shell_enabled,
                 shell_bridge_name=shell_bridge_name,
                 shell_bridge_url=shell_bridge_url,
@@ -168,6 +197,8 @@ def main(argv: list[str] | None = None) -> int:
     print("workspaces=" + ", ".join(str(workspace) for workspace in workspace_roots))
     print(f"tenant_id={tenant_id}")
     print(f"bridge={bridge_url}")
+    if text_enabled:
+        print(f"text_bridge={text_bridge_url}")
     if shell_enabled:
         print(f"shell_bridge={shell_bridge_url}")
     print(f"api=http://{api_host}:{api_port}")
@@ -183,6 +214,19 @@ def main(argv: list[str] | None = None) -> int:
                     label="filesystem MCP bridge",
                 )
             )
+            if text_enabled:
+                processes.append(
+                    start_process(
+                        build_text_bridge_command(
+                            text_bridge_name,
+                            bridge_host,
+                            text_bridge_port,
+                            workspace_roots,
+                        ),
+                        env=env,
+                        label="targeted text MCP bridge",
+                    )
+                )
             if shell_enabled:
                 processes.append(
                     start_process(
@@ -220,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
                 tenant_id,
                 workspace_roots[0],
                 bridge_name,
+                text_bridge_name if text_enabled else None,
                 shell_bridge_name if shell_enabled else None,
             )
 
@@ -285,6 +330,9 @@ def default_tenant_config(
     bridge_name: str,
     bridge_url: str,
     *,
+    text_enabled: bool = False,
+    text_bridge_name: str = DEFAULT_TEXT_BRIDGE_NAME,
+    text_bridge_url: str | None = None,
     shell_enabled: bool = False,
     shell_bridge_name: str = DEFAULT_SHELL_BRIDGE_NAME,
     shell_bridge_url: str | None = None,
@@ -319,6 +367,31 @@ def default_tenant_config(
             "mcp_server_names": [bridge_name],
         }
     ]
+    if text_enabled:
+        mcp_servers.append(
+            {
+                "name": text_bridge_name,
+                "url": text_bridge_url or f"http://127.0.0.1:{DEFAULT_TEXT_BRIDGE_PORT}/mcp",
+                "headers": {},
+                "allowed_tools": [
+                    "read_text_file_lines",
+                    "read_text_file_around",
+                    "search_text_file",
+                ],
+                "path_policy": {
+                    "deny_globs": [
+                        "**/.env*",
+                        "**/.git/**",
+                        "**/.venv/**",
+                        "**/.pytest_cache/**",
+                        "**/.ruff_cache/**",
+                        "**/.uv-cache/**",
+                    ],
+                    "allow_globs": ["**/.env*.template"],
+                },
+            }
+        )
+        profiles[0]["mcp_server_names"].append(text_bridge_name)
     if shell_enabled:
         mcp_servers.append(
             {
@@ -380,7 +453,9 @@ def coding_workspace_skill() -> dict[str, str]:
             "You are assisting with a code workspace. When the user says current directory, "
             "workspace, repo, or repository root, use its absolute path. Filesystem MCP tools "
             "require explicit absolute paths; always pass the path argument for directory and "
-            "file operations. Prefer working with git-tracked source files; use git status "
+            "file operations. Prefer targeted text-read MCP tools for exact line ranges when "
+            "they are available; use broader filesystem reads only when broader file context is "
+            "needed. Prefer working with git-tracked source files; use git status "
             "or git ls-files when needed to distinguish tracked, untracked, ignored, and "
             "generated files. Do not read or write secrets such as .env files unless the user "
             "explicitly asks and the active tool policy permits it."
@@ -578,6 +653,40 @@ def build_shell_bridge_command(
     ]
 
 
+def build_text_bridge_command(
+    text_bridge_name: str,
+    bridge_host: str,
+    text_bridge_port: int,
+    workspaces: Path | list[Path],
+) -> list[str]:
+    workspace_roots = [workspaces] if isinstance(workspaces, Path) else list(workspaces)
+    workspace_args: list[str] = []
+    for workspace in workspace_roots:
+        workspace_args.extend(["--workspace", str(workspace)])
+    return [
+        sys.executable,
+        "-c",
+        "from app.mcp_stdio_bridge import main; main()",
+        "--name",
+        text_bridge_name,
+        "--host",
+        bridge_host,
+        "--port",
+        str(text_bridge_port),
+        "--allowed-tool",
+        "read_text_file_lines",
+        "--allowed-tool",
+        "read_text_file_around",
+        "--allowed-tool",
+        "search_text_file",
+        "--",
+        sys.executable,
+        "-c",
+        "from app.text_mcp_server import main; raise SystemExit(main())",
+        *workspace_args,
+    ]
+
+
 def start_process(command: list[str], *, env: dict[str, str], label: str) -> subprocess.Popen[str]:
     print(f"starting {label}: {' '.join(shlex.quote(part) for part in command)}")
     return subprocess.Popen(command, env=env, text=True, start_new_session=True)
@@ -611,6 +720,7 @@ def print_demo_commands(
     tenant_id: str,
     workspace: Path,
     bridge_name: str,
+    text_bridge_name: str | None = None,
     shell_bridge_name: str | None = None,
 ) -> None:
     base_url = f"http://{api_host}:{api_port}"
@@ -621,6 +731,15 @@ def print_demo_commands(
         f"--base-url {base_url} --tenant-id {tenant_id} --capability-profile inspect "
         f"{shlex.quote(tool_message)}"
     )
+    if text_bridge_name is not None:
+        text_message = f"/tool {text_bridge_name}.read_text_file_around " + json.dumps(
+            {"path": str(workspace / "README.md"), "line": 1, "after": 20}, separators=(",", ":")
+        )
+        print(
+            "uv run python scripts/demo_client.py "
+            f"--base-url {base_url} --tenant-id {tenant_id} --capability-profile inspect "
+            f"{shlex.quote(text_message)}"
+        )
     if shell_bridge_name is not None:
         shell_message = f"/tool {shell_bridge_name}.run_command " + json.dumps(
             {"command": "pwd && ls", "cwd": str(workspace)}, separators=(",", ":")

@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from app.text_mcp_server import TextMCPServer
+
+
+def test_text_mcp_server_lists_targeted_read_tools(tmp_path: Path) -> None:
+    server = TextMCPServer(workspace=tmp_path)
+
+    response = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+
+    assert response is not None
+    assert [tool["name"] for tool in response["result"]["tools"]] == [
+        "read_text_file_lines",
+        "read_text_file_around",
+        "search_text_file",
+    ]
+
+
+def test_read_text_file_lines_reads_inclusive_line_range(tmp_path: Path) -> None:
+    file_path = tmp_path / "sample.py"
+    file_path.write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
+    server = TextMCPServer(workspace=tmp_path)
+
+    result = server.read_text_file_lines(
+        {"path": str(file_path), "start_line": 2, "end_line": 3}
+    )
+
+    assert result["path"] == str(file_path)
+    assert result["start_line"] == 2
+    assert result["end_line"] == 3
+    assert result["line_count"] == 4
+    assert result["content"] == "two\nthree\n"
+    assert result["truncated"] is False
+
+
+def test_read_text_file_lines_allows_workspace_relative_paths(tmp_path: Path) -> None:
+    file_path = tmp_path / "sample.txt"
+    file_path.write_text("alpha\nbeta\n", encoding="utf-8")
+    server = TextMCPServer(workspace=tmp_path)
+
+    result = server.read_text_file_lines({"path": "sample.txt", "start_line": 1, "end_line": 1})
+
+    assert result["path"] == str(file_path)
+    assert result["content"] == "alpha\n"
+
+
+def test_read_text_file_around_adds_context(tmp_path: Path) -> None:
+    file_path = tmp_path / "sample.txt"
+    file_path.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
+    server = TextMCPServer(workspace=tmp_path)
+
+    result = server.read_text_file_around(
+        {"path": str(file_path), "line": 3, "before": 1, "after": 2}
+    )
+
+    assert result["start_line"] == 2
+    assert result["end_line"] == 5
+    assert result["content"] == "two\nthree\nfour\nfive\n"
+
+
+def test_search_text_file_returns_match_contexts(tmp_path: Path) -> None:
+    file_path = tmp_path / "sample.txt"
+    file_path.write_text("alpha\nbeta\ngamma\nbeta two\n", encoding="utf-8")
+    server = TextMCPServer(workspace=tmp_path)
+
+    result = server.search_text_file(
+        {"path": str(file_path), "pattern": "beta", "before": 1, "after": 1}
+    )
+
+    assert result["match_count"] == 2
+    assert result["matches"][0] == {
+        "line": 2,
+        "start_line": 1,
+        "end_line": 3,
+        "content": "alpha\nbeta\ngamma\n",
+        "truncated": False,
+    }
+    assert result["matches"][1]["line"] == 4
+    assert result["matches"][1]["content"] == "gamma\nbeta two\n"
+
+
+def test_text_mcp_server_rejects_path_outside_workspace(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("secret\n", encoding="utf-8")
+    server = TextMCPServer(workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="path must be inside a workspace root"):
+        server.read_text_file_lines({"path": str(outside), "start_line": 1, "end_line": 1})
+
+
+def test_text_mcp_server_rejects_invalid_line_range(tmp_path: Path) -> None:
+    file_path = tmp_path / "sample.txt"
+    file_path.write_text("alpha\n", encoding="utf-8")
+    server = TextMCPServer(workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="end_line must be >= start_line"):
+        server.read_text_file_lines({"path": str(file_path), "start_line": 2, "end_line": 1})
+
+
+def test_text_mcp_server_tool_call_returns_structured_content(tmp_path: Path) -> None:
+    file_path = tmp_path / "sample.txt"
+    file_path.write_text("alpha\nbeta\n", encoding="utf-8")
+    server = TextMCPServer(workspace=tmp_path)
+
+    response = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "read_text_file_lines",
+                "arguments": {"path": str(file_path), "start_line": 2, "end_line": 2},
+            },
+        }
+    )
+
+    assert response is not None
+    assert response["result"]["structuredContent"]["content"] == "beta\n"

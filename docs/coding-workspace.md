@@ -24,7 +24,7 @@ isolation such as a restricted user, container, or other sandbox.
 
 Recommended profile split:
 
-- `inspect`: read-only filesystem MCP tools plus safe local utilities
+- `inspect`: read-only filesystem MCP tools, targeted text-read MCP tools, plus safe local utilities
 - `edit`: explicit filesystem write/edit MCP tools, if needed
 - `test` or `dev`: shell-command MCP tools for trusted local testing/build workflows
 
@@ -154,6 +154,91 @@ MINIGENT_CODING_BRIDGE_ALLOW_GLOBS=**/.env*.template,**/.env*.driver.sh
 ```
 
 Direct bridge env vars take precedence over the mirrored tenant path policy.
+
+### Targeted text reads
+
+The convenience runner can also start Minigent's small targeted text-read MCP server. This
+server complements the authoritative filesystem MCP by exposing efficient exact reads for
+known files and regions:
+
+- `read_text_file_lines(path, start_line, end_line)` reads an inclusive 1-based line range.
+- `read_text_file_around(path, line, before, after)` reads context around a 1-based line.
+- `search_text_file(path, pattern, before, after, max_matches)` searches within one text file
+  and returns matching line contexts.
+
+Enable it with `MINIGENT_CODING_TEXT_ENABLED=true` or `--enable-text`. When the runner
+generates the tenant config, it starts a second read-only MCP bridge named `text-workspace`
+on port `8767` and adds it to the default `inspect` capability profile:
+
+```bash
+uv run python scripts/run_coding_workspace.py --env-file .env.coding --enable-text
+uv run python scripts/demo_client.py \
+  --tenant-id demo-tenant \
+  --capability-profile inspect \
+  '/tool text-workspace.read_text_file_around {"path":"/path/to/workspace/README.md","line":1,"after":20}'
+```
+
+The targeted text server requires paths to stay under one of the configured workspace roots
+and reads UTF-8 text files only. It is for inspection, not mutation; keep using the filesystem
+MCP layer as the source of truth for file writes and broader file operations.
+
+To enable targeted text reads from `.env.coding`, use:
+
+```dotenv
+MINIGENT_CODING_TEXT_ENABLED=true
+MINIGENT_CODING_TEXT_BRIDGE_NAME=text-workspace
+MINIGENT_CODING_TEXT_BRIDGE_PORT=8767
+```
+
+If you provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, include the text MCP server in
+`tools.mcp_servers` and add it to the relevant capability profile. For example:
+
+```json
+{
+  "demo-tenant": {
+    "llm": {"provider": "mock"},
+    "tools": {
+      "allowed_local_tools": ["current_time", "calculator"],
+      "mcp_servers": [
+        {
+          "name": "fs-workspace",
+          "url": "http://127.0.0.1:8765/mcp",
+          "headers": {},
+          "allowed_tools": ["list_allowed_directories", "list_directory", "read_file"],
+          "path_policy": {
+            "deny_globs": ["**/.env*", "**/.git/**", "**/.venv/**"],
+            "allow_globs": ["**/.env*.template"]
+          }
+        },
+        {
+          "name": "text-workspace",
+          "url": "http://127.0.0.1:8767/mcp",
+          "headers": {},
+          "allowed_tools": [
+            "read_text_file_lines",
+            "read_text_file_around",
+            "search_text_file"
+          ],
+          "path_policy": {
+            "deny_globs": ["**/.env*", "**/.git/**", "**/.venv/**"],
+            "allow_globs": ["**/.env*.template"]
+          }
+        }
+      ]
+    },
+    "capability_profiles": {
+      "default_profile": "inspect",
+      "items": [
+        {
+          "name": "inspect",
+          "allowed_local_tools": ["current_time", "calculator"],
+          "mcp_server_names": ["fs-workspace", "text-workspace"]
+        }
+      ]
+    }
+  }
+}
+```
 
 To enable trusted-local shell commands, set `MINIGENT_CODING_SHELL_ENABLED=true` or pass
 `--enable-shell`. When the runner generates the tenant config, this starts a second MCP bridge

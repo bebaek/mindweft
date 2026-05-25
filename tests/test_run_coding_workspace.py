@@ -163,6 +163,44 @@ def test_bridge_command_uses_tenant_config_allowed_tools(tmp_path: Path) -> None
     ]
 
 
+def test_default_tenant_config_adds_text_server_to_inspect_profile() -> None:
+    config = runner.default_tenant_config(
+        "demo-tenant",
+        "fs-workspace",
+        "http://127.0.0.1:8765/mcp",
+        text_enabled=True,
+        text_bridge_name="text-workspace",
+        text_bridge_url="http://127.0.0.1:8767/mcp",
+    )
+
+    tenant = config["demo-tenant"]
+    assert tenant["tools"]["mcp_servers"][1]["name"] == "text-workspace"
+    assert tenant["tools"]["mcp_servers"][1]["allowed_tools"] == [
+        "read_text_file_lines",
+        "read_text_file_around",
+        "search_text_file",
+    ]
+    assert tenant["capability_profiles"]["items"][0]["mcp_server_names"] == [
+        "fs-workspace",
+        "text-workspace",
+    ]
+
+
+def test_text_bridge_command_runs_text_mcp_server(tmp_path: Path) -> None:
+    command = runner.build_text_bridge_command("text-workspace", "127.0.0.1", 8767, tmp_path)
+
+    allowed_tool_indexes = [
+        index for index, value in enumerate(command) if value == "--allowed-tool"
+    ]
+    assert [command[index + 1] for index in allowed_tool_indexes] == [
+        "read_text_file_lines",
+        "read_text_file_around",
+        "search_text_file",
+    ]
+    assert "from app.text_mcp_server import main; raise SystemExit(main())" in command
+    assert command[-2:] == ["--workspace", str(tmp_path)]
+
+
 def test_default_tenant_config_adds_shell_test_profile_when_enabled() -> None:
     config = runner.default_tenant_config(
         "demo-tenant",
