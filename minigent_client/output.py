@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from typing import Any, Literal, TextIO
 
@@ -15,6 +16,9 @@ _STYLES = {
     "dim": "\033[2m",
     "error": "\033[31m",
     "idle": "\033[2m",
+    "markdown_code": "\033[36m",
+    "markdown_fence": "\033[38;5;248m",
+    "markdown_heading": "\033[1m",
     "progress": "\033[38;5;248m",
     "peer": "\033[35m",
     "status": "\033[2m",
@@ -81,6 +85,44 @@ def style_stream_progress_line(line: str, *, stream: TextIO) -> str:
     if line.startswith("✖"):
         return style_line(line, stream=stream)
     return style_text(line, "progress", stream=stream)
+
+
+def style_assistant_markdown(text: str, *, stream: TextIO) -> str:
+    """Add light Markdown-aware color without rendering or changing content."""
+
+    if not color_enabled(stream):
+        return text
+    styled_lines: list[str] = []
+    in_code_block = False
+    for line in text.splitlines(keepends=True):
+        newline = "\n" if line.endswith("\n") else ""
+        content = line[:-1] if newline else line
+        stripped = content.lstrip()
+        if stripped.startswith(("```", "~~~")):
+            styled_lines.append(style_text(content, "markdown_fence", stream=stream) + newline)
+            in_code_block = not in_code_block
+            continue
+        if in_code_block:
+            styled_lines.append(style_text(content, "markdown_code", stream=stream) + newline)
+            continue
+        if _MARKDOWN_HEADING_RE.match(content):
+            styled_lines.append(style_text(content, "markdown_heading", stream=stream) + newline)
+            continue
+        if stripped.startswith(">"):
+            styled_lines.append(style_text(content, "progress", stream=stream) + newline)
+            continue
+        styled_lines.append(_style_inline_code(content, stream=stream) + newline)
+    return "".join(styled_lines)
+
+
+_MARKDOWN_HEADING_RE = re.compile(r"^#{1,6}\s+\S")
+_INLINE_CODE_RE = re.compile(r"(`+)([^`\n]+?)\1")
+
+
+def _style_inline_code(text: str, *, stream: TextIO) -> str:
+    return _INLINE_CODE_RE.sub(
+        lambda match: style_text(match.group(0), "markdown_code", stream=stream), text
+    )
 
 
 def _style_prefix(line: str, prefix: str, style: str, *, stream: TextIO) -> str:

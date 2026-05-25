@@ -40,6 +40,7 @@ from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker, should_duck_for_state
 from minigent_client.output import (
     format_thread_context_summary,
+    style_assistant_markdown,
     style_line,
     style_stream_progress_line,
 )
@@ -492,6 +493,29 @@ def test_cli_style_line_respects_no_color(monkeypatch: pytest.MonkeyPatch) -> No
     output_stream = TtyStringIO()
 
     assert style_line("[warning] careful", stream=output_stream) == "[warning] careful"
+
+
+def test_cli_styles_assistant_markdown_without_rendering(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output_stream = TtyStringIO()
+    markdown = "## Summary\nUse `minigent-client chat`.\n```python\nprint('raw')\n```\n> quoted"
+
+    assert style_assistant_markdown(markdown, stream=output_stream) == (
+        "\033[1m## Summary\033[0m\n"
+        "Use \033[36m`minigent-client chat`\033[0m.\n"
+        "\033[38;5;248m```python\033[0m\n"
+        "\033[36mprint('raw')\033[0m\n"
+        "\033[38;5;248m```\033[0m\n"
+        "\033[38;5;248m> quoted\033[0m"
+    )
+
+
+def test_cli_assistant_markdown_respects_no_color(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    output_stream = TtyStringIO()
+    markdown = "## Summary\nUse `raw`."
+
+    assert style_assistant_markdown(markdown, stream=output_stream) == markdown
 
 
 def test_cli_stream_progress_styles_muted_full_tty_lines(monkeypatch: pytest.MonkeyPatch) -> None:

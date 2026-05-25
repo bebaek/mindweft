@@ -13,12 +13,13 @@ from tempfile import NamedTemporaryFile
 from typing import TextIO
 
 from minigent_client.audio import AudioDependencyError, load_recorded_audio_from_wav
-from minigent_client.output import style_line
+from minigent_client.output import style_assistant_markdown, style_line
 from minigent_client.runtime import SpeechOutput
 
 
 def _write_assistant_line(output_stream: TextIO, text: str) -> None:
-    output_stream.write(f"{style_line(f'[assistant] {text}', stream=output_stream)}\n")
+    prefix = style_line("[assistant]", stream=output_stream)
+    output_stream.write(f"{prefix} {style_assistant_markdown(text, stream=output_stream)}\n")
     output_stream.flush()
 
 

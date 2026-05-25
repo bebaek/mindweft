@@ -21,6 +21,7 @@ from minigent_client.output import (
     StreamProgressRenderer,
     format_message,
     print_json,
+    style_assistant_markdown,
     token_usage_from_event,
 )
 from minigent_client.state import ClientState, ThreadHistoryItem
@@ -723,12 +724,16 @@ def run_chat(
         print(f"trace_id={trace_id}")
     if args.print_thread_id:
         print(f"thread_id={thread_id}")
-    print(reply)
+    _print_assistant_reply(reply)
     if args.transcript:
         print("")
         for message in client.get_thread(thread_id)["messages"]:
             print(format_message(message))
     return 0
+
+
+def _print_assistant_reply(reply: str) -> None:
+    print(style_assistant_markdown(reply, stream=sys.stdout))
 
 
 def run_threads_list(
