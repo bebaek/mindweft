@@ -38,7 +38,11 @@ from minigent_client.cli import (
 from minigent_client.config import ClientConfig, PrincipalConfig
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker, should_duck_for_state
-from minigent_client.output import format_thread_context_summary, style_line
+from minigent_client.output import (
+    format_thread_context_summary,
+    style_line,
+    style_stream_progress_line,
+)
 from minigent_client.ring_buffer import AudioRingBuffer
 from minigent_client.runtime import Activation, ClientState, MinigentClientRuntime
 from minigent_client.speech import (
@@ -488,6 +492,45 @@ def test_cli_style_line_respects_no_color(monkeypatch: pytest.MonkeyPatch) -> No
     output_stream = TtyStringIO()
 
     assert style_line("[warning] careful", stream=output_stream) == "[warning] careful"
+
+
+def test_cli_stream_progress_styles_muted_full_tty_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output_stream = TtyStringIO()
+
+    assert (
+        style_stream_progress_line("● preparing", stream=output_stream)
+        == "\033[38;5;248m● preparing\033[0m"
+    )
+    assert (
+        style_stream_progress_line("🔧 calculator(expression=\"1+1\") ...", stream=output_stream)
+        == "\033[38;5;248m🔧 calculator(expression=\"1+1\") ...\033[0m"
+    )
+    assert (
+        style_stream_progress_line("[peer] task created", stream=output_stream)
+        == "\033[38;5;248m[peer] task created\033[0m"
+    )
+    assert (
+        style_stream_progress_line("   result:", stream=output_stream)
+        == "\033[38;5;248m   result:\033[0m"
+    )
+
+
+def test_cli_stream_progress_keeps_errors_high_contrast(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output_stream = TtyStringIO()
+
+    assert (
+        style_stream_progress_line("✖ error 502: upstream", stream=output_stream)
+        == "\033[31m✖\033[0m error 502: upstream"
+    )
+
+
+def test_cli_stream_progress_respects_no_color(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    output_stream = TtyStringIO()
+
+    assert style_stream_progress_line("● preparing", stream=output_stream) == "● preparing"
 
 
 def test_silent_speech_output_prints_reply_without_audio() -> None:

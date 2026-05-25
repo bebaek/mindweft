@@ -12,8 +12,10 @@ _MAX_TOOL_RESULT_CHARS = 2000
 _RESET = "\033[0m"
 _STYLES = {
     "assistant": "\033[32m",
+    "dim": "\033[2m",
     "error": "\033[31m",
     "idle": "\033[2m",
+    "progress": "\033[38;5;248m",
     "peer": "\033[35m",
     "status": "\033[2m",
     "tool": "\033[36m",
@@ -66,6 +68,19 @@ def style_line(line: str, *, stream: TextIO) -> str:
     if line.startswith("●"):
         return _style_prefix(line, "●", "status", stream=stream)
     return line
+
+
+def style_stream_progress_line(line: str, *, stream: TextIO) -> str:
+    """Style streaming progress as provisional output.
+
+    Stream progress is not the final assistant reply, so render the whole line
+    as medium gray. ANSI faint is too subtle or ignored in some terminal/tmux
+    combinations. Error lines remain high-contrast.
+    """
+
+    if line.startswith("✖"):
+        return style_line(line, stream=stream)
+    return style_text(line, "progress", stream=stream)
 
 
 def _style_prefix(line: str, prefix: str, style: str, *, stream: TextIO) -> str:
@@ -246,7 +261,7 @@ class StreamProgressRenderer:
         self._write(f"[peer] event {peer_event_type}")
 
     def _write(self, line: str) -> None:
-        self._stream.write(f"{style_line(line, stream=self._stream)}\n")
+        self._stream.write(f"{style_stream_progress_line(line, stream=self._stream)}\n")
         self._stream.flush()
 
 
