@@ -109,6 +109,9 @@ class OpenAICompatibleAdapter(LLMAdapter):
         request_messages = messages
         pruned_for_azure = False
         if _is_azure_openai_base_url(self._base_url):
+            # Azure chat-completions can reject historical tool-result messages whose
+            # matching tool calls are no longer in the provider's active context. For
+            # that API shape we intentionally keep only the current trailing tool pair.
             request_messages = _prune_historical_tool_messages_for_azure(messages)
             pruned_for_azure = True
         logger.debug(
@@ -128,6 +131,8 @@ class OpenAICompatibleAdapter(LLMAdapter):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
+                # OpenRouter may proxy to Azure and surface the same validation error;
+                # retry once with the Azure-specific historical tool pruning.
                 retry_messages = _prune_historical_tool_messages_for_azure(messages)
                 should_retry = (
                     not pruned_for_azure
@@ -265,7 +270,11 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
         request_messages = messages
         pruned_for_responses_tool_history = False
         if _is_chatgpt_codex_responses_url(self._url):
-            request_messages = _prune_historical_tool_messages_for_azure(messages)
+            # Responses input items are self-contained: a function_call_output must
+            # have its matching function_call in the same request. Drop only malformed
+            # orphaned tool messages; preserving complete historical pairs is important
+            # so the model can see prior file reads and other workspace actions.
+            request_messages = _prune_orphaned_responses_tool_messages(messages)
             pruned_for_responses_tool_history = request_messages != messages
         headers = {
             "Authorization": f"Bearer {credentials.access_token}",
@@ -313,7 +322,7 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
                 )
                 if pruned_for_responses_tool_history:
                     logger.debug(
-                        "Pruned historical tool messages from ChatGPT Codex Responses payload url=%s",
+                        "Pruned orphaned tool messages from ChatGPT Codex Responses payload url=%s",
                         self._url,
                     )
                 body, content_type = await _post_responses_request(
@@ -767,7 +776,49 @@ def _is_missing_tool_call_for_output_error(response: httpx.Response) -> bool:
     return "No tool call found for function call output with call_id" in detail
 
 
+def _prune_orphaned_responses_tool_messages(messages: list[Message]) -> list[Message]:
+    # ChatGPT Codex Responses rejects a function_call_output if the same request does
+    # not include the matching function_call. Unlike the Azure chat-completions helper
+    # below, do not discard valid historical tool history here; doing so hides prior
+    # tool use from the model and can make it repeat reads or deny visible tool calls.
+    tool_call_counts: dict[str, dict[MessageRole, int]] = {}
+    for message in messages:
+        if not message.tool_call_id:
+            continue
+        counts = tool_call_counts.setdefault(message.tool_call_id, {})
+        if message.role == MessageRole.ASSISTANT and message.tool_name:
+            counts[MessageRole.ASSISTANT] = counts.get(MessageRole.ASSISTANT, 0) + 1
+        elif message.role == MessageRole.TOOL:
+            counts[MessageRole.TOOL] = counts.get(MessageRole.TOOL, 0) + 1
+
+    complete_call_ids = {
+        call_id
+        for call_id, counts in tool_call_counts.items()
+        if counts.get(MessageRole.ASSISTANT, 0) > 0 and counts.get(MessageRole.TOOL, 0) > 0
+    }
+    pruned: list[Message] = []
+    dropped_messages = 0
+    for message in messages:
+        if message.tool_call_id and message.role in {MessageRole.ASSISTANT, MessageRole.TOOL}:
+            if message.role == MessageRole.ASSISTANT and not message.tool_name:
+                pruned.append(message)
+                continue
+            if message.tool_call_id not in complete_call_ids:
+                dropped_messages += 1
+                continue
+        pruned.append(message)
+    if dropped_messages:
+        logger.debug(
+            "Pruned %s orphaned tool-related message(s) from Responses payload",
+            dropped_messages,
+        )
+    return pruned
+
+
 def _prune_historical_tool_messages_for_azure(messages: list[Message]) -> list[Message]:
+    # Azure chat-completions is stricter about old tool messages than the Responses
+    # API path. This intentionally removes historical tool calls/results and keeps
+    # only the active trailing pair, if the runtime is mid tool-response turn.
     active_tool_call_id = _active_tool_call_id(messages)
     pruned: list[Message] = []
     dropped_messages = 0

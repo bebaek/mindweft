@@ -429,6 +429,21 @@ def test_generic_oauth_adapter_prunes_orphaned_tool_outputs_for_chatgpt_codex(
                     tool_call_id="call_orphaned",
                 ),
                 Message(thread_id="thread", role=MessageRole.ASSISTANT, content="old answer"),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name="echo",
+                    tool_call_id="call_complete",
+                    tool_arguments={"text": "hello"},
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content='{"echo":"hello"}',
+                    tool_name="echo",
+                    tool_call_id="call_complete",
+                ),
                 Message(thread_id="thread", role=MessageRole.USER, content="new request"),
             ],
             [ToolSpec(name="echo", description="Echo text", input_schema={"type": "object"})],
@@ -439,6 +454,17 @@ def test_generic_oauth_adapter_prunes_orphaned_tool_outputs_for_chatgpt_codex(
     assert seen_payload["input"] == [
         {"role": "user", "content": "old request"},
         {"role": "assistant", "content": "old answer"},
+        {
+            "type": "function_call",
+            "call_id": "call_complete",
+            "name": "echo",
+            "arguments": '{"text": "hello"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_complete",
+            "output": '{"echo":"hello"}',
+        },
         {"role": "user", "content": "new request"},
     ]
 
