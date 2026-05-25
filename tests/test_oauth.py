@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 import jwt
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.llm import GenericOAuthResponsesAdapter, build_llm_adapter_from_env
@@ -712,6 +714,99 @@ def test_generic_oauth_adapter_parses_sse_usage(tmp_path: Path) -> None:
         "total_tokens": 1225,
         "cache_read_tokens": 900,
     }
+
+
+def test_generic_oauth_adapter_surfaces_json_response_failure(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_failed",
+                "status": "failed",
+                "error": {"code": "context_length_exceeded", "message": "too many tokens"},
+            },
+        )
+
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://example.test/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            adapter.generate(
+                [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+                [],
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == (
+        "Generic OAuth LLM response failed: context_length_exceeded: too many tokens"
+    )
+
+
+def test_generic_oauth_adapter_surfaces_sse_response_failure(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=(
+                'data: {"type":"response.failed","response":{"id":"resp_failed","status":"failed",'
+                '"error":{"code":"server_error","message":"upstream failed"}}}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://example.test/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            adapter.generate(
+                [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+                [],
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == "Generic OAuth LLM response failed: server_error: upstream failed"
 
 
 class _BrokenAfterChunkStream(httpx.AsyncByteStream):

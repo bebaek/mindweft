@@ -874,7 +874,9 @@ def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMRespons
             if response.usage is None and usage is not None:
                 response.usage = usage
             return response
-        except HTTPException:
+        except HTTPException as exc:
+            if not _is_no_responses_output_error(exc):
+                raise
             if text_parts:
                 return LLMResponse(content="".join(text_parts), usage=usage)
             if output_items:
@@ -961,6 +963,11 @@ def _parse_responses_payload(
     *,
     log_missing_output: bool = True,
 ) -> LLMResponse:
+    failure_detail = _responses_failure_detail(payload)
+    if failure_detail is not None:
+        logger.error("Responses payload failed: %s", _truncate_json(payload))
+        raise HTTPException(status_code=502, detail=failure_detail)
+
     output = payload.get("output") or []
     if not isinstance(output, list):
         logger.error("Responses payload output is not a list: %s", _truncate_json(payload))
@@ -1014,6 +1021,28 @@ def _parse_responses_payload(
             "Responses payload missing message/function output: %s", _truncate_json(payload)
         )
     raise HTTPException(status_code=502, detail="Generic OAuth LLM returned no assistant output")
+
+
+def _responses_failure_detail(payload: dict[str, Any]) -> str | None:
+    status = payload.get("status")
+    if status not in {"failed", "incomplete", "cancelled"}:
+        return None
+
+    reason = ""
+    error = payload.get("error")
+    if isinstance(error, dict):
+        code = error.get("code")
+        message = error.get("message")
+        reason_parts = [part for part in (code, message) if isinstance(part, str) and part]
+        reason = ": " + ": ".join(reason_parts) if reason_parts else ""
+
+    incomplete_details = payload.get("incomplete_details")
+    if not reason and isinstance(incomplete_details, dict):
+        incomplete_reason = incomplete_details.get("reason")
+        if isinstance(incomplete_reason, str) and incomplete_reason:
+            reason = f": {incomplete_reason}"
+
+    return f"Generic OAuth LLM response {status}{reason}"
 
 
 def _is_no_responses_output_error(exc: HTTPException) -> bool:
