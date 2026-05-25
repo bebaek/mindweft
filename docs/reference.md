@@ -903,7 +903,8 @@ message, or use `Esc+Enter`/`Ctrl+J` to insert a newline before submitting. Set
 `MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter` or pass `--chat-submit-mode alt-enter` to make
 plain `Enter` insert newlines and `Esc+Enter` submit instead. Use `/editor` to compose a
 long prompt in `$VISUAL` or `$EDITOR`. Interactive chat also supports thread-shell
-commands: `/new`, `/threads [selector]`, `/switch <id>`, `/rename <title>`, `/copy-id`,
+commands: `/new`, `/agent [current|preset]`, `/threads [selector]`, `/switch <id>`,
+`/rename <title>`, `/copy-id`,
 `/export [markdown|json]`, `/tokens`, and `/debug`; in a TTY, `/threads` opens the same thread
 picker and switches to the selected thread. Pass a thread ID or unique search text as
 `/threads <selector>` to switch directly. Per-thread prompt history is stored under
@@ -912,7 +913,17 @@ the client seeds that local history from the thread's server-side user message m
 (`metadata.raw_user_prompt`) so history contains only prompts, even when model-facing
 messages include client context. Older messages fall back to stripping Minigent's legacy
 client-context preamble. A thread resumed on another machine still has prompt history for
-that thread. Older shared history may remain at `~/.minigent/client-chat-history`. Piped or otherwise
+that thread. Older shared history may remain at `~/.minigent/client-chat-history`. Use `/agent` with no arguments to list configured agent presets, `/agent current` to show
+the current client-side agent label, or `/agent <preset>` to create and switch to a new
+thread using that preset's `skill_name` or `skill_names` plus optional
+`capability_profile`. Configure presets with `MINIGENT_CLIENT_AGENT_PRESETS`, either as a
+JSON object keyed by preset name or as an array of objects:
+
+```dotenv
+MINIGENT_CLIENT_AGENT_PRESETS={"coding-inspect":{"skill_names":["coding-workspace"],"capability_profile":"inspect"},"home-assistant":{"skill_names":["home-assistant","concise"],"capability_profile":"home-assistant"}}
+```
+
+Piped or otherwise
 non-interactive stdin keeps the existing plain line-read behavior. In chat mode, pressing
 Enter on an empty line is ignored; use `Ctrl-D`, `Ctrl-C`, `/exit`, or `/quit` to exit.
 
@@ -1229,6 +1240,7 @@ Daemon-related env vars:
 - `MINIGENT_VOICE_TTS_SENTENCE_SILENCE`
 - `MINIGENT_VOICE_WAKEWORD_PROVIDER`
 - `MINIGENT_VOICE_SKILL`
+- `MINIGENT_CLIENT_AGENT_PRESETS`
 - `MINIGENT_VOICE_THREAD_ID`
 - `MINIGENT_VOICE_AUDIO_DEVICE`
 - `MINIGENT_VOICE_DEBUG_CAPTURE_PATH`

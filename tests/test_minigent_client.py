@@ -35,7 +35,12 @@ from minigent_client.cli import (
     build_wake_word_detector,
     run_chat_loop,
 )
-from minigent_client.config import ClientConfig, PrincipalConfig
+from minigent_client.config import (
+    AgentPreset,
+    ClientConfig,
+    PrincipalConfig,
+    parse_agent_presets,
+)
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker, should_duck_for_state
 from minigent_client.output import (
@@ -1309,6 +1314,54 @@ def test_principal_config_prefers_bearer_token() -> None:
     assert principal.build_headers() == {"Authorization": "Bearer secret-token"}
 
 
+def test_parse_agent_presets_supports_object_and_array_forms() -> None:
+    assert parse_agent_presets(
+        {
+            "coding-inspect": {
+                "skill_names": ["coding-workspace"],
+                "capability_profile": "inspect",
+            },
+            "support": {"skill_name": "support"},
+        }
+    ) == (
+        AgentPreset(
+            name="coding-inspect",
+            skills=("coding-workspace",),
+            capability_profile="inspect",
+        ),
+        AgentPreset(name="support", skill_name="support"),
+    )
+    assert parse_agent_presets(
+        [
+            {
+                "name": "home-assistant",
+                "skillNames": ["home-assistant", "concise"],
+                "capabilityProfile": "home-assistant",
+            }
+        ]
+    ) == (
+        AgentPreset(
+            name="home-assistant",
+            skills=("home-assistant", "concise"),
+            capability_profile="home-assistant",
+        ),
+    )
+
+
+def test_parse_agent_presets_rejects_ambiguous_or_empty_presets() -> None:
+    with pytest.raises(ValueError, match="cannot set both skill_name and skill_names"):
+        parse_agent_presets({"coding": {"skill_name": "coding", "skill_names": ["review"]}})
+    with pytest.raises(ValueError, match="must set skill_name, skill_names, or capability_profile"):
+        parse_agent_presets({"empty": {"description": "No effective thread settings"}})
+    with pytest.raises(ValueError, match="Duplicate agent preset"):
+        parse_agent_presets(
+            [
+                {"name": "Support", "skill_name": "support"},
+                {"name": "support", "skill_name": "support"},
+            ]
+        )
+
+
 def test_minigent_client_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_BASE_URL", "http://127.0.0.1:9000/")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_PHRASE", "computer")
@@ -1332,6 +1385,18 @@ def test_minigent_client_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_VOICE_TTS_SENTENCE_SILENCE", "0.6")
     monkeypatch.setenv("MINIGENT_VOICE_WAKEWORD_PROVIDER", "porcupine")
     monkeypatch.setenv("MINIGENT_VOICE_SKILL", "support")
+    monkeypatch.setenv(
+        "MINIGENT_CLIENT_AGENT_PRESETS",
+        json.dumps(
+            {
+                "coding-inspect": {
+                    "skill_names": ["coding-workspace"],
+                    "capability_profile": "inspect",
+                    "description": "Read-only coding agent",
+                }
+            }
+        ),
+    )
     monkeypatch.setenv("MINIGENT_VOICE_THREAD_ID", "thread-123")
     monkeypatch.setenv("MINIGENT_VOICE_AUDIO_DEVICE", "Built-in Mic")
     monkeypatch.setenv("MINIGENT_VOICE_DEBUG_CAPTURE_PATH", "/tmp/minigent-last-capture.wav")
@@ -1389,6 +1454,14 @@ def test_minigent_client_config_from_env(monkeypatch) -> None:
         tts_sentence_silence=0.6,
         wakeword_provider="porcupine",
         skill_name="support",
+        agent_presets=(
+            AgentPreset(
+                name="coding-inspect",
+                skills=("coding-workspace",),
+                capability_profile="inspect",
+                description="Read-only coding agent",
+            ),
+        ),
         thread_id="thread-123",
         audio_device="Built-in Mic",
         debug_capture_path="/tmp/minigent-last-capture.wav",
@@ -4081,12 +4154,83 @@ def test_run_chat_loop_handles_local_chat_commands(
 
     assert exit_code == 0
     assert output_stream.getvalue() == (
-        "[user] [idle] chat commands: /help, /new, /threads, /switch <id>, "
-        "/rename <title>, /copy-id, /cancel, /export [markdown|json], /tokens, /debug, /editor, "
-        "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
-        "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
+        "[user] [idle] chat commands: /help, /new, /agent [current|preset], /threads, "
+        "/switch <id>, /rename <title>, /copy-id, /cancel, /export [markdown|json], /tokens, "
+        "/debug, /editor, /exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J "
+        "inserts a newline. Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make "
+        "Esc+Enter submit.\n"
         "[user] [idle] shutting down\n"
     )
+
+
+def test_run_chat_loop_handles_agent_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("/agent\n/agent coding-inspect\n/agent current\n/exit\n")
+    create_calls: list[dict[str, object]] = []
+
+    class FakeChatClient:
+        thread_id: str | None = None
+
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def create_thread(
+            self,
+            *,
+            skill_name: str | None = None,
+            skills: list[str] | None = None,
+            capability_profile: str | None = None,
+        ) -> dict[str, str]:
+            create_calls.append(
+                {
+                    "skill_name": skill_name,
+                    "skills": skills,
+                    "capability_profile": capability_profile,
+                }
+            )
+            self.thread_id = "thread-agent"
+            return {"thread_id": "thread-agent"}
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            raise AssertionError(f"local chat command should not be sent: {content}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            agent_presets=(
+                AgentPreset(
+                    name="coding-inspect",
+                    skills=("coding-workspace",),
+                    capability_profile="inspect",
+                    description="Read-only coding agent",
+                ),
+            ),
+        )
+    )
+
+    assert exit_code == 0
+    assert create_calls == [
+        {
+            "skill_name": None,
+            "skills": ["coding-workspace"],
+            "capability_profile": "inspect",
+        }
+    ]
+    output = output_stream.getvalue()
+    assert "[idle] available agents:\n" in output
+    assert "[idle] - coding-inspect  skills=coding-workspace profile=inspect" in output
+    assert "[idle] switched to agent coding-inspect; created thread thread-agent\n" in output
+    assert "[idle] current agent: coding-inspect\n" in output
+    assert "[idle] current thread: thread-agent\n" in output
 
 
 def test_run_chat_loop_handles_cancel_command(

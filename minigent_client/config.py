@@ -1,7 +1,18 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field, replace
+from typing import Any
+
+
+@dataclass(frozen=True)
+class AgentPreset:
+    name: str
+    skill_name: str | None = None
+    skills: tuple[str, ...] | None = None
+    capability_profile: str | None = None
+    description: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +60,7 @@ class ClientConfig:
     tts_sentence_silence: float | None = 0.35
     wakeword_provider: str = "porcupine"
     skill_name: str | None = None
+    agent_presets: tuple[AgentPreset, ...] = ()
     thread_id: str | None = None
     audio_device: str | None = None
     debug_capture_path: str | None = None
@@ -121,6 +133,7 @@ class ClientConfig:
                 "MINIGENT_VOICE_WAKEWORD_PROVIDER", "porcupine"
             ).strip().lower(),
             skill_name=_clean_optional(os.getenv("MINIGENT_VOICE_SKILL")),
+            agent_presets=parse_agent_presets_env(os.getenv("MINIGENT_CLIENT_AGENT_PRESETS")),
             thread_id=_clean_optional(os.getenv("MINIGENT_VOICE_THREAD_ID")),
             audio_device=_clean_optional(os.getenv("MINIGENT_VOICE_AUDIO_DEVICE")),
             debug_capture_path=_clean_optional(os.getenv("MINIGENT_VOICE_DEBUG_CAPTURE_PATH")),
@@ -202,6 +215,7 @@ def build_client_config(
         wake_phrase=(wake_phrase or base.wake_phrase).strip(),
         thread_id=thread_id if thread_id is not None else base.thread_id,
         skill_name=skill_name if skill_name is not None else base.skill_name,
+        agent_presets=base.agent_presets,
         stream_runs=stream_runs if stream_runs is not None else base.stream_runs,
         principal=principal,
         extra_headers=dict(extra_headers or base.extra_headers),
@@ -261,6 +275,94 @@ def _bounded_int_from_env(name: str, default: int, *, minimum: int, maximum: int
     if value < minimum or value > maximum:
         raise ValueError(f"{name} must be between {minimum} and {maximum}")
     return value
+
+
+def parse_agent_presets_env(value: str | None) -> tuple[AgentPreset, ...]:
+    if value is None or not value.strip():
+        return ()
+    try:
+        raw = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("MINIGENT_CLIENT_AGENT_PRESETS must be valid JSON") from exc
+    return parse_agent_presets(raw)
+
+
+def parse_agent_presets(raw: object) -> tuple[AgentPreset, ...]:
+    if isinstance(raw, dict):
+        entries = []
+        for name, payload in raw.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("MINIGENT_CLIENT_AGENT_PRESETS object keys must be non-empty names")
+            if not isinstance(payload, dict):
+                raise ValueError(f"Agent preset '{name}' must be an object")
+            entries.append({"name": name, **payload})
+    elif isinstance(raw, list):
+        entries = raw
+    else:
+        raise ValueError("MINIGENT_CLIENT_AGENT_PRESETS must be a JSON object or array")
+
+    presets: list[AgentPreset] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("Agent preset entries must be objects")
+        preset = _parse_agent_preset(entry)
+        normalized_name = preset.name.casefold()
+        if normalized_name in seen:
+            raise ValueError(f"Duplicate agent preset '{preset.name}'")
+        seen.add(normalized_name)
+        presets.append(preset)
+    return tuple(presets)
+
+
+def _parse_agent_preset(entry: dict[Any, Any]) -> AgentPreset:
+    name = _required_preset_str(entry.get("name"), "name")
+    skill_name = _optional_preset_str(entry.get("skill_name", entry.get("skillName")), "skill_name")
+    raw_skills = entry.get("skill_names", entry.get("skillNames", entry.get("skills")))
+    skills = _optional_preset_str_tuple(raw_skills, "skill_names")
+    if skill_name is not None and skills is not None:
+        raise ValueError(f"Agent preset '{name}' cannot set both skill_name and skill_names")
+    capability_profile = _optional_preset_str(
+        entry.get("capability_profile", entry.get("capabilityProfile")),
+        "capability_profile",
+    )
+    if skill_name is None and skills is None and capability_profile is None:
+        raise ValueError(
+            f"Agent preset '{name}' must set skill_name, skill_names, or capability_profile"
+        )
+    description = _optional_preset_str(entry.get("description"), "description")
+    return AgentPreset(
+        name=name,
+        skill_name=skill_name,
+        skills=skills,
+        capability_profile=capability_profile,
+        description=description,
+    )
+
+
+def _required_preset_str(value: object, label: str) -> str:
+    parsed = _optional_preset_str(value, label)
+    if parsed is None:
+        raise ValueError(f"Agent preset {label} must be a non-empty string")
+    return parsed
+
+
+def _optional_preset_str(value: object, label: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"Agent preset {label} must be a string")
+    stripped = value.strip()
+    return stripped or None
+
+
+def _optional_preset_str_tuple(value: object, label: str) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"Agent preset {label} must be an array of strings")
+    parsed = tuple(item.strip() for item in value if item.strip())
+    return parsed or None
 
 
 def _default_stt_model(provider: str) -> str:

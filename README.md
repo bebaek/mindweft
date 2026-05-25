@@ -112,12 +112,17 @@ Inside the repo:
 ```bash
 uv run minigent run "hello"
 uv run minigent chat --stream "hello with progress"
-uv run minigent-client --backend chat --resume-last  # supports /cancel for stale runs
+uv run minigent-client --backend chat --resume-last  # supports /agent and /cancel
 uv run minigent threads
 uv run minigent resume
 uv run minigent export --format markdown
 uv run minigent config doctor
 ```
+
+Interactive chat supports local slash commands such as `/new`, `/threads`, `/switch <id>`,
+and `/agent <preset>`. Configure `/agent` presets with `MINIGENT_CLIENT_AGENT_PRESETS`, a
+JSON object or array mapping user-facing agent names to Minigent `skill_name`/`skill_names`
+and `capability_profile` values; selecting a preset creates a new thread with that bundle.
 
 Install as a reusable CLI app:
 

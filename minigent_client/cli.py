@@ -15,7 +15,7 @@ import time
 from dataclasses import replace
 from importlib import import_module
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from app.config import load_environment
 from minigent_client.api_client import MinigentAPIClient
@@ -23,7 +23,7 @@ from minigent_client.audio import AudioCaptureConfig, MicrophoneRecorder, open_m
 from minigent_client.backends.manual_audio import ManualAudioActivationSource
 from minigent_client.backends.passive_audio import PassiveAudioActivationSource
 from minigent_client.backends.stdin_loop import StdinActivationSource
-from minigent_client.config import ClientConfig, build_client_config
+from minigent_client.config import AgentPreset, ClientConfig, build_client_config
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker
 from minigent_client.one_shot_cli import _format_markdown_transcript
@@ -304,6 +304,7 @@ def build_config(args: argparse.Namespace) -> ClientConfig:
         ),
         wakeword_provider=args.wakeword_provider or env_config.wakeword_provider,
         skill_name=args.skill or env_config.skill_name,
+        agent_presets=env_config.agent_presets,
         thread_id=args.thread_id or env_config.thread_id,
         audio_device=args.audio_device or env_config.audio_device,
         debug_capture_path=args.debug_capture_path or env_config.debug_capture_path,
@@ -402,6 +403,7 @@ class RememberingMinigentAPIClient:
     def __init__(self, client: object, config: ClientConfig) -> None:
         self._client = client
         self._remembering_config = config
+        self.active_agent_preset: str | None = None
 
     def __getattr__(self, name: str) -> object:
         return getattr(self._client, name)
@@ -411,12 +413,28 @@ class RememberingMinigentAPIClient:
         thread_id = getattr(self._client, "thread_id", None)
         return thread_id if isinstance(thread_id, str) else None
 
+    def create_thread(
+        self,
+        *,
+        skill_name: str | None = None,
+        skills: list[str] | None = None,
+        capability_profile: str | None = None,
+    ) -> dict[str, Any]:
+        response = self._client.create_thread(  # type: ignore[attr-defined]
+            skill_name=skill_name,
+            skills=skills,
+            capability_profile=capability_profile,
+        )
+        self.active_agent_preset = None
+        return response if isinstance(response, dict) else {}
+
     def set_thread_id(self, thread_id: str | None) -> None:
         setter = getattr(self._client, "set_thread_id", None)
         if callable(setter):
             setter(thread_id)
-            return
-        self._client.thread_id = thread_id  # type: ignore[attr-defined]
+        else:
+            self._client.thread_id = thread_id  # type: ignore[attr-defined]
+        self.active_agent_preset = None
 
     def set_debug_enabled(self, enabled: bool) -> None:
         setter = getattr(self._client, "set_debug_enabled", None)
@@ -661,6 +679,9 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         if utterance == "/new":
             _handle_chat_new(client, config, output_stream)
             continue
+        if utterance == "/agent" or utterance.startswith("/agent "):
+            _handle_chat_agent(utterance, client, config, output_stream)
+            continue
         if utterance == "/threads" or utterance.startswith("/threads "):
             _handle_chat_threads(utterance, client, config, output_stream)
             continue
@@ -735,8 +756,9 @@ def _chat_abort_message(config: ClientConfig) -> str:
 
 def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
-        "[idle] chat commands: /help, /new, /threads, /switch <id>, /rename <title>, "
-        "/copy-id, /cancel, /export [markdown|json], /tokens, /debug, /editor, /exit, /quit. "
+        "[idle] chat commands: /help, /new, /agent [current|preset], /threads, "
+        "/switch <id>, /rename <title>, /copy-id, /cancel, /export [markdown|json], "
+        "/tokens, /debug, /editor, /exit, /quit. "
         "Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
     )
@@ -756,6 +778,110 @@ def _handle_chat_new(
         remember_client_thread(config, thread_id, title="New thread")
         output_stream.write(f"[idle] created thread {thread_id}\n")
     output_stream.flush()
+
+
+def _handle_chat_agent(
+    utterance: str,
+    client: RememberingMinigentAPIClient,
+    config: ClientConfig,
+    output_stream: ChatOutputStream,
+) -> None:
+    selection = utterance.removeprefix("/agent").strip()
+    if not selection:
+        _write_agent_preset_list(config.agent_presets, output_stream)
+        return
+    if selection == "current":
+        _write_current_agent(client, config, output_stream)
+        return
+    preset = _find_agent_preset(config.agent_presets, selection)
+    if preset is None:
+        output_stream.write(f"[idle] unknown agent preset '{selection}'\n")
+        if config.agent_presets:
+            output_stream.write("[idle] use /agent to list available presets\n")
+        else:
+            output_stream.write(
+                "[idle] no agent presets configured; set MINIGENT_CLIENT_AGENT_PRESETS\n"
+            )
+        output_stream.flush()
+        return
+    try:
+        response = client.create_thread(
+            skill_name=preset.skill_name,
+            skills=list(preset.skills) if preset.skills is not None else None,
+            capability_profile=preset.capability_profile,
+        )
+    except RuntimeError as exc:
+        output_stream.write(f"[idle] agent switch failed: {exc}\n")
+        output_stream.flush()
+        return
+    thread_id = response.get("thread_id") if isinstance(response, dict) else None
+    if not isinstance(thread_id, str) or not thread_id:
+        output_stream.write("[idle] agent switch failed: missing thread_id\n")
+        output_stream.flush()
+        return
+    client.active_agent_preset = preset.name
+    remember_client_thread(config, thread_id, title=f"Agent: {preset.name}")
+    output_stream.write(f"[idle] switched to agent {preset.name}; created thread {thread_id}\n")
+    detail = _format_agent_preset_detail(preset)
+    if detail:
+        output_stream.write(f"[idle] {detail}\n")
+    output_stream.flush()
+
+
+def _write_agent_preset_list(
+    presets: tuple[AgentPreset, ...],
+    output_stream: ChatOutputStream,
+) -> None:
+    if not presets:
+        output_stream.write(
+            "[idle] no agent presets configured; set MINIGENT_CLIENT_AGENT_PRESETS\n"
+        )
+        output_stream.flush()
+        return
+    output_stream.write("[idle] available agents:\n")
+    for preset in presets:
+        detail = _format_agent_preset_detail(preset)
+        suffix = f"  {detail}" if detail else ""
+        output_stream.write(f"[idle] - {preset.name}{suffix}\n")
+    output_stream.flush()
+
+
+def _write_current_agent(
+    client: RememberingMinigentAPIClient,
+    config: ClientConfig,
+    output_stream: ChatOutputStream,
+) -> None:
+    active = client.active_agent_preset
+    if active:
+        output_stream.write(f"[idle] current agent: {active}\n")
+    elif config.skill_name:
+        output_stream.write(f"[idle] current agent: default skill={config.skill_name}\n")
+    else:
+        output_stream.write("[idle] current agent: default tenant configuration\n")
+    if client.thread_id:
+        output_stream.write(f"[idle] current thread: {client.thread_id}\n")
+    output_stream.flush()
+
+
+def _find_agent_preset(presets: tuple[AgentPreset, ...], name: str) -> AgentPreset | None:
+    normalized = name.casefold()
+    for preset in presets:
+        if preset.name.casefold() == normalized:
+            return preset
+    return None
+
+
+def _format_agent_preset_detail(preset: AgentPreset) -> str:
+    parts: list[str] = []
+    if preset.skill_name:
+        parts.append(f"skill={preset.skill_name}")
+    if preset.skills:
+        parts.append("skills=" + ",".join(preset.skills))
+    if preset.capability_profile:
+        parts.append(f"profile={preset.capability_profile}")
+    if preset.description:
+        parts.append(f"- {preset.description}")
+    return " ".join(parts)
 
 
 def _handle_chat_threads(
