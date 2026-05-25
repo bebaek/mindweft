@@ -185,7 +185,10 @@ uv run ruff format .
 uv run basedpyright
 ```
 
-Use Conventional Commits for commit messages, for example:
+### Repository rules
+
+- Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages,
+  for example:
 
 ```text
 chore: redact secrets from MCP URL logging
