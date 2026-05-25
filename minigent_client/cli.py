@@ -1311,6 +1311,7 @@ def _build_chat_prompt_session(
             history=FileHistory(str(history_path)),
             key_bindings=key_bindings,
             multiline=True,
+            prompt_continuation="",
         )
     except Exception:
         return None

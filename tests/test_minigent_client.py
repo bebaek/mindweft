@@ -3373,6 +3373,7 @@ def test_build_chat_prompt_session_for_tty_streams(
     assert session_kwargs["history"].path == str(tmp_path / "history")
     assert isinstance(session_kwargs["key_bindings"], FakeKeyBindings)
     assert session_kwargs["multiline"] is True
+    assert session_kwargs["prompt_continuation"] == ""
 
 
 def test_build_chat_prompt_session_uses_thread_scoped_history(
