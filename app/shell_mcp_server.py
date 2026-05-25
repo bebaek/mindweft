@@ -51,6 +51,25 @@ RUN_COMMAND_TOOL = {
 }
 
 
+class _ShutdownRequested(BaseException):
+    """Raised by signal handlers to exit the stdio server without a traceback."""
+
+
+_ACTIVE_COMMAND_PROCESSES: set[subprocess.Popen[str]] = set()
+
+
+def _request_shutdown(_signum: int, _frame: Any) -> None:
+    for process in tuple(_ACTIVE_COMMAND_PROCESSES):
+        if process.poll() is None:
+            _terminate_process_group(process)
+    raise _ShutdownRequested
+
+
+def _install_shutdown_signal_handlers() -> None:
+    signal.signal(signal.SIGINT, _request_shutdown)
+    signal.signal(signal.SIGTERM, _request_shutdown)
+
+
 class ShellMCPServer:
     def __init__(
         self,
@@ -150,13 +169,17 @@ class ShellMCPServer:
             text=True,
             start_new_session=True,
         )
+        _ACTIVE_COMMAND_PROCESSES.add(process)
         timed_out = False
         try:
-            stdout, stderr = process.communicate(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _terminate_process_group(process)
-            stdout, stderr = process.communicate()
+            try:
+                stdout, stderr = process.communicate(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                _terminate_process_group(process)
+                stdout, stderr = process.communicate()
+        finally:
+            _ACTIVE_COMMAND_PROCESSES.discard(process)
         duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
         stdout_text, stdout_truncated = _truncate_text(stdout or "", max_output_chars)
         stderr_text, stderr_truncated = _truncate_text(stderr or "", max_output_chars)
@@ -243,18 +266,24 @@ def _truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
 
 
 def serve_stdio(server: ShellMCPServer) -> int:
-    for line in sys.stdin:
-        try:
-            payload = json.loads(line)
-            if not isinstance(payload, dict):
-                response = ShellMCPServer._error(None, -32600, "JSON-RPC payload must be an object")
-            else:
-                response = server.handle(payload)
-        except json.JSONDecodeError:
-            response = ShellMCPServer._error(None, -32700, "invalid JSON")
-        if response is None:
-            continue
-        print(json.dumps(response, ensure_ascii=True, separators=(",", ":")), flush=True)
+    _install_shutdown_signal_handlers()
+    try:
+        for line in sys.stdin:
+            try:
+                payload = json.loads(line)
+                if not isinstance(payload, dict):
+                    response = ShellMCPServer._error(
+                        None, -32600, "JSON-RPC payload must be an object"
+                    )
+                else:
+                    response = server.handle(payload)
+            except json.JSONDecodeError:
+                response = ShellMCPServer._error(None, -32700, "invalid JSON")
+            if response is None:
+                continue
+            print(json.dumps(response, ensure_ascii=True, separators=(",", ":")), flush=True)
+    except (KeyboardInterrupt, _ShutdownRequested):
+        return 0
     return 0
 
 

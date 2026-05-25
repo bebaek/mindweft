@@ -580,7 +580,7 @@ def build_shell_bridge_command(
 
 def start_process(command: list[str], *, env: dict[str, str], label: str) -> subprocess.Popen[str]:
     print(f"starting {label}: {' '.join(shlex.quote(part) for part in command)}")
-    return subprocess.Popen(command, env=env, text=True)
+    return subprocess.Popen(command, env=env, text=True, start_new_session=True)
 
 
 def wait_for_processes(processes: list[subprocess.Popen[str]]) -> int:

@@ -75,6 +75,8 @@ class StdioMCPBridge:
         if process is None:
             return
         if process.returncode is None:
+            await self._request_graceful_stdio_shutdown(process)
+        if process.returncode is None:
             process.terminate()
             try:
                 await asyncio.wait_for(process.wait(), timeout=5.0)
@@ -89,6 +91,24 @@ class StdioMCPBridge:
                 pass
         self._stderr_task = None
         self._process = None
+
+    async def _request_graceful_stdio_shutdown(
+        self, process: asyncio.subprocess.Process
+    ) -> None:
+        stdin = process.stdin
+        if stdin is not None and not stdin.is_closing():
+            stdin.close()
+            try:
+                await stdin.wait_closed()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        try:
+            await asyncio.wait_for(process.wait(), timeout=self._settings.request_timeout)
+        except TimeoutError:
+            logger.warning(
+                "Timed out waiting for MCP stdio server graceful shutdown: name=%s",
+                self._settings.name,
+            )
 
     async def handle(self, payload: dict[str, Any], headers: dict[str, str]) -> Response:
         method = payload.get("method")
