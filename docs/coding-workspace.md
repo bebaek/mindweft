@@ -212,6 +212,32 @@ When the runner generates `MINIGENT_TENANT_EXECUTION_CONFIGS`, it derives
 provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, the file still controls process startup,
 but your explicit tenant config remains authoritative for tool registration and profiles.
 
+By default, each stdio server still runs behind its own local bridge/port. To collapse all
+stdio servers from this file into one local gateway process, enable:
+
+```dotenv
+MINIGENT_CODING_MCP_GATEWAY_ENABLED=true
+MINIGENT_CODING_MCP_GATEWAY_PORT=8765
+MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX=/mcp
+```
+
+With the gateway enabled, generated tenant config uses URLs shaped like:
+
+```text
+http://127.0.0.1:8765/mcp/fs-workspace
+http://127.0.0.1:8765/mcp/text-workspace
+http://127.0.0.1:8765/mcp/shell-workspace
+```
+
+If you provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, update the `tools.mcp_servers`
+URLs to the gateway paths; the runner does not rewrite explicit tenant config.
+
+You can also run the gateway directly with a gateway config file:
+
+```bash
+uv run minigent-mcp-stdio-gateway --config .data/mcp-gateway.json --port 8765
+```
+
 ### Targeted text reads
 
 The convenience runner can also start Minigent's small targeted text-read MCP server. This

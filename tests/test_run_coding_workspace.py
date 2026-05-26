@@ -427,3 +427,62 @@ def test_build_mcp_stdio_bridge_command_uses_declarative_spec() -> None:
     assert command[command.index("--deny-glob") + 1] == "**/.env*"
     assert command[command.index("--allow-glob") + 1] == "**/.env*.template"
     assert command[-1] == "custom-mcp"
+
+
+def test_mcp_server_specs_for_gateway_rewrites_stdio_urls_only() -> None:
+    specs = [
+        runner.CodingMCPServerSpec(
+            name="stdio-workspace",
+            url="http://127.0.0.1:9001/mcp",
+            command=["stdio-server"],
+        ),
+        runner.CodingMCPServerSpec(
+            name="http-workspace",
+            url="http://127.0.0.1:9002/mcp",
+            transport="http",
+        ),
+    ]
+
+    transformed = runner.mcp_server_specs_for_gateway(specs, "http://127.0.0.1:8765/mcp")
+
+    assert transformed[0].url == "http://127.0.0.1:8765/mcp/stdio-workspace"
+    assert transformed[1].url == "http://127.0.0.1:9002/mcp"
+
+
+def test_mcp_gateway_config_from_specs_includes_stdio_servers_only() -> None:
+    specs = [
+        runner.CodingMCPServerSpec(
+            name="stdio-workspace",
+            url="http://127.0.0.1:9001/mcp",
+            command=["stdio-server"],
+            allowed_tools=["read_file"],
+            path_policy={"deny_globs": ["**/.env*"]},
+            env={"EXAMPLE": "1"},
+        ),
+        runner.CodingMCPServerSpec(
+            name="http-workspace",
+            url="http://127.0.0.1:9002/mcp",
+            transport="http",
+        ),
+    ]
+
+    assert runner.mcp_gateway_config_from_specs(specs) == {
+        "servers": [
+            {
+                "name": "stdio-workspace",
+                "command": ["stdio-server"],
+                "allowed_tools": ["read_file"],
+                "path_policy": {"deny_globs": ["**/.env*"]},
+                "env": {"EXAMPLE": "1"},
+            }
+        ]
+    }
+
+
+def test_build_mcp_gateway_command() -> None:
+    command = runner.build_mcp_gateway_command(Path("gateway.json"), "127.0.0.1", 8765)
+
+    assert "from app.mcp_stdio_gateway import main; main()" in command
+    assert command[command.index("--config") + 1] == "gateway.json"
+    assert command[command.index("--host") + 1] == "127.0.0.1"
+    assert command[command.index("--port") + 1] == "8765"

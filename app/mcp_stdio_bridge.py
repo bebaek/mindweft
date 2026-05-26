@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import secrets
 from contextlib import asynccontextmanager
 from typing import Any, Sequence
@@ -38,6 +39,7 @@ class BridgeSettings(BaseModel):
     stdio_stream_limit: int = DEFAULT_STDIO_STREAM_LIMIT_BYTES
     allowed_tools: list[str] | None = None
     path_policy: MCPPathPolicy = Field(default_factory=MCPPathPolicy)
+    env: dict[str, str] = Field(default_factory=dict)
 
 
 class StdioMCPBridge:
@@ -58,6 +60,7 @@ class StdioMCPBridge:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             limit=self._settings.stdio_stream_limit,
+            env={**os.environ, **self._settings.env} if self._settings.env else None,
         )
         self._stderr_task = asyncio.create_task(
             self._log_stderr(),

@@ -7,6 +7,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ DEFAULT_SHELL_BRIDGE_NAME = "shell-workspace"
 DEFAULT_SHELL_BRIDGE_PORT = 8766
 DEFAULT_TEXT_BRIDGE_NAME = "text-workspace"
 DEFAULT_TEXT_BRIDGE_PORT = 8767
+DEFAULT_MCP_GATEWAY_PATH_PREFIX = "/mcp"
 DEFAULT_TENANT_ID = "demo-tenant"
 DEFAULT_BRIDGE_ALLOWED_TOOLS = (
     "list_allowed_directories",
@@ -103,6 +105,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "JSON file declaring MCP servers to register/start. Defaults to "
             "MINIGENT_CODING_MCP_SERVERS_FILE when set."
+        ),
+    )
+    parser.add_argument(
+        "--mcp-gateway",
+        action="store_true",
+        help=(
+            "Start stdio MCP servers behind one local gateway instead of one bridge process "
+            "per server. Also rewrites generated tenant MCP URLs to /mcp/<server-name>."
+        ),
+    )
+    parser.add_argument(
+        "--mcp-gateway-port",
+        type=int,
+        default=None,
+        help=(
+            "Gateway port when --mcp-gateway is used. Defaults to "
+            "MINIGENT_CODING_MCP_GATEWAY_PORT or the filesystem bridge port."
+        ),
+    )
+    parser.add_argument(
+        "--mcp-gateway-path-prefix",
+        default=None,
+        help=(
+            "Gateway path prefix when --mcp-gateway is used. Defaults to "
+            "MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX or /mcp."
         ),
     )
     parser.add_argument("--tenant-id", default=None, help="Tenant ID for generated default config.")
@@ -192,6 +219,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     bridge_name = args.bridge_name or env.get("MINIGENT_CODING_BRIDGE_NAME") or DEFAULT_BRIDGE_NAME
     bridge_url = f"http://{bridge_host}:{bridge_port}/mcp"
+    gateway_enabled = args.mcp_gateway or env_flag_enabled(env.get("MINIGENT_CODING_MCP_GATEWAY_ENABLED"))
+    gateway_port = args.mcp_gateway_port or int(
+        env.get("MINIGENT_CODING_MCP_GATEWAY_PORT") or bridge_port
+    )
+    gateway_path_prefix = (
+        args.mcp_gateway_path_prefix
+        or env.get("MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX")
+        or DEFAULT_MCP_GATEWAY_PATH_PREFIX
+    )
+    gateway_url_prefix = f"http://{bridge_host}:{gateway_port}{normalize_path_prefix(gateway_path_prefix)}"
     text_enabled = args.enable_text or env_flag_enabled(env.get("MINIGENT_CODING_TEXT_ENABLED"))
     text_bridge_name = (
         args.text_bridge_name or env.get("MINIGENT_CODING_TEXT_BRIDGE_NAME") or DEFAULT_TEXT_BRIDGE_NAME
@@ -237,12 +274,17 @@ def main(argv: list[str] | None = None) -> int:
             shell_bridge_port=shell_bridge_port,
             shell_bridge_url=shell_bridge_url,
         )
+    tenant_mcp_server_specs = (
+        mcp_server_specs_for_gateway(mcp_server_specs, gateway_url_prefix)
+        if gateway_enabled
+        else mcp_server_specs
+    )
 
     env.setdefault("MINIGENT_AUTH_MODE", "dev-headers")
     env.setdefault("MINIGENT_LLM_PROVIDER", "mock")
     if "MINIGENT_TENANT_EXECUTION_CONFIGS" not in env:
         env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = json.dumps(
-            default_tenant_config_from_servers(tenant_id, mcp_server_specs),
+            default_tenant_config_from_servers(tenant_id, tenant_mcp_server_specs),
             separators=(",", ":"),
         )
     elif env.get("MINIGENT_CODING_INJECT_WORKSPACE_SKILL", "true").lower() not in {
@@ -255,6 +297,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     processes: list[subprocess.Popen[str]] = []
+    generated_files: list[Path] = []
     print(f"env_file={args.env_file}")
     print("workspaces=" + ", ".join(str(workspace) for workspace in workspace_roots))
     print(f"tenant_id={tenant_id}")
@@ -262,21 +305,38 @@ def main(argv: list[str] | None = None) -> int:
         print(f"mcp_servers_file={mcp_servers_file}")
     for spec in mcp_server_specs:
         print(f"mcp_server={spec.name} url={spec.url} transport={spec.transport}")
+    if gateway_enabled:
+        print(f"mcp_gateway={gateway_url_prefix}")
     print(f"api=http://{api_host}:{api_port}")
 
     try:
         if not args.skip_bridge:
-            for spec in mcp_server_specs:
-                if spec.transport != "stdio":
-                    continue
-                process_env = {**env, **spec.env}
+            if gateway_enabled:
+                gateway_config_path = write_mcp_gateway_config(mcp_server_specs)
+                generated_files.append(gateway_config_path)
                 processes.append(
                     start_process(
-                        build_mcp_stdio_bridge_command(spec),
-                        env=process_env,
-                        label=f"{spec.name} MCP bridge",
+                        build_mcp_gateway_command(
+                            gateway_config_path,
+                            bridge_host,
+                            gateway_port,
+                        ),
+                        env=env,
+                        label="MCP stdio gateway",
                     )
                 )
+            else:
+                for spec in mcp_server_specs:
+                    if spec.transport != "stdio":
+                        continue
+                    process_env = {**env, **spec.env}
+                    processes.append(
+                        start_process(
+                            build_mcp_stdio_bridge_command(spec),
+                            env=process_env,
+                            label=f"{spec.name} MCP bridge",
+                        )
+                    )
         if not args.skip_api:
             processes.append(
                 start_process(
@@ -311,10 +371,97 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         for process in reversed(processes):
             stop_process(process)
+        for path in generated_files:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def env_flag_enabled(value: str | None) -> bool:
     return value is not None and value.lower() not in {"", "0", "false", "no"}
+
+
+def normalize_path_prefix(path_prefix: str) -> str:
+    if not path_prefix.startswith("/"):
+        path_prefix = f"/{path_prefix}"
+    return path_prefix.rstrip("/") or DEFAULT_MCP_GATEWAY_PATH_PREFIX
+
+
+def mcp_server_specs_for_gateway(
+    specs: list[CodingMCPServerSpec], gateway_url_prefix: str
+) -> list[CodingMCPServerSpec]:
+    normalized_prefix = gateway_url_prefix.rstrip("/")
+    transformed: list[CodingMCPServerSpec] = []
+    for spec in specs:
+        if spec.transport == "stdio":
+            transformed.append(
+                CodingMCPServerSpec(
+                    name=spec.name,
+                    url=f"{normalized_prefix}/{spec.name}",
+                    transport=spec.transport,
+                    command=spec.command,
+                    host=spec.host,
+                    port=spec.port,
+                    path=spec.path,
+                    profiles=list(spec.profiles),
+                    allowed_tools=list(spec.allowed_tools) if spec.allowed_tools is not None else None,
+                    path_policy={key: list(value) for key, value in spec.path_policy.items()},
+                    env=dict(spec.env),
+                    enabled=spec.enabled,
+                )
+            )
+            continue
+        transformed.append(spec)
+    return transformed
+
+
+def mcp_gateway_config_from_specs(specs: list[CodingMCPServerSpec]) -> dict[str, Any]:
+    servers: list[dict[str, Any]] = []
+    for spec in specs:
+        if spec.transport != "stdio":
+            continue
+        if spec.command is None:
+            raise RuntimeError(f"MCP server '{spec.name}' requires a command")
+        server: dict[str, Any] = {
+            "name": spec.name,
+            "command": spec.command,
+        }
+        if spec.allowed_tools is not None:
+            server["allowed_tools"] = spec.allowed_tools
+        if spec.path_policy:
+            server["path_policy"] = spec.path_policy
+        if spec.env:
+            server["env"] = spec.env
+        servers.append(server)
+    return {"servers": servers}
+
+
+def write_mcp_gateway_config(specs: list[CodingMCPServerSpec]) -> Path:
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        prefix="minigent-mcp-gateway-",
+        suffix=".json",
+        delete=False,
+    ) as file:
+        json.dump(mcp_gateway_config_from_specs(specs), file, separators=(",", ":"))
+        file.write("\n")
+        return Path(file.name)
+
+
+def build_mcp_gateway_command(config_path: Path, host: str, port: int) -> list[str]:
+    return [
+        sys.executable,
+        "-c",
+        "from app.mcp_stdio_gateway import main; main()",
+        "--config",
+        str(config_path),
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
 
 
 def resolve_mcp_servers_file(
