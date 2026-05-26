@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util
 import json
 from pathlib import Path
@@ -17,6 +18,17 @@ def _load_runner() -> ModuleType:
 
 
 runner = _load_runner()
+
+
+def test_console_script_entry_point_loads_runner_main() -> None:
+    scripts = importlib.metadata.entry_points(group="console_scripts")
+    entry_point = next(
+        script for script in scripts if script.name == "minigent-coding-workspace"
+    )
+
+    loaded = entry_point.load()
+    assert loaded.__module__ == "scripts.run_coding_workspace"
+    assert loaded.__name__ == "main"
 
 
 def test_load_env_file_reads_file_backed_values(tmp_path: Path, monkeypatch) -> None:

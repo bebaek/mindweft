@@ -119,7 +119,7 @@ Minigent API, and prints a ready-to-run demo client command:
 ```bash
 cp .env.coding.template .env.coding
 # edit MINIGENT_CODING_WORKSPACE=/path/to/workspace
-uv run python scripts/run_coding_workspace.py --env-file .env.coding
+uv run minigent-coding-workspace --env-file .env.coding
 ```
 
 The template sets `MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db` so coding threads
@@ -135,7 +135,7 @@ MINIGENT_CODING_WORKSPACE=/path/to/repo1,/path/to/repo2
 ```
 
 ```bash
-uv run python scripts/run_coding_workspace.py --workspace /path/to/repo1 --workspace /path/to/repo2
+uv run minigent-coding-workspace --workspace /path/to/repo1 --workspace /path/to/repo2
 ```
 
 When trusted-local shell support is enabled, shell `cwd` values may be under any configured
@@ -254,7 +254,7 @@ generates the tenant config, it starts a second read-only MCP bridge named `text
 on port `8767` and adds it to the default `inspect` capability profile:
 
 ```bash
-uv run python scripts/run_coding_workspace.py --env-file .env.coding --enable-text
+uv run minigent-coding-workspace --env-file .env.coding --enable-text
 uv run python scripts/demo_client.py \
   --tenant-id demo-tenant \
   --capability-profile inspect \
@@ -329,7 +329,7 @@ named `shell-workspace` on port `8766` and adds a non-default `test` capability 
 can call `shell-workspace.run_command`:
 
 ```bash
-uv run python scripts/run_coding_workspace.py --env-file .env.coding --enable-shell
+uv run minigent-coding-workspace --env-file .env.coding --enable-shell
 uv run python scripts/demo_client.py \
   --tenant-id demo-tenant \
   --capability-profile test \
