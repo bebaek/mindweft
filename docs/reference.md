@@ -121,7 +121,7 @@ MINIGENT_LLM_DEBUG_REQUEST_LOG_PATH=/tmp/minigent-llm-requests.jsonl
 ```
 
 ```bash
-uv run python scripts/run_coding_workspace.py --env-file .env.coding
+uv run minigent-coding-workspace --env-file .env.coding
 uv run python scripts/investigate_prompt_cache.py --trace --pause 2 \
   --tenant-id demo-tenant --capability-profile inspect
 ```

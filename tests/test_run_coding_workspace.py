@@ -1,23 +1,10 @@
 from __future__ import annotations
 
 import importlib.metadata
-import importlib.util
 import json
 from pathlib import Path
-from types import ModuleType
 
-
-def _load_runner() -> ModuleType:
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "run_coding_workspace.py"
-    spec = importlib.util.spec_from_file_location("run_coding_workspace", script_path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-runner = _load_runner()
+from app import coding_workspace_runner as runner
 
 
 def test_console_script_entry_point_loads_runner_main() -> None:
@@ -27,7 +14,7 @@ def test_console_script_entry_point_loads_runner_main() -> None:
     )
 
     loaded = entry_point.load()
-    assert loaded.__module__ == "scripts.run_coding_workspace"
+    assert loaded.__module__ == "app.coding_workspace_runner"
     assert loaded.__name__ == "main"
 
 

@@ -19,7 +19,7 @@ dependencies = [
 
 [project.scripts]
 minigent = "minigent_client.one_shot_cli:main"
-minigent-coding-workspace = "scripts.run_coding_workspace:main"
+minigent-coding-workspace = "app.coding_workspace_runner:main"
 minigent-mcp-stdio-bridge = "app.mcp_stdio_bridge:main"
 minigent-mcp-stdio-gateway = "app.mcp_stdio_gateway:main"
 minigent-shell-mcp = "app.shell_mcp_server:main"
@@ -52,7 +52,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["app*", "minigent_client*", "scripts*"]
+include = ["app*", "minigent_client*"]
 
 [tool.setuptools.package-data]
 app = ["static/web/*"]
