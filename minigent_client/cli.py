@@ -36,8 +36,16 @@ from minigent_client.speech import (
     PiperSpeechOutput,
     SilentSpeechOutput,
 )
-from minigent_client.state import STATE_DIR_NAME, ThreadHistoryItem, state_scope_key
-from minigent_client.state import ClientState as PersistentClientState
+from minigent_client.state import (
+    STATE_DIR_NAME,
+    PromptCommand,
+    ThreadHistoryItem,
+    normalize_prompt_command_name,
+    state_scope_key,
+)
+from minigent_client.state import (
+    ClientState as PersistentClientState,
+)
 from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
 from minigent_client.vad import SileroVoiceActivityDetector
 from minigent_client.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
@@ -680,6 +688,12 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         if utterance == "/help":
             _write_chat_help(output_stream)
             continue
+        if utterance == "/commands":
+            _handle_chat_commands(output_stream)
+            continue
+        if utterance == "/command" or utterance.startswith("/command "):
+            _handle_chat_command_manager(utterance, output_stream)
+            continue
         if utterance == "/new":
             _handle_chat_new(client, config, output_stream)
             continue
@@ -724,6 +738,10 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             utterance = edited.strip()
             if not utterance:
                 continue
+        expanded_utterance = _expand_custom_prompt_command(utterance, output_stream)
+        if expanded_utterance is None:
+            continue
+        utterance = expanded_utterance
         try:
             client.send_user_message(utterance)
             reply = client.run_thread()
@@ -765,11 +783,129 @@ def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
         "[idle] chat commands: /help, /new, /agent [current|preset], /threads, "
         "/switch <id>, /rename <title>, /copy-id, /cancel, /compact, /export [markdown|json], "
-        "/tokens, /debug, /editor, /exit, /quit. "
+        "/tokens, /debug, /editor, /commands, /command set|show|delete, /exit, /quit. "
         "Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
     )
     output_stream.flush()
+
+
+def _handle_chat_commands(output_stream: ChatOutputStream) -> None:
+    commands = PersistentClientState.load().list_prompt_commands()
+    if not commands:
+        output_stream.write(
+            "[idle] no custom slash commands. Add one with /command set <name> <prompt>.\n"
+        )
+        output_stream.flush()
+        return
+    output_stream.write("[idle] custom slash commands:\n")
+    for command in commands:
+        summary = _summarize_prompt_template(command.prompt_template)
+        output_stream.write(f"[idle] - /{command.name}: {summary}\n")
+    output_stream.flush()
+
+
+def _handle_chat_command_manager(utterance: str, output_stream: ChatOutputStream) -> None:
+    parts = shlex.split(utterance)
+    if len(parts) < 2:
+        _write_chat_command_usage(output_stream)
+        return
+    action = parts[1].lower()
+    state = PersistentClientState.load()
+    if action == "set":
+        if len(parts) < 4:
+            output_stream.write("[idle] usage: /command set <name> <prompt template>\n")
+            output_stream.flush()
+            return
+        name = parts[2]
+        prompt_template = " ".join(parts[3:])
+        try:
+            command = state.set_prompt_command(name, prompt_template)
+        except ValueError as exc:
+            output_stream.write(f"[idle] command not saved: {exc}\n")
+            output_stream.flush()
+            return
+        state.save()
+        output_stream.write(f"[idle] saved /{command.name}\n")
+        output_stream.flush()
+        return
+    if action == "delete":
+        if len(parts) != 3:
+            output_stream.write("[idle] usage: /command delete <name>\n")
+            output_stream.flush()
+            return
+        if state.delete_prompt_command(parts[2]):
+            state.save()
+            output_stream.write(f"[idle] deleted /{normalize_prompt_command_name(parts[2])}\n")
+        else:
+            output_stream.write(f"[idle] no custom command /{normalize_prompt_command_name(parts[2])}\n")
+        output_stream.flush()
+        return
+    if action == "show":
+        if len(parts) != 3:
+            output_stream.write("[idle] usage: /command show <name>\n")
+            output_stream.flush()
+            return
+        command = state.get_prompt_command(parts[2])
+        if command is None:
+            output_stream.write(f"[idle] no custom command /{normalize_prompt_command_name(parts[2])}\n")
+        else:
+            output_stream.write(f"[idle] /{command.name}\n{command.prompt_template}\n")
+        output_stream.flush()
+        return
+    if action == "list":
+        _handle_chat_commands(output_stream)
+        return
+    _write_chat_command_usage(output_stream)
+
+
+def _write_chat_command_usage(output_stream: ChatOutputStream) -> None:
+    output_stream.write(
+        "[idle] custom commands: /commands, /command set <name> <prompt>, "
+        "/command show <name>, /command delete <name>. "
+        "Use {input} in a template to place invocation text.\n"
+    )
+    output_stream.flush()
+
+
+def _expand_custom_prompt_command(
+    utterance: str,
+    output_stream: ChatOutputStream,
+) -> str | None:
+    if not utterance.startswith("/"):
+        return utterance
+    command_token, _, command_input = utterance.partition(" ")
+    name = normalize_prompt_command_name(command_token)
+    if not name:
+        return utterance
+    command = PersistentClientState.load().get_prompt_command(name)
+    if command is None:
+        output_stream.write(
+            f"[idle] unknown command /{name}; use /help or /commands to see available commands\n"
+        )
+        output_stream.flush()
+        return None
+    return _render_prompt_command(command, command_input.strip())
+
+
+def _render_prompt_command(command: PromptCommand, command_input: str) -> str:
+    template = command.prompt_template
+    if any(placeholder in template for placeholder in ("{input}", "{{input}}", "{selection}")):
+        return (
+            template.replace("{{input}}", command_input)
+            .replace("{input}", command_input)
+            .replace("{selection}", command_input)
+        )
+    if command_input:
+        return f"{template}\n\n{command_input}"
+    return template
+
+
+def _summarize_prompt_template(prompt_template: str, *, max_length: int = 72) -> str:
+    summary = " ".join(prompt_template.split())
+    if len(summary) <= max_length:
+        return summary
+    return f"{summary[: max_length - 1]}…"
 
 
 def _handle_chat_new(

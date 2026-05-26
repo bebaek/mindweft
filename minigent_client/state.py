@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,10 +10,30 @@ from typing import Any
 
 STATE_DIR_NAME = ".minigent"
 STATE_FILE_NAME = "cli-state.json"
+PROMPT_COMMANDS_KEY = "prompt_commands"
+
+
+_PROMPT_COMMAND_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]{0,63}$")
 
 
 def state_file_path() -> Path:
     return Path.home() / STATE_DIR_NAME / STATE_FILE_NAME
+
+
+@dataclass
+class PromptCommand:
+    name: str
+    prompt_template: str
+    description: str | None = None
+    updated_at: str | None = None
+
+    def to_dict(self) -> dict[str, str]:
+        payload = {"prompt_template": self.prompt_template}
+        if self.description:
+            payload["description"] = self.description
+        if self.updated_at:
+            payload["updated_at"] = self.updated_at
+        return payload
 
 
 @dataclass
@@ -153,6 +174,84 @@ class ClientState:
                 self.thread_history[key] = filtered
                 changed = True
         return changed
+
+    def list_prompt_commands(self) -> list[PromptCommand]:
+        commands = self.extra.get(PROMPT_COMMANDS_KEY, {})
+        if not isinstance(commands, dict):
+            return []
+        return sorted(_parse_prompt_commands(commands).values(), key=lambda command: command.name)
+
+    def get_prompt_command(self, name: str) -> PromptCommand | None:
+        normalized_name = normalize_prompt_command_name(name)
+        commands = self.extra.get(PROMPT_COMMANDS_KEY, {})
+        if not isinstance(commands, dict):
+            return None
+        return _parse_prompt_commands(commands).get(normalized_name)
+
+    def set_prompt_command(
+        self,
+        name: str,
+        prompt_template: str,
+        *,
+        description: str | None = None,
+    ) -> PromptCommand:
+        normalized_name = normalize_prompt_command_name(name)
+        if not normalized_name:
+            raise ValueError("command name is required")
+        if _PROMPT_COMMAND_NAME_RE.fullmatch(normalized_name) is None:
+            raise ValueError(
+                "command names must start with a letter and contain only letters, numbers, '-', or '_'"
+            )
+        if not prompt_template.strip():
+            raise ValueError("prompt template is required")
+        raw_commands = self.extra.get(PROMPT_COMMANDS_KEY, {})
+        commands = dict(raw_commands) if isinstance(raw_commands, dict) else {}
+        command = PromptCommand(
+            name=normalized_name,
+            prompt_template=prompt_template.strip(),
+            description=description.strip() if description and description.strip() else None,
+            updated_at=_utc_now_iso(),
+        )
+        commands[normalized_name] = command.to_dict()
+        self.extra[PROMPT_COMMANDS_KEY] = commands
+        return command
+
+    def delete_prompt_command(self, name: str) -> bool:
+        normalized_name = normalize_prompt_command_name(name)
+        raw_commands = self.extra.get(PROMPT_COMMANDS_KEY, {})
+        if not isinstance(raw_commands, dict) or normalized_name not in raw_commands:
+            return False
+        commands = dict(raw_commands)
+        del commands[normalized_name]
+        if commands:
+            self.extra[PROMPT_COMMANDS_KEY] = commands
+        else:
+            self.extra.pop(PROMPT_COMMANDS_KEY, None)
+        return True
+
+
+def normalize_prompt_command_name(name: str) -> str:
+    return name.strip().removeprefix("/").lower()
+
+
+def _parse_prompt_commands(raw_commands: dict[Any, Any]) -> dict[str, PromptCommand]:
+    parsed: dict[str, PromptCommand] = {}
+    for raw_name, raw_command in raw_commands.items():
+        name = normalize_prompt_command_name(str(raw_name))
+        if _PROMPT_COMMAND_NAME_RE.fullmatch(name) is None or not isinstance(raw_command, dict):
+            continue
+        prompt_template = raw_command.get("prompt_template")
+        if not isinstance(prompt_template, str) or not prompt_template.strip():
+            continue
+        description = raw_command.get("description")
+        updated_at = raw_command.get("updated_at")
+        parsed[name] = PromptCommand(
+            name=name,
+            prompt_template=prompt_template,
+            description=description if isinstance(description, str) else None,
+            updated_at=updated_at if isinstance(updated_at, str) else None,
+        )
+    return parsed
 
 
 def _parse_thread_history(raw_history: dict[Any, Any]) -> dict[str, list[ThreadHistoryItem]]:

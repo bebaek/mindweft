@@ -59,7 +59,7 @@ from minigent_client.speech import (
     _sanitize_text_for_tts,
 )
 from minigent_client.state import ClientState as PersistentClientState
-from minigent_client.state import principal_key, state_scope_key
+from minigent_client.state import PromptCommand, principal_key, state_scope_key
 from minigent_client.stt import (
     FasterWhisperTranscriptionAdapter,
     FasterWhisperTranscriptionConfig,
@@ -178,6 +178,24 @@ def test_persistent_client_state_round_trips_last_thread(tmp_path: Path) -> None
     assert loaded.forget_last_thread(key, "thread-1") is True
     assert loaded.get_last_thread(key) is None
     assert loaded.list_threads(key) == []
+
+
+def test_persistent_client_state_round_trips_prompt_commands(tmp_path: Path) -> None:
+    state_path = tmp_path / "cli-state.json"
+    state = PersistentClientState.load(state_path)
+
+    command = state.set_prompt_command("/Rewrite-Friendly", "Rewrite this politely:\n\n{input}")
+    state.save()
+
+    assert command.name == "rewrite-friendly"
+    loaded = PersistentClientState.load(state_path)
+    assert [item.name for item in loaded.list_prompt_commands()] == ["rewrite-friendly"]
+    loaded_command = loaded.get_prompt_command("rewrite-friendly")
+    assert loaded_command is not None
+    assert loaded_command.prompt_template == "Rewrite this politely:\n\n{input}"
+
+    assert loaded.delete_prompt_command("/rewrite-friendly") is True
+    assert loaded.get_prompt_command("rewrite-friendly") is None
 
 
 def test_persistent_client_state_uses_stable_token_fingerprint() -> None:
@@ -3405,6 +3423,58 @@ def test_minigent_client_cli_handles_keyboard_interrupt(
     assert activation_source.close_calls == 1
 
 
+def test_render_prompt_command_replaces_input_placeholder() -> None:
+    command = PromptCommand(
+        name="rewrite",
+        prompt_template="Rewrite this in a friendly tone:\n\n{input}",
+    )
+
+    assert voice_cli._render_prompt_command(command, "Send it now.") == (
+        "Rewrite this in a friendly tone:\n\nSend it now."
+    )
+
+
+def test_run_chat_loop_expands_custom_slash_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "cli-state.json"
+    state = PersistentClientState.load(state_path)
+    state.set_prompt_command("rewrite", "Rewrite this in a friendly tone:\n\n{input}")
+    state.save()
+    output_stream = StringIO()
+    input_stream = StringIO("/rewrite Send it now.\n")
+    events: list[tuple[str, str]] = []
+
+    class FakeChatClient:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            events.append(("message", content))
+            return {"id": "message-1"}
+
+        def run_thread(self) -> str:
+            events.append(("run", "rewritten"))
+            return "rewritten"
+
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+    monkeypatch.setattr("minigent_client.state.state_file_path", lambda: state_path)
+
+    exit_code = run_chat_loop(
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+        once=True,
+    )
+
+    assert exit_code == 0
+    assert events == [
+        ("message", "Rewrite this in a friendly tone:\n\nSend it now."),
+        ("run", "rewritten"),
+    ]
+
+
 def test_run_chat_loop_handles_multiple_turns_and_blank_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4160,7 +4230,8 @@ def test_run_chat_loop_handles_local_chat_commands(
     assert output_stream.getvalue() == (
         "[user] [idle] chat commands: /help, /new, /agent [current|preset], /threads, "
         "/switch <id>, /rename <title>, /copy-id, /cancel, /compact, /export [markdown|json], /tokens, "
-        "/debug, /editor, /exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J "
+        "/debug, /editor, /commands, /command set|show|delete, /exit, /quit. Default: "
+        "Enter submits; Esc+Enter or Ctrl+J "
         "inserts a newline. Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make "
         "Esc+Enter submit.\n"
         "[user] [idle] shutting down\n"

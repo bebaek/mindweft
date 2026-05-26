@@ -121,7 +121,10 @@ uv run minigent config doctor
 ```
 
 Interactive chat supports local slash commands such as `/new`, `/threads`, `/switch <id>`,
-`/compact`, and `/agent <preset>`. Configure `/agent` presets with
+`/compact`, and `/agent <preset>`. Users can also save personal prompt shortcuts with
+`/command set <name> <prompt template>`, list them with `/commands`, and invoke them as
+`/<name> optional input`; templates can include `{input}` to place the invocation text.
+Configure `/agent` presets with
 `MINIGENT_CLIENT_AGENT_PRESETS`, a JSON object or array mapping user-facing agent names to
 Minigent `skill_name`/`skill_names` and `capability_profile` values; selecting a preset
 creates a new thread with that bundle.
