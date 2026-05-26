@@ -118,7 +118,7 @@ Minigent API, and prints a ready-to-run demo client command:
 
 ```bash
 cp .env.coding.template .env.coding
-# edit MINIGENT_CODING_WORKSPACE=/path/to/workspace
+# edit MINIGENT_CODING_WORKSPACES=/path/to/workspace
 uv run minigent-coding-workspace --env-file .env.coding
 ```
 
@@ -127,11 +127,13 @@ survive runner/API restarts. Remove that setting only if you intentionally want 
 restart-discarded threads.
 
 To expose multiple roots through the same filesystem MCP server, set
-`MINIGENT_CODING_WORKSPACE` to a comma-separated list or repeat `--workspace` on the runner
-CLI:
+`MINIGENT_CODING_WORKSPACES` to a comma-separated list or repeat `--workspace` on the runner
+CLI. The older singular `MINIGENT_CODING_WORKSPACE` key is still accepted for compatibility.
+Generated tenant configs include the resolved roots in the coding-workspace skill prompt so
+the model can distinguish each configured workspace root:
 
 ```dotenv
-MINIGENT_CODING_WORKSPACE=/path/to/repo1,/path/to/repo2
+MINIGENT_CODING_WORKSPACES=/path/to/repo1,/path/to/repo2
 ```
 
 ```bash

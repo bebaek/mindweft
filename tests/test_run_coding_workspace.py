@@ -267,6 +267,45 @@ def test_resolve_workspace_roots_splits_env_value(tmp_path: Path) -> None:
     assert runner.resolve_workspace_roots(None, f"{one},{two}") == [one.resolve(), two.resolve()]
 
 
+def test_coding_workspace_skill_lists_multiple_workspace_roots(tmp_path: Path) -> None:
+    one = tmp_path / "one"
+    two = tmp_path / "two"
+
+    skill = runner.coding_workspace_skill(workspace_roots=[one, two])
+
+    assert "Configured workspace roots:" in skill["system_prompt"]
+    assert str(one) in skill["system_prompt"]
+    assert str(two) in skill["system_prompt"]
+
+
+def test_inject_coding_workspace_skill_enriches_existing_skill_with_workspaces(
+    tmp_path: Path,
+) -> None:
+    config = json.dumps(
+        {
+            "demo-tenant": {
+                "skills": {
+                    "items": [
+                        {"name": "coding-workspace", "system_prompt": "Base coding prompt."}
+                    ]
+                }
+            }
+        }
+    )
+
+    injected = runner.inject_coding_workspace_skill(
+        config,
+        "demo-tenant",
+        workspace_roots=[tmp_path, tmp_path / "other"],
+    )
+
+    skill = json.loads(injected)["demo-tenant"]["skills"]["items"][0]
+    assert skill["system_prompt"].startswith("Base coding prompt.")
+    assert "Configured workspace roots:" in skill["system_prompt"]
+    assert str(tmp_path) in skill["system_prompt"]
+    assert str(tmp_path / "other") in skill["system_prompt"]
+
+
 def test_shell_bridge_command_passes_allowed_command_prefixes(tmp_path: Path) -> None:
     command = runner.build_shell_bridge_command(
         "shell-workspace",

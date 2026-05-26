@@ -96,7 +96,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Workspace root to expose. Repeat for multiple roots. Defaults to "
-            "MINIGENT_CODING_WORKSPACE or cwd."
+            "MINIGENT_CODING_WORKSPACES, MINIGENT_CODING_WORKSPACE, or cwd."
         ),
     )
     parser.add_argument(
@@ -204,7 +204,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     env = load_env_file(args.env_file)
 
-    workspace_roots = resolve_workspace_roots(args.workspace, env.get("MINIGENT_CODING_WORKSPACE"))
+    workspace_roots = resolve_workspace_roots(
+        args.workspace,
+        env.get("MINIGENT_CODING_WORKSPACES") or env.get("MINIGENT_CODING_WORKSPACE"),
+    )
     for workspace in workspace_roots:
         if not workspace.exists() or not workspace.is_dir():
             print(f"Workspace does not exist or is not a directory: {workspace}", file=sys.stderr)
@@ -284,7 +287,11 @@ def main(argv: list[str] | None = None) -> int:
     env.setdefault("MINIGENT_LLM_PROVIDER", "mock")
     if "MINIGENT_TENANT_EXECUTION_CONFIGS" not in env:
         env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = json.dumps(
-            default_tenant_config_from_servers(tenant_id, tenant_mcp_server_specs),
+            default_tenant_config_from_servers(
+                tenant_id,
+                tenant_mcp_server_specs,
+                workspace_roots=workspace_roots,
+            ),
             separators=(",", ":"),
         )
     elif env.get("MINIGENT_CODING_INJECT_WORKSPACE_SKILL", "true").lower() not in {
@@ -293,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
         "no",
     }:
         env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = inject_coding_workspace_skill(
-            env["MINIGENT_TENANT_EXECUTION_CONFIGS"], tenant_id
+            env["MINIGENT_TENANT_EXECUTION_CONFIGS"], tenant_id, workspace_roots=workspace_roots
         )
 
     processes: list[subprocess.Popen[str]] = []
@@ -767,7 +774,10 @@ def capability_profiles_from_specs(specs: list[CodingMCPServerSpec]) -> list[dic
 
 
 def default_tenant_config_from_servers(
-    tenant_id: str, specs: list[CodingMCPServerSpec]
+    tenant_id: str,
+    specs: list[CodingMCPServerSpec],
+    *,
+    workspace_roots: list[Path] | None = None,
 ) -> dict[str, Any]:
     return {
         tenant_id: {
@@ -778,7 +788,7 @@ def default_tenant_config_from_servers(
             },
             "skills": {
                 "default_skill": "coding-workspace",
-                "items": [coding_workspace_skill()],
+                "items": [coding_workspace_skill(workspace_roots=workspace_roots)],
             },
             "capability_profiles": {
                 "default_profile": "inspect",
@@ -799,6 +809,7 @@ def default_tenant_config(
     shell_enabled: bool = False,
     shell_bridge_name: str = DEFAULT_SHELL_BRIDGE_NAME,
     shell_bridge_url: str | None = None,
+    workspace_roots: list[Path] | None = None,
 ) -> dict[str, Any]:
     mcp_servers: list[dict[str, Any]] = [
         {
@@ -880,7 +891,7 @@ def default_tenant_config(
             },
             "skills": {
                 "default_skill": "coding-workspace",
-                "items": [coding_workspace_skill()],
+                "items": [coding_workspace_skill(workspace_roots=workspace_roots)],
             },
             "capability_profiles": {
                 "default_profile": "inspect",
@@ -890,7 +901,9 @@ def default_tenant_config(
     }
 
 
-def inject_coding_workspace_skill(raw_config: str, tenant_id: str) -> str:
+def inject_coding_workspace_skill(
+    raw_config: str, tenant_id: str, *, workspace_roots: list[Path] | None = None
+) -> str:
     payload = json.loads(raw_config)
     if not isinstance(payload, dict):
         raise RuntimeError("MINIGENT_TENANT_EXECUTION_CONFIGS must be a JSON object")
@@ -903,27 +916,50 @@ def inject_coding_workspace_skill(raw_config: str, tenant_id: str) -> str:
     items = skills.setdefault("items", [])
     if not isinstance(items, list):
         return raw_config
-    if not any(isinstance(item, dict) and item.get("name") == "coding-workspace" for item in items):
-        items.append(coding_workspace_skill())
+    existing_skill = next(
+        (item for item in items if isinstance(item, dict) and item.get("name") == "coding-workspace"),
+        None,
+    )
+    if existing_skill is None:
+        items.append(coding_workspace_skill(workspace_roots=workspace_roots))
+    elif workspace_roots:
+        enrich_coding_workspace_skill(existing_skill, workspace_roots)
     skills.setdefault("default_skill", "coding-workspace")
     return json.dumps(payload, separators=(",", ":"))
 
 
-def coding_workspace_skill() -> dict[str, str]:
-    return {
-        "name": "coding-workspace",
-        "system_prompt": (
-            "You are assisting with a code workspace. When the user says current directory, "
-            "workspace, repo, or repository root, use its absolute path. Filesystem MCP tools "
-            "require explicit absolute paths; always pass the path argument for directory and "
-            "file operations. Prefer targeted text-read MCP tools for exact line ranges when "
-            "they are available; use broader filesystem reads only when broader file context is "
-            "needed. Prefer working with git-tracked source files; use git status "
-            "or git ls-files when needed to distinguish tracked, untracked, ignored, and "
-            "generated files. Do not read or write secrets such as .env files unless the user "
-            "explicitly asks and the active tool policy permits it."
-        ),
-    }
+def coding_workspace_skill(*, workspace_roots: list[Path] | None = None) -> dict[str, str]:
+    system_prompt = (
+        "You are assisting with a code workspace. When the user says current directory, "
+        "workspace, repo, or repository root, use its absolute path. Filesystem MCP tools "
+        "require explicit absolute paths; always pass the path argument for directory and "
+        "file operations. Prefer targeted text-read MCP tools for exact line ranges when "
+        "they are available; use broader filesystem reads only when broader file context is "
+        "needed. Prefer working with git-tracked source files; use git status "
+        "or git ls-files when needed to distinguish tracked, untracked, ignored, and "
+        "generated files. Do not read or write secrets such as .env files unless the user "
+        "explicitly asks and the active tool policy permits it."
+    )
+    if workspace_roots:
+        system_prompt = append_workspace_roots_to_prompt(system_prompt, workspace_roots)
+    return {"name": "coding-workspace", "system_prompt": system_prompt}
+
+
+def enrich_coding_workspace_skill(skill: dict[str, Any], workspace_roots: list[Path]) -> None:
+    system_prompt = skill.get("system_prompt", skill.get("systemPrompt"))
+    if not isinstance(system_prompt, str):
+        return
+    skill["system_prompt"] = append_workspace_roots_to_prompt(system_prompt, workspace_roots)
+    skill.pop("systemPrompt", None)
+
+
+def append_workspace_roots_to_prompt(system_prompt: str, workspace_roots: list[Path]) -> str:
+    marker = "Configured workspace roots:"
+    if marker in system_prompt:
+        return system_prompt
+    roots = ", ".join(str(workspace) for workspace in workspace_roots)
+    root_label = "a workspace root" if len(workspace_roots) == 1 else "workspace roots"
+    return f"{system_prompt} {marker} {roots}. Treat each listed path as {root_label}."
 
 
 def bridge_allowed_tools_from_config(
