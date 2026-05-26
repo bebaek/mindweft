@@ -56,6 +56,7 @@ from app.runtime import (
     AgentRuntime,
     context_compaction_enabled_from_env,
     estimate_thread_context_usage,
+    final_response_review_enabled_from_env,
     max_iterations_from_env,
     render_raw_thread_context,
 )
@@ -239,6 +240,7 @@ def create_app(
         max_iterations=max_iterations_from_env(),
         quality_enhancer=app.state.quality_enhancer,
         context_compaction_enabled=context_compaction_enabled_from_env(),
+        final_response_review_enabled=final_response_review_enabled_from_env(),
     )
     app.state.peer_agent_registry = peer_agent_registry or build_peer_agent_registry_from_env()
     app.state.active_run_tasks = {}

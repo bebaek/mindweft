@@ -1359,6 +1359,14 @@ uses tools can make at most one fewer tool call than the configured value. Incre
 for deeper MCP, retrieval, or verification workflows; decrease it when you want a tighter
 runaway-loop guard.
 
+`MINIGENT_FINAL_RESPONSE_REVIEW_ENABLED=true` enables a single pre-final review pass for
+native runtime replies. The pass sends the full current LLM context plus the draft assistant
+answer back to the same LLM with instructions to return the draft unchanged or revise it to
+better satisfy the conversation requirements. Streaming runs emit
+`final_response_review.request` and `final_response_review.completed` events; the completed
+event includes `correction_occurred` for observability. If the review request fails, the
+runtime falls back to the original draft and emits `final_response_review.error`.
+
 ## Tenant Execution Config
 
 The runtime config source is controlled by `MINIGENT_TENANT_CONFIG_SOURCE`:

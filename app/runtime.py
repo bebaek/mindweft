@@ -41,6 +41,21 @@ RUNTIME_SYSTEM_PROMPT = (
 DEFAULT_MAX_ITERATIONS = 16
 MAX_ITERATIONS_ENV = "MINIGENT_MAX_ITERATIONS"
 CONTEXT_COMPACTION_ENABLED_ENV = "MINIGENT_CONTEXT_COMPACTION_ENABLED"
+FINAL_RESPONSE_REVIEW_ENABLED_ENV = "MINIGENT_FINAL_RESPONSE_REVIEW_ENABLED"
+FINAL_RESPONSE_REVIEW_PROMPT = """\
+Review the assistant draft against the full conversation, especially the user's latest request
+and any explicit constraints.
+
+Revise the draft if needed to satisfy the request better.
+
+Rules:
+- Preserve correct parts of the draft.
+- Fix omissions, format violations, wrong scope, and unsupported claims.
+- Do not mention that you reviewed or revised the answer.
+- Return only the final answer.
+- If the draft already satisfies the request, return it unchanged.
+- If you did coding and it is ready for commit, suggest a commit message in succinct conventional commits style.
+""".strip()
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
 
 
@@ -53,6 +68,17 @@ def context_compaction_enabled_from_env() -> bool:
     if raw in {"0", "false", "no", "off"}:
         return False
     raise RuntimeError(f"{CONTEXT_COMPACTION_ENABLED_ENV} must be a boolean")
+
+
+def final_response_review_enabled_from_env() -> bool:
+    raw = os.getenv(FINAL_RESPONSE_REVIEW_ENABLED_ENV, "").strip().lower()
+    if not raw:
+        return False
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{FINAL_RESPONSE_REVIEW_ENABLED_ENV} must be a boolean")
 
 
 def max_iterations_from_env() -> int:
@@ -82,6 +108,7 @@ class AgentRuntime:
         target_prompt_tokens: int = 3000,
         quality_enhancer: QualityEnhancer | None = None,
         context_compaction_enabled: bool = True,
+        final_response_review_enabled: bool = False,
     ) -> None:
         self._store = store
         if execution_resolver is not None:
@@ -101,6 +128,7 @@ class AgentRuntime:
         self._target_prompt_tokens = max(256, target_prompt_tokens)
         self._quality_enhancer = quality_enhancer
         self._context_compaction_enabled = context_compaction_enabled
+        self._final_response_review_enabled = final_response_review_enabled
 
     async def run_thread(
         self,
@@ -182,7 +210,7 @@ class AgentRuntime:
                         status_code=500, detail="LLM returned neither content nor tool call"
                     )
 
-                final_content = await self._maybe_apply_quality_enhancement(
+                enhanced_content = await self._maybe_apply_quality_enhancement(
                     principal,
                     thread_id,
                     response.content,
@@ -190,13 +218,25 @@ class AgentRuntime:
                     base_messages=messages,
                     event_sink=event_sink,
                 )
+                final_content = await self._maybe_apply_final_response_review(
+                    thread_id,
+                    enhanced_content,
+                    execution=execution,
+                    base_messages=messages,
+                    event_sink=event_sink,
+                )
+                final_metadata = dict(response.metadata or {})
+                if _normalize_final_answer(final_content) != _normalize_final_answer(
+                    enhanced_content
+                ):
+                    final_metadata["final_response_review"] = {"correction_occurred": True}
                 self._store.append_message(
                     principal.tenant_id,
                     Message(
                         thread_id=thread_id,
                         role=MessageRole.ASSISTANT,
                         content=final_content,
-                        metadata=response.metadata,
+                        metadata=final_metadata or None,
                     ),
                 )
                 self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
@@ -277,6 +317,58 @@ class AgentRuntime:
             return local_draft
         await _emit_run_event(event_sink, {"type": "quality.applied"})
         return revised.content
+
+    async def _maybe_apply_final_response_review(
+        self,
+        thread_id: str,
+        draft: str,
+        *,
+        execution: Any,
+        base_messages: list[Message],
+        event_sink: RunEventSink | None,
+    ) -> str:
+        if not self._final_response_review_enabled or isinstance(
+            execution.llm_adapter, MockLLMAdapter
+        ):
+            return draft
+        review_messages = [
+            *base_messages,
+            Message(thread_id=thread_id, role=MessageRole.ASSISTANT, content=draft),
+            Message(
+                thread_id=thread_id,
+                role=MessageRole.USER,
+                content=FINAL_RESPONSE_REVIEW_PROMPT,
+            ),
+        ]
+        await _emit_run_event(event_sink, {"type": "final_response_review.request"})
+        try:
+            reviewed = await execution.llm_adapter.generate(review_messages, [])
+        except Exception as exc:  # pragma: no cover - advisory fallback boundary
+            await _emit_run_event(
+                event_sink,
+                {"type": "final_response_review.error", "detail": str(exc)},
+            )
+            return draft
+        if reviewed.content is None:
+            await _emit_run_event(
+                event_sink,
+                {
+                    "type": "final_response_review.error",
+                    "detail": "final response review returned no content",
+                },
+            )
+            return draft
+        correction_occurred = _normalize_final_answer(reviewed.content) != _normalize_final_answer(
+            draft
+        )
+        await _emit_run_event(
+            event_sink,
+            {
+                "type": "final_response_review.completed",
+                "correction_occurred": correction_occurred,
+            },
+        )
+        return reviewed.content
 
     async def _handle_tool_call(
         self,
@@ -476,6 +568,10 @@ class AgentRuntime:
             summarize_upto,
             min_boundary=context.summarized_message_count,
         )
+
+
+def _normalize_final_answer(content: str) -> str:
+    return "\n".join(line.rstrip() for line in content.strip().splitlines())
 
 
 async def _emit_run_event(

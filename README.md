@@ -77,6 +77,7 @@ Start from [`.env.template`](.env.template) for local or deployment settings. Co
 | `MINIGENT_LLM_MODEL` | Model identifier for the selected provider. |
 | `MINIGENT_THREAD_DB_PATH` | Optional SQLite path for persistent thread/message storage. |
 | `MINIGENT_TENANT_EXECUTION_CONFIGS` | Optional per-tenant LLM, tool, skill, capability, backend, and quality config. |
+| `MINIGENT_FINAL_RESPONSE_REVIEW_ENABLED` | Enables a pre-final full-context revise-if-needed pass and emits correction telemetry in stream events. |
 | `MINIGENT_MCP_BROKER_ENABLED` | Enables the peer-agent MCP broker path when using peer backends. |
 
 See the [full reference](docs/reference.md) for the complete environment and tenant config

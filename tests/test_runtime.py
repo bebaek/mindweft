@@ -31,6 +31,7 @@ from app.runtime import (
     DEFAULT_MAX_ITERATIONS,
     RUNTIME_SYSTEM_PROMPT,
     AgentRuntime,
+    final_response_review_enabled_from_env,
     max_iterations_from_env,
 )
 from app.store import InMemoryThreadStore
@@ -63,6 +64,68 @@ def test_runtime_returns_assistant_reply_for_plain_user_message() -> None:
     assert messages[-1].role == MessageRole.ASSISTANT
     assert messages[-1].content == "Mock reply: hello"
     assert store._threads[thread.thread_id].status == ThreadStatus.IDLE
+
+
+def test_runtime_applies_final_response_review_when_enabled() -> None:
+    seen_messages: list[list[Message]] = []
+    seen_tools: list[list[ToolSpec]] = []
+
+    class ReviewingLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            seen_messages.append(messages)
+            seen_tools.append(tools)
+            if len(seen_messages) == 1:
+                return LLMResponse(content="Draft answer")
+            return LLMResponse(content="Revised answer")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    events: list[dict[str, object]] = []
+
+    async def emit(event: dict[str, object]) -> None:
+        events.append(event)
+
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=ReviewingLLM(),
+        tool_registry=build_local_tool_registry(),
+        final_response_review_enabled=True,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="include the required detail",
+            created_by=PRINCIPAL.user_id,
+        ),
+    )
+
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id, event_sink=emit))
+
+    assert reply == "Revised answer"
+    assert len(seen_messages) == 2
+    assert seen_messages[1][-2].role == MessageRole.ASSISTANT
+    assert seen_messages[1][-2].content == "Draft answer"
+    assert seen_messages[1][-1].role == MessageRole.USER
+    assert "Review the assistant draft" in seen_messages[1][-1].content
+    assert seen_tools[1] == []
+    assert {event["type"] for event in events} >= {
+        "final_response_review.request",
+        "final_response_review.completed",
+    }
+    assert events[-1] == {
+        "type": "final_response_review.completed",
+        "correction_occurred": True,
+    }
+    stored_messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    assert stored_messages[-1].content == "Revised answer"
+    assert stored_messages[-1].metadata == {
+        "final_response_review": {"correction_occurred": True}
+    }
 
 
 def test_runtime_sends_system_prompt_to_llm() -> None:
@@ -888,6 +951,18 @@ def test_max_iterations_from_env_rejects_invalid_value(monkeypatch) -> None:
         assert str(exc) == "MINIGENT_MAX_ITERATIONS must be a positive integer"
     else:  # pragma: no cover - assertion guard
         raise AssertionError("Expected RuntimeError")
+
+
+def test_final_response_review_enabled_from_env_defaults_to_false(monkeypatch) -> None:
+    monkeypatch.delenv("MINIGENT_FINAL_RESPONSE_REVIEW_ENABLED", raising=False)
+
+    assert final_response_review_enabled_from_env() is False
+
+
+def test_final_response_review_enabled_from_env_accepts_boolean(monkeypatch) -> None:
+    monkeypatch.setenv("MINIGENT_FINAL_RESPONSE_REVIEW_ENABLED", "true")
+
+    assert final_response_review_enabled_from_env() is True
 
 
 def test_runtime_rejects_concurrent_runs_for_same_thread() -> None:
