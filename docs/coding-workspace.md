@@ -155,6 +155,63 @@ MINIGENT_CODING_BRIDGE_ALLOW_GLOBS=**/.env*.template,**/.env*.driver.sh
 
 Direct bridge env vars take precedence over the mirrored tenant path policy.
 
+### Declarative MCP server lists
+
+For more than the built-in filesystem/text/shell tools, point the runner at a JSON MCP server
+list instead of adding more runner-specific flags. Relative paths are resolved from the dotenv
+file directory:
+
+```dotenv
+MINIGENT_CODING_MCP_SERVERS_FILE=.data/coding-mcp-servers.json
+```
+
+The file can be a JSON array or an object with a `servers` array. Each server entry can define:
+
+- `name`: MCP server name registered in tenant config.
+- `transport`: `stdio` to start it behind the stdio bridge, or `http` to register an
+  externally managed HTTP MCP server. Defaults to `stdio`.
+- `command`: argv for stdio servers. Use `{workspace}` for the first workspace,
+  `{workspace_roots}` as an argv item that expands to all workspace roots, or
+  `{workspace_roots_csv}` for a comma-separated root list.
+- `host`, `port`, and `path`: local bridge bind settings. The tenant `url` defaults to
+  `http://<host>:<port><path>` unless `url` is set explicitly.
+- `profiles`: capability profiles that should include this server, such as `inspect`, `edit`,
+  or `test`.
+- `allowed_tools`, `path_policy`, and `env`: bridge/tool filters and additional process
+  environment.
+
+Example:
+
+```json
+{
+  "servers": [
+    {
+      "name": "fs-workspace",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "{workspace_roots}"],
+      "port": 8765,
+      "profiles": ["inspect"],
+      "allowed_tools": ["list_allowed_directories", "list_directory", "read_file"],
+      "path_policy": {
+        "deny_globs": ["**/.env*", "**/.git/**", "**/.venv/**"],
+        "allow_globs": ["**/.env*.template"]
+      }
+    },
+    {
+      "name": "custom-workspace",
+      "command": ["custom-mcp-server", "--workspace", "{workspace}"],
+      "port": 8770,
+      "profiles": ["inspect", "test"],
+      "allowed_tools": ["inspect_repo", "run_repo_check"]
+    }
+  ]
+}
+```
+
+When the runner generates `MINIGENT_TENANT_EXECUTION_CONFIGS`, it derives
+`tools.mcp_servers` and `capability_profiles.items[*].mcp_server_names` from this file. If you
+provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, the file still controls process startup,
+but your explicit tenant config remains authoritative for tool registration and profiles.
+
 ### Targeted text reads
 
 The convenience runner can also start Minigent's small targeted text-read MCP server. This

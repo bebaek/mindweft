@@ -309,3 +309,121 @@ def test_bridge_allowed_tools_allows_unfiltered_explicit_null() -> None:
     }
 
     assert runner.bridge_allowed_tools_from_config(env, "demo-tenant", "fs-workspace") == []
+
+
+def test_load_coding_mcp_server_specs_expands_workspace_placeholders(tmp_path: Path) -> None:
+    other_workspace = tmp_path / "other"
+    other_workspace.mkdir()
+    specs_path = tmp_path / "mcp-servers.json"
+    specs_path.write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "custom-workspace",
+                        "command": ["custom-mcp", "{workspace_roots}", "--root-csv", "{workspace_roots_csv}"],
+                        "port": 9001,
+                        "profiles": ["inspect", "test"],
+                        "allowed_tools": ["inspect_repo"],
+                        "path_policy": {"deny_globs": ["**/.env*"]},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    specs = runner.load_coding_mcp_server_specs(
+        specs_path,
+        bridge_host="127.0.0.1",
+        workspace_roots=[tmp_path, other_workspace],
+    )
+
+    assert len(specs) == 1
+    assert specs[0].name == "custom-workspace"
+    assert specs[0].url == "http://127.0.0.1:9001/mcp"
+    assert specs[0].command == [
+        "custom-mcp",
+        str(tmp_path),
+        str(other_workspace),
+        "--root-csv",
+        f"{tmp_path},{other_workspace}",
+    ]
+    assert specs[0].profiles == ["inspect", "test"]
+    assert specs[0].allowed_tools == ["inspect_repo"]
+    assert specs[0].path_policy == {"deny_globs": ["**/.env*"]}
+
+
+def test_default_tenant_config_from_servers_builds_profiles() -> None:
+    specs = [
+        runner.CodingMCPServerSpec(
+            name="fs-workspace",
+            url="http://127.0.0.1:8765/mcp",
+            command=["fs-server"],
+            profiles=["inspect", "edit"],
+            allowed_tools=["read_file"],
+        ),
+        runner.CodingMCPServerSpec(
+            name="git-workspace",
+            url="http://127.0.0.1:8770/mcp",
+            command=["git-server"],
+            profiles=["test"],
+            allowed_tools=["git_status"],
+        ),
+    ]
+
+    config = runner.default_tenant_config_from_servers("demo-tenant", specs)
+
+    tenant = config["demo-tenant"]
+    assert tenant["tools"]["mcp_servers"] == [
+        {
+            "name": "fs-workspace",
+            "url": "http://127.0.0.1:8765/mcp",
+            "headers": {},
+            "allowed_tools": ["read_file"],
+        },
+        {
+            "name": "git-workspace",
+            "url": "http://127.0.0.1:8770/mcp",
+            "headers": {},
+            "allowed_tools": ["git_status"],
+        },
+    ]
+    assert tenant["capability_profiles"]["items"] == [
+        {
+            "name": "inspect",
+            "allowed_local_tools": ["current_time", "calculator"],
+            "mcp_server_names": ["fs-workspace"],
+        },
+        {
+            "name": "edit",
+            "allowed_local_tools": ["current_time", "calculator"],
+            "mcp_server_names": ["fs-workspace"],
+        },
+        {
+            "name": "test",
+            "allowed_local_tools": ["current_time", "calculator"],
+            "mcp_server_names": ["git-workspace"],
+        },
+    ]
+
+
+def test_build_mcp_stdio_bridge_command_uses_declarative_spec() -> None:
+    spec = runner.CodingMCPServerSpec(
+        name="custom-workspace",
+        url="http://127.0.0.1:9001/custom",
+        command=["custom-mcp"],
+        port=9001,
+        path="/custom",
+        allowed_tools=["inspect_repo"],
+        path_policy={"deny_globs": ["**/.env*"], "allow_globs": ["**/.env*.template"]},
+    )
+
+    command = runner.build_mcp_stdio_bridge_command(spec)
+
+    assert "--path" in command
+    assert command[command.index("--path") + 1] == "/custom"
+    assert command[command.index("--allowed-tool") + 1] == "inspect_repo"
+    assert command[command.index("--deny-glob") + 1] == "**/.env*"
+    assert command[command.index("--allow-glob") + 1] == "**/.env*.template"
+    assert command[-1] == "custom-mcp"

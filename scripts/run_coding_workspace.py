@@ -39,6 +39,43 @@ DEFAULT_BRIDGE_DENY_GLOBS = (
 DEFAULT_BRIDGE_ALLOW_GLOBS = ("**/.env*.template",)
 
 
+class CodingMCPServerSpec:
+    """Declarative MCP server entry for the coding workspace runner.
+
+    Stdio servers are launched behind Minigent's stdio-to-HTTP bridge. HTTP servers are
+    registered in tenant config but are assumed to be managed externally.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        url: str,
+        transport: str = "stdio",
+        command: list[str] | None = None,
+        host: str = DEFAULT_BRIDGE_HOST,
+        port: int = DEFAULT_BRIDGE_PORT,
+        path: str = "/mcp",
+        profiles: list[str] | None = None,
+        allowed_tools: list[str] | None = None,
+        path_policy: dict[str, list[str]] | None = None,
+        env: dict[str, str] | None = None,
+        enabled: bool = True,
+    ) -> None:
+        self.name = name
+        self.url = url
+        self.transport = transport
+        self.command = command
+        self.host = host
+        self.port = port
+        self.path = path
+        self.profiles = profiles or ["inspect"]
+        self.allowed_tools = allowed_tools
+        self.path_policy = path_policy or {}
+        self.env = env or {}
+        self.enabled = enabled
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -58,6 +95,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Workspace root to expose. Repeat for multiple roots. Defaults to "
             "MINIGENT_CODING_WORKSPACE or cwd."
+        ),
+    )
+    parser.add_argument(
+        "--mcp-servers-file",
+        default=None,
+        help=(
+            "JSON file declaring MCP servers to register/start. Defaults to "
+            "MINIGENT_CODING_MCP_SERVERS_FILE when set."
         ),
     )
     parser.add_argument("--tenant-id", default=None, help="Tenant ID for generated default config.")
@@ -165,22 +210,39 @@ def main(argv: list[str] | None = None) -> int:
         env.get("MINIGENT_CODING_SHELL_BRIDGE_PORT") or DEFAULT_SHELL_BRIDGE_PORT
     )
     shell_bridge_url = f"http://{bridge_host}:{shell_bridge_port}/mcp"
+    mcp_servers_file = resolve_mcp_servers_file(
+        args.mcp_servers_file, env, base_dir=Path(args.env_file).expanduser().resolve().parent
+    )
+    if mcp_servers_file is not None:
+        mcp_server_specs = load_coding_mcp_server_specs(
+            mcp_servers_file,
+            bridge_host=bridge_host,
+            workspace_roots=workspace_roots,
+        )
+    else:
+        mcp_server_specs = build_builtin_mcp_server_specs(
+            env,
+            tenant_id,
+            bridge_name=bridge_name,
+            bridge_host=bridge_host,
+            bridge_port=bridge_port,
+            bridge_url=bridge_url,
+            workspace_roots=workspace_roots,
+            text_enabled=text_enabled,
+            text_bridge_name=text_bridge_name,
+            text_bridge_port=text_bridge_port,
+            text_bridge_url=text_bridge_url,
+            shell_enabled=shell_enabled,
+            shell_bridge_name=shell_bridge_name,
+            shell_bridge_port=shell_bridge_port,
+            shell_bridge_url=shell_bridge_url,
+        )
 
     env.setdefault("MINIGENT_AUTH_MODE", "dev-headers")
     env.setdefault("MINIGENT_LLM_PROVIDER", "mock")
     if "MINIGENT_TENANT_EXECUTION_CONFIGS" not in env:
         env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = json.dumps(
-            default_tenant_config(
-                tenant_id,
-                bridge_name,
-                bridge_url,
-                text_enabled=text_enabled,
-                text_bridge_name=text_bridge_name,
-                text_bridge_url=text_bridge_url,
-                shell_enabled=shell_enabled,
-                shell_bridge_name=shell_bridge_name,
-                shell_bridge_url=shell_bridge_url,
-            ),
+            default_tenant_config_from_servers(tenant_id, mcp_server_specs),
             separators=(",", ":"),
         )
     elif env.get("MINIGENT_CODING_INJECT_WORKSPACE_SKILL", "true").lower() not in {
@@ -196,49 +258,23 @@ def main(argv: list[str] | None = None) -> int:
     print(f"env_file={args.env_file}")
     print("workspaces=" + ", ".join(str(workspace) for workspace in workspace_roots))
     print(f"tenant_id={tenant_id}")
-    print(f"bridge={bridge_url}")
-    if text_enabled:
-        print(f"text_bridge={text_bridge_url}")
-    if shell_enabled:
-        print(f"shell_bridge={shell_bridge_url}")
+    if mcp_servers_file is not None:
+        print(f"mcp_servers_file={mcp_servers_file}")
+    for spec in mcp_server_specs:
+        print(f"mcp_server={spec.name} url={spec.url} transport={spec.transport}")
     print(f"api=http://{api_host}:{api_port}")
 
     try:
         if not args.skip_bridge:
-            processes.append(
-                start_process(
-                    build_bridge_command(
-                        env, tenant_id, bridge_name, bridge_host, bridge_port, workspace_roots
-                    ),
-                    env=env,
-                    label="filesystem MCP bridge",
-                )
-            )
-            if text_enabled:
+            for spec in mcp_server_specs:
+                if spec.transport != "stdio":
+                    continue
+                process_env = {**env, **spec.env}
                 processes.append(
                     start_process(
-                        build_text_bridge_command(
-                            text_bridge_name,
-                            bridge_host,
-                            text_bridge_port,
-                            workspace_roots,
-                        ),
-                        env=env,
-                        label="targeted text MCP bridge",
-                    )
-                )
-            if shell_enabled:
-                processes.append(
-                    start_process(
-                        build_shell_bridge_command(
-                            shell_bridge_name,
-                            bridge_host,
-                            shell_bridge_port,
-                            workspace_roots,
-                            allowed_command_prefixes=shell_allowed_command_prefixes_from_env(env),
-                        ),
-                        env=env,
-                        label="shell MCP bridge",
+                        build_mcp_stdio_bridge_command(spec),
+                        env=process_env,
+                        label=f"{spec.name} MCP bridge",
                     )
                 )
         if not args.skip_api:
@@ -279,6 +315,230 @@ def main(argv: list[str] | None = None) -> int:
 
 def env_flag_enabled(value: str | None) -> bool:
     return value is not None and value.lower() not in {"", "0", "false", "no"}
+
+
+def resolve_mcp_servers_file(
+    cli_path: str | None, env: dict[str, str], *, base_dir: Path | None = None
+) -> Path | None:
+    raw_path = cli_path or env.get("MINIGENT_CODING_MCP_SERVERS_FILE")
+    if not raw_path:
+        return None
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute() and base_dir is not None:
+        path = base_dir / path
+    return path.resolve()
+
+
+def load_coding_mcp_server_specs(
+    path: Path,
+    *,
+    bridge_host: str,
+    workspace_roots: list[Path],
+) -> list[CodingMCPServerSpec]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw_servers = payload.get("servers") if isinstance(payload, dict) else payload
+    if not isinstance(raw_servers, list):
+        raise RuntimeError("coding MCP servers file must contain a JSON array or {\"servers\": [...]}")
+
+    specs: list[CodingMCPServerSpec] = []
+    for index, raw_server in enumerate(raw_servers):
+        if not isinstance(raw_server, dict):
+            raise RuntimeError("each coding MCP server entry must be an object")
+        specs.append(
+            coding_mcp_server_spec_from_mapping(
+                raw_server,
+                default_host=bridge_host,
+                default_port=DEFAULT_BRIDGE_PORT + index,
+                workspace_roots=workspace_roots,
+            )
+        )
+    return [spec for spec in specs if spec.enabled]
+
+
+def coding_mcp_server_spec_from_mapping(
+    raw_server: dict[str, Any],
+    *,
+    default_host: str,
+    default_port: int,
+    workspace_roots: list[Path],
+) -> CodingMCPServerSpec:
+    name = raw_server.get("name")
+    if not isinstance(name, str) or not name:
+        raise RuntimeError("coding MCP server entry requires a non-empty name")
+
+    transport = raw_server.get("transport", "stdio")
+    if transport not in {"stdio", "http"}:
+        raise RuntimeError(f"coding MCP server '{name}' has unsupported transport '{transport}'")
+
+    host = raw_server.get("host", default_host)
+    if not isinstance(host, str) or not host:
+        raise RuntimeError(f"coding MCP server '{name}' has invalid host")
+    port = raw_server.get("port", default_port)
+    if not isinstance(port, int):
+        raise RuntimeError(f"coding MCP server '{name}' has invalid port")
+    path = raw_server.get("path", "/mcp")
+    if not isinstance(path, str) or not path.startswith("/"):
+        raise RuntimeError(f"coding MCP server '{name}' has invalid path")
+    url = raw_server.get("url") or f"http://{host}:{port}{path}"
+    if not isinstance(url, str) or not url:
+        raise RuntimeError(f"coding MCP server '{name}' has invalid url")
+
+    command = raw_server.get("command")
+    if command is not None:
+        if not isinstance(command, list) or not all(isinstance(item, str) for item in command):
+            raise RuntimeError(f"coding MCP server '{name}' command must be a string array")
+        command = expand_coding_mcp_command(command, workspace_roots)
+    elif transport == "stdio":
+        raise RuntimeError(f"coding MCP server '{name}' requires command for stdio transport")
+
+    allowed_tools = raw_server.get("allowed_tools", raw_server.get("allowedTools"))
+    if allowed_tools is not None and (
+        not isinstance(allowed_tools, list) or not all(isinstance(item, str) for item in allowed_tools)
+    ):
+        raise RuntimeError(f"coding MCP server '{name}' allowed_tools must be a string array or null")
+
+    path_policy = raw_server.get("path_policy", raw_server.get("pathPolicy", {}))
+    if not isinstance(path_policy, dict):
+        raise RuntimeError(f"coding MCP server '{name}' path_policy must be an object")
+
+    profiles = raw_server.get("profiles", ["inspect"])
+    if not isinstance(profiles, list) or not all(isinstance(item, str) and item for item in profiles):
+        raise RuntimeError(f"coding MCP server '{name}' profiles must be a non-empty string array")
+
+    extra_env = raw_server.get("env", {})
+    if not isinstance(extra_env, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in extra_env.items()
+    ):
+        raise RuntimeError(f"coding MCP server '{name}' env must be an object of string values")
+
+    return CodingMCPServerSpec(
+        name=name,
+        url=url,
+        transport=transport,
+        command=command,
+        host=host,
+        port=port,
+        path=path,
+        profiles=list(profiles),
+        allowed_tools=list(allowed_tools) if allowed_tools is not None else None,
+        path_policy={key: list(value) for key, value in path_policy.items() if isinstance(value, list)},
+        env=dict(extra_env),
+        enabled=env_flag_enabled(str(raw_server.get("enabled", "true"))),
+    )
+
+
+def expand_coding_mcp_command(command: list[str], workspace_roots: list[Path]) -> list[str]:
+    expanded: list[str] = []
+    first_workspace = str(workspace_roots[0])
+    workspace_roots_csv = ",".join(str(workspace) for workspace in workspace_roots)
+    for item in command:
+        if item == "{workspace_roots}":
+            expanded.extend(str(workspace) for workspace in workspace_roots)
+            continue
+        expanded.append(
+            item.replace("{workspace}", first_workspace).replace(
+                "{workspace_roots_csv}", workspace_roots_csv
+            )
+        )
+    return expanded
+
+
+def build_builtin_mcp_server_specs(
+    env: dict[str, str],
+    tenant_id: str,
+    *,
+    bridge_name: str,
+    bridge_host: str,
+    bridge_port: int,
+    bridge_url: str,
+    workspace_roots: list[Path],
+    text_enabled: bool,
+    text_bridge_name: str,
+    text_bridge_port: int,
+    text_bridge_url: str,
+    shell_enabled: bool,
+    shell_bridge_name: str,
+    shell_bridge_port: int,
+    shell_bridge_url: str,
+) -> list[CodingMCPServerSpec]:
+    filesystem_command = env.get("MINIGENT_CODING_FILESYSTEM_COMMAND")
+    fs_command = (
+        shlex.split(filesystem_command)
+        if filesystem_command
+        else [
+            "npx",
+            "-y",
+            "@modelcontextprotocol/server-filesystem",
+            *(str(workspace) for workspace in workspace_roots),
+        ]
+    )
+    specs = [
+        CodingMCPServerSpec(
+            name=bridge_name,
+            url=bridge_url,
+            command=fs_command,
+            host=bridge_host,
+            port=bridge_port,
+            profiles=["inspect"],
+            allowed_tools=bridge_allowed_tools_from_config(env, tenant_id, bridge_name),
+            path_policy={
+                "deny_globs": bridge_path_globs(
+                    env,
+                    tenant_id,
+                    bridge_name,
+                    env_name="MINIGENT_CODING_BRIDGE_DENY_GLOBS",
+                    policy_key="deny_globs",
+                    policy_camel_key="denyGlobs",
+                    defaults=DEFAULT_BRIDGE_DENY_GLOBS,
+                ),
+                "allow_globs": bridge_path_globs(
+                    env,
+                    tenant_id,
+                    bridge_name,
+                    env_name="MINIGENT_CODING_BRIDGE_ALLOW_GLOBS",
+                    policy_key="allow_globs",
+                    policy_camel_key="allowGlobs",
+                    defaults=DEFAULT_BRIDGE_ALLOW_GLOBS,
+                ),
+            },
+        )
+    ]
+    if text_enabled:
+        specs.append(
+            CodingMCPServerSpec(
+                name=text_bridge_name,
+                url=text_bridge_url,
+                command=build_text_mcp_server_command(workspace_roots),
+                host=bridge_host,
+                port=text_bridge_port,
+                profiles=["inspect"],
+                allowed_tools=[
+                    "read_text_file_lines",
+                    "read_text_file_around",
+                    "search_text_file",
+                ],
+                path_policy={
+                    "deny_globs": list(DEFAULT_BRIDGE_DENY_GLOBS),
+                    "allow_globs": list(DEFAULT_BRIDGE_ALLOW_GLOBS),
+                },
+            )
+        )
+    if shell_enabled:
+        specs.append(
+            CodingMCPServerSpec(
+                name=shell_bridge_name,
+                url=shell_bridge_url,
+                command=build_shell_mcp_server_command(
+                    workspace_roots,
+                    allowed_command_prefixes=shell_allowed_command_prefixes_from_env(env),
+                ),
+                host=bridge_host,
+                port=shell_bridge_port,
+                profiles=["test"],
+                allowed_tools=["run_command"],
+            )
+        )
+    return specs
 
 
 def resolve_workspace_roots(cli_workspaces: list[str] | None, env_workspace: str | None) -> list[Path]:
@@ -323,6 +583,62 @@ def apply_file_env_values(env: dict[str, str], *, base_dir: Path) -> None:
         if not value_path.is_absolute():
             value_path = base_dir / value_path
         env[target_key] = value_path.read_text(encoding="utf-8").strip()
+
+
+def tenant_mcp_server_from_spec(spec: CodingMCPServerSpec) -> dict[str, Any]:
+    server: dict[str, Any] = {
+        "name": spec.name,
+        "url": spec.url,
+        "headers": {},
+    }
+    if spec.allowed_tools is not None:
+        server["allowed_tools"] = list(spec.allowed_tools)
+    if spec.path_policy:
+        server["path_policy"] = spec.path_policy
+    return server
+
+
+def capability_profiles_from_specs(specs: list[CodingMCPServerSpec]) -> list[dict[str, Any]]:
+    profile_names: list[str] = []
+    for spec in specs:
+        for profile_name in spec.profiles:
+            if profile_name not in profile_names:
+                profile_names.append(profile_name)
+    if "inspect" not in profile_names:
+        profile_names.insert(0, "inspect")
+    profiles: list[dict[str, Any]] = []
+    for profile_name in profile_names:
+        server_names = [spec.name for spec in specs if profile_name in spec.profiles]
+        profiles.append(
+            {
+                "name": profile_name,
+                "allowed_local_tools": ["current_time", "calculator"],
+                "mcp_server_names": server_names,
+            }
+        )
+    return profiles
+
+
+def default_tenant_config_from_servers(
+    tenant_id: str, specs: list[CodingMCPServerSpec]
+) -> dict[str, Any]:
+    return {
+        tenant_id: {
+            "llm": {"provider": "mock"},
+            "tools": {
+                "allowed_local_tools": ["current_time", "calculator"],
+                "mcp_servers": [tenant_mcp_server_from_spec(spec) for spec in specs],
+            },
+            "skills": {
+                "default_skill": "coding-workspace",
+                "items": [coding_workspace_skill()],
+            },
+            "capability_profiles": {
+                "default_profile": "inspect",
+                "items": capability_profiles_from_specs(specs),
+            },
+        }
+    }
 
 
 def default_tenant_config(
@@ -549,6 +865,39 @@ def bridge_path_globs(
     return list(defaults)
 
 
+def build_mcp_stdio_bridge_command(spec: CodingMCPServerSpec) -> list[str]:
+    if spec.command is None:
+        raise RuntimeError(f"MCP server '{spec.name}' requires a command")
+    allowed_tool_args: list[str] = []
+    if spec.allowed_tools is not None:
+        for tool_name in spec.allowed_tools:
+            allowed_tool_args.extend(["--allowed-tool", tool_name])
+    deny_glob_args: list[str] = []
+    for pattern in spec.path_policy.get("deny_globs", spec.path_policy.get("denyGlobs", [])):
+        deny_glob_args.extend(["--deny-glob", pattern])
+    allow_glob_args: list[str] = []
+    for pattern in spec.path_policy.get("allow_globs", spec.path_policy.get("allowGlobs", [])):
+        allow_glob_args.extend(["--allow-glob", pattern])
+    return [
+        sys.executable,
+        "-c",
+        "from app.mcp_stdio_bridge import main; main()",
+        "--name",
+        spec.name,
+        "--host",
+        spec.host,
+        "--port",
+        str(spec.port),
+        "--path",
+        spec.path,
+        *allowed_tool_args,
+        *deny_glob_args,
+        *allow_glob_args,
+        "--",
+        *spec.command,
+    ]
+
+
 def build_bridge_command(
     env: dict[str, str],
     tenant_id: str,
@@ -617,10 +966,7 @@ def shell_allowed_command_prefixes_from_env(env: dict[str, str]) -> list[str]:
     return [prefix.strip() for prefix in raw.split(",") if prefix.strip()]
 
 
-def build_shell_bridge_command(
-    shell_bridge_name: str,
-    bridge_host: str,
-    shell_bridge_port: int,
+def build_shell_mcp_server_command(
     workspaces: Path | list[Path],
     *,
     allowed_command_prefixes: list[str] | None = None,
@@ -635,6 +981,26 @@ def build_shell_bridge_command(
     return [
         sys.executable,
         "-c",
+        "from app.shell_mcp_server import main; raise SystemExit(main())",
+        *workspace_args,
+        *allowed_command_args,
+    ]
+
+
+def build_shell_bridge_command(
+    shell_bridge_name: str,
+    bridge_host: str,
+    shell_bridge_port: int,
+    workspaces: Path | list[Path],
+    *,
+    allowed_command_prefixes: list[str] | None = None,
+) -> list[str]:
+    server_command = build_shell_mcp_server_command(
+        workspaces, allowed_command_prefixes=allowed_command_prefixes
+    )
+    return [
+        sys.executable,
+        "-c",
         "from app.mcp_stdio_bridge import main; main()",
         "--name",
         shell_bridge_name,
@@ -645,11 +1011,20 @@ def build_shell_bridge_command(
         "--allowed-tool",
         "run_command",
         "--",
+        *server_command,
+    ]
+
+
+def build_text_mcp_server_command(workspaces: Path | list[Path]) -> list[str]:
+    workspace_roots = [workspaces] if isinstance(workspaces, Path) else list(workspaces)
+    workspace_args: list[str] = []
+    for workspace in workspace_roots:
+        workspace_args.extend(["--workspace", str(workspace)])
+    return [
         sys.executable,
         "-c",
-        "from app.shell_mcp_server import main; raise SystemExit(main())",
+        "from app.text_mcp_server import main; raise SystemExit(main())",
         *workspace_args,
-        *allowed_command_args,
     ]
 
 
@@ -659,10 +1034,7 @@ def build_text_bridge_command(
     text_bridge_port: int,
     workspaces: Path | list[Path],
 ) -> list[str]:
-    workspace_roots = [workspaces] if isinstance(workspaces, Path) else list(workspaces)
-    workspace_args: list[str] = []
-    for workspace in workspace_roots:
-        workspace_args.extend(["--workspace", str(workspace)])
+    server_command = build_text_mcp_server_command(workspaces)
     return [
         sys.executable,
         "-c",
@@ -680,10 +1052,7 @@ def build_text_bridge_command(
         "--allowed-tool",
         "search_text_file",
         "--",
-        sys.executable,
-        "-c",
-        "from app.text_mcp_server import main; raise SystemExit(main())",
-        *workspace_args,
+        *server_command,
     ]
 
 
