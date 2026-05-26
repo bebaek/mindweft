@@ -43,6 +43,7 @@ from minigent_client.config import (
 )
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker, should_duck_for_state
+from minigent_client.errors import MinigentAPIError
 from minigent_client.output import (
     format_thread_context_summary,
     style_assistant_markdown,
@@ -4066,6 +4067,75 @@ def test_build_config_resolves_resume_last(
     config = build_config(args)
 
     assert config.thread_id == "thread-last"
+
+
+def test_run_chat_loop_resume_last_forgets_missing_thread_and_reports_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("hello again\n")
+    send_thread_ids: list[str | None] = []
+
+    key = state_scope_key(
+        "http://127.0.0.1:8000",
+        api_token=None,
+        user_id="demo-user",
+        tenant_id="demo-tenant",
+        is_admin=False,
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    state = PersistentClientState.load()
+    state.set_last_thread(key, "thread-missing")
+    state.save()
+
+    class FakeChatClient:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del output_stream
+            self.thread_id = config.thread_id
+
+        def create_thread(self, *, skill_name=None, skills=None, capability_profile=None):
+            raise AssertionError("missing resumed threads must not be silently replaced")
+
+        def set_thread_id(self, thread_id: str | None) -> None:
+            self.thread_id = thread_id
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            assert content == "hello again"
+            send_thread_ids.append(self.thread_id)
+            raise MinigentAPIError(
+                "Minigent resource not found. Thread 'thread-missing' not found",
+                category="not_found",
+                status_code=404,
+            )
+
+        def run_thread(self) -> str:
+            raise AssertionError("the thread must not run after a missing resumed thread")
+
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            thread_id="thread-missing",
+            resume_last=True,
+        ),
+        once=True,
+    )
+
+    state = PersistentClientState.load()
+    assert exit_code == 0
+    assert send_thread_ids == ["thread-missing"]
+    assert state.get_last_thread(key) is None
+    assert state.list_threads(key) == []
+    assert (
+        "[idle] request failed, staying in chat mode: Remembered thread 'thread-missing' "
+        "was not found. The saved resume target was forgotten; start a new thread explicitly "
+        "with /new.\n"
+    ) in output_stream.getvalue()
 
 
 def test_run_chat_loop_honors_once(

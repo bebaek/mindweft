@@ -26,6 +26,7 @@ from minigent_client.backends.stdin_loop import StdinActivationSource
 from minigent_client.config import AgentPreset, ClientConfig, build_client_config
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker
+from minigent_client.errors import MinigentAPIError
 from minigent_client.one_shot_cli import _format_markdown_transcript
 from minigent_client.output import estimate_thread_token_usage, format_usage_summary, style_text
 from minigent_client.ring_buffer import AudioRingBuffer
@@ -351,6 +352,7 @@ def build_config(args: argparse.Namespace) -> ClientConfig:
         openwakeword_model=args.oww_model or env_config.openwakeword_model,
         openwakeword_threshold=env_config.openwakeword_threshold,
         principal=principal,
+        resume_last=args.resume_last,
     )
     if args.resume_last:
         config = replace(config, thread_id=load_remembered_client_thread(config))
@@ -407,6 +409,14 @@ def _list_client_threads(config: ClientConfig):
     return PersistentClientState.load().list_threads(client_state_scope_key(config))
 
 
+def forget_remembered_client_thread(config: ClientConfig, thread_id: str) -> bool:
+    state = PersistentClientState.load()
+    changed = state.forget_last_thread(client_state_scope_key(config), thread_id)
+    if changed:
+        state.save()
+    return changed
+
+
 class RememberingMinigentAPIClient:
     def __init__(self, client: object, config: ClientConfig) -> None:
         self._client = client
@@ -454,7 +464,18 @@ class RememberingMinigentAPIClient:
         return response if isinstance(response, dict) else {}
 
     def send_user_message(self, content: str) -> object:
-        message = self._client.send_user_message(content)  # type: ignore[attr-defined]
+        try:
+            message = self._client.send_user_message(content)  # type: ignore[attr-defined]
+        except MinigentAPIError as exc:
+            if self._forget_missing_resumed_thread(exc):
+                thread_id = getattr(self._client, "thread_id", None)
+                raise MinigentAPIError(
+                    f"Remembered thread '{thread_id}' was not found. "
+                    "The saved resume target was forgotten; start a new thread explicitly with /new.",
+                    category="not_found",
+                    status_code=exc.status_code,
+                ) from exc
+            raise
         thread_id = getattr(self._client, "thread_id", None)
         if isinstance(thread_id, str) and thread_id:
             remember_client_thread(
@@ -463,6 +484,14 @@ class RememberingMinigentAPIClient:
                 title=_thread_title_from_message(content),
             )
         return message
+
+    def _forget_missing_resumed_thread(self, exc: MinigentAPIError) -> bool:
+        if not self._remembering_config.resume_last or exc.category != "not_found":
+            return False
+        thread_id = getattr(self._client, "thread_id", None)
+        if not isinstance(thread_id, str) or not thread_id:
+            return False
+        return forget_remembered_client_thread(self._remembering_config, thread_id)
 
 
 def _first_cli_command(argv: list[str], commands: set[str]) -> str | None:

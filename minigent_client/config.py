@@ -62,6 +62,7 @@ class ClientConfig:
     skill_name: str | None = None
     agent_presets: tuple[AgentPreset, ...] = ()
     thread_id: str | None = None
+    resume_last: bool = False
     audio_device: str | None = None
     debug_capture_path: str | None = None
     stt_debug_path: str | None = None
