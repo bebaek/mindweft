@@ -34,7 +34,7 @@ from app.runtime import (
     max_iterations_from_env,
 )
 from app.store import InMemoryThreadStore
-from app.tools import build_local_tool_registry
+from app.tools import ToolExecutionContext, ToolRegistry, build_local_tool_registry
 
 PRINCIPAL = Principal(user_id="user-1", tenant_id="tenant-1")
 OTHER_PRINCIPAL = Principal(user_id="user-2", tenant_id="tenant-2")
@@ -63,6 +63,105 @@ def test_runtime_returns_assistant_reply_for_plain_user_message() -> None:
     assert messages[-1].role == MessageRole.ASSISTANT
     assert messages[-1].content == "Mock reply: hello"
     assert store._threads[thread.thread_id].status == ThreadStatus.IDLE
+
+
+def test_runtime_executes_multiple_tool_calls_in_one_iteration() -> None:
+    class MultiToolThenReplyLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            if messages[-1].role == MessageRole.TOOL:
+                tool_results = [message.content for message in messages if message.role == MessageRole.TOOL]
+                return LLMResponse(content=" | ".join(tool_results))
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(id="call-a", name="echo", arguments={"text": "alpha"}),
+                    ToolCall(id="call-b", name="echo", arguments={"text": "beta"}),
+                ]
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=MultiToolThenReplyLLM(),
+        tool_registry=build_local_tool_registry(allowed_tools=["echo"]),
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="use two tools"),
+    )
+
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert "alpha" in reply
+    assert "beta" in reply
+    messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    assert [message.role for message in messages] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+        MessageRole.TOOL,
+        MessageRole.ASSISTANT,
+        MessageRole.TOOL,
+        MessageRole.ASSISTANT,
+    ]
+    assert [message.tool_call_id for message in messages[1:5]] == [
+        "call-a",
+        "call-a",
+        "call-b",
+        "call-b",
+    ]
+
+
+def test_runtime_runs_multiple_tool_calls_concurrently() -> None:
+    started: list[str] = []
+    release = asyncio.Event()
+
+    async def wait_tool(
+        arguments: dict[str, object], context: ToolExecutionContext | None
+    ) -> dict[str, object]:
+        _ = context
+        name = str(arguments["name"])
+        started.append(name)
+        if len(started) == 2:
+            release.set()
+        await asyncio.wait_for(release.wait(), timeout=1)
+        return {"name": name}
+
+    class MultiToolThenReplyLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            if messages[-1].role == MessageRole.TOOL:
+                return LLMResponse(content="done")
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(id="call-a", name="wait", arguments={"name": "a"}),
+                    ToolCall(id="call-b", name="wait", arguments={"name": "b"}),
+                ]
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    registry = ToolRegistry()
+    registry.register(
+        "wait",
+        "Wait until both calls have started.",
+        {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+        wait_tool,
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(store=store, llm_adapter=MultiToolThenReplyLLM(), tool_registry=registry)
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="use two tools"),
+    )
+
+    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert reply == "done"
+    assert sorted(started) == ["a", "b"]
 
 
 def test_runtime_sends_system_prompt_to_llm() -> None:

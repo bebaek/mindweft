@@ -376,6 +376,95 @@ def test_generic_oauth_adapter_round_trips_encrypted_reasoning_items(tmp_path: P
     }
 
 
+def test_generic_oauth_adapter_dedupes_repeated_reasoning_items(
+    tmp_path: Path,
+) -> None:
+    seen_payload: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payload.update(json.loads(request.read().decode()))
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "ok"}],
+                    }
+                ]
+            },
+        )
+
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://example.test/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+    metadata = {
+        "generic_oauth_responses_output_items": [
+            {"id": "rs_duplicate", "type": "reasoning", "encrypted_content": "encrypted"}
+        ]
+    }
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(thread_id="thread", role=MessageRole.USER, content="call tools"),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name="current_time",
+                    tool_call_id="call_time",
+                    metadata=metadata,
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content='{"current_time":"now"}',
+                    tool_call_id="call_time",
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name="calculator",
+                    tool_call_id="call_calc",
+                    tool_arguments={"expression": "2 + 2"},
+                    metadata=metadata,
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content='{"result":4}',
+                    tool_call_id="call_calc",
+                ),
+            ],
+            build_local_tool_registry(allowed_tools=["current_time", "calculator"]).specs(),
+        )
+    )
+
+    assert response.content == "ok"
+    reasoning_items = [item for item in seen_payload["input"] if item.get("type") == "reasoning"]
+    assert [item["id"] for item in reasoning_items] == ["rs_duplicate"]
+
+
 def test_generic_oauth_adapter_prunes_orphaned_tool_outputs_for_chatgpt_codex(
     tmp_path: Path,
 ) -> None:

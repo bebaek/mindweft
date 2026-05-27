@@ -106,6 +106,14 @@ class ToolCall(BaseModel):
 
 class LLMResponse(BaseModel):
     content: str | None = None
+    # Backward-compatible single-call view. New code should prefer tool_calls.
     tool_call: ToolCall | None = None
+    tool_calls: list[ToolCall] = Field(default_factory=list)
     usage: dict[str, int] | None = None
     metadata: dict[str, Any] | None = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.tool_call is not None and not self.tool_calls:
+            self.tool_calls = [self.tool_call]
+        elif self.tool_call is None and self.tool_calls:
+            self.tool_call = self.tool_calls[0]

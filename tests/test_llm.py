@@ -133,6 +133,55 @@ def test_openai_compatible_adapter_returns_tool_call() -> None:
     assert response.tool_call.arguments == {"text": "hello from tool"}
 
 
+def test_openai_compatible_adapter_returns_multiple_tool_calls() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "function": {
+                                        "name": "echo",
+                                        "arguments": '{"text":"one"}',
+                                    },
+                                },
+                                {
+                                    "id": "call_2",
+                                    "function": {
+                                        "name": "calculator",
+                                        "arguments": '{"expression":"1+1"}',
+                                    },
+                                },
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            build_local_tool_registry().specs(),
+        )
+    )
+
+    assert [tool_call.id for tool_call in response.tool_calls] == ["call_1", "call_2"]
+    assert [tool_call.name for tool_call in response.tool_calls] == ["echo", "calculator"]
+    assert response.tool_call == response.tool_calls[0]
+
+
 def test_load_provider_config_for_openrouter_includes_optional_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

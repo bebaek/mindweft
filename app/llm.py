@@ -295,12 +295,14 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
             "store": False,
             "stream": True,
             "instructions": _responses_instructions(request_messages),
-            "input": [
-                item
-                for message in request_messages
-                if message.role != MessageRole.SYSTEM
-                for item in _message_to_responses_payload(message, tool_name_map)
-            ],
+            "input": _dedupe_responses_input_items(
+                [
+                    item
+                    for message in request_messages
+                    if message.role != MessageRole.SYSTEM
+                    for item in _message_to_responses_payload(message, tool_name_map)
+                ]
+            ),
             "tool_choice": "auto",
             "parallel_tool_calls": True,
         }
@@ -708,6 +710,18 @@ def _message_to_responses_payload(
     return payload_items
 
 
+def _dedupe_responses_input_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen_reasoning_ids: set[str] = set()
+    for item in items:
+        item_id = item.get("id")
+        if item.get("type") == "reasoning" and isinstance(item_id, str):
+            if item_id in seen_reasoning_ids:
+                continue
+            seen_reasoning_ids.add(item_id)
+        deduped.append(item)
+    return deduped
+
 def _stored_responses_output_items(message: Message) -> list[dict[str, Any]]:
     metadata = message.metadata or {}
     raw_items = metadata.get(RESPONSES_OUTPUT_ITEMS_METADATA_KEY)
@@ -1037,6 +1051,7 @@ def _parse_responses_payload(
     reverse_tool_name_map = {value: key for key, value in tool_name_map.items()}
     metadata = _responses_metadata_from_output(output)
     text_parts: list[str] = []
+    tool_calls: list[ToolCall] = []
     for item in output:
         if not isinstance(item, dict):
             continue
@@ -1052,15 +1067,14 @@ def _parse_responses_payload(
                 arguments = {}
             if not isinstance(arguments, dict):
                 arguments = {}
-            return LLMResponse(
-                tool_call=ToolCall(
+            tool_calls.append(
+                ToolCall(
                     id=call_id,
                     name=reverse_tool_name_map.get(raw_name, raw_name),
                     arguments=arguments,
-                ),
-                usage=_normalize_llm_usage(payload.get("usage")),
-                metadata=metadata,
+                )
             )
+            continue
         if item.get("type") == "message":
             content = item.get("content") or []
             if not isinstance(content, list):
@@ -1071,6 +1085,12 @@ def _parse_responses_payload(
                 text = part.get("text") or part.get("output_text")
                 if isinstance(text, str):
                     text_parts.append(text)
+    if tool_calls:
+        return LLMResponse(
+            tool_calls=tool_calls,
+            usage=_normalize_llm_usage(payload.get("usage")),
+            metadata=metadata,
+        )
     if text_parts:
         return LLMResponse(
             content="".join(text_parts),
@@ -1165,25 +1185,34 @@ def _parse_chat_completion(payload: dict[str, Any], tool_name_map: dict[str, str
     message = choices[0].get("message") or {}
     tool_calls = message.get("tool_calls") or []
     if tool_calls:
-        function = tool_calls[0].get("function") or {}
-        arguments = function.get("arguments") or "{}"
-        if isinstance(arguments, str):
-            try:
-                parsed_arguments = json.loads(arguments)
-            except json.JSONDecodeError as exc:
+        parsed_tool_calls: list[ToolCall] = []
+        for raw_tool_call in tool_calls:
+            if not isinstance(raw_tool_call, dict):
+                continue
+            function = raw_tool_call.get("function") or {}
+            arguments = function.get("arguments") or "{}"
+            if isinstance(arguments, str):
+                try:
+                    parsed_arguments = json.loads(arguments)
+                except json.JSONDecodeError as exc:
+                    raise HTTPException(
+                        status_code=502, detail="LLM returned invalid tool arguments"
+                    ) from exc
+            else:
+                parsed_arguments = arguments
+            if not isinstance(parsed_arguments, dict):
                 raise HTTPException(
-                    status_code=502, detail="LLM returned invalid tool arguments"
-                ) from exc
-        else:
-            parsed_arguments = arguments
-        return LLMResponse(
-            tool_call=ToolCall(
-                id=tool_calls[0].get("id"),
-                name=_resolve_internal_tool_name(function.get("name", ""), tool_name_map),
-                arguments=parsed_arguments,
-            ),
-            usage=usage,
-        )
+                    status_code=502, detail="LLM returned non-object tool arguments"
+                )
+            parsed_tool_calls.append(
+                ToolCall(
+                    id=raw_tool_call.get("id"),
+                    name=_resolve_internal_tool_name(function.get("name", ""), tool_name_map),
+                    arguments=parsed_arguments,
+                )
+            )
+        if parsed_tool_calls:
+            return LLMResponse(tool_calls=parsed_tool_calls, usage=usage)
 
     content = _extract_text_content(message)
     if content is None:

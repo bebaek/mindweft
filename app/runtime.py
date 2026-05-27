@@ -166,8 +166,8 @@ class AgentRuntime:
                                 "usage": response.usage,
                             },
                         )
-                if response.tool_call is not None:
-                    await self._handle_tool_call(
+                if response.tool_calls:
+                    await self._handle_tool_calls(
                         principal,
                         thread_id,
                         response,
@@ -278,7 +278,7 @@ class AgentRuntime:
         await _emit_run_event(event_sink, {"type": "quality.applied"})
         return revised.content
 
-    async def _handle_tool_call(
+    async def _handle_tool_calls(
         self,
         principal: Principal,
         thread_id: str,
@@ -288,41 +288,32 @@ class AgentRuntime:
         tool_registry: ToolRegistry,
         event_sink: RunEventSink | None = None,
     ) -> None:
-        tool_call = response.tool_call
-        if tool_call is None:
+        tool_calls = response.tool_calls or ([response.tool_call] if response.tool_call else [])
+        if not tool_calls:
             return
-        await _emit_run_event(
-            event_sink,
-            {
-                "type": "tool.call",
-                "tool_call_id": tool_call.id,
-                "name": tool_call.name,
-                "arguments": tool_call.arguments,
-            },
-        )
-        tool_call_signature = _tool_call_signature(tool_call.name, tool_call.arguments)
-        self._store.append_message(
-            principal.tenant_id,
-            Message(
-                thread_id=thread_id,
-                role=MessageRole.ASSISTANT,
-                content="",
-                tool_name=tool_call.name,
-                tool_call_id=tool_call.id,
-                tool_arguments=tool_call.arguments,
-                metadata=response.metadata,
-            ),
-        )
-        if tool_call_signature in failed_tool_calls:
-            result = _serialize_tool_error(
-                tool_call.name,
-                HTTPException(
-                    status_code=409,
-                    detail="Repeated failed tool call blocked for identical arguments",
-                ),
-                blocked=True,
+
+        for tool_call in tool_calls:
+            await _emit_run_event(
+                event_sink,
+                {
+                    "type": "tool.call",
+                    "tool_call_id": tool_call.id,
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                },
             )
-        else:
+
+        async def execute_one(tool_call: ToolCall) -> object:
+            tool_call_signature = _tool_call_signature(tool_call.name, tool_call.arguments)
+            if tool_call_signature in failed_tool_calls:
+                return _serialize_tool_error(
+                    tool_call.name,
+                    HTTPException(
+                        status_code=409,
+                        detail="Repeated failed tool call blocked for identical arguments",
+                    ),
+                    blocked=True,
+                )
             try:
                 execute_signature = inspect.signature(tool_registry.execute)
                 if "context" in execute_signature.parameters:
@@ -338,32 +329,70 @@ class AgentRuntime:
                     result = await tool_registry.execute(tool_call.name, tool_call.arguments)
             except HTTPException as exc:
                 failed_tool_calls.add(tool_call_signature)
-                result = _serialize_tool_error(tool_call.name, exc)
-            else:
-                normalized_error = _normalize_tool_error_result(tool_call.name, result)
-                if normalized_error is not None:
-                    failed_tool_calls.add(tool_call_signature)
-                    result = normalized_error
-        serialized_result = serialize_tool_result(result)
-        self._store.append_message(
-            principal.tenant_id,
-            Message(
-                thread_id=thread_id,
-                role=MessageRole.TOOL,
-                content=serialized_result,
-                tool_name=tool_call.name,
-                tool_call_id=tool_call.id,
-            ),
-        )
-        await _emit_run_event(
-            event_sink,
-            {
-                "type": "tool.result",
-                "tool_call_id": tool_call.id,
-                "name": tool_call.name,
-                "is_error": _normalize_tool_error_result(tool_call.name, result) is not None,
-                "result": result,
-            },
+                return _serialize_tool_error(tool_call.name, exc)
+            normalized_error = _normalize_tool_error_result(tool_call.name, result)
+            if normalized_error is not None:
+                failed_tool_calls.add(tool_call_signature)
+                return normalized_error
+            return result
+
+        # Minimal POC: execute all calls from one model response concurrently. The next
+        # LLM turn still receives deterministic message ordering matching the provider's
+        # tool-call order.
+        results = await asyncio.gather(*(execute_one(tool_call) for tool_call in tool_calls))
+
+        for index, (tool_call, result) in enumerate(zip(tool_calls, results, strict=True)):
+            self._store.append_message(
+                principal.tenant_id,
+                Message(
+                    thread_id=thread_id,
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name=tool_call.name,
+                    tool_call_id=tool_call.id,
+                    tool_arguments=tool_call.arguments,
+                    metadata=response.metadata if index == 0 else None,
+                ),
+            )
+            serialized_result = serialize_tool_result(result)
+            self._store.append_message(
+                principal.tenant_id,
+                Message(
+                    thread_id=thread_id,
+                    role=MessageRole.TOOL,
+                    content=serialized_result,
+                    tool_name=tool_call.name,
+                    tool_call_id=tool_call.id,
+                ),
+            )
+            await _emit_run_event(
+                event_sink,
+                {
+                    "type": "tool.result",
+                    "tool_call_id": tool_call.id,
+                    "name": tool_call.name,
+                    "is_error": _normalize_tool_error_result(tool_call.name, result) is not None,
+                    "result": result,
+                },
+            )
+
+    async def _handle_tool_call(
+        self,
+        principal: Principal,
+        thread_id: str,
+        response: LLMResponse,
+        failed_tool_calls: set[str],
+        *,
+        tool_registry: ToolRegistry,
+        event_sink: RunEventSink | None = None,
+    ) -> None:
+        await self._handle_tool_calls(
+            principal,
+            thread_id,
+            response,
+            failed_tool_calls,
+            tool_registry=tool_registry,
+            event_sink=event_sink,
         )
 
     def _messages_for_llm(
