@@ -175,8 +175,11 @@ The file can be a JSON array or an object with a `servers` array. Each server en
 - `command`: argv for stdio servers. Use `{workspace}` for the first workspace,
   `{workspace_roots}` as an argv item that expands to all workspace roots, or
   `{workspace_roots_csv}` for a comma-separated root list.
-- `host`, `port`, and `path`: local bridge bind settings. The tenant `url` defaults to
-  `http://<host>:<port><path>` unless `url` is set explicitly.
+- `host`, `port`, and `path`: local bridge bind settings for `http` servers and for the
+  legacy compatibility mode where the runner starts one bridge process per stdio server. The
+  tenant `url` defaults to `http://<host>:<port><path>` unless `url` is set explicitly.
+  When `MINIGENT_CODING_MCP_GATEWAY_ENABLED=true`, stdio server entries do not need these
+  fields; generated tenant URLs use the shared gateway path `/<prefix>/<server-name>`.
 - `profiles`: capability profiles that should include this server, such as `inspect`, `edit`,
   or `test`.
 - `allowed_tools`, `path_policy`, and `env`: bridge/tool filters and additional process
@@ -190,7 +193,6 @@ Example:
     {
       "name": "fs-workspace",
       "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "{workspace_roots}"],
-      "port": 8765,
       "profiles": ["inspect"],
       "allowed_tools": ["list_allowed_directories", "list_directory", "read_file"],
       "path_policy": {
@@ -201,7 +203,6 @@ Example:
     {
       "name": "custom-workspace",
       "command": ["custom-mcp-server", "--workspace", "{workspace}"],
-      "port": 8770,
       "profiles": ["inspect", "test"],
       "allowed_tools": ["inspect_repo", "run_repo_check"]
     }
@@ -214,8 +215,9 @@ When the runner generates `MINIGENT_TENANT_EXECUTION_CONFIGS`, it derives
 provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, the file still controls process startup,
 but your explicit tenant config remains authoritative for tool registration and profiles.
 
-By default, each stdio server still runs behind its own local bridge/port. To collapse all
-stdio servers from this file into one local gateway process, enable:
+By default, each stdio server still runs behind its own local bridge/port for backwards
+compatibility; if `port` is omitted, the runner assigns sequential local bridge ports. For new
+multi-server setups, prefer a single local gateway process:
 
 ```dotenv
 MINIGENT_CODING_MCP_GATEWAY_ENABLED=true
@@ -232,7 +234,9 @@ http://127.0.0.1:8765/mcp/shell-workspace
 ```
 
 If you provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, update the `tools.mcp_servers`
-URLs to the gateway paths; the runner does not rewrite explicit tenant config.
+URLs to the gateway paths; the runner does not rewrite explicit tenant config. In gateway
+mode, per-server `host`, `port`, `path`, and `url` fields in the stdio server-list file are
+legacy compatibility settings and are not needed unless you also run without the gateway.
 
 You can also run the gateway directly with a gateway config file:
 

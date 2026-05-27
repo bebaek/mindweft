@@ -46,6 +46,11 @@ class CodingMCPServerSpec:
 
     Stdio servers are launched behind Minigent's stdio-to-HTTP bridge. HTTP servers are
     registered in tenant config but are assumed to be managed externally.
+
+    For stdio servers, ``host``/``port``/``path`` describe the compatibility mode where
+    the runner starts one HTTP bridge per stdio server. They are not used by the shared
+    stdio gateway; gateway tenant URLs are derived from the gateway bind address and the
+    server name.
     """
 
     def __init__(
@@ -310,8 +315,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"tenant_id={tenant_id}")
     if mcp_servers_file is not None:
         print(f"mcp_servers_file={mcp_servers_file}")
-    for spec in mcp_server_specs:
-        print(f"mcp_server={spec.name} url={spec.url} transport={spec.transport}")
+    for spec, tenant_spec in zip(mcp_server_specs, tenant_mcp_server_specs, strict=True):
+        if spec.url == tenant_spec.url:
+            print(f"mcp_server={spec.name} url={spec.url} transport={spec.transport}")
+        else:
+            print(
+                f"mcp_server={spec.name} url={tenant_spec.url} "
+                f"transport={spec.transport} bridge_url={spec.url}"
+            )
     if gateway_enabled:
         print(f"mcp_gateway={gateway_url_prefix}")
     print(f"api=http://{api_host}:{api_port}")
@@ -527,7 +538,9 @@ def coding_mcp_server_spec_from_mapping(
     host = raw_server.get("host", default_host)
     if not isinstance(host, str) or not host:
         raise RuntimeError(f"coding MCP server '{name}' has invalid host")
-    port = raw_server.get("port", default_port)
+    port = raw_server.get("port")
+    if port is None:
+        port = default_port
     if not isinstance(port, int):
         raise RuntimeError(f"coding MCP server '{name}' has invalid port")
     path = raw_server.get("path", "/mcp")

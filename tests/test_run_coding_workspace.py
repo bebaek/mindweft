@@ -392,6 +392,37 @@ def test_load_coding_mcp_server_specs_expands_workspace_placeholders(tmp_path: P
     assert specs[0].path_policy == {"deny_globs": ["**/.env*"]}
 
 
+def test_load_coding_mcp_server_specs_defaults_stdio_port_when_omitted(tmp_path: Path) -> None:
+    specs_path = tmp_path / "mcp-servers.json"
+    specs_path.write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "web-fetch",
+                        "command": ["uvx", "mcp-server-fetch"],
+                        "profiles": ["inspect"],
+                        "allowed_tools": ["fetch"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    specs = runner.load_coding_mcp_server_specs(
+        specs_path,
+        bridge_host="127.0.0.1",
+        workspace_roots=[tmp_path],
+    )
+
+    assert len(specs) == 1
+    assert specs[0].name == "web-fetch"
+    assert specs[0].port == runner.DEFAULT_BRIDGE_PORT
+    assert specs[0].url == "http://127.0.0.1:8765/mcp"
+    assert specs[0].command == ["uvx", "mcp-server-fetch"]
+
+
 def test_default_tenant_config_from_servers_builds_profiles() -> None:
     specs = [
         runner.CodingMCPServerSpec(
