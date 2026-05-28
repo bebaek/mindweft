@@ -102,6 +102,7 @@ class ToolCall(BaseModel):
     id: str | None = None
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] | None = None
 
 
 class LLMResponse(BaseModel):

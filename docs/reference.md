@@ -175,6 +175,24 @@ For OpenRouter,
 Minigent requests usage metadata with `usage: {"include": true}` so compatible models
 can report usage and cache counters.
 
+## Google Gemini LLM Provider
+
+Minigent can call Gemini through Google's native `generateContent` API instead of the
+OpenAI-compatible endpoint:
+
+```dotenv
+MINIGENT_LLM_PROVIDER=google
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-3.5-flash
+# Optional override; defaults to the Gemini API v1beta base.
+GOOGLE_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+```
+
+For tenant execution config, use `llm.provider: "google"` and put the Gemini API key in
+`llm.api_key`. Minigent calls `POST /models/{model}:generateContent` and supports text
+responses plus native Gemini function calls for Minigent tools. Tool input schemas are sent
+as `parametersJsonSchema` so Gemini can accept full JSON Schema from MCP tools.
+
 ## Generic OAuth LLM Provider
 
 Minigent can use a user-configured OAuth authorization-code + PKCE flow for LLM endpoints
@@ -1382,13 +1400,20 @@ MINIGENT_TENANT_EXECUTION_CONFIGS={
       "api_key":"tenant-2-key"
     },
     "tools":{"allowed_local_tools":["calculator"]}
+  },
+  "tenant-3":{
+    "llm":{
+      "provider":"google",
+      "model":"gemini-3.5-flash",
+      "api_key":"tenant-3-gemini-key"
+    }
   }
 }
 ```
 
 Supported fields:
 
-- `llm.provider`: `mock`, `openai`, `openrouter`, or `openai-compatible`
+- `llm.provider`: `mock`, `openai`, `openrouter`, `openai-compatible`, `generic-oauth`, or `google`
 - `llm.model`, `llm.base_url`, `llm.api_key`, `llm.extra_headers`, `llm.timeout`
 - `tools.allowed_local_tools`: local tool allowlist
 - `tools.mcp_servers`: per-tenant MCP server definitions

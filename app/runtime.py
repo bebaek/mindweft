@@ -342,6 +342,10 @@ class AgentRuntime:
         results = await asyncio.gather(*(execute_one(tool_call) for tool_call in tool_calls))
 
         for index, (tool_call, result) in enumerate(zip(tool_calls, results, strict=True)):
+            assistant_metadata = _combine_message_metadata(
+                response.metadata if index == 0 else None,
+                tool_call.metadata,
+            )
             self._store.append_message(
                 principal.tenant_id,
                 Message(
@@ -351,7 +355,7 @@ class AgentRuntime:
                     tool_name=tool_call.name,
                     tool_call_id=tool_call.id,
                     tool_arguments=tool_call.arguments,
-                    metadata=response.metadata if index == 0 else None,
+                    metadata=assistant_metadata,
                 ),
             )
             serialized_result = serialize_tool_result(result)
@@ -513,6 +517,14 @@ async def _emit_run_event(
 ) -> None:
     if event_sink is not None:
         await event_sink(event)
+
+
+def _combine_message_metadata(*items: dict[str, Any] | None) -> dict[str, Any] | None:
+    combined: dict[str, Any] = {}
+    for item in items:
+        if item:
+            combined.update(item)
+    return combined or None
 
 
 def _serialize_tool_error(

@@ -189,7 +189,7 @@ class StreamProgressRenderer:
             self._saw_peer_event = True
             self._write_peer_task_event(event)
         elif event_type == "run.error":
-            self._write(f"✖ error {event.get('status_code')}: {event.get('detail')}")
+            self._write(f"✖ error {event.get('status_code')}: {_format_error_detail(event.get('detail'))}")
         elif event_type == "run.completed":
             summaries = []
             if self._token_mode != "off":
@@ -312,6 +312,17 @@ def _event_name(event: dict[str, Any]) -> str:
     if isinstance(value, str) and value:
         return value
     return "tool"
+
+
+def _format_error_detail(detail: object) -> str:
+    if isinstance(detail, dict):
+        message = detail.get("message")
+        if isinstance(message, str) and message:
+            return message
+        error_type = detail.get("type")
+        if isinstance(error_type, str) and error_type:
+            return error_type
+    return str(detail)
 
 
 def _format_tool_arguments(arguments: object) -> str:

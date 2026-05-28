@@ -2240,6 +2240,49 @@ def test_minigent_client_stream_run_errors_raise_runtime_error(
         client.run_thread()
 
 
+def test_minigent_client_stream_run_structured_provider_errors_are_concise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeStreamResponse:
+        def __iter__(self):
+            event = {
+                "type": "run.error",
+                "status_code": 429,
+                "detail": {
+                    "type": "provider_rate_limited",
+                    "message": "Gemini quota exceeded. Retry in about 51s.",
+                    "provider": "gemini",
+                    "retry_after_seconds": 51,
+                },
+            }
+            return iter([(json.dumps(event) + "\n").encode("utf-8")])
+
+        def __enter__(self) -> "FakeStreamResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request: FakeStreamResponse())
+    progress_stream = StringIO()
+    client = MinigentAPIClient(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            thread_id="thread-123",
+            stream_runs=True,
+        ),
+        progress_stream=progress_stream,
+    )
+
+    with pytest.raises(MinigentAPIError) as exc_info:
+        client.run_thread()
+
+    assert exc_info.value.message == "Gemini quota exceeded. Retry in about 51s."
+    assert exc_info.value.category == "provider_rate_limited"
+    assert "✖ error 429: Gemini quota exceeded. Retry in about 51s." in progress_stream.getvalue()
+
+
 def test_build_config_prefers_cli_stream_run_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIGENT_CLIENT_STREAM_RUNS", "false")
 

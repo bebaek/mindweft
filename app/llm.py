@@ -22,8 +22,11 @@ LLM_DEBUG_LOG_RESPONSE_MAX_CHARS_ENV = "MINIGENT_LLM_DEBUG_LOG_RESPONSE_MAX_CHAR
 LLM_DEBUG_RESPONSE_LOG_PATH_ENV = "MINIGENT_LLM_DEBUG_RESPONSE_LOG_PATH"
 LLM_DEBUG_REQUEST_LOG_PATH_ENV = "MINIGENT_LLM_DEBUG_REQUEST_LOG_PATH"
 LLM_PROMPT_CACHE_KEY_ENV = "MINIGENT_LLM_PROMPT_CACHE_KEY"
+LLM_MAX_TOOL_RESULT_CHARS_ENV = "MINIGENT_LLM_MAX_TOOL_RESULT_CHARS"
 RESPONSES_OUTPUT_ITEMS_METADATA_KEY = "generic_oauth_responses_output_items"
+GEMINI_THOUGHT_SIGNATURE_METADATA_KEY = "gemini_thought_signature"
 DEFAULT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS = 20000
+DEFAULT_LLM_MAX_TOOL_RESULT_CHARS = 200000
 
 
 class LLMAdapter(ABC):
@@ -131,6 +134,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
+                provider = str(self.describe()["provider"])
                 # OpenRouter may proxy to Azure and surface the same validation error;
                 # retry once with the Azure-specific historical tool pruning.
                 retry_messages = _prune_historical_tool_messages_for_azure(messages)
@@ -143,7 +147,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
                     logger.warning(
                         "Retrying chat completion with Azure tool-history pruning after provider error "
                         "provider=%s base_url=%s",
-                        self.describe()["provider"],
+                        provider,
                         self._base_url,
                     )
                     retry_response = await self._post_chat_completion(
@@ -156,30 +160,36 @@ class OpenAICompatibleAdapter(LLMAdapter):
                     try:
                         retry_response.raise_for_status()
                     except httpx.HTTPStatusError as retry_exc:
-                        detail = retry_exc.response.text or str(retry_exc)
                         logger.warning(
                             "Retried chat completion with Azure tool-history pruning failed provider=%s "
                             "base_url=%s",
-                            self.describe()["provider"],
+                            provider,
                             self._base_url,
                         )
-                        raise HTTPException(
-                            status_code=502, detail=f"LLM provider error: {detail}"
+                        raise _provider_http_exception(
+                            retry_exc,
+                            provider=provider,
+                            model=self._model,
                         ) from retry_exc
                     logger.info(
                         "Retried chat completion with Azure tool-history pruning succeeded provider=%s "
                         "base_url=%s",
-                        self.describe()["provider"],
+                        provider,
                         self._base_url,
                     )
                     response = retry_response
                 else:
-                    detail = exc.response.text or str(exc)
-                    raise HTTPException(
-                        status_code=502, detail=f"LLM provider error: {detail}"
+                    raise _provider_http_exception(
+                        exc,
+                        provider=provider,
+                        model=self._model,
                     ) from exc
             except httpx.HTTPError as exc:
-                raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}") from exc
+                raise _provider_request_exception(
+                    exc,
+                    provider=str(self.describe()["provider"]),
+                    model=self._model,
+                ) from exc
         _debug_log_raw_llm_response(
             "openai-compatible",
             response.text,
@@ -234,6 +244,283 @@ class OpenAICompatibleAdapter(LLMAdapter):
             json=payload,
             headers=headers,
         )
+
+
+class GoogleGeminiAdapter(LLMAdapter):
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        base_url: str = "https://generativelanguage.googleapis.com/v1beta",
+        extra_headers: dict[str, str] | None = None,
+        timeout: float = 30.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._model = model
+        self._base_url = base_url.rstrip("/")
+        self._extra_headers = extra_headers or {}
+        self._timeout = timeout
+        self._transport = transport
+
+    async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+        tools = _stable_tool_order(tools)
+        tool_name_map = _build_provider_tool_name_map(tools)
+        payload = _messages_to_gemini_payload(
+            messages,
+            tools,
+            tool_name_map,
+            require_thought_signatures=_gemini_requires_thought_signatures(self._model),
+        )
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self._api_key,
+            **self._extra_headers,
+        }
+        model_path = self._model if self._model.startswith("models/") else f"models/{self._model}"
+        _debug_log_llm_request(
+            "google-gemini",
+            payload,
+            model=self._model,
+            message_count=len(messages),
+            tool_count=len(tools),
+        )
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+            try:
+                response = await client.post(
+                    f"{self._base_url}/{model_path}:generateContent",
+                    json=payload,
+                    headers=headers,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise _provider_http_exception(exc, provider="gemini", model=self._model) from exc
+            except httpx.HTTPError as exc:
+                raise _provider_request_exception(exc, provider="gemini", model=self._model) from exc
+        _debug_log_raw_llm_response(
+            "google-gemini",
+            response.text,
+            content_type=response.headers.get("content-type"),
+        )
+        return _parse_gemini_response(response.json(), tool_name_map)
+
+    def describe(self) -> dict[str, Any]:
+        return {
+            "provider": "google",
+            "model": self._model,
+            "base_url": self._base_url,
+            "headers": sorted(self._extra_headers.keys()),
+            "adapter": "GoogleGeminiAdapter",
+        }
+
+
+def _provider_http_exception(
+    exc: httpx.HTTPStatusError,
+    *,
+    provider: str,
+    model: str,
+) -> HTTPException:
+    response = exc.response
+    raw_body = response.text or str(exc)
+    provider_error = _parse_provider_error_body(raw_body)
+    error_obj = provider_error.get("error") if isinstance(provider_error.get("error"), dict) else {}
+    upstream_code = _provider_error_field(error_obj, "code")
+    upstream_type = _provider_error_field(error_obj, "type")
+    upstream_status = _provider_error_field(error_obj, "status")
+    retry_after_seconds = _extract_retry_after_seconds(response, error_obj)
+    quota_violation = _extract_gemini_quota_violation(error_obj) if provider == "gemini" else {}
+    error_type, status_code = _classify_provider_http_error(response.status_code, upstream_status)
+
+    log_fields: dict[str, object] = {
+        "event": error_type,
+        "provider": provider,
+        "model": model,
+        "upstream_status": response.status_code,
+    }
+    if upstream_code is not None:
+        log_fields["upstream_code"] = upstream_code
+    if upstream_type:
+        log_fields["upstream_error_type"] = upstream_type
+    if upstream_status:
+        log_fields["upstream_error_status"] = upstream_status
+    if retry_after_seconds is not None:
+        log_fields["retry_after_seconds"] = retry_after_seconds
+    if quota_violation:
+        log_fields.update(quota_violation)
+    logger.warning("LLM provider request failed: %s", _format_log_fields(log_fields))
+    if _env_bool(LLM_DEBUG_LOG_RESPONSES_ENV):
+        logger.debug("LLM provider raw error response provider=%s body=%s", provider, raw_body)
+
+    message = _provider_error_message(
+        provider,
+        error_type,
+        retry_after_seconds=retry_after_seconds,
+    )
+    detail: dict[str, object] = {
+        "type": error_type,
+        "message": message,
+        "provider": provider,
+    }
+    headers: dict[str, str] = {}
+    if retry_after_seconds is not None:
+        detail["retry_after_seconds"] = retry_after_seconds
+        headers["Retry-After"] = str(retry_after_seconds)
+    return HTTPException(status_code=status_code, detail=detail, headers=headers or None)
+
+
+def _provider_request_exception(
+    exc: httpx.HTTPError,
+    *,
+    provider: str,
+    model: str,
+) -> HTTPException:
+    log_fields: dict[str, object] = {
+        "event": "provider_request_failed",
+        "provider": provider,
+        "model": model,
+        "exception_type": exc.__class__.__name__,
+    }
+    logger.warning("LLM provider request failed: %s", _format_log_fields(log_fields))
+    if _env_bool(LLM_DEBUG_LOG_RESPONSES_ENV):
+        logger.debug("LLM provider raw request error provider=%s error=%s", provider, exc)
+    return HTTPException(
+        status_code=502,
+        detail={
+            "type": "provider_request_failed",
+            "message": f"{_provider_display_name(provider)} request failed.",
+            "provider": provider,
+        },
+    )
+
+
+def _classify_provider_http_error(
+    upstream_status_code: int,
+    upstream_status: object,
+) -> tuple[str, int]:
+    if upstream_status_code == 429 or upstream_status == "RESOURCE_EXHAUSTED":
+        return "provider_rate_limited", 429
+    if upstream_status_code in {401, 403}:
+        return "provider_auth_failed", 502
+    if upstream_status_code in {408, 504}:
+        return "provider_timeout", 504
+    if upstream_status_code >= 500:
+        return "provider_unavailable", 503
+    if upstream_status_code == 400:
+        return "provider_bad_request", 502
+    return "provider_error", 502
+
+
+def _provider_error_message(
+    provider: str,
+    error_type: str,
+    *,
+    retry_after_seconds: int | None = None,
+) -> str:
+    display_name = _provider_display_name(provider)
+    if error_type == "provider_rate_limited":
+        if provider == "gemini":
+            if retry_after_seconds is not None:
+                return f"Gemini quota exceeded. Retry in about {retry_after_seconds}s."
+            return "Gemini quota exceeded."
+        if retry_after_seconds is not None:
+            return f"{display_name} rate limit exceeded. Retry in about {retry_after_seconds}s."
+        return f"{display_name} rate limit exceeded."
+    if error_type == "provider_auth_failed":
+        return f"{display_name} authentication failed. Check provider credentials."
+    if error_type == "provider_timeout":
+        return f"{display_name} request timed out."
+    if error_type == "provider_unavailable":
+        return f"{display_name} is temporarily unavailable."
+    if error_type == "provider_bad_request":
+        return f"{display_name} rejected the request."
+    return f"{display_name} provider request failed."
+
+
+def _provider_display_name(provider: str) -> str:
+    return {
+        "azure-openai": "Azure OpenAI",
+        "gemini": "Gemini",
+        "generic-oauth": "Generic OAuth LLM",
+        "openai": "OpenAI",
+        "openai-compatible": "OpenAI-compatible provider",
+        "openrouter": "OpenRouter",
+    }.get(provider, provider)
+
+
+def _provider_error_field(error_obj: object, field: str) -> object:
+    if not isinstance(error_obj, dict):
+        return None
+    value = error_obj.get(field)
+    if isinstance(value, str | int):
+        return value
+    return None
+
+
+def _parse_provider_error_body(raw_body: str) -> dict[str, object]:
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _extract_retry_after_seconds(
+    response: httpx.Response, error_obj: object
+) -> int | None:
+    retry_after_header = response.headers.get("retry-after")
+    if retry_after_header:
+        try:
+            return max(0, int(float(retry_after_header)))
+        except ValueError:
+            pass
+    if not isinstance(error_obj, dict):
+        return None
+    details = error_obj.get("details")
+    if not isinstance(details, list):
+        return None
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+        retry_delay = item.get("retryDelay")
+        if isinstance(retry_delay, str):
+            match = re.match(r"^(\d+(?:\.\d+)?)s$", retry_delay.strip())
+            if match:
+                return max(0, round(float(match.group(1))))
+    return None
+
+
+def _extract_gemini_quota_violation(error_obj: object) -> dict[str, object]:
+    if not isinstance(error_obj, dict):
+        return {}
+    details = error_obj.get("details")
+    if not isinstance(details, list):
+        return {}
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+        violations = item.get("violations")
+        if not isinstance(violations, list) or not violations:
+            continue
+        violation = violations[0]
+        if not isinstance(violation, dict):
+            continue
+        result: dict[str, object] = {}
+        quota_metric = violation.get("quotaMetric")
+        quota_id = violation.get("quotaId")
+        quota_value = violation.get("quotaValue")
+        if isinstance(quota_metric, str):
+            result["quota_metric"] = quota_metric
+        if isinstance(quota_id, str):
+            result["quota_id"] = quota_id
+        if isinstance(quota_value, str):
+            result["quota_value"] = quota_value
+        return result
+    return {}
+
+
+def _format_log_fields(fields: dict[str, object]) -> str:
+    return " ".join(f"{key}={value!r}" for key, value in fields.items())
 
 
 class GenericOAuthResponsesAdapter(LLMAdapter):
@@ -332,6 +619,8 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
                     self._url,
                     payload,
                     headers,
+                    provider=GENERIC_OAUTH_PROVIDER,
+                    model=self._model,
                 )
                 _debug_log_raw_llm_response(
                     GENERIC_OAUTH_PROVIDER,
@@ -380,6 +669,9 @@ async def _post_responses_request(
     url: str,
     payload: dict[str, Any],
     headers: dict[str, str],
+    *,
+    provider: str,
+    model: str,
 ) -> tuple[str, str]:
     body_chunks: list[str] = []
     content_type = ""
@@ -394,27 +686,34 @@ async def _post_responses_request(
             content_type = response.headers.get("content-type", "")
             if response.is_error:
                 detail = await response.aread()
-                text = detail.decode(errors="replace") if detail else response.reason_phrase
-                raise HTTPException(status_code=502, detail=f"Generic OAuth LLM error: {text}")
+                request = response.request
+                response = httpx.Response(
+                    response.status_code,
+                    headers=response.headers,
+                    content=detail,
+                    request=request,
+                    extensions=response.extensions,
+                )
+                raise _provider_http_exception(
+                    httpx.HTTPStatusError(
+                        f"Provider returned HTTP {response.status_code}",
+                        request=request,
+                        response=response,
+                    ),
+                    provider=provider,
+                    model=model,
+                )
             try:
                 async for chunk in response.aiter_text():
                     body_chunks.append(chunk)
             except httpx.HTTPError as exc:
                 read_error = exc
     except httpx.HTTPError as exc:
-        detail = str(exc) or exc.__class__.__name__
-        raise HTTPException(
-            status_code=502,
-            detail=f"Generic OAuth LLM request failed: {detail}",
-        ) from exc
+        raise _provider_request_exception(exc, provider=provider, model=model) from exc
 
     body = "".join(body_chunks)
     if read_error is not None and not body:
-        detail = str(read_error) or read_error.__class__.__name__
-        raise HTTPException(
-            status_code=502,
-            detail=f"Generic OAuth LLM request failed: {detail}",
-        ) from read_error
+        raise _provider_request_exception(read_error, provider=provider, model=model) from read_error
     return body, content_type
 
 
@@ -438,6 +737,30 @@ def build_llm_adapter_from_env() -> LLMAdapter:
         extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS")
         logger.info("LLM config: provider=%s model=%s url=%s", provider, model, url)
         return GenericOAuthResponsesAdapter(model=model, url=url, extra_headers=extra_headers)
+    if provider in {"google", "google-generative-ai", "gemini"}:
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "GEMINI_API_KEY or GOOGLE_API_KEY is required when MINIGENT_LLM_PROVIDER=google"
+            )
+        model = (
+            os.getenv("GEMINI_MODEL")
+            or os.getenv("GOOGLE_MODEL")
+            or os.getenv("MINIGENT_LLM_MODEL")
+            or "gemini-3.5-flash"
+        )
+        base_url = os.getenv(
+            "GOOGLE_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1beta",
+        )
+        extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS")
+        logger.info("LLM config: provider=%s model=%s base_url=%s", provider, model, base_url)
+        return GoogleGeminiAdapter(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            extra_headers=extra_headers,
+        )
 
     config = load_provider_config(provider)
     logger.info(
@@ -497,7 +820,31 @@ def load_provider_config(provider: str) -> ProviderConfig:
 
 
 def serialize_tool_result(result: object) -> str:
-    return json.dumps(result, ensure_ascii=True, default=str)
+    serialized = json.dumps(result, ensure_ascii=True, default=str)
+    return _truncate_tool_result_text(serialized)
+
+
+def _max_tool_result_chars() -> int:
+    return max(1024, _env_int(LLM_MAX_TOOL_RESULT_CHARS_ENV, DEFAULT_LLM_MAX_TOOL_RESULT_CHARS))
+
+
+def _truncate_tool_result_text(text: str) -> str:
+    max_chars = _max_tool_result_chars()
+    if len(text) <= max_chars:
+        return text
+    marker = f"\n...[truncated tool result; original_chars={len(text)}]"
+    return text[: max(0, max_chars - len(marker))] + marker
+
+
+def _truncated_tool_result_payload(content: str) -> dict[str, Any] | None:
+    max_chars = _max_tool_result_chars()
+    if len(content) <= max_chars:
+        return None
+    return {
+        "content": _truncate_tool_result_text(content),
+        "truncated": True,
+        "original_chars": len(content),
+    }
 
 
 def _debug_log_llm_request(
@@ -647,6 +994,217 @@ def _tool_to_payload(tool: ToolSpec, tool_name_map: dict[str, str]) -> dict[str,
             "parameters": _canonical_jsonish(tool.input_schema),
         },
     }
+
+
+def _messages_to_gemini_payload(
+    messages: list[Message],
+    tools: list[ToolSpec],
+    tool_name_map: dict[str, str],
+    *,
+    require_thought_signatures: bool = False,
+) -> dict[str, Any]:
+    system_parts: list[dict[str, str]] = []
+    contents: list[dict[str, Any]] = []
+    text_replayed_tool_call_ids: set[str] = set()
+    for message in messages:
+        if message.role == MessageRole.SYSTEM:
+            if message.content:
+                system_parts.append({"text": message.content})
+            continue
+        if message.role == MessageRole.USER:
+            contents.append({"role": "user", "parts": [{"text": message.content}]})
+            continue
+        if message.role == MessageRole.ASSISTANT:
+            if message.tool_name and message.tool_arguments is not None:
+                function_call_part: dict[str, Any] = {
+                    "functionCall": {
+                        "name": tool_name_map.get(
+                            message.tool_name,
+                            _sanitize_tool_name(message.tool_name),
+                        ),
+                        "args": _canonical_jsonish(message.tool_arguments),
+                    }
+                }
+                thought_signature = _gemini_thought_signature_from_metadata(message.metadata)
+                if thought_signature is not None:
+                    function_call_part["thoughtSignature"] = thought_signature
+                elif require_thought_signatures:
+                    if message.tool_call_id:
+                        text_replayed_tool_call_ids.add(message.tool_call_id)
+                    contents.append(
+                        {
+                            "role": "model",
+                            "parts": [
+                                {
+                                    "text": _render_gemini_text_tool_call(
+                                        message.tool_name,
+                                        message.tool_arguments or {},
+                                    )
+                                }
+                            ],
+                        }
+                    )
+                    continue
+                contents.append(
+                    {
+                        "role": "model",
+                        "parts": [function_call_part],
+                    }
+                )
+            elif message.content:
+                contents.append({"role": "model", "parts": [{"text": message.content}]})
+            continue
+        if message.role == MessageRole.TOOL:
+            if message.tool_call_id and message.tool_call_id in text_replayed_tool_call_ids:
+                contents.append(
+                    {
+                        "role": "user",
+                        "parts": [{"text": _render_gemini_text_tool_result(message)}],
+                    }
+                )
+                continue
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "functionResponse": {
+                                "name": tool_name_map.get(
+                                    message.tool_name or "tool",
+                                    _sanitize_tool_name(message.tool_name or "tool"),
+                                ),
+                                "response": _gemini_tool_response(message.content),
+                            }
+                        }
+                    ],
+                }
+            )
+    payload: dict[str, Any] = {"contents": contents}
+    if system_parts:
+        payload["systemInstruction"] = {"parts": system_parts}
+    if tools:
+        payload["tools"] = [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": tool_name_map[tool.name],
+                        "description": tool.description,
+                        "parametersJsonSchema": _canonical_jsonish(tool.input_schema),
+                    }
+                    for tool in tools
+                ]
+            }
+        ]
+    return payload
+
+
+def _gemini_tool_response(content: str) -> dict[str, Any]:
+    truncated = _truncated_tool_result_payload(content)
+    if truncated is not None:
+        return truncated
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return {"content": content}
+    if isinstance(parsed, dict):
+        return _canonical_jsonish(parsed)
+    return {"result": parsed}
+
+
+def _gemini_requires_thought_signatures(model: str) -> bool:
+    normalized = model.removeprefix("models/").lower()
+    return bool(re.match(r"gemini-3(?:\.|-)", normalized))
+
+
+def _render_gemini_text_tool_call(tool_name: str, arguments: dict[str, Any]) -> str:
+    return "[tool_call]\n" + "\n".join(
+        [
+            f"name: {tool_name}",
+            "arguments: " + json.dumps(arguments, ensure_ascii=True, sort_keys=True, default=str),
+        ]
+    )
+
+
+def _render_gemini_text_tool_result(message: Message) -> str:
+    lines = ["[tool_result]", f"name: {message.tool_name or 'unknown'}"]
+    if message.tool_call_id:
+        lines.append(f"id: {message.tool_call_id}")
+    lines.append(_truncate_tool_result_text(message.content))
+    return "\n".join(lines)
+
+
+def _gemini_thought_signature_from_metadata(metadata: dict[str, Any] | None) -> str | None:
+    if not isinstance(metadata, dict):
+        return None
+    signature = metadata.get(GEMINI_THOUGHT_SIGNATURE_METADATA_KEY)
+    return signature if isinstance(signature, str) and signature else None
+
+
+def _gemini_tool_call_metadata(part: dict[str, Any]) -> dict[str, Any] | None:
+    signature = part.get("thoughtSignature")
+    if not isinstance(signature, str) or not signature:
+        return None
+    return {GEMINI_THOUGHT_SIGNATURE_METADATA_KEY: signature}
+
+
+def _parse_gemini_response(payload: dict[str, Any], tool_name_map: dict[str, str]) -> LLMResponse:
+    usage = _normalize_gemini_usage(payload.get("usageMetadata"))
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        logger.error("Gemini response missing candidates: %s", _truncate_json(payload))
+        raise HTTPException(status_code=502, detail="Gemini provider returned no candidates")
+    content = candidates[0].get("content") or {}
+    parts = content.get("parts") or []
+    reverse_tool_name_map = {value: key for key, value in tool_name_map.items()}
+    text_parts: list[str] = []
+    tool_calls: list[ToolCall] = []
+    for index, part in enumerate(parts):
+        if not isinstance(part, dict):
+            continue
+        text = part.get("text")
+        if isinstance(text, str):
+            text_parts.append(text)
+        function_call = part.get("functionCall")
+        if isinstance(function_call, dict):
+            raw_name = function_call.get("name")
+            raw_args = function_call.get("args") or {}
+            if isinstance(raw_name, str) and isinstance(raw_args, dict):
+                tool_calls.append(
+                    ToolCall(
+                        id=function_call.get("id") or f"gemini-tool-call-{index}",
+                        name=reverse_tool_name_map.get(raw_name, raw_name),
+                        arguments=raw_args,
+                        metadata=_gemini_tool_call_metadata(part),
+                    )
+                )
+    if tool_calls:
+        return LLMResponse(tool_calls=tool_calls, usage=usage)
+    if text_parts:
+        return LLMResponse(content="".join(text_parts), usage=usage)
+    logger.error("Gemini response missing text/tool content: %s", _truncate_json(payload))
+    raise HTTPException(status_code=502, detail="Gemini provider returned no message content")
+
+
+def _normalize_gemini_usage(raw_usage: Any) -> dict[str, int] | None:
+    if not isinstance(raw_usage, dict):
+        return None
+    usage: dict[str, int] = {}
+    prompt_tokens = _usage_int(raw_usage, "promptTokenCount")
+    completion_tokens = _usage_int(raw_usage, "candidatesTokenCount")
+    thoughts_tokens = _usage_int(raw_usage, "thoughtsTokenCount")
+    total_tokens = _usage_int(raw_usage, "totalTokenCount")
+    if prompt_tokens is not None:
+        usage["prompt_tokens"] = prompt_tokens
+        usage["input_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        output_tokens = completion_tokens + (thoughts_tokens or 0)
+        usage["completion_tokens"] = output_tokens
+        usage["output_tokens"] = output_tokens
+    if total_tokens is not None:
+        usage["total_tokens"] = total_tokens
+    elif prompt_tokens is not None and completion_tokens is not None:
+        usage["total_tokens"] = prompt_tokens + completion_tokens + (thoughts_tokens or 0)
+    return usage or None
 
 
 def _is_chatgpt_codex_responses_url(url: str) -> bool:

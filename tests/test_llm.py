@@ -7,14 +7,27 @@ import pytest
 from fastapi import HTTPException
 
 from app.llm import (
+    GenericOAuthResponsesAdapter,
+    GoogleGeminiAdapter,
     MockLLMAdapter,
     OpenAICompatibleAdapter,
     _prune_historical_tool_messages_for_azure,
     build_llm_adapter_from_env,
     load_provider_config,
+    serialize_tool_result,
 )
 from app.models import Message, MessageRole, ToolSpec
+from app.oauth import OAuthCredentials
 from app.tools import build_local_tool_registry
+
+
+class FakeOAuthProvider:
+    async def get_credentials(self) -> OAuthCredentials:
+        return OAuthCredentials(
+            access_token="access-token",
+            refresh_token="refresh-token",
+            expires_at=9999999999.0,
+        )
 
 
 def test_openai_compatible_adapter_returns_text_response() -> None:
@@ -43,6 +56,454 @@ def test_openai_compatible_adapter_returns_text_response() -> None:
 
     assert response.content == "hello from provider"
     assert response.tool_call is None
+
+
+def test_openai_adapter_normalizes_provider_rate_limit_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            headers={"retry-after": "12"},
+            json={
+                "error": {
+                    "message": "raw rate limit details",
+                    "type": "rate_limit_error",
+                    "code": "rate_limit_exceeded",
+                }
+            },
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with caplog.at_level("WARNING", logger="app.llm"):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                adapter.generate(
+                    [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+                    [],
+                )
+            )
+
+    exc = exc_info.value
+    assert exc.status_code == 429
+    assert exc.headers == {"Retry-After": "12"}
+    assert exc.detail == {
+        "type": "provider_rate_limited",
+        "message": "OpenAI rate limit exceeded. Retry in about 12s.",
+        "provider": "openai",
+        "retry_after_seconds": 12,
+    }
+    assert "upstream_error_type='rate_limit_error'" in caplog.text
+    assert "upstream_code='rate_limit_exceeded'" in caplog.text
+    assert "raw rate limit details" not in caplog.text
+
+
+def test_openrouter_adapter_normalizes_provider_unavailable_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={"error": {"message": "raw upstream outage", "code": "provider_unavailable"}},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://openrouter.ai/api/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            adapter.generate(
+                [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+                [],
+            )
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == {
+        "type": "provider_unavailable",
+        "message": "OpenRouter is temporarily unavailable.",
+        "provider": "openrouter",
+    }
+
+
+def test_generic_oauth_adapter_normalizes_provider_bad_request_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MINIGENT_LLM_ACCOUNT_ID_HEADER", raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer access-token"
+        return httpx.Response(
+            400,
+            json={"error": {"message": "raw invalid payload", "type": "invalid_request_error"}},
+        )
+
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://example.com/responses",
+        model="test-model",
+        oauth_provider=FakeOAuthProvider(),  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            adapter.generate(
+                [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+                [],
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == {
+        "type": "provider_bad_request",
+        "message": "Generic OAuth LLM rejected the request.",
+        "provider": "generic-oauth",
+    }
+
+
+def test_google_gemini_adapter_returns_text_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://example.com/v1beta/models/gemini-test:generateContent"
+        assert request.headers["x-goog-api-key"] == "test-key"
+        payload = json.loads(request.read().decode())
+        assert payload["contents"] == [{"role": "user", "parts": [{"text": "hello"}]}]
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "hello from gemini"}]}}],
+                "usageMetadata": {
+                    "promptTokenCount": 3,
+                    "candidatesTokenCount": 4,
+                    "totalTokenCount": 7,
+                },
+            },
+        )
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="gemini-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.content == "hello from gemini"
+    assert response.tool_call is None
+    assert response.usage == {
+        "prompt_tokens": 3,
+        "input_tokens": 3,
+        "completion_tokens": 4,
+        "output_tokens": 4,
+        "total_tokens": 7,
+    }
+
+
+def test_google_gemini_adapter_sanitizes_quota_errors(caplog: pytest.LogCaptureFixture) -> None:
+    raw_error = {
+        "error": {
+            "code": 429,
+            "message": "You exceeded your current quota, please check billing details.",
+            "status": "RESOURCE_EXHAUSTED",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                    "violations": [
+                        {
+                            "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+                            "quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier",
+                            "quotaValue": "5",
+                        }
+                    ],
+                },
+                {
+                    "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                    "retryDelay": "51s",
+                },
+            ],
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json=raw_error)
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="gemini-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with caplog.at_level("WARNING", logger="app.llm"):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                adapter.generate(
+                    [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+                    [],
+                )
+            )
+
+    exc = exc_info.value
+    assert exc.status_code == 429
+    assert exc.headers == {"Retry-After": "51"}
+    assert exc.detail == {
+        "type": "provider_rate_limited",
+        "message": "Gemini quota exceeded. Retry in about 51s.",
+        "provider": "gemini",
+        "retry_after_seconds": 51,
+    }
+    assert "quota_metric='generativelang...<truncated>" in caplog.text
+    assert "You exceeded your current quota" not in caplog.text
+
+
+def test_google_gemini_adapter_sanitizes_non_rate_provider_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={"error": {"code": 400, "message": "raw upstream details", "status": "INVALID_ARGUMENT"}},
+        )
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="gemini-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            adapter.generate(
+                [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+                [],
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == {
+        "type": "provider_bad_request",
+        "message": "Gemini rejected the request.",
+        "provider": "gemini",
+    }
+
+
+def test_google_gemini_adapter_returns_tool_call() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        declarations = payload["tools"][0]["functionDeclarations"]
+        assert declarations[0]["name"] == "calculator"
+        assert declarations[0]["parametersJsonSchema"]["type"] == "object"
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "functionCall": {
+                                        "name": "calculator",
+                                        "args": {"expression": "2+2"},
+                                    },
+                                    "thoughtSignature": "signature-123",
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="models/gemini-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="calculate")],
+            build_local_tool_registry(allowed_tools=["calculator"]).specs(),
+        )
+    )
+
+    assert response.content is None
+    assert response.tool_call is not None
+    assert response.tool_call.name == "calculator"
+    assert response.tool_call.arguments == {"expression": "2+2"}
+    assert response.tool_call.metadata == {"gemini_thought_signature": "signature-123"}
+
+
+def test_google_gemini_adapter_replays_tool_call_thought_signature() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        function_call_part = payload["contents"][0]["parts"][0]
+        assert function_call_part["thoughtSignature"] == "signature-123"
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"text": "done"}]}}]},
+        )
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="gemini-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name="calculator",
+                    tool_call_id="gemini-tool-call-0",
+                    tool_arguments={"expression": "2+2"},
+                    metadata={"gemini_thought_signature": "signature-123"},
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content='{"result":4}',
+                    tool_name="calculator",
+                    tool_call_id="gemini-tool-call-0",
+                ),
+            ],
+            build_local_tool_registry(allowed_tools=["calculator"]).specs(),
+        )
+    )
+
+    assert response.content == "done"
+
+
+def test_google_gemini3_adapter_text_replays_tool_call_when_thought_signature_missing() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        tool_call_content = payload["contents"][0]
+        tool_result_content = payload["contents"][1]
+        assert tool_call_content == {
+            "role": "model",
+            "parts": [
+                {
+                    "text": '[tool_call]\nname: calculator\narguments: {"expression": "2+2"}'
+                }
+            ],
+        }
+        assert tool_result_content == {
+            "role": "user",
+            "parts": [
+                {"text": '[tool_result]\nname: calculator\nid: old-call\n{"result":4}'}
+            ],
+        }
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"text": "done"}]}}]},
+        )
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="gemini-3.5-flash",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name="calculator",
+                    tool_call_id="old-call",
+                    tool_arguments={"expression": "2+2"},
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content='{"result":4}',
+                    tool_name="calculator",
+                    tool_call_id="old-call",
+                ),
+            ],
+            build_local_tool_registry(allowed_tools=["calculator"]).specs(),
+        )
+    )
+
+    assert response.content == "done"
+
+
+def test_google_gemini_adapter_truncates_large_tool_result_for_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_LLM_MAX_TOOL_RESULT_CHARS", "1024")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        response_payload = payload["contents"][1]["parts"][0]["functionResponse"]["response"]
+        assert response_payload["truncated"] is True
+        assert response_payload["original_chars"] > 1024
+        assert len(response_payload["content"]) <= 1024
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"text": "done"}]}}]},
+        )
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="gemini-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name="search_files",
+                    tool_call_id="call-1",
+                    tool_arguments={"pattern": "*"},
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content=json.dumps({"content": "x" * 2000}),
+                    tool_name="search_files",
+                    tool_call_id="call-1",
+                ),
+            ],
+            [],
+        )
+    )
+
+    assert response.content == "done"
+
+
+def test_serialize_tool_result_truncates_large_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_LLM_MAX_TOOL_RESULT_CHARS", "1024")
+
+    serialized = serialize_tool_result({"content": "x" * 2000})
+
+    assert len(serialized) <= 1024
+    assert "truncated tool result" in serialized
 
 
 def test_mock_llm_adapter_supports_json_tool_arguments() -> None:
@@ -206,6 +667,17 @@ def test_build_llm_adapter_from_env_supports_openai(monkeypatch: pytest.MonkeyPa
     adapter = build_llm_adapter_from_env()
 
     assert isinstance(adapter, OpenAICompatibleAdapter)
+
+
+def test_build_llm_adapter_from_env_supports_google(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_LLM_PROVIDER", "google")
+    monkeypatch.setenv("GEMINI_API_KEY", "google-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-test")
+
+    adapter = build_llm_adapter_from_env()
+
+    assert isinstance(adapter, GoogleGeminiAdapter)
+    assert adapter.describe()["model"] == "gemini-test"
 
 
 def test_build_llm_adapter_from_env_rejects_missing_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -688,7 +1160,7 @@ def test_openai_compatible_adapter_does_not_retry_unrelated_provider_errors() ->
         transport=httpx.MockTransport(handler),
     )
 
-    with pytest.raises(HTTPException, match="Some other provider validation error"):
+    with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
             adapter.generate(
                 [
@@ -723,6 +1195,12 @@ def test_openai_compatible_adapter_does_not_retry_unrelated_provider_errors() ->
             )
         )
 
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == {
+        "type": "provider_bad_request",
+        "message": "OpenRouter rejected the request.",
+        "provider": "openrouter",
+    }
     assert len(seen_payloads) == 1
 
 

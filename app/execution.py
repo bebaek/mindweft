@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from app.admin_store import SQLiteTenantConfigStore
 from app.llm import (
     GenericOAuthResponsesAdapter,
+    GoogleGeminiAdapter,
     LLMAdapter,
     MockLLMAdapter,
     OpenAICompatibleAdapter,
@@ -975,6 +976,18 @@ def _build_llm_adapter(config: TenantLLMConfig) -> LLMAdapter:
             extra_headers=config.extra_headers,
             timeout=config.timeout,
         )
+    if config.provider in {"google", "google-generative-ai", "gemini"}:
+        if not config.api_key:
+            raise RuntimeError(f"Tenant LLM provider '{config.provider}' requires api_key")
+        if not config.model:
+            raise RuntimeError(f"Tenant LLM provider '{config.provider}' requires model")
+        return GoogleGeminiAdapter(
+            base_url=config.base_url or "https://generativelanguage.googleapis.com/v1beta",
+            api_key=config.api_key,
+            model=config.model,
+            extra_headers=config.extra_headers,
+            timeout=config.timeout,
+        )
     if config.provider in {"openai", "openrouter", "openai-compatible"}:
         if not config.api_key:
             raise RuntimeError(f"Tenant LLM provider '{config.provider}' requires api_key")
@@ -994,6 +1007,8 @@ def _build_llm_adapter(config: TenantLLMConfig) -> LLMAdapter:
 def _default_base_url_for_provider(provider: str) -> str:
     if provider == "openrouter":
         return "https://openrouter.ai/api/v1"
+    if provider in {"google", "google-generative-ai", "gemini"}:
+        return "https://generativelanguage.googleapis.com/v1beta"
     return "https://api.openai.com/v1"
 
 
@@ -1150,7 +1165,15 @@ def _validate_llm_config(config: TenantExecutionConfig) -> dict[str, Any]:
         provider = config.llm.provider
         base_url = config.llm.base_url or (
             _default_base_url_for_provider(config.llm.provider)
-            if config.llm.provider in {"openai", "openrouter", "openai-compatible"}
+            if config.llm.provider
+            in {
+                "openai",
+                "openrouter",
+                "openai-compatible",
+                "google",
+                "google-generative-ai",
+                "gemini",
+            }
             else None
         )
         model = config.llm.model

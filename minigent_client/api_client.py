@@ -418,7 +418,7 @@ class MinigentAPIClient:
         return None
 
 
-def _extract_error_detail(body: str) -> str:
+def _extract_error_detail(body: str) -> object:
     if not body:
         return ""
     try:
@@ -427,11 +427,31 @@ def _extract_error_detail(body: str) -> str:
         return body.strip()
     if isinstance(payload, dict):
         detail = payload.get("detail")
-        if isinstance(detail, str):
-            return detail
         if detail is not None:
-            return json.dumps(detail, sort_keys=True)
+            return detail
     return body.strip()
+
+
+def _structured_error_message(detail: object) -> str | None:
+    if not isinstance(detail, dict):
+        return None
+    message = detail.get("message")
+    return message if isinstance(message, str) and message else None
+
+
+def _structured_error_type(detail: object) -> str | None:
+    if not isinstance(detail, dict):
+        return None
+    error_type = detail.get("type")
+    return error_type if isinstance(error_type, str) and error_type else None
+
+
+def _detail_to_text(detail: object) -> str:
+    if isinstance(detail, str):
+        return detail
+    if detail is None:
+        return ""
+    return json.dumps(detail, sort_keys=True)
 
 
 def _api_error_from_status(
@@ -442,7 +462,16 @@ def _api_error_from_status(
     *,
     technical_detail: str,
 ) -> MinigentAPIError:
-    detail_text = detail if isinstance(detail, str) else ""
+    detail_text = _detail_to_text(detail)
+    structured_message = _structured_error_message(detail)
+    structured_type = _structured_error_type(detail)
+    if structured_message is not None:
+        return MinigentAPIError(
+            structured_message,
+            category=structured_type or "request_failed",
+            detail=technical_detail,
+            status_code=status_code,
+        )
     if status_code == 401:
         return MinigentAPIError(
             "Authentication failed. Check MINIGENT_API_TOKEN or your Minigent principal headers.",
