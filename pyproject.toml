@@ -27,9 +27,6 @@ minigent-text-mcp = "app.text_mcp_server:main"
 minigent-client = "minigent_client.cli:main"
 
 [project.optional-dependencies]
-minirag = [
-  "minirag",
-]
 voice = [
   "faster-whisper>=1.1,<2.0",
   "numpy>=2,<3",
@@ -56,9 +53,6 @@ include = ["app*", "minigent_client*"]
 
 [tool.setuptools.package-data]
 app = ["static/web/*"]
-
-[tool.uv.sources]
-minirag = { path = "../minirag" }
 
 [tool.ruff]
 line-length = 100

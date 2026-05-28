@@ -3,6 +3,7 @@
 !.env.template
 !.env.*.template
 .data/
+.codebase-memory/
 .venv/
 .uv-cache/
 .codex-container/

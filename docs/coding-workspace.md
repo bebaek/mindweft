@@ -210,6 +210,79 @@ Example:
 }
 ```
 
+### Optional codebase-memory-mcp graph navigation
+
+[`codebase-memory-mcp`](https://github.com/DeusData/codebase-memory-mcp) can be added as an
+optional code-navigation layer for structural discovery. Use it to find relevant symbols,
+call paths, routes, architecture boundaries, and change-impact candidates before doing exact
+filesystem/text reads. It is not a replacement for the filesystem MCP: before editing an
+existing file, verify the current contents through `fs-workspace` or `text-workspace`.
+
+Install the `codebase-memory-mcp` binary separately and prefer an install mode that does not
+modify your editor/agent configuration automatically. For example, download a release binary
+or use the project's installer options such as `--skip-config` when appropriate, then make
+sure `codebase-memory-mcp` is on `PATH` or use an absolute command path in the server file.
+
+Add it to the declarative server list alongside filesystem/text/shell tools:
+
+```json
+{
+  "servers": [
+    {
+      "name": "fs-workspace",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "{workspace_roots}"],
+      "profiles": ["inspect"],
+      "allowed_tools": ["list_allowed_directories", "list_directory", "read_file"],
+      "path_policy": {
+        "deny_globs": ["**/.env*", "**/.git/**", "**/.venv/**"],
+        "allow_globs": ["**/.env*.template"]
+      }
+    },
+    {
+      "name": "codebase-memory",
+      "command": ["codebase-memory-mcp"],
+      "profiles": ["inspect"],
+      "allowed_tools": [
+        "index_repository",
+        "search_graph",
+        "search_code",
+        "semantic_query",
+        "get_architecture",
+        "trace_call_path",
+        "detect_changes"
+      ]
+    }
+  ]
+}
+```
+
+Then enable the server file and, for multi-server setups, the shared gateway:
+
+```dotenv
+MINIGENT_CODING_MCP_SERVERS_FILE=.data/coding-mcp-servers.json
+MINIGENT_CODING_MCP_GATEWAY_ENABLED=true
+MINIGENT_CODING_MCP_GATEWAY_PORT=8765
+MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX=/mcp
+```
+
+Start the runner as usual:
+
+```bash
+uv run minigent-coding-workspace --env-file .env.coding
+```
+
+On first use, ask the coding agent to index the repository, for example: "Index this
+project." After that, prefer this workflow:
+
+1. Use `codebase-memory` tools for discovery and impact analysis.
+2. Use `text-workspace`, when configured, for exact line ranges around the returned files/symbols.
+3. Use `fs-workspace` for broader authoritative reads and all edits.
+4. Re-index or refresh graph queries after meaningful changes when graph freshness matters.
+
+The exact `allowed_tools` list should match the installed `codebase-memory-mcp` release. If a
+listed tool is unavailable, remove it from the JSON file or omit `allowed_tools` to expose the
+server's full tool list to the selected profile.
+
 When the runner generates `MINIGENT_TENANT_EXECUTION_CONFIGS`, it derives
 `tools.mcp_servers` and `capability_profiles.items[*].mcp_server_names` from this file. If you
 provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, the file still controls process startup,

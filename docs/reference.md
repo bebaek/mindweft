@@ -1411,9 +1411,9 @@ local MCP capability, not a default Minigent local tool.
 
 The local tool `retrieve_knowledge` is not enabled by default because it requires a
 MiniRAG database and related backend setup. Enable it explicitly with
-`tools.allowed_local_tools` (or a skill/capability profile allowlist), and run Minigent
-with the `minirag` extra installed plus `MINIGENT_MINIRAG_DB_PATH` set to a SQLite
-database created by `minirag ingest`.
+`tools.allowed_local_tools` (or a skill/capability profile allowlist), install the
+MiniRAG package in the runtime environment, and set `MINIGENT_MINIRAG_DB_PATH` to a
+SQLite database created by `minirag ingest`.
 
 Recommended setup today:
 
@@ -1429,11 +1429,8 @@ Optional retrieval tuning env vars:
 - `MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT`: optional lexical score weight for `hybrid`
 - `MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT`: optional dense score weight for `hybrid`
 
-For local development with `uv`, install it with:
-
-```bash
-uv sync --extra minirag
-```
+For local development with `uv`, install the MiniRAG package into the environment you use
+for Minigent before enabling `retrieve_knowledge`.
 
 Example:
 
@@ -1451,10 +1448,6 @@ export MINIGENT_MINIRAG_EMBEDDING_PROVIDER=openrouter
 export MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT=0.05
 export MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT=0.95
 ```
-
-Because `minirag` is wired in via a local path source during development, rerun
-`uv sync --extra minirag` in Minigent after changing the sibling `minirag` repo so the
-runtime environment picks up the updated package build.
 
 In `store-with-defaults`, a `*` tenant record in the admin store acts as a default profile before env fallback is considered.
 

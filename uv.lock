@@ -749,9 +749,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-minirag = [
-    { name = "minirag" },
-]
 voice = [
     { name = "faster-whisper" },
     { name = "numpy" },
@@ -774,7 +771,6 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1.0" },
     { name = "faster-whisper", marker = "extra == 'voice'", specifier = ">=1.1,<2.0" },
     { name = "httpx", specifier = ">=0.28,<1.0" },
-    { name = "minirag", marker = "extra == 'minirag'", directory = "../minirag" },
     { name = "numpy", marker = "extra == 'voice'", specifier = ">=2,<3" },
     { name = "opentelemetry-api", specifier = ">=1.33,<2.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.33,<2.0" },
@@ -791,37 +787,13 @@ requires-dist = [
     { name = "sounddevice", marker = "extra == 'voice'", specifier = ">=0.5.5,<0.6" },
     { name = "uvicorn", specifier = ">=0.30,<1.0" },
 ]
-provides-extras = ["minirag", "voice"]
+provides-extras = ["voice"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "basedpyright", specifier = ">=1.20.0" },
     { name = "pytest", specifier = ">=8.0,<9.0" },
     { name = "ruff", specifier = ">=0.11,<1.0" },
-]
-
-[[package]]
-name = "minirag"
-version = "0.1.0"
-source = { directory = "../minirag" }
-dependencies = [
-    { name = "httpx" },
-    { name = "python-dotenv" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.28.0" },
-    { name = "ir-datasets", marker = "extra == 'benchmark'", specifier = ">=0.5.10" },
-    { name = "python-dotenv", specifier = ">=1.0.0" },
-]
-provides-extras = ["benchmark"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "basedpyright", specifier = ">=1.20.0" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "ruff", specifier = ">=0.11.0" },
 ]
 
 [[package]]
