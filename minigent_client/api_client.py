@@ -29,6 +29,7 @@ class MinigentAPIClient:
         progress_stream: TextIO | None = None,
         progress_verbose: bool = False,
         show_tool_results: bool | None = None,
+        show_reasoning: bool | None = None,
         token_mode: TokenMode | None = None,
     ) -> None:
         self._config = config
@@ -42,6 +43,11 @@ class MinigentAPIClient:
                 bool(getattr(config, "show_tool_results", False))
                 if show_tool_results is None
                 else show_tool_results
+            ),
+            show_reasoning=(
+                bool(getattr(config, "show_reasoning", False))
+                if show_reasoning is None
+                else show_reasoning
             ),
             token_mode=_resolve_token_mode(getattr(config, "token_mode", "auto"), token_mode),
         )
@@ -251,7 +257,7 @@ class MinigentAPIClient:
             metadata={"raw_user_prompt": content},
         )
 
-    def run_thread(self, thread_id: str | None = None, *, stream: bool | None = None) -> str:
+    def run_thread(self, thread_id: str | None = None, *, stream: bool | None = None) -> tuple[str, dict[str, Any] | None]:
         resolved_thread_id = thread_id or self.ensure_thread()
         use_stream = self._config.stream_runs if stream is None else stream
         if use_stream:
@@ -265,7 +271,7 @@ class MinigentAPIClient:
         reply = response["reply"]
         if not isinstance(reply, str):
             raise RuntimeError("Minigent reply must be a string")
-        return reply
+        return reply, None
 
     def compact_thread(self, thread_id: str) -> dict[str, Any]:
         response = self.request_json(
@@ -290,8 +296,9 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent cancel-run response must be an object")
         return cast(dict[str, Any], response)
 
-    def _run_thread_stream(self, thread_id: str) -> str:
+    def _run_thread_stream(self, thread_id: str) -> tuple[str, dict[str, Any] | None]:
         reply: str | None = None
+        metadata: dict[str, Any] | None = None
         for event in self.request_ndjson_events(
             "POST",
             f"{self._config.base_url}/threads/{thread_id}/run/stream",
@@ -303,6 +310,7 @@ class MinigentAPIClient:
                 if not isinstance(content, str):
                     raise RuntimeError("Minigent stream assistant message must be a string")
                 reply = content
+                metadata = event.get("metadata")
             elif event_type == "run.error":
                 status_code = event.get("status_code")
                 detail = event.get("detail")
@@ -315,7 +323,7 @@ class MinigentAPIClient:
                 )
         if reply is None:
             raise RuntimeError("Minigent run stream ended without an assistant message")
-        return reply
+        return reply, metadata
 
     def request_ndjson_events(
         self,

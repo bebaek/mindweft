@@ -88,6 +88,62 @@ def style_stream_progress_line(line: str, *, stream: TextIO) -> str:
     return style_text(line, "progress", stream=stream)
 
 
+def extract_reasoning_content(metadata: dict[str, Any] | None) -> str | None:
+    """Extract reasoning content from message metadata.
+
+    Supports:
+    - OpenAI Responses API: summary text from reasoning items
+    - OpenRouter/DeepSeek R1: reasoning field in chat completion response
+    - Gemini: thinking content (if available)
+    """
+    if not metadata:
+        return None
+
+    # Direct reasoning content (e.g., from OpenRouter DeepSeek R1)
+    reasoning_content = metadata.get("reasoning_content")
+    if isinstance(reasoning_content, str) and reasoning_content.strip():
+        return reasoning_content.strip()
+
+    # OpenAI Responses API reasoning items
+    reasoning_items = metadata.get("generic_oauth_responses_output_items")
+    if isinstance(reasoning_items, list):
+        summary_parts: list[str] = []
+        for item in reasoning_items:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "reasoning":
+                continue
+            summary = item.get("summary")
+            if isinstance(summary, list):
+                for summary_item in summary:
+                    if isinstance(summary_item, dict) and summary_item.get("type") == "summary_text":
+                        text = summary_item.get("text")
+                        if isinstance(text, str) and text.strip():
+                            summary_parts.append(text.strip())
+        if summary_parts:
+            return "\n\n".join(summary_parts)
+
+    # Gemini thought signature (opaque, not displayable)
+    # Just return None - we can't show the actual thinking content
+    return None
+
+
+def format_reasoning_block(reasoning: str, *, stream: TextIO) -> str:
+    """Format reasoning content for display.
+
+    Returns styled text with a thinking indicator.
+    """
+    if not color_enabled(stream):
+        return f"[Thinking]\n{reasoning}\n[End Thinking]"
+
+    styled_lines: list[str] = []
+    styled_lines.append(style_text("[Thinking]", "dim", stream=stream))
+    for line in reasoning.splitlines():
+        styled_lines.append(style_text(line, "dim", stream=stream))
+    styled_lines.append(style_text("[End Thinking]", "dim", stream=stream))
+    return "\n".join(styled_lines)
+
+
 def style_assistant_markdown(text: str, *, stream: TextIO) -> str:
     """Add light Markdown-aware color without rendering or changing content."""
 
@@ -145,11 +201,13 @@ class StreamProgressRenderer:
         *,
         verbose: bool = False,
         show_tool_results: bool = False,
+        show_reasoning: bool = False,
         token_mode: TokenMode = "auto",
     ) -> None:
         self._stream = stream or sys.stderr
         self._verbose = verbose
         self._show_tool_results = show_tool_results
+        self._show_reasoning = show_reasoning
         self._token_mode = token_mode
         self._seen_peer_update_tasks: set[str] = set()
         self._peer_task_statuses: dict[str, str] = {}
@@ -197,6 +255,11 @@ class StreamProgressRenderer:
         elif event_type == "peer.task.event":
             self._saw_peer_event = True
             self._write_peer_task_event(event)
+        elif event_type == "reasoning":
+            if self._show_reasoning:
+                content = event.get("content", "")
+                if content:
+                    self._write_reasoning_block(content)
         elif event_type == "run.error":
             self._write(f"✖ error {event.get('status_code')}: {_format_error_detail(event.get('detail'))}")
         elif event_type == "run.completed":
@@ -242,6 +305,21 @@ class StreamProgressRenderer:
         self._write(f"   {label}:")
         for line in text.splitlines() or [""]:
             self._write(f"     {line}")
+
+    def _write_reasoning_block(self, content: str) -> None:
+        """Display reasoning/thinking content in styled format."""
+        if not content.strip():
+            return
+        styled_start = style_text("[Thinking]", "dim", stream=self._stream)
+        styled_end = style_text("[End Thinking]", "dim", stream=self._stream)
+        self._write(styled_start)
+        for line in content.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            styled_line = style_text(stripped, "dim", stream=self._stream)
+            self._write(f"  {styled_line}")
+        self._write(styled_end)
 
     def _write_peer_task_status(self, event: dict[str, Any], *, label: str) -> None:
         peer = event.get("peer")

@@ -88,7 +88,7 @@ async def _run_thread_ndjson_stream(
             started_event["thread_context"] = started_context
         await emit(started_event)
         try:
-            reply = await request.app.state.agent_backend.run_thread(
+            reply, metadata = await request.app.state.agent_backend.run_thread(
                 principal,
                 thread_id,
                 event_sink=emit,
@@ -105,7 +105,10 @@ async def _run_thread_ndjson_stream(
         except Exception as exc:  # pragma: no cover - defensive streaming boundary
             await emit({"type": "run.error", "status_code": 500, "detail": str(exc)})
             return
-        await emit({"type": "assistant.message", "content": reply})
+        event: dict[str, object] = {"type": "assistant.message", "content": reply}
+        if metadata:
+            event["metadata"] = metadata
+        await emit(event)
         await emit({"type": "run.completed", "thread_context": _thread_context_usage(request, principal, thread_id)})
 
     run_key = (principal.tenant_id, thread_id)
@@ -485,9 +488,8 @@ def create_app(
         request: Request,
         principal: Principal = Depends(require_principal),
     ) -> RunThreadResponse:
-        return RunThreadResponse(
-            reply=await request.app.state.agent_backend.run_thread(principal, thread_id)
-        )
+        reply, _metadata = await request.app.state.agent_backend.run_thread(principal, thread_id)
+        return RunThreadResponse(reply=reply)
 
     @app.post("/threads/{thread_id}/run/stream", response_model=None)
     async def run_thread_stream(

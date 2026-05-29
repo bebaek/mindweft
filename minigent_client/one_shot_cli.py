@@ -119,6 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="In streaming text mode, print expanded tool result bodies to stderr.",
     )
     chat_parser.add_argument(
+        "--show-reasoning",
+        action="store_true",
+        help="Show model reasoning/thinking content when available.",
+    )
+    chat_parser.add_argument(
         "--tokens",
         choices=["auto", "live", "off"],
         default="auto",
@@ -185,6 +190,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--show-tool-results",
         action="store_true",
         help="With --stream, print expanded tool result bodies to stderr unless --quiet is set.",
+    )
+    run_parser.add_argument(
+        "--show-reasoning",
+        action="store_true",
+        help="Show model reasoning/thinking content when available.",
     )
     run_parser.add_argument(
         "--tokens",
@@ -589,6 +599,8 @@ def build_client(args: argparse.Namespace, trace_id: str | None) -> MinigentAPIC
         progress_verbose=args.verbose and not getattr(args, "quiet", False),
         show_tool_results=getattr(args, "show_tool_results", False)
         and not getattr(args, "quiet", False),
+        show_reasoning=getattr(args, "show_reasoning", False)
+        and not getattr(args, "quiet", False),
         token_mode="off" if getattr(args, "quiet", False) else getattr(args, "tokens", "auto"),
     )
 
@@ -693,13 +705,14 @@ def run_chat(
     thread_id, created_thread = ensure_thread(args, client, base_url)
     client.add_message(thread_id, args.message)
     events: list[dict[str, Any]] | None = None
+    metadata: dict[str, Any] | None = None
     if args.stream and args.json:
         events = list(
             client.request_ndjson_events("POST", f"{base_url}/threads/{thread_id}/run/stream")
         )
         reply = _reply_from_run_stream(events)
     else:
-        reply = client.run_thread(thread_id, stream=args.stream)
+        reply, metadata = client.run_thread(thread_id, stream=args.stream)
     remember_thread(base_url, args, thread_id, title=_thread_title_from_message(args.message))
 
     if args.json:
@@ -713,6 +726,8 @@ def run_chat(
             usage = _usage_from_run_stream(events)
             if usage is not None:
                 output["usage"] = usage
+        if metadata:
+            output["metadata"] = metadata
         if trace_id is not None:
             output["trace_id"] = trace_id
         if args.transcript:
@@ -724,6 +739,13 @@ def run_chat(
         print(f"trace_id={trace_id}")
     if args.print_thread_id:
         print(f"thread_id={thread_id}")
+    # Display reasoning content if present and enabled (only for non-streaming mode)
+    # In streaming mode, reasoning is displayed via 'reasoning' events
+    if getattr(args, 'show_reasoning', False) and not getattr(args, 'stream', False):
+        from minigent_client.output import extract_reasoning_content, format_reasoning_block
+        reasoning = extract_reasoning_content(metadata)
+        if reasoning:
+            print(format_reasoning_block(reasoning, stream=sys.stdout))
     _print_assistant_reply(reply)
     if args.transcript:
         print("")

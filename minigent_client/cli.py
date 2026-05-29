@@ -28,7 +28,13 @@ from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker
 from minigent_client.errors import MinigentAPIError
 from minigent_client.one_shot_cli import _format_markdown_transcript
-from minigent_client.output import estimate_thread_token_usage, format_usage_summary, style_text
+from minigent_client.output import (
+    estimate_thread_token_usage,
+    extract_reasoning_content,
+    format_reasoning_block,
+    format_usage_summary,
+    style_text,
+)
 from minigent_client.ring_buffer import AudioRingBuffer
 from minigent_client.runtime import MinigentClientRuntime
 from minigent_client.speech import (
@@ -97,6 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--show-tool-results",
         action="store_true",
         help="With streaming runs, print expanded tool result bodies to stderr.",
+    )
+    parser.add_argument(
+        "--show-reasoning",
+        action="store_true",
+        help="Show model reasoning/thinking content when available.",
     )
     parser.add_argument(
         "--tokens",
@@ -284,6 +295,7 @@ def build_config(args: argparse.Namespace) -> ClientConfig:
         debug_show_prompt=env_config.debug_show_prompt,
         stream_runs=args.stream_runs or env_config.stream_runs,
         show_tool_results=args.show_tool_results or env_config.show_tool_results,
+        show_reasoning=args.show_reasoning or env_config.show_reasoning,
         token_mode=args.tokens or env_config.token_mode,
         chat_submit_mode=args.chat_submit_mode or env_config.chat_submit_mode,
         wake_acknowledgement=args.wake_acknowledgement or env_config.wake_acknowledgement,
@@ -773,7 +785,7 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         utterance = expanded_utterance
         try:
             client.send_user_message(utterance)
-            reply = client.run_thread()
+            reply, metadata = client.run_thread()
         except KeyboardInterrupt:
             _cancel_current_run_after_interrupt(client)
             output_stream.write(f"\n{_chat_abort_message(config)}\n")
@@ -783,6 +795,13 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             output_stream.write(f"[idle] request failed, staying in chat mode: {exc}\n")
             output_stream.flush()
             continue
+        # Display reasoning content if present and enabled (only for non-streaming mode)
+        # In streaming mode, reasoning is displayed via 'reasoning' events
+        if config.show_reasoning and not config.stream_runs:
+            reasoning = extract_reasoning_content(metadata)
+            if reasoning:
+                output_stream.write(format_reasoning_block(reasoning, stream=output_stream) + "\n")
+                output_stream.flush()
         speech_output.speak(reply)
         turns_completed += 1
         if once and turns_completed >= 1:

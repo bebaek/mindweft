@@ -53,7 +53,7 @@ class AgentBackend(ABC):
         thread_id: str,
         *,
         event_sink: RunEventSink | None = None,
-    ) -> str:
+    ) -> tuple[str, dict[str, Any] | None]:
         raise NotImplementedError
 
 
@@ -67,7 +67,7 @@ class NativeAgentBackend(AgentBackend):
         thread_id: str,
         *,
         event_sink: RunEventSink | None = None,
-    ) -> str:
+    ) -> tuple[str, dict[str, Any] | None]:
         return await self._runtime.run_thread(principal, thread_id, event_sink=event_sink)
 
 
@@ -93,7 +93,7 @@ class AgentBackendRouter(AgentBackend):
         thread_id: str,
         *,
         event_sink: RunEventSink | None = None,
-    ) -> str:
+    ) -> tuple[str, dict[str, Any] | None]:
         execution = self._execution_resolver.resolve(principal.tenant_id)
         backend = execution.config.agent_backend
         if backend.type == AGENT_BACKEND_NATIVE:
@@ -124,7 +124,7 @@ class AgentBackendRouter(AgentBackend):
         poll_interval_seconds: float,
         mcp_broker_enabled: bool,
         event_sink: RunEventSink | None,
-    ) -> str:
+    ) -> tuple[str, dict[str, Any] | None]:
         self._store.start_run(principal.tenant_id, thread_id)
         broker_session_id: str | None = None
         task_id: str | None = None
@@ -231,7 +231,7 @@ class AgentBackendRouter(AgentBackend):
                 Message(thread_id=thread_id, role=MessageRole.ASSISTANT, content=reply),
             )
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
-            return reply
+            return reply, None
         except asyncio.CancelledError:
             if task_id:
                 await self._cancel_peer_agent_task(peer, task_id)

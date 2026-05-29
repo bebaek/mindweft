@@ -1742,6 +1742,13 @@ def _parse_chat_completion(payload: dict[str, Any], tool_name_map: dict[str, str
 
     message = choices[0].get("message") or {}
     tool_calls = message.get("tool_calls") or []
+
+    # Extract reasoning content if present (e.g., from DeepSeek R1 via OpenRouter)
+    reasoning_content = message.get("reasoning")
+    metadata: dict[str, Any] | None = None
+    if isinstance(reasoning_content, str) and reasoning_content.strip():
+        metadata = {"reasoning_content": reasoning_content}
+
     if tool_calls:
         parsed_tool_calls: list[ToolCall] = []
         for raw_tool_call in tool_calls:
@@ -1770,13 +1777,13 @@ def _parse_chat_completion(payload: dict[str, Any], tool_name_map: dict[str, str
                 )
             )
         if parsed_tool_calls:
-            return LLMResponse(tool_calls=parsed_tool_calls, usage=usage)
+            return LLMResponse(tool_calls=parsed_tool_calls, usage=usage, metadata=metadata)
 
     content = _extract_text_content(message)
     if content is None:
         logger.error("LLM response missing message content: %s", _truncate_json(payload))
         raise HTTPException(status_code=502, detail="LLM provider returned no message content")
-    return LLMResponse(content=str(content), usage=usage)
+    return LLMResponse(content=str(content), usage=usage, metadata=metadata)
 
 
 def _normalize_llm_usage(raw_usage: Any) -> dict[str, int] | None:

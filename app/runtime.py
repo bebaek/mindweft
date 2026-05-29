@@ -108,7 +108,7 @@ class AgentRuntime:
         thread_id: str,
         *,
         event_sink: RunEventSink | None = None,
-    ) -> str:
+    ) -> tuple[str, dict[str, Any] | None]:
         self._store.start_run(principal.tenant_id, thread_id)
         failed_tool_calls: set[str] = set()
         execution = self._execution_resolver.resolve(principal.tenant_id)
@@ -167,6 +167,17 @@ class AgentRuntime:
                             },
                         )
                 if response.tool_calls:
+                    # Emit reasoning content before tool calls if present
+                    if response.metadata:
+                        reasoning_content = response.metadata.get("reasoning_content")
+                        if isinstance(reasoning_content, str) and reasoning_content.strip():
+                            await _emit_run_event(
+                                event_sink,
+                                {
+                                    "type": "reasoning",
+                                    "content": reasoning_content,
+                                },
+                            )
                     await self._handle_tool_calls(
                         principal,
                         thread_id,
@@ -200,7 +211,7 @@ class AgentRuntime:
                     ),
                 )
                 self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
-                return final_content
+                return final_content, response.metadata
         except asyncio.CancelledError:
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
             raise

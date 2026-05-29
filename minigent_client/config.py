@@ -41,6 +41,7 @@ class ClientConfig:
     debug_show_prompt: bool = False
     stream_runs: bool = False
     show_tool_results: bool = False
+    show_reasoning: bool = False
     token_mode: str = "auto"
     chat_submit_mode: str = "enter"
     wake_acknowledgement: str | None = None
