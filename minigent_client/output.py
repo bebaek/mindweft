@@ -19,6 +19,7 @@ _STYLES = {
     "markdown_code": "\033[36m",
     "markdown_fence": "\033[38;5;248m",
     "markdown_heading": "\033[1m",
+    "markdown_bold": "\033[1m",
     "progress": "\033[38;5;248m",
     "peer": "\033[35m",
     "status": "\033[2m",
@@ -111,17 +112,25 @@ def style_assistant_markdown(text: str, *, stream: TextIO) -> str:
         if stripped.startswith(">"):
             styled_lines.append(style_text(content, "progress", stream=stream) + newline)
             continue
+        content = _style_inline_bold(content, stream=stream)
         styled_lines.append(_style_inline_code(content, stream=stream) + newline)
     return "".join(styled_lines)
 
 
 _MARKDOWN_HEADING_RE = re.compile(r"^#{1,6}\s+\S")
 _INLINE_CODE_RE = re.compile(r"(`+)([^`\n]+?)\1")
+_BOLD_RE = re.compile(r"(\*\*|__)(.+?)\1")
 
 
 def _style_inline_code(text: str, *, stream: TextIO) -> str:
     return _INLINE_CODE_RE.sub(
         lambda match: style_text(match.group(0), "markdown_code", stream=stream), text
+    )
+
+
+def _style_inline_bold(text: str, *, stream: TextIO) -> str:
+    return _BOLD_RE.sub(
+        lambda match: style_text(match.group(0), "markdown_bold", stream=stream), text
     )
 
 

@@ -534,6 +534,16 @@ def test_cli_styles_assistant_markdown_without_rendering(monkeypatch: pytest.Mon
     )
 
 
+def test_cli_styles_assistant_markdown_bold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output_stream = TtyStringIO()
+    markdown = "This is **bold** and __also bold__ text."
+
+    assert style_assistant_markdown(markdown, stream=output_stream) == (
+        "This is \033[1m**bold**\033[0m and \033[1m__also bold__\033[0m text."
+    )
+
+
 def test_cli_assistant_markdown_respects_no_color(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
     output_stream = TtyStringIO()
