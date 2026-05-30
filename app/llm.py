@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import logging
 import os
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -29,9 +31,19 @@ DEFAULT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS = 20000
 DEFAULT_LLM_MAX_TOOL_RESULT_CHARS = 200000
 
 
+ProgressSink = Callable[[int], Awaitable[None]] | None
+_progress_sink_ctx: contextvars.ContextVar[ProgressSink] = contextvars.ContextVar(
+    "progress_sink", default=None
+)
+
+
 class LLMAdapter(ABC):
     @abstractmethod
-    async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+    async def generate(
+        self,
+        messages: list[Message],
+        tools: list[ToolSpec],
+    ) -> LLMResponse:
         raise NotImplementedError
 
     @abstractmethod
@@ -48,7 +60,11 @@ class MockLLMAdapter(LLMAdapter):
     After a tool result is present, it turns that into the final assistant reply.
     """
 
-    async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+    async def generate(
+        self,
+        messages: list[Message],
+        tools: list[ToolSpec],
+    ) -> LLMResponse:
         if messages and messages[-1].role == MessageRole.TOOL:
             return LLMResponse(content=f"Tool result: {messages[-1].content}")
 
@@ -101,7 +117,11 @@ class OpenAICompatibleAdapter(LLMAdapter):
         self._timeout = timeout
         self._transport = transport
 
-    async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+    async def generate(
+        self,
+        messages: list[Message],
+        tools: list[ToolSpec],
+    ) -> LLMResponse:
         tools = _stable_tool_order(tools)
         tool_name_map = _build_provider_tool_name_map(tools)
         headers = {
@@ -264,7 +284,11 @@ class GoogleGeminiAdapter(LLMAdapter):
         self._timeout = timeout
         self._transport = transport
 
-    async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+    async def generate(
+        self,
+        messages: list[Message],
+        tools: list[ToolSpec],
+    ) -> LLMResponse:
         tools = _stable_tool_order(tools)
         tool_name_map = _build_provider_tool_name_map(tools)
         payload = _messages_to_gemini_payload(
@@ -555,7 +579,11 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
         self._timeout = timeout
         self._transport = transport
 
-    async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+    async def generate(
+        self,
+        messages: list[Message],
+        tools: list[ToolSpec],
+    ) -> LLMResponse:
         credentials = await self._oauth_provider.get_credentials()
         if credentials is None:
             raise HTTPException(
@@ -720,6 +748,9 @@ async def _post_responses_request(
             try:
                 async for chunk in response.aiter_text():
                     body_chunks.append(chunk)
+                    sink = _progress_sink_ctx.get()
+                    if sink is not None:
+                        await sink(len(chunk))
             except httpx.HTTPError as exc:
                 read_error = exc
     except httpx.HTTPError as exc:

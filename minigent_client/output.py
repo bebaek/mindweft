@@ -4,6 +4,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 from typing import Any, Literal, TextIO
 
 TokenMode = Literal["auto", "live", "off"]
@@ -196,6 +198,72 @@ def _style_prefix(line: str, prefix: str, style: str, *, stream: TextIO) -> str:
     return line.replace(prefix, style_text(prefix, style, stream=stream), 1)
 
 
+def _format_bytes(n: int) -> str:
+    """Human-friendly byte count."""
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} kB"
+    return f"{n / (1024 * 1024):.1f} MB"
+
+
+class _ProgressSpinner:
+    """Animated spinner for TTY stderr, with optional byte counter."""
+
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, stream: TextIO, prefix: str) -> None:
+        self._stream = stream
+        self._prefix = prefix
+        self._bytes = 0
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._tty = hasattr(stream, "isatty") and stream.isatty()
+        self._start_time: float = 0.0
+
+    def start(self) -> None:
+        if not self._tty:
+            return
+        self._start_time = time.monotonic()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def update_bytes(self, n: int) -> None:
+        with self._lock:
+            self._bytes = n
+
+    def _run(self) -> None:
+        i = 0
+        while not self._stop.wait(0.1):
+            with self._lock:
+                b = self._bytes
+            elapsed = time.monotonic() - self._start_time
+            frame = self.FRAMES[i % len(self.FRAMES)]
+            parts: list[str] = []
+            parts.append(f"{elapsed:.1f}s")
+            if b:
+                parts.append(_format_bytes(b))
+            sep = " \u00b7 "
+            suffix = f" {sep.join(parts)}" if parts else ""
+            self._stream.write(f"\r{self._prefix}{suffix} {frame}  ")
+            self._stream.flush()
+            i += 1
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=0.2)
+            # Use unbuffered write to guarantee the terminal processes
+            # the cursor movement before any subsequent stdout write.
+            fd = self._stream.fileno() if hasattr(self._stream, "fileno") else -1
+            if fd >= 0:
+                os.write(fd, b"\r\x1b[2K\n")
+            else:
+                self._stream.write("\r\x1b[2K\n")
+                self._stream.flush()
+
+
 class StreamProgressRenderer:
     def __init__(
         self,
@@ -221,6 +289,7 @@ class StreamProgressRenderer:
         self._last_thread_context_summary: str | None = None
         self._saw_peer_event = False
         self._pending_summary: str | None = None
+        self._current_spinner: _ProgressSpinner | None = None
 
     def set_verbose(self, verbose: bool) -> None:
         self._verbose = verbose
@@ -239,7 +308,18 @@ class StreamProgressRenderer:
             self._write("● preparing")
         elif event_type == "llm.request":
             suffix = f" iteration={event.get('iteration')}" if self._verbose else ""
-            self._write(f"● sending{suffix}")
+            self._stop_spinner()
+            self._current_spinner = _ProgressSpinner(self._stream, f"● sending{suffix}")
+            if self._current_spinner._tty:
+                self._write_inline(f"● sending{suffix}")
+            else:
+                self._write(f"● sending{suffix}")
+            self._current_spinner.start()
+        elif event_type == "llm.progress":
+            if self._current_spinner:
+                self._current_spinner.update_bytes(event.get("bytes", 0))
+        elif event_type == "assistant.message":
+            self._stop_spinner()
         elif event_type == "tool.call":
             self._write_tool_call(event)
         elif event_type == "tool.result":
@@ -400,11 +480,24 @@ class StreamProgressRenderer:
 
     def flush_pending_summary(self) -> None:
         """Write any pending summary line (e.g., token stats) and clear it."""
+        self._stop_spinner()
         if self._pending_summary is not None:
             self._write(self._pending_summary)
             self._pending_summary = None
 
+    def _stop_spinner(self) -> None:
+        """Stop and clear any active progress spinner."""
+        if self._current_spinner is not None:
+            self._current_spinner.stop()
+            self._current_spinner = None
+
+    def _write_inline(self, line: str) -> None:
+        """Write to the progress stream without a trailing newline."""
+        self._stream.write(line)
+        self._stream.flush()
+
     def _write(self, line: str) -> None:
+        self._stop_spinner()
         self._stream.write(f"{style_stream_progress_line(line, stream=self._stream)}\n")
         self._stream.flush()
 

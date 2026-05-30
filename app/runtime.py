@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import textwrap
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -18,7 +19,7 @@ from app.execution import (
     get_capability_profile,
     get_skill_configs,
 )
-from app.llm import LLMAdapter, MockLLMAdapter, serialize_tool_result
+from app.llm import LLMAdapter, MockLLMAdapter, _progress_sink_ctx, serialize_tool_result
 from app.models import (
     LLMResponse,
     Message,
@@ -156,7 +157,27 @@ class AgentRuntime:
                             "tool_count": len(tool_specs),
                         },
                     )
-                    response = await execution.llm_adapter.generate(messages, tool_specs)
+                    _progress_bytes = 0
+                    _progress_last_emit = 0.0
+
+                    async def _on_progress(chunk_len: int) -> None:
+                        nonlocal _progress_bytes, _progress_last_emit
+                        _progress_bytes += chunk_len
+                        now = time.monotonic()
+                        if now - _progress_last_emit >= 0.3:
+                            _progress_last_emit = now
+                            await _emit_run_event(
+                                event_sink,
+                                {"type": "llm.progress", "bytes": _progress_bytes},
+                            )
+
+                    token = _progress_sink_ctx.set(_on_progress)
+                    try:
+                        response = await execution.llm_adapter.generate(
+                            messages, tool_specs
+                        )
+                    finally:
+                        _progress_sink_ctx.reset(token)
                     if response.usage is not None:
                         await _emit_run_event(
                             event_sink,
