@@ -1,6 +1,6 @@
 # Layered MCP tool stack for coding agents
 
-Status: Proposed
+Status: Implemented (see [Coding workspace setup](coding-workspace.md) for the current setup guide)
 
 ## Context
 

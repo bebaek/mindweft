@@ -113,21 +113,12 @@ Inside the repo:
 ```bash
 uv run minigent run "hello"
 uv run minigent chat --stream "hello with progress"
-uv run minigent-client --backend chat --resume-last  # supports /agent and /cancel
+uv run minigent-client chat --resume-last
 uv run minigent threads
 uv run minigent resume
 uv run minigent export --format markdown
 uv run minigent config doctor
 ```
-
-Interactive chat supports local slash commands such as `/new`, `/threads`, `/switch <id>`,
-`/compact`, and `/agent <preset>`. Users can also save personal prompt shortcuts with
-`/command set <name> <prompt template>`, list them with `/commands`, and invoke them as
-`/<name> optional input`; templates can include `{input}` to place the invocation text.
-Configure `/agent` presets with
-`MINIGENT_CLIENT_AGENT_PRESETS`, a JSON object or array mapping user-facing agent names to
-Minigent `skill_name`/`skill_names` and `capability_profile` values; selecting a preset
-creates a new thread with that bundle.
 
 Install as a reusable CLI app:
 
@@ -135,6 +126,9 @@ Install as a reusable CLI app:
 uv tool install '.[voice]'
 minigent-client chat
 ```
+
+See the [CLI reference](docs/cli.md) for all commands, interactive slash commands,
+streaming options, voice modes, and configuration.
 
 ### Voice
 
@@ -179,14 +173,11 @@ it deliberately.
 
 ## Documentation
 
-The previous long README now lives in [`docs/reference.md`](docs/reference.md). Additional
-focused docs and planning notes are available in:
-
+- [CLI reference](docs/cli.md)
 - [Coding workspace setup](docs/coding-workspace.md)
 - [Dynamic tenant management](docs/dynamic-tenant-management.md)
-- [Layered MCP tool stack for coding agents](docs/layered-mcp-tool-stack.md)
-- [CLI UI improvements](docs/cli-ui-improvements.md)
-- [CLI unification plan](docs/cli-unification-plan.md)
+- [Layered MCP tool stack](docs/layered-mcp-tool-stack.md)
+- [Full reference](docs/reference.md)
 
 ## Development
 
