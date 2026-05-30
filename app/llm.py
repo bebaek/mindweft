@@ -286,24 +286,38 @@ class GoogleGeminiAdapter(LLMAdapter):
             message_count=len(messages),
             tool_count=len(tools),
         )
-        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+        max_malformed_retries = 2
+        for attempt in range(max_malformed_retries + 1):
+            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+                try:
+                    response = await client.post(
+                        f"{self._base_url}/{model_path}:generateContent",
+                        json=payload,
+                        headers=headers,
+                    )
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise _provider_http_exception(exc, provider="gemini", model=self._model) from exc
+                except httpx.HTTPError as exc:
+                    raise _provider_request_exception(exc, provider="gemini", model=self._model) from exc
+            _debug_log_raw_llm_response(
+                "google-gemini",
+                response.text,
+                content_type=response.headers.get("content-type"),
+            )
             try:
-                response = await client.post(
-                    f"{self._base_url}/{model_path}:generateContent",
-                    json=payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                raise _provider_http_exception(exc, provider="gemini", model=self._model) from exc
-            except httpx.HTTPError as exc:
-                raise _provider_request_exception(exc, provider="gemini", model=self._model) from exc
-        _debug_log_raw_llm_response(
-            "google-gemini",
-            response.text,
-            content_type=response.headers.get("content-type"),
-        )
-        return _parse_gemini_response(response.json(), tool_name_map)
+                return _parse_gemini_response(response.json(), tool_name_map)
+            except GeminiMalformedResponseError:
+                if attempt < max_malformed_retries:
+                    logger.warning("Gemini MALFORMED_RESPONSE, retrying attempt %d/%d", attempt + 1, max_malformed_retries)
+                    continue
+                logger.error("Gemini MALFORMED_RESPONSE after %d retries", max_malformed_retries)
+                raise HTTPException(
+                    status_code=502,
+                    detail="Gemini provider returned malformed response after retries",
+                ) from None
+        # This should never be reached, but satisfies the type checker
+        raise RuntimeError("Unexpected: loop completed without returning or raising")
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -1147,13 +1161,23 @@ def _gemini_tool_call_metadata(part: dict[str, Any]) -> dict[str, Any] | None:
     return {GEMINI_THOUGHT_SIGNATURE_METADATA_KEY: signature}
 
 
+class GeminiMalformedResponseError(Exception):
+    """Raised when Gemini returns a MALFORMED_RESPONSE finish reason."""
+    pass
+
+
 def _parse_gemini_response(payload: dict[str, Any], tool_name_map: dict[str, str]) -> LLMResponse:
     usage = _normalize_gemini_usage(payload.get("usageMetadata"))
     candidates = payload.get("candidates") or []
     if not candidates:
         logger.error("Gemini response missing candidates: %s", _truncate_json(payload))
         raise HTTPException(status_code=502, detail="Gemini provider returned no candidates")
-    content = candidates[0].get("content") or {}
+    candidate = candidates[0]
+    finish_reason = candidate.get("finishReason")
+    if finish_reason == "MALFORMED_RESPONSE":
+        logger.warning("Gemini returned MALFORMED_RESPONSE: %s", _truncate_json(payload))
+        raise GeminiMalformedResponseError("Gemini returned MALFORMED_RESPONSE")
+    content = candidate.get("content") or {}
     parts = content.get("parts") or []
     reverse_tool_name_map = {value: key for key, value in tool_name_map.items()}
     text_parts: list[str] = []

@@ -1400,3 +1400,92 @@ def test_openai_compatible_adapter_sanitizes_provider_tool_names() -> None:
     assert seen_payload["tools"][0]["function"]["name"] == "tavily_tavily_search"
     assert response.tool_call is not None
     assert response.tool_call.name == "tavily.tavily_search"
+
+
+def test_google_gemini_adapter_retries_malformed_response() -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            # First two calls return MALFORMED_RESPONSE
+            return httpx.Response(
+                200,
+                json={
+                    "candidates": [{
+                        "content": {},
+                        "finishReason": "MALFORMED_RESPONSE",
+                        "index": 0,
+                    }],
+                    "usageMetadata": {
+                        "promptTokenCount": 100,
+                        "totalTokenCount": 100,
+                    },
+                },
+            )
+        # Third call returns valid response
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "success after retry"}]}}],
+                "usageMetadata": {
+                    "promptTokenCount": 100,
+                    "candidatesTokenCount": 10,
+                    "totalTokenCount": 110,
+                },
+            },
+        )
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="gemini-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.content == "success after retry"
+    assert call_count == 3  # 2 malformed + 1 success
+
+
+def test_google_gemini_adapter_fails_after_max_malformed_retries() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{
+                    "content": {},
+                    "finishReason": "MALFORMED_RESPONSE",
+                    "index": 0,
+                }],
+                "usageMetadata": {
+                    "promptTokenCount": 100,
+                    "totalTokenCount": 100,
+                },
+            },
+        )
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="gemini-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            adapter.generate(
+                [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+                [],
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+    assert "malformed response" in exc_info.value.detail.lower()
