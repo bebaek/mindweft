@@ -94,11 +94,21 @@ async def _run_thread_ndjson_stream(
                 event_sink=emit,
             )
         except HTTPException as exc:
+            detail = exc.detail
+            if isinstance(detail, dict) and detail.get("code") == "max_iterations":
+                await emit(
+                    {
+                        "type": "run.warning",
+                        "status_code": exc.status_code,
+                        "detail": detail.get("message", "Reached tool call limit."),
+                    }
+                )
+                return
             await emit(
                 {
                     "type": "run.error",
                     "status_code": exc.status_code,
-                    "detail": exc.detail,
+                    "detail": detail,
                 }
             )
             return

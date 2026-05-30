@@ -223,7 +223,14 @@ class AgentRuntime:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.ERROR)
-        raise HTTPException(status_code=500, detail="Agent exceeded maximum tool iterations")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "max_iterations",
+                "message": f"Reached tool call limit ({self._max_iterations}). "
+                "You can type 'continue' to keep going.",
+            },
+        )
 
     async def _maybe_apply_quality_enhancement(
         self,

@@ -85,6 +85,8 @@ def style_stream_progress_line(line: str, *, stream: TextIO) -> str:
 
     if line.startswith("✖"):
         return style_line(line, stream=stream)
+    if line.startswith("⚠"):
+        return style_text(line, "warning", stream=stream)
     return style_text(line, "progress", stream=stream)
 
 
@@ -262,6 +264,8 @@ class StreamProgressRenderer:
                     self._write_reasoning_block(content)
         elif event_type == "run.error":
             self._write(f"✖ error {event.get('status_code')}: {_format_error_detail(event.get('detail'))}")
+        elif event_type == "run.warning":
+            self._write(f"⚠ {_format_error_detail(event.get('detail'))}")
         elif event_type == "run.completed":
             summaries = []
             if self._token_mode != "off":

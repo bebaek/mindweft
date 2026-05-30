@@ -299,6 +299,7 @@ class MinigentAPIClient:
     def _run_thread_stream(self, thread_id: str) -> tuple[str, dict[str, Any] | None]:
         reply: str | None = None
         metadata: dict[str, Any] | None = None
+        saw_warning = False
         for event in self.request_ndjson_events(
             "POST",
             f"{self._config.base_url}/threads/{thread_id}/run/stream",
@@ -311,6 +312,8 @@ class MinigentAPIClient:
                     raise RuntimeError("Minigent stream assistant message must be a string")
                 reply = content
                 metadata = event.get("metadata")
+            elif event_type == "run.warning":
+                saw_warning = True
             elif event_type == "run.error":
                 status_code = event.get("status_code")
                 detail = event.get("detail")
@@ -322,6 +325,8 @@ class MinigentAPIClient:
                     technical_detail=f"run.error event: status_code={status_code} detail={detail}",
                 )
         if reply is None:
+            if saw_warning:
+                return "", metadata
             raise RuntimeError("Minigent run stream ended without an assistant message")
         return reply, metadata
 

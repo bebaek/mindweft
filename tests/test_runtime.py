@@ -958,7 +958,10 @@ def test_runtime_marks_thread_error_when_max_iterations_exceeded() -> None:
         asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
     except HTTPException as exc:
         assert exc.status_code == 500
-        assert exc.detail == "Agent exceeded maximum tool iterations"
+        assert exc.detail == {
+            "code": "max_iterations",
+            "message": "Reached tool call limit (2). You can type 'continue' to keep going.",
+        }
     else:  # pragma: no cover - assertion guard
         raise AssertionError("Expected HTTPException")
 
