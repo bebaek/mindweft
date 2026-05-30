@@ -105,6 +105,7 @@ class MinigentClientRuntime:
                 return reply
             self._set_state(ClientState.SPEAKING)
             activation = self._speak_with_optional_barge_in(reply)
+            self._minigent_client.flush_pending_token_summary()
             if activation is None:
                 activation = self._capture_follow_up_activation()
             if activation is None:

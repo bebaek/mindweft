@@ -85,6 +85,9 @@ class FakeMinigentClient:
     def run_thread(self) -> tuple[str, dict[str, object] | None]:
         return (self.reply, None)
 
+    def flush_pending_token_summary(self) -> None:
+        pass
+
 
 class TtyStringIO(StringIO):
     def isatty(self) -> bool:
@@ -1951,6 +1954,7 @@ def test_minigent_client_can_run_thread_with_ndjson_stream(
         }
     ]
     assert output_stream.getvalue() == ""
+    client.flush_pending_token_summary()
     assert progress_stream.getvalue() == (
         "● preparing\n"
         "🔧 echo() ...\n"

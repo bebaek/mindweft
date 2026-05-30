@@ -747,6 +747,7 @@ def run_chat(
         if reasoning:
             print(format_reasoning_block(reasoning, stream=sys.stdout))
     _print_assistant_reply(reply)
+    client.flush_pending_token_summary()
     if args.transcript:
         print("")
         for message in client.get_thread(thread_id)["messages"]:

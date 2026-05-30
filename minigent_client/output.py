@@ -220,6 +220,7 @@ class StreamProgressRenderer:
         self._last_usage_summary: str | None = None
         self._last_thread_context_summary: str | None = None
         self._saw_peer_event = False
+        self._pending_summary: str | None = None
 
     def set_verbose(self, verbose: bool) -> None:
         self._verbose = verbose
@@ -274,11 +275,15 @@ class StreamProgressRenderer:
                 if self._last_usage_summary is not None:
                     summaries.append(self._last_usage_summary)
             if summaries:
-                self._write(f"● done · {' · '.join(summaries)}")
+                summary_line = f"● done · {' · '.join(summaries)}"
             elif self._token_mode == "live" and self._saw_peer_event:
-                self._write("● done · tokens unavailable for peer backend")
+                summary_line = "● done · tokens unavailable for peer backend"
             else:
-                self._write("● done")
+                summary_line = "● done"
+            if self._token_mode == "live":
+                self._write(summary_line)
+            else:
+                self._pending_summary = summary_line
 
     def _write_tool_call(self, event: dict[str, Any]) -> None:
         name = _event_name(event)
@@ -392,6 +397,12 @@ class StreamProgressRenderer:
                     self._write_tool_detail_block(details)
             return
         self._write(f"[peer] event {peer_event_type}")
+
+    def flush_pending_summary(self) -> None:
+        """Write any pending summary line (e.g., token stats) and clear it."""
+        if self._pending_summary is not None:
+            self._write(self._pending_summary)
+            self._pending_summary = None
 
     def _write(self, line: str) -> None:
         self._stream.write(f"{style_stream_progress_line(line, stream=self._stream)}\n")

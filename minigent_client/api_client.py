@@ -219,6 +219,10 @@ class MinigentAPIClient:
         self._config = replace(self._config, debug_show_prompt=enabled)
         self._stream_progress_renderer.set_verbose(enabled)
 
+    def flush_pending_token_summary(self) -> None:
+        """Flush any deferred "done · tokens …" line to the progress stream."""
+        self._stream_progress_renderer.flush_pending_summary()
+
     def add_message(
         self,
         thread_id: str,

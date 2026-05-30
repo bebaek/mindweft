@@ -471,6 +471,11 @@ class RememberingMinigentAPIClient:
         if callable(setter):
             setter(enabled)
 
+    def flush_pending_token_summary(self) -> None:
+        flusher = getattr(self._client, "flush_pending_token_summary", None)
+        if callable(flusher):
+            flusher()
+
     def compact_thread(self, thread_id: str) -> dict[str, Any]:
         response = self._client.compact_thread(thread_id)  # type: ignore[attr-defined]
         return response if isinstance(response, dict) else {}
@@ -803,6 +808,7 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
                 output_stream.write(format_reasoning_block(reasoning, stream=output_stream) + "\n")
                 output_stream.flush()
         speech_output.speak(reply)
+        client.flush_pending_token_summary()
         turns_completed += 1
         if once and turns_completed >= 1:
             return 0
