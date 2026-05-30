@@ -98,7 +98,7 @@ class MinigentClientRuntime:
             self._set_state(ClientState.THINKING)
             try:
                 self._minigent_client.send_user_message(utterance)
-                reply = self._minigent_client.run_thread()
+                reply, _metadata = self._minigent_client.run_thread()
             except RuntimeError as exc:
                 self._handle_backend_error(exc)
                 self._set_state(ClientState.IDLE)

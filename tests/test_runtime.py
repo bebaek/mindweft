@@ -56,7 +56,7 @@ def test_runtime_returns_assistant_reply_for_plain_user_message() -> None:
         ),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert reply == "Mock reply: hello"
     messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
@@ -93,7 +93,7 @@ def test_runtime_executes_multiple_tool_calls_in_one_iteration() -> None:
         Message(thread_id=thread.thread_id, role=MessageRole.USER, content="use two tools"),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert "alpha" in reply
     assert "beta" in reply
@@ -158,7 +158,7 @@ def test_runtime_runs_multiple_tool_calls_concurrently() -> None:
         Message(thread_id=thread.thread_id, role=MessageRole.USER, content="use two tools"),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert reply == "done"
     assert sorted(started) == ["a", "b"]
@@ -191,7 +191,7 @@ def test_runtime_sends_system_prompt_to_llm() -> None:
         ),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert reply == "ok"
     assert seen_messages[0].role == MessageRole.SYSTEM
@@ -239,7 +239,7 @@ def test_runtime_summarizes_older_messages_and_keeps_recent_tail_verbatim() -> N
             ),
         )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert reply == "ok"
     assert seen_messages[0].role == MessageRole.SYSTEM
@@ -470,7 +470,7 @@ def test_runtime_uses_prompt_budget_to_compact_more_than_default_tail() -> None:
             ),
         )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert reply == "ok"
     assert seen_messages[1].role == MessageRole.SYSTEM
@@ -534,7 +534,7 @@ def test_runtime_executes_tool_and_stores_tool_message() -> None:
         ),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
     assert reply == 'Tool result: {"echo": "hello from tool"}'
@@ -582,7 +582,7 @@ def test_runtime_executes_direct_tool_command_without_llm_tool_planning() -> Non
         ),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
     assert reply == 'Tool result: {"echo": "hello from direct tool"}'
@@ -608,7 +608,7 @@ def test_runtime_executes_current_time_tool() -> None:
         ),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
     assert reply.startswith('Tool result: {"current_time": "')
@@ -691,7 +691,7 @@ def test_runtime_exposes_peer_routing_hints_to_llm_and_delegates() -> None:
         ),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert seen_peer_description is not None
     assert "Available peers:" in seen_peer_description
@@ -759,7 +759,7 @@ def test_runtime_stores_tool_error_and_continues() -> None:
         ),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
     assert reply == (
@@ -827,7 +827,7 @@ def test_runtime_blocks_repeated_identical_failed_tool_calls() -> None:
         ),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
     assert registry.calls == 1
@@ -899,7 +899,7 @@ def test_runtime_blocks_repeated_identical_error_results() -> None:
         ),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
     assert registry.calls == 1
@@ -1033,7 +1033,8 @@ def test_runtime_rejects_concurrent_runs_for_same_thread() -> None:
             with_raise = exc
 
         release.set()
-        assert await first_run == "done"
+        first_reply, _first_metadata = await first_run
+        assert first_reply == "done"
         assert with_raise is not None
         assert with_raise.status_code == 409
         assert store._threads[thread.thread_id].status == ThreadStatus.IDLE
@@ -1116,7 +1117,7 @@ def test_runtime_appends_skill_prompt_to_system_prompt() -> None:
         ),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert reply == "ok"
     assert seen_messages[0].content == (
@@ -1179,7 +1180,7 @@ def test_runtime_appends_multiple_skill_prompts_in_order() -> None:
         ),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert reply == "ok"
     assert seen_messages[0].content == (
@@ -1222,7 +1223,7 @@ def test_runtime_skill_can_narrow_tools_for_thread() -> None:
         ),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert reply == "Mock reply: /tool echo blocked by skill"
 
@@ -1318,7 +1319,7 @@ def test_runtime_capability_profile_can_narrow_tools_for_thread() -> None:
         ),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     assert reply == "Mock reply: /tool echo blocked by capability profile"
 
@@ -1437,7 +1438,7 @@ def test_runtime_applies_enabled_remote_quality_critique() -> None:
         Message(thread_id=thread.thread_id, role=MessageRole.USER, content="hello"),
     )
 
-    reply = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id, event_sink=emit))
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id, event_sink=emit))
 
     assert reply == "Revised final answer"
     assert llm.calls == 2

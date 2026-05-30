@@ -82,8 +82,8 @@ class FakeMinigentClient:
         self.messages.append(content)
         return {"id": "message-1"}
 
-    def run_thread(self) -> str:
-        return self.reply
+    def run_thread(self) -> tuple[str, dict[str, object] | None]:
+        return (self.reply, None)
 
 
 class TtyStringIO(StringIO):
@@ -348,7 +348,7 @@ def test_minigent_client_supports_barge_in() -> None:
         speech_output=speech_output,
     )
     replies = iter(["first reply", "second reply"])
-    minigent_client.run_thread = lambda: next(replies)
+    minigent_client.run_thread = lambda: (next(replies), None)
 
     reply = daemon.run_once()
 
@@ -372,7 +372,7 @@ def test_minigent_client_uses_follow_up_window_without_wake_word() -> None:
         follow_up_timeout_ms=6000,
     )
     replies = iter(["first reply", "second reply"])
-    minigent_client.run_thread = lambda: next(replies)
+    minigent_client.run_thread = lambda: (next(replies), None)
 
     reply = daemon.run_once()
 
@@ -404,7 +404,7 @@ def test_minigent_client_returns_to_idle_when_follow_up_window_expires() -> None
 
 def test_minigent_client_recovers_from_backend_error() -> None:
     class FailingMinigentClient(FakeMinigentClient):
-        def run_thread(self) -> str:
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
             raise RuntimeError(
                 'POST http://127.0.0.1:8000/threads/thread-1/run failed: 502 {"detail":"LLM provider returned no message content"}'
             )
@@ -1858,7 +1858,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "thread_id": "thread-1",
         "messages": [{"role": "user", "content": "hello"}],
     }
-    assert client.run_thread("thread-1", stream=False) == "hi"
+    assert client.run_thread("thread-1", stream=False) == ("hi", None)
     assert client.compact_thread("thread-1") == {"compacted_message_count": 1, "message_count": 2}
     client.delete_thread("thread-1")
 
@@ -1935,7 +1935,7 @@ def test_minigent_client_can_run_thread_with_ndjson_stream(
         progress_stream=progress_stream,
     )
 
-    reply = client.run_thread()
+    reply, _metadata = client.run_thread()
 
     assert reply == "streamed reply"
     assert requests == [
@@ -1996,7 +1996,7 @@ def test_minigent_client_notes_peer_token_usage_unavailable_for_live_tokens(
         token_mode="live",
     )
 
-    assert client.run_thread() == "streamed reply"
+    assert client.run_thread() == ("streamed reply", None)
     assert "● done · tokens unavailable for peer backend" in progress_stream.getvalue()
 
 
@@ -2049,7 +2049,7 @@ def test_minigent_client_can_show_stream_tool_results(
         show_tool_results=True,
     )
 
-    assert client.run_thread() == "streamed reply"
+    assert client.run_thread() == ("streamed reply", None)
     progress = progress_stream.getvalue()
     assert '🔧 echo(text="hi") done' in progress
     assert "   result:" in progress
@@ -2114,7 +2114,7 @@ def test_minigent_client_shows_limited_peer_stream_tool_arguments(
         progress_stream=progress_stream,
     )
 
-    assert client.run_thread() == "streamed reply"
+    assert client.run_thread() == ("streamed reply", None)
     progress = progress_stream.getvalue()
     assert '[peer] tool start read(path="README.md", limit=20)' in progress
     assert '[peer] tool end read(path="README.md", limit=20)' in progress
@@ -2164,7 +2164,7 @@ def test_minigent_client_can_show_peer_stream_tool_details(
         show_tool_results=True,
     )
 
-    assert client.run_thread() == "streamed reply"
+    assert client.run_thread() == ("streamed reply", None)
     progress = progress_stream.getvalue()
     assert "[peer] tool update temperature status=completed" in progress
     assert "   details:" in progress
@@ -2214,7 +2214,7 @@ def test_minigent_client_can_show_nested_peer_stream_tool_details(
         show_tool_results=True,
     )
 
-    assert client.run_thread() == "streamed reply"
+    assert client.run_thread() == ("streamed reply", None)
     progress = progress_stream.getvalue()
     assert "[peer] tool end current_time" in progress
     assert "resultPayload" in progress
@@ -3508,9 +3508,9 @@ def test_run_chat_loop_expands_custom_slash_command(
             events.append(("message", content))
             return {"id": "message-1"}
 
-        def run_thread(self) -> str:
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
             events.append(("run", "rewritten"))
-            return "rewritten"
+            return ("rewritten", None)
 
     monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
@@ -3545,10 +3545,10 @@ def test_run_chat_loop_handles_multiple_turns_and_blank_lines(
             events.append(("message", content))
             return {"id": "message-1"}
 
-        def run_thread(self) -> str:
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
             reply = next(self.replies)
             events.append(("run", reply))
-            return reply
+            return (reply, None)
 
     monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
@@ -4041,8 +4041,8 @@ def test_run_chat_loop_continues_after_backend_error(
                 raise RuntimeError("502 upstream")
             return {"id": "message-1"}
 
-        def run_thread(self) -> str:
-            return "good reply"
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
+            return ("good reply", None)
 
     monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
@@ -4074,8 +4074,8 @@ def test_run_chat_loop_remembers_thread_after_successful_turn(
             assert content == "remember this"
             return {"id": "message-1"}
 
-        def run_thread(self) -> str:
-            return "reply"
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
+            return ("reply", None)
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
@@ -4162,7 +4162,7 @@ def test_run_chat_loop_resume_last_forgets_missing_thread_and_reports_error(
                 status_code=404,
             )
 
-        def run_thread(self) -> str:
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
             raise AssertionError("the thread must not run after a missing resumed thread")
 
     monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
@@ -4206,8 +4206,8 @@ def test_run_chat_loop_honors_once(
             messages.append(content)
             return {"id": "message-1"}
 
-        def run_thread(self) -> str:
-            return "first reply"
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
+            return ("first reply", None)
 
     monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
@@ -4238,8 +4238,8 @@ def test_run_chat_loop_ignores_blank_interactive_submit(
             messages.append(content)
             return {"id": "message-1"}
 
-        def run_thread(self) -> str:
-            return "reply"
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
+            return ("reply", None)
 
     responses = iter(["", "real question"])
 
@@ -4306,8 +4306,8 @@ def test_run_chat_loop_rebuilds_prompt_history_after_thread_switch(
             messages.append((self.thread_id, content))
             return {"id": "message-1"}
 
-        def run_thread(self) -> str:
-            return "reply"
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
+            return ("reply", None)
 
     def fake_build_chat_prompt_session(**kwargs: object) -> FakePromptSession:
         history_thread_id = kwargs.get("history_thread_id")
@@ -4563,8 +4563,8 @@ def test_run_chat_loop_handles_editor_command(
             messages.append(content)
             return {"id": "message-1"}
 
-        def run_thread(self) -> str:
-            return "reply"
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
+            return ("reply", None)
 
     def fake_run(argv: list[str], check: bool = False) -> object:
         del check
@@ -4605,8 +4605,8 @@ def test_run_chat_loop_handles_editor_atomic_save(
             messages.append(content)
             return {"id": "message-1"}
 
-        def run_thread(self) -> str:
-            return "reply"
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
+            return ("reply", None)
 
     def fake_run(argv: list[str], check: bool = False) -> object:
         del check
@@ -4672,7 +4672,7 @@ def test_run_chat_loop_interrupt_during_run_aborts_turn_and_stays_in_chat(
         def send_user_message(self, content: str) -> None:
             calls.append(content)
 
-        def run_thread(self) -> str:
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
             raise KeyboardInterrupt
 
     monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
