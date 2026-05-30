@@ -7,7 +7,8 @@ import logging
 import os
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -35,6 +36,15 @@ ProgressSink = Callable[[int], Awaitable[None]] | None
 _progress_sink_ctx: contextvars.ContextVar[ProgressSink] = contextvars.ContextVar(
     "progress_sink", default=None
 )
+
+
+@contextmanager
+def llm_progress_sink(sink: Callable[[int], Awaitable[None]]) -> Iterator[None]:
+    token = _progress_sink_ctx.set(sink)
+    try:
+        yield
+    finally:
+        _progress_sink_ctx.reset(token)
 
 
 class LLMAdapter(ABC):
@@ -259,10 +269,11 @@ class OpenAICompatibleAdapter(LLMAdapter):
             message_count=len(request_messages),
             tool_count=len(tools),
         )
-        return await client.post(
+        return await _post_json_with_progress(
+            client,
             f"{self._base_url}/chat/completions",
-            json=payload,
-            headers=headers,
+            payload,
+            headers,
         )
 
 
@@ -314,10 +325,11 @@ class GoogleGeminiAdapter(LLMAdapter):
         for attempt in range(max_malformed_retries + 1):
             async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
                 try:
-                    response = await client.post(
+                    response = await _post_json_with_progress(
+                        client,
                         f"{self._base_url}/{model_path}:generateContent",
-                        json=payload,
-                        headers=headers,
+                        payload,
+                        headers,
                     )
                     response.raise_for_status()
                 except httpx.HTTPStatusError as exc:
@@ -706,6 +718,37 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
         }
 
 
+async def _emit_progress_chunk(chunk_len: int) -> None:
+    sink = _progress_sink_ctx.get()
+    if sink is not None:
+        await sink(chunk_len)
+
+
+async def _post_json_with_progress(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+) -> httpx.Response:
+    body_chunks: list[bytes] = []
+    async with client.stream(
+        "POST",
+        url,
+        json=payload,
+        headers=headers,
+    ) as response:
+        async for chunk in response.aiter_bytes():
+            body_chunks.append(chunk)
+            await _emit_progress_chunk(len(chunk))
+        return httpx.Response(
+            response.status_code,
+            headers=response.headers,
+            content=b"".join(body_chunks),
+            request=response.request,
+            extensions=response.extensions,
+        )
+
+
 async def _post_responses_request(
     client: httpx.AsyncClient,
     url: str,
@@ -748,9 +791,7 @@ async def _post_responses_request(
             try:
                 async for chunk in response.aiter_text():
                     body_chunks.append(chunk)
-                    sink = _progress_sink_ctx.get()
-                    if sink is not None:
-                        await sink(len(chunk))
+                    await _emit_progress_chunk(len(chunk))
             except httpx.HTTPError as exc:
                 read_error = exc
     except httpx.HTTPError as exc:

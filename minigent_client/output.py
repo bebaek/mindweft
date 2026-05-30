@@ -308,13 +308,14 @@ class StreamProgressRenderer:
             self._write("● preparing")
         elif event_type == "llm.request":
             suffix = f" iteration={event.get('iteration')}" if self._verbose else ""
-            self._stop_spinner()
-            self._current_spinner = _ProgressSpinner(self._stream, f"● sending{suffix}")
-            if self._current_spinner._tty:
+            spinner = _ProgressSpinner(self._stream, f"● sending{suffix}")
+            if spinner._tty:
+                self._stop_spinner()
+                self._current_spinner = spinner
                 self._write_inline(f"● sending{suffix}")
+                spinner.start()
             else:
                 self._write(f"● sending{suffix}")
-            self._current_spinner.start()
         elif event_type == "llm.progress":
             if self._current_spinner:
                 self._current_spinner.update_bytes(event.get("bytes", 0))

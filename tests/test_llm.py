@@ -13,6 +13,7 @@ from app.llm import (
     OpenAICompatibleAdapter,
     _prune_historical_tool_messages_for_azure,
     build_llm_adapter_from_env,
+    llm_progress_sink,
     load_provider_config,
     serialize_tool_result,
 )
@@ -56,6 +57,38 @@ def test_openai_compatible_adapter_returns_text_response() -> None:
 
     assert response.content == "hello from provider"
     assert response.tool_call is None
+
+
+def test_openai_compatible_adapter_emits_progress_for_response_chunks() -> None:
+    progress: list[int] = []
+
+    async def collect_progress(chunk_len: int) -> None:
+        progress.append(chunk_len)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "hello from provider"}}]},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def run() -> None:
+        with llm_progress_sink(collect_progress):
+            await adapter.generate(
+                [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+                [],
+            )
+
+    asyncio.run(run())
+
+    assert progress
+    assert sum(progress) > 0
 
 
 def test_openai_adapter_normalizes_provider_rate_limit_error(
@@ -210,6 +243,38 @@ def test_google_gemini_adapter_returns_text_response() -> None:
         "output_tokens": 4,
         "total_tokens": 7,
     }
+
+
+def test_google_gemini_adapter_emits_progress_for_response_chunks() -> None:
+    progress: list[int] = []
+
+    async def collect_progress(chunk_len: int) -> None:
+        progress.append(chunk_len)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"text": "hello from gemini"}]}}]},
+        )
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="gemini-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def run() -> None:
+        with llm_progress_sink(collect_progress):
+            await adapter.generate(
+                [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+                [],
+            )
+
+    asyncio.run(run())
+
+    assert progress
+    assert sum(progress) > 0
 
 
 def test_google_gemini_adapter_sanitizes_quota_errors(caplog: pytest.LogCaptureFixture) -> None:

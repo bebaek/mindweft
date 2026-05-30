@@ -19,7 +19,7 @@ from app.execution import (
     get_capability_profile,
     get_skill_configs,
 )
-from app.llm import LLMAdapter, MockLLMAdapter, _progress_sink_ctx, serialize_tool_result
+from app.llm import LLMAdapter, MockLLMAdapter, llm_progress_sink, serialize_tool_result
 from app.models import (
     LLMResponse,
     Message,
@@ -171,13 +171,10 @@ class AgentRuntime:
                                 {"type": "llm.progress", "bytes": _progress_bytes},
                             )
 
-                    token = _progress_sink_ctx.set(_on_progress)
-                    try:
+                    with llm_progress_sink(_on_progress):
                         response = await execution.llm_adapter.generate(
                             messages, tool_specs
                         )
-                    finally:
-                        _progress_sink_ctx.reset(token)
                     if response.usage is not None:
                         await _emit_run_event(
                             event_sink,
