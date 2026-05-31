@@ -202,6 +202,95 @@ def test_generic_oauth_adapter_normalizes_provider_bad_request_error(
     }
 
 
+def test_generic_oauth_codex_responses_requests_reasoning_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MINIGENT_LLM_ACCOUNT_ID_HEADER", raising=False)
+    monkeypatch.delenv("MINIGENT_LLM_REASONING_EFFORT", raising=False)
+    monkeypatch.delenv("MINIGENT_LLM_REASONING_SUMMARY", raising=False)
+    captured_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_payload
+        captured_payload = json.loads(request.read().decode())
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=(
+                'data: {"type":"response.output_text.delta","delta":"hello"}\n\n'
+                'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\n'
+            ),
+        )
+
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://chatgpt.com/backend-api/codex/responses",
+        model="gpt-5.5",
+        oauth_provider=FakeOAuthProvider(),  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.content == "hello"
+    assert captured_payload["include"] == ["reasoning.encrypted_content"]
+    assert captured_payload["reasoning"] == {"effort": "medium", "summary": "auto"}
+
+
+def test_generic_oauth_responses_extracts_streamed_reasoning_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MINIGENT_LLM_ACCOUNT_ID_HEADER", raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        _ = request.read()
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(
+                [
+                    'data: {"type":"response.output_item.added","item":{"id":"rs_1","type":"reasoning","encrypted_content":"opaque"}}\n\n',
+                    'data: {"type":"response.reasoning_summary_part.added","item_id":"rs_1","part":{"type":"summary_text","text":""}}\n\n',
+                    'data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","delta":"I checked"}\n\n',
+                    'data: {"type":"response.reasoning_summary_part.done","item_id":"rs_1","part":{"type":"summary_text","text":"I checked"}}\n\n',
+                    'data: {"type":"response.output_item.done","item":{"id":"rs_1","type":"reasoning","encrypted_content":"opaque","summary":[{"type":"summary_text","text":"I checked"}]}}\n\n',
+                    'data: {"type":"response.output_text.delta","delta":"done"}\n\n',
+                    'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\n',
+                ]
+            ),
+        )
+
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://chatgpt.com/backend-api/codex/responses",
+        model="gpt-5.5",
+        oauth_provider=FakeOAuthProvider(),  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.content == "done"
+    assert response.metadata == {
+        "generic_oauth_responses_output_items": [
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "I checked"}],
+                "encrypted_content": "opaque",
+                "id": "rs_1",
+            }
+        ]
+    }
+
+
 def test_google_gemini_adapter_returns_text_response() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert str(request.url) == "https://example.com/v1beta/models/gemini-test:generateContent"

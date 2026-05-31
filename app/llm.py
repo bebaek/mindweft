@@ -25,6 +25,8 @@ LLM_DEBUG_LOG_RESPONSE_MAX_CHARS_ENV = "MINIGENT_LLM_DEBUG_LOG_RESPONSE_MAX_CHAR
 LLM_DEBUG_RESPONSE_LOG_PATH_ENV = "MINIGENT_LLM_DEBUG_RESPONSE_LOG_PATH"
 LLM_DEBUG_REQUEST_LOG_PATH_ENV = "MINIGENT_LLM_DEBUG_REQUEST_LOG_PATH"
 LLM_PROMPT_CACHE_KEY_ENV = "MINIGENT_LLM_PROMPT_CACHE_KEY"
+LLM_REASONING_EFFORT_ENV = "MINIGENT_LLM_REASONING_EFFORT"
+LLM_REASONING_SUMMARY_ENV = "MINIGENT_LLM_REASONING_SUMMARY"
 LLM_MAX_TOOL_RESULT_CHARS_ENV = "MINIGENT_LLM_MAX_TOOL_RESULT_CHARS"
 RESPONSES_OUTPUT_ITEMS_METADATA_KEY = "generic_oauth_responses_output_items"
 GEMINI_THOUGHT_SIGNATURE_METADATA_KEY = "gemini_thought_signature"
@@ -651,6 +653,9 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
             payload["tools"] = [_tool_to_responses_payload(tool, tool_name_map) for tool in tools]
         if _is_chatgpt_codex_responses_url(self._url):
             payload["include"] = ["reasoning.encrypted_content"]
+            reasoning = _responses_request_reasoning_config()
+            if reasoning is not None:
+                payload["reasoning"] = reasoning
         prompt_cache_key = _prompt_cache_key_for_request(messages)
         if prompt_cache_key:
             payload["prompt_cache_key"] = prompt_cache_key
@@ -1310,6 +1315,24 @@ def _is_chatgpt_codex_responses_url(url: str) -> bool:
     )
 
 
+def _responses_request_reasoning_config() -> dict[str, str] | None:
+    """Build optional Responses API reasoning settings for ChatGPT Codex.
+
+    ChatGPT's Codex Responses endpoint defaults to hidden reasoning with no
+    displayable summary. Request an automatic summary by default while allowing
+    deployments to tune or disable this behavior via environment variables.
+    """
+    effort = os.getenv(LLM_REASONING_EFFORT_ENV, "medium").strip().lower()
+    summary = os.getenv(LLM_REASONING_SUMMARY_ENV, "auto").strip().lower()
+
+    reasoning: dict[str, str] = {}
+    if effort not in {"", "off", "none", "null", "false", "0"}:
+        reasoning["effort"] = effort
+    if summary not in {"", "off", "none", "null", "false", "0"}:
+        reasoning["summary"] = summary
+    return reasoning or None
+
+
 def _thread_id_for_prompt_cache(messages: list[Message]) -> str | None:
     message = next((item for item in messages if item.thread_id), None)
     return message.thread_id if message is not None else None
@@ -1543,6 +1566,7 @@ def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMRespons
     output_item_order: list[str] = []
     argument_deltas_by_key: dict[str, list[str]] = {}
     done_arguments_by_key: dict[str, str] = {}
+    current_reasoning_key: str | None = None
     for raw_line in body.splitlines():
         line = raw_line.strip()
         if not line.startswith("data:"):
@@ -1574,6 +1598,43 @@ def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMRespons
             output_items_by_key[item_key] = merged
             if item_key not in output_item_order:
                 output_item_order.append(item_key)
+            if merged.get("type") == "reasoning":
+                current_reasoning_key = item_key
+        if event_type == "response.reasoning_summary_part.added":
+            reasoning_key = item_key or current_reasoning_key
+            part = event.get("part")
+            if reasoning_key is not None and isinstance(part, dict):
+                output_items_by_key.setdefault(reasoning_key, {"type": "reasoning"})
+                output_items_by_key[reasoning_key].setdefault("summary", []).append(part)
+                if reasoning_key not in output_item_order:
+                    output_item_order.append(reasoning_key)
+        if event_type == "response.reasoning_summary_text.delta" and isinstance(delta, str):
+            reasoning_key = item_key or current_reasoning_key
+            if reasoning_key is not None:
+                reasoning_item = output_items_by_key.setdefault(reasoning_key, {"type": "reasoning"})
+                summary = reasoning_item.setdefault("summary", [])
+                if not isinstance(summary, list):
+                    summary = []
+                    reasoning_item["summary"] = summary
+                if not summary or not isinstance(summary[-1], dict):
+                    summary.append({"type": "summary_text", "text": ""})
+                text = summary[-1].get("text")
+                summary[-1]["text"] = (text if isinstance(text, str) else "") + delta
+                if reasoning_key not in output_item_order:
+                    output_item_order.append(reasoning_key)
+        if event_type == "response.reasoning_summary_part.done":
+            reasoning_key = item_key or current_reasoning_key
+            part = event.get("part")
+            if reasoning_key is not None and isinstance(part, dict):
+                reasoning_item = output_items_by_key.setdefault(reasoning_key, {"type": "reasoning"})
+                summary = reasoning_item.setdefault("summary", [])
+                if isinstance(summary, list):
+                    if summary and isinstance(summary[-1], dict):
+                        summary[-1].update(part)
+                    else:
+                        summary.append(part)
+                if reasoning_key not in output_item_order:
+                    output_item_order.append(reasoning_key)
         if event_type in {
             "response.function_call_arguments.delta",
             "response.function_call_arguments.done",
@@ -1602,12 +1663,18 @@ def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMRespons
             )
             if response.usage is None and usage is not None:
                 response.usage = usage
+            if response.metadata is None:
+                response.metadata = _responses_metadata_from_output(output_items)
             return response
         except HTTPException as exc:
             if not _is_no_responses_output_error(exc):
                 raise
             if text_parts:
-                return LLMResponse(content="".join(text_parts), usage=usage)
+                return LLMResponse(
+                    content="".join(text_parts),
+                    usage=usage,
+                    metadata=_responses_metadata_from_output(output_items),
+                )
             if output_items:
                 payload: dict[str, Any] = {"output": output_items}
                 if usage is not None:
@@ -1618,6 +1685,12 @@ def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMRespons
                 _truncate_json(final_response),
             )
             raise
+    if output_items and text_parts:
+        return LLMResponse(
+            content="".join(text_parts),
+            usage=usage,
+            metadata=_responses_metadata_from_output(output_items),
+        )
     if output_items:
         payload = {"output": output_items}
         if usage is not None:

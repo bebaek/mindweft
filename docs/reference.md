@@ -168,8 +168,12 @@ and provider enabling prompt caching for stable prompt prefixes. For generic OAu
 Responses endpoints that support caller-selected cache buckets, Minigent sends the current
 thread ID as `prompt_cache_key` and also sends Codex/Pi-style `session_id`, `session-id`,
 `thread-id`, and `x-client-request-id` headers. For the ChatGPT Codex Responses endpoint,
-Minigent also sends `include: ["reasoning.encrypted_content"]` to match Pi's request shape.
-Set `MINIGENT_LLM_PROMPT_CACHE_KEY` to a literal value to
+Minigent also sends `include: ["reasoning.encrypted_content"]` and requests reasoning
+summaries with `reasoning: {"effort":"medium","summary":"auto"}` by default, matching
+Pi's visible-thinking request shape. Override those defaults with
+`MINIGENT_LLM_REASONING_EFFORT` and `MINIGENT_LLM_REASONING_SUMMARY`; set either value to
+`off`, `none`, `null`, `false`, or `0` to omit that field. Set
+`MINIGENT_LLM_PROMPT_CACHE_KEY` to a literal value to
 override the cache key, or to `thread`/`auto` to explicitly use thread-ID mode.
 For OpenRouter,
 Minigent requests usage metadata with `usage: {"include": true}` so compatible models

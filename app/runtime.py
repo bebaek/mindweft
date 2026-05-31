@@ -19,7 +19,13 @@ from app.execution import (
     get_capability_profile,
     get_skill_configs,
 )
-from app.llm import LLMAdapter, MockLLMAdapter, llm_progress_sink, serialize_tool_result
+from app.llm import (
+    RESPONSES_OUTPUT_ITEMS_METADATA_KEY,
+    LLMAdapter,
+    MockLLMAdapter,
+    llm_progress_sink,
+    serialize_tool_result,
+)
 from app.models import (
     LLMResponse,
     Message,
@@ -185,17 +191,15 @@ class AgentRuntime:
                             },
                         )
                 if response.tool_calls:
-                    # Emit reasoning content before tool calls if present
-                    if response.metadata:
-                        reasoning_content = response.metadata.get("reasoning_content")
-                        if isinstance(reasoning_content, str) and reasoning_content.strip():
-                            await _emit_run_event(
-                                event_sink,
-                                {
-                                    "type": "reasoning",
-                                    "content": reasoning_content,
-                                },
-                            )
+                    reasoning_content = _reasoning_content_from_metadata(response.metadata)
+                    if reasoning_content:
+                        await _emit_run_event(
+                            event_sink,
+                            {
+                                "type": "reasoning",
+                                "content": reasoning_content,
+                            },
+                        )
                     await self._handle_tool_calls(
                         principal,
                         thread_id,
@@ -219,6 +223,15 @@ class AgentRuntime:
                     base_messages=messages,
                     event_sink=event_sink,
                 )
+                reasoning_content = _reasoning_content_from_metadata(response.metadata)
+                if reasoning_content:
+                    await _emit_run_event(
+                        event_sink,
+                        {
+                            "type": "reasoning",
+                            "content": reasoning_content,
+                        },
+                    )
                 self._store.append_message(
                     principal.tenant_id,
                     Message(
@@ -647,6 +660,36 @@ def _normalize_tool_error_result(tool_name: str, result: object) -> dict[str, An
     if "documentation" in result:
         normalized_error["documentation"] = result["documentation"]
     return {"error": normalized_error}
+
+
+def _reasoning_content_from_metadata(metadata: dict[str, Any] | None) -> str | None:
+    if not metadata:
+        return None
+
+    reasoning_content = metadata.get("reasoning_content")
+    if isinstance(reasoning_content, str) and reasoning_content.strip():
+        return reasoning_content.strip()
+
+    reasoning_items = metadata.get(RESPONSES_OUTPUT_ITEMS_METADATA_KEY)
+    if not isinstance(reasoning_items, list):
+        return None
+
+    summary_parts: list[str] = []
+    for item in reasoning_items:
+        if not isinstance(item, dict) or item.get("type") != "reasoning":
+            continue
+        summary = item.get("summary")
+        if not isinstance(summary, list):
+            continue
+        for summary_item in summary:
+            if not isinstance(summary_item, dict):
+                continue
+            text = summary_item.get("text")
+            if isinstance(text, str) and text.strip():
+                summary_parts.append(text.strip())
+    if not summary_parts:
+        return None
+    return "\n\n".join(summary_parts)
 
 
 def _safe_compaction_boundary(
