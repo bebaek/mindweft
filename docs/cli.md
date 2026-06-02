@@ -136,6 +136,10 @@ minigent --admin admin tenants archive <tenant-id>
 minigent --admin admin tenants delete <tenant-id>
 minigent --admin admin tenants seed --from execution-configs --status active --dry-run
 minigent --admin admin tenants seed --from execution-configs --status active
+minigent --admin admin tenants entitlements show <tenant-id>
+minigent --admin admin tenants entitlements set <tenant-id> --features-json '{"mcp":true}' --limits-json '{"max_threads":100}'
+minigent --admin admin tenants entitlements validate <tenant-id> --features-json '{"mcp":true}'
+minigent --admin admin tenants entitlements delete <tenant-id>
 ```
 
 Thread and audit admin commands use `--tenant` to select the target tenant:

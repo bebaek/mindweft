@@ -40,6 +40,14 @@ class Tenant(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class TenantEntitlements(BaseModel):
+    tenant_id: str
+    features: dict[str, bool] = Field(default_factory=dict)
+    limits: dict[str, int | float | str | bool | None] = Field(default_factory=dict)
+    version: int = 1
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class MessageRole(str, Enum):
     SYSTEM = "system"
     USER = "user"

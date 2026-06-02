@@ -1351,6 +1351,10 @@ Admin endpoints:
 - `POST /admin/tenants/{tenant_id}/archive`
 - `DELETE /admin/tenants/{tenant_id}`
 - `POST /admin/tenants/seed`
+- `GET /admin/tenants/{tenant_id}/entitlements`
+- `PUT /admin/tenants/{tenant_id}/entitlements`
+- `POST /admin/tenants/{tenant_id}/entitlements/validate`
+- `DELETE /admin/tenants/{tenant_id}/entitlements`
 - `GET /admin/execution-config-tenants`
 - `GET /admin/tenants/{tenant_id}/threads`
 - `GET /admin/tenants/{tenant_id}/threads/{thread_id}`
@@ -1370,7 +1374,7 @@ X-Minigent-Tenant-Id: admin-tenant
 X-Minigent-Admin: true
 ```
 
-Tenant registry endpoints manage durable tenant identity and lifecycle state. Tenant records include `id`, `slug`, `name`, `status`, `plan`, `region`, JSON `metadata`, actor fields, and timestamps. Slugs must be unique and contain lowercase letters, digits, and hyphens. `DELETE /admin/tenants/{tenant_id}` soft-deletes by setting `status` to `deleted`; it does not remove threads or execution config. `GET /admin/tenants` returns tenant objects with pagination metadata and accepts `limit`, `offset`, `status`, `plan`, and `slug` query parameters. `POST /admin/tenants/seed` can create missing registry tenants from existing execution-config tenant IDs; pass `dry_run=true` to preview. `GET /admin/execution-config-tenants` preserves the old execution-config tenant listing by returning tenant IDs that have stored execution config.
+Tenant registry endpoints manage durable tenant identity and lifecycle state. Tenant records include `id`, `slug`, `name`, `status`, `plan`, `region`, JSON `metadata`, actor fields, and timestamps. Slugs must be unique and contain lowercase letters, digits, and hyphens. `DELETE /admin/tenants/{tenant_id}` soft-deletes by setting `status` to `deleted`; it does not remove threads or execution config. `GET /admin/tenants` returns tenant objects with pagination metadata and accepts `limit`, `offset`, `status`, `plan`, and `slug` query parameters. `POST /admin/tenants/seed` can create missing registry tenants from existing execution-config tenant IDs; pass `dry_run=true` to preview. Tenant entitlements are stored as `features` and `limits` JSON objects with a monotonically increasing `version`; validation currently checks shape only and does not enforce limits at runtime. `GET /admin/execution-config-tenants` preserves the old execution-config tenant listing by returning tenant IDs that have stored execution config.
 
 When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, public thread endpoints reject authenticated principals whose `tenant_id` is missing from the registry or not `active`. The default is `false` to preserve local and migration workflows.
 
@@ -1389,6 +1393,10 @@ minigent --admin admin tenants archive TENANT_ID
 minigent --admin admin tenants delete TENANT_ID
 minigent --admin admin tenants seed --from execution-configs --status active --dry-run
 minigent --admin admin tenants seed --from execution-configs --status active
+minigent --admin admin tenants entitlements show TENANT_ID
+minigent --admin admin tenants entitlements set TENANT_ID --features-json '{"mcp":true}' --limits-json '{"max_threads":100}'
+minigent --admin admin tenants entitlements validate TENANT_ID --features-json '{"mcp":true}'
+minigent --admin admin tenants entitlements delete TENANT_ID
 minigent --admin admin threads list --tenant TENANT_ID --limit 50
 minigent --admin admin threads list --tenant TENANT_ID --status idle --profile default --skill coding
 minigent --admin admin threads show THREAD_ID --tenant TENANT_ID

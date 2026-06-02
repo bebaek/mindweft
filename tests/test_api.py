@@ -2378,6 +2378,65 @@ def test_admin_api_seed_rejects_unknown_source(tmp_path: Path) -> None:
     assert response.status_code == 400
 
 
+def test_admin_api_can_manage_tenant_entitlements(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+
+    missing_response = client.get("/admin/tenants/tenant-1/entitlements", headers=ADMIN_HEADERS)
+    assert missing_response.status_code == 404
+
+    validate_response = client.post(
+        "/admin/tenants/tenant-1/entitlements/validate",
+        json={"features": {"mcp": True}, "limits": {"max_threads": 100}},
+        headers=ADMIN_HEADERS,
+    )
+    assert validate_response.status_code == 200
+    assert validate_response.json()["valid"] is True
+
+    first_response = client.put(
+        "/admin/tenants/tenant-1/entitlements",
+        json={
+            "features": {"mcp": True, "peer_agents": False},
+            "limits": {"max_threads": 100, "tier": "pro"},
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["version"] == 1
+    assert first_response.json()["features"] == {"mcp": True, "peer_agents": False}
+
+    second_response = client.put(
+        "/admin/tenants/tenant-1/entitlements",
+        json={"features": {"mcp": False}, "limits": {"max_threads": 50}},
+        headers=ADMIN_HEADERS,
+    )
+    assert second_response.status_code == 200
+    assert second_response.json()["version"] == 2
+
+    get_response = client.get("/admin/tenants/tenant-1/entitlements", headers=ADMIN_HEADERS)
+    assert get_response.status_code == 200
+    assert get_response.json()["limits"] == {"max_threads": 50}
+
+    audit_response = client.get(
+        "/admin/tenants/tenant-1/audit-records?action=tenant_entitlements.put",
+        headers=ADMIN_HEADERS,
+    )
+    assert audit_response.status_code == 200
+    audit_record = audit_response.json()["audit_records"][0]
+    assert audit_record["resource_type"] == "tenant"
+    assert audit_record["resource_id"] == "tenant-1"
+    assert audit_record["old_values"]["features"] == {"mcp": True, "peer_agents": False}
+    assert audit_record["new_values"]["features"] == {"mcp": False}
+
+    delete_response = client.delete(
+        "/admin/tenants/tenant-1/entitlements",
+        headers=ADMIN_HEADERS,
+    )
+    assert delete_response.status_code == 204
+    assert client.get("/admin/tenants/tenant-1/entitlements", headers=ADMIN_HEADERS).status_code == 404
+
+
 def test_tenant_registry_required_blocks_inactive_tenants(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

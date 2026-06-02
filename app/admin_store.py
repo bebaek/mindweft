@@ -11,7 +11,7 @@ from typing import Any, Iterator, TypeGuard
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from app.models import Tenant, TenantStatus
+from app.models import Tenant, TenantEntitlements, TenantStatus
 
 SECRET_WRAPPER_KEY = "__secret__"
 
@@ -161,6 +161,61 @@ class SQLiteTenantConfigStore:
             is not None
         )
 
+    def get_tenant_entitlements(self, tenant_id: str) -> TenantEntitlements | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM tenant_entitlements WHERE tenant_id = ?",
+                (tenant_id,),
+            ).fetchone()
+        return _entitlements_from_row(row) if row is not None else None
+
+    def upsert_tenant_entitlements(
+        self,
+        tenant_id: str,
+        *,
+        features: dict[str, bool],
+        limits: dict[str, int | float | str | bool | None],
+    ) -> TenantEntitlements:
+        current = self.get_tenant_entitlements(tenant_id)
+        version = 1 if current is None else current.version + 1
+        now = _utc_now_iso()
+        with self._lock:
+            with self._connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO tenant_entitlements (
+                        tenant_id, features_json, limits_json, version, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(tenant_id) DO UPDATE SET
+                        features_json = excluded.features_json,
+                        limits_json = excluded.limits_json,
+                        version = excluded.version,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        tenant_id,
+                        json.dumps(features, ensure_ascii=True, sort_keys=True),
+                        json.dumps(limits, ensure_ascii=True, sort_keys=True),
+                        version,
+                        now,
+                    ),
+                )
+                connection.commit()
+        entitlements = self.get_tenant_entitlements(tenant_id)
+        if entitlements is None:  # pragma: no cover - defensive
+            raise RuntimeError(f"Entitlements for tenant '{tenant_id}' were not saved")
+        return entitlements
+
+    def delete_tenant_entitlements(self, tenant_id: str) -> bool:
+        with self._lock:
+            with self._connection() as connection:
+                cursor = connection.execute(
+                    "DELETE FROM tenant_entitlements WHERE tenant_id = ?",
+                    (tenant_id,),
+                )
+                connection.commit()
+        return cursor.rowcount > 0
+
     def list_tenants(self) -> list[str]:
         with self._connection() as connection:
             rows = connection.execute(
@@ -240,6 +295,17 @@ class SQLiteTenantConfigStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS tenant_entitlements (
+                    tenant_id TEXT PRIMARY KEY,
+                    features_json TEXT NOT NULL DEFAULT '{}',
+                    limits_json TEXT NOT NULL DEFAULT '{}',
+                    version INTEGER NOT NULL DEFAULT 1,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS tenant_execution_configs (
                     tenant_id TEXT PRIMARY KEY,
                     config_json TEXT NOT NULL,
@@ -284,6 +350,22 @@ def _tenant_from_row(row: sqlite3.Row) -> Tenant:
         created_by=str(row["created_by"]) if row["created_by"] is not None else None,
         updated_by=str(row["updated_by"]) if row["updated_by"] is not None else None,
         created_at=datetime.fromisoformat(str(row["created_at"])),
+        updated_at=datetime.fromisoformat(str(row["updated_at"])),
+    )
+
+
+def _entitlements_from_row(row: sqlite3.Row) -> TenantEntitlements:
+    features = json.loads(str(row["features_json"]))
+    limits = json.loads(str(row["limits_json"]))
+    if not isinstance(features, dict) or not all(isinstance(value, bool) for value in features.values()):
+        raise RuntimeError(f"Stored features for tenant '{row['tenant_id']}' are invalid")
+    if not isinstance(limits, dict):
+        raise RuntimeError(f"Stored limits for tenant '{row['tenant_id']}' are invalid")
+    return TenantEntitlements(
+        tenant_id=str(row["tenant_id"]),
+        features={str(key): value for key, value in features.items()},
+        limits={str(key): value for key, value in limits.items()},
+        version=int(row["version"]),
         updated_at=datetime.fromisoformat(str(row["updated_at"])),
     )
 

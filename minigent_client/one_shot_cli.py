@@ -354,6 +354,28 @@ def build_parser() -> argparse.ArgumentParser:
     admin_tenants_seed_parser.add_argument("--region", default=None)
     admin_tenants_seed_parser.add_argument("--dry-run", action="store_true")
 
+    admin_tenants_entitlements_parser = admin_tenants_subparsers.add_parser(
+        "entitlements", help="Manage tenant entitlements."
+    )
+    admin_tenants_entitlements_subparsers = admin_tenants_entitlements_parser.add_subparsers(
+        dest="admin_tenant_entitlements_command", required=True
+    )
+    admin_tenant_entitlements_show_parser = admin_tenants_entitlements_subparsers.add_parser(
+        "show", help="Show tenant entitlements."
+    )
+    admin_tenant_entitlements_show_parser.add_argument("tenant_id")
+    for command_name in ["set", "validate"]:
+        entitlements_parser = admin_tenants_entitlements_subparsers.add_parser(
+            command_name, help=f"{command_name.title()} tenant entitlements."
+        )
+        entitlements_parser.add_argument("tenant_id")
+        entitlements_parser.add_argument("--features-json", default="{}")
+        entitlements_parser.add_argument("--limits-json", default="{}")
+    admin_tenant_entitlements_delete_parser = admin_tenants_entitlements_subparsers.add_parser(
+        "delete", help="Delete tenant entitlements."
+    )
+    admin_tenant_entitlements_delete_parser.add_argument("tenant_id")
+
     admin_threads_parser = admin_subparsers.add_parser("threads", help="Inspect tenant threads.")
     admin_threads_subparsers = admin_threads_parser.add_subparsers(
         dest="admin_threads_command", required=True
@@ -1004,24 +1026,28 @@ def run_threads_delete(
     return 0
 
 
-def _metadata_from_arg(raw: str | None) -> dict[str, Any] | None:
+def _json_object_from_arg(raw: str | None, label: str) -> dict[str, Any] | None:
     if raw is None:
         return None
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise MinigentAPIError(
-            "--metadata-json must be valid JSON.",
+            f"{label} must be valid JSON.",
             category="invalid_request",
             detail=str(exc),
         ) from exc
     if not isinstance(parsed, dict):
         raise MinigentAPIError(
-            "--metadata-json must be a JSON object.",
+            f"{label} must be a JSON object.",
             category="invalid_request",
             detail=raw,
         )
     return cast(dict[str, Any], parsed)
+
+
+def _metadata_from_arg(raw: str | None) -> dict[str, Any] | None:
+    return _json_object_from_arg(raw, "--metadata-json")
 
 
 def _tenant_payload(args: argparse.Namespace, *, create: bool) -> dict[str, Any]:
@@ -1164,6 +1190,61 @@ def run_admin_tenants_seed(
                 ]
             )
         )
+    return 0
+
+
+def _entitlements_payload(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "features": _json_object_from_arg(args.features_json, "--features-json") or {},
+        "limits": _json_object_from_arg(args.limits_json, "--limits-json") or {},
+    }
+
+
+def run_admin_tenant_entitlements(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    command = args.admin_tenant_entitlements_command
+    if command == "show":
+        response = client.get_admin_tenant_entitlements(args.tenant_id)
+    elif command == "set":
+        response = client.put_admin_tenant_entitlements(args.tenant_id, _entitlements_payload(args))
+    elif command == "validate":
+        response = client.validate_admin_tenant_entitlements(args.tenant_id, _entitlements_payload(args))
+    elif command == "delete":
+        client.delete_admin_tenant_entitlements(args.tenant_id)
+        response = {"deleted": True, "tenant_id": args.tenant_id}
+    else:  # pragma: no cover - argparse prevents this
+        raise RuntimeError(f"Unhandled entitlements command: {command}")
+    if args.json:
+        output: dict[str, Any] = dict(response)
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    if command == "delete":
+        print(f"deleted tenant_id={args.tenant_id}")
+        return 0
+    print(
+        " ".join(
+            [
+                f"tenant_id={response.get('tenant_id')}",
+                f"version={response.get('version')}",
+                f"updated_at={response.get('updated_at')}",
+            ]
+        )
+    )
+    if "valid" in response:
+        print(f"valid={response.get('valid')}")
+    features = response.get("features")
+    limits = response.get("limits")
+    if isinstance(features, dict):
+        print("features=" + json.dumps(features, ensure_ascii=True, sort_keys=True))
+    if isinstance(limits, dict):
+        print("limits=" + json.dumps(limits, ensure_ascii=True, sort_keys=True))
     return 0
 
 
@@ -1905,6 +1986,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     return run_admin_tenants_transition(args, client, trace_id)
                 if args.admin_tenants_command == "seed":
                     return run_admin_tenants_seed(args, client, trace_id)
+                if args.admin_tenants_command == "entitlements":
+                    return run_admin_tenant_entitlements(args, client, trace_id)
             if args.admin_command == "threads":
                 if args.admin_threads_command == "list":
                     return run_admin_threads_list(args, client, trace_id)

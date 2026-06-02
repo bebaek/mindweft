@@ -138,6 +138,45 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent admin tenant-seed response must be an object")
         return cast(dict[str, Any], response)
 
+    def get_admin_tenant_entitlements(self, tenant_id: str) -> dict[str, Any]:
+        response = self.request_json(
+            "GET",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}/entitlements",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin entitlements response must be an object")
+        return cast(dict[str, Any], response)
+
+    def put_admin_tenant_entitlements(
+        self, tenant_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self.request_json(
+            "PUT",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}/entitlements",
+            payload=payload,
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin entitlement update response must be an object")
+        return cast(dict[str, Any], response)
+
+    def validate_admin_tenant_entitlements(
+        self, tenant_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}/entitlements/validate",
+            payload=payload,
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin entitlement validation response must be an object")
+        return cast(dict[str, Any], response)
+
+    def delete_admin_tenant_entitlements(self, tenant_id: str) -> None:
+        self.request_json(
+            "DELETE",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}/entitlements",
+        )
+
     def create_thread(
         self,
         *,

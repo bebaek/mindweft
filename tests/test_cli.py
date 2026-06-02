@@ -1137,6 +1137,112 @@ def test_admin_tenants_seed_json(monkeypatch: Any, capsys: Any) -> None:
     assert json.loads(capsys.readouterr().out) == response
 
 
+def test_admin_tenant_entitlements_set_and_show(monkeypatch: Any, capsys: Any) -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+    response = {
+        "tenant_id": "tenant-a",
+        "features": {"mcp": True},
+        "limits": {"max_threads": 100},
+        "version": 1,
+        "updated_at": "2026-05-19T10:00:00Z",
+    }
+
+    def urlopen(request: Any) -> _Response:
+        payload = json.loads(request.data.decode("utf-8")) if request.data else {}
+        calls.append((request.get_method(), request.full_url, payload))
+        return _Response(body=response)
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    set_exit = cli.main(
+        [
+            "--admin",
+            "admin",
+            "tenants",
+            "entitlements",
+            "set",
+            "tenant-a",
+            "--features-json",
+            '{"mcp":true}',
+            "--limits-json",
+            '{"max_threads":100}',
+        ]
+    )
+    show_exit = cli.main(
+        ["--admin", "--json", "admin", "tenants", "entitlements", "show", "tenant-a"]
+    )
+
+    assert set_exit == 0
+    assert show_exit == 0
+    assert calls[0] == (
+        "PUT",
+        "http://127.0.0.1:8000/admin/tenants/tenant-a/entitlements",
+        {"features": {"mcp": True}, "limits": {"max_threads": 100}},
+    )
+    assert calls[1] == (
+        "GET",
+        "http://127.0.0.1:8000/admin/tenants/tenant-a/entitlements",
+        {},
+    )
+    output = capsys.readouterr().out
+    assert "tenant_id=tenant-a version=1 updated_at=2026-05-19T10:00:00Z" in output
+    assert '"tenant_id": "tenant-a"' in output
+    assert '"max_threads": 100' in output
+
+
+def test_admin_tenant_entitlements_validate_and_delete(monkeypatch: Any, capsys: Any) -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def urlopen(request: Any) -> _Response:
+        payload = json.loads(request.data.decode("utf-8")) if request.data else {}
+        calls.append((request.get_method(), request.full_url, payload))
+        if request.get_method() == "DELETE":
+            return _Response(body=None)
+        return _Response(
+            body={
+                "valid": True,
+                "features": {"ok": True, "errors": []},
+                "limits": {"ok": True, "errors": []},
+            }
+        )
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    validate_exit = cli.main(
+        [
+            "--admin",
+            "--json",
+            "admin",
+            "tenants",
+            "entitlements",
+            "validate",
+            "tenant-a",
+            "--features-json",
+            '{"mcp":true}',
+        ]
+    )
+    assert validate_exit == 0
+    validate_output = capsys.readouterr().out
+    assert '"valid": true' in validate_output
+
+    delete_exit = cli.main(
+        ["--admin", "--json", "admin", "tenants", "entitlements", "delete", "tenant-a"]
+    )
+    assert delete_exit == 0
+    assert calls[0] == (
+        "POST",
+        "http://127.0.0.1:8000/admin/tenants/tenant-a/entitlements/validate",
+        {"features": {"mcp": True}, "limits": {}},
+    )
+    assert calls[1] == (
+        "DELETE",
+        "http://127.0.0.1:8000/admin/tenants/tenant-a/entitlements",
+        {},
+    )
+    delete_output = json.loads(capsys.readouterr().out)
+    assert delete_output == {"deleted": True, "tenant_id": "tenant-a"}
+
+
 def test_admin_threads_list_json(monkeypatch: Any, capsys: Any) -> None:
     calls: list[tuple[str, str, dict[str, str]]] = []
     response = {

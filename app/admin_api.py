@@ -23,6 +23,7 @@ from app.models import (
     Message,
     Principal,
     Tenant,
+    TenantEntitlements,
     TenantStatus,
     Thread,
     ThreadContext,
@@ -104,6 +105,25 @@ class AdminTenantSeedResponse(BaseModel):
     created: int
     conflicts: int
     tenants: list[AdminTenantSeedItemResponse]
+
+
+class AdminTenantEntitlementsRequest(BaseModel):
+    features: dict[str, bool] = Field(default_factory=dict)
+    limits: dict[str, int | float | str | bool | None] = Field(default_factory=dict)
+
+
+class AdminTenantEntitlementsResponse(BaseModel):
+    tenant_id: str
+    features: dict[str, bool]
+    limits: dict[str, int | float | str | bool | None]
+    version: int
+    updated_at: datetime
+
+
+class AdminTenantEntitlementsValidationResponse(BaseModel):
+    valid: bool
+    features: dict[str, Any]
+    limits: dict[str, Any]
 
 
 class AdminExecutionConfigTenantListResponse(BaseModel):
@@ -388,6 +408,96 @@ def build_admin_router() -> APIRouter:
             created=created,
             conflicts=conflicts,
             tenants=items,
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/entitlements",
+        response_model=AdminTenantEntitlementsResponse,
+    )
+    async def get_tenant_entitlements(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantEntitlementsResponse:
+        _ = admin
+        store = _require_admin_store(request)
+        entitlements = store.get_tenant_entitlements(tenant_id)
+        if entitlements is None:
+            raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' has no entitlements")
+        return _entitlements_response(entitlements)
+
+    @router.put(
+        "/tenants/{tenant_id}/entitlements",
+        response_model=AdminTenantEntitlementsResponse,
+    )
+    async def put_tenant_entitlements(
+        tenant_id: str,
+        body: AdminTenantEntitlementsRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantEntitlementsResponse:
+        _validate_entitlements(body.features, body.limits)
+        store = _require_admin_store(request)
+        old_entitlements = store.get_tenant_entitlements(tenant_id)
+        entitlements = store.upsert_tenant_entitlements(
+            tenant_id,
+            features=body.features,
+            limits=body.limits,
+        )
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_entitlements.put",
+            old_values=(
+                _entitlements_audit_values(old_entitlements)
+                if old_entitlements is not None
+                else None
+            ),
+            new_values=_entitlements_audit_values(entitlements),
+        )
+        return _entitlements_response(entitlements)
+
+    @router.post(
+        "/tenants/{tenant_id}/entitlements/validate",
+        response_model=AdminTenantEntitlementsValidationResponse,
+    )
+    async def validate_tenant_entitlements(
+        tenant_id: str,
+        body: AdminTenantEntitlementsRequest,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantEntitlementsValidationResponse:
+        _ = tenant_id
+        _ = admin
+        feature_errors, limit_errors = _entitlement_validation_errors(body.features, body.limits)
+        return AdminTenantEntitlementsValidationResponse(
+            valid=not feature_errors and not limit_errors,
+            features={"ok": not feature_errors, "errors": feature_errors},
+            limits={"ok": not limit_errors, "errors": limit_errors},
+        )
+
+    @router.delete("/tenants/{tenant_id}/entitlements", status_code=204)
+    async def delete_tenant_entitlements(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> None:
+        store = _require_admin_store(request)
+        old_entitlements = store.get_tenant_entitlements(tenant_id)
+        deleted = store.delete_tenant_entitlements(tenant_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' has no entitlements")
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_entitlements.delete",
+            old_values=(
+                _entitlements_audit_values(old_entitlements)
+                if old_entitlements is not None
+                else None
+            ),
+            new_values=None,
         )
 
     @router.get("/tenants/{tenant_id}", response_model=AdminTenantResponse)
@@ -779,6 +889,49 @@ def _require_thread_store(request: Request) -> Any:
 
 def _tenant_response(tenant: Tenant) -> AdminTenantResponse:
     return AdminTenantResponse(**tenant.model_dump())
+
+
+def _entitlements_response(entitlements: TenantEntitlements) -> AdminTenantEntitlementsResponse:
+    return AdminTenantEntitlementsResponse(**entitlements.model_dump())
+
+
+def _entitlements_audit_values(entitlements: TenantEntitlements) -> dict[str, Any]:
+    return {
+        "tenant_id": entitlements.tenant_id,
+        "features": entitlements.features,
+        "limits": entitlements.limits,
+        "version": entitlements.version,
+        "updated_at": entitlements.updated_at.isoformat(),
+    }
+
+
+def _entitlement_validation_errors(
+    features: dict[str, bool],
+    limits: dict[str, int | float | str | bool | None],
+) -> tuple[list[str], list[str]]:
+    feature_errors: list[str] = []
+    limit_errors: list[str] = []
+    for key, value in features.items():
+        if not key.strip():
+            feature_errors.append("Feature names must be non-empty")
+        if not isinstance(value, bool):
+            feature_errors.append(f"Feature '{key}' must be a boolean")
+    for key, value in limits.items():
+        if not key.strip():
+            limit_errors.append("Limit names must be non-empty")
+        if value is not None and not isinstance(value, (int, float, str, bool)):
+            limit_errors.append(f"Limit '{key}' must be a scalar or null")
+    return feature_errors, limit_errors
+
+
+def _validate_entitlements(
+    features: dict[str, bool],
+    limits: dict[str, int | float | str | bool | None],
+) -> None:
+    feature_errors, limit_errors = _entitlement_validation_errors(features, limits)
+    errors = [*feature_errors, *limit_errors]
+    if errors:
+        raise HTTPException(status_code=400, detail={"errors": errors})
 
 
 def _require_tenant(request: Request, tenant_id: str) -> Tenant:
