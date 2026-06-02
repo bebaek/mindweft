@@ -1218,6 +1218,8 @@ X-Minigent-Admin: false
 
 Thread lifecycle endpoints require the auth material for the active mode. Threads are isolated by `tenant_id`, and cross-tenant access returns `404`.
 
+`GET /tenant-context` returns the resolved tenant context for the authenticated caller. When the tenant registry is not required, the response always includes the principal and `tenant_id`; if an admin store is enabled and the tenant exists, Minigent enriches the context with registry fields, entitlement `features`, entitlement `limits`, and `entitlements_version`. When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, the endpoint and thread lifecycle endpoints require an active registry tenant.
+
 ## Runtime Settings
 
 `MINIGENT_MAX_ITERATIONS` controls the maximum number of LLM loop passes for one

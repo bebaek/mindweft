@@ -45,6 +45,7 @@ from app.models import (
     MessageRole,
     Principal,
     RunThreadResponse,
+    TenantContext,
     ThreadStatus,
 )
 from app.oauth import GenericOAuthProvider, OAuthFlowStore
@@ -60,7 +61,7 @@ from app.runtime import (
     render_raw_thread_context,
 )
 from app.store import ThreadStore, build_thread_store_from_env
-from app.tenants import require_active_tenant_principal
+from app.tenants import require_active_tenant_principal, require_tenant_context
 from app.tools import ToolRegistry, build_tool_registry_from_env
 
 load_environment()
@@ -274,6 +275,12 @@ def create_app(
     @app.get("/config")
     async def config(request: Request) -> dict[str, object]:
         return request.app.state.execution_resolver.describe()
+
+    @app.get("/tenant-context")
+    async def tenant_context(
+        context: TenantContext = Depends(require_tenant_context),
+    ) -> dict[str, object]:
+        return context.model_dump(mode="json")
 
     @app.get("/oauth/generic/login")
     async def generic_oauth_login(request: Request) -> dict[str, str]:

@@ -48,6 +48,18 @@ class TenantEntitlements(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class TenantContext(BaseModel):
+    principal: "Principal"
+    tenant_id: str
+    slug: str | None = None
+    status: TenantStatus | None = None
+    plan: str | None = None
+    region: str | None = None
+    features: dict[str, bool] = Field(default_factory=dict)
+    limits: dict[str, int | float | str | bool | None] = Field(default_factory=dict)
+    entitlements_version: int | None = None
+
+
 class MessageRole(str, Enum):
     SYSTEM = "system"
     USER = "user"

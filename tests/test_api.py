@@ -2437,6 +2437,89 @@ def test_admin_api_can_manage_tenant_entitlements(tmp_path: Path) -> None:
     assert client.get("/admin/tenants/tenant-1/entitlements", headers=ADMIN_HEADERS).status_code == 404
 
 
+def test_tenant_context_is_minimal_without_registry_requirement(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            admin_store=_sqlite_store(tmp_path),
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+
+    response = client.get("/tenant-context", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["tenant_id"] == "tenant-1"
+    assert response.json()["principal"] == {
+        "user_id": "user-1",
+        "tenant_id": "tenant-1",
+        "is_admin": False,
+    }
+    assert response.json()["slug"] is None
+    assert response.json()["features"] == {}
+    assert response.json()["entitlements_version"] is None
+
+
+def test_tenant_context_enriches_known_tenant_without_requirement(tmp_path: Path) -> None:
+    store = _sqlite_store(tmp_path)
+    client = TestClient(
+        create_app(
+            admin_store=store,
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+    client.post(
+        "/admin/tenants",
+        json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "suspended"},
+        headers=ADMIN_HEADERS,
+    )
+    client.put(
+        "/admin/tenants/tenant-1/entitlements",
+        json={"features": {"mcp": True}, "limits": {"max_threads": 100}},
+        headers=ADMIN_HEADERS,
+    )
+
+    response = client.get("/tenant-context", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["slug"] == "tenant-one"
+    assert response.json()["status"] == TenantStatus.SUSPENDED
+    assert response.json()["features"] == {"mcp": True}
+    assert response.json()["limits"] == {"max_threads": 100}
+    assert response.json()["entitlements_version"] == 1
+
+
+def test_tenant_context_requires_active_tenant_when_registry_required(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
+    client = TestClient(
+        create_app(
+            admin_store=_sqlite_store(tmp_path),
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+    client.post(
+        "/admin/tenants",
+        json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "active"},
+        headers=ADMIN_HEADERS,
+    )
+    client.put(
+        "/admin/tenants/tenant-1/entitlements",
+        json={"features": {"mcp": True}, "limits": {"max_threads": 100}},
+        headers=ADMIN_HEADERS,
+    )
+
+    response = client.get("/tenant-context", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == TenantStatus.ACTIVE
+    assert response.json()["features"] == {"mcp": True}
+
+
 def test_tenant_registry_required_blocks_inactive_tenants(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
