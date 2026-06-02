@@ -27,6 +27,7 @@ from app.models import (
     Message,
     MessageRole,
     Principal,
+    TenantStatus,
     ThreadStatus,
     ToolCall,
     ToolSpec,
@@ -2140,6 +2141,116 @@ def test_admin_api_requires_admin_access(tmp_path: Path) -> None:
     assert response.json()["detail"] == "Admin access required"
 
 
+def test_admin_api_can_manage_tenant_registry(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+
+    create_response = client.post(
+        "/admin/tenants",
+        json={
+            "id": "tenant-1",
+            "slug": "tenant-one",
+            "name": "Tenant One",
+            "status": "provisioning",
+            "plan": "dev",
+            "metadata": {"owner": "support"},
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert create_response.status_code == 201
+    assert create_response.json()["id"] == "tenant-1"
+    assert create_response.json()["slug"] == "tenant-one"
+    assert create_response.json()["status"] == TenantStatus.PROVISIONING
+    assert create_response.json()["created_by"] == "admin-user"
+
+    duplicate_response = client.post(
+        "/admin/tenants",
+        json={"id": "tenant-2", "slug": "tenant-one", "name": "Duplicate"},
+        headers=ADMIN_HEADERS,
+    )
+    assert duplicate_response.status_code == 409
+
+    patch_response = client.patch(
+        "/admin/tenants/tenant-1",
+        json={"slug": "tenant-renamed", "name": "Tenant Renamed", "plan": "pro"},
+        headers=ADMIN_HEADERS,
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.json()["slug"] == "tenant-renamed"
+    assert patch_response.json()["name"] == "Tenant Renamed"
+    assert patch_response.json()["plan"] == "pro"
+    assert patch_response.json()["updated_by"] == "admin-user"
+
+    activate_response = client.post("/admin/tenants/tenant-1/activate", headers=ADMIN_HEADERS)
+    assert activate_response.status_code == 200
+    assert activate_response.json()["status"] == TenantStatus.ACTIVE
+
+    list_response = client.get("/admin/tenants?status=active&plan=pro", headers=ADMIN_HEADERS)
+    assert list_response.status_code == 200
+    assert list_response.json()["total"] == 1
+    assert list_response.json()["tenants"][0]["id"] == "tenant-1"
+
+    delete_response = client.delete("/admin/tenants/tenant-1", headers=ADMIN_HEADERS)
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {
+        "deleted": True,
+        "tenant_id": "tenant-1",
+        "status": TenantStatus.DELETED,
+    }
+
+
+def test_admin_api_rejects_invalid_tenant_slug(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+
+    response = client.post(
+        "/admin/tenants",
+        json={"id": "tenant-1", "slug": "Bad Slug", "name": "Tenant One"},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "slug" in response.json()["detail"]
+
+
+def test_tenant_registry_required_blocks_inactive_tenants(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
+    store = _sqlite_store(tmp_path)
+    client = TestClient(
+        create_app(
+            admin_store=store,
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+
+    missing_response = client.post("/threads", headers=AUTH_HEADERS)
+    assert missing_response.status_code == 403
+    assert missing_response.json()["detail"] == "Tenant is not active"
+
+    client.post(
+        "/admin/tenants",
+        json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One"},
+        headers=ADMIN_HEADERS,
+    )
+    provisioning_response = client.post("/threads", headers=AUTH_HEADERS)
+    assert provisioning_response.status_code == 403
+
+    client.post("/admin/tenants/tenant-1/activate", headers=ADMIN_HEADERS)
+    active_response = client.post("/threads", headers=AUTH_HEADERS)
+    assert active_response.status_code == 200
+
+    client.post("/admin/tenants/tenant-1/suspend", headers=ADMIN_HEADERS)
+    suspended_response = client.post("/threads", headers=AUTH_HEADERS)
+    assert suspended_response.status_code == 403
+
+
 def test_admin_api_validates_tenant_execution_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -2733,7 +2844,7 @@ def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
         == "<redacted>"
     )
 
-    list_response = client.get("/admin/tenants", headers=ADMIN_HEADERS)
+    list_response = client.get("/admin/execution-config-tenants", headers=ADMIN_HEADERS)
     assert list_response.status_code == 200
     assert list_response.json()["tenants"] == ["tenant-1"]
 

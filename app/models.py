@@ -18,6 +18,28 @@ class ThreadStatus(str, Enum):
     ERROR = "error"
 
 
+class TenantStatus(str, Enum):
+    PROVISIONING = "provisioning"
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    ARCHIVED = "archived"
+    DELETED = "deleted"
+
+
+class Tenant(BaseModel):
+    id: str
+    slug: str
+    name: str
+    status: TenantStatus = TenantStatus.PROVISIONING
+    plan: str | None = None
+    region: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class MessageRole(str, Enum):
     SYSTEM = "system"
     USER = "user"

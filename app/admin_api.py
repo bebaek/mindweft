@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import re
+import sqlite3
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -15,13 +18,69 @@ from app.execution import (
     redact_tenant_execution_payload,
     validate_tenant_execution_config,
 )
-from app.models import AuditRecord, Message, Principal, Thread, ThreadContext, ThreadStatus
+from app.models import (
+    AuditRecord,
+    Message,
+    Principal,
+    Tenant,
+    TenantStatus,
+    Thread,
+    ThreadContext,
+    ThreadStatus,
+)
 
 ADMIN_DB_PATH_ENV = "MINIGENT_ADMIN_DB_PATH"
 ADMIN_ENCRYPTION_KEY_ENV = "MINIGENT_ADMIN_ENCRYPTION_KEY"
+TENANT_SLUG_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+class AdminTenantResponse(BaseModel):
+    id: str
+    slug: str
+    name: str
+    status: TenantStatus
+    plan: str | None = None
+    region: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class AdminTenantListResponse(BaseModel):
+    tenants: list[AdminTenantResponse]
+    limit: int
+    offset: int
+    total: int
+    next_offset: int | None = None
+
+
+class AdminTenantCreateRequest(BaseModel):
+    id: str | None = None
+    slug: str
+    name: str
+    status: TenantStatus = TenantStatus.PROVISIONING
+    plan: str | None = None
+    region: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdminTenantPatchRequest(BaseModel):
+    slug: str | None = None
+    name: str | None = None
+    plan: str | None = None
+    region: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class AdminTenantDeleteResponse(BaseModel):
+    deleted: bool
+    tenant_id: str
+    status: TenantStatus
+
+
+class AdminExecutionConfigTenantListResponse(BaseModel):
     tenants: list[str]
 
 
@@ -142,10 +201,151 @@ def build_admin_router() -> APIRouter:
     async def list_tenants(
         request: Request,
         admin: Principal = Depends(require_admin_principal),
+        status: TenantStatus | None = Query(default=None),
+        plan: str | None = Query(default=None),
+        slug: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
     ) -> AdminTenantListResponse:
         _ = admin
         store = _require_admin_store(request)
-        return AdminTenantListResponse(tenants=store.list_tenants())
+        tenants, total = store.list_registry_tenants(
+            status=status,
+            plan=plan,
+            slug=slug,
+            limit=limit,
+            offset=offset,
+        )
+        next_offset = offset + len(tenants) if offset + len(tenants) < total else None
+        return AdminTenantListResponse(
+            tenants=[_tenant_response(tenant) for tenant in tenants],
+            limit=limit,
+            offset=offset,
+            total=total,
+            next_offset=next_offset,
+        )
+
+    @router.get(
+        "/execution-config-tenants",
+        response_model=AdminExecutionConfigTenantListResponse,
+    )
+    async def list_execution_config_tenants(
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminExecutionConfigTenantListResponse:
+        _ = admin
+        store = _require_admin_store(request)
+        return AdminExecutionConfigTenantListResponse(tenants=store.list_tenants())
+
+    @router.post("/tenants", response_model=AdminTenantResponse, status_code=201)
+    async def create_tenant(
+        request: AdminTenantCreateRequest,
+        app_request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantResponse:
+        _validate_tenant_id(request.id) if request.id is not None else None
+        _validate_slug(request.slug)
+        _validate_name(request.name)
+        store = _require_admin_store(app_request)
+        tenant = Tenant(
+            id=request.id or str(uuid4()),
+            slug=request.slug,
+            name=request.name,
+            status=request.status,
+            plan=request.plan,
+            region=request.region,
+            metadata=request.metadata,
+            created_by=admin.user_id,
+            updated_by=admin.user_id,
+        )
+        try:
+            created = store.create_tenant(tenant)
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="Tenant id or slug already exists") from exc
+        _append_tenant_audit(app_request, created.id, admin, "tenants.create")
+        return _tenant_response(created)
+
+    @router.get("/tenants/{tenant_id}", response_model=AdminTenantResponse)
+    async def get_tenant(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantResponse:
+        _ = admin
+        tenant = _require_tenant(request, tenant_id)
+        return _tenant_response(tenant)
+
+    @router.patch("/tenants/{tenant_id}", response_model=AdminTenantResponse)
+    async def patch_tenant(
+        tenant_id: str,
+        body: AdminTenantPatchRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantResponse:
+        if body.slug is not None:
+            _validate_slug(body.slug)
+        if body.name is not None:
+            _validate_name(body.name)
+        store = _require_admin_store(request)
+        try:
+            tenant = store.update_tenant(
+                tenant_id,
+                slug=body.slug,
+                name=body.name,
+                plan=body.plan,
+                region=body.region,
+                metadata=body.metadata,
+                updated_by=admin.user_id,
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="Tenant slug already exists") from exc
+        if tenant is None:
+            raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+        _append_tenant_audit(request, tenant_id, admin, "tenants.update")
+        return _tenant_response(tenant)
+
+    @router.post("/tenants/{tenant_id}/activate", response_model=AdminTenantResponse)
+    async def activate_tenant(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantResponse:
+        return _update_tenant_status(request, tenant_id, admin, TenantStatus.ACTIVE, "tenants.activate")
+
+    @router.post("/tenants/{tenant_id}/suspend", response_model=AdminTenantResponse)
+    async def suspend_tenant(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantResponse:
+        return _update_tenant_status(
+            request, tenant_id, admin, TenantStatus.SUSPENDED, "tenants.suspend"
+        )
+
+    @router.post("/tenants/{tenant_id}/archive", response_model=AdminTenantResponse)
+    async def archive_tenant(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantResponse:
+        return _update_tenant_status(request, tenant_id, admin, TenantStatus.ARCHIVED, "tenants.archive")
+
+    @router.delete("/tenants/{tenant_id}", response_model=AdminTenantDeleteResponse)
+    async def delete_tenant(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantDeleteResponse:
+        store = _require_admin_store(request)
+        deleted = store.delete_tenant(tenant_id, updated_by=admin.user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+        _append_tenant_audit(request, tenant_id, admin, "tenants.delete")
+        return AdminTenantDeleteResponse(
+            deleted=True,
+            tenant_id=tenant_id,
+            status=TenantStatus.DELETED,
+        )
 
     @router.get("/tenants/{tenant_id}/threads", response_model=AdminThreadListResponse)
     async def list_tenant_threads(
@@ -434,6 +634,69 @@ def _require_thread_store(request: Request) -> Any:
     if store is None:
         raise HTTPException(status_code=503, detail="Thread store is not enabled")
     return store
+
+
+def _tenant_response(tenant: Tenant) -> AdminTenantResponse:
+    return AdminTenantResponse(**tenant.model_dump())
+
+
+def _require_tenant(request: Request, tenant_id: str) -> Tenant:
+    store = _require_admin_store(request)
+    tenant = store.get_tenant(tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+    return tenant
+
+
+def _update_tenant_status(
+    request: Request,
+    tenant_id: str,
+    admin: Principal,
+    status: TenantStatus,
+    action: str,
+) -> AdminTenantResponse:
+    store = _require_admin_store(request)
+    tenant = store.update_tenant(tenant_id, status=status, updated_by=admin.user_id)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+    _append_tenant_audit(request, tenant_id, admin, action)
+    return _tenant_response(tenant)
+
+
+def _append_tenant_audit(
+    request: Request,
+    tenant_id: str,
+    admin: Principal,
+    action: str,
+) -> None:
+    store = _require_thread_store(request)
+    store.append_audit_record(
+        AuditRecord(
+            tenant_id=tenant_id,
+            actor_user_id=admin.user_id,
+            action=action,
+            affected_count=1,
+            thread_ids=[],
+        )
+    )
+
+
+def _validate_tenant_id(tenant_id: str) -> None:
+    if not tenant_id.strip():
+        raise HTTPException(status_code=400, detail="Tenant id must be non-empty")
+
+
+def _validate_slug(slug: str) -> None:
+    if not TENANT_SLUG_PATTERN.fullmatch(slug):
+        raise HTTPException(
+            status_code=400,
+            detail="Tenant slug must contain only lowercase letters, digits, and hyphens",
+        )
+
+
+def _validate_name(name: str) -> None:
+    if not name.strip():
+        raise HTTPException(status_code=400, detail="Tenant name must be non-empty")
 
 
 def _thread_summary(thread: Thread, message_count: int) -> AdminThreadSummaryResponse:

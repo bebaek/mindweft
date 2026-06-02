@@ -19,7 +19,7 @@ from app.admin_api import (
 )
 from app.admin_store import SQLiteTenantConfigStore
 from app.agent_backends import AgentBackendRouter, NativeAgentBackend
-from app.auth import require_principal, validate_auth_settings
+from app.auth import validate_auth_settings
 from app.config import load_environment
 from app.execution import (
     TENANT_CONFIG_SOURCE_ENV_ONLY,
@@ -60,6 +60,7 @@ from app.runtime import (
     render_raw_thread_context,
 )
 from app.store import ThreadStore, build_thread_store_from_env
+from app.tenants import require_active_tenant_principal
 from app.tools import ToolRegistry, build_tool_registry_from_env
 
 load_environment()
@@ -391,7 +392,7 @@ def create_app(
     async def create_thread(
         request: Request,
         body: CreateThreadRequest | None = None,
-        principal: Principal = Depends(require_principal),
+        principal: Principal = Depends(require_active_tenant_principal),
     ) -> CreateThreadResponse:
         skill_name = body.skill_name if body is not None else None
         skill_names = body.skill_names if body is not None else None
@@ -431,7 +432,7 @@ def create_app(
         thread_id: str,
         request: AddMessageRequest,
         app_request: Request,
-        principal: Principal = Depends(require_principal),
+        principal: Principal = Depends(require_active_tenant_principal),
     ) -> Message:
         return app_request.app.state.store.append_message(
             principal.tenant_id,
@@ -448,7 +449,7 @@ def create_app(
     async def get_messages(
         thread_id: str,
         request: Request,
-        principal: Principal = Depends(require_principal),
+        principal: Principal = Depends(require_active_tenant_principal),
     ) -> list[Message]:
         return request.app.state.store.list_messages(principal.tenant_id, thread_id)
 
@@ -456,7 +457,7 @@ def create_app(
     async def get_raw_thread_context(
         thread_id: str,
         request: Request,
-        principal: Principal = Depends(require_principal),
+        principal: Principal = Depends(require_active_tenant_principal),
     ) -> dict[str, object]:
         store = request.app.state.store
         messages = store.list_messages(principal.tenant_id, thread_id)
@@ -474,7 +475,7 @@ def create_app(
     async def compact_thread_context(
         thread_id: str,
         request: Request,
-        principal: Principal = Depends(require_principal),
+        principal: Principal = Depends(require_active_tenant_principal),
     ) -> dict[str, object]:
         store = request.app.state.store
         before_messages = store.list_messages(principal.tenant_id, thread_id)
@@ -496,7 +497,7 @@ def create_app(
     async def run_thread(
         thread_id: str,
         request: Request,
-        principal: Principal = Depends(require_principal),
+        principal: Principal = Depends(require_active_tenant_principal),
     ) -> RunThreadResponse:
         reply, _metadata = await request.app.state.agent_backend.run_thread(principal, thread_id)
         return RunThreadResponse(reply=reply)
@@ -505,7 +506,7 @@ def create_app(
     async def run_thread_stream(
         thread_id: str,
         request: Request,
-        principal: Principal = Depends(require_principal),
+        principal: Principal = Depends(require_active_tenant_principal),
     ) -> StreamingResponse:
         return StreamingResponse(
             _run_thread_ndjson_stream(request, principal, thread_id),
@@ -516,7 +517,7 @@ def create_app(
     async def cancel_thread_run(
         thread_id: str,
         request: Request,
-        principal: Principal = Depends(require_principal),
+        principal: Principal = Depends(require_active_tenant_principal),
     ) -> dict[str, object]:
         run_key = (principal.tenant_id, thread_id)
         task = request.app.state.active_run_tasks.pop(run_key, None)
@@ -541,7 +542,7 @@ def create_app(
     async def delete_thread(
         thread_id: str,
         request: Request,
-        principal: Principal = Depends(require_principal),
+        principal: Principal = Depends(require_active_tenant_principal),
     ) -> None:
         request.app.state.store.delete_thread(principal.tenant_id, thread_id)
 

@@ -1329,18 +1329,28 @@ In `store-with-defaults`, a `*` tenant record in the admin store acts as a defau
 
 ## Admin API
 
-The admin API is an authenticated control plane for tenant execution config and thread inspection. Tenant execution config storage is optional and backed by SQLite.
+The admin API is an authenticated control plane for the tenant registry, tenant execution config, and thread inspection. Tenant registry and execution config storage are backed by the admin SQLite database.
 
 Enable tenant execution config storage with:
 
 ```dotenv
 MINIGENT_ADMIN_DB_PATH=.data/minigent-admin.db
 MINIGENT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
+# Optional: require request tenant IDs to exist and be active in the registry.
+MINIGENT_TENANT_REGISTRY_REQUIRED=false
 ```
 
 Admin endpoints:
 
 - `GET /admin/tenants`
+- `POST /admin/tenants`
+- `GET /admin/tenants/{tenant_id}`
+- `PATCH /admin/tenants/{tenant_id}`
+- `POST /admin/tenants/{tenant_id}/activate`
+- `POST /admin/tenants/{tenant_id}/suspend`
+- `POST /admin/tenants/{tenant_id}/archive`
+- `DELETE /admin/tenants/{tenant_id}`
+- `GET /admin/execution-config-tenants`
 - `GET /admin/tenants/{tenant_id}/threads`
 - `GET /admin/tenants/{tenant_id}/threads/{thread_id}`
 - `DELETE /admin/tenants/{tenant_id}/threads/{thread_id}`
@@ -1358,6 +1368,10 @@ X-Minigent-User-Id: admin-user
 X-Minigent-Tenant-Id: admin-tenant
 X-Minigent-Admin: true
 ```
+
+Tenant registry endpoints manage durable tenant identity and lifecycle state. Tenant records include `id`, `slug`, `name`, `status`, `plan`, `region`, JSON `metadata`, actor fields, and timestamps. Slugs must be unique and contain lowercase letters, digits, and hyphens. `DELETE /admin/tenants/{tenant_id}` soft-deletes by setting `status` to `deleted`; it does not remove threads or execution config. `GET /admin/tenants` returns tenant objects with pagination metadata and accepts `limit`, `offset`, `status`, `plan`, and `slug` query parameters. `GET /admin/execution-config-tenants` preserves the old execution-config tenant listing by returning tenant IDs that have stored execution config.
+
+When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, public thread endpoints reject authenticated principals whose `tenant_id` is missing from the registry or not `active`. The default is `false` to preserve local and migration workflows.
 
 Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. Admin deletion removes a thread and its messages and writes an audit record. The prune endpoint deletes matching tenant threads with `updated_at` older than required `updated_before`, with optional `status`, `profile`, and `skill` filters. Add `dry_run=true` to preview `candidate_thread_ids` without deleting threads or writing audit records. The audit endpoint lists deletion/prune records with actor, action, affected count, thread IDs, timestamp, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `action`, `actor`, `created_after`, and `created_before` query parameters. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect and manage persisted threads and audit records after process restarts.
 
