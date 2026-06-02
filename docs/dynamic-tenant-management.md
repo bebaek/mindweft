@@ -8,8 +8,9 @@ listing compatibility endpoint, execution-config tenant seeding, tenant entitlem
 request-time tenant context resolution, structured tenant audit metadata, opt-in
 request-time active-tenant enforcement with `MINIGENT_TENANT_REGISTRY_REQUIRED`, and initial
 runtime entitlement enforcement for `peer_agents`/`mcp` feature flags plus `max_threads` and
-`max_messages_per_thread` limits. Domains, broader quota coverage, and cache invalidation
-remain proposed follow-up work.
+`max_messages_per_thread` limits, and tenant-context exposure of the exact tenant execution
+config version. Domains, broader quota coverage, and cache invalidation remain proposed
+follow-up work.
 
 ## Context
 

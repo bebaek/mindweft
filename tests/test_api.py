@@ -2457,6 +2457,7 @@ def test_tenant_context_is_minimal_without_registry_requirement(tmp_path: Path) 
     }
     assert response.json()["slug"] is None
     assert response.json()["features"] == {}
+    assert response.json()["execution_config_version"] is None
     assert response.json()["entitlements_version"] is None
 
 
@@ -2487,7 +2488,45 @@ def test_tenant_context_enriches_known_tenant_without_requirement(tmp_path: Path
     assert response.json()["status"] == TenantStatus.SUSPENDED
     assert response.json()["features"] == {"mcp": True}
     assert response.json()["limits"] == {"max_threads": 100}
+    assert response.json()["execution_config_version"] is None
     assert response.json()["entitlements_version"] == 1
+
+
+def test_tenant_context_includes_execution_config_version(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
+    client = TestClient(create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults"))
+    client.post(
+        "/admin/tenants",
+        json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "active"},
+        headers=ADMIN_HEADERS,
+    )
+
+    initial_response = client.get("/tenant-context", headers=AUTH_HEADERS)
+    assert initial_response.status_code == 200
+    assert initial_response.json()["execution_config_version"] is None
+
+    first_config_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        json={"config": {"llm": {"provider": "mock", "model": "first"}}},
+        headers=ADMIN_HEADERS,
+    )
+    assert first_config_response.status_code == 200
+    first_context_response = client.get("/tenant-context", headers=AUTH_HEADERS)
+    assert first_context_response.status_code == 200
+    assert first_context_response.json()["execution_config_version"] == 1
+
+    second_config_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        json={"config": {"llm": {"provider": "mock", "model": "second"}}},
+        headers=ADMIN_HEADERS,
+    )
+    assert second_config_response.status_code == 200
+    second_context_response = client.get("/tenant-context", headers=AUTH_HEADERS)
+    assert second_context_response.status_code == 200
+    assert second_context_response.json()["execution_config_version"] == 2
 
 
 def test_tenant_context_requires_active_tenant_when_registry_required(

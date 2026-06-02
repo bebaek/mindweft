@@ -236,6 +236,14 @@ class SQLiteTenantConfigStore:
             raise RuntimeError(f"Stored config for tenant '{tenant_id}' is invalid")
         return _decrypt_payload(payload, self._fernet)
 
+    def get_config_version(self, tenant_id: str) -> int | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT version FROM tenant_execution_configs WHERE tenant_id = ?",
+                (tenant_id,),
+            ).fetchone()
+        return int(row[0]) if row is not None else None
+
     def upsert_raw_config(self, tenant_id: str, payload: dict[str, Any]) -> None:
         serialized = json.dumps(
             _encrypt_payload(payload, self._fernet),
@@ -246,10 +254,11 @@ class SQLiteTenantConfigStore:
             with self._connection() as connection:
                 connection.execute(
                     """
-                    INSERT INTO tenant_execution_configs (tenant_id, config_json)
-                    VALUES (?, ?)
+                    INSERT INTO tenant_execution_configs (tenant_id, config_json, version)
+                    VALUES (?, ?, 1)
                     ON CONFLICT(tenant_id) DO UPDATE SET
                         config_json = excluded.config_json,
+                        version = tenant_execution_configs.version + 1,
                         updated_at = CURRENT_TIMESTAMP
                     """,
                     (tenant_id, serialized),
@@ -309,12 +318,14 @@ class SQLiteTenantConfigStore:
                 CREATE TABLE IF NOT EXISTS tenant_execution_configs (
                     tenant_id TEXT PRIMARY KEY,
                     config_json TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
             connection.commit()
+            _ensure_tenant_execution_config_columns(connection)
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -426,6 +437,15 @@ def _decrypt_payload(payload: dict[str, Any], fernet: Fernet | None) -> dict[str
                 if isinstance(server, dict):
                     _decrypt_secret_field(server, "headers", fernet)
     return cloned
+
+
+def _ensure_tenant_execution_config_columns(connection: sqlite3.Connection) -> None:
+    rows = connection.execute("PRAGMA table_info(tenant_execution_configs)").fetchall()
+    columns = {str(row[1]) for row in rows}
+    if "version" not in columns:
+        connection.execute(
+            "ALTER TABLE tenant_execution_configs ADD COLUMN version INTEGER NOT NULL DEFAULT 1"
+        )
 
 
 def _encrypt_secret_field(container: dict[str, Any], key: str, fernet: Fernet) -> None:

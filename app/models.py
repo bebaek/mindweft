@@ -57,6 +57,7 @@ class TenantContext(BaseModel):
     region: str | None = None
     features: dict[str, bool] = Field(default_factory=dict)
     limits: dict[str, int | float | str | bool | None] = Field(default_factory=dict)
+    execution_config_version: int | None = None
     entitlements_version: int | None = None
 
 

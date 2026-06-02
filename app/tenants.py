@@ -42,7 +42,8 @@ async def require_tenant_context(
         raise HTTPException(status_code=403, detail="Tenant is not active")
 
     entitlements = store.get_tenant_entitlements(principal.tenant_id)
-    context = _tenant_context_from_records(principal, tenant, entitlements)
+    execution_config_version = store.get_config_version(principal.tenant_id)
+    context = _tenant_context_from_records(principal, tenant, entitlements, execution_config_version)
     request.state.tenant_context = context
     return context
 
@@ -59,6 +60,7 @@ def _tenant_context_from_records(
     principal: Principal,
     tenant: Tenant,
     entitlements: TenantEntitlements | None,
+    execution_config_version: int | None,
 ) -> TenantContext:
     return TenantContext(
         principal=principal,
@@ -69,5 +71,6 @@ def _tenant_context_from_records(
         region=tenant.region,
         features=dict(entitlements.features) if entitlements is not None else {},
         limits=dict(entitlements.limits) if entitlements is not None else {},
+        execution_config_version=execution_config_version,
         entitlements_version=entitlements.version if entitlements is not None else None,
     )
