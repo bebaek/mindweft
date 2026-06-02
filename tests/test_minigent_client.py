@@ -45,6 +45,7 @@ from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker, should_duck_for_state
 from minigent_client.errors import MinigentAPIError
 from minigent_client.output import (
+    StreamProgressRenderer,
     format_thread_context_summary,
     style_assistant_markdown,
     style_line,
@@ -592,6 +593,54 @@ def test_cli_stream_progress_respects_no_color(monkeypatch: pytest.MonkeyPatch) 
     output_stream = TtyStringIO()
 
     assert style_stream_progress_line("● preparing", stream=output_stream) == "● preparing"
+
+
+def test_stream_progress_renderer_can_stop_spinner_on_interrupt() -> None:
+    renderer = StreamProgressRenderer(stream=TtyStringIO())
+    renderer.render({"type": "llm.request", "iteration": 1})
+
+    renderer.stop_active_progress()
+
+    assert renderer._current_spinner is None
+
+
+def test_streaming_run_stops_progress_when_interrupted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = ClientConfig(
+        base_url="http://api.example.test",
+        wake_phrase="hey minigent",
+        stream_runs=True,
+    )
+    client = MinigentAPIClient(config)
+
+    class FakeRenderer:
+        def __init__(self) -> None:
+            self.rendered: list[dict[str, object]] = []
+            self.stop_calls = 0
+
+        def render(self, event: dict[str, object]) -> None:
+            self.rendered.append(event)
+
+        def stop_active_progress(self) -> None:
+            self.stop_calls += 1
+
+    renderer = FakeRenderer()
+    client._stream_progress_renderer = renderer  # type: ignore[assignment]
+
+    def fake_events(method: str, url: str):
+        assert method == "POST"
+        assert url == "http://api.example.test/threads/thread-1/run/stream"
+        yield {"type": "llm.request", "iteration": 1}
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(client, "request_ndjson_events", fake_events)
+
+    with pytest.raises(KeyboardInterrupt):
+        client.run_thread("thread-1")
+
+    assert renderer.rendered == [{"type": "llm.request", "iteration": 1}]
+    assert renderer.stop_calls == 1
 
 
 def test_silent_speech_output_prints_reply_without_audio() -> None:

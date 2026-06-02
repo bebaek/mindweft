@@ -417,30 +417,33 @@ class MinigentAPIClient:
         reply: str | None = None
         metadata: dict[str, Any] | None = None
         saw_warning = False
-        for event in self.request_ndjson_events(
-            "POST",
-            f"{self._config.base_url}/threads/{thread_id}/run/stream",
-        ):
-            self._stream_progress_renderer.render(event)
-            event_type = event.get("type")
-            if event_type == "assistant.message":
-                content = event.get("content")
-                if not isinstance(content, str):
-                    raise RuntimeError("Minigent stream assistant message must be a string")
-                reply = content
-                metadata = event.get("metadata")
-            elif event_type == "run.warning":
-                saw_warning = True
-            elif event_type == "run.error":
-                status_code = event.get("status_code")
-                detail = event.get("detail")
-                raise _api_error_from_status(
-                    "POST",
-                    f"{self._config.base_url}/threads/{thread_id}/run/stream",
-                    int(status_code) if isinstance(status_code, int) else None,
-                    detail,
-                    technical_detail=f"run.error event: status_code={status_code} detail={detail}",
-                )
+        try:
+            for event in self.request_ndjson_events(
+                "POST",
+                f"{self._config.base_url}/threads/{thread_id}/run/stream",
+            ):
+                self._stream_progress_renderer.render(event)
+                event_type = event.get("type")
+                if event_type == "assistant.message":
+                    content = event.get("content")
+                    if not isinstance(content, str):
+                        raise RuntimeError("Minigent stream assistant message must be a string")
+                    reply = content
+                    metadata = event.get("metadata")
+                elif event_type == "run.warning":
+                    saw_warning = True
+                elif event_type == "run.error":
+                    status_code = event.get("status_code")
+                    detail = event.get("detail")
+                    raise _api_error_from_status(
+                        "POST",
+                        f"{self._config.base_url}/threads/{thread_id}/run/stream",
+                        int(status_code) if isinstance(status_code, int) else None,
+                        detail,
+                        technical_detail=f"run.error event: status_code={status_code} detail={detail}",
+                    )
+        finally:
+            self._stream_progress_renderer.stop_active_progress()
         if reply is None:
             if saw_warning:
                 return "", metadata

@@ -256,7 +256,10 @@ class _ProgressSpinner:
             self._thread.join(timeout=0.2)
             # Use unbuffered write to guarantee the terminal processes
             # the cursor movement before any subsequent stdout write.
-            fd = self._stream.fileno() if hasattr(self._stream, "fileno") else -1
+            try:
+                fd = self._stream.fileno() if hasattr(self._stream, "fileno") else -1
+            except OSError:
+                fd = -1
             if fd >= 0:
                 os.write(fd, b"\r\x1b[2K\n")
             else:
@@ -478,6 +481,10 @@ class StreamProgressRenderer:
                     self._write_tool_detail_block(details)
             return
         self._write(f"[peer] event {peer_event_type}")
+
+    def stop_active_progress(self) -> None:
+        """Stop any active live progress indicator without printing deferred output."""
+        self._stop_spinner()
 
     def flush_pending_summary(self) -> None:
         """Write any pending summary line (e.g., token stats) and clear it."""
