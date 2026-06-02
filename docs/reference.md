@@ -192,6 +192,16 @@ GEMINI_MODEL=gemini-3.5-flash
 GOOGLE_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 ```
 
+If Gemini requests fail with a warning like
+`provider_request_failed ... exception_type='DecodingError'`, the response body was likely
+advertised as compressed but could not be decoded by the HTTP client. This can happen with
+corrupt or truncated compressed responses from an intermediary such as a proxy, VPN, or
+security appliance. Disable response compression for Gemini by setting:
+
+```dotenv
+MINIGENT_LLM_EXTRA_HEADERS={"Accept-Encoding":"identity"}
+```
+
 For tenant execution config, use `llm.provider: "google"` and put the Gemini API key in
 `llm.api_key`. Minigent calls `POST /models/{model}:generateContent` and supports text
 responses plus native Gemini function calls for Minigent tools. Tool input schemas are sent
