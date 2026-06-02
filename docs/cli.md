@@ -134,6 +134,8 @@ minigent --admin admin tenants suspend <tenant-id>
 minigent --admin admin tenants activate <tenant-id>
 minigent --admin admin tenants archive <tenant-id>
 minigent --admin admin tenants delete <tenant-id>
+minigent --admin admin tenants seed --from execution-configs --status active --dry-run
+minigent --admin admin tenants seed --from execution-configs --status active
 ```
 
 Thread and audit admin commands use `--tenant` to select the target tenant:

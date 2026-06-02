@@ -336,6 +336,24 @@ def build_parser() -> argparse.ArgumentParser:
         )
         transition_parser.add_argument("tenant_id")
 
+    admin_tenants_seed_parser = admin_tenants_subparsers.add_parser(
+        "seed", help="Seed registry tenants from an existing source."
+    )
+    admin_tenants_seed_parser.add_argument(
+        "--from",
+        dest="seed_source",
+        choices=["execution-configs"],
+        default="execution-configs",
+    )
+    admin_tenants_seed_parser.add_argument(
+        "--status",
+        choices=["active", "provisioning", "suspended", "archived", "deleted"],
+        default="active",
+    )
+    admin_tenants_seed_parser.add_argument("--plan", default=None)
+    admin_tenants_seed_parser.add_argument("--region", default=None)
+    admin_tenants_seed_parser.add_argument("--dry-run", action="store_true")
+
     admin_threads_parser = admin_subparsers.add_parser("threads", help="Inspect tenant threads.")
     admin_threads_subparsers = admin_threads_parser.add_subparsers(
         dest="admin_threads_command", required=True
@@ -1098,6 +1116,57 @@ def run_admin_tenants_transition(
     return _print_admin_tenant_response(args, response, trace_id)
 
 
+def run_admin_tenants_seed(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    payload: dict[str, Any] = {
+        "source": args.seed_source,
+        "status": args.status,
+        "dry_run": args.dry_run,
+    }
+    if args.plan is not None:
+        payload["plan"] = args.plan
+    if args.region is not None:
+        payload["region"] = args.region
+    response = client.seed_admin_tenants(payload)
+    if args.json:
+        output: dict[str, Any] = dict(response)
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    print(
+        " ".join(
+            [
+                f"source={response.get('source')}",
+                f"discovered={response.get('discovered')}",
+                f"existing={response.get('existing')}",
+                f"created={response.get('created')}",
+                f"conflicts={response.get('conflicts')}",
+                f"dry_run={response.get('dry_run')}",
+            ]
+        )
+    )
+    for tenant in response.get("tenants", []):
+        if not isinstance(tenant, dict):
+            continue
+        print(
+            " ".join(
+                [
+                    str(tenant.get("id", "")),
+                    f"slug={tenant.get('slug')}",
+                    f"status={tenant.get('status')}",
+                    f"action={tenant.get('action')}",
+                ]
+            )
+        )
+    return 0
+
+
 def _print_admin_tenant_response(
     args: argparse.Namespace,
     response: dict[str, Any],
@@ -1834,6 +1903,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     return run_admin_tenants_update(args, client, trace_id)
                 if args.admin_tenants_command in {"activate", "suspend", "archive", "delete"}:
                     return run_admin_tenants_transition(args, client, trace_id)
+                if args.admin_tenants_command == "seed":
+                    return run_admin_tenants_seed(args, client, trace_id)
             if args.admin_command == "threads":
                 if args.admin_threads_command == "list":
                     return run_admin_threads_list(args, client, trace_id)

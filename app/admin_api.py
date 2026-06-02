@@ -80,6 +80,32 @@ class AdminTenantDeleteResponse(BaseModel):
     status: TenantStatus
 
 
+class AdminTenantSeedRequest(BaseModel):
+    source: str = "execution-configs"
+    status: TenantStatus = TenantStatus.ACTIVE
+    plan: str | None = None
+    region: str | None = None
+    dry_run: bool = False
+
+
+class AdminTenantSeedItemResponse(BaseModel):
+    id: str
+    slug: str
+    name: str
+    status: TenantStatus
+    action: str
+
+
+class AdminTenantSeedResponse(BaseModel):
+    source: str
+    dry_run: bool
+    discovered: int
+    existing: int
+    created: int
+    conflicts: int
+    tenants: list[AdminTenantSeedItemResponse]
+
+
 class AdminExecutionConfigTenantListResponse(BaseModel):
     tenants: list[str]
 
@@ -264,6 +290,80 @@ def build_admin_router() -> APIRouter:
             raise HTTPException(status_code=409, detail="Tenant id or slug already exists") from exc
         _append_tenant_audit(app_request, created.id, admin, "tenants.create")
         return _tenant_response(created)
+
+    @router.post("/tenants/seed", response_model=AdminTenantSeedResponse)
+    async def seed_tenants(
+        body: AdminTenantSeedRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantSeedResponse:
+        if body.source != "execution-configs":
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported tenant seed source. Expected 'execution-configs'.",
+            )
+        store = _require_admin_store(request)
+        tenant_ids = store.list_tenants()
+        used_slugs = _used_tenant_slugs(store)
+        items: list[AdminTenantSeedItemResponse] = []
+        existing = 0
+        created = 0
+        conflicts = 0
+        for tenant_id in tenant_ids:
+            current = store.get_tenant(tenant_id)
+            if current is not None:
+                existing += 1
+                used_slugs.add(current.slug)
+                items.append(
+                    AdminTenantSeedItemResponse(
+                        id=current.id,
+                        slug=current.slug,
+                        name=current.name,
+                        status=current.status,
+                        action="exists",
+                    )
+                )
+                continue
+            slug = _unique_seed_slug(tenant_id, used_slugs)
+            used_slugs.add(slug)
+            item = AdminTenantSeedItemResponse(
+                id=tenant_id,
+                slug=slug,
+                name=tenant_id,
+                status=body.status,
+                action="would_create" if body.dry_run else "created",
+            )
+            items.append(item)
+            if body.dry_run:
+                continue
+            try:
+                store.create_tenant(
+                    Tenant(
+                        id=tenant_id,
+                        slug=slug,
+                        name=tenant_id,
+                        status=body.status,
+                        plan=body.plan,
+                        region=body.region,
+                        created_by=admin.user_id,
+                        updated_by=admin.user_id,
+                    )
+                )
+            except sqlite3.IntegrityError:
+                conflicts += 1
+                items[-1] = item.model_copy(update={"action": "conflict"})
+                continue
+            created += 1
+            _append_tenant_audit(request, tenant_id, admin, "tenants.seed")
+        return AdminTenantSeedResponse(
+            source=body.source,
+            dry_run=body.dry_run,
+            discovered=len(tenant_ids),
+            existing=existing,
+            created=created,
+            conflicts=conflicts,
+            tenants=items,
+        )
 
     @router.get("/tenants/{tenant_id}", response_model=AdminTenantResponse)
     async def get_tenant(
@@ -697,6 +797,32 @@ def _validate_slug(slug: str) -> None:
 def _validate_name(name: str) -> None:
     if not name.strip():
         raise HTTPException(status_code=400, detail="Tenant name must be non-empty")
+
+
+def _used_tenant_slugs(store: Any) -> set[str]:
+    tenants, _total = store.list_registry_tenants(limit=500, offset=0)
+    return {tenant.slug for tenant in tenants}
+
+
+def _seed_slug_from_tenant_id(tenant_id: str) -> str:
+    slug = re.sub(r"[^a-z0-9-]+", "-", tenant_id.lower())
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    slug = slug[:63].strip("-")
+    if not slug:
+        slug = "tenant"
+    return slug
+
+
+def _unique_seed_slug(tenant_id: str, used_slugs: set[str]) -> str:
+    base = _seed_slug_from_tenant_id(tenant_id)
+    if base not in used_slugs:
+        return base
+    for suffix in range(2, 10_000):
+        suffix_text = f"-{suffix}"
+        candidate = base[: 63 - len(suffix_text)].rstrip("-") + suffix_text
+        if candidate not in used_slugs:
+            return candidate
+    raise HTTPException(status_code=409, detail=f"Unable to derive unique slug for '{tenant_id}'")
 
 
 def _thread_summary(thread: Thread, message_count: int) -> AdminThreadSummaryResponse:

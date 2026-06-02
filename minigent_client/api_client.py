@@ -128,6 +128,16 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent admin tenant-delete response must be an object")
         return cast(dict[str, Any], response)
 
+    def seed_admin_tenants(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/admin/tenants/seed",
+            payload=payload,
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin tenant-seed response must be an object")
+        return cast(dict[str, Any], response)
+
     def create_thread(
         self,
         *,

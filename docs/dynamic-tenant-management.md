@@ -3,10 +3,10 @@
 Status: Partially implemented
 
 Initial implementation includes a SQLite-backed tenant registry, admin tenant lifecycle
-endpoints, soft deletion via tenant status, an execution-config tenant listing compatibility
-endpoint, and opt-in request-time active-tenant enforcement with
-`MINIGENT_TENANT_REGISTRY_REQUIRED`. Domains, entitlements, structured old/new audit
-values, and automatic seeding remain proposed follow-up work.
+endpoints and CLI commands, soft deletion via tenant status, an execution-config tenant
+listing compatibility endpoint, execution-config tenant seeding, and opt-in request-time
+active-tenant enforcement with `MINIGENT_TENANT_REGISTRY_REQUIRED`. Domains,
+entitlements, and structured old/new audit values remain proposed follow-up work.
 
 ## Context
 

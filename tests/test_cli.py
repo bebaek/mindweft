@@ -1036,6 +1036,107 @@ def test_admin_tenants_delete_json(monkeypatch: Any, capsys: Any) -> None:
     assert json.loads(capsys.readouterr().out) == response
 
 
+def test_admin_tenants_seed_sends_options(monkeypatch: Any, capsys: Any) -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+    response = {
+        "source": "execution-configs",
+        "dry_run": True,
+        "discovered": 2,
+        "existing": 1,
+        "created": 0,
+        "conflicts": 0,
+        "tenants": [
+            {
+                "id": "tenant-a",
+                "slug": "tenant-a",
+                "name": "tenant-a",
+                "status": "active",
+                "action": "exists",
+            },
+            {
+                "id": "tenant-b",
+                "slug": "tenant-b",
+                "name": "tenant-b",
+                "status": "active",
+                "action": "would_create",
+            },
+        ],
+    }
+
+    def urlopen(request: Any) -> _Response:
+        payload = json.loads(request.data.decode("utf-8")) if request.data else {}
+        calls.append((request.get_method(), request.full_url, payload))
+        return _Response(body=response)
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        [
+            "--admin",
+            "admin",
+            "tenants",
+            "seed",
+            "--from",
+            "execution-configs",
+            "--status",
+            "active",
+            "--plan",
+            "pro",
+            "--region",
+            "us",
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:8000/admin/tenants/seed",
+            {
+                "source": "execution-configs",
+                "status": "active",
+                "dry_run": True,
+                "plan": "pro",
+                "region": "us",
+            },
+        )
+    ]
+    output = capsys.readouterr().out
+    assert "source=execution-configs discovered=2 existing=1 created=0 conflicts=0 dry_run=True" in output
+    assert "tenant-b slug=tenant-b status=active action=would_create" in output
+
+
+def test_admin_tenants_seed_json(monkeypatch: Any, capsys: Any) -> None:
+    response = {
+        "source": "execution-configs",
+        "dry_run": False,
+        "discovered": 1,
+        "existing": 0,
+        "created": 1,
+        "conflicts": 0,
+        "tenants": [
+            {
+                "id": "tenant-a",
+                "slug": "tenant-a",
+                "name": "tenant-a",
+                "status": "active",
+                "action": "created",
+            }
+        ],
+    }
+
+    def urlopen(request: Any) -> _Response:
+        return _Response(body=response)
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["--admin", "--json", "admin", "tenants", "seed"])
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out) == response
+
+
 def test_admin_threads_list_json(monkeypatch: Any, capsys: Any) -> None:
     calls: list[tuple[str, str, dict[str, str]]] = []
     response = {

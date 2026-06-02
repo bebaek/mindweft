@@ -2216,6 +2216,90 @@ def test_admin_api_rejects_invalid_tenant_slug(tmp_path: Path) -> None:
     assert "slug" in response.json()["detail"]
 
 
+def test_admin_api_seeds_tenants_from_execution_configs(tmp_path: Path) -> None:
+    store = _sqlite_store(tmp_path)
+    store.upsert_raw_config("Tenant A", {"llm": {"provider": "mock"}})
+    store.upsert_raw_config("tenant-a", {"llm": {"provider": "mock"}})
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store-with-defaults"))
+
+    existing_response = client.post(
+        "/admin/tenants",
+        json={"id": "existing", "slug": "tenant-a", "name": "Existing"},
+        headers=ADMIN_HEADERS,
+    )
+    assert existing_response.status_code == 201
+
+    dry_run_response = client.post(
+        "/admin/tenants/seed",
+        json={
+            "source": "execution-configs",
+            "status": "active",
+            "plan": "pro",
+            "region": "us",
+            "dry_run": True,
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert dry_run_response.status_code == 200
+    dry_run_payload = dry_run_response.json()
+    assert dry_run_payload["dry_run"] is True
+    assert dry_run_payload["discovered"] == 2
+    assert dry_run_payload["created"] == 0
+    assert {item["action"] for item in dry_run_payload["tenants"]} == {"would_create"}
+    assert client.get("/admin/tenants/Tenant A", headers=ADMIN_HEADERS).status_code == 404
+
+    seed_response = client.post(
+        "/admin/tenants/seed",
+        json={
+            "source": "execution-configs",
+            "status": "active",
+            "plan": "pro",
+            "region": "us",
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert seed_response.status_code == 200
+    payload = seed_response.json()
+    assert payload["discovered"] == 2
+    assert payload["created"] == 2
+    assert payload["existing"] == 0
+    assert payload["conflicts"] == 0
+    by_id = {item["id"]: item for item in payload["tenants"]}
+    assert by_id["Tenant A"]["slug"] == "tenant-a-2"
+    assert by_id["tenant-a"]["slug"] == "tenant-a-3"
+
+    get_response = client.get("/admin/tenants/Tenant A", headers=ADMIN_HEADERS)
+    assert get_response.status_code == 200
+    assert get_response.json()["status"] == TenantStatus.ACTIVE
+    assert get_response.json()["plan"] == "pro"
+    assert get_response.json()["region"] == "us"
+
+    second_seed_response = client.post(
+        "/admin/tenants/seed",
+        json={"source": "execution-configs"},
+        headers=ADMIN_HEADERS,
+    )
+    assert second_seed_response.status_code == 200
+    assert second_seed_response.json()["existing"] == 2
+    assert second_seed_response.json()["created"] == 0
+
+
+def test_admin_api_seed_rejects_unknown_source(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+
+    response = client.post(
+        "/admin/tenants/seed",
+        json={"source": "static-tokens"},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 400
+
+
 def test_tenant_registry_required_blocks_inactive_tenants(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
