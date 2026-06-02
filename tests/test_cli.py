@@ -838,6 +838,204 @@ def test_debug_bundle_output_writes_human_report(monkeypatch: Any, tmp_path: Pat
     assert "model: mock-model" in report
 
 
+def test_admin_tenants_list_sends_filters(monkeypatch: Any, capsys: Any) -> None:
+    calls: list[tuple[str, str, dict[str, str]]] = []
+    response = {
+        "tenants": [
+            {
+                "id": "tenant-a",
+                "slug": "tenant-a",
+                "name": "Tenant A",
+                "status": "active",
+                "plan": "pro",
+                "region": "us",
+                "metadata": {},
+                "created_at": "2026-05-19T10:00:00Z",
+                "updated_at": "2026-05-19T10:01:00Z",
+            }
+        ],
+        "limit": 10,
+        "offset": 20,
+        "total": 42,
+        "next_offset": 30,
+    }
+
+    def urlopen(request: Any) -> _Response:
+        calls.append((request.get_method(), request.full_url, dict(request.header_items())))
+        return _Response(body=response)
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        [
+            "--admin",
+            "admin",
+            "tenants",
+            "list",
+            "--limit",
+            "10",
+            "--offset",
+            "20",
+            "--status",
+            "active",
+            "--plan",
+            "pro",
+            "--slug",
+            "tenant-a",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        (
+            "GET",
+            "http://127.0.0.1:8000/admin/tenants?limit=10&offset=20&status=active&plan=pro&slug=tenant-a",
+            calls[0][2],
+        )
+    ]
+    assert calls[0][2]["X-minigent-admin"] == "true"
+    output = capsys.readouterr().out
+    assert "total=42 limit=10 offset=20 next_offset=30" in output
+    assert "tenant-a slug=tenant-a name=Tenant A status=active plan=pro region=us" in output
+
+
+def test_admin_tenants_create_json_sends_payload(monkeypatch: Any, capsys: Any) -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+    response = {
+        "id": "tenant-a",
+        "slug": "tenant-a",
+        "name": "Tenant A",
+        "status": "active",
+        "plan": "pro",
+        "region": "us",
+        "metadata": {"owner": "ops"},
+        "created_at": "2026-05-19T10:00:00Z",
+        "updated_at": "2026-05-19T10:00:00Z",
+    }
+
+    def urlopen(request: Any) -> _Response:
+        payload = json.loads(request.data.decode("utf-8")) if request.data else {}
+        calls.append((request.get_method(), request.full_url, payload))
+        return _Response(body=response)
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        [
+            "--admin",
+            "--json",
+            "admin",
+            "tenants",
+            "create",
+            "--id",
+            "tenant-a",
+            "--slug",
+            "tenant-a",
+            "--name",
+            "Tenant A",
+            "--status",
+            "active",
+            "--plan",
+            "pro",
+            "--region",
+            "us",
+            "--metadata-json",
+            '{"owner":"ops"}',
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:8000/admin/tenants",
+            {
+                "id": "tenant-a",
+                "slug": "tenant-a",
+                "name": "Tenant A",
+                "status": "active",
+                "plan": "pro",
+                "region": "us",
+                "metadata": {"owner": "ops"},
+            },
+        )
+    ]
+    assert json.loads(capsys.readouterr().out) == response
+
+
+def test_admin_tenants_update_and_transition(monkeypatch: Any, capsys: Any) -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def urlopen(request: Any) -> _Response:
+        payload = json.loads(request.data.decode("utf-8")) if request.data else {}
+        calls.append((request.get_method(), request.full_url, payload))
+        return _Response(
+            body={
+                "id": "tenant-a",
+                "slug": payload.get("slug", "tenant-a"),
+                "name": payload.get("name", "Tenant A"),
+                "status": "active",
+                "plan": payload.get("plan"),
+                "region": None,
+                "metadata": {},
+                "created_at": "2026-05-19T10:00:00Z",
+                "updated_at": "2026-05-19T10:01:00Z",
+            }
+        )
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    update_exit = cli.main(
+        [
+            "--admin",
+            "admin",
+            "tenants",
+            "update",
+            "tenant-a",
+            "--slug",
+            "tenant-renamed",
+            "--name",
+            "Tenant Renamed",
+            "--plan",
+            "pro",
+        ]
+    )
+    activate_exit = cli.main(["--admin", "--json", "admin", "tenants", "activate", "tenant-a"])
+
+    assert update_exit == 0
+    assert activate_exit == 0
+    assert calls[0] == (
+        "PATCH",
+        "http://127.0.0.1:8000/admin/tenants/tenant-a",
+        {"slug": "tenant-renamed", "name": "Tenant Renamed", "plan": "pro"},
+    )
+    assert calls[1] == (
+        "POST",
+        "http://127.0.0.1:8000/admin/tenants/tenant-a/activate",
+        {},
+    )
+    output = capsys.readouterr().out
+    assert "tenant-a slug=tenant-renamed name=Tenant Renamed status=active plan=pro" in output
+    assert '"id": "tenant-a"' in output
+
+
+def test_admin_tenants_delete_json(monkeypatch: Any, capsys: Any) -> None:
+    calls: list[tuple[str, str]] = []
+    response = {"deleted": True, "tenant_id": "tenant-a", "status": "deleted"}
+
+    def urlopen(request: Any) -> _Response:
+        calls.append((request.get_method(), request.full_url))
+        return _Response(body=response)
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["--admin", "--json", "admin", "tenants", "delete", "tenant-a"])
+
+    assert exit_code == 0
+    assert calls == [("DELETE", "http://127.0.0.1:8000/admin/tenants/tenant-a")]
+    assert json.loads(capsys.readouterr().out) == response
+
+
 def test_admin_threads_list_json(monkeypatch: Any, capsys: Any) -> None:
     calls: list[tuple[str, str, dict[str, str]]] = []
     response = {

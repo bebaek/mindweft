@@ -122,12 +122,28 @@ mode. Both support `--json` and return nonzero when a blocking issue is detected
 
 ### Admin commands
 
-Admin commands require `--admin` and a tenant:
+Admin commands require `--admin`. Tenant registry commands manage durable tenant lifecycle
+state:
+
+```bash
+minigent --admin admin tenants list --status active
+minigent --admin admin tenants create --id <tenant-id> --slug <slug> --name "Tenant Name" --status active
+minigent --admin admin tenants show <tenant-id>
+minigent --admin admin tenants update <tenant-id> --plan pro --metadata-json '{"owner":"support"}'
+minigent --admin admin tenants suspend <tenant-id>
+minigent --admin admin tenants activate <tenant-id>
+minigent --admin admin tenants archive <tenant-id>
+minigent --admin admin tenants delete <tenant-id>
+```
+
+Thread and audit admin commands use `--tenant` to select the target tenant:
 
 ```bash
 minigent --admin admin threads list --tenant <tenant-id>
 minigent --admin admin threads show <thread-id> --tenant <tenant-id>
 minigent --admin admin threads delete <thread-id> --tenant <tenant-id>
+minigent --admin admin threads prune --tenant <tenant-id> --updated-before 2026-05-01T00:00:00Z --dry-run
+minigent --admin admin audit list --tenant <tenant-id>
 ```
 
 ## Interactive chat

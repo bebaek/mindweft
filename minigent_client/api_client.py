@@ -64,6 +64,70 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent config response must be an object")
         return cast(dict[str, Any], response)
 
+    def list_admin_tenants(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int | None = None,
+        status: str | None = None,
+        plan: str | None = None,
+        slug: str | None = None,
+    ) -> dict[str, Any]:
+        query = _build_query(
+            {
+                "limit": limit,
+                "offset": offset,
+                "status": status,
+                "plan": plan,
+                "slug": slug,
+            }
+        )
+        response = self.request_json("GET", f"{self._config.base_url}/admin/tenants{query}")
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin tenant-list response must be an object")
+        return cast(dict[str, Any], response)
+
+    def create_admin_tenant(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/admin/tenants",
+            payload=payload,
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin tenant-create response must be an object")
+        return cast(dict[str, Any], response)
+
+    def get_admin_tenant(self, tenant_id: str) -> dict[str, Any]:
+        response = self.request_json("GET", f"{self._config.base_url}/admin/tenants/{tenant_id}")
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin tenant response must be an object")
+        return cast(dict[str, Any], response)
+
+    def update_admin_tenant(self, tenant_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self.request_json(
+            "PATCH",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}",
+            payload=payload,
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin tenant-update response must be an object")
+        return cast(dict[str, Any], response)
+
+    def transition_admin_tenant(self, tenant_id: str, transition: str) -> dict[str, Any]:
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}/{transition}",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin tenant-transition response must be an object")
+        return cast(dict[str, Any], response)
+
+    def delete_admin_tenant(self, tenant_id: str) -> dict[str, Any]:
+        response = self.request_json("DELETE", f"{self._config.base_url}/admin/tenants/{tenant_id}")
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin tenant-delete response must be an object")
+        return cast(dict[str, Any], response)
+
     def create_thread(
         self,
         *,

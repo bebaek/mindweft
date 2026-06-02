@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.config import ClientConfig, build_client_config
@@ -274,6 +274,68 @@ def build_parser() -> argparse.ArgumentParser:
 
     admin_parser = subparsers.add_parser("admin", help="Admin inspection commands.")
     admin_subparsers = admin_parser.add_subparsers(dest="admin_command", required=True)
+
+    admin_tenants_parser = admin_subparsers.add_parser("tenants", help="Manage tenants.")
+    admin_tenants_subparsers = admin_tenants_parser.add_subparsers(
+        dest="admin_tenants_command", required=True
+    )
+    admin_tenants_list_parser = admin_tenants_subparsers.add_parser(
+        "list", help="List registry tenants."
+    )
+    admin_tenants_list_parser.add_argument("--limit", type=int, default=None)
+    admin_tenants_list_parser.add_argument("--offset", type=int, default=None)
+    admin_tenants_list_parser.add_argument(
+        "--status",
+        choices=["active", "provisioning", "suspended", "archived", "deleted"],
+        default=None,
+    )
+    admin_tenants_list_parser.add_argument("--plan", default=None)
+    admin_tenants_list_parser.add_argument("--slug", default=None)
+
+    admin_tenants_create_parser = admin_tenants_subparsers.add_parser(
+        "create", help="Create a tenant."
+    )
+    admin_tenants_create_parser.add_argument("--id", dest="new_tenant_id", default=None)
+    admin_tenants_create_parser.add_argument("--slug", required=True)
+    admin_tenants_create_parser.add_argument("--name", required=True)
+    admin_tenants_create_parser.add_argument(
+        "--status",
+        choices=["active", "provisioning", "suspended", "archived", "deleted"],
+        default=None,
+    )
+    admin_tenants_create_parser.add_argument("--plan", default=None)
+    admin_tenants_create_parser.add_argument("--region", default=None)
+    admin_tenants_create_parser.add_argument(
+        "--metadata-json",
+        default=None,
+        help="Tenant metadata as a JSON object.",
+    )
+
+    admin_tenants_show_parser = admin_tenants_subparsers.add_parser(
+        "show", help="Show one tenant."
+    )
+    admin_tenants_show_parser.add_argument("tenant_id")
+
+    admin_tenants_update_parser = admin_tenants_subparsers.add_parser(
+        "update", help="Update tenant fields."
+    )
+    admin_tenants_update_parser.add_argument("tenant_id")
+    admin_tenants_update_parser.add_argument("--slug", default=None)
+    admin_tenants_update_parser.add_argument("--name", default=None)
+    admin_tenants_update_parser.add_argument("--plan", default=None)
+    admin_tenants_update_parser.add_argument("--region", default=None)
+    admin_tenants_update_parser.add_argument(
+        "--metadata-json",
+        default=None,
+        help="Replace tenant metadata with this JSON object.",
+    )
+
+    for command_name in ["activate", "suspend", "archive", "delete"]:
+        transition_parser = admin_tenants_subparsers.add_parser(
+            command_name, help=f"{command_name.title()} a tenant."
+        )
+        transition_parser.add_argument("tenant_id")
+
     admin_threads_parser = admin_subparsers.add_parser("threads", help="Inspect tenant threads.")
     admin_threads_subparsers = admin_threads_parser.add_subparsers(
         dest="admin_threads_command", required=True
@@ -922,6 +984,152 @@ def run_threads_delete(
         print(f"trace_id={trace_id}")
     print(args.thread_id)
     return 0
+
+
+def _metadata_from_arg(raw: str | None) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise MinigentAPIError(
+            "--metadata-json must be valid JSON.",
+            category="invalid_request",
+            detail=str(exc),
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise MinigentAPIError(
+            "--metadata-json must be a JSON object.",
+            category="invalid_request",
+            detail=raw,
+        )
+    return cast(dict[str, Any], parsed)
+
+
+def _tenant_payload(args: argparse.Namespace, *, create: bool) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if create and args.new_tenant_id is not None:
+        payload["id"] = args.new_tenant_id
+    for key in ["slug", "name", "status", "plan", "region"]:
+        value = getattr(args, key, None)
+        if value is not None:
+            payload[key] = value
+    metadata = _metadata_from_arg(args.metadata_json)
+    if metadata is not None:
+        payload["metadata"] = metadata
+    return payload
+
+
+def run_admin_tenants_list(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    response = client.list_admin_tenants(
+        limit=args.limit,
+        offset=args.offset,
+        status=args.status,
+        plan=args.plan,
+        slug=args.slug,
+    )
+    if args.json:
+        output: dict[str, Any] = dict(response)
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    print(
+        " ".join(
+            [
+                f"total={response.get('total')}",
+                f"limit={response.get('limit')}",
+                f"offset={response.get('offset')}",
+                f"next_offset={response.get('next_offset')}",
+            ]
+        )
+    )
+    for tenant in response.get("tenants", []):
+        if not isinstance(tenant, dict):
+            continue
+        print(_format_tenant_line(tenant))
+    return 0
+
+
+def run_admin_tenants_create(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    response = client.create_admin_tenant(_tenant_payload(args, create=True))
+    return _print_admin_tenant_response(args, response, trace_id)
+
+
+def run_admin_tenants_show(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    response = client.get_admin_tenant(args.tenant_id)
+    return _print_admin_tenant_response(args, response, trace_id)
+
+
+def run_admin_tenants_update(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    payload = _tenant_payload(args, create=False)
+    response = client.update_admin_tenant(args.tenant_id, payload)
+    return _print_admin_tenant_response(args, response, trace_id)
+
+
+def run_admin_tenants_transition(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    command = args.admin_tenants_command
+    if command == "delete":
+        response = client.delete_admin_tenant(args.tenant_id)
+    else:
+        response = client.transition_admin_tenant(args.tenant_id, command)
+    return _print_admin_tenant_response(args, response, trace_id)
+
+
+def _print_admin_tenant_response(
+    args: argparse.Namespace,
+    response: dict[str, Any],
+    trace_id: str | None,
+) -> int:
+    if args.json:
+        output: dict[str, Any] = dict(response)
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    print(_format_tenant_line(response))
+    metadata = response.get("metadata")
+    if isinstance(metadata, dict) and metadata:
+        print("metadata=" + json.dumps(metadata, ensure_ascii=True, sort_keys=True))
+    return 0
+
+
+def _format_tenant_line(tenant: dict[str, Any]) -> str:
+    return " ".join(
+        [
+            str(tenant.get("id") or tenant.get("tenant_id") or ""),
+            f"slug={tenant.get('slug')}",
+            f"name={tenant.get('name')}",
+            f"status={tenant.get('status')}",
+            f"plan={tenant.get('plan')}",
+            f"region={tenant.get('region')}",
+            f"updated_at={tenant.get('updated_at')}",
+        ]
+    )
 
 
 def run_admin_threads_list(
@@ -1615,6 +1823,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.threads_command == "delete":
                 return run_threads_delete(args, client, base_url, trace_id)
         if args.command == "admin":
+            if args.admin_command == "tenants":
+                if args.admin_tenants_command == "list":
+                    return run_admin_tenants_list(args, client, trace_id)
+                if args.admin_tenants_command == "create":
+                    return run_admin_tenants_create(args, client, trace_id)
+                if args.admin_tenants_command == "show":
+                    return run_admin_tenants_show(args, client, trace_id)
+                if args.admin_tenants_command == "update":
+                    return run_admin_tenants_update(args, client, trace_id)
+                if args.admin_tenants_command in {"activate", "suspend", "archive", "delete"}:
+                    return run_admin_tenants_transition(args, client, trace_id)
             if args.admin_command == "threads":
                 if args.admin_threads_command == "list":
                     return run_admin_threads_list(args, client, trace_id)

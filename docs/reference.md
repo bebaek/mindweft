@@ -1375,9 +1375,17 @@ When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, public thread endpoints reject au
 
 Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. Admin deletion removes a thread and its messages and writes an audit record. The prune endpoint deletes matching tenant threads with `updated_at` older than required `updated_before`, with optional `status`, `profile`, and `skill` filters. Add `dry_run=true` to preview `candidate_thread_ids` without deleting threads or writing audit records. The audit endpoint lists deletion/prune records with actor, action, affected count, thread IDs, timestamp, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `action`, `actor`, `created_after`, and `created_before` query parameters. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect and manage persisted threads and audit records after process restarts.
 
-The packaged CLI can inspect the same thread data when authenticated as an admin:
+The packaged CLI can inspect and manage the same tenant registry and thread data when authenticated as an admin:
 
 ```bash
+minigent --admin admin tenants list --status active --limit 50
+minigent --admin admin tenants create --id TENANT_ID --slug tenant-slug --name "Tenant Name" --status active
+minigent --admin admin tenants show TENANT_ID
+minigent --admin admin tenants update TENANT_ID --plan pro --metadata-json '{"owner":"support"}'
+minigent --admin admin tenants suspend TENANT_ID
+minigent --admin admin tenants activate TENANT_ID
+minigent --admin admin tenants archive TENANT_ID
+minigent --admin admin tenants delete TENANT_ID
 minigent --admin admin threads list --tenant TENANT_ID --limit 50
 minigent --admin admin threads list --tenant TENANT_ID --status idle --profile default --skill coding
 minigent --admin admin threads show THREAD_ID --tenant TENANT_ID
