@@ -2520,6 +2520,91 @@ def test_tenant_context_requires_active_tenant_when_registry_required(
     assert response.json()["features"] == {"mcp": True}
 
 
+def test_tenant_entitlements_enforce_thread_and_message_limits(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
+    client = TestClient(
+        create_app(
+            admin_store=_sqlite_store(tmp_path),
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+    client.post(
+        "/admin/tenants",
+        json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "active"},
+        headers=ADMIN_HEADERS,
+    )
+    client.put(
+        "/admin/tenants/tenant-1/entitlements",
+        json={"features": {}, "limits": {"max_threads": 1, "max_messages_per_thread": 1}},
+        headers=ADMIN_HEADERS,
+    )
+
+    first_thread_response = client.post("/threads", headers=AUTH_HEADERS)
+    assert first_thread_response.status_code == 200
+    thread_id = first_thread_response.json()["thread_id"]
+
+    second_thread_response = client.post("/threads", headers=AUTH_HEADERS)
+    assert second_thread_response.status_code == 429
+    assert "max_threads" in second_thread_response.json()["detail"]
+
+    first_message_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "hello"},
+        headers=AUTH_HEADERS,
+    )
+    assert first_message_response.status_code == 200
+
+    second_message_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "again"},
+        headers=AUTH_HEADERS,
+    )
+    assert second_message_response.status_code == 429
+    assert "max_messages_per_thread" in second_message_response.json()["detail"]
+
+
+def test_tenant_entitlements_block_disabled_peer_agent_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
+    store = _sqlite_store(tmp_path)
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store-with-defaults"))
+    client.post(
+        "/admin/tenants",
+        json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "active"},
+        headers=ADMIN_HEADERS,
+    )
+    client.put(
+        "/admin/tenants/tenant-1/entitlements",
+        json={"features": {"peer_agents": False}, "limits": {}},
+        headers=ADMIN_HEADERS,
+    )
+    client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        json={
+            "config": {
+                "agent_backend": {
+                    "type": "peer_agent",
+                    "peer": "pi",
+                    "cwd": "/workspace/project",
+                    "mcp_broker_enabled": False,
+                }
+            }
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    create_response = client.post("/threads", headers=AUTH_HEADERS)
+
+    assert create_response.status_code == 403
+    assert create_response.json()["detail"] == "Tenant feature 'peer_agents' is disabled"
+
+
 def test_tenant_registry_required_blocks_inactive_tenants(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

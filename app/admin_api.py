@@ -1143,6 +1143,14 @@ def _serialize_config_payload(config: TenantExecutionConfig) -> dict[str, Any]:
             "timeout": config.quality.timeout,
             "max_payload_chars": config.quality.max_payload_chars,
         },
+        "agent_backend": {
+            "type": config.agent_backend.type,
+            "peer": config.agent_backend.peer,
+            "cwd": config.agent_backend.cwd,
+            "timeout_seconds": config.agent_backend.timeout_seconds,
+            "poll_interval_seconds": config.agent_backend.poll_interval_seconds,
+            "mcp_broker_enabled": config.agent_backend.mcp_broker_enabled,
+        },
         "skills": {
             "default_skill": config.skills.default_skill,
             "items": [

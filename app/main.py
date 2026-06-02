@@ -21,6 +21,12 @@ from app.admin_store import SQLiteTenantConfigStore
 from app.agent_backends import AgentBackendRouter, NativeAgentBackend
 from app.auth import validate_auth_settings
 from app.config import load_environment
+from app.entitlements import (
+    enforce_execution_entitlements,
+    enforce_message_creation_limit,
+    enforce_thread_creation_limit,
+    tenant_context_from_request_state,
+)
 from app.execution import (
     TENANT_CONFIG_SOURCE_ENV_ONLY,
     TENANT_CONFIG_SOURCE_STORE,
@@ -405,6 +411,14 @@ def create_app(
         skill_names = body.skill_names if body is not None else None
         capability_profile = body.capability_profile if body is not None else None
         execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
+        enforce_thread_creation_limit(
+            context=tenant_context_from_request_state(request.state),
+            store=request.app.state.store,
+        )
+        enforce_execution_entitlements(
+            context=tenant_context_from_request_state(request.state),
+            execution=execution,
+        )
         if skill_name is not None and skill_names is not None:
             raise HTTPException(
                 status_code=400,
@@ -441,6 +455,11 @@ def create_app(
         app_request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> Message:
+        enforce_message_creation_limit(
+            context=tenant_context_from_request_state(app_request.state),
+            store=app_request.app.state.store,
+            thread_id=thread_id,
+        )
         return app_request.app.state.store.append_message(
             principal.tenant_id,
             Message(
@@ -506,6 +525,11 @@ def create_app(
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> RunThreadResponse:
+        execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
+        enforce_execution_entitlements(
+            context=tenant_context_from_request_state(request.state),
+            execution=execution,
+        )
         reply, _metadata = await request.app.state.agent_backend.run_thread(principal, thread_id)
         return RunThreadResponse(reply=reply)
 
@@ -515,6 +539,11 @@ def create_app(
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> StreamingResponse:
+        execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
+        enforce_execution_entitlements(
+            context=tenant_context_from_request_state(request.state),
+            execution=execution,
+        )
         return StreamingResponse(
             _run_thread_ndjson_stream(request, principal, thread_id),
             media_type="application/x-ndjson",
