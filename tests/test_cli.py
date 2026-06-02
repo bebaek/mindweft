@@ -1397,6 +1397,44 @@ def test_admin_audit_list_text(monkeypatch: Any, capsys: Any) -> None:
     )
 
 
+def test_admin_audit_list_json_passes_structured_fields(monkeypatch: Any, capsys: Any) -> None:
+    response = {
+        "tenant_id": "tenant-a",
+        "limit": 50,
+        "offset": 0,
+        "total": 1,
+        "next_offset": None,
+        "audit_records": [
+            {
+                "audit_id": "audit-1",
+                "tenant_id": "tenant-a",
+                "actor_user_id": "admin-user",
+                "action": "tenants.update",
+                "affected_count": 1,
+                "thread_ids": [],
+                "resource_type": "tenant",
+                "resource_id": "tenant-a",
+                "old_values": {"status": "active"},
+                "new_values": {"status": "suspended"},
+                "metadata": {"reason": "test"},
+                "created_at": "2026-05-19T10:00:00Z",
+            }
+        ],
+    }
+
+    def urlopen(request: Any) -> _Response:
+        return _Response(body=response)
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        ["--admin", "--json", "admin", "audit", "list", "--tenant", "tenant-a"]
+    )
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out) == response
+
+
 def test_admin_threads_show_text(monkeypatch: Any, capsys: Any) -> None:
     response = {
         "thread_id": "thread-1",

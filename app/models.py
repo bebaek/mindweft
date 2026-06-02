@@ -85,6 +85,11 @@ class AuditRecord(BaseModel):
     action: str
     affected_count: int
     thread_ids: list[str] = Field(default_factory=list)
+    resource_type: str | None = None
+    resource_id: str | None = None
+    old_values: dict[str, Any] | None = None
+    new_values: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 

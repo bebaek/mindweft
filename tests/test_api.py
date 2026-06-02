@@ -148,6 +148,62 @@ def test_sqlite_thread_store_persists_threads_and_messages(tmp_path: Path) -> No
     assert messages[1]["content"] == "Mock reply: hello before restart"
 
 
+def test_sqlite_thread_store_persists_structured_audit_records(tmp_path: Path) -> None:
+    db_path = tmp_path / "threads.db"
+    store = SQLiteThreadStore(db_path)
+    store.append_audit_record(
+        AuditRecord(
+            tenant_id="tenant-1",
+            actor_user_id="admin-user",
+            action="tenants.update",
+            affected_count=1,
+            resource_type="tenant",
+            resource_id="tenant-1",
+            old_values={"status": "active"},
+            new_values={"status": "suspended"},
+            metadata={"reason": "test"},
+        )
+    )
+
+    reloaded = SQLiteThreadStore(db_path).list_audit_records("tenant-1")
+
+    assert len(reloaded) == 1
+    assert reloaded[0].resource_type == "tenant"
+    assert reloaded[0].resource_id == "tenant-1"
+    assert reloaded[0].old_values == {"status": "active"}
+    assert reloaded[0].new_values == {"status": "suspended"}
+    assert reloaded[0].metadata == {"reason": "test"}
+
+
+def test_sqlite_thread_store_migrates_audit_record_columns(tmp_path: Path) -> None:
+    import sqlite3
+
+    db_path = tmp_path / "threads.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE audit_records (
+                audit_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                payload TEXT NOT NULL
+            );
+            """
+        )
+
+    SQLiteThreadStore(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(audit_records)")}
+    assert {
+        "resource_type",
+        "resource_id",
+        "old_values_json",
+        "new_values_json",
+        "metadata_json",
+    }.issubset(columns)
+
+
 def test_sqlite_thread_store_closes_connections(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2174,7 +2230,7 @@ def test_admin_api_can_manage_tenant_registry(tmp_path: Path) -> None:
 
     patch_response = client.patch(
         "/admin/tenants/tenant-1",
-        json={"slug": "tenant-renamed", "name": "Tenant Renamed", "plan": "pro"},
+        json={"slug": "tenant-renamed", "name": "Tenant Renamed", "plan": "pro", "metadata": {"api_token": "secret"}},
         headers=ADMIN_HEADERS,
     )
     assert patch_response.status_code == 200
@@ -2199,6 +2255,18 @@ def test_admin_api_can_manage_tenant_registry(tmp_path: Path) -> None:
         "tenant_id": "tenant-1",
         "status": TenantStatus.DELETED,
     }
+
+    audit_response = client.get(
+        "/admin/tenants/tenant-1/audit-records?action=tenants.update",
+        headers=ADMIN_HEADERS,
+    )
+    assert audit_response.status_code == 200
+    audit_record = audit_response.json()["audit_records"][0]
+    assert audit_record["resource_type"] == "tenant"
+    assert audit_record["resource_id"] == "tenant-1"
+    assert audit_record["old_values"]["slug"] == "tenant-one"
+    assert audit_record["new_values"]["slug"] == "tenant-renamed"
+    assert audit_record["new_values"]["metadata"]["api_token"] == "<redacted>"
 
 
 def test_admin_api_rejects_invalid_tenant_slug(tmp_path: Path) -> None:
@@ -2284,6 +2352,16 @@ def test_admin_api_seeds_tenants_from_execution_configs(tmp_path: Path) -> None:
     assert second_seed_response.status_code == 200
     assert second_seed_response.json()["existing"] == 2
     assert second_seed_response.json()["created"] == 0
+
+    audit_response = client.get(
+        "/admin/tenants/Tenant A/audit-records?action=tenants.seed",
+        headers=ADMIN_HEADERS,
+    )
+    assert audit_response.status_code == 200
+    audit_record = audit_response.json()["audit_records"][0]
+    assert audit_record["resource_type"] == "tenant"
+    assert audit_record["new_values"]["slug"] == "tenant-a-2"
+    assert audit_record["metadata"] == {"source": "execution-configs", "slug": "tenant-a-2"}
 
 
 def test_admin_api_seed_rejects_unknown_source(tmp_path: Path) -> None:

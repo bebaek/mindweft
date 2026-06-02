@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Iterator, Protocol
+from typing import Any, Iterator, Protocol
 
 from fastapi import HTTPException
 
@@ -502,14 +502,22 @@ class SQLiteThreadStore:
         with self._lock, self._connection() as conn:
             conn.execute(
                 """
-                INSERT INTO audit_records (audit_id, tenant_id, created_at, payload)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO audit_records (
+                    audit_id, tenant_id, created_at, payload,
+                    resource_type, resource_id, old_values_json, new_values_json, metadata_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.audit_id,
                     record.tenant_id,
                     record.created_at.isoformat(),
                     _dump_model(record),
+                    record.resource_type,
+                    record.resource_id,
+                    _dump_optional_json(record.old_values),
+                    _dump_optional_json(record.new_values),
+                    _dump_optional_json(record.metadata),
                 ),
             )
             return record
@@ -731,12 +739,18 @@ class SQLiteThreadStore:
                     audit_id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    payload TEXT NOT NULL
+                    payload TEXT NOT NULL,
+                    resource_type TEXT,
+                    resource_id TEXT,
+                    old_values_json TEXT,
+                    new_values_json TEXT,
+                    metadata_json TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_audit_records_tenant_created
                     ON audit_records (tenant_id, created_at DESC);
                 """
             )
+            _ensure_audit_record_columns(conn)
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -928,6 +942,26 @@ def _paginate_audit_records(
     if limit is None:
         return records[start:]
     return records[start : start + max(limit, 0)]
+
+
+def _dump_optional_json(value: dict[str, Any] | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=True, sort_keys=True)
+
+
+def _ensure_audit_record_columns(conn: sqlite3.Connection) -> None:
+    rows = conn.execute("PRAGMA table_info(audit_records)").fetchall()
+    columns = {str(row[1]) for row in rows}
+    for column_name in [
+        "resource_type",
+        "resource_id",
+        "old_values_json",
+        "new_values_json",
+        "metadata_json",
+    ]:
+        if column_name not in columns:
+            conn.execute(f"ALTER TABLE audit_records ADD COLUMN {column_name} TEXT")
 
 
 def _dump_model(model: AuditRecord | Message | Thread | ThreadContext) -> str:

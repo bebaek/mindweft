@@ -172,6 +172,11 @@ class AdminAuditRecordResponse(BaseModel):
     action: str
     affected_count: int
     thread_ids: list[str]
+    resource_type: str | None = None
+    resource_id: str | None = None
+    old_values: dict[str, Any] | None = None
+    new_values: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
     created_at: datetime
 
 
@@ -288,7 +293,13 @@ def build_admin_router() -> APIRouter:
             created = store.create_tenant(tenant)
         except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="Tenant id or slug already exists") from exc
-        _append_tenant_audit(app_request, created.id, admin, "tenants.create")
+        _append_tenant_audit(
+            app_request,
+            created.id,
+            admin,
+            "tenants.create",
+            new_values=_tenant_audit_values(created),
+        )
         return _tenant_response(created)
 
     @router.post("/tenants/seed", response_model=AdminTenantSeedResponse)
@@ -354,7 +365,21 @@ def build_admin_router() -> APIRouter:
                 items[-1] = item.model_copy(update={"action": "conflict"})
                 continue
             created += 1
-            _append_tenant_audit(request, tenant_id, admin, "tenants.seed")
+            _append_tenant_audit(
+                request,
+                tenant_id,
+                admin,
+                "tenants.seed",
+                new_values={
+                    "id": tenant_id,
+                    "slug": slug,
+                    "name": tenant_id,
+                    "status": body.status.value,
+                    "plan": body.plan,
+                    "region": body.region,
+                },
+                metadata={"source": body.source, "slug": slug},
+            )
         return AdminTenantSeedResponse(
             source=body.source,
             dry_run=body.dry_run,
@@ -387,6 +412,7 @@ def build_admin_router() -> APIRouter:
         if body.name is not None:
             _validate_name(body.name)
         store = _require_admin_store(request)
+        old_tenant = store.get_tenant(tenant_id)
         try:
             tenant = store.update_tenant(
                 tenant_id,
@@ -401,7 +427,14 @@ def build_admin_router() -> APIRouter:
             raise HTTPException(status_code=409, detail="Tenant slug already exists") from exc
         if tenant is None:
             raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
-        _append_tenant_audit(request, tenant_id, admin, "tenants.update")
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenants.update",
+            old_values=_tenant_audit_values(old_tenant) if old_tenant is not None else None,
+            new_values=_tenant_audit_values(tenant),
+        )
         return _tenant_response(tenant)
 
     @router.post("/tenants/{tenant_id}/activate", response_model=AdminTenantResponse)
@@ -437,10 +470,18 @@ def build_admin_router() -> APIRouter:
         admin: Principal = Depends(require_admin_principal),
     ) -> AdminTenantDeleteResponse:
         store = _require_admin_store(request)
+        old_tenant = store.get_tenant(tenant_id)
         deleted = store.delete_tenant(tenant_id, updated_by=admin.user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
-        _append_tenant_audit(request, tenant_id, admin, "tenants.delete")
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenants.delete",
+            old_values=_tenant_audit_values(old_tenant) if old_tenant is not None else None,
+            new_values={"status": TenantStatus.DELETED.value},
+        )
         return AdminTenantDeleteResponse(
             deleted=True,
             tenant_id=tenant_id,
@@ -756,10 +797,18 @@ def _update_tenant_status(
     action: str,
 ) -> AdminTenantResponse:
     store = _require_admin_store(request)
+    old_tenant = store.get_tenant(tenant_id)
     tenant = store.update_tenant(tenant_id, status=status, updated_by=admin.user_id)
     if tenant is None:
         raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
-    _append_tenant_audit(request, tenant_id, admin, action)
+    _append_tenant_audit(
+        request,
+        tenant_id,
+        admin,
+        action,
+        old_values={"status": old_tenant.status.value} if old_tenant is not None else None,
+        new_values={"status": status.value},
+    )
     return _tenant_response(tenant)
 
 
@@ -768,6 +817,10 @@ def _append_tenant_audit(
     tenant_id: str,
     admin: Principal,
     action: str,
+    *,
+    old_values: dict[str, Any] | None = None,
+    new_values: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     store = _require_thread_store(request)
     store.append_audit_record(
@@ -777,8 +830,50 @@ def _append_tenant_audit(
             action=action,
             affected_count=1,
             thread_ids=[],
+            resource_type="tenant",
+            resource_id=tenant_id,
+            old_values=_redact_audit_payload(old_values),
+            new_values=_redact_audit_payload(new_values),
+            metadata=_redact_audit_payload(metadata),
         )
     )
+
+
+_AUDIT_SECRET_KEY_PARTS = ("token", "secret", "key", "authorization", "password")
+
+
+def _tenant_audit_values(tenant: Tenant) -> dict[str, Any]:
+    return {
+        "id": tenant.id,
+        "slug": tenant.slug,
+        "name": tenant.name,
+        "status": tenant.status.value,
+        "plan": tenant.plan,
+        "region": tenant.region,
+        "metadata": tenant.metadata,
+    }
+
+
+def _redact_audit_payload(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    redacted = _redact_audit_value(value)
+    return redacted if isinstance(redacted, dict) else None
+
+
+def _redact_audit_value(value: object) -> object:
+    if isinstance(value, dict):
+        redacted: dict[str, object] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if any(part in key_text.casefold() for part in _AUDIT_SECRET_KEY_PARTS):
+                redacted[key_text] = "<redacted>"
+            else:
+                redacted[key_text] = _redact_audit_value(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_audit_value(item) for item in value]
+    return value
 
 
 def _validate_tenant_id(tenant_id: str) -> None:
