@@ -309,6 +309,27 @@ def build_admin_router() -> APIRouter:
         store = _require_admin_store(request)
         return AdminExecutionConfigTenantListResponse(tenants=store.list_tenants())
 
+    @router.get(
+        "/tenant-domains/lookup",
+        response_model=AdminTenantDomainResponse,
+    )
+    async def lookup_tenant_domain(
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+        domain: str = Query(...),
+        verified_only: bool = Query(default=False),
+    ) -> AdminTenantDomainResponse:
+        _ = admin
+        store = _require_admin_store(request)
+        domain_name = _normalize_domain(domain)
+        tenant_domain = store.get_tenant_domain_by_domain(
+            domain_name,
+            verified_only=verified_only,
+        )
+        if tenant_domain is None:
+            raise HTTPException(status_code=404, detail=f"Tenant domain '{domain_name}' not found")
+        return _domain_response(tenant_domain)
+
     @router.post("/tenants", response_model=AdminTenantResponse, status_code=201)
     async def create_tenant(
         request: AdminTenantCreateRequest,

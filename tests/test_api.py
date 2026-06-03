@@ -2323,12 +2323,33 @@ def test_admin_api_can_manage_tenant_domains(tmp_path: Path) -> None:
     assert list_response.status_code == 200
     assert list_response.json()["domains"][0]["domain"] == "app.example.com"
 
+    lookup_response = client.get(
+        "/admin/tenant-domains/lookup?domain=APP.EXAMPLE.COM.",
+        headers=ADMIN_HEADERS,
+    )
+    assert lookup_response.status_code == 200
+    assert lookup_response.json()["id"] == domain_id
+    assert lookup_response.json()["tenant_id"] == "tenant-1"
+
+    unverified_lookup_response = client.get(
+        "/admin/tenant-domains/lookup?domain=app.example.com&verified_only=true",
+        headers=ADMIN_HEADERS,
+    )
+    assert unverified_lookup_response.status_code == 404
+
     verify_response = client.post(
         f"/admin/tenants/tenant-1/domains/{domain_id}/verify",
         headers=ADMIN_HEADERS,
     )
     assert verify_response.status_code == 200
     assert verify_response.json()["verified"] is True
+
+    verified_lookup_response = client.get(
+        "/admin/tenant-domains/lookup?domain=app.example.com&verified_only=true",
+        headers=ADMIN_HEADERS,
+    )
+    assert verified_lookup_response.status_code == 200
+    assert verified_lookup_response.json()["id"] == domain_id
 
     audit_response = client.get(
         "/admin/tenants/tenant-1/audit-records?action=tenant_domains.verify",

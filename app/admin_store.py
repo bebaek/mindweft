@@ -200,6 +200,20 @@ class SQLiteTenantConfigStore:
             ).fetchone()
         return _domain_from_row(row) if row is not None else None
 
+    def get_tenant_domain_by_domain(
+        self,
+        domain: str,
+        *,
+        verified_only: bool = False,
+    ) -> TenantDomain | None:
+        where = "domain = ? AND verified = 1" if verified_only else "domain = ?"
+        with self._connection() as connection:
+            row = connection.execute(
+                f"SELECT * FROM tenant_domains WHERE {where}",
+                (domain,),
+            ).fetchone()
+        return _domain_from_row(row) if row is not None else None
+
     def verify_tenant_domain(self, tenant_id: str, domain_id: str) -> TenantDomain | None:
         with self._lock:
             with self._connection() as connection:
@@ -379,6 +393,9 @@ class SQLiteTenantConfigStore:
             )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tenant_domains_tenant ON tenant_domains(tenant_id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tenant_domains_domain_verified ON tenant_domains(domain, verified)"
             )
             connection.execute(
                 """
