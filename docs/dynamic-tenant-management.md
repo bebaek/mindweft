@@ -7,11 +7,11 @@ endpoints and CLI commands, soft deletion via tenant status, an execution-config
 listing compatibility endpoint, execution-config tenant seeding, tenant entitlement storage,
 request-time tenant context resolution, structured tenant audit metadata, opt-in
 request-time active-tenant enforcement with `MINIGENT_TENANT_REGISTRY_REQUIRED`, and initial
-runtime entitlement enforcement for `peer_agents`/`mcp` feature flags plus `max_threads` and
-`max_messages_per_thread` limits, tenant-context exposure of the exact tenant execution
-config version, admin-managed tenant domain registration with manual verification, and admin
-lookup of domains to tenant IDs. Request routing by tenant domain, broader quota coverage,
-and cache invalidation remain proposed follow-up work.
+runtime entitlement enforcement for `peer_agents`/`mcp` feature flags plus `max_threads`,
+`max_messages_per_thread`, and `max_thread_runs` limits, tenant-context exposure of the
+exact tenant execution config version, admin-managed tenant domain registration with manual
+verification, and admin lookup of domains to tenant IDs. Request routing by tenant domain,
+broader quota coverage, and cache invalidation remain proposed follow-up work.
 
 ## Context
 

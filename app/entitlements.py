@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.execution import AGENT_BACKEND_PEER_AGENT, TenantExecutionContext
-from app.models import TenantContext
+from app.models import MessageRole, TenantContext
 from app.store import ThreadStore
 
 _FEATURE_MCP = "mcp"
@@ -13,6 +13,7 @@ _FEATURE_PEER_AGENTS = "peer_agents"
 _LIMIT_MAX_THREADS = "max_threads"
 _LIMIT_MAX_MESSAGES_PER_THREAD = "max_messages_per_thread"
 _LIMIT_MAX_MESSAGES = "max_messages"
+_LIMIT_MAX_THREAD_RUNS = "max_thread_runs"
 
 
 def enforce_thread_creation_limit(
@@ -54,6 +55,28 @@ def enforce_message_creation_limit(
             detail=(
                 f"Tenant limit '{_LIMIT_MAX_MESSAGES_PER_THREAD}' exceeded: "
                 f"{current}/{max_messages} messages already exist in thread"
+            ),
+        )
+
+
+def enforce_thread_run_limit(
+    *,
+    context: TenantContext,
+    store: ThreadStore,
+    thread_id: str,
+) -> None:
+    max_runs = _optional_non_negative_int_limit(context, _LIMIT_MAX_THREAD_RUNS)
+    if max_runs is None:
+        return
+    current = sum(
+        1 for message in store.list_messages(context.tenant_id, thread_id) if message.role == MessageRole.ASSISTANT
+    )
+    if current >= max_runs:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Tenant limit '{_LIMIT_MAX_THREAD_RUNS}' exceeded: "
+                f"{current}/{max_runs} assistant runs already exist in thread"
             ),
         )
 

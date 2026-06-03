@@ -25,6 +25,7 @@ from app.entitlements import (
     enforce_execution_entitlements,
     enforce_message_creation_limit,
     enforce_thread_creation_limit,
+    enforce_thread_run_limit,
     tenant_context_from_request_state,
 )
 from app.execution import (
@@ -530,6 +531,11 @@ def create_app(
             context=tenant_context_from_request_state(request.state),
             execution=execution,
         )
+        enforce_thread_run_limit(
+            context=tenant_context_from_request_state(request.state),
+            store=request.app.state.store,
+            thread_id=thread_id,
+        )
         reply, _metadata = await request.app.state.agent_backend.run_thread(principal, thread_id)
         return RunThreadResponse(reply=reply)
 
@@ -543,6 +549,11 @@ def create_app(
         enforce_execution_entitlements(
             context=tenant_context_from_request_state(request.state),
             execution=execution,
+        )
+        enforce_thread_run_limit(
+            context=tenant_context_from_request_state(request.state),
+            store=request.app.state.store,
+            thread_id=thread_id,
         )
         return StreamingResponse(
             _run_thread_ndjson_stream(request, principal, thread_id),

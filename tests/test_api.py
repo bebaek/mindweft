@@ -2692,6 +2692,47 @@ def test_tenant_entitlements_enforce_thread_and_message_limits(
     assert "max_messages_per_thread" in second_message_response.json()["detail"]
 
 
+def test_tenant_entitlements_enforce_thread_run_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
+    client = TestClient(
+        create_app(
+            admin_store=_sqlite_store(tmp_path),
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+    client.post(
+        "/admin/tenants",
+        json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "active"},
+        headers=ADMIN_HEADERS,
+    )
+    client.put(
+        "/admin/tenants/tenant-1/entitlements",
+        json={"features": {}, "limits": {"max_thread_runs": 1}},
+        headers=ADMIN_HEADERS,
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "hello"},
+        headers=AUTH_HEADERS,
+    )
+
+    first_run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    assert first_run_response.status_code == 200
+
+    second_run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    assert second_run_response.status_code == 429
+    assert "max_thread_runs" in second_run_response.json()["detail"]
+
+    stream_response = client.post(f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS)
+    assert stream_response.status_code == 429
+    assert "max_thread_runs" in stream_response.json()["detail"]
+
+
 def test_tenant_entitlements_block_disabled_peer_agent_backend(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
