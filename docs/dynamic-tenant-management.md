@@ -2,32 +2,33 @@
 
 Status: Partially implemented
 
-Initial implementation includes a SQLite-backed tenant registry, admin tenant lifecycle
-endpoints and CLI commands, soft deletion via tenant status, an execution-config tenant
-listing compatibility endpoint, execution-config tenant seeding, tenant entitlement storage,
-request-time tenant context resolution, structured tenant audit metadata, opt-in
-request-time active-tenant enforcement with `MINIGENT_TENANT_REGISTRY_REQUIRED`, and initial
-runtime entitlement enforcement for `peer_agents`/`mcp` feature flags plus `max_threads`,
-`max_messages_per_thread`, and `max_thread_runs` limits, tenant-context exposure of the
-exact tenant execution config version, admin-managed tenant domain registration with manual
-verification, and admin lookup of domains to tenant IDs. Request routing by tenant domain,
-broader quota coverage, and cache invalidation remain proposed follow-up work.
+Implemented: SQLite-backed tenant registry, tenant lifecycle admin APIs and CLI commands,
+soft deletion via tenant status, tenant seeding from execution-config tenants, tenant
+domain registration, manual verification, and lookup APIs, tenant entitlement
+CRUD/validation APIs, request-time tenant context resolution, structured tenant audit
+metadata for tenant/domain/entitlement mutations, optional active-tenant enforcement with
+`MINIGENT_TENANT_REGISTRY_REQUIRED`, execution-config version exposure in tenant context,
+execution-config admin CRUD/validation with in-process resolver invalidation, and runtime
+entitlement enforcement for `peer_agents`/`mcp` feature flags plus `max_threads`,
+`max_messages_per_thread`/`max_messages`, and `max_thread_runs` limits.
+
+Still pending or partial: request routing by tenant domain, broader quotas and rate limits,
+registry and entitlement caching/cross-process invalidation, granular admin roles beyond
+`is_admin=true`, complete execution-config mutation audit coverage, stricter referential
+integrity between registry/config/entitlement/domain records, and moving all
+tenant-specific defaults out of environment/static configuration.
 
 ## Context
 
-Minigent already supports tenant-scoped authentication, thread isolation, per-tenant
-execution config, and an optional admin SQLite store for execution config. The current
-tenant model is still mostly config-oriented: tenants are identified by authenticated
-requests, and execution resources can be loaded from `MINIGENT_TENANT_EXECUTION_CONFIGS`
-or from the admin store.
+Minigent supports tenant-scoped authentication, thread isolation, per-tenant execution
+configuration, and an optional admin SQLite store. Dynamic tenant management extends that
+model with runtime-managed tenant identity, lifecycle state, domains, entitlements, admin
+operations, and audit metadata.
 
-That shape works for local development and a small number of tenants, but static tenant
-configuration does not scale well. Adding, suspending, renaming, changing limits, or
-changing tenant-specific capabilities should not require editing environment variables or
-redeploying the service.
-
-Dynamic tenant management should make tenants runtime-managed entities with durable state,
-admin APIs, audit records, validation, and cache invalidation.
+The current implementation remains compatibility-oriented: tenant registry records,
+entitlements, and execution configs are related by tenant ID but can still be managed
+independently in some paths. This preserves existing execution-config workflows while the
+registry becomes the durable control-plane source of truth.
 
 ## Goals
 
@@ -35,8 +36,8 @@ admin APIs, audit records, validation, and cache invalidation.
 - Keep request-time tenant resolution and authorization explicit and auditable.
 - Preserve existing tenant thread isolation and execution-config behavior during migration.
 - Support per-tenant status, domains/slugs, plan/entitlements, quotas, and execution config.
-- Provide admin APIs and CLI/UI surfaces for safe support and operations workflows.
-- Keep global defaults static while tenant-specific state lives in a durable store.
+- Provide admin APIs and CLI surfaces for support and operations workflows.
+- Keep global defaults static while tenant-specific state moves to a durable store.
 
 ## Non-goals for the first iteration
 
@@ -46,46 +47,41 @@ admin APIs, audit records, validation, and cache invalidation.
 - Per-tenant database provisioning.
 - Self-service public signup flows.
 
-Those can build on the same registry later, but the first version should focus on the
-control-plane foundation.
+Those can build on the same registry later. The first version focuses on the control-plane
+foundation.
 
 ## Terminology
 
 - **Tenant ID**: immutable internal identifier used for authorization, thread isolation,
-  audit records, and foreign keys.
+  audit records, and record lookup. Admin tenant creation accepts an explicit ID for
+  compatibility or generates a UUID when omitted.
 - **Slug**: unique, URL-friendly human identifier such as `acme` or `big-river-labs`.
-  Slugs may be visible in admin tools, path-based tenant URLs, or subdomains.
-- **Tenant registry**: durable source of truth for tenant identity, state, domains, and
-  operational metadata.
+  Slugs can currently be changed by admin update operations, subject to uniqueness.
+- **Tenant registry**: durable source of truth for tenant identity, lifecycle state,
+  domains, and operational metadata.
 - **Execution config**: tenant-specific LLM, tool, MCP, skill, capability-profile,
   backend, and quality configuration.
-- **Entitlements**: plan-derived or overridden features and limits that determine what a
-  tenant is allowed to use.
+- **Entitlements**: explicit feature flags and limits that determine what a tenant is
+  allowed to use. Plan-derived entitlement expansion is not implemented yet.
 
-## Proposed model
+## Implemented data model
 
-Add a tenant registry alongside the existing execution-config store. The registry owns
-identity and lifecycle state; execution config remains a separate but related document.
-
-Suggested first-class tenant fields:
+The SQLite admin store creates the following registry/control-plane tables:
 
 ```text
-id
-slug
-name
-status: active | provisioning | suspended | archived | deleted
-plan
-region
-created_at
-updated_at
-created_by
-updated_by
-metadata
-```
+tenants
+  id
+  slug
+  name
+  status: active | provisioning | suspended | archived | deleted
+  plan
+  region
+  metadata_json
+  created_by
+  updated_by
+  created_at
+  updated_at
 
-Related records:
-
-```text
 tenant_domains
   id
   tenant_id
@@ -95,36 +91,45 @@ tenant_domains
 
 tenant_entitlements
   tenant_id
-  features
-  limits
+  features_json
+  limits_json
   version
   updated_at
 
 tenant_execution_configs
   tenant_id
-  config
+  config_json
   version
+  created_at
   updated_at
 ```
 
-Important attributes such as `status`, `slug`, `plan`, and `region` should be columns, not
-only JSON fields, because they are used for routing, filtering, authorization, and support
-workflows. Flexible metadata can stay in JSON.
+Important attributes such as `status`, `slug`, `plan`, and `region` are columns rather
+than only JSON fields because they are used for filtering, authorization, support, and
+future routing workflows. Flexible tenant metadata remains JSON.
+
+Current caveat: the SQLite schema stores related records by `tenant_id`, but not every admin
+path requires an existing registry tenant and the table definitions do not currently enforce
+foreign-key constraints. This is intentional or at least tolerated during migration from the
+older execution-config-only model, but it should be tightened when the registry becomes the
+sole source of truth.
 
 ## Request-time behavior
 
-A typical request should follow this flow:
+The current request-time tenant flow is:
 
 1. Authenticate the caller.
-2. Resolve or read the tenant ID from trusted auth material.
-3. Load tenant registry state from cache or durable store.
-4. Reject inactive tenants before running business logic.
-5. Verify user membership or token authority for that tenant.
-6. Attach tenant context to the request and downstream run state.
-7. Load execution config and entitlements for the tenant.
-8. Run the thread operation with tenant-scoped storage and policy.
+2. Read the tenant ID from trusted principal/auth material.
+3. If the admin store is enabled, load the tenant registry record for the principal tenant.
+4. If `MINIGENT_TENANT_REGISTRY_REQUIRED` is enabled, reject missing or non-active tenants.
+5. Load tenant entitlements and execution-config version when a registry/admin store is
+   available.
+6. Attach `TenantContext` to request state for handlers and runtime policy checks.
+7. Resolve execution config for the tenant.
+8. Apply entitlement checks where currently wired.
+9. Run thread/message/run operations with tenant-scoped storage.
 
-Tenant context should include at least:
+`TenantContext` currently includes:
 
 ```text
 tenant_id
@@ -132,38 +137,62 @@ slug
 status
 plan
 region
-feature flags
+features
 limits
 execution_config_version
 entitlements_version
 ```
 
-The context must be available to HTTP handlers, background jobs, event consumers, logging,
-metrics, and audit writing. Avoid designs where only HTTP middleware knows the tenant.
+If the registry is not required, missing registry rows are allowed for compatibility and the
+context falls back to the authenticated principal tenant ID. If the registry is required,
+missing or inactive tenants are rejected before business logic runs.
 
-## Admin operations
+## Runtime entitlement enforcement
 
-The admin control plane should eventually support:
+Implemented runtime enforcement covers:
 
-- Create tenant.
-- Update tenant name, slug, plan, metadata, and region.
-- Activate, suspend, archive, or delete tenant.
-- Add, verify, or remove tenant domains.
-- Read and update entitlements.
-- Read, validate, update, or delete execution config.
-- List tenants with filters for status, plan, slug, and updated time.
-- Emit audit records for every mutating operation.
+- `peer_agents`: required when the tenant execution config selects the peer-agent backend.
+- `mcp`: required when the tenant execution config includes MCP servers.
+- `max_threads`: enforced before thread creation.
+- `max_messages_per_thread`: enforced before user message creation.
+- `max_messages`: accepted as a fallback for `max_messages_per_thread`.
+- `max_thread_runs`: enforced before non-streaming and streaming thread runs.
 
-Sensitive operations should support validation or dry-run behavior where practical. For
-example, changing a slug should check uniqueness and show affected routes before commit.
+Broader quota coverage is still pending, including token usage, time-window rate limits,
+tool-call counts, MCP-call counts, storage usage, attachment size, and concurrent-run
+limits.
 
-## API sketch
+## Admin operations status
 
-Initial endpoints could extend the existing admin surface:
+| Operation | Status | Notes |
+| --- | --- | --- |
+| List tenants | Implemented | Supports `status`, `plan`, `slug`, `limit`, and `offset`. |
+| Create tenant | Implemented | Optional explicit ID; otherwise generated UUID. |
+| Read tenant | Implemented | `GET /admin/tenants/{tenant_id}`. |
+| Update tenant fields | Implemented | Supports slug, name, plan, region, metadata. |
+| Activate tenant | Implemented | Status transition to `active`. |
+| Suspend tenant | Implemented | Status transition to `suspended`. |
+| Archive tenant | Implemented | Status transition to `archived`. |
+| Delete tenant | Implemented | Soft delete by status transition to `deleted`. |
+| Seed registry tenants | Implemented | Seeds from existing execution-config tenant IDs. |
+| Add/list/delete domains | Implemented | Domains are unique by domain name. |
+| Verify domains | Implemented | Manual admin verification. |
+| Lookup domain | Implemented | Admin lookup from domain to tenant-domain record. |
+| Read/update/delete entitlements | Implemented | Explicit features/limits JSON with versioning. |
+| Validate entitlements | Implemented | Validation endpoint reports feature/limit errors. |
+| Read/update/delete execution config | Implemented | Read responses redact secrets. |
+| Validate execution config | Implemented | Parses and validates config shape. |
+| Audit tenant mutations | Partial | Tenant/domain/entitlement mutations audited; execution-config mutation audit coverage should be completed. |
+| Dry-run admin operations | Partial | Validation and seed dry-run exist; slug-change dry-run is not implemented. |
+
+## API surface
+
+Implemented tenant registry and control-plane routes include:
 
 ```text
 GET    /admin/tenants
 POST   /admin/tenants
+POST   /admin/tenants/seed
 GET    /admin/tenants/{tenant_id}
 PATCH  /admin/tenants/{tenant_id}
 POST   /admin/tenants/{tenant_id}/activate
@@ -171,50 +200,76 @@ POST   /admin/tenants/{tenant_id}/suspend
 POST   /admin/tenants/{tenant_id}/archive
 DELETE /admin/tenants/{tenant_id}
 
+GET    /admin/tenant-domains/lookup
 GET    /admin/tenants/{tenant_id}/domains
 POST   /admin/tenants/{tenant_id}/domains
+POST   /admin/tenants/{tenant_id}/domains/{domain_id}/verify
 DELETE /admin/tenants/{tenant_id}/domains/{domain_id}
 
 GET    /admin/tenants/{tenant_id}/entitlements
 PUT    /admin/tenants/{tenant_id}/entitlements
 POST   /admin/tenants/{tenant_id}/entitlements/validate
+DELETE /admin/tenants/{tenant_id}/entitlements
+
+GET    /admin/tenants/{tenant_id}/execution-config
+PUT    /admin/tenants/{tenant_id}/execution-config
+POST   /admin/tenants/{tenant_id}/execution-config/validate
+DELETE /admin/tenants/{tenant_id}/execution-config
 ```
 
-Existing execution-config and thread-inspection endpoints can remain tenant-scoped under
+The compatibility endpoint for listing execution-config tenants remains available:
+
+```text
+GET /admin/execution-config-tenants
+```
+
+Existing admin thread-inspection and audit-listing endpoints remain tenant-scoped under
 `/admin/tenants/{tenant_id}`.
 
 ## Storage and caching
 
-Use a durable store as the source of truth. The current admin SQLite store is a reasonable
-local/single-node starting point. If Minigent later needs multiple API instances, use a
-shared database and cross-process cache invalidation.
+The durable SQLite admin store is the current source of truth for local/single-node tenant
+registry data, tenant domains, entitlements, and store-backed tenant execution configs.
 
-Recommended cache behavior:
+Implemented caching/invalidation:
 
-- Cache tenant registry, entitlements, and execution config separately.
-- Include version fields in cached payloads.
-- Invalidate per-tenant cache entries on admin writes.
-- Keep TTLs short enough that stale policy is bounded if invalidation fails.
-- Fail closed for missing tenants when the configured source of truth is the store.
+- Store-backed execution config resolution uses an in-process cache.
+- Admin execution-config writes and deletes invalidate the in-process execution resolver for
+  the affected tenant.
 
-Execution config already has in-process cache invalidation on admin writes. Tenant registry
-and entitlement caches should follow the same pattern.
+Not yet implemented:
 
-## Security requirements
+- Tenant registry record caching.
+- Tenant entitlement caching.
+- Registry/entitlement cache invalidation.
+- Cross-process cache invalidation for multi-instance deployments.
+
+Because registry and entitlements are currently loaded from the store during tenant-context
+resolution, stale registry/entitlement cache behavior is not a current runtime concern. It
+will become relevant if registry or entitlement caching is added.
+
+## Security requirements and status
 
 - Do not trust arbitrary tenant IDs from request headers unless the active auth mode is a
   development-only mode or the token is otherwise verified.
 - Verify that the caller is authorized for the target tenant before exposing tenant data.
-- Require `is_admin=true` or a more granular admin role for control-plane operations.
+- Require `is_admin=true` for control-plane operations. More granular admin roles remain
+  future work.
 - Audit all tenant mutations with actor, timestamp, action, old values, and new values.
-- Redact secrets from read responses and audit records.
+  Current audit coverage is partial: tenant/domain/entitlement mutations are audited, while
+  execution-config mutation audit coverage should be completed.
+- Redact secrets from read responses and audit records. Execution-config read responses and
+  audit helper payloads currently redact secret-looking values.
 - Validate slug and domain uniqueness.
-- Prevent tenant enumeration through error messages where public routes are involved.
+- Prevent tenant enumeration through error messages where public routes are involved. Admin
+  routes can return specific not-found details.
 - Keep data access tenant-scoped at the storage layer, not only in route handlers.
 
-## Migration path
+## Migration path and current status
 
 ### Phase 1: Inventory current static config
+
+Status: ongoing / not directly represented in code.
 
 List every tenant-specific setting currently represented by env vars, static JSON, or
 runtime assumptions. Classify each as identity, status, entitlement, execution config,
@@ -222,32 +277,59 @@ secret, or operational metadata.
 
 ### Phase 2: Add tenant registry schema
 
-Add durable tenant, domain, entitlement, and audit tables. Seed tenants from existing
-execution config keys and known auth-token tenant IDs where appropriate.
+Status: implemented.
+
+Durable tenant, domain, entitlement, and execution-config tables exist in the SQLite admin
+store. Audit records are stored in the thread store rather than the admin store.
 
 ### Phase 3: Read registry state during requests
 
-Keep existing execution-config behavior, but require a known active tenant when the tenant
-config source is store-backed. Continue allowing development defaults for local workflows.
+Status: implemented with compatibility fallback.
+
+Registry state, entitlements, and execution-config version are loaded during request-time
+tenant-context resolution when the admin store is enabled. Active-tenant enforcement is
+opt-in with `MINIGENT_TENANT_REGISTRY_REQUIRED`.
 
 ### Phase 4: Add admin tenant APIs
 
-Add create/read/update/list/status-transition operations with validation and audit records.
-Expose CLI commands after the HTTP API stabilizes.
+Status: mostly implemented.
+
+Tenant lifecycle, domain, entitlement, execution-config, seed, validation, and listing APIs
+exist. CLI support exists for tenant lifecycle and entitlements. Domain CLI support should be
+verified or added if needed by operations workflows.
 
 ### Phase 5: Move tenant-specific defaults out of env
+
+Status: incomplete / ongoing.
 
 Keep static config for global defaults and bootstrap behavior only. Make tenant registry,
 entitlements, and execution config the runtime source of truth for tenant-specific state.
 
+## Remaining follow-up work
+
+- Resolve tenant from verified request domain/host where that deployment mode is enabled.
+- Add broader quota/rate-limit enforcement.
+- Add registry and entitlement caching only if needed, with per-tenant invalidation and a
+  multi-instance invalidation mechanism.
+- Add granular admin roles beyond `is_admin=true`.
+- Audit execution-config create/update/delete operations.
+- Decide whether entitlement writes and execution-config writes must require an existing
+  registry tenant after migration.
+- Add or enforce foreign-key constraints once registry-first operation is mandatory.
+- Decide whether plan-derived entitlements should be snapshots, computed defaults,
+  explicit overrides, or a combination.
+- Clarify which tenant states should block reads, writes, new runs, and admin-only access.
+- Complete migration of tenant-specific defaults from env/static config to durable tenant
+  records and execution config.
+
 ## Open questions
 
-- Should tenant IDs be generated UUIDs only, or should existing string IDs remain valid for
-  compatibility?
-- Should slug changes be allowed after tenant creation, or should they require an alias or
-  redirect period?
-- Which tenant states should block thread reads versus only block new runs?
-- Should entitlements be stored as explicit overrides, plan-derived snapshots, or both?
+- When should compatibility mode end for execution-config-only tenant IDs?
+- Should slug changes remain freely allowed, or should they require aliases, redirects, or a
+  deprecation period?
+- Which tenant states should block thread reads versus only message creation and new runs?
+- Should entitlements be explicit overrides, plan-derived snapshots, computed from plan at
+  request time, or both?
 - What admin role model is needed beyond the current `is_admin=true` flag?
 - When multiple API instances are deployed, what cache-invalidation mechanism should be
   used?
