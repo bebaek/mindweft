@@ -176,6 +176,7 @@ it deliberately.
 - [CLI reference](docs/cli.md)
 - [Coding workspace setup](docs/coding-workspace.md)
 - [Dynamic tenant management](docs/dynamic-tenant-management.md)
+- [Dynamic user management](docs/dynamic-user-management.md)
 - [Layered MCP tool stack](docs/layered-mcp-tool-stack.md)
 - [Full reference](docs/reference.md)
 
