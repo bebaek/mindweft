@@ -2284,6 +2284,71 @@ def test_admin_api_rejects_invalid_tenant_slug(tmp_path: Path) -> None:
     assert "slug" in response.json()["detail"]
 
 
+def test_admin_api_can_manage_tenant_domains(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+    client.post(
+        "/admin/tenants",
+        json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One"},
+        headers=ADMIN_HEADERS,
+    )
+
+    create_response = client.post(
+        "/admin/tenants/tenant-1/domains",
+        json={"domain": "App.Example.COM."},
+        headers=ADMIN_HEADERS,
+    )
+    assert create_response.status_code == 201
+    assert create_response.json()["tenant_id"] == "tenant-1"
+    assert create_response.json()["domain"] == "app.example.com"
+    assert create_response.json()["verified"] is False
+    domain_id = create_response.json()["id"]
+
+    duplicate_response = client.post(
+        "/admin/tenants/tenant-1/domains",
+        json={"domain": "app.example.com"},
+        headers=ADMIN_HEADERS,
+    )
+    assert duplicate_response.status_code == 409
+
+    invalid_response = client.post(
+        "/admin/tenants/tenant-1/domains",
+        json={"domain": "https://app.example.com/path"},
+        headers=ADMIN_HEADERS,
+    )
+    assert invalid_response.status_code == 400
+
+    list_response = client.get("/admin/tenants/tenant-1/domains", headers=ADMIN_HEADERS)
+    assert list_response.status_code == 200
+    assert list_response.json()["domains"][0]["domain"] == "app.example.com"
+
+    verify_response = client.post(
+        f"/admin/tenants/tenant-1/domains/{domain_id}/verify",
+        headers=ADMIN_HEADERS,
+    )
+    assert verify_response.status_code == 200
+    assert verify_response.json()["verified"] is True
+
+    audit_response = client.get(
+        "/admin/tenants/tenant-1/audit-records?action=tenant_domains.verify",
+        headers=ADMIN_HEADERS,
+    )
+    assert audit_response.status_code == 200
+    audit_record = audit_response.json()["audit_records"][0]
+    assert audit_record["resource_type"] == "tenant"
+    assert audit_record["resource_id"] == "tenant-1"
+    assert audit_record["old_values"]["verified"] is False
+    assert audit_record["new_values"]["verified"] is True
+
+    delete_response = client.delete(
+        f"/admin/tenants/tenant-1/domains/{domain_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert delete_response.status_code == 204
+    assert client.get("/admin/tenants/tenant-1/domains", headers=ADMIN_HEADERS).json()["domains"] == []
+
+
 def test_admin_api_seeds_tenants_from_execution_configs(tmp_path: Path) -> None:
     store = _sqlite_store(tmp_path)
     store.upsert_raw_config("Tenant A", {"llm": {"provider": "mock"}})

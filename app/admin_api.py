@@ -23,6 +23,7 @@ from app.models import (
     Message,
     Principal,
     Tenant,
+    TenantDomain,
     TenantEntitlements,
     TenantStatus,
     Thread,
@@ -33,6 +34,9 @@ from app.models import (
 ADMIN_DB_PATH_ENV = "MINIGENT_ADMIN_DB_PATH"
 ADMIN_ENCRYPTION_KEY_ENV = "MINIGENT_ADMIN_ENCRYPTION_KEY"
 TENANT_SLUG_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+DOMAIN_PATTERN = re.compile(
+    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+)
 
 
 class AdminTenantResponse(BaseModel):
@@ -79,6 +83,23 @@ class AdminTenantDeleteResponse(BaseModel):
     deleted: bool
     tenant_id: str
     status: TenantStatus
+
+
+class AdminTenantDomainCreateRequest(BaseModel):
+    domain: str
+
+
+class AdminTenantDomainResponse(BaseModel):
+    id: str
+    tenant_id: str
+    domain: str
+    verified: bool
+    created_at: datetime
+
+
+class AdminTenantDomainListResponse(BaseModel):
+    tenant_id: str
+    domains: list[AdminTenantDomainResponse]
 
 
 class AdminTenantSeedRequest(BaseModel):
@@ -408,6 +429,98 @@ def build_admin_router() -> APIRouter:
             created=created,
             conflicts=conflicts,
             tenants=items,
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/domains",
+        response_model=AdminTenantDomainListResponse,
+    )
+    async def list_tenant_domains(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantDomainListResponse:
+        _ = admin
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        return AdminTenantDomainListResponse(
+            tenant_id=tenant_id,
+            domains=[_domain_response(domain) for domain in store.list_tenant_domains(tenant_id)],
+        )
+
+    @router.post(
+        "/tenants/{tenant_id}/domains",
+        response_model=AdminTenantDomainResponse,
+        status_code=201,
+    )
+    async def add_tenant_domain(
+        tenant_id: str,
+        body: AdminTenantDomainCreateRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantDomainResponse:
+        domain_name = _normalize_domain(body.domain)
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        domain = TenantDomain(id=str(uuid4()), tenant_id=tenant_id, domain=domain_name)
+        try:
+            created = store.add_tenant_domain(domain)
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="Tenant domain already exists") from exc
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_domains.create",
+            new_values=_domain_audit_values(created),
+        )
+        return _domain_response(created)
+
+    @router.post(
+        "/tenants/{tenant_id}/domains/{domain_id}/verify",
+        response_model=AdminTenantDomainResponse,
+    )
+    async def verify_tenant_domain(
+        tenant_id: str,
+        domain_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantDomainResponse:
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        old_domain = store.get_tenant_domain(tenant_id, domain_id)
+        domain = store.verify_tenant_domain(tenant_id, domain_id)
+        if domain is None:
+            raise HTTPException(status_code=404, detail=f"Tenant domain '{domain_id}' not found")
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_domains.verify",
+            old_values=_domain_audit_values(old_domain) if old_domain is not None else None,
+            new_values=_domain_audit_values(domain),
+        )
+        return _domain_response(domain)
+
+    @router.delete("/tenants/{tenant_id}/domains/{domain_id}", status_code=204)
+    async def delete_tenant_domain(
+        tenant_id: str,
+        domain_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> None:
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        deleted = store.delete_tenant_domain(tenant_id, domain_id)
+        if deleted is None:
+            raise HTTPException(status_code=404, detail=f"Tenant domain '{domain_id}' not found")
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_domains.delete",
+            old_values=_domain_audit_values(deleted),
+            new_values=None,
         )
 
     @router.get(
@@ -891,6 +1004,20 @@ def _tenant_response(tenant: Tenant) -> AdminTenantResponse:
     return AdminTenantResponse(**tenant.model_dump())
 
 
+def _domain_response(domain: TenantDomain) -> AdminTenantDomainResponse:
+    return AdminTenantDomainResponse(**domain.model_dump())
+
+
+def _domain_audit_values(domain: TenantDomain) -> dict[str, Any]:
+    return {
+        "id": domain.id,
+        "tenant_id": domain.tenant_id,
+        "domain": domain.domain,
+        "verified": domain.verified,
+        "created_at": domain.created_at.isoformat(),
+    }
+
+
 def _entitlements_response(entitlements: TenantEntitlements) -> AdminTenantEntitlementsResponse:
     return AdminTenantEntitlementsResponse(**entitlements.model_dump())
 
@@ -1045,6 +1172,15 @@ def _validate_slug(slug: str) -> None:
 def _validate_name(name: str) -> None:
     if not name.strip():
         raise HTTPException(status_code=400, detail="Tenant name must be non-empty")
+
+
+def _normalize_domain(domain: str) -> str:
+    normalized = domain.strip().lower().rstrip(".")
+    if "://" in normalized or "/" in normalized or ":" in normalized:
+        raise HTTPException(status_code=400, detail="Tenant domain must be a hostname")
+    if not DOMAIN_PATTERN.fullmatch(normalized):
+        raise HTTPException(status_code=400, detail="Tenant domain is invalid")
+    return normalized
 
 
 def _used_tenant_slugs(store: Any) -> set[str]:

@@ -48,6 +48,14 @@ class TenantEntitlements(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class TenantDomain(BaseModel):
+    id: str
+    tenant_id: str
+    domain: str
+    verified: bool = False
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class TenantContext(BaseModel):
     principal: "Principal"
     tenant_id: str

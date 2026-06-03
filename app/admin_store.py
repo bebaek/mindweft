@@ -11,7 +11,7 @@ from typing import Any, Iterator, TypeGuard
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from app.models import Tenant, TenantEntitlements, TenantStatus
+from app.models import Tenant, TenantDomain, TenantEntitlements, TenantStatus
 
 SECRET_WRAPPER_KEY = "__secret__"
 
@@ -161,6 +161,70 @@ class SQLiteTenantConfigStore:
             is not None
         )
 
+    def list_tenant_domains(self, tenant_id: str) -> list[TenantDomain]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM tenant_domains WHERE tenant_id = ? ORDER BY domain ASC",
+                (tenant_id,),
+            ).fetchall()
+        return [_domain_from_row(row) for row in rows]
+
+    def add_tenant_domain(self, domain: TenantDomain) -> TenantDomain:
+        created_at = domain.created_at.isoformat()
+        with self._lock:
+            with self._connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO tenant_domains (id, tenant_id, domain, verified, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        domain.id,
+                        domain.tenant_id,
+                        domain.domain,
+                        1 if domain.verified else 0,
+                        created_at,
+                    ),
+                )
+                connection.commit()
+        created = self.get_tenant_domain(domain.tenant_id, domain.id)
+        if created is None:  # pragma: no cover - defensive
+            raise RuntimeError(f"Domain '{domain.id}' was not created")
+        return created
+
+    def get_tenant_domain(self, tenant_id: str, domain_id: str) -> TenantDomain | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM tenant_domains WHERE tenant_id = ? AND id = ?",
+                (tenant_id, domain_id),
+            ).fetchone()
+        return _domain_from_row(row) if row is not None else None
+
+    def verify_tenant_domain(self, tenant_id: str, domain_id: str) -> TenantDomain | None:
+        with self._lock:
+            with self._connection() as connection:
+                cursor = connection.execute(
+                    "UPDATE tenant_domains SET verified = 1 WHERE tenant_id = ? AND id = ?",
+                    (tenant_id, domain_id),
+                )
+                connection.commit()
+        if cursor.rowcount == 0:
+            return None
+        return self.get_tenant_domain(tenant_id, domain_id)
+
+    def delete_tenant_domain(self, tenant_id: str, domain_id: str) -> TenantDomain | None:
+        current = self.get_tenant_domain(tenant_id, domain_id)
+        if current is None:
+            return None
+        with self._lock:
+            with self._connection() as connection:
+                connection.execute(
+                    "DELETE FROM tenant_domains WHERE tenant_id = ? AND id = ?",
+                    (tenant_id, domain_id),
+                )
+                connection.commit()
+        return current
+
     def get_tenant_entitlements(self, tenant_id: str) -> TenantEntitlements | None:
         with self._connection() as connection:
             row = connection.execute(
@@ -304,6 +368,20 @@ class SQLiteTenantConfigStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS tenant_domains (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    domain TEXT NOT NULL UNIQUE,
+                    verified INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tenant_domains_tenant ON tenant_domains(tenant_id)"
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS tenant_entitlements (
                     tenant_id TEXT PRIMARY KEY,
                     features_json TEXT NOT NULL DEFAULT '{}',
@@ -362,6 +440,16 @@ def _tenant_from_row(row: sqlite3.Row) -> Tenant:
         updated_by=str(row["updated_by"]) if row["updated_by"] is not None else None,
         created_at=datetime.fromisoformat(str(row["created_at"])),
         updated_at=datetime.fromisoformat(str(row["updated_at"])),
+    )
+
+
+def _domain_from_row(row: sqlite3.Row) -> TenantDomain:
+    return TenantDomain(
+        id=str(row["id"]),
+        tenant_id=str(row["tenant_id"]),
+        domain=str(row["domain"]),
+        verified=bool(row["verified"]),
+        created_at=datetime.fromisoformat(str(row["created_at"])),
     )
 
 
