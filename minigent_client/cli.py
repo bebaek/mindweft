@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import mimetypes
 import os
 import platform
 import re
@@ -480,9 +482,14 @@ class RememberingMinigentAPIClient:
         response = self._client.compact_thread(thread_id)  # type: ignore[attr-defined]
         return response if isinstance(response, dict) else {}
 
-    def send_user_message(self, content: str) -> object:
+    def send_user_message(
+        self, content: str, *, parts: list[dict[str, Any]] | None = None
+    ) -> object:
         try:
-            message = self._client.send_user_message(content)  # type: ignore[attr-defined]
+            if parts is None:
+                message = self._client.send_user_message(content)  # type: ignore[attr-defined]
+            else:
+                message = self._client.send_user_message(content, parts=parts)  # type: ignore[attr-defined]
         except MinigentAPIError as exc:
             if self._forget_missing_resumed_thread(exc):
                 thread_id = getattr(self._client, "thread_id", None)
@@ -674,6 +681,124 @@ def run_backend(backend: str, config: ClientConfig, *, once: bool = False) -> in
             close()
 
 
+def _image_parts_from_macos_clipboard() -> list[dict[str, Any]]:
+    if platform.system() != "Darwin":
+        raise ValueError("clipboard image paste is currently supported only on macOS")
+    if shutil.which("pngpaste") is None:
+        raise ValueError("clipboard image paste requires pngpaste on macOS")
+    with tempfile.NamedTemporaryFile(suffix=".png") as temp_file:
+        result = subprocess.run(
+            ["pngpaste", temp_file.name],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            raise ValueError("no PNG image found on the clipboard")
+        data = Path(temp_file.name).read_bytes()
+    if not data:
+        raise ValueError("no PNG image found on the clipboard")
+    return [
+        {
+            "type": "image",
+            "mime_type": "image/png",
+            "data": base64.b64encode(data).decode("ascii"),
+            "detail": "auto",
+            "source_path": "clipboard",
+        }
+    ]
+
+
+def _image_parts_from_paths(paths: list[str], *, detail: str = "auto") -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    for raw_path in paths:
+        path = Path(raw_path).expanduser()
+        if not path.is_file():
+            raise ValueError(f"image file not found: {raw_path}")
+        mime_type, _ = mimetypes.guess_type(str(path))
+        if mime_type is None or not mime_type.startswith("image/"):
+            raise ValueError(f"could not determine image MIME type: {raw_path}")
+        parts.append(
+            {
+                "type": "image",
+                "mime_type": mime_type,
+                "data": base64.b64encode(path.read_bytes()).decode("ascii"),
+                "detail": detail,
+                "source_path": str(path),
+            }
+        )
+    return parts
+
+
+def _message_parts_for_pending_images(
+    content: str, pending_image_parts: list[dict[str, Any]]
+) -> list[dict[str, Any]] | None:
+    if not pending_image_parts:
+        return None
+    parts: list[dict[str, Any]] = []
+    if content:
+        parts.append({"type": "text", "text": content})
+    for part in pending_image_parts:
+        clean_part = {key: value for key, value in part.items() if key != "source_path"}
+        parts.append(clean_part)
+    return parts
+
+
+def _handle_chat_image_command(
+    utterance: str,
+    pending_image_parts: list[dict[str, Any]],
+    output_stream: ChatOutputStream,
+) -> None:
+    try:
+        args = shlex.split(utterance)
+    except ValueError as exc:
+        output_stream.write(f"[idle] image command parse error: {exc}\n")
+        output_stream.flush()
+        return
+    if len(args) == 1 or (len(args) == 2 and args[1] in {"list", "status"}):
+        if not pending_image_parts:
+            output_stream.write("[idle] no images queued for the next message\n")
+        else:
+            output_stream.write(
+                f"[idle] {len(pending_image_parts)} image(s) queued for the next message:\n"
+            )
+            for index, part in enumerate(pending_image_parts, start=1):
+                output_stream.write(
+                    f"  {index}. {part.get('source_path', '<inline>')} ({part.get('mime_type')})\n"
+                )
+        output_stream.flush()
+        return
+    if len(args) == 2 and args[1] in {"paste", "clipboard"}:
+        try:
+            pending_image_parts.extend(_image_parts_from_macos_clipboard())
+        except ValueError as exc:
+            output_stream.write(f"[idle] {exc}\n")
+            output_stream.flush()
+            return
+        output_stream.write(
+            f"[idle] queued clipboard image for the next message "
+            f"({len(pending_image_parts)} total)\n"
+        )
+        output_stream.flush()
+        return
+    if len(args) == 2 and args[1] in {"clear", "reset"}:
+        pending_image_parts.clear()
+        output_stream.write("[idle] cleared queued images\n")
+        output_stream.flush()
+        return
+    paths = args[1:]
+    try:
+        pending_image_parts.extend(_image_parts_from_paths(paths))
+    except ValueError as exc:
+        output_stream.write(f"[idle] {exc}\n")
+        output_stream.flush()
+        return
+    output_stream.write(
+        f"[idle] queued {len(paths)} image(s) for the next message "
+        f"({len(pending_image_parts)} total)\n"
+    )
+    output_stream.flush()
+
 def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
     output_stream = sys.stdout
     input_stream = sys.stdin
@@ -685,6 +810,7 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
     prompt_session_thread_id: str | None | object = object()
     synced_prompt_history_thread_id: str | None = None
     speech_output = ConsoleSpeechOutput(output_stream=output_stream)
+    pending_image_parts: list[dict[str, Any]] = []
 
     turns_completed = 0
     while True:
@@ -733,6 +859,9 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             return 0
         if utterance == "/help":
             _write_chat_help(output_stream)
+            continue
+        if utterance == "/image" or utterance.startswith("/image "):
+            _handle_chat_image_command(utterance, pending_image_parts, output_stream)
             continue
         if utterance == "/commands":
             _handle_chat_commands(output_stream)
@@ -789,7 +918,12 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             continue
         utterance = expanded_utterance
         try:
-            client.send_user_message(utterance)
+            message_parts = _message_parts_for_pending_images(utterance, pending_image_parts)
+            if message_parts is None:
+                client.send_user_message(utterance)
+            else:
+                client.send_user_message(utterance, parts=message_parts)
+                pending_image_parts.clear()
             reply, metadata = client.run_thread()
         except KeyboardInterrupt:
             _cancel_current_run_after_interrupt(client)
@@ -837,7 +971,8 @@ def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
         "[idle] chat commands: /help, /new, /agent [current|preset], /threads, "
         "/switch <id>, /rename <title>, /copy-id, /cancel, /compact, /export [markdown|json], "
-        "/tokens, /debug, /editor, /commands, /command set|show|delete, /exit, /quit. "
+        "/tokens, /debug, /editor, /image <path...>|paste|list|clear, /commands, "
+        "/command set|show|delete, /exit, /quit. "
         "Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
     )

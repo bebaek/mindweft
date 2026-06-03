@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -76,11 +76,29 @@ class MessageRole(str, Enum):
     TOOL = "tool"
 
 
+class TextPart(BaseModel):
+    type: Literal["text"] = "text"
+    text: str
+
+
+class ImagePart(BaseModel):
+    type: Literal["image"] = "image"
+    mime_type: str
+    data: str | None = None
+    url: str | None = None
+    attachment_id: str | None = None
+    detail: Literal["auto", "low", "high"] = "auto"
+
+
+MessagePart = Annotated[TextPart | ImagePart, Field(discriminator="type")]
+
+
 class Message(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     thread_id: str
     role: MessageRole
     content: str
+    parts: list[MessagePart] | None = None
     created_by: str | None = None
     metadata: dict[str, Any] | None = None
     tool_name: str | None = None
@@ -140,7 +158,8 @@ class CreateThreadRequest(BaseModel):
 
 
 class AddMessageRequest(BaseModel):
-    content: str
+    content: str = ""
+    parts: list[MessagePart] | None = None
     metadata: dict[str, Any] | None = None
 
 

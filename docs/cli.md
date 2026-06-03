@@ -47,6 +47,8 @@ minigent run --stream --show-reasoning "hello"
 minigent run --stream --tokens live "hello"
 minigent run --thread <thread-id> "continue"
 minigent run --resume-last "continue"
+minigent run --image ./screenshot.png "describe this image"
+minigent run --image before.png --image after.png "compare these"
 ```
 
 `run` reads from stdin when no prompt argument is provided. By default the assistant
@@ -67,6 +69,8 @@ reply prints to stdout with no extra noise. Useful flags:
 | `--skill <name>` | Skill to apply when creating a thread. |
 | `--skills <name>...` | Ordered list of prompt-overlay skills. |
 | `--capability-profile <name>` | Capability profile to apply. |
+| `--image <path>` | Attach an image file; can be repeated. Requires server-side `MINIGENT_IMAGE_INPUT_ENABLED=true` and a vision-capable model/provider. |
+| `--image-detail auto\|low\|high` | Vision detail hint for attached images. |
 
 ### Chat (one-shot)
 
@@ -75,6 +79,7 @@ minigent chat "hello"
 minigent chat --stream "hello with progress"
 minigent chat --thread <thread-id> "continue"
 minigent chat --resume-last "continue"
+minigent chat --image ./diagram.png "what does this show?"
 ```
 
 Same flags as `run`, plus `--print-thread-id` and `--transcript` for printing the full
@@ -207,6 +212,10 @@ Available during interactive chat:
 | `/tokens` | Show estimated current thread size. |
 | `/debug` | Toggle debug mode. |
 | `/editor` | Open `$EDITOR` for long prompt composition. |
+| `/image <path...>` | Queue one or more image files for the next message. Requires server-side `MINIGENT_IMAGE_INPUT_ENABLED=true` and a vision-capable model/provider. |
+| `/image paste`, `/image clipboard` | On macOS, use `pngpaste` to queue a PNG image from the system clipboard for the next message. |
+| `/image list` | Show images queued for the next message. |
+| `/image clear` | Clear queued images without sending them. |
 | `/commands` | List saved custom slash commands. |
 | `/command set <name> <template>` | Save a custom slash command. Use `{input}` to place invocation text. |
 | `/command show <name>` | Show a saved command's template. |

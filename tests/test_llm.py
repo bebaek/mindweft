@@ -59,6 +59,57 @@ def test_openai_compatible_adapter_returns_text_response() -> None:
     assert response.tool_call is None
 
 
+def test_openai_compatible_adapter_sends_image_parts() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        content = payload["messages"][0]["content"]
+        assert content == [
+            {"type": "text", "text": "describe it"},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/png;base64,aGk=",
+                    "detail": "low",
+                },
+            },
+        ]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "image reply"}}]},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.USER,
+                    content="describe it",
+                    parts=[
+                        {"type": "text", "text": "describe it"},
+                        {
+                            "type": "image",
+                            "mime_type": "image/png",
+                            "data": "aGk=",
+                            "detail": "low",
+                        },
+                    ],
+                )
+            ],
+            [],
+        )
+    )
+
+    assert response.content == "image reply"
+
+
 def test_openai_compatible_adapter_emits_progress_for_response_chunks() -> None:
     progress: list[int] = []
 
@@ -332,6 +383,50 @@ def test_google_gemini_adapter_returns_text_response() -> None:
         "output_tokens": 4,
         "total_tokens": 7,
     }
+
+
+def test_google_gemini_adapter_sends_image_parts() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        assert payload["contents"] == [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "describe it"},
+                    {"inline_data": {"mime_type": "image/png", "data": "aGk="}},
+                ],
+            }
+        ]
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"text": "image reply"}]}}]},
+        )
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="gemini-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.USER,
+                    content="describe it",
+                    parts=[
+                        {"type": "text", "text": "describe it"},
+                        {"type": "image", "mime_type": "image/png", "data": "aGk="},
+                    ],
+                )
+            ],
+            [],
+        )
+    )
+
+    assert response.content == "image reply"
 
 
 def test_google_gemini_adapter_emits_progress_for_response_chunks() -> None:

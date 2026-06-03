@@ -109,6 +109,53 @@ def test_thread_lifecycle_endpoints() -> None:
     assert missing_response.status_code == 404
 
 
+def test_add_message_rejects_image_when_disabled() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    create_response = client.post("/threads", headers=AUTH_HEADERS)
+    thread_id = create_response.json()["thread_id"]
+
+    response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={
+            "content": "describe it",
+            "parts": [
+                {"type": "text", "text": "describe it"},
+                {"type": "image", "mime_type": "image/png", "data": "aGk="},
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "image input is disabled"
+
+
+def test_add_message_accepts_image_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    create_response = client.post("/threads", headers=AUTH_HEADERS)
+    thread_id = create_response.json()["thread_id"]
+
+    response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={
+            "content": "describe it",
+            "parts": [
+                {"type": "text", "text": "describe it"},
+                {"type": "image", "mime_type": "image/png", "data": "aGk="},
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["parts"][1]["mime_type"] == "image/png"
+
+
 def test_sqlite_thread_store_persists_threads_and_messages(tmp_path: Path) -> None:
     db_path = tmp_path / "threads.db"
     first_client = TestClient(

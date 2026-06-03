@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import HTTPException
 
-from app.models import LLMResponse, Message, MessageRole, ToolCall, ToolSpec
+from app.models import ImagePart, LLMResponse, Message, MessageRole, TextPart, ToolCall, ToolSpec
 from app.oauth import GENERIC_OAUTH_PROVIDER, GenericOAuthProvider
 
 logger = logging.getLogger(__name__)
@@ -1050,8 +1050,59 @@ def _parse_mock_tool_arguments(tool_name: str, payload: str) -> dict[str, Any]:
     return {"text": stripped}
 
 
+def _image_data_url(part: ImagePart) -> str:
+    if part.url:
+        return part.url
+    if part.data:
+        return f"data:{part.mime_type};base64,{part.data}"
+    return ""
+
+
+def _message_to_openai_content(message: Message) -> str | list[dict[str, Any]]:
+    if not message.parts or message.role != MessageRole.USER:
+        return message.content
+    content: list[dict[str, Any]] = []
+    for part in message.parts:
+        if isinstance(part, TextPart):
+            if part.text:
+                content.append({"type": "text", "text": part.text})
+            continue
+        if isinstance(part, ImagePart):
+            url = _image_data_url(part)
+            if url:
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": url, "detail": part.detail},
+                    }
+                )
+    return content or message.content
+
+
+def _gemini_parts_for_message(message: Message) -> list[dict[str, Any]]:
+    if not message.parts:
+        return [{"text": message.content}]
+    parts: list[dict[str, Any]] = []
+    for part in message.parts:
+        if isinstance(part, TextPart):
+            if part.text:
+                parts.append({"text": part.text})
+            continue
+        if isinstance(part, ImagePart):
+            if part.data:
+                parts.append(
+                    {"inline_data": {"mime_type": part.mime_type, "data": part.data}}
+                )
+            elif part.url:
+                parts.append({"file_data": {"mime_type": part.mime_type, "file_uri": part.url}})
+    return parts or [{"text": message.content}]
+
+
 def _message_to_chat_payload(message: Message, tool_name_map: dict[str, str]) -> dict[str, Any]:
-    payload: dict[str, Any] = {"role": message.role.value, "content": message.content}
+    payload: dict[str, Any] = {
+        "role": message.role.value,
+        "content": _message_to_openai_content(message),
+    }
     if message.role == MessageRole.ASSISTANT and message.tool_call_id and message.tool_name:
         payload["content"] = None
         payload["tool_calls"] = [
@@ -1103,7 +1154,7 @@ def _messages_to_gemini_payload(
                 system_parts.append({"text": message.content})
             continue
         if message.role == MessageRole.USER:
-            contents.append({"role": "user", "parts": [{"text": message.content}]})
+            contents.append({"role": "user", "parts": _gemini_parts_for_message(message)})
             continue
         if message.role == MessageRole.ASSISTANT:
             if message.tool_name and message.tool_arguments is not None:
@@ -1352,6 +1403,22 @@ def _responses_instructions(messages: list[Message]) -> str:
     return "\n\n".join(system_parts)
 
 
+def _message_to_responses_content(message: Message) -> str | list[dict[str, Any]]:
+    if not message.parts or message.role != MessageRole.USER:
+        return message.content
+    content: list[dict[str, Any]] = []
+    for part in message.parts:
+        if isinstance(part, TextPart):
+            if part.text:
+                content.append({"type": "input_text", "text": part.text})
+            continue
+        if isinstance(part, ImagePart):
+            url = _image_data_url(part)
+            if url:
+                content.append({"type": "input_image", "image_url": url})
+    return content or message.content
+
+
 def _message_to_responses_payload(
     message: Message, tool_name_map: dict[str, str]
 ) -> list[dict[str, Any]]:
@@ -1383,7 +1450,7 @@ def _message_to_responses_payload(
         return payload_items
 
     role = "assistant" if message.role == MessageRole.ASSISTANT else "user"
-    payload_items.append({"role": role, "content": message.content})
+    payload_items.append({"role": role, "content": _message_to_responses_content(message)})
     return payload_items
 
 

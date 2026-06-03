@@ -102,6 +102,41 @@ def test_run_reads_prompt_from_stdin_and_prints_plain_reply(
     assert captured.err == ""
 
 
+def test_run_sends_image_parts(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    image_path = tmp_path / "tiny.png"
+    image_path.write_bytes(b"hi")
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            body = json.loads(request.data.decode("utf-8"))
+            assert body == {
+                "content": "describe",
+                "parts": [
+                    {"type": "text", "text": "describe"},
+                    {
+                        "type": "image",
+                        "mime_type": "image/png",
+                        "data": "aGk=",
+                        "detail": "high",
+                    },
+                ],
+            }
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run"):
+            return _Response(body={"reply": "image summary"})
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["run", "--image", str(image_path), "--image-detail", "high", "describe"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "image summary\n"
+
+
 def test_run_json_outputs_structured_reply(
     monkeypatch: Any, tmp_path: Path, capsys: Any
 ) -> None:

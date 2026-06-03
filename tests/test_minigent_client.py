@@ -3624,6 +3624,117 @@ def test_run_chat_loop_handles_multiple_turns_and_blank_lines(
     )
 
 
+def test_run_chat_loop_image_command_queues_next_message(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_stream = StringIO()
+    image_path = tmp_path / "tiny.png"
+    image_path.write_bytes(b"hi")
+    input_stream = StringIO(f"/image {image_path}\nwhat is this?\n")
+    sent_messages: list[tuple[str, list[dict[str, object]] | None]] = []
+
+    class FakeChatClient:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def send_user_message(
+            self, content: str, *, parts: list[dict[str, object]] | None = None
+        ) -> dict[str, str]:
+            sent_messages.append((content, parts))
+            return {"id": "message-1"}
+
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
+            return ("it is tiny", None)
+
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+    )
+
+    assert exit_code == 0
+    assert sent_messages == [
+        (
+            "what is this?",
+            [
+                {"type": "text", "text": "what is this?"},
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "data": "aGk=",
+                    "detail": "auto",
+                },
+            ],
+        )
+    ]
+    output = output_stream.getvalue()
+    assert "[idle] queued 1 image(s) for the next message (1 total)\n" in output
+    assert "[assistant] it is tiny\n" in output
+
+
+def test_run_chat_loop_image_paste_command_queues_clipboard_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("/image paste\nwhat is this?\n")
+    sent_messages: list[tuple[str, list[dict[str, object]] | None]] = []
+
+    def fake_clipboard_image() -> list[dict[str, object]]:
+        return [
+            {
+                "type": "image",
+                "mime_type": "image/png",
+                "data": "aGk=",
+                "detail": "auto",
+                "source_path": "clipboard",
+            }
+        ]
+
+    class FakeChatClient:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def send_user_message(
+            self, content: str, *, parts: list[dict[str, object]] | None = None
+        ) -> dict[str, str]:
+            sent_messages.append((content, parts))
+            return {"id": "message-1"}
+
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
+            return ("clipboard reply", None)
+
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "_image_parts_from_macos_clipboard", fake_clipboard_image)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+    )
+
+    assert exit_code == 0
+    assert sent_messages == [
+        (
+            "what is this?",
+            [
+                {"type": "text", "text": "what is this?"},
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "data": "aGk=",
+                    "detail": "auto",
+                },
+            ],
+        )
+    ]
+    output = output_stream.getvalue()
+    assert "[idle] queued clipboard image for the next message (1 total)\n" in output
+    assert "[assistant] clipboard reply\n" in output
+
+
 def test_build_chat_prompt_session_for_tty_streams(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -4406,7 +4517,8 @@ def test_run_chat_loop_handles_local_chat_commands(
     assert output_stream.getvalue() == (
         "[user] [idle] chat commands: /help, /new, /agent [current|preset], /threads, "
         "/switch <id>, /rename <title>, /copy-id, /cancel, /compact, /export [markdown|json], /tokens, "
-        "/debug, /editor, /commands, /command set|show|delete, /exit, /quit. Default: "
+        "/debug, /editor, /image <path...>|paste|list|clear, /commands, /command set|show|delete, "
+        "/exit, /quit. Default: "
         "Enter submits; Esc+Enter or Ctrl+J "
         "inserts a newline. Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make "
         "Esc+Enter submit.\n"

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import mimetypes
 import os
 import platform
 import secrets
@@ -85,6 +87,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Resume the last locally remembered thread for this server and principal.",
     )
     chat_parser.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        help="Image file to attach to the message. Can be specified multiple times.",
+    )
+    chat_parser.add_argument(
+        "--image-detail",
+        choices=["auto", "low", "high"],
+        default="auto",
+        help="Vision detail hint for attached images.",
+    )
+    chat_parser.add_argument(
         "--skill", default=None, help="Skill to apply when creating a new thread."
     )
     chat_parser.add_argument(
@@ -145,6 +159,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--resume-last",
         action="store_true",
         help="Resume the last locally remembered thread for this server and principal.",
+    )
+    run_parser.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        help="Image file to attach to the prompt. Can be specified multiple times.",
+    )
+    run_parser.add_argument(
+        "--image-detail",
+        choices=["auto", "low", "high"],
+        default="auto",
+        help="Vision detail hint for attached images.",
     )
     run_parser.add_argument("--skill", default=None, help="Skill to apply when creating a thread.")
     run_parser.add_argument(
@@ -798,6 +824,38 @@ def _read_run_message(args: argparse.Namespace) -> str:
     return message.rstrip("\n")
 
 
+def _image_parts_from_paths(paths: Sequence[str] | None, *, detail: str = "auto") -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    for raw_path in paths or []:
+        path = Path(raw_path).expanduser()
+        if not path.is_file():
+            raise SystemExit(f"image file not found: {raw_path}")
+        mime_type, _ = mimetypes.guess_type(str(path))
+        if mime_type is None or not mime_type.startswith("image/"):
+            raise SystemExit(f"could not determine image MIME type: {raw_path}")
+        data = base64.b64encode(path.read_bytes()).decode("ascii")
+        parts.append(
+            {
+                "type": "image",
+                "mime_type": mime_type,
+                "data": data,
+                "detail": detail,
+            }
+        )
+    return parts
+
+
+def _message_parts(content: str, image_paths: Sequence[str] | None, *, detail: str) -> list[dict[str, Any]] | None:
+    image_parts = _image_parts_from_paths(image_paths, detail=detail)
+    if not image_parts:
+        return None
+    parts: list[dict[str, Any]] = []
+    if content:
+        parts.append({"type": "text", "text": content})
+    parts.extend(image_parts)
+    return parts
+
+
 def run_chat(
     args: argparse.Namespace,
     client: MinigentAPIClient,
@@ -805,7 +863,12 @@ def run_chat(
     trace_id: str | None,
 ) -> int:
     thread_id, created_thread = ensure_thread(args, client, base_url)
-    client.add_message(thread_id, args.message)
+    message_parts = _message_parts(
+        args.message,
+        getattr(args, "image", None),
+        detail=getattr(args, "image_detail", "auto"),
+    )
+    client.add_message(thread_id, args.message, parts=message_parts)
     events: list[dict[str, Any]] | None = None
     metadata: dict[str, Any] | None = None
     if args.stream and args.json:

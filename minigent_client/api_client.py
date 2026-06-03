@@ -342,8 +342,11 @@ class MinigentAPIClient:
         content: str,
         *,
         metadata: dict[str, Any] | None = None,
+        parts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"content": content}
+        if parts is not None:
+            payload["parts"] = parts
         if metadata is not None:
             payload["metadata"] = metadata
         response = self.request_json(
@@ -364,14 +367,18 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent create-thread response must include thread_id")
         return thread_id
 
-    def send_user_message(self, content: str) -> dict[str, Any]:
+    def send_user_message(
+        self, content: str, *, parts: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
         thread_id = self.ensure_thread()
         formatted_content = self._format_user_message(content)
+        formatted_parts = _parts_with_formatted_text(parts, formatted_content)
         self._maybe_log_prompt(formatted_content)
         return self.add_message(
             thread_id,
             formatted_content,
             metadata={"raw_user_prompt": content},
+            parts=formatted_parts,
         )
 
     def run_thread(self, thread_id: str | None = None, *, stream: bool | None = None) -> tuple[str, dict[str, Any] | None]:
@@ -677,6 +684,21 @@ def _timeout_error(method: str, url: str, detail: str) -> MinigentAPIError:
         category="timeout",
         detail=f"{method} {url} timed out: {detail}",
     )
+
+
+def _parts_with_formatted_text(
+    parts: list[dict[str, Any]] | None, formatted_content: str
+) -> list[dict[str, Any]] | None:
+    if parts is None:
+        return None
+    formatted_parts = [dict(part) for part in parts]
+    for part in formatted_parts:
+        if part.get("type") == "text":
+            part["text"] = formatted_content
+            return formatted_parts
+    if formatted_content:
+        return [{"type": "text", "text": formatted_content}, *formatted_parts]
+    return formatted_parts
 
 
 def _build_query(params: dict[str, object | None]) -> str:

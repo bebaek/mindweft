@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -53,6 +56,7 @@ from app.models import (
     Principal,
     RunThreadResponse,
     TenantContext,
+    TextPart,
     ThreadStatus,
 )
 from app.oauth import GenericOAuthProvider, OAuthFlowStore
@@ -78,6 +82,69 @@ configure_logging()
 
 logger = logging.getLogger(__name__)
 WEB_CLIENT_DIR = Path(__file__).resolve().parent / "static" / "web"
+
+IMAGE_INPUT_ENABLED_ENV = "MINIGENT_IMAGE_INPUT_ENABLED"
+IMAGE_INPUT_MAX_BYTES_ENV = "MINIGENT_IMAGE_INPUT_MAX_BYTES"
+IMAGE_INPUT_ALLOWED_MIME_TYPES_ENV = "MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES"
+DEFAULT_IMAGE_INPUT_MAX_BYTES = 5 * 1024 * 1024
+DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+
+
+def _env_bool(name: str, *, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _allowed_image_mime_types() -> set[str]:
+    configured = os.getenv(IMAGE_INPUT_ALLOWED_MIME_TYPES_ENV, "").strip()
+    if not configured:
+        return DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES
+    return {item.strip().lower() for item in configured.split(",") if item.strip()}
+
+
+def _max_image_input_bytes() -> int:
+    configured = os.getenv(IMAGE_INPUT_MAX_BYTES_ENV, "").strip()
+    if not configured:
+        return DEFAULT_IMAGE_INPUT_MAX_BYTES
+    try:
+        return int(configured)
+    except ValueError:
+        return DEFAULT_IMAGE_INPUT_MAX_BYTES
+
+
+def _validate_and_normalize_message_request(request: AddMessageRequest) -> AddMessageRequest:
+    if not request.parts:
+        if not request.content:
+            raise HTTPException(status_code=400, detail="message content is required")
+        return request
+    has_image = any(part.type == "image" for part in request.parts)
+    if has_image and not _env_bool(IMAGE_INPUT_ENABLED_ENV):
+        raise HTTPException(status_code=400, detail="image input is disabled")
+    allowed_mime_types = _allowed_image_mime_types()
+    max_bytes = _max_image_input_bytes()
+    for part in request.parts:
+        if part.type != "image":
+            continue
+        mime_type = part.mime_type.lower()
+        if mime_type not in allowed_mime_types:
+            raise HTTPException(status_code=400, detail=f"unsupported image MIME type: {part.mime_type}")
+        if not part.data and not part.url and not part.attachment_id:
+            raise HTTPException(status_code=400, detail="image part must include data, url, or attachment_id")
+        if part.data:
+            try:
+                decoded = base64.b64decode(part.data, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="image data must be base64") from exc
+            if len(decoded) > max_bytes:
+                raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
+    if request.content:
+        return request
+    text_content = "\n".join(
+        part.text for part in request.parts if isinstance(part, TextPart) and part.text
+    )
+    return request.model_copy(update={"content": text_content})
 
 
 async def _run_thread_ndjson_stream(
@@ -461,12 +528,14 @@ def create_app(
             store=app_request.app.state.store,
             thread_id=thread_id,
         )
+        request = _validate_and_normalize_message_request(request)
         return app_request.app.state.store.append_message(
             principal.tenant_id,
             Message(
                 thread_id=thread_id,
                 role=MessageRole.USER,
                 content=request.content,
+                parts=request.parts,
                 created_by=principal.user_id,
                 metadata=request.metadata,
             ),
