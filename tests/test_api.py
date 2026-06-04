@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import sqlite3
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,6 +29,9 @@ from app.models import (
     MessageRole,
     Principal,
     TenantStatus,
+    TenantUser,
+    TenantUserRole,
+    TenantUserStatus,
     ThreadStatus,
     ToolCall,
     ToolSpec,
@@ -2314,6 +2318,73 @@ def test_admin_api_can_manage_tenant_registry(tmp_path: Path) -> None:
     assert audit_record["old_values"]["slug"] == "tenant-one"
     assert audit_record["new_values"]["slug"] == "tenant-renamed"
     assert audit_record["new_values"]["metadata"]["api_token"] == "<redacted>"
+
+
+def test_admin_store_can_manage_tenant_users(tmp_path: Path) -> None:
+    store = _sqlite_store(tmp_path)
+
+    created = store.create_tenant_user(
+        TenantUser(
+            id="membership-1",
+            tenant_id="tenant-1",
+            user_id="user-1",
+            email="user@example.com",
+            display_name="User One",
+            role=TenantUserRole.MEMBER,
+            status=TenantUserStatus.INVITED,
+            metadata={"team": "engineering"},
+            created_by="admin-user",
+            updated_by="admin-user",
+        )
+    )
+
+    assert created.id == "membership-1"
+    assert created.tenant_id == "tenant-1"
+    assert created.user_id == "user-1"
+    assert created.email == "user@example.com"
+    assert created.role == TenantUserRole.MEMBER
+    assert created.status == TenantUserStatus.INVITED
+    assert created.metadata == {"team": "engineering"}
+
+    assert store.get_tenant_user("tenant-1", "membership-1") == created
+    assert store.get_tenant_user_by_user_id("tenant-1", "user-1") == created
+
+    duplicate_user = TenantUser(
+        id="membership-2",
+        tenant_id="tenant-1",
+        user_id="user-1",
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        store.create_tenant_user(duplicate_user)
+
+    updated = store.update_tenant_user(
+        "tenant-1",
+        "membership-1",
+        display_name="User Renamed",
+        role=TenantUserRole.ADMIN,
+        status=TenantUserStatus.ACTIVE,
+        metadata={"team": "support"},
+        updated_by="admin-user",
+    )
+    assert updated is not None
+    assert updated.display_name == "User Renamed"
+    assert updated.role == TenantUserRole.ADMIN
+    assert updated.status == TenantUserStatus.ACTIVE
+    assert updated.metadata == {"team": "support"}
+    assert updated.updated_by == "admin-user"
+
+    users, total = store.list_tenant_users(
+        "tenant-1",
+        status=TenantUserStatus.ACTIVE,
+        role=TenantUserRole.ADMIN,
+    )
+    assert total == 1
+    assert users[0].id == "membership-1"
+
+    assert store.delete_tenant_user("tenant-1", "membership-1", updated_by="admin-user") is True
+    deleted = store.get_tenant_user("tenant-1", "membership-1")
+    assert deleted is not None
+    assert deleted.status == TenantUserStatus.DELETED
 
 
 def test_admin_api_rejects_invalid_tenant_slug(tmp_path: Path) -> None:

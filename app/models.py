@@ -40,6 +40,35 @@ class Tenant(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class TenantUserRole(str, Enum):
+    OWNER = "owner"
+    ADMIN = "admin"
+    MEMBER = "member"
+    VIEWER = "viewer"
+
+
+class TenantUserStatus(str, Enum):
+    INVITED = "invited"
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    DELETED = "deleted"
+
+
+class TenantUser(BaseModel):
+    id: str
+    tenant_id: str
+    user_id: str
+    email: str | None = None
+    display_name: str | None = None
+    role: TenantUserRole = TenantUserRole.MEMBER
+    status: TenantUserStatus = TenantUserStatus.INVITED
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class TenantEntitlements(BaseModel):
     tenant_id: str
     features: dict[str, bool] = Field(default_factory=dict)

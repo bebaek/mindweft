@@ -11,7 +11,15 @@ from typing import Any, Iterator, TypeGuard
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from app.models import Tenant, TenantDomain, TenantEntitlements, TenantStatus
+from app.models import (
+    Tenant,
+    TenantDomain,
+    TenantEntitlements,
+    TenantStatus,
+    TenantUser,
+    TenantUserRole,
+    TenantUserStatus,
+)
 
 SECRET_WRAPPER_KEY = "__secret__"
 
@@ -158,6 +166,161 @@ class SQLiteTenantConfigStore:
     def delete_tenant(self, tenant_id: str, *, updated_by: str | None = None) -> bool:
         return (
             self.update_tenant(tenant_id, status=TenantStatus.DELETED, updated_by=updated_by)
+            is not None
+        )
+
+    def list_tenant_users(
+        self,
+        tenant_id: str,
+        *,
+        status: TenantUserStatus | str | None = None,
+        role: TenantUserRole | str | None = None,
+        email: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[TenantUser], int]:
+        clauses = ["tenant_id = ?"]
+        values: list[object] = [tenant_id]
+        if status is not None:
+            clauses.append("status = ?")
+            values.append(str(status.value if isinstance(status, TenantUserStatus) else status))
+        if role is not None:
+            clauses.append("role = ?")
+            values.append(str(role.value if isinstance(role, TenantUserRole) else role))
+        if email is not None:
+            clauses.append("email = ?")
+            values.append(email)
+        where = " AND ".join(clauses)
+        with self._connection() as connection:
+            total_row = connection.execute(
+                f"SELECT COUNT(*) FROM tenant_users WHERE {where}",
+                tuple(values),
+            ).fetchone()
+            total = int(total_row[0]) if total_row is not None else 0
+            rows = connection.execute(
+                f"""
+                SELECT * FROM tenant_users WHERE {where}
+                ORDER BY updated_at DESC, user_id ASC
+                LIMIT ? OFFSET ?
+                """,
+                (*values, limit, offset),
+            ).fetchall()
+        return [_tenant_user_from_row(row) for row in rows], total
+
+    def create_tenant_user(self, user: TenantUser) -> TenantUser:
+        now = _utc_now_iso()
+        created_at = user.created_at.isoformat() if user.created_at else now
+        updated_at = user.updated_at.isoformat() if user.updated_at else now
+        with self._lock:
+            with self._connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO tenant_users (
+                        id, tenant_id, user_id, email, display_name, role, status,
+                        metadata_json, created_by, updated_by, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user.id,
+                        user.tenant_id,
+                        user.user_id,
+                        user.email,
+                        user.display_name,
+                        user.role.value,
+                        user.status.value,
+                        json.dumps(user.metadata, ensure_ascii=True, sort_keys=True),
+                        user.created_by,
+                        user.updated_by,
+                        created_at,
+                        updated_at,
+                    ),
+                )
+                connection.commit()
+        created = self.get_tenant_user(user.tenant_id, user.id)
+        if created is None:  # pragma: no cover - defensive
+            raise RuntimeError(f"Tenant user '{user.id}' was not created")
+        return created
+
+    def get_tenant_user(self, tenant_id: str, user_record_id: str) -> TenantUser | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM tenant_users WHERE tenant_id = ? AND id = ?",
+                (tenant_id, user_record_id),
+            ).fetchone()
+        return _tenant_user_from_row(row) if row is not None else None
+
+    def get_tenant_user_by_user_id(self, tenant_id: str, user_id: str) -> TenantUser | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM tenant_users WHERE tenant_id = ? AND user_id = ?",
+                (tenant_id, user_id),
+            ).fetchone()
+        return _tenant_user_from_row(row) if row is not None else None
+
+    def update_tenant_user(
+        self,
+        tenant_id: str,
+        user_record_id: str,
+        *,
+        email: str | None = None,
+        display_name: str | None = None,
+        role: TenantUserRole | None = None,
+        status: TenantUserStatus | None = None,
+        metadata: dict[str, Any] | None = None,
+        updated_by: str | None = None,
+    ) -> TenantUser | None:
+        current = self.get_tenant_user(tenant_id, user_record_id)
+        if current is None:
+            return None
+        next_email = current.email if email is None else email
+        next_display_name = current.display_name if display_name is None else display_name
+        next_role = current.role if role is None else role
+        next_status = current.status if status is None else status
+        next_metadata = current.metadata if metadata is None else metadata
+        now = _utc_now_iso()
+        with self._lock:
+            with self._connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE tenant_users SET
+                        email = ?,
+                        display_name = ?,
+                        role = ?,
+                        status = ?,
+                        metadata_json = ?,
+                        updated_by = ?,
+                        updated_at = ?
+                    WHERE tenant_id = ? AND id = ?
+                    """,
+                    (
+                        next_email,
+                        next_display_name,
+                        next_role.value,
+                        next_status.value,
+                        json.dumps(next_metadata, ensure_ascii=True, sort_keys=True),
+                        updated_by,
+                        now,
+                        tenant_id,
+                        user_record_id,
+                    ),
+                )
+                connection.commit()
+        return self.get_tenant_user(tenant_id, user_record_id)
+
+    def delete_tenant_user(
+        self,
+        tenant_id: str,
+        user_record_id: str,
+        *,
+        updated_by: str | None = None,
+    ) -> bool:
+        return (
+            self.update_tenant_user(
+                tenant_id,
+                user_record_id,
+                status=TenantUserStatus.DELETED,
+                updated_by=updated_by,
+            )
             is not None
         )
 
@@ -382,6 +545,34 @@ class SQLiteTenantConfigStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS tenant_users (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    email TEXT,
+                    display_name TEXT,
+                    role TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_by TEXT,
+                    updated_by TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE (tenant_id, user_id)
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant_status ON tenant_users(tenant_id, status)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant_role ON tenant_users(tenant_id, role)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tenant_users_email ON tenant_users(email)"
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS tenant_domains (
                     id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
@@ -452,6 +643,26 @@ def _tenant_from_row(row: sqlite3.Row) -> Tenant:
         status=TenantStatus(str(row["status"])),
         plan=str(row["plan"]) if row["plan"] is not None else None,
         region=str(row["region"]) if row["region"] is not None else None,
+        metadata=metadata,
+        created_by=str(row["created_by"]) if row["created_by"] is not None else None,
+        updated_by=str(row["updated_by"]) if row["updated_by"] is not None else None,
+        created_at=datetime.fromisoformat(str(row["created_at"])),
+        updated_at=datetime.fromisoformat(str(row["updated_at"])),
+    )
+
+
+def _tenant_user_from_row(row: sqlite3.Row) -> TenantUser:
+    metadata = json.loads(str(row["metadata_json"]))
+    if not isinstance(metadata, dict):
+        raise RuntimeError(f"Stored metadata for tenant user '{row['id']}' is invalid")
+    return TenantUser(
+        id=str(row["id"]),
+        tenant_id=str(row["tenant_id"]),
+        user_id=str(row["user_id"]),
+        email=str(row["email"]) if row["email"] is not None else None,
+        display_name=str(row["display_name"]) if row["display_name"] is not None else None,
+        role=TenantUserRole(str(row["role"])),
+        status=TenantUserStatus(str(row["status"])),
         metadata=metadata,
         created_by=str(row["created_by"]) if row["created_by"] is not None else None,
         updated_by=str(row["updated_by"]) if row["updated_by"] is not None else None,
