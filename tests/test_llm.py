@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 import json
 from pathlib import Path
 
@@ -385,6 +386,73 @@ def test_google_gemini_adapter_returns_text_response() -> None:
     }
 
 
+def test_google_gemini_adapter_handles_compressed_response() -> None:
+    raw_body = json.dumps(
+        {"candidates": [{"content": {"parts": [{"text": "compressed gemini"}]}}]}
+    ).encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=gzip.compress(raw_body),
+            headers={"content-encoding": "gzip", "content-length": "999999"},
+        )
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="gemini-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.content == "compressed gemini"
+
+
+def test_google_gemini_adapter_requests_and_returns_thought_summary() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        assert payload["generationConfig"] == {"thinkingConfig": {"includeThoughts": True}}
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"text": "I checked the arithmetic.", "thought": True},
+                                {"text": "The answer is 4."},
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="gemini-3.5-flash",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="2+2?")],
+            [],
+        )
+    )
+
+    assert response.content == "The answer is 4."
+    assert response.metadata == {"reasoning_content": "I checked the arithmetic."}
+
+
 def test_google_gemini_adapter_sends_image_parts() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read().decode())
@@ -561,6 +629,7 @@ def test_google_gemini_adapter_returns_tool_call() -> None:
                     {
                         "content": {
                             "parts": [
+                                {"text": "I need a calculator.", "thought": True},
                                 {
                                     "functionCall": {
                                         "name": "calculator",
@@ -594,6 +663,7 @@ def test_google_gemini_adapter_returns_tool_call() -> None:
     assert response.tool_call.name == "calculator"
     assert response.tool_call.arguments == {"expression": "2+2"}
     assert response.tool_call.metadata == {"gemini_thought_signature": "signature-123"}
+    assert response.metadata == {"reasoning_content": "I need a calculator."}
 
 
 def test_google_gemini_adapter_replays_tool_call_thought_signature() -> None:

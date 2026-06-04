@@ -309,6 +309,7 @@ class GoogleGeminiAdapter(LLMAdapter):
             tools,
             tool_name_map,
             require_thought_signatures=_gemini_requires_thought_signatures(self._model),
+            include_thoughts=_gemini_include_thought_summaries(self._model),
         )
         headers = {
             "Content-Type": "application/json",
@@ -747,11 +748,26 @@ async def _post_json_with_progress(
             await _emit_progress_chunk(len(chunk))
         return httpx.Response(
             response.status_code,
-            headers=response.headers,
+            headers=_headers_for_decoded_body(response.headers),
             content=b"".join(body_chunks),
             request=response.request,
             extensions=response.extensions,
         )
+
+
+def _headers_for_decoded_body(headers: httpx.Headers) -> httpx.Headers:
+    """Return headers safe for a response body already decoded by httpx streaming.
+
+    httpx.Response.aiter_bytes()/aiter_text() yields decoded body bytes/text. If we
+    rebuild a response with those decoded bytes while preserving compression headers,
+    later response.text/response.json access can try to decode the body a second time
+    and raise httpx.DecodingError.
+    """
+    decoded_headers = httpx.Headers(headers)
+    for name in ("content-encoding", "content-length"):
+        if name in decoded_headers:
+            del decoded_headers[name]
+    return decoded_headers
 
 
 async def _post_responses_request(
@@ -779,7 +795,7 @@ async def _post_responses_request(
                 request = response.request
                 response = httpx.Response(
                     response.status_code,
-                    headers=response.headers,
+                    headers=_headers_for_decoded_body(response.headers),
                     content=detail,
                     request=request,
                     extensions=response.extensions,
@@ -1144,6 +1160,7 @@ def _messages_to_gemini_payload(
     tool_name_map: dict[str, str],
     *,
     require_thought_signatures: bool = False,
+    include_thoughts: bool = False,
 ) -> dict[str, Any]:
     system_parts: list[dict[str, str]] = []
     contents: list[dict[str, Any]] = []
@@ -1237,6 +1254,8 @@ def _messages_to_gemini_payload(
                 ]
             }
         ]
+    if include_thoughts:
+        payload["generationConfig"] = {"thinkingConfig": {"includeThoughts": True}}
     return payload
 
 
@@ -1256,6 +1275,15 @@ def _gemini_tool_response(content: str) -> dict[str, Any]:
 def _gemini_requires_thought_signatures(model: str) -> bool:
     normalized = model.removeprefix("models/").lower()
     return bool(re.match(r"gemini-3(?:\.|-)", normalized))
+
+
+def _gemini_include_thought_summaries(model: str) -> bool:
+    """Return whether Gemini requests should ask for displayable thought summaries."""
+    summary = os.getenv(LLM_REASONING_SUMMARY_ENV, "auto").strip().lower()
+    if summary in {"", "off", "none", "null", "false", "0"}:
+        return False
+    normalized = model.removeprefix("models/").lower()
+    return bool(re.match(r"gemini-(?:3(?:\.|-)|2\.5(?:\.|-))", normalized))
 
 
 def _render_gemini_text_tool_call(tool_name: str, arguments: dict[str, Any]) -> str:
@@ -1309,13 +1337,17 @@ def _parse_gemini_response(payload: dict[str, Any], tool_name_map: dict[str, str
     parts = content.get("parts") or []
     reverse_tool_name_map = {value: key for key, value in tool_name_map.items()}
     text_parts: list[str] = []
+    thought_parts: list[str] = []
     tool_calls: list[ToolCall] = []
     for index, part in enumerate(parts):
         if not isinstance(part, dict):
             continue
         text = part.get("text")
         if isinstance(text, str):
-            text_parts.append(text)
+            if part.get("thought") is True:
+                thought_parts.append(text)
+            else:
+                text_parts.append(text)
         function_call = part.get("functionCall")
         if isinstance(function_call, dict):
             raw_name = function_call.get("name")
@@ -1329,12 +1361,22 @@ def _parse_gemini_response(payload: dict[str, Any], tool_name_map: dict[str, str
                         metadata=_gemini_tool_call_metadata(part),
                     )
                 )
+    metadata = _gemini_response_metadata(thought_parts)
     if tool_calls:
-        return LLMResponse(tool_calls=tool_calls, usage=usage)
+        return LLMResponse(tool_calls=tool_calls, usage=usage, metadata=metadata)
     if text_parts:
-        return LLMResponse(content="".join(text_parts), usage=usage)
+        return LLMResponse(content="".join(text_parts), usage=usage, metadata=metadata)
+    if thought_parts:
+        return LLMResponse(content="", usage=usage, metadata=metadata)
     logger.error("Gemini response missing text/tool content: %s", _truncate_json(payload))
     raise HTTPException(status_code=502, detail="Gemini provider returned no message content")
+
+
+def _gemini_response_metadata(thought_parts: list[str]) -> dict[str, Any] | None:
+    reasoning_content = "".join(thought_parts).strip()
+    if not reasoning_content:
+        return None
+    return {"reasoning_content": reasoning_content}
 
 
 def _normalize_gemini_usage(raw_usage: Any) -> dict[str, int] | None:
