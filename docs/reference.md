@@ -1404,6 +1404,13 @@ minigent --admin admin tenants archive TENANT_ID
 minigent --admin admin tenants delete TENANT_ID
 minigent --admin admin tenants seed --from execution-configs --status active --dry-run
 minigent --admin admin tenants seed --from execution-configs --status active
+minigent --admin admin tenants users list TENANT_ID --status active
+minigent --admin admin tenants users create TENANT_ID --user-id USER_ID --email user@example.com --role member --status active
+minigent --admin admin tenants users show TENANT_ID USER_RECORD_ID
+minigent --admin admin tenants users update TENANT_ID USER_RECORD_ID --role admin
+minigent --admin admin tenants users suspend TENANT_ID USER_RECORD_ID
+minigent --admin admin tenants users activate TENANT_ID USER_RECORD_ID
+minigent --admin admin tenants users delete TENANT_ID USER_RECORD_ID
 minigent --admin admin tenants entitlements show TENANT_ID
 minigent --admin admin tenants entitlements set TENANT_ID --features-json '{"mcp":true}' --limits-json '{"max_threads":100}'
 minigent --admin admin tenants entitlements validate TENANT_ID --features-json '{"mcp":true}'

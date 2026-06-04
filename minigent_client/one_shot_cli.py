@@ -380,6 +380,89 @@ def build_parser() -> argparse.ArgumentParser:
     admin_tenants_seed_parser.add_argument("--region", default=None)
     admin_tenants_seed_parser.add_argument("--dry-run", action="store_true")
 
+    admin_tenants_users_parser = admin_tenants_subparsers.add_parser(
+        "users", help="Manage tenant users."
+    )
+    admin_tenants_users_subparsers = admin_tenants_users_parser.add_subparsers(
+        dest="admin_tenant_users_command", required=True
+    )
+    admin_tenant_users_list_parser = admin_tenants_users_subparsers.add_parser(
+        "list", help="List tenant users."
+    )
+    admin_tenant_users_list_parser.add_argument("tenant_id")
+    admin_tenant_users_list_parser.add_argument("--limit", type=int, default=None)
+    admin_tenant_users_list_parser.add_argument("--offset", type=int, default=None)
+    admin_tenant_users_list_parser.add_argument(
+        "--status",
+        choices=["invited", "active", "suspended", "deleted"],
+        default=None,
+    )
+    admin_tenant_users_list_parser.add_argument(
+        "--role",
+        choices=["owner", "admin", "member", "viewer"],
+        default=None,
+    )
+    admin_tenant_users_list_parser.add_argument("--email", default=None)
+
+    admin_tenant_users_create_parser = admin_tenants_users_subparsers.add_parser(
+        "create", help="Create a tenant user."
+    )
+    admin_tenant_users_create_parser.add_argument("tenant_id")
+    admin_tenant_users_create_parser.add_argument("--user-id", required=True)
+    admin_tenant_users_create_parser.add_argument("--email", default=None)
+    admin_tenant_users_create_parser.add_argument("--display-name", default=None)
+    admin_tenant_users_create_parser.add_argument(
+        "--role",
+        choices=["owner", "admin", "member", "viewer"],
+        default=None,
+    )
+    admin_tenant_users_create_parser.add_argument(
+        "--status",
+        choices=["invited", "active", "suspended", "deleted"],
+        default=None,
+    )
+    admin_tenant_users_create_parser.add_argument(
+        "--metadata-json",
+        default=None,
+        help="Tenant user metadata as a JSON object.",
+    )
+
+    admin_tenant_users_show_parser = admin_tenants_users_subparsers.add_parser(
+        "show", help="Show one tenant user."
+    )
+    admin_tenant_users_show_parser.add_argument("tenant_id")
+    admin_tenant_users_show_parser.add_argument("user_record_id")
+
+    admin_tenant_users_update_parser = admin_tenants_users_subparsers.add_parser(
+        "update", help="Update tenant user fields."
+    )
+    admin_tenant_users_update_parser.add_argument("tenant_id")
+    admin_tenant_users_update_parser.add_argument("user_record_id")
+    admin_tenant_users_update_parser.add_argument("--email", default=None)
+    admin_tenant_users_update_parser.add_argument("--display-name", default=None)
+    admin_tenant_users_update_parser.add_argument(
+        "--role",
+        choices=["owner", "admin", "member", "viewer"],
+        default=None,
+    )
+    admin_tenant_users_update_parser.add_argument(
+        "--status",
+        choices=["invited", "active", "suspended", "deleted"],
+        default=None,
+    )
+    admin_tenant_users_update_parser.add_argument(
+        "--metadata-json",
+        default=None,
+        help="Replace tenant user metadata with this JSON object.",
+    )
+
+    for command_name in ["activate", "suspend", "delete"]:
+        user_transition_parser = admin_tenants_users_subparsers.add_parser(
+            command_name, help=f"{command_name.title()} a tenant user."
+        )
+        user_transition_parser.add_argument("tenant_id")
+        user_transition_parser.add_argument("user_record_id")
+
     admin_tenants_entitlements_parser = admin_tenants_subparsers.add_parser(
         "entitlements", help="Manage tenant entitlements."
     )
@@ -1256,6 +1339,140 @@ def run_admin_tenants_seed(
     return 0
 
 
+def _tenant_user_payload(args: argparse.Namespace, *, create: bool) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if create:
+        payload["user_id"] = args.user_id
+    for key in ["email", "display_name", "role", "status"]:
+        value = getattr(args, key, None)
+        if value is not None:
+            payload[key] = value
+    metadata = _metadata_from_arg(args.metadata_json)
+    if metadata is not None:
+        payload["metadata"] = metadata
+    return payload
+
+
+def _format_tenant_user_line(user: dict[str, Any]) -> str:
+    return " ".join(
+        [
+            str(user.get("id") or ""),
+            f"tenant_id={user.get('tenant_id')}",
+            f"user_id={user.get('user_id')}",
+            f"email={user.get('email')}",
+            f"display_name={user.get('display_name')}",
+            f"role={user.get('role')}",
+            f"status={user.get('status')}",
+            f"updated_at={user.get('updated_at')}",
+        ]
+    )
+
+
+def _print_admin_tenant_user_response(
+    args: argparse.Namespace,
+    response: dict[str, Any],
+    trace_id: str | None,
+) -> int:
+    if args.json:
+        output: dict[str, Any] = dict(response)
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    print(_format_tenant_user_line(response))
+    metadata = response.get("metadata")
+    if isinstance(metadata, dict) and metadata:
+        print("metadata=" + json.dumps(metadata, ensure_ascii=True, sort_keys=True))
+    return 0
+
+
+def run_admin_tenant_users(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    command = args.admin_tenant_users_command
+    if command == "list":
+        response = client.list_admin_tenant_users(
+            args.tenant_id,
+            limit=args.limit,
+            offset=args.offset,
+            status=args.status,
+            role=args.role,
+            email=args.email,
+        )
+        if args.json:
+            output: dict[str, Any] = dict(response)
+            if trace_id is not None:
+                output["trace_id"] = trace_id
+            print_json(output)
+            return 0
+        if trace_id is not None:
+            print(f"trace_id={trace_id}")
+        print(
+            " ".join(
+                [
+                    f"tenant_id={response.get('tenant_id')}",
+                    f"total={response.get('total')}",
+                    f"limit={response.get('limit')}",
+                    f"offset={response.get('offset')}",
+                    f"next_offset={response.get('next_offset')}",
+                ]
+            )
+        )
+        for user in response.get("users", []):
+            if isinstance(user, dict):
+                print(_format_tenant_user_line(user))
+        return 0
+    if command == "create":
+        response = client.create_admin_tenant_user(
+            args.tenant_id,
+            _tenant_user_payload(args, create=True),
+        )
+        return _print_admin_tenant_user_response(args, response, trace_id)
+    if command == "show":
+        response = client.get_admin_tenant_user(args.tenant_id, args.user_record_id)
+        return _print_admin_tenant_user_response(args, response, trace_id)
+    if command == "update":
+        response = client.update_admin_tenant_user(
+            args.tenant_id,
+            args.user_record_id,
+            _tenant_user_payload(args, create=False),
+        )
+        return _print_admin_tenant_user_response(args, response, trace_id)
+    if command in {"activate", "suspend"}:
+        response = client.transition_admin_tenant_user(
+            args.tenant_id,
+            args.user_record_id,
+            command,
+        )
+        return _print_admin_tenant_user_response(args, response, trace_id)
+    if command == "delete":
+        response = client.delete_admin_tenant_user(args.tenant_id, args.user_record_id)
+        if args.json:
+            output = dict(response)
+            if trace_id is not None:
+                output["trace_id"] = trace_id
+            print_json(output)
+            return 0
+        if trace_id is not None:
+            print(f"trace_id={trace_id}")
+        print(
+            " ".join(
+                [
+                    "deleted=True",
+                    f"tenant_id={response.get('tenant_id')}",
+                    f"id={response.get('id')}",
+                    f"status={response.get('status')}",
+                ]
+            )
+        )
+        return 0
+    raise RuntimeError(f"Unhandled tenant users command: {command}")
+
+
 def _entitlements_payload(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "features": _json_object_from_arg(args.features_json, "--features-json") or {},
@@ -2049,6 +2266,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     return run_admin_tenants_transition(args, client, trace_id)
                 if args.admin_tenants_command == "seed":
                     return run_admin_tenants_seed(args, client, trace_id)
+                if args.admin_tenants_command == "users":
+                    return run_admin_tenant_users(args, client, trace_id)
                 if args.admin_tenants_command == "entitlements":
                     return run_admin_tenant_entitlements(args, client, trace_id)
             if args.admin_command == "threads":

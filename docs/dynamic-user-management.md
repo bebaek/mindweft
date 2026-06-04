@@ -3,11 +3,12 @@
 Status: Partially implemented
 
 Implemented: tenant membership model and SQLite store, admin CRUD/list/status-transition
-APIs, mutation audit records, optional request-time active-membership enforcement with
-`MINIGENT_TENANT_USER_REGISTRY_REQUIRED`, and membership fields on `TenantContext`.
+APIs and CLI commands, mutation audit records, optional request-time active-membership
+enforcement with `MINIGENT_TENANT_USER_REGISTRY_REQUIRED`, and membership fields on
+`TenantContext`.
 
-Still pending or partial: CLI support, invite-token/email workflows, granular tenant-admin
-RBAC, richer identity-provider mapping, service-account modeling, and seat/billing limits.
+Still pending or partial: invite-token/email workflows, granular tenant-admin RBAC, richer
+identity-provider mapping, service-account modeling, and seat/billing limits.
 
 Focus: tenant user and membership management, not full identity management.
 
@@ -238,12 +239,16 @@ Add CRUD, status-transition, list, and audit behavior under
 
 ### Phase 3: Add CLI support
 
-Add CLI commands for list/show/create/update/activate/suspend/delete membership workflows.
+Status: implemented.
+
+CLI commands exist for list/show/create/update/activate/suspend/delete membership workflows.
 
 ### Phase 4: Add optional request-time enforcement
 
-Add `MINIGENT_TENANT_USER_REGISTRY_REQUIRED`. When enabled, reject requests from principals
-without an active tenant membership.
+Status: implemented.
+
+`MINIGENT_TENANT_USER_REGISTRY_REQUIRED` rejects requests from principals without an active
+tenant membership when enabled.
 
 ### Phase 5: Introduce granular roles
 
