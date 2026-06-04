@@ -1218,7 +1218,7 @@ X-Minigent-Admin: false
 
 Thread lifecycle endpoints require the auth material for the active mode. Threads are isolated by `tenant_id`, and cross-tenant access returns `404`.
 
-`GET /tenant-context` returns the resolved tenant context for the authenticated caller. When the tenant registry is not required, the response always includes the principal and `tenant_id`; if an admin store is enabled and the tenant exists, Minigent enriches the context with registry fields, entitlement `features`, entitlement `limits`, and `entitlements_version`. When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, the endpoint and thread lifecycle endpoints require an active registry tenant.
+`GET /tenant-context` returns the resolved tenant context for the authenticated caller. When the tenant registry is not required, the response always includes the principal and `tenant_id`; if an admin store is enabled and the tenant exists, Minigent enriches the context with registry fields, entitlement `features`, entitlement `limits`, and `entitlements_version`. When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, the endpoint and thread lifecycle endpoints require an active registry tenant. When `MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true`, those paths also require an active tenant membership for the authenticated `user_id` and expose optional membership fields on the tenant context.
 
 ## Runtime Settings
 
@@ -1340,6 +1340,8 @@ MINIGENT_ADMIN_DB_PATH=.data/minigent-admin.db
 MINIGENT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
 # Optional: require request tenant IDs to exist and be active in the registry.
 MINIGENT_TENANT_REGISTRY_REQUIRED=false
+# Optional: require authenticated users to have active tenant membership.
+MINIGENT_TENANT_USER_REGISTRY_REQUIRED=false
 ```
 
 Admin endpoints:
@@ -1353,6 +1355,13 @@ Admin endpoints:
 - `POST /admin/tenants/{tenant_id}/archive`
 - `DELETE /admin/tenants/{tenant_id}`
 - `POST /admin/tenants/seed`
+- `GET /admin/tenants/{tenant_id}/users`
+- `POST /admin/tenants/{tenant_id}/users`
+- `GET /admin/tenants/{tenant_id}/users/{user_record_id}`
+- `PATCH /admin/tenants/{tenant_id}/users/{user_record_id}`
+- `POST /admin/tenants/{tenant_id}/users/{user_record_id}/activate`
+- `POST /admin/tenants/{tenant_id}/users/{user_record_id}/suspend`
+- `DELETE /admin/tenants/{tenant_id}/users/{user_record_id}`
 - `GET /admin/tenants/{tenant_id}/entitlements`
 - `PUT /admin/tenants/{tenant_id}/entitlements`
 - `POST /admin/tenants/{tenant_id}/entitlements/validate`
@@ -1378,7 +1387,7 @@ X-Minigent-Admin: true
 
 Tenant registry endpoints manage durable tenant identity and lifecycle state. Tenant records include `id`, `slug`, `name`, `status`, `plan`, `region`, JSON `metadata`, actor fields, and timestamps. Slugs must be unique and contain lowercase letters, digits, and hyphens. `DELETE /admin/tenants/{tenant_id}` soft-deletes by setting `status` to `deleted`; it does not remove threads or execution config. `GET /admin/tenants` returns tenant objects with pagination metadata and accepts `limit`, `offset`, `status`, `plan`, and `slug` query parameters. `POST /admin/tenants/seed` can create missing registry tenants from existing execution-config tenant IDs; pass `dry_run=true` to preview. Tenant entitlements are stored as `features` and `limits` JSON objects with a monotonically increasing `version`; validation currently checks shape only and does not enforce limits at runtime. `GET /admin/execution-config-tenants` preserves the old execution-config tenant listing by returning tenant IDs that have stored execution config.
 
-When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, public thread endpoints reject authenticated principals whose `tenant_id` is missing from the registry or not `active`. The default is `false` to preserve local and migration workflows.
+When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, public thread endpoints reject authenticated principals whose `tenant_id` is missing from the registry or not `active`. The default is `false` to preserve local and migration workflows. When `MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true`, request-time tenant context resolution also requires an active tenant membership for `(tenant_id, user_id)` and populates membership fields such as `membership_id`, `user_role`, and `user_status` on `TenantContext`.
 
 Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. Admin deletion removes a thread and its messages and writes an audit record. The prune endpoint deletes matching tenant threads with `updated_at` older than required `updated_before`, with optional `status`, `profile`, and `skill` filters. Add `dry_run=true` to preview `candidate_thread_ids` without deleting threads or writing audit records. The audit endpoint lists deletion/prune records and tenant mutation records with actor, action, affected count, thread IDs, optional `resource_type`/`resource_id`, optional `old_values`/`new_values`, optional metadata, timestamp, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `action`, `actor`, `created_after`, and `created_before` query parameters. Tenant audit payloads redact secret-like keys such as `token`, `secret`, `key`, `authorization`, and `password`. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect and manage persisted threads and audit records after process restarts.
 

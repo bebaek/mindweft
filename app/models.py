@@ -96,6 +96,12 @@ class TenantContext(BaseModel):
     limits: dict[str, int | float | str | bool | None] = Field(default_factory=dict)
     execution_config_version: int | None = None
     entitlements_version: int | None = None
+    membership_id: str | None = None
+    membership_email: str | None = None
+    membership_display_name: str | None = None
+    user_role: TenantUserRole | None = None
+    user_status: TenantUserStatus | None = None
+    membership_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class MessageRole(str, Enum):

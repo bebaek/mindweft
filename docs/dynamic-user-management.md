@@ -1,6 +1,13 @@
 # Dynamic user management
 
-Status: Proposed
+Status: Partially implemented
+
+Implemented: tenant membership model and SQLite store, admin CRUD/list/status-transition
+APIs, mutation audit records, optional request-time active-membership enforcement with
+`MINIGENT_TENANT_USER_REGISTRY_REQUIRED`, and membership fields on `TenantContext`.
+
+Still pending or partial: CLI support, invite-token/email workflows, granular tenant-admin
+RBAC, richer identity-provider mapping, service-account modeling, and seat/billing limits.
 
 Focus: tenant user and membership management, not full identity management.
 
@@ -57,9 +64,9 @@ These can be layered on later. The first version should be a tenant membership r
 - **Status**: lifecycle state for a membership: `invited`, `active`, `suspended`, or
   `deleted`.
 
-## Proposed data model
+## Implemented data model
 
-Add a membership table alongside the tenant registry:
+The SQLite admin store includes a membership table alongside the tenant registry:
 
 ```text
 tenant_users
@@ -93,20 +100,20 @@ operation should eventually require a tenant registry row.
 
 ## Request-time behavior
 
-The first version should preserve current auth behavior unless membership enforcement is
-explicitly enabled.
+Current request-time membership enforcement preserves existing auth behavior unless
+membership enforcement is explicitly enabled.
 
-Suggested request flow when the admin store is available:
+Current request flow when the admin store is available:
 
 1. Authenticate the caller and build the principal.
 2. Resolve tenant context from the tenant registry as today.
 3. If user-registry enforcement is enabled, load the membership for
    `(tenant_id, principal.user_id)`.
-4. Reject missing, suspended, or deleted memberships before business logic runs.
-5. Attach membership fields to request state and/or `TenantContext`.
+4. Reject missing or non-`active` memberships before business logic runs.
+5. Attach membership fields to `TenantContext`.
 6. Continue with execution config, entitlements, and tenant-scoped storage.
 
-Suggested opt-in flag:
+Opt-in flag:
 
 ```text
 MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true
@@ -118,21 +125,20 @@ while operators migrate membership data.
 
 ## Tenant/user context
 
-The current `TenantContext` can be extended or paired with a separate `TenantUserContext`.
-The context available to handlers should include at least:
+The current implementation extends `TenantContext` with optional membership fields:
 
 ```text
-user_id
-email
-display_name
-role
-user_status
 membership_id
+membership_email
+membership_display_name
+user_role
+user_status
 membership_metadata
 ```
 
-A separate `TenantUserContext` may keep the tenant context focused on tenant-level policy.
-If the fields are added to `TenantContext`, keep them optional for compatibility mode.
+These fields remain optional for compatibility mode and are populated when
+`MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true` and the authenticated user has an active
+membership.
 
 ## Admin operations
 

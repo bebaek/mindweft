@@ -2836,6 +2836,104 @@ def test_tenant_context_enriches_known_tenant_without_requirement(tmp_path: Path
     assert response.json()["entitlements_version"] == 1
 
 
+def test_tenant_context_requires_active_tenant_user_when_user_registry_required(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MINIGENT_TENANT_USER_REGISTRY_REQUIRED", "true")
+    client = TestClient(
+        create_app(
+            admin_store=_sqlite_store(tmp_path),
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+    client.post(
+        "/admin/tenants",
+        json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "active"},
+        headers=ADMIN_HEADERS,
+    )
+
+    missing_response = client.get("/tenant-context", headers=AUTH_HEADERS)
+    assert missing_response.status_code == 403
+    assert missing_response.json()["detail"] == "Tenant user is not active"
+
+    create_user_response = client.post(
+        "/admin/tenants/tenant-1/users",
+        json={
+            "user_id": "user-1",
+            "email": "USER@example.com",
+            "display_name": "User One",
+            "role": "admin",
+            "status": "active",
+            "metadata": {"team": "engineering"},
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert create_user_response.status_code == 201
+    user_record_id = create_user_response.json()["id"]
+
+    response = client.get("/tenant-context", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["tenant_id"] == "tenant-1"
+    assert payload["membership_id"] == user_record_id
+    assert payload["membership_email"] == "user@example.com"
+    assert payload["membership_display_name"] == "User One"
+    assert payload["user_role"] == "admin"
+    assert payload["user_status"] == "active"
+    assert payload["membership_metadata"] == {"team": "engineering"}
+
+
+@pytest.mark.parametrize("status", ["invited", "suspended", "deleted"])
+def test_tenant_context_rejects_inactive_tenant_user_when_user_registry_required(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    status: str,
+) -> None:
+    monkeypatch.setenv("MINIGENT_TENANT_USER_REGISTRY_REQUIRED", "true")
+    client = TestClient(
+        create_app(
+            admin_store=_sqlite_store(tmp_path),
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+    client.post(
+        "/admin/tenants",
+        json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "active"},
+        headers=ADMIN_HEADERS,
+    )
+    client.post(
+        "/admin/tenants/tenant-1/users",
+        json={"user_id": "user-1", "status": status},
+        headers=ADMIN_HEADERS,
+    )
+
+    response = client.get("/tenant-context", headers=AUTH_HEADERS)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Tenant user is not active"
+
+
+def test_tenant_context_requires_tenant_user_store_when_user_registry_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_TENANT_USER_REGISTRY_REQUIRED", "true")
+    client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+
+    response = client.get("/tenant-context", headers=AUTH_HEADERS)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Tenant user registry is not enabled"
+
+
 def test_tenant_context_includes_execution_config_version(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
