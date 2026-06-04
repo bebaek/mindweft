@@ -2387,6 +2387,146 @@ def test_admin_store_can_manage_tenant_users(tmp_path: Path) -> None:
     assert deleted.status == TenantUserStatus.DELETED
 
 
+def test_admin_api_can_manage_tenant_users(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+    client.post(
+        "/admin/tenants",
+        json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One"},
+        headers=ADMIN_HEADERS,
+    )
+
+    create_response = client.post(
+        "/admin/tenants/tenant-1/users",
+        json={
+            "user_id": "user-1",
+            "email": "USER@Example.COM",
+            "display_name": "User One",
+            "role": "member",
+            "status": "invited",
+            "metadata": {"api_token": "secret", "team": "engineering"},
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["tenant_id"] == "tenant-1"
+    assert created["user_id"] == "user-1"
+    assert created["email"] == "user@example.com"
+    assert created["role"] == "member"
+    assert created["status"] == "invited"
+    assert created["created_by"] == "admin-user"
+    user_record_id = created["id"]
+
+    duplicate_response = client.post(
+        "/admin/tenants/tenant-1/users",
+        json={"user_id": "user-1"},
+        headers=ADMIN_HEADERS,
+    )
+    assert duplicate_response.status_code == 409
+
+    invalid_user_response = client.post(
+        "/admin/tenants/tenant-1/users",
+        json={"user_id": "   "},
+        headers=ADMIN_HEADERS,
+    )
+    assert invalid_user_response.status_code == 400
+
+    invalid_email_response = client.post(
+        "/admin/tenants/tenant-1/users",
+        json={"user_id": "user-2", "email": "not-an-email"},
+        headers=ADMIN_HEADERS,
+    )
+    assert invalid_email_response.status_code == 400
+
+    show_response = client.get(
+        f"/admin/tenants/tenant-1/users/{user_record_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert show_response.status_code == 200
+    assert show_response.json()["id"] == user_record_id
+
+    patch_response = client.patch(
+        f"/admin/tenants/tenant-1/users/{user_record_id}",
+        json={"display_name": "User Renamed", "role": "admin", "metadata": {"team": "support"}},
+        headers=ADMIN_HEADERS,
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.json()["display_name"] == "User Renamed"
+    assert patch_response.json()["role"] == "admin"
+    assert patch_response.json()["updated_by"] == "admin-user"
+
+    activate_response = client.post(
+        f"/admin/tenants/tenant-1/users/{user_record_id}/activate",
+        headers=ADMIN_HEADERS,
+    )
+    assert activate_response.status_code == 200
+    assert activate_response.json()["status"] == "active"
+
+    list_response = client.get(
+        "/admin/tenants/tenant-1/users?status=active&role=admin&email=USER@example.com",
+        headers=ADMIN_HEADERS,
+    )
+    assert list_response.status_code == 200
+    assert list_response.json()["total"] == 1
+    assert list_response.json()["users"][0]["id"] == user_record_id
+
+    suspend_response = client.post(
+        f"/admin/tenants/tenant-1/users/{user_record_id}/suspend",
+        headers=ADMIN_HEADERS,
+    )
+    assert suspend_response.status_code == 200
+    assert suspend_response.json()["status"] == "suspended"
+
+    delete_response = client.delete(
+        f"/admin/tenants/tenant-1/users/{user_record_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {
+        "deleted": True,
+        "tenant_id": "tenant-1",
+        "id": user_record_id,
+        "status": "deleted",
+    }
+
+    audit_response = client.get(
+        "/admin/tenants/tenant-1/audit-records?action=tenant_users.create",
+        headers=ADMIN_HEADERS,
+    )
+    assert audit_response.status_code == 200
+    audit_record = audit_response.json()["audit_records"][0]
+    assert audit_record["resource_type"] == "tenant_user"
+    assert audit_record["resource_id"] == user_record_id
+    assert audit_record["new_values"]["user_id"] == "user-1"
+    assert audit_record["new_values"]["metadata"]["api_token"] == "<redacted>"
+
+
+def test_admin_api_rejects_tenant_users_for_unknown_tenant(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+
+    response = client.post(
+        "/admin/tenants/missing/users",
+        json={"user_id": "user-1"},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 404
+
+
+def test_admin_api_tenant_users_require_admin(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+
+    response = client.get("/admin/tenants/tenant-1/users", headers=AUTH_HEADERS)
+
+    assert response.status_code == 403
+
+
 def test_admin_api_rejects_invalid_tenant_slug(tmp_path: Path) -> None:
     client = TestClient(
         create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")

@@ -26,6 +26,9 @@ from app.models import (
     TenantDomain,
     TenantEntitlements,
     TenantStatus,
+    TenantUser,
+    TenantUserRole,
+    TenantUserStatus,
     Thread,
     ThreadContext,
     ThreadStatus,
@@ -87,6 +90,54 @@ class AdminTenantDeleteResponse(BaseModel):
 
 class AdminTenantDomainCreateRequest(BaseModel):
     domain: str
+
+
+class AdminTenantUserCreateRequest(BaseModel):
+    user_id: str
+    email: str | None = None
+    display_name: str | None = None
+    role: TenantUserRole = TenantUserRole.MEMBER
+    status: TenantUserStatus = TenantUserStatus.INVITED
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdminTenantUserPatchRequest(BaseModel):
+    email: str | None = None
+    display_name: str | None = None
+    role: TenantUserRole | None = None
+    status: TenantUserStatus | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class AdminTenantUserResponse(BaseModel):
+    id: str
+    tenant_id: str
+    user_id: str
+    email: str | None = None
+    display_name: str | None = None
+    role: TenantUserRole
+    status: TenantUserStatus
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminTenantUserListResponse(BaseModel):
+    tenant_id: str
+    users: list[AdminTenantUserResponse]
+    limit: int
+    offset: int
+    total: int
+    next_offset: int | None = None
+
+
+class AdminTenantUserDeleteResponse(BaseModel):
+    deleted: bool
+    tenant_id: str
+    id: str
+    status: TenantUserStatus
 
 
 class AdminTenantDomainResponse(BaseModel):
@@ -450,6 +501,212 @@ def build_admin_router() -> APIRouter:
             created=created,
             conflicts=conflicts,
             tenants=items,
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/users",
+        response_model=AdminTenantUserListResponse,
+    )
+    async def list_tenant_users(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+        status: TenantUserStatus | None = Query(default=None),
+        role: TenantUserRole | None = Query(default=None),
+        email: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+    ) -> AdminTenantUserListResponse:
+        _ = admin
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        normalized_email = _normalize_email(email) if email is not None else None
+        users, total = store.list_tenant_users(
+            tenant_id,
+            status=status,
+            role=role,
+            email=normalized_email,
+            limit=limit,
+            offset=offset,
+        )
+        next_offset = offset + len(users) if offset + len(users) < total else None
+        return AdminTenantUserListResponse(
+            tenant_id=tenant_id,
+            users=[_tenant_user_response(user) for user in users],
+            limit=limit,
+            offset=offset,
+            total=total,
+            next_offset=next_offset,
+        )
+
+    @router.post(
+        "/tenants/{tenant_id}/users",
+        response_model=AdminTenantUserResponse,
+        status_code=201,
+    )
+    async def create_tenant_user(
+        tenant_id: str,
+        body: AdminTenantUserCreateRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantUserResponse:
+        _validate_user_id(body.user_id)
+        email = _normalize_email(body.email) if body.email is not None else None
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        user = TenantUser(
+            id=str(uuid4()),
+            tenant_id=tenant_id,
+            user_id=body.user_id,
+            email=email,
+            display_name=body.display_name,
+            role=body.role,
+            status=body.status,
+            metadata=body.metadata,
+            created_by=admin.user_id,
+            updated_by=admin.user_id,
+        )
+        try:
+            created = store.create_tenant_user(user)
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="Tenant user already exists") from exc
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_users.create",
+            new_values=_tenant_user_audit_values(created),
+            resource_type="tenant_user",
+            resource_id=created.id,
+        )
+        return _tenant_user_response(created)
+
+    @router.get(
+        "/tenants/{tenant_id}/users/{user_record_id}",
+        response_model=AdminTenantUserResponse,
+    )
+    async def get_tenant_user(
+        tenant_id: str,
+        user_record_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantUserResponse:
+        _ = admin
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        user = store.get_tenant_user(tenant_id, user_record_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail=f"Tenant user '{user_record_id}' not found")
+        return _tenant_user_response(user)
+
+    @router.patch(
+        "/tenants/{tenant_id}/users/{user_record_id}",
+        response_model=AdminTenantUserResponse,
+    )
+    async def patch_tenant_user(
+        tenant_id: str,
+        user_record_id: str,
+        body: AdminTenantUserPatchRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantUserResponse:
+        email = _normalize_email(body.email) if body.email is not None else None
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        old_user = store.get_tenant_user(tenant_id, user_record_id)
+        user = store.update_tenant_user(
+            tenant_id,
+            user_record_id,
+            email=email,
+            display_name=body.display_name,
+            role=body.role,
+            status=body.status,
+            metadata=body.metadata,
+            updated_by=admin.user_id,
+        )
+        if user is None:
+            raise HTTPException(status_code=404, detail=f"Tenant user '{user_record_id}' not found")
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_users.update",
+            old_values=_tenant_user_audit_values(old_user) if old_user is not None else None,
+            new_values=_tenant_user_audit_values(user),
+            resource_type="tenant_user",
+            resource_id=user.id,
+        )
+        return _tenant_user_response(user)
+
+    @router.post(
+        "/tenants/{tenant_id}/users/{user_record_id}/activate",
+        response_model=AdminTenantUserResponse,
+    )
+    async def activate_tenant_user(
+        tenant_id: str,
+        user_record_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantUserResponse:
+        return _update_tenant_user_status(
+            request,
+            tenant_id,
+            user_record_id,
+            admin,
+            TenantUserStatus.ACTIVE,
+            "tenant_users.activate",
+        )
+
+    @router.post(
+        "/tenants/{tenant_id}/users/{user_record_id}/suspend",
+        response_model=AdminTenantUserResponse,
+    )
+    async def suspend_tenant_user(
+        tenant_id: str,
+        user_record_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantUserResponse:
+        return _update_tenant_user_status(
+            request,
+            tenant_id,
+            user_record_id,
+            admin,
+            TenantUserStatus.SUSPENDED,
+            "tenant_users.suspend",
+        )
+
+    @router.delete(
+        "/tenants/{tenant_id}/users/{user_record_id}",
+        response_model=AdminTenantUserDeleteResponse,
+    )
+    async def delete_tenant_user(
+        tenant_id: str,
+        user_record_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantUserDeleteResponse:
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        old_user = store.get_tenant_user(tenant_id, user_record_id)
+        deleted = store.delete_tenant_user(tenant_id, user_record_id, updated_by=admin.user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Tenant user '{user_record_id}' not found")
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_users.delete",
+            old_values=_tenant_user_audit_values(old_user) if old_user is not None else None,
+            new_values={"status": TenantUserStatus.DELETED.value},
+            resource_type="tenant_user",
+            resource_id=user_record_id,
+        )
+        return AdminTenantUserDeleteResponse(
+            deleted=True,
+            tenant_id=tenant_id,
+            id=user_record_id,
+            status=TenantUserStatus.DELETED,
         )
 
     @router.get(
@@ -1025,6 +1282,23 @@ def _tenant_response(tenant: Tenant) -> AdminTenantResponse:
     return AdminTenantResponse(**tenant.model_dump())
 
 
+def _tenant_user_response(user: TenantUser) -> AdminTenantUserResponse:
+    return AdminTenantUserResponse(**user.model_dump())
+
+
+def _tenant_user_audit_values(user: TenantUser) -> dict[str, Any]:
+    return {
+        "id": user.id,
+        "tenant_id": user.tenant_id,
+        "user_id": user.user_id,
+        "email": user.email,
+        "display_name": user.display_name,
+        "role": user.role.value,
+        "status": user.status.value,
+        "metadata": user.metadata,
+    }
+
+
 def _domain_response(domain: TenantDomain) -> AdminTenantDomainResponse:
     return AdminTenantDomainResponse(**domain.model_dump())
 
@@ -1113,6 +1387,38 @@ def _update_tenant_status(
     return _tenant_response(tenant)
 
 
+def _update_tenant_user_status(
+    request: Request,
+    tenant_id: str,
+    user_record_id: str,
+    admin: Principal,
+    status: TenantUserStatus,
+    action: str,
+) -> AdminTenantUserResponse:
+    store = _require_admin_store(request)
+    _require_tenant(request, tenant_id)
+    old_user = store.get_tenant_user(tenant_id, user_record_id)
+    user = store.update_tenant_user(
+        tenant_id,
+        user_record_id,
+        status=status,
+        updated_by=admin.user_id,
+    )
+    if user is None:
+        raise HTTPException(status_code=404, detail=f"Tenant user '{user_record_id}' not found")
+    _append_tenant_audit(
+        request,
+        tenant_id,
+        admin,
+        action,
+        old_values={"status": old_user.status.value} if old_user is not None else None,
+        new_values={"status": status.value},
+        resource_type="tenant_user",
+        resource_id=user.id,
+    )
+    return _tenant_user_response(user)
+
+
 def _append_tenant_audit(
     request: Request,
     tenant_id: str,
@@ -1122,6 +1428,8 @@ def _append_tenant_audit(
     old_values: dict[str, Any] | None = None,
     new_values: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
+    resource_type: str = "tenant",
+    resource_id: str | None = None,
 ) -> None:
     store = _require_thread_store(request)
     store.append_audit_record(
@@ -1131,8 +1439,8 @@ def _append_tenant_audit(
             action=action,
             affected_count=1,
             thread_ids=[],
-            resource_type="tenant",
-            resource_id=tenant_id,
+            resource_type=resource_type,
+            resource_id=resource_id or tenant_id,
             old_values=_redact_audit_payload(old_values),
             new_values=_redact_audit_payload(new_values),
             metadata=_redact_audit_payload(metadata),
@@ -1180,6 +1488,18 @@ def _redact_audit_value(value: object) -> object:
 def _validate_tenant_id(tenant_id: str) -> None:
     if not tenant_id.strip():
         raise HTTPException(status_code=400, detail="Tenant id must be non-empty")
+
+
+def _validate_user_id(user_id: str) -> None:
+    if not user_id.strip():
+        raise HTTPException(status_code=400, detail="User id must be non-empty")
+
+
+def _normalize_email(email: str) -> str:
+    normalized = email.strip().casefold()
+    if not normalized or "@" not in normalized:
+        raise HTTPException(status_code=400, detail="Tenant user email is invalid")
+    return normalized
 
 
 def _validate_slug(slug: str) -> None:
