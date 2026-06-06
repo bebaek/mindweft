@@ -170,11 +170,11 @@ MINIGENT_CODING_MCP_SERVERS_FILE=.data/coding-mcp-servers.json
 The file can be a JSON array or an object with a `servers` array. Each server entry can define:
 
 - `name`: MCP server name registered in tenant config.
-- `transport`: `stdio` to start it behind the stdio bridge, or `http` to register an
-  externally managed HTTP MCP server. Defaults to `stdio`.
-- `command`: argv for stdio servers. Use `{workspace}` for the first workspace,
-  `{workspace_roots}` as an argv item that expands to all workspace roots, or
-  `{workspace_roots_csv}` for a comma-separated root list.
+- `transport`: `stdio` to start it behind the stdio bridge/gateway, or `http` to register an
+  HTTP MCP server. Defaults to `stdio`.
+- `command`: argv for stdio servers and for managed HTTP servers. Use `{workspace}` for the
+  first workspace, `{workspace_roots}` as an argv item that expands to all workspace roots,
+  or `{workspace_roots_csv}` for a comma-separated root list.
 - `host`, `port`, and `path`: local bridge bind settings for `http` servers and for the
   legacy compatibility mode where the runner starts one bridge process per stdio server. The
   tenant `url` defaults to `http://<host>:<port><path>` unless `url` is set explicitly.
@@ -182,8 +182,17 @@ The file can be a JSON array or an object with a `servers` array. Each server en
   fields; generated tenant URLs use the shared gateway path `/<prefix>/<server-name>`.
 - `profiles`: capability profiles that should include this server, such as `inspect`, `edit`,
   or `test`.
-- `allowed_tools`, `path_policy`, and `env`: bridge/tool filters and additional process
-  environment.
+- `allowed_tools` and `path_policy`: tool filters and bridge/tool path filters.
+- `env`: extra process environment for stdio servers and managed HTTP servers.
+- `headers`: HTTP headers to send when Minigent calls the server URL.
+- `managed`: for `transport: "http"`, start `command` as a child process before Minigent.
+  Defaults to `false`; unmanaged HTTP entries are only registered as external endpoints.
+- `health_url`: optional URL to poll for a managed HTTP server before starting the API.
+- `startup_timeout_seconds`: optional managed HTTP health-check timeout; defaults to `30`.
+
+String values in `command`, `env`, `headers`, `url`, and `health_url` can reference dotenv or
+environment values with `${NAME}` placeholders. Prefer passing credentials through `env` or
+`headers` rather than command-line arguments so they are not exposed in process listings.
 
 Example:
 
@@ -205,6 +214,34 @@ Example:
       "command": ["custom-mcp-server", "--workspace", "{workspace}"],
       "profiles": ["inspect", "test"],
       "allowed_tools": ["inspect_repo", "run_repo_check"]
+    },
+    {
+      "name": "web-search",
+      "transport": "http",
+      "managed": true,
+      "command": [
+        "npx",
+        "-y",
+        "@brave/brave-search-mcp-server",
+        "--transport",
+        "http",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8766"
+      ],
+      "url": "http://127.0.0.1:8766/mcp",
+      "health_url": "http://127.0.0.1:8766/ping",
+      "env": {"BRAVE_API_KEY": "${BRAVE_API_KEY}"},
+      "profiles": ["inspect"],
+      "allowed_tools": ["brave_web_search", "brave_news_search", "brave_llm_context"]
+    },
+    {
+      "name": "remote-company-tools",
+      "transport": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {"Authorization": "Bearer ${COMPANY_MCP_TOKEN}"},
+      "profiles": ["inspect", "edit"]
     }
   ]
 }

@@ -3,12 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -44,8 +47,10 @@ DEFAULT_BRIDGE_ALLOW_GLOBS = ("**/.env*.template",)
 class CodingMCPServerSpec:
     """Declarative MCP server entry for the coding workspace runner.
 
-    Stdio servers are launched behind Minigent's stdio-to-HTTP bridge. HTTP servers are
-    registered in tenant config but are assumed to be managed externally.
+    Stdio servers are launched behind Minigent's stdio-to-HTTP bridge or gateway. HTTP
+    servers are registered in tenant config; when ``managed`` is true, the runner also
+    starts their ``command`` as a child process and can wait on ``health_url`` before
+    starting the Minigent API.
 
     For stdio servers, ``host``/``port``/``path`` describe the compatibility mode where
     the runner starts one HTTP bridge per stdio server. They are not used by the shared
@@ -67,6 +72,10 @@ class CodingMCPServerSpec:
         allowed_tools: list[str] | None = None,
         path_policy: dict[str, list[str]] | None = None,
         env: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        managed: bool = False,
+        health_url: str | None = None,
+        startup_timeout_seconds: float = 30.0,
         enabled: bool = True,
     ) -> None:
         self.name = name
@@ -80,6 +89,10 @@ class CodingMCPServerSpec:
         self.allowed_tools = allowed_tools
         self.path_policy = path_policy or {}
         self.env = env or {}
+        self.headers = headers or {}
+        self.managed = managed
+        self.health_url = health_url
+        self.startup_timeout_seconds = startup_timeout_seconds
         self.enabled = enabled
 
 
@@ -263,6 +276,7 @@ def main(argv: list[str] | None = None) -> int:
             mcp_servers_file,
             bridge_host=bridge_host,
             workspace_roots=workspace_roots,
+            env=env,
         )
     else:
         mcp_server_specs = build_builtin_mcp_server_specs(
@@ -309,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     processes: list[subprocess.Popen[str]] = []
+    managed_http_processes: list[tuple[CodingMCPServerSpec, subprocess.Popen[str]]] = []
     generated_files: list[Path] = []
     print(f"env_file={args.env_file}")
     print("workspaces=" + ", ".join(str(workspace) for workspace in workspace_roots))
@@ -317,11 +332,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"mcp_servers_file={mcp_servers_file}")
     for spec, tenant_spec in zip(mcp_server_specs, tenant_mcp_server_specs, strict=True):
         if spec.url == tenant_spec.url:
-            print(f"mcp_server={spec.name} url={spec.url} transport={spec.transport}")
+            print(
+                f"mcp_server={spec.name} url={spec.url} transport={spec.transport} "
+                f"managed={str(spec.managed).lower()}"
+            )
         else:
             print(
                 f"mcp_server={spec.name} url={tenant_spec.url} "
-                f"transport={spec.transport} bridge_url={spec.url}"
+                f"transport={spec.transport} managed={str(spec.managed).lower()} "
+                f"bridge_url={spec.url}"
             )
     if gateway_enabled:
         print(f"mcp_gateway={gateway_url_prefix}")
@@ -355,6 +374,21 @@ def main(argv: list[str] | None = None) -> int:
                             label=f"{spec.name} MCP bridge",
                         )
                     )
+            for spec in mcp_server_specs:
+                if spec.transport != "http" or not spec.managed:
+                    continue
+                if spec.command is None:
+                    raise RuntimeError(f"managed HTTP MCP server '{spec.name}' requires a command")
+                process_env = {**env, **spec.env}
+                process = start_process(
+                    spec.command,
+                    env=process_env,
+                    label=f"{spec.name} MCP HTTP server",
+                )
+                processes.append(process)
+                managed_http_processes.append((spec, process))
+            for spec, process in managed_http_processes:
+                wait_for_managed_http_server(spec, process)
         if not args.skip_api:
             processes.append(
                 start_process(
@@ -400,6 +434,19 @@ def env_flag_enabled(value: str | None) -> bool:
     return value is not None and value.lower() not in {"", "0", "false", "no"}
 
 
+_ENV_PLACEHOLDER_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def interpolate_config_string(value: str, env: dict[str, str]) -> str:
+    """Replace ${NAME} placeholders in declarative MCP config strings."""
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        return env.get(name, "")
+
+    return _ENV_PLACEHOLDER_PATTERN.sub(replace, value)
+
+
 def normalize_path_prefix(path_prefix: str) -> str:
     if not path_prefix.startswith("/"):
         path_prefix = f"/{path_prefix}"
@@ -426,6 +473,10 @@ def mcp_server_specs_for_gateway(
                     allowed_tools=list(spec.allowed_tools) if spec.allowed_tools is not None else None,
                     path_policy={key: list(value) for key, value in spec.path_policy.items()},
                     env=dict(spec.env),
+                    headers=dict(spec.headers),
+                    managed=spec.managed,
+                    health_url=spec.health_url,
+                    startup_timeout_seconds=spec.startup_timeout_seconds,
                     enabled=spec.enabled,
                 )
             )
@@ -499,6 +550,7 @@ def load_coding_mcp_server_specs(
     *,
     bridge_host: str,
     workspace_roots: list[Path],
+    env: dict[str, str] | None = None,
 ) -> list[CodingMCPServerSpec]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     raw_servers = payload.get("servers") if isinstance(payload, dict) else payload
@@ -506,6 +558,7 @@ def load_coding_mcp_server_specs(
         raise RuntimeError("coding MCP servers file must contain a JSON array or {\"servers\": [...]}")
 
     specs: list[CodingMCPServerSpec] = []
+    interpolation_env = dict(env or os.environ)
     for index, raw_server in enumerate(raw_servers):
         if not isinstance(raw_server, dict):
             raise RuntimeError("each coding MCP server entry must be an object")
@@ -515,6 +568,7 @@ def load_coding_mcp_server_specs(
                 default_host=bridge_host,
                 default_port=DEFAULT_BRIDGE_PORT + index,
                 workspace_roots=workspace_roots,
+                env=interpolation_env,
             )
         )
     return [spec for spec in specs if spec.enabled]
@@ -526,6 +580,7 @@ def coding_mcp_server_spec_from_mapping(
     default_host: str,
     default_port: int,
     workspace_roots: list[Path],
+    env: dict[str, str],
 ) -> CodingMCPServerSpec:
     name = raw_server.get("name")
     if not isinstance(name, str) or not name:
@@ -534,6 +589,10 @@ def coding_mcp_server_spec_from_mapping(
     transport = raw_server.get("transport", "stdio")
     if transport not in {"stdio", "http"}:
         raise RuntimeError(f"coding MCP server '{name}' has unsupported transport '{transport}'")
+
+    managed = env_flag_enabled(str(raw_server.get("managed", "false")))
+    if transport == "stdio":
+        managed = False
 
     host = raw_server.get("host", default_host)
     if not isinstance(host, str) or not host:
@@ -549,14 +608,17 @@ def coding_mcp_server_spec_from_mapping(
     url = raw_server.get("url") or f"http://{host}:{port}{path}"
     if not isinstance(url, str) or not url:
         raise RuntimeError(f"coding MCP server '{name}' has invalid url")
+    url = interpolate_config_string(url, env)
 
     command = raw_server.get("command")
     if command is not None:
         if not isinstance(command, list) or not all(isinstance(item, str) for item in command):
             raise RuntimeError(f"coding MCP server '{name}' command must be a string array")
-        command = expand_coding_mcp_command(command, workspace_roots)
-    elif transport == "stdio":
-        raise RuntimeError(f"coding MCP server '{name}' requires command for stdio transport")
+        command = expand_coding_mcp_command(
+            [interpolate_config_string(item, env) for item in command], workspace_roots
+        )
+    elif transport == "stdio" or managed:
+        raise RuntimeError(f"coding MCP server '{name}' requires command for managed or stdio transport")
 
     allowed_tools = raw_server.get("allowed_tools", raw_server.get("allowedTools"))
     if allowed_tools is not None and (
@@ -577,6 +639,28 @@ def coding_mcp_server_spec_from_mapping(
         isinstance(key, str) and isinstance(value, str) for key, value in extra_env.items()
     ):
         raise RuntimeError(f"coding MCP server '{name}' env must be an object of string values")
+    extra_env = {key: interpolate_config_string(value, env) for key, value in extra_env.items()}
+
+    headers = raw_server.get("headers", {})
+    if not isinstance(headers, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in headers.items()
+    ):
+        raise RuntimeError(f"coding MCP server '{name}' headers must be an object of string values")
+    headers = {key: interpolate_config_string(value, env) for key, value in headers.items()}
+
+    health_url = raw_server.get("health_url", raw_server.get("healthUrl"))
+    if health_url is not None:
+        if not isinstance(health_url, str) or not health_url:
+            raise RuntimeError(f"coding MCP server '{name}' health_url must be a non-empty string")
+        health_url = interpolate_config_string(health_url, env)
+
+    startup_timeout_seconds = raw_server.get(
+        "startup_timeout_seconds", raw_server.get("startupTimeoutSeconds", 30.0)
+    )
+    if not isinstance(startup_timeout_seconds, int | float) or startup_timeout_seconds < 0:
+        raise RuntimeError(
+            f"coding MCP server '{name}' startup_timeout_seconds must be a non-negative number"
+        )
 
     return CodingMCPServerSpec(
         name=name,
@@ -590,6 +674,10 @@ def coding_mcp_server_spec_from_mapping(
         allowed_tools=list(allowed_tools) if allowed_tools is not None else None,
         path_policy={key: list(value) for key, value in path_policy.items() if isinstance(value, list)},
         env=dict(extra_env),
+        headers=dict(headers),
+        managed=managed,
+        health_url=health_url,
+        startup_timeout_seconds=float(startup_timeout_seconds),
         enabled=env_flag_enabled(str(raw_server.get("enabled", "true"))),
     )
 
@@ -756,7 +844,7 @@ def tenant_mcp_server_from_spec(spec: CodingMCPServerSpec) -> dict[str, Any]:
     server: dict[str, Any] = {
         "name": spec.name,
         "url": spec.url,
-        "headers": {},
+        "headers": dict(spec.headers),
     }
     if spec.allowed_tools is not None:
         server["allowed_tools"] = list(spec.allowed_tools)
@@ -1253,8 +1341,66 @@ def build_text_bridge_command(
 
 
 def start_process(command: list[str], *, env: dict[str, str], label: str) -> subprocess.Popen[str]:
-    print(f"starting {label}: {' '.join(shlex.quote(part) for part in command)}")
+    print(f"starting {label}: {redacted_command_for_log(command)}")
     return subprocess.Popen(command, env=env, text=True, start_new_session=True)
+
+
+_SENSITIVE_ARG_MARKERS = ("key", "token", "secret", "password", "authorization", "credential")
+
+
+def redacted_command_for_log(command: list[str]) -> str:
+    redacted: list[str] = []
+    redact_next = False
+    for part in command:
+        lower_part = part.lower()
+        if redact_next:
+            redacted.append("<redacted>")
+            redact_next = False
+            continue
+        if lower_part.startswith("--") and any(marker in lower_part for marker in _SENSITIVE_ARG_MARKERS):
+            if "=" in part:
+                option, _value = part.split("=", 1)
+                redacted.append(f"{option}=<redacted>")
+            else:
+                redacted.append(part)
+                redact_next = True
+            continue
+        if "=" in part:
+            key, _value = part.split("=", 1)
+            if any(marker in key.lower() for marker in _SENSITIVE_ARG_MARKERS):
+                redacted.append(f"{key}=<redacted>")
+                continue
+        redacted.append(part)
+    return " ".join(shlex.quote(part) for part in redacted)
+
+
+def wait_for_managed_http_server(
+    spec: CodingMCPServerSpec, process: subprocess.Popen[str]
+) -> None:
+    if not spec.health_url:
+        return
+    deadline = time.monotonic() + spec.startup_timeout_seconds
+    last_error: Exception | None = None
+    while time.monotonic() <= deadline:
+        return_code = process.poll()
+        if return_code is not None:
+            raise RuntimeError(
+                f"managed HTTP MCP server '{spec.name}' exited before health check succeeded: "
+                f"code={return_code}"
+            )
+        try:
+            with urllib.request.urlopen(spec.health_url, timeout=1.0) as response:
+                if 200 <= response.status < 400:
+                    print(f"healthy {spec.name} MCP HTTP server: {spec.health_url}")
+                    return
+        except (urllib.error.URLError, TimeoutError) as error:
+            last_error = error
+        time.sleep(0.2)
+    detail = f": {last_error}" if last_error is not None else ""
+    raise RuntimeError(
+        f"managed HTTP MCP server '{spec.name}' did not become healthy within "
+        f"{spec.startup_timeout_seconds:g}s at {spec.health_url}{detail}"
+    )
 
 
 def wait_for_processes(processes: list[subprocess.Popen[str]]) -> int:

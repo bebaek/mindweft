@@ -423,6 +423,98 @@ def test_load_coding_mcp_server_specs_defaults_stdio_port_when_omitted(tmp_path:
     assert specs[0].command == ["uvx", "mcp-server-fetch"]
 
 
+def test_load_coding_mcp_server_specs_loads_managed_http_server(tmp_path: Path) -> None:
+    specs_path = tmp_path / "mcp-servers.json"
+    specs_path.write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "web-search",
+                        "transport": "http",
+                        "managed": True,
+                        "command": [
+                            "npx",
+                            "-y",
+                            "@example/search-mcp",
+                            "--api-key",
+                            "${SEARCH_API_KEY}",
+                        ],
+                        "url": "http://127.0.0.1:8766/mcp",
+                        "health_url": "http://127.0.0.1:8766/ping",
+                        "startup_timeout_seconds": 2,
+                        "env": {"SEARCH_API_KEY": "${SEARCH_API_KEY}"},
+                        "headers": {"Authorization": "Bearer ${SEARCH_API_KEY}"},
+                        "profiles": ["inspect"],
+                        "allowed_tools": ["web_search"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    specs = runner.load_coding_mcp_server_specs(
+        specs_path,
+        bridge_host="127.0.0.1",
+        workspace_roots=[tmp_path],
+        env={"SEARCH_API_KEY": "secret-token"},
+    )
+
+    assert len(specs) == 1
+    assert specs[0].name == "web-search"
+    assert specs[0].transport == "http"
+    assert specs[0].managed is True
+    assert specs[0].command == [
+        "npx",
+        "-y",
+        "@example/search-mcp",
+        "--api-key",
+        "secret-token",
+    ]
+    assert specs[0].url == "http://127.0.0.1:8766/mcp"
+    assert specs[0].health_url == "http://127.0.0.1:8766/ping"
+    assert specs[0].startup_timeout_seconds == 2
+    assert specs[0].env == {"SEARCH_API_KEY": "secret-token"}
+    assert specs[0].headers == {"Authorization": "Bearer secret-token"}
+
+
+def test_tenant_mcp_server_from_spec_preserves_headers() -> None:
+    spec = runner.CodingMCPServerSpec(
+        name="remote-tools",
+        url="https://example.com/mcp",
+        transport="http",
+        headers={"Authorization": "Bearer token"},
+        allowed_tools=["search"],
+    )
+
+    assert runner.tenant_mcp_server_from_spec(spec) == {
+        "name": "remote-tools",
+        "url": "https://example.com/mcp",
+        "headers": {"Authorization": "Bearer token"},
+        "allowed_tools": ["search"],
+    }
+
+
+def test_load_coding_mcp_server_specs_requires_command_for_managed_http(tmp_path: Path) -> None:
+    specs_path = tmp_path / "mcp-servers.json"
+    specs_path.write_text(
+        json.dumps({"servers": [{"name": "managed-http", "transport": "http", "managed": True}]}),
+        encoding="utf-8",
+    )
+
+    try:
+        runner.load_coding_mcp_server_specs(
+            specs_path,
+            bridge_host="127.0.0.1",
+            workspace_roots=[tmp_path],
+        )
+    except RuntimeError as error:
+        assert "requires command" in str(error)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
 def test_default_tenant_config_from_servers_builds_profiles() -> None:
     specs = [
         runner.CodingMCPServerSpec(
@@ -546,6 +638,23 @@ def test_mcp_gateway_config_from_specs_includes_stdio_servers_only() -> None:
             }
         ]
     }
+
+
+def test_redacted_command_for_log_hides_sensitive_values() -> None:
+    logged = runner.redacted_command_for_log(
+        [
+            "server",
+            "--api-key",
+            "secret-token",
+            "--password=also-secret",
+            "AUTHORIZATION=Bearer token",
+        ]
+    )
+
+    assert "secret-token" not in logged
+    assert "also-secret" not in logged
+    assert "Bearer token" not in logged
+    assert "<redacted>" in logged
 
 
 def test_build_mcp_gateway_command() -> None:
