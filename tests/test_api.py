@@ -17,7 +17,12 @@ from jwt.algorithms import RSAAlgorithm
 from app import auth as auth_module
 from app import store as store_module
 from app.agent_backends import _sanitize_peer_task_event
-from app.execution import InMemoryTenantExecutionResolver, parse_tenant_execution_config
+from app.execution import (
+    InMemoryTenantExecutionResolver,
+    build_execution_resolver_from_env,
+    interpolate_tenant_execution_env_placeholders,
+    parse_tenant_execution_config,
+)
 from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter
 from app.main import create_app
 from app.mcp import MCPServerInfo
@@ -1901,6 +1906,52 @@ def test_thread_endpoints_accept_rs256_jwt_via_jwks(monkeypatch: pytest.MonkeyPa
     create_response = client.post("/threads", headers={"Authorization": f"Bearer {token}"})
 
     assert create_response.status_code == 200
+
+
+def test_tenant_execution_env_interpolation_replaces_nested_string_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TENANT_API_KEY", "tenant-secret")
+    monkeypatch.setenv("MCP_URL", "http://127.0.0.1:9123/mcp")
+    monkeypatch.setenv("MCP_TOKEN", "mcp-secret")
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock", "api_key": "${TENANT_API_KEY}"},
+                    "tools": {
+                        "mcp_servers": [
+                            {
+                                "name": "svc",
+                                "url": "${MCP_URL}",
+                                "headers": {"Authorization": "Bearer ${MCP_TOKEN}"},
+                            }
+                        ]
+                    },
+                }
+            }
+        ),
+    )
+
+    context = build_execution_resolver_from_env().resolve("tenant-1")
+
+    assert context.config.llm.api_key == "tenant-secret"
+    server = context.config.tools.mcp_servers[0]
+    assert server.url == "http://127.0.0.1:9123/mcp"
+    assert server.headers == {"Authorization": "Bearer mcp-secret"}
+
+
+def test_tenant_execution_env_interpolation_preserves_non_string_values() -> None:
+    payload = {
+        "enabled": True,
+        "timeout": 12.5,
+        "items": ["${NAME}", 3, None],
+    }
+
+    interpolated = interpolate_tenant_execution_env_placeholders(payload, {"NAME": "demo"})
+
+    assert interpolated == {"enabled": True, "timeout": 12.5, "items": ["demo", 3, None]}
 
 
 def test_tenant_execution_config_limits_tools_per_tenant(monkeypatch: pytest.MonkeyPatch) -> None:

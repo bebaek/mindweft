@@ -1273,6 +1273,11 @@ Supported fields:
 - `skills.default_skill`, `skills.items`: available prompt-overlay skills
 - `capability_profiles.default_profile`, `capability_profiles.items`: explicit tool/MCP narrowing profiles
 
+String values in `MINIGENT_TENANT_EXECUTION_CONFIGS` can reference environment values with
+`${NAME}` placeholders. Placeholder replacement is recursive across nested objects and arrays,
+and non-string JSON values are left unchanged. Missing variables expand to an empty string.
+This also applies when the JSON is loaded through `MINIGENT_TENANT_EXECUTION_CONFIGS_FILE`.
+
 For a developer-oriented example that combines multiple skills with explicit capability profiles,
 see the commented block in [.env.template](/Users/burm/code/minigent/.env.template).
 

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Any
+from typing import Any, Mapping
 
 from fastapi import HTTPException
 
@@ -27,6 +28,7 @@ DEFAULT_TENANT_KEY = "*"
 TENANT_CONFIG_SOURCE_ENV_ONLY = "env"
 TENANT_CONFIG_SOURCE_STORE = "store"
 TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS = "store-with-defaults"
+TENANT_ENV_PLACEHOLDER_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 AGENT_BACKEND_ENV = "MINIGENT_AGENT_BACKEND"
 AGENT_BACKEND_PEER_ENV = "MINIGENT_AGENT_BACKEND_PEER"
 AGENT_BACKEND_CWD_ENV = "MINIGENT_AGENT_BACKEND_CWD"
@@ -433,6 +435,30 @@ def _build_registry_for_config(
     )
 
 
+def interpolate_tenant_execution_env_placeholders(
+    value: Any,
+    env: Mapping[str, str] | None = None,
+) -> Any:
+    """Recursively replace ${NAME} placeholders in tenant execution config strings."""
+
+    interpolation_env = env if env is not None else os.environ
+    if isinstance(value, str):
+        return TENANT_ENV_PLACEHOLDER_PATTERN.sub(
+            lambda match: interpolation_env.get(match.group(1), ""), value
+        )
+    if isinstance(value, list):
+        return [
+            interpolate_tenant_execution_env_placeholders(item, interpolation_env)
+            for item in value
+        ]
+    if isinstance(value, dict):
+        return {
+            key: interpolate_tenant_execution_env_placeholders(item, interpolation_env)
+            for key, item in value.items()
+        }
+    return value
+
+
 def build_execution_resolver_from_env(
     *,
     mcp_manager: MCPServerManager | None = None,
@@ -463,6 +489,7 @@ def build_execution_resolver_from_env(
         raise RuntimeError(f"{TENANT_EXECUTION_CONFIGS_ENV} must be a JSON object")
 
     tenant_configs: dict[str, TenantExecutionConfig] = {}
+    parsed = interpolate_tenant_execution_env_placeholders(parsed)
     for tenant_id, value in parsed.items():
         if not isinstance(tenant_id, str) or not tenant_id:
             raise RuntimeError(
