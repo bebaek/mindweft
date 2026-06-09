@@ -565,7 +565,9 @@ def test_run_stream_endpoint_emits_ndjson_events() -> None:
         headers=AUTH_HEADERS,
     )
 
-    with client.stream("POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS) as response:
+    with client.stream(
+        "POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS
+    ) as response:
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("application/x-ndjson")
         events = [json.loads(line) for line in response.iter_lines() if line]
@@ -605,7 +607,9 @@ def test_run_stream_endpoint_emits_llm_usage() -> None:
         def describe(self) -> dict[str, object]:
             return {"provider": "usage-test"}
 
-    client = TestClient(create_app(llm_adapter=UsageLLM(), tool_registry=build_local_tool_registry()))
+    client = TestClient(
+        create_app(llm_adapter=UsageLLM(), tool_registry=build_local_tool_registry())
+    )
     thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
     client.post(
         f"/threads/{thread_id}/messages",
@@ -613,7 +617,9 @@ def test_run_stream_endpoint_emits_llm_usage() -> None:
         headers=AUTH_HEADERS,
     )
 
-    with client.stream("POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS) as response:
+    with client.stream(
+        "POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS
+    ) as response:
         assert response.status_code == 200
         events = [json.loads(line) for line in response.iter_lines() if line]
 
@@ -645,7 +651,9 @@ def test_run_stream_endpoint_emits_tool_events() -> None:
         headers=AUTH_HEADERS,
     )
 
-    with client.stream("POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS) as response:
+    with client.stream(
+        "POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS
+    ) as response:
         assert response.status_code == 200
         events = [json.loads(line) for line in response.iter_lines() if line]
 
@@ -740,7 +748,9 @@ def test_run_stream_endpoint_emits_peer_task_events() -> None:
         headers=AUTH_HEADERS,
     )
 
-    with client.stream("POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS) as response:
+    with client.stream(
+        "POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS
+    ) as response:
         assert response.status_code == 200
         events = [json.loads(line) for line in response.iter_lines() if line]
 
@@ -809,7 +819,9 @@ def test_run_stream_endpoint_emits_peer_task_usage() -> None:
         headers=AUTH_HEADERS,
     )
 
-    with client.stream("POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS) as response:
+    with client.stream(
+        "POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS
+    ) as response:
         assert response.status_code == 200
         events = [json.loads(line) for line in response.iter_lines() if line]
 
@@ -893,16 +905,13 @@ def test_peer_agent_backend_persists_peer_tool_events_in_raw_context() -> None:
     raw_context = client.get(f"/threads/{thread_id}/context/raw", headers=AUTH_HEADERS).json()
     assert raw_context["messages"][1]["tool_name"] == "read"
     assert raw_context["messages"][1]["tool_call_id"] == "call-read-1"
-    assert raw_context["messages"][1]["tool_arguments"] == {
-        "summary": 'path="README.md", limit=20'
-    }
+    assert raw_context["messages"][1]["tool_arguments"] == {"summary": 'path="README.md", limit=20'}
     assert raw_context["messages"][2]["role"] == "tool"
     assert raw_context["messages"][2]["tool_name"] == "read"
     assert raw_context["messages"][2]["tool_call_id"] == "call-read-1"
     assert "# Minigent" in raw_context["messages"][2]["content"]
     assert "[assistant tool_call]\nname: read\nid: call-read-1" in raw_context["rendered"]
     assert "[tool_result]\nname: read\nid: call-read-1" in raw_context["rendered"]
-
 
 
 def test_peer_task_event_sanitizer_preserves_tool_details_without_messages() -> None:
@@ -934,8 +943,9 @@ def test_peer_task_event_sanitizer_preserves_tool_details_without_messages() -> 
     }
 
 
-
-def test_peer_task_event_sanitizer_strips_nested_tool_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_peer_task_event_sanitizer_strips_nested_tool_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("MINIGENT_PEER_TOOL_ARG_ALLOWLIST", raising=False)
 
     sanitized = _sanitize_peer_task_event(
@@ -957,7 +967,9 @@ def test_peer_task_event_sanitizer_strips_nested_tool_arguments(monkeypatch: pyt
     }
 
 
-def test_peer_task_event_sanitizer_adds_allowlisted_args_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_peer_task_event_sanitizer_adds_allowlisted_args_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("MINIGENT_PEER_TOOL_ARG_ALLOWLIST", raising=False)
 
     sanitized = _sanitize_peer_task_event(
@@ -981,7 +993,9 @@ def test_peer_task_event_sanitizer_adds_allowlisted_args_summary(monkeypatch: py
     }
 
 
-def test_peer_task_event_sanitizer_redacts_allowlisted_sensitive_values(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_peer_task_event_sanitizer_redacts_allowlisted_sensitive_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("MINIGENT_PEER_TOOL_ARG_ALLOWLIST", raising=False)
 
     sanitized = _sanitize_peer_task_event(
@@ -1002,7 +1016,9 @@ def test_peer_task_event_sanitizer_redacts_allowlisted_sensitive_values(monkeypa
     assert "arguments" not in sanitized
 
 
-def test_peer_task_event_sanitizer_uses_configured_arg_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_peer_task_event_sanitizer_uses_configured_arg_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("MINIGENT_PEER_TOOL_ARG_ALLOWLIST", '{"read":["path"]}')
 
     sanitized = _sanitize_peer_task_event(
@@ -1020,7 +1036,9 @@ def test_peer_task_event_sanitizer_uses_configured_arg_allowlist(monkeypatch: py
     }
 
 
-def test_peer_task_event_sanitizer_can_disable_arg_summaries(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_peer_task_event_sanitizer_can_disable_arg_summaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("MINIGENT_PEER_TOOL_ARG_ALLOWLIST", "off")
 
     sanitized = _sanitize_peer_task_event(
@@ -1056,7 +1074,6 @@ def test_peer_task_event_sanitizer_can_allow_all_args_for_dev(
         "tool_name": "custom_tool",
         "args_summary": 'path="README.md", limit=20, token="<redacted>"',
     }
-
 
 
 def test_run_stream_endpoint_emits_error_event() -> None:
@@ -1124,7 +1141,9 @@ def test_agent_runtime_cancellation_resets_thread_to_idle() -> None:
 
         task = asyncio.create_task(runtime.run_thread(principal, thread.thread_id))
         await adapter.started.wait()
-        assert store.get_thread(principal.tenant_id, thread.thread_id).status == ThreadStatus.RUNNING
+        assert (
+            store.get_thread(principal.tenant_id, thread.thread_id).status == ThreadStatus.RUNNING
+        )
 
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -1362,7 +1381,9 @@ def test_peer_agent_backend_cancellation_cancels_peer_task_and_resets_thread() -
 
         task = asyncio.create_task(app.state.agent_backend.run_thread(principal, thread.thread_id))
         await task_polled.wait()
-        assert store.get_thread(principal.tenant_id, thread.thread_id).status == ThreadStatus.RUNNING
+        assert (
+            store.get_thread(principal.tenant_id, thread.thread_id).status == ThreadStatus.RUNNING
+        )
 
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -2043,6 +2064,74 @@ def test_tenant_execution_config_rejects_missing_tenant_config(
     assert create_response.json()["detail"] == "Tenant 'tenant-2' has no execution configuration"
 
 
+def test_execution_options_lists_sanitized_skills_and_capability_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "tools": {"allowed_local_tools": ["echo", "calculator"]},
+                    "skills": {
+                        "default_skill": "support",
+                        "items": [
+                            {
+                                "name": "support",
+                                "description": "Support assistant",
+                                "system_prompt": "secret prompt text",
+                            },
+                            {
+                                "name": "coding",
+                                "system_prompt": "another secret prompt",
+                            },
+                        ],
+                    },
+                    "capability_profiles": {
+                        "default_profile": "inspect",
+                        "items": [
+                            {
+                                "name": "inspect",
+                                "description": "Inspection tools",
+                                "allowed_local_tools": ["echo"],
+                            },
+                            {
+                                "name": "math",
+                                "allowed_local_tools": ["calculator"],
+                            },
+                        ],
+                    },
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+
+    response = client.get("/execution-options", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "tenant_id": "tenant-1",
+        "skills": {
+            "default": "support",
+            "items": [
+                {"name": "support", "description": "Support assistant"},
+                {"name": "coding", "description": None},
+            ],
+        },
+        "capability_profiles": {
+            "default": "inspect",
+            "items": [
+                {"name": "inspect", "description": "Inspection tools"},
+                {"name": "math", "description": None},
+            ],
+        },
+    }
+    assert "system_prompt" not in response.text
+    assert "allowed_local_tools" not in response.text
+
+
 def test_create_thread_can_select_skill_and_skill_narrows_runtime_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2332,7 +2421,12 @@ def test_admin_api_can_manage_tenant_registry(tmp_path: Path) -> None:
 
     patch_response = client.patch(
         "/admin/tenants/tenant-1",
-        json={"slug": "tenant-renamed", "name": "Tenant Renamed", "plan": "pro", "metadata": {"api_token": "secret"}},
+        json={
+            "slug": "tenant-renamed",
+            "name": "Tenant Renamed",
+            "plan": "pro",
+            "metadata": {"api_token": "secret"},
+        },
         headers=ADMIN_HEADERS,
     )
     assert patch_response.status_code == 200
@@ -2676,7 +2770,9 @@ def test_admin_api_can_manage_tenant_domains(tmp_path: Path) -> None:
         headers=ADMIN_HEADERS,
     )
     assert delete_response.status_code == 204
-    assert client.get("/admin/tenants/tenant-1/domains", headers=ADMIN_HEADERS).json()["domains"] == []
+    assert (
+        client.get("/admin/tenants/tenant-1/domains", headers=ADMIN_HEADERS).json()["domains"] == []
+    )
 
 
 def test_admin_api_seeds_tenants_from_execution_configs(tmp_path: Path) -> None:
@@ -2829,7 +2925,9 @@ def test_admin_api_can_manage_tenant_entitlements(tmp_path: Path) -> None:
         headers=ADMIN_HEADERS,
     )
     assert delete_response.status_code == 204
-    assert client.get("/admin/tenants/tenant-1/entitlements", headers=ADMIN_HEADERS).status_code == 404
+    assert (
+        client.get("/admin/tenants/tenant-1/entitlements", headers=ADMIN_HEADERS).status_code == 404
+    )
 
 
 def test_tenant_context_is_minimal_without_registry_requirement(tmp_path: Path) -> None:
@@ -2990,7 +3088,9 @@ def test_tenant_context_includes_execution_config_version(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
-    client = TestClient(create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults"))
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
     client.post(
         "/admin/tenants",
         json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "active"},
@@ -3543,18 +3643,30 @@ def test_admin_api_prunes_threads_with_filters() -> None:
 
     assert prune_response.status_code == 200
     assert prune_response.json()["deleted_count"] == 1
-    assert client.get(
-        f"/admin/tenants/tenant-1/threads/{old_coding.thread_id}", headers=ADMIN_HEADERS
-    ).status_code == 404
-    assert client.get(
-        f"/admin/tenants/tenant-1/threads/{old_research.thread_id}", headers=ADMIN_HEADERS
-    ).status_code == 200
-    assert client.get(
-        f"/admin/tenants/tenant-1/threads/{recent_coding.thread_id}", headers=ADMIN_HEADERS
-    ).status_code == 200
-    assert client.get(
-        f"/admin/tenants/tenant-2/threads/{other_tenant.thread_id}", headers=ADMIN_HEADERS
-    ).status_code == 200
+    assert (
+        client.get(
+            f"/admin/tenants/tenant-1/threads/{old_coding.thread_id}", headers=ADMIN_HEADERS
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/admin/tenants/tenant-1/threads/{old_research.thread_id}", headers=ADMIN_HEADERS
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            f"/admin/tenants/tenant-1/threads/{recent_coding.thread_id}", headers=ADMIN_HEADERS
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            f"/admin/tenants/tenant-2/threads/{other_tenant.thread_id}", headers=ADMIN_HEADERS
+        ).status_code
+        == 200
+    )
     assert cutoff.isoformat().replace("+00:00", "Z") == "2026-02-01T00:00:00Z"
 
 
@@ -3571,8 +3683,7 @@ def test_admin_api_prune_dry_run_does_not_delete_or_audit() -> None:
     )
 
     response = client.post(
-        "/admin/tenants/tenant-1/threads/prune"
-        "?updated_before=2026-02-01T00:00:00Z&dry_run=true",
+        "/admin/tenants/tenant-1/threads/prune?updated_before=2026-02-01T00:00:00Z&dry_run=true",
         headers=ADMIN_HEADERS,
     )
 
@@ -3580,12 +3691,13 @@ def test_admin_api_prune_dry_run_does_not_delete_or_audit() -> None:
     assert response.json()["deleted_count"] == 0
     assert response.json()["dry_run"] is True
     assert response.json()["candidate_thread_ids"] == [thread.thread_id]
-    assert client.get(
-        f"/admin/tenants/tenant-1/threads/{thread.thread_id}", headers=ADMIN_HEADERS
-    ).status_code == 200
-    audit_response = client.get(
-        "/admin/tenants/tenant-1/audit-records", headers=ADMIN_HEADERS
+    assert (
+        client.get(
+            f"/admin/tenants/tenant-1/threads/{thread.thread_id}", headers=ADMIN_HEADERS
+        ).status_code
+        == 200
     )
+    audit_response = client.get("/admin/tenants/tenant-1/audit-records", headers=ADMIN_HEADERS)
     assert audit_response.status_code == 200
     assert audit_response.json()["audit_records"] == []
 
@@ -3621,9 +3733,12 @@ def test_admin_api_prune_deletes_sqlite_messages_durably(tmp_path: Path) -> None
             thread_store=SQLiteThreadStore(db_path),
         )
     )
-    assert restarted_client.get(
-        f"/admin/tenants/tenant-1/threads/{thread_id}", headers=ADMIN_HEADERS
-    ).status_code == 404
+    assert (
+        restarted_client.get(
+            f"/admin/tenants/tenant-1/threads/{thread_id}", headers=ADMIN_HEADERS
+        ).status_code
+        == 404
+    )
     audit_response = restarted_client.get(
         "/admin/tenants/tenant-1/audit-records", headers=ADMIN_HEADERS
     )
@@ -3643,9 +3758,7 @@ def test_admin_api_delete_writes_audit_record() -> None:
     delete_response = client.delete(
         f"/admin/tenants/tenant-1/threads/{thread_id}", headers=ADMIN_HEADERS
     )
-    audit_response = client.get(
-        "/admin/tenants/tenant-1/audit-records", headers=ADMIN_HEADERS
-    )
+    audit_response = client.get("/admin/tenants/tenant-1/audit-records", headers=ADMIN_HEADERS)
 
     assert delete_response.status_code == 200
     assert audit_response.status_code == 200
@@ -3708,9 +3821,7 @@ def test_admin_api_audit_records_are_paginated_and_filtered() -> None:
     assert body["offset"] == 0
     assert body["total"] == 1
     assert body["next_offset"] is None
-    assert [record["audit_id"] for record in body["audit_records"]] == [
-        matching_prune.audit_id
-    ]
+    assert [record["audit_id"] for record in body["audit_records"]] == [matching_prune.audit_id]
 
 
 def test_admin_api_audit_records_pagination_metadata() -> None:

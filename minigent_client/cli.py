@@ -29,7 +29,7 @@ from minigent_client.config import AgentPreset, ClientConfig, build_client_confi
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker
 from minigent_client.errors import MinigentAPIError
-from minigent_client.one_shot_cli import _format_markdown_transcript
+from minigent_client.one_shot_cli import _format_execution_options, _format_markdown_transcript
 from minigent_client.output import (
     estimate_thread_token_usage,
     extract_reasoning_content,
@@ -460,6 +460,10 @@ class RememberingMinigentAPIClient:
         self.active_agent_preset = None
         return response if isinstance(response, dict) else {}
 
+    def execution_options(self) -> dict[str, Any]:
+        response = self._client.execution_options()  # type: ignore[attr-defined]
+        return response if isinstance(response, dict) else {}
+
     def set_thread_id(self, thread_id: str | None) -> None:
         setter = getattr(self._client, "set_thread_id", None)
         if callable(setter):
@@ -606,7 +610,20 @@ def main(argv: list[str] | None = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     one_shot_command = _first_cli_command(
         raw_argv,
-        {"run", "threads", "resume", "export", "health", "ping", "debug-bundle", "config", "admin"},
+        {
+            "run",
+            "threads",
+            "resume",
+            "export",
+            "health",
+            "ping",
+            "options",
+            "skills",
+            "capabilities",
+            "debug-bundle",
+            "config",
+            "admin",
+        },
     )
     if one_shot_command is not None:
         from minigent_client.one_shot_cli import main as one_shot_main
@@ -799,6 +816,7 @@ def _handle_chat_image_command(
     )
     output_stream.flush()
 
+
 def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
     output_stream = sys.stdout
     input_stream = sys.stdin
@@ -874,6 +892,9 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             continue
         if utterance == "/agent" or utterance.startswith("/agent "):
             _handle_chat_agent(utterance, client, config, output_stream)
+            continue
+        if utterance in {"/options", "/skills", "/profiles", "/capabilities"}:
+            _handle_chat_execution_options(utterance, client, output_stream)
             continue
         if utterance == "/threads" or utterance.startswith("/threads "):
             _handle_chat_threads(utterance, client, config, output_stream)
@@ -969,13 +990,34 @@ def _chat_abort_message(config: ClientConfig) -> str:
 
 def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
-        "[idle] chat commands: /help, /new, /agent [current|preset], /threads, "
-        "/switch <id>, /rename <title>, /copy-id, /cancel, /compact, /export [markdown|json], "
-        "/tokens, /debug, /editor, /image <path...>|paste|list|clear, /commands, "
-        "/command set|show|delete, /exit, /quit. "
-        "Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
+        "[idle] chat commands: /help, /new, /agent [current|preset], /options, /skills, "
+        "/profiles, /threads, /switch <id>, /rename <title>, /copy-id, /cancel, "
+        "/compact, /export [markdown|json], /tokens, /debug, /editor, "
+        "/image <path...>|paste|list|clear, /commands, /command set|show|delete, "
+        "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
     )
+    output_stream.flush()
+
+
+def _handle_chat_execution_options(
+    utterance: str,
+    client: RememberingMinigentAPIClient,
+    output_stream: ChatOutputStream,
+) -> None:
+    section = None
+    if utterance == "/skills":
+        section = "skills"
+    elif utterance in {"/profiles", "/capabilities"}:
+        section = "capability_profiles"
+    try:
+        response = client.execution_options()
+    except RuntimeError as exc:
+        output_stream.write(f"[idle] options request failed: {exc}\n")
+        output_stream.flush()
+        return
+    for line in _format_execution_options(response, section=section).splitlines():
+        output_stream.write(f"[idle] {line}\n")
     output_stream.flush()
 
 
@@ -1027,7 +1069,9 @@ def _handle_chat_command_manager(utterance: str, output_stream: ChatOutputStream
             state.save()
             output_stream.write(f"[idle] deleted /{normalize_prompt_command_name(parts[2])}\n")
         else:
-            output_stream.write(f"[idle] no custom command /{normalize_prompt_command_name(parts[2])}\n")
+            output_stream.write(
+                f"[idle] no custom command /{normalize_prompt_command_name(parts[2])}\n"
+            )
         output_stream.flush()
         return
     if action == "show":
@@ -1037,7 +1081,9 @@ def _handle_chat_command_manager(utterance: str, output_stream: ChatOutputStream
             return
         command = state.get_prompt_command(parts[2])
         if command is None:
-            output_stream.write(f"[idle] no custom command /{normalize_prompt_command_name(parts[2])}\n")
+            output_stream.write(
+                f"[idle] no custom command /{normalize_prompt_command_name(parts[2])}\n"
+            )
         else:
             output_stream.write(f"[idle] /{command.name}\n{command.prompt_template}\n")
         output_stream.flush()
@@ -1236,7 +1282,9 @@ def _handle_chat_threads(
         if selected_thread_id:
             _switch_to_thread(selected_thread_id, client, config, output_stream)
         return
-    _write_thread_history_list(threads, current_thread_id=client.thread_id, output_stream=output_stream)
+    _write_thread_history_list(
+        threads, current_thread_id=client.thread_id, output_stream=output_stream
+    )
 
 
 def _write_thread_history_list(
@@ -1389,10 +1437,10 @@ def _handle_chat_rename(
     elif not title:
         output_stream.write("[idle] usage: /rename <title>\n")
     elif _rename_client_thread(config, thread_id, title):
-        output_stream.write(f"[idle] renamed {thread_id} to \"{title}\"\n")
+        output_stream.write(f'[idle] renamed {thread_id} to "{title}"\n')
     else:
         remember_client_thread(config, thread_id, title=title)
-        output_stream.write(f"[idle] renamed {thread_id} to \"{title}\"\n")
+        output_stream.write(f'[idle] renamed {thread_id} to "{title}"\n')
     output_stream.flush()
 
 
@@ -1518,7 +1566,9 @@ def _handle_chat_export(
     elif export_format == "json":
         import json
 
-        output_stream.write(json.dumps({"thread_id": thread_id, "messages": messages}, indent=2) + "\n")
+        output_stream.write(
+            json.dumps({"thread_id": thread_id, "messages": messages}, indent=2) + "\n"
+        )
     else:
         output_stream.write(_format_markdown_transcript(thread_id, messages))
     output_stream.flush()
@@ -1564,7 +1614,6 @@ def _read_editor_chat_prompt(*, output_stream: ChatOutputStream) -> str | None:
             return None
     lines = [line for line in content.splitlines() if not line.lstrip().startswith("#")]
     return "\n".join(lines).strip()
-
 
 
 def _read_chat_line(

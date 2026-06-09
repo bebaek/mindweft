@@ -565,8 +565,8 @@ def test_cli_stream_progress_styles_muted_full_tty_lines(monkeypatch: pytest.Mon
         == "\033[38;5;248m● preparing\033[0m"
     )
     assert (
-        style_stream_progress_line("🔧 calculator(expression=\"1+1\") ...", stream=output_stream)
-        == "\033[38;5;248m🔧 calculator(expression=\"1+1\") ...\033[0m"
+        style_stream_progress_line('🔧 calculator(expression="1+1") ...', stream=output_stream)
+        == '\033[38;5;248m🔧 calculator(expression="1+1") ...\033[0m'
     )
     assert (
         style_stream_progress_line("[peer] task created", stream=output_stream)
@@ -838,7 +838,9 @@ def test_build_ambient_volume_controller_warns_and_continues_when_unsupported(
 ) -> None:
     monkeypatch.setattr(
         "minigent_client.cli.MacOsAmbientVolumeDucker.validate_platform",
-        lambda: (_ for _ in ()).throw(RuntimeError("ambient audio ducking is currently supported only on macOS")),
+        lambda: (_ for _ in ()).throw(
+            RuntimeError("ambient audio ducking is currently supported only on macOS")
+        ),
     )
 
     controller = build_ambient_volume_controller(
@@ -901,12 +903,16 @@ def test_build_activation_feedback_prefers_system_sound_for_bell(
     assert captured["check"] is False
 
 
-def test_build_activation_feedback_falls_back_to_terminal_bell(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+def test_build_activation_feedback_falls_back_to_terminal_bell(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
     monkeypatch.setattr(
         "minigent_client.cli._resolve_acknowledgement_sound",
         lambda configured_sound_path: None,
     )
-    monkeypatch.setattr("minigent_client.cli._resolve_acknowledgement_players", lambda sound_path: [])
+    monkeypatch.setattr(
+        "minigent_client.cli._resolve_acknowledgement_players", lambda sound_path: []
+    )
 
     bell = voice_cli.build_activation_feedback(
         ClientConfig(
@@ -1005,7 +1011,9 @@ def test_build_acknowledgement_feedback_can_emit_bell_async(
     assert started == [(voice_cli._emit_terminal_bell, ("/tmp/wake.aiff",))]
 
 
-def test_resolve_wake_acknowledgement_sound_prefers_configured_path(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_resolve_wake_acknowledgement_sound_prefers_configured_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     sound_path = tmp_path / "wake.wav"
     sound_path.write_bytes(b"sound")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND", str(sound_path))
@@ -1014,7 +1022,9 @@ def test_resolve_wake_acknowledgement_sound_prefers_configured_path(monkeypatch:
     assert voice_cli._resolve_wake_acknowledgement_sound() == sound_path
 
 
-def test_default_wake_acknowledgement_sounds_supports_macos_and_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_wake_acknowledgement_sounds_supports_macos_and_linux(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr("minigent_client.cli.platform.system", lambda: "Darwin")
     assert voice_cli._default_wake_acknowledgement_sounds() == [
         Path("/System/Library/Sounds/Glass.aiff")
@@ -1029,7 +1039,9 @@ def test_default_wake_acknowledgement_sounds_supports_macos_and_linux(monkeypatc
     ]
 
 
-def test_resolve_wake_acknowledgement_player_supports_macos_and_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_wake_acknowledgement_player_supports_macos_and_linux(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr("minigent_client.cli.platform.system", lambda: "Darwin")
     monkeypatch.setattr(
         "minigent_client.cli.shutil.which",
@@ -1125,7 +1137,9 @@ def test_macos_say_speech_output_can_be_interrupted(monkeypatch: pytest.MonkeyPa
             terminated["value"] = True
             self.running = False
 
-    monkeypatch.setattr("minigent_client.speech.subprocess.Popen", lambda command, text: FakeProcess())
+    monkeypatch.setattr(
+        "minigent_client.speech.subprocess.Popen", lambda command, text: FakeProcess()
+    )
     speech = MacOsSaySpeechOutput(output_stream=output_stream, voice="Samantha")
 
     speech.start("done")
@@ -1355,7 +1369,9 @@ def test_resolve_piper_model_path_uses_existing_onnx_path(tmp_path) -> None:
     assert _resolve_piper_model_path(str(model_path), None) == model_path
 
 
-def test_resolve_piper_model_path_downloads_named_voice(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_resolve_piper_model_path_downloads_named_voice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     from minigent_client import speech as speech_module
 
     downloaded: dict[str, object] = {}
@@ -1877,11 +1893,27 @@ def test_minigent_api_client_exposes_shared_thread_methods(
             return FakeResponse({"status": "ok"})
         if request.full_url.endswith("/config"):
             return FakeResponse({"llm_provider": "mock"})
+        if request.full_url.endswith("/execution-options"):
+            return FakeResponse(
+                {
+                    "skills": {
+                        "default": "support",
+                        "items": [{"name": "support", "description": "Support"}],
+                    },
+                    "capability_profiles": {"default": None, "items": []},
+                }
+            )
         if request.full_url.endswith("/threads"):
             return FakeResponse({"thread_id": "thread-1"})
-        if request.full_url.endswith("/threads/thread-1/messages") and request.get_method() == "POST":
+        if (
+            request.full_url.endswith("/threads/thread-1/messages")
+            and request.get_method() == "POST"
+        ):
             return FakeResponse({"id": "message-1"})
-        if request.full_url.endswith("/threads/thread-1/messages") and request.get_method() == "GET":
+        if (
+            request.full_url.endswith("/threads/thread-1/messages")
+            and request.get_method() == "GET"
+        ):
             return FakeResponse([{"role": "user", "content": "hello"}])
         if request.full_url.endswith("/threads/thread-1/compact"):
             return FakeResponse({"compacted_message_count": 1, "message_count": 2})
@@ -1902,6 +1934,13 @@ def test_minigent_api_client_exposes_shared_thread_methods(
 
     assert client.health() == {"status": "ok"}
     assert client.config() == {"llm_provider": "mock"}
+    assert client.execution_options() == {
+        "skills": {
+            "default": "support",
+            "items": [{"name": "support", "description": "Support"}],
+        },
+        "capability_profiles": {"default": None, "items": []},
+    }
     assert client.create_thread(skills=["coding", "review"], capability_profile="dev") == {
         "thread_id": "thread-1"
     }
@@ -1917,6 +1956,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
     assert [request["method"] for request in requests] == [
         "GET",
         "GET",
+        "GET",
         "POST",
         "POST",
         "GET",
@@ -1924,7 +1964,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "POST",
         "DELETE",
     ]
-    assert requests[2]["payload"] == {
+    assert requests[3]["payload"] == {
         "skill_names": ["coding", "review"],
         "capability_profile": "dev",
     }
@@ -1941,11 +1981,24 @@ def test_minigent_client_can_run_thread_with_ndjson_stream(
                 {"type": "run.started"},
                 {"type": "tool.call", "name": "echo"},
                 {"type": "tool.result", "name": "echo", "is_error": False},
-                {"type": "peer.task.created", "peer": "pi", "task_id": "task-1", "status": "queued"},
+                {
+                    "type": "peer.task.created",
+                    "peer": "pi",
+                    "task_id": "task-1",
+                    "status": "queued",
+                },
                 {"type": "peer.task.poll", "peer": "pi", "task_id": "task-1", "status": "running"},
                 {"type": "peer.task.poll", "peer": "pi", "task_id": "task-1", "status": "running"},
-                {"type": "peer.task.event", "task_id": "task-1", "event": {"type": "message_update"}},
-                {"type": "peer.task.event", "task_id": "task-1", "event": {"type": "message_update"}},
+                {
+                    "type": "peer.task.event",
+                    "task_id": "task-1",
+                    "event": {"type": "message_update"},
+                },
+                {
+                    "type": "peer.task.event",
+                    "task_id": "task-1",
+                    "event": {"type": "message_update"},
+                },
                 {
                     "type": "peer.task.event",
                     "task_id": "task-1",
@@ -2023,7 +2076,12 @@ def test_minigent_client_notes_peer_token_usage_unavailable_for_live_tokens(
         def __iter__(self):
             lines = [
                 {"type": "run.started"},
-                {"type": "peer.task.created", "peer": "pi", "task_id": "task-1", "status": "queued"},
+                {
+                    "type": "peer.task.created",
+                    "peer": "pi",
+                    "task_id": "task-1",
+                    "status": "queued",
+                },
                 {"type": "assistant.message", "content": "streamed reply"},
                 {"type": "run.completed"},
             ]
@@ -2061,7 +2119,6 @@ def test_format_thread_context_summary() -> None:
         == "thread context est.: 42"
     )
     assert format_thread_context_summary({"type": "run.completed"}) is None
-
 
 
 def test_minigent_client_can_show_stream_tool_results(
@@ -2274,7 +2331,6 @@ def test_minigent_client_can_show_nested_peer_stream_tool_details(
     assert '"time": "9:55 PM"' in progress
 
 
-
 def test_minigent_client_stream_run_errors_raise_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2446,7 +2502,9 @@ def test_should_duck_for_state_only_covers_input_states() -> None:
     assert should_duck_for_state(ClientState.SPEAKING) is False
 
 
-def test_macos_ambient_volume_ducker_reads_sets_and_restores(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_macos_ambient_volume_ducker_reads_sets_and_restores(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     output_stream = StringIO()
     commands: list[list[str]] = []
 
@@ -2780,7 +2838,9 @@ def test_manual_audio_activation_source_ignores_stt_error() -> None:
     class FakeTranscriber:
         def transcribe(self, audio: RecordedAudio) -> str:
             del audio
-            raise SpeechToTextError("STT provider returned assistant-style text instead of a transcript")
+            raise SpeechToTextError(
+                "STT provider returned assistant-style text instead of a transcript"
+            )
 
     output_stream = StringIO()
     source = ManualAudioActivationSource(
@@ -2938,7 +2998,9 @@ def test_passive_audio_activation_source_records_on_existing_stream() -> None:
     assert recorder.timeout_ms == 100
     assert recorder.preroll_ms == 250
     assert source.wake_detector.reset_calls == 1
-    assert "[idle] passive listening for wake word openwakeword:okay_nabu" in output_stream.getvalue()
+    assert (
+        "[idle] passive listening for wake word openwakeword:okay_nabu" in output_stream.getvalue()
+    )
     assert "[listening] wake word detected" in output_stream.getvalue()
 
 
@@ -2996,7 +3058,10 @@ def test_passive_audio_activation_source_settles_before_wake_feedback(
             events.append("transcribe")
             return "wake word request"
 
-    monkeypatch.setattr("minigent_client.backends.passive_audio.time.sleep", lambda seconds: events.append(f"sleep:{seconds}"))
+    monkeypatch.setattr(
+        "minigent_client.backends.passive_audio.time.sleep",
+        lambda seconds: events.append(f"sleep:{seconds}"),
+    )
 
     source = PassiveAudioActivationSource(
         output_stream=StringIO(),
@@ -3050,7 +3115,9 @@ def test_passive_audio_activation_source_captures_follow_up_without_wake_word() 
         def __init__(self) -> None:
             self.timeout_ms: int | None = None
 
-        def record_after_speech(self, timeout_ms: int, *, preroll_ms: int = 250) -> RecordedAudio | None:
+        def record_after_speech(
+            self, timeout_ms: int, *, preroll_ms: int = 250
+        ) -> RecordedAudio | None:
             events.append("record")
             self.timeout_ms = timeout_ms
             self.preroll_ms = preroll_ms
@@ -3117,7 +3184,9 @@ def test_passive_audio_activation_source_follow_up_window_expires() -> None:
             return False
 
     class FakeRecorder:
-        def record_after_speech(self, timeout_ms: int, *, preroll_ms: int = 250) -> RecordedAudio | None:
+        def record_after_speech(
+            self, timeout_ms: int, *, preroll_ms: int = 250
+        ) -> RecordedAudio | None:
             del timeout_ms, preroll_ms
             return None
 
@@ -3138,7 +3207,9 @@ def test_passive_audio_activation_source_follow_up_window_expires() -> None:
     assert transcript is None
     assert feedback_calls == ["capture-ended"]
     assert "[follow-up] capture ended" in output_stream.getvalue()
-    assert "[idle] follow-up window expired, returning to wake-word mode" in output_stream.getvalue()
+    assert (
+        "[idle] follow-up window expired, returning to wake-word mode" in output_stream.getvalue()
+    )
 
 
 def test_passive_audio_activation_source_detects_barge_in() -> None:
@@ -3321,7 +3392,9 @@ def test_passive_audio_activation_source_ignores_stt_error() -> None:
     class FakeTranscriber:
         def transcribe(self, audio: RecordedAudio) -> str:
             del audio
-            raise SpeechToTextError("STT provider returned assistant-style text instead of a transcript")
+            raise SpeechToTextError(
+                "STT provider returned assistant-style text instead of a transcript"
+            )
 
     output_stream = StringIO()
     source = PassiveAudioActivationSource(
@@ -3400,7 +3473,9 @@ def test_passive_audio_activation_source_retries_after_empty_wake_capture() -> N
             del audio
             self.calls += 1
             if self.calls == 1:
-                raise SpeechToTextError("faster-whisper transcription response did not include text")
+                raise SpeechToTextError(
+                    "faster-whisper transcription response did not include text"
+                )
             return "actual request"
 
     output_stream = StringIO()
@@ -4028,7 +4103,6 @@ def test_build_config_accepts_chat_submit_mode() -> None:
     assert config.chat_submit_mode == "alt-enter"
 
 
-
 def test_build_chat_prompt_session_skips_non_tty_streams(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4515,13 +4589,12 @@ def test_run_chat_loop_handles_local_chat_commands(
 
     assert exit_code == 0
     assert output_stream.getvalue() == (
-        "[user] [idle] chat commands: /help, /new, /agent [current|preset], /threads, "
-        "/switch <id>, /rename <title>, /copy-id, /cancel, /compact, /export [markdown|json], /tokens, "
-        "/debug, /editor, /image <path...>|paste|list|clear, /commands, /command set|show|delete, "
-        "/exit, /quit. Default: "
-        "Enter submits; Esc+Enter or Ctrl+J "
-        "inserts a newline. Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make "
-        "Esc+Enter submit.\n"
+        "[user] [idle] chat commands: /help, /new, /agent [current|preset], /options, "
+        "/skills, /profiles, /threads, /switch <id>, /rename <title>, /copy-id, /cancel, "
+        "/compact, /export [markdown|json], /tokens, /debug, /editor, "
+        "/image <path...>|paste|list|clear, /commands, /command set|show|delete, "
+        "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
+        "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
         "[user] [idle] shutting down\n"
     )
 
@@ -4704,7 +4777,7 @@ def test_run_chat_loop_handles_thread_shell_commands(
     assert exit_code == 0
     assert "[idle] created thread new-thread\n" in output
     assert "[idle] * new-thread  question for new-thread" in output
-    assert "[idle] renamed new-thread to \"renamed thread\"\n" in output
+    assert '[idle] renamed new-thread to "renamed thread"\n' in output
     assert "[idle] new-thread (clipboard unavailable)\n" in output
     assert "# Minigent transcript\n\nThread: `new-thread`" in output
     assert "[idle] switched to existing-thread\n" in output
@@ -4752,7 +4825,6 @@ def test_run_chat_loop_handles_editor_command(
     assert output_stream.getvalue() == "[user] [assistant] reply\n"
 
 
-
 def test_run_chat_loop_handles_editor_atomic_save(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4795,7 +4867,6 @@ def test_run_chat_loop_handles_editor_atomic_save(
     assert exit_code == 0
     assert messages == ["saved through rename"]
     assert output_stream.getvalue() == "[user] [assistant] reply\n"
-
 
 
 def test_run_chat_loop_handles_keyboard_interrupt(
@@ -4936,23 +5007,34 @@ def test_minigent_client_cli_delegates_one_shot_commands_to_one_shot_cli(
     thread_exit_code = voice_cli.main(["--base-url", "http://example.test", "threads", "create"])
     resume_exit_code = voice_cli.main(["resume"])
     run_exit_code = voice_cli.main(["run", "hello"])
-    admin_exit_code = voice_cli.main([
-        "--admin",
-        "admin",
-        "threads",
-        "list",
-        "--tenant",
-        "tenant-a",
-    ])
+    options_exit_code = voice_cli.main(["options"])
+    skills_exit_code = voice_cli.main(["skills"])
+    capabilities_exit_code = voice_cli.main(["capabilities"])
+    admin_exit_code = voice_cli.main(
+        [
+            "--admin",
+            "admin",
+            "threads",
+            "list",
+            "--tenant",
+            "tenant-a",
+        ]
+    )
 
     assert thread_exit_code == 9
     assert resume_exit_code == 9
     assert run_exit_code == 9
+    assert options_exit_code == 9
+    assert skills_exit_code == 9
+    assert capabilities_exit_code == 9
     assert admin_exit_code == 9
     assert calls == [
         ["--base-url", "http://example.test", "threads", "create"],
         ["resume"],
         ["run", "hello"],
+        ["options"],
+        ["skills"],
+        ["capabilities"],
         ["--admin", "admin", "threads", "list", "--tenant", "tenant-a"],
     ]
 
@@ -5017,7 +5099,9 @@ def test_openai_transcription_adapter_returns_text(monkeypatch: pytest.MonkeyPat
     assert captured["timeout"] == 30.0
 
 
-def test_openai_transcription_adapter_requires_text_response(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openai_transcription_adapter_requires_text_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class FakeResponse:
         def raise_for_status(self) -> None:
             return None
@@ -5050,15 +5134,7 @@ def test_openrouter_transcription_adapter_returns_text(monkeypatch: pytest.Monke
             return None
 
         def json(self) -> dict[str, object]:
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "content": '{"transcript":"hello from openrouter"}'
-                        }
-                    }
-                ]
-            }
+            return {"choices": [{"message": {"content": '{"transcript":"hello from openrouter"}'}}]}
 
     def fake_post(url: str, *, json: object, headers: object, timeout: object) -> FakeResponse:
         captured["url"] = url
@@ -5107,7 +5183,9 @@ def test_openrouter_transcription_adapter_returns_text(monkeypatch: pytest.Monke
     assert messages[1]["content"][1]["input_audio"]["format"] == "wav"
 
 
-def test_openrouter_transcription_adapter_rejects_assistant_style_text(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openrouter_transcription_adapter_rejects_assistant_style_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class FakeResponse:
         text = ""
         status_code = 200
@@ -5227,7 +5305,9 @@ def test_faster_whisper_transcription_adapter_returns_text(monkeypatch: pytest.M
     assert text == "hello world"
 
 
-def test_build_transcription_adapter_supports_all_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_transcription_adapter_supports_all_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         "minigent_client.stt._load_faster_whisper_model",
         lambda model, *, device, compute_type: object(),
@@ -5286,7 +5366,9 @@ def test_minigent_client_config_defaults_openrouter_model(monkeypatch: pytest.Mo
     assert config.stt_model == "openai/gpt-audio"
 
 
-def test_minigent_client_config_defaults_faster_whisper_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_minigent_client_config_defaults_faster_whisper_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("MINIGENT_VOICE_STT_MODEL", raising=False)
     monkeypatch.setenv("MINIGENT_VOICE_STT_PROVIDER", "faster-whisper")
 

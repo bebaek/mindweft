@@ -114,6 +114,9 @@ Inside the repo:
 uv run minigent run "hello"
 uv run minigent chat --stream "hello with progress"
 uv run minigent-client chat --resume-last
+uv run minigent options
+uv run minigent skills
+uv run minigent capabilities
 uv run minigent threads
 uv run minigent resume
 uv run minigent export --format markdown
@@ -128,7 +131,7 @@ minigent-client chat
 ```
 
 See the [CLI reference](docs/cli.md) for all commands, interactive slash commands,
-streaming options, voice modes, and configuration.
+execution option discovery, streaming options, voice modes, and configuration.
 
 ### Voice
 

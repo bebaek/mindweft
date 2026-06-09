@@ -337,9 +337,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Tenant metadata as a JSON object.",
     )
 
-    admin_tenants_show_parser = admin_tenants_subparsers.add_parser(
-        "show", help="Show one tenant."
-    )
+    admin_tenants_show_parser = admin_tenants_subparsers.add_parser("show", help="Show one tenant.")
     admin_tenants_show_parser.add_argument("tenant_id")
 
     admin_tenants_update_parser = admin_tenants_subparsers.add_parser(
@@ -644,6 +642,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("health", help="Check API health.")
     subparsers.add_parser("ping", help="Check API reachability and basic server config.")
+    subparsers.add_parser("options", help="List available skills and capability profiles.")
+    subparsers.add_parser("skills", help="List available skills for the current tenant.")
+    subparsers.add_parser(
+        "capabilities", help="List available capability profiles for the current tenant."
+    )
     debug_bundle_parser = subparsers.add_parser(
         "debug-bundle", help="Collect masked local/server diagnostics for bug reports."
     )
@@ -703,7 +706,12 @@ def remember_thread(
 def load_remembered_thread(base_url: str, args: argparse.Namespace) -> str:
     state = ClientState.load()
     threads = state.list_threads(state_scope_key(base_url, args))
-    if getattr(args, "thread_picker", False) and len(threads) > 1 and sys.stdin.isatty() and sys.stdout.isatty():
+    if (
+        getattr(args, "thread_picker", False)
+        and len(threads) > 1
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+    ):
         selected_thread_id = pick_thread_from_history(threads)
         if selected_thread_id is not None:
             return selected_thread_id
@@ -723,7 +731,9 @@ def pick_thread_from_history(threads: list[ThreadHistoryItem]) -> str | None:
     WordCompleter = completion_module.WordCompleter
     print("Select a thread by number, ID, or search text; blank cancels.")
     _print_numbered_thread_history(threads)
-    session = PromptSession(completer=WordCompleter([item.thread_id for item in threads], ignore_case=True))
+    session = PromptSession(
+        completer=WordCompleter([item.thread_id for item in threads], ignore_case=True)
+    )
     try:
         selection = session.prompt("thread> ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -810,8 +820,7 @@ def build_client(args: argparse.Namespace, trace_id: str | None) -> MinigentAPIC
         progress_verbose=args.verbose and not getattr(args, "quiet", False),
         show_tool_results=getattr(args, "show_tool_results", False)
         and not getattr(args, "quiet", False),
-        show_reasoning=getattr(args, "show_reasoning", False)
-        and not getattr(args, "quiet", False),
+        show_reasoning=getattr(args, "show_reasoning", False) and not getattr(args, "quiet", False),
         token_mode="off" if getattr(args, "quiet", False) else getattr(args, "tokens", "auto"),
     )
 
@@ -907,7 +916,9 @@ def _read_run_message(args: argparse.Namespace) -> str:
     return message.rstrip("\n")
 
 
-def _image_parts_from_paths(paths: Sequence[str] | None, *, detail: str = "auto") -> list[dict[str, Any]]:
+def _image_parts_from_paths(
+    paths: Sequence[str] | None, *, detail: str = "auto"
+) -> list[dict[str, Any]]:
     parts: list[dict[str, Any]] = []
     for raw_path in paths or []:
         path = Path(raw_path).expanduser()
@@ -928,7 +939,9 @@ def _image_parts_from_paths(paths: Sequence[str] | None, *, detail: str = "auto"
     return parts
 
 
-def _message_parts(content: str, image_paths: Sequence[str] | None, *, detail: str) -> list[dict[str, Any]] | None:
+def _message_parts(
+    content: str, image_paths: Sequence[str] | None, *, detail: str
+) -> list[dict[str, Any]] | None:
     image_parts = _image_parts_from_paths(image_paths, detail=detail)
     if not image_parts:
         return None
@@ -989,8 +1002,9 @@ def run_chat(
         print(f"thread_id={thread_id}")
     # Display reasoning content if present and enabled (only for non-streaming mode)
     # In streaming mode, reasoning is displayed via 'reasoning' events
-    if getattr(args, 'show_reasoning', False) and not getattr(args, 'stream', False):
+    if getattr(args, "show_reasoning", False) and not getattr(args, "stream", False):
         from minigent_client.output import extract_reasoning_content, format_reasoning_block
+
         reasoning = extract_reasoning_content(metadata)
         if reasoning:
             print(format_reasoning_block(reasoning, stream=sys.stdout))
@@ -1491,7 +1505,9 @@ def run_admin_tenant_entitlements(
     elif command == "set":
         response = client.put_admin_tenant_entitlements(args.tenant_id, _entitlements_payload(args))
     elif command == "validate":
-        response = client.validate_admin_tenant_entitlements(args.tenant_id, _entitlements_payload(args))
+        response = client.validate_admin_tenant_entitlements(
+            args.tenant_id, _entitlements_payload(args)
+        )
     elif command == "delete":
         client.delete_admin_tenant_entitlements(args.tenant_id)
         response = {"deleted": True, "tenant_id": args.tenant_id}
@@ -1803,6 +1819,66 @@ def run_config(client: MinigentAPIClient, trace_id: str | None) -> int:
     return 0
 
 
+def run_execution_options(
+    client: MinigentAPIClient,
+    trace_id: str | None,
+    *,
+    section: str | None = None,
+    as_json: bool = False,
+) -> int:
+    response = client.execution_options()
+    if as_json:
+        output = response if section is None else response.get(section, {})
+        if trace_id is not None and isinstance(output, dict):
+            output = {**output, "trace_id": trace_id}
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    print(_format_execution_options(response, section=section), end="")
+    return 0
+
+
+def _format_execution_options(response: dict[str, Any], *, section: str | None = None) -> str:
+    sections: list[str] = []
+    if section in {None, "skills"}:
+        sections.append(_format_execution_option_section("Skills", response.get("skills")))
+    if section in {None, "capability_profiles"}:
+        sections.append(
+            _format_execution_option_section(
+                "Capability profiles", response.get("capability_profiles")
+            )
+        )
+    return "\n".join(part for part in sections if part) + ("\n" if sections else "")
+
+
+def _format_execution_option_section(title: str, payload: object) -> str:
+    if not isinstance(payload, dict):
+        return f"{title}:\n  none reported\n"
+    default = payload.get("default")
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return f"{title}:\n  none configured\n"
+    lines = [f"{title}:"]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        description = item.get("description")
+        suffix_parts: list[str] = []
+        if name == default:
+            suffix_parts.append("default")
+        if isinstance(description, str) and description:
+            suffix_parts.append(description)
+        suffix = " — " + " · ".join(suffix_parts) if suffix_parts else ""
+        lines.append(f"  {name}{suffix}")
+    if len(lines) == 1:
+        lines.append("  none configured")
+    return "\n".join(lines) + "\n"
+
+
 def run_ping(
     args: argparse.Namespace,
     client: MinigentAPIClient,
@@ -2088,7 +2164,9 @@ def collect_debug_bundle(
     threads = list_remembered_threads(config.base_url, args)
     server_config = _mask_secrets(config_response) if config_response is not None else None
     server_summary = _server_summary(config_response) if config_response is not None else {}
-    agent_backend = config_response.get("agent_backend") if isinstance(config_response, dict) else None
+    agent_backend = (
+        config_response.get("agent_backend") if isinstance(config_response, dict) else None
+    )
     mcp_servers = config_response.get("mcp_servers") if isinstance(config_response, dict) else None
     bundle: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -2114,7 +2192,9 @@ def collect_debug_bundle(
             "server_count": len(mcp_servers) if isinstance(mcp_servers, list) else None,
         },
         "threads": {
-            "last_thread_id": ClientState.load().get_last_thread(state_scope_key(config.base_url, args)),
+            "last_thread_id": ClientState.load().get_last_thread(
+                state_scope_key(config.base_url, args)
+            ),
             "recent": [item.to_dict() for item in threads[:10]],
         },
         "recent_events": "not collected by the local CLI; rerun the failing command with --verbose or --stream",
@@ -2190,7 +2270,11 @@ def run_debug_bundle(
     trace_id: str | None,
 ) -> int:
     bundle, success = collect_debug_bundle(args, client, config, trace_id)
-    text = json.dumps(bundle, indent=2, sort_keys=True) + "\n" if args.json else _format_debug_bundle(bundle)
+    text = (
+        json.dumps(bundle, indent=2, sort_keys=True) + "\n"
+        if args.json
+        else _format_debug_bundle(bundle)
+    )
     output_path = getattr(args, "output", None)
     if output_path:
         Path(output_path).write_text(text, encoding="utf-8")
@@ -2286,6 +2370,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_health(client, args.json, trace_id)
         if args.command == "ping":
             return run_ping(args, client, trace_id)
+        if args.command == "options":
+            return run_execution_options(client, trace_id, as_json=args.json)
+        if args.command == "skills":
+            return run_execution_options(client, trace_id, section="skills", as_json=args.json)
+        if args.command == "capabilities":
+            return run_execution_options(
+                client,
+                trace_id,
+                section="capability_profiles",
+                as_json=args.json,
+            )
         if args.command == "debug-bundle":
             return run_debug_bundle(args, client, config, trace_id)
         if args.command == "config":

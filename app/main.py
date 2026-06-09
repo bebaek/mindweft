@@ -51,6 +51,9 @@ from app.models import (
     AddMessageRequest,
     CreateThreadRequest,
     CreateThreadResponse,
+    ExecutionOptionItem,
+    ExecutionOptionSection,
+    ExecutionOptionsResponse,
     Message,
     MessageRole,
     Principal,
@@ -129,9 +132,13 @@ def _validate_and_normalize_message_request(request: AddMessageRequest) -> AddMe
             continue
         mime_type = part.mime_type.lower()
         if mime_type not in allowed_mime_types:
-            raise HTTPException(status_code=400, detail=f"unsupported image MIME type: {part.mime_type}")
+            raise HTTPException(
+                status_code=400, detail=f"unsupported image MIME type: {part.mime_type}"
+            )
         if not part.data and not part.url and not part.attachment_id:
-            raise HTTPException(status_code=400, detail="image part must include data, url, or attachment_id")
+            raise HTTPException(
+                status_code=400, detail="image part must include data, url, or attachment_id"
+            )
         if part.data:
             try:
                 decoded = base64.b64decode(part.data, validate=True)
@@ -195,7 +202,12 @@ async def _run_thread_ndjson_stream(
         if metadata:
             event["metadata"] = metadata
         await emit(event)
-        await emit({"type": "run.completed", "thread_context": _thread_context_usage(request, principal, thread_id)})
+        await emit(
+            {
+                "type": "run.completed",
+                "thread_context": _thread_context_usage(request, principal, thread_id),
+            }
+        )
 
     run_key = (principal.tenant_id, thread_id)
     task = asyncio.create_task(run())
@@ -349,6 +361,35 @@ def create_app(
     @app.get("/config")
     async def config(request: Request) -> dict[str, object]:
         return request.app.state.execution_resolver.describe()
+
+    @app.get("/execution-options", response_model=ExecutionOptionsResponse)
+    async def execution_options(
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> ExecutionOptionsResponse:
+        execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
+        enforce_execution_entitlements(
+            context=tenant_context_from_request_state(request.state),
+            execution=execution,
+        )
+        config = execution.config
+        return ExecutionOptionsResponse(
+            tenant_id=principal.tenant_id,
+            skills=ExecutionOptionSection(
+                default=config.skills.default_skill,
+                items=[
+                    ExecutionOptionItem(name=skill.name, description=skill.description)
+                    for skill in config.skills.items
+                ],
+            ),
+            capability_profiles=ExecutionOptionSection(
+                default=config.capability_profiles.default_profile,
+                items=[
+                    ExecutionOptionItem(name=profile.name, description=profile.description)
+                    for profile in config.capability_profiles.items
+                ],
+            ),
+        )
 
     @app.get("/tenant-context")
     async def tenant_context(

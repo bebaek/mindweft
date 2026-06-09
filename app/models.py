@@ -192,6 +192,22 @@ class CreateThreadRequest(BaseModel):
     capability_profile: str | None = None
 
 
+class ExecutionOptionItem(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class ExecutionOptionSection(BaseModel):
+    default: str | None = None
+    items: list[ExecutionOptionItem] = Field(default_factory=list)
+
+
+class ExecutionOptionsResponse(BaseModel):
+    tenant_id: str
+    skills: ExecutionOptionSection
+    capability_profiles: ExecutionOptionSection
+
+
 class AddMessageRequest(BaseModel):
     content: str = ""
     parts: list[MessagePart] | None = None

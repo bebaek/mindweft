@@ -1804,6 +1804,11 @@ uv run python scripts/demo_client.py \
 Skills are execution overlays. They primarily customize the system prompt. Capability profiles
 control the effective local-tool and MCP-server surface for a thread.
 
+Users can discover the current tenant's sanitized skill/profile names and descriptions with
+`GET /execution-options`, `minigent options`, or the interactive `/options`, `/skills`, and
+`/profiles` chat commands. This discovery surface intentionally omits skill prompts, MCP URLs,
+headers, secrets, and raw tool allowlist internals.
+
 Tenant tool config still defines the maximum available tools and MCP servers. A capability profile
 can narrow access for a thread, but it cannot expand access beyond the tenant configuration.
 

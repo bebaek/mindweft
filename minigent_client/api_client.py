@@ -64,6 +64,12 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent config response must be an object")
         return cast(dict[str, Any], response)
 
+    def execution_options(self) -> dict[str, Any]:
+        response = self.request_json("GET", f"{self._config.base_url}/execution-options")
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent execution-options response must be an object")
+        return cast(dict[str, Any], response)
+
     def list_admin_tenants(
         self,
         *,
@@ -459,7 +465,9 @@ class MinigentAPIClient:
             parts=formatted_parts,
         )
 
-    def run_thread(self, thread_id: str | None = None, *, stream: bool | None = None) -> tuple[str, dict[str, Any] | None]:
+    def run_thread(
+        self, thread_id: str | None = None, *, stream: bool | None = None
+    ) -> tuple[str, dict[str, Any] | None]:
         resolved_thread_id = thread_id or self.ensure_thread()
         use_stream = self._config.stream_runs if stream is None else stream
         if use_stream:
@@ -744,7 +752,9 @@ def _api_error_from_status(
     )
 
 
-def _api_error_from_url_error(method: str, url: str, exc: urllib.error.URLError) -> MinigentAPIError:
+def _api_error_from_url_error(
+    method: str, url: str, exc: urllib.error.URLError
+) -> MinigentAPIError:
     reason = exc.reason
     reason_text = str(reason)
     if isinstance(reason, TimeoutError) or "timed out" in reason_text.lower():

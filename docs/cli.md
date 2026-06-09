@@ -85,6 +85,36 @@ minigent chat --image ./diagram.png "what does this show?"
 Same flags as `run`, plus `--print-thread-id` and `--transcript` for printing the full
 thread transcript after the reply.
 
+### Execution option discovery
+
+List the current tenant's user-visible skills and capability profiles before creating a
+thread:
+
+```bash
+minigent options
+minigent skills
+minigent capabilities
+minigent --json options
+```
+
+These commands call `GET /execution-options`, which returns sanitized metadata only:
+skill/profile names, descriptions, and defaults. It does not expose skill system prompts,
+MCP URLs, headers, API keys, or tool allowlist internals.
+
+In interactive chat, use the matching slash commands:
+
+```text
+/options
+/skills
+/profiles
+```
+
+Use the reported names when creating threads:
+
+```bash
+minigent threads create --skills coding-workspace concise --capability-profile inspect
+```
+
 ### Threads
 
 ```bash
@@ -345,5 +375,5 @@ These flags work across all commands:
 | `MINIGENT_CLIENT_STREAM_RUNS` | Enable streaming by default (`true`/`false`). |
 | `MINIGENT_CLIENT_SHOW_TOOL_RESULTS` | Show tool results by default. |
 | `MINIGENT_CLIENT_CHAT_SUBMIT_MODE` | `enter` (default) or `alt-enter`. |
-| `MINIGENT_CLIENT_AGENT_PRESETS` | JSON object or array of agent presets. |
+| `MINIGENT_CLIENT_AGENT_PRESETS` | JSON object or array of client-side agent presets. Presets reference tenant-defined skills/capability profiles discoverable with `minigent options`. |
 | `NO_COLOR` | Disable ANSI styling. |
