@@ -378,6 +378,79 @@ def build_parser() -> argparse.ArgumentParser:
     admin_tenants_seed_parser.add_argument("--region", default=None)
     admin_tenants_seed_parser.add_argument("--dry-run", action="store_true")
 
+    admin_execution_config_parser = admin_subparsers.add_parser(
+        "execution-config", help="Import, export, and validate tenant execution configs."
+    )
+    admin_execution_config_subparsers = admin_execution_config_parser.add_subparsers(
+        dest="admin_execution_config_command", required=True
+    )
+    admin_execution_config_import_parser = admin_execution_config_subparsers.add_parser(
+        "import", help="Import tenant execution configs from a JSON file into the admin store."
+    )
+    admin_execution_config_import_parser.add_argument("file", help="JSON file to import.")
+    admin_execution_config_import_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate and report changes without writing configs.",
+    )
+    admin_execution_config_import_parser.add_argument(
+        "--upsert",
+        action="store_true",
+        help="Write valid configs to the admin store. Required unless --dry-run is used.",
+    )
+    admin_execution_config_import_parser.add_argument(
+        "--tenant",
+        dest="import_tenant_id",
+        default=None,
+        help="Import only one tenant from the JSON file.",
+    )
+    admin_execution_config_import_parser.add_argument(
+        "--seed-tenants",
+        action="store_true",
+        help="Seed missing tenant registry records from imported execution-config tenant IDs.",
+    )
+    admin_execution_config_import_parser.add_argument(
+        "--status",
+        choices=["active", "provisioning", "suspended", "archived", "deleted"],
+        default="active",
+        help="Tenant status to use with --seed-tenants.",
+    )
+    admin_execution_config_import_parser.add_argument("--plan", default=None)
+    admin_execution_config_import_parser.add_argument("--region", default=None)
+
+    admin_execution_config_export_parser = admin_execution_config_subparsers.add_parser(
+        "export", help="Export stored tenant execution configs as JSON."
+    )
+    admin_execution_config_export_parser.add_argument(
+        "--tenant",
+        dest="export_tenant_id",
+        default=None,
+        help="Export only one tenant.",
+    )
+    admin_execution_config_export_parser.add_argument(
+        "--out",
+        dest="output",
+        default=None,
+        help="Write JSON to this file instead of stdout.",
+    )
+    admin_execution_config_export_parser.add_argument(
+        "--redacted",
+        action="store_true",
+        default=True,
+        help="Export redacted configs returned by the admin API (default).",
+    )
+
+    admin_execution_config_validate_parser = admin_execution_config_subparsers.add_parser(
+        "validate-file", help="Validate a tenant execution-config JSON file without importing."
+    )
+    admin_execution_config_validate_parser.add_argument("file", help="JSON file to validate.")
+    admin_execution_config_validate_parser.add_argument(
+        "--tenant",
+        dest="validate_tenant_id",
+        default=None,
+        help="Validate only one tenant from the JSON file.",
+    )
+
     admin_tenants_users_parser = admin_tenants_subparsers.add_parser(
         "users", help="Manage tenant users."
     )
@@ -1350,6 +1423,258 @@ def run_admin_tenants_seed(
                 ]
             )
         )
+    return 0
+
+
+def _load_execution_config_file(path_text: str) -> dict[str, dict[str, Any]]:
+    path = Path(path_text).expanduser()
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise MinigentAPIError(
+            f"Execution-config file not found: {path_text}",
+            category="invalid_request",
+            detail=str(exc),
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise MinigentAPIError(
+            "Execution-config file must be valid JSON.",
+            category="invalid_request",
+            detail=str(exc),
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise MinigentAPIError(
+            "Execution-config file must contain a JSON object.",
+            category="invalid_request",
+        )
+    raw_configs = parsed.get("execution_configs") if "execution_configs" in parsed else parsed
+    if not isinstance(raw_configs, dict):
+        raise MinigentAPIError(
+            "execution_configs must be a JSON object when present.",
+            category="invalid_request",
+        )
+    configs: dict[str, dict[str, Any]] = {}
+    for tenant_id, config in raw_configs.items():
+        if not isinstance(tenant_id, str) or not tenant_id:
+            raise MinigentAPIError(
+                "Execution-config tenant IDs must be non-empty strings.",
+                category="invalid_request",
+            )
+        if not isinstance(config, dict):
+            raise MinigentAPIError(
+                f"Execution config for tenant '{tenant_id}' must be a JSON object.",
+                category="invalid_request",
+            )
+        configs[tenant_id] = cast(dict[str, Any], config)
+    return configs
+
+
+def _select_execution_configs(
+    configs: dict[str, dict[str, Any]], tenant_id: str | None
+) -> dict[str, dict[str, Any]]:
+    if tenant_id is None:
+        return configs
+    config = configs.get(tenant_id)
+    if config is None:
+        raise MinigentAPIError(
+            f"Execution-config file has no tenant '{tenant_id}'.",
+            category="invalid_request",
+        )
+    return {tenant_id: config}
+
+
+def _validation_ok(report: dict[str, Any]) -> bool:
+    valid = report.get("valid")
+    if isinstance(valid, bool):
+        return valid
+    status = report.get("status")
+    if isinstance(status, str):
+        return status.lower() in {"ok", "valid"}
+    errors = report.get("errors")
+    return not (isinstance(errors, list) and errors)
+
+
+def _validation_summary(report: dict[str, Any]) -> str:
+    if _validation_ok(report):
+        return "valid"
+    errors = report.get("errors")
+    if isinstance(errors, list) and errors:
+        return f"invalid errors={len(errors)}"
+    return "invalid"
+
+
+def _validate_execution_configs(
+    client: MinigentAPIClient, configs: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    return {
+        tenant_id: client.validate_admin_tenant_execution_config(tenant_id, config)
+        for tenant_id, config in configs.items()
+    }
+
+
+def run_admin_execution_config_validate_file(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    configs = _select_execution_configs(
+        _load_execution_config_file(args.file), args.validate_tenant_id
+    )
+    reports = _validate_execution_configs(client, configs)
+    ok = all(_validation_ok(report) for report in reports.values())
+    output: dict[str, Any] = {
+        "valid": ok,
+        "tenant_count": len(configs),
+        "tenants": [
+            {
+                "tenant_id": tenant_id,
+                "valid": _validation_ok(report),
+                "report": report,
+            }
+            for tenant_id, report in reports.items()
+        ],
+    }
+    if trace_id is not None:
+        output["trace_id"] = trace_id
+    if args.json:
+        print_json(output)
+        return 0 if ok else 1
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    print(f"tenant_count={len(configs)} valid={ok}")
+    for tenant_id, report in reports.items():
+        print(f"{tenant_id} {_validation_summary(report)}")
+    return 0 if ok else 1
+
+
+def run_admin_execution_config_import(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    if not args.dry_run and not args.upsert:
+        raise MinigentAPIError(
+            "Import requires --dry-run or --upsert.",
+            category="invalid_request",
+        )
+    configs = _select_execution_configs(
+        _load_execution_config_file(args.file), args.import_tenant_id
+    )
+    reports = _validate_execution_configs(client, configs)
+    valid_tenant_ids = [
+        tenant_id for tenant_id, report in reports.items() if _validation_ok(report)
+    ]
+    invalid_tenant_ids = [
+        tenant_id for tenant_id, report in reports.items() if not _validation_ok(report)
+    ]
+    written: list[str] = []
+    if not args.dry_run:
+        if invalid_tenant_ids:
+            raise MinigentAPIError(
+                "Import validation failed; no configs were written.",
+                category="invalid_request",
+                detail=", ".join(invalid_tenant_ids),
+            )
+        for tenant_id in valid_tenant_ids:
+            client.put_admin_tenant_execution_config(tenant_id, configs[tenant_id])
+            written.append(tenant_id)
+    seed_response: dict[str, Any] | None = None
+    if args.seed_tenants and not args.dry_run:
+        payload: dict[str, Any] = {
+            "source": "execution-configs",
+            "status": args.status,
+            "dry_run": False,
+        }
+        if args.plan is not None:
+            payload["plan"] = args.plan
+        if args.region is not None:
+            payload["region"] = args.region
+        seed_response = client.seed_admin_tenants(payload)
+    output: dict[str, Any] = {
+        "dry_run": args.dry_run,
+        "tenant_count": len(configs),
+        "valid": len(valid_tenant_ids),
+        "invalid": len(invalid_tenant_ids),
+        "written": written,
+        "tenants": [
+            {
+                "tenant_id": tenant_id,
+                "valid": _validation_ok(report),
+                "written": tenant_id in written,
+                "report": report,
+            }
+            for tenant_id, report in reports.items()
+        ],
+    }
+    if seed_response is not None:
+        output["seed"] = seed_response
+    if trace_id is not None:
+        output["trace_id"] = trace_id
+    if args.json:
+        print_json(output)
+        return 0 if not invalid_tenant_ids else 1
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    print(
+        " ".join(
+            [
+                f"tenant_count={len(configs)}",
+                f"valid={len(valid_tenant_ids)}",
+                f"invalid={len(invalid_tenant_ids)}",
+                f"written={len(written)}",
+                f"dry_run={args.dry_run}",
+            ]
+        )
+    )
+    for tenant in output["tenants"]:
+        if not isinstance(tenant, dict):
+            continue
+        print(
+            f"{tenant.get('tenant_id')} valid={tenant.get('valid')} written={tenant.get('written')}"
+        )
+    if seed_response is not None:
+        print(
+            "seed "
+            + " ".join(
+                [
+                    f"created={seed_response.get('created')}",
+                    f"existing={seed_response.get('existing')}",
+                    f"conflicts={seed_response.get('conflicts')}",
+                ]
+            )
+        )
+    return 0 if not invalid_tenant_ids else 1
+
+
+def run_admin_execution_config_export(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    tenant_ids = (
+        [args.export_tenant_id]
+        if args.export_tenant_id is not None
+        else client.list_admin_execution_config_tenants()
+    )
+    configs: dict[str, Any] = {}
+    for tenant_id in tenant_ids:
+        response = client.get_admin_tenant_execution_config(tenant_id)
+        config = response.get("config")
+        if not isinstance(config, dict):
+            raise RuntimeError(
+                f"Minigent admin execution-config response for tenant '{tenant_id}' must include config"
+            )
+        configs[tenant_id] = config
+    output: dict[str, Any] = configs
+    if trace_id is not None and args.json:
+        output = {"execution_configs": configs, "trace_id": trace_id}
+    text = json.dumps(output, indent=2, sort_keys=True) + "\n"
+    if args.output:
+        Path(args.output).write_text(text, encoding="utf-8")
+        if not args.json:
+            print(f"Wrote execution configs for {len(configs)} tenant(s) to {args.output}")
+    else:
+        print(text, end="")
     return 0
 
 
@@ -2354,6 +2679,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     return run_admin_tenant_users(args, client, trace_id)
                 if args.admin_tenants_command == "entitlements":
                     return run_admin_tenant_entitlements(args, client, trace_id)
+            if args.admin_command == "execution-config":
+                if args.admin_execution_config_command == "import":
+                    return run_admin_execution_config_import(args, client, trace_id)
+                if args.admin_execution_config_command == "export":
+                    return run_admin_execution_config_export(args, client, trace_id)
+                if args.admin_execution_config_command == "validate-file":
+                    return run_admin_execution_config_validate_file(args, client, trace_id)
             if args.admin_command == "threads":
                 if args.admin_threads_command == "list":
                     return run_admin_threads_list(args, client, trace_id)

@@ -261,6 +261,57 @@ class MinigentAPIClient:
             f"{self._config.base_url}/admin/tenants/{tenant_id}/entitlements",
         )
 
+    def list_admin_execution_config_tenants(self) -> list[str]:
+        response = self.request_json(
+            "GET",
+            f"{self._config.base_url}/admin/execution-config-tenants",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError(
+                "Minigent admin execution-config tenant-list response must be an object"
+            )
+        tenants = response.get("tenants")
+        if not isinstance(tenants, list) or not all(isinstance(item, str) for item in tenants):
+            raise RuntimeError(
+                "Minigent admin execution-config tenant-list response must include tenants"
+            )
+        return cast(list[str], tenants)
+
+    def get_admin_tenant_execution_config(self, tenant_id: str) -> dict[str, Any]:
+        response = self.request_json(
+            "GET",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}/execution-config",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin execution-config response must be an object")
+        return cast(dict[str, Any], response)
+
+    def put_admin_tenant_execution_config(
+        self, tenant_id: str, config: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self.request_json(
+            "PUT",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}/execution-config",
+            payload={"config": config},
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent admin execution-config update response must be an object")
+        return cast(dict[str, Any], response)
+
+    def validate_admin_tenant_execution_config(
+        self, tenant_id: str, config: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}/execution-config/validate",
+            payload={"config": config},
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError(
+                "Minigent admin execution-config validation response must be an object"
+            )
+        return cast(dict[str, Any], response)
+
     def create_thread(
         self,
         *,

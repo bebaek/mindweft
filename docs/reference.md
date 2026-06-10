@@ -1420,6 +1420,11 @@ minigent --admin admin tenants entitlements show TENANT_ID
 minigent --admin admin tenants entitlements set TENANT_ID --features-json '{"mcp":true}' --limits-json '{"max_threads":100}'
 minigent --admin admin tenants entitlements validate TENANT_ID --features-json '{"mcp":true}'
 minigent --admin admin tenants entitlements delete TENANT_ID
+minigent --admin admin execution-config validate-file tenant-config.json
+minigent --admin admin execution-config import tenant-config.json --dry-run
+minigent --admin admin execution-config import tenant-config.json --upsert --seed-tenants
+minigent --admin admin execution-config export --out tenant-config.redacted.json
+minigent --admin admin execution-config export --tenant TENANT_ID
 minigent --admin admin threads list --tenant TENANT_ID --limit 50
 minigent --admin admin threads list --tenant TENANT_ID --status idle --profile default --skill coding
 minigent --admin admin threads show THREAD_ID --tenant TENANT_ID
@@ -1432,6 +1437,14 @@ minigent --api-token ADMIN_TOKEN admin threads list --tenant TENANT_ID --json
 ```
 
 Secrets such as LLM API keys and MCP headers are accepted on writes but redacted in read responses. If `MINIGENT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`, `MINIGENT_ADMIN_ENCRYPTION_KEY` is required and those secrets are encrypted before being written to SQLite. Updating or deleting a tenant config invalidates the in-process execution cache for that tenant so new runs pick up the change immediately.
+
+The admin CLI can bridge the static JSON and DB-backed modes. `admin execution-config import`
+accepts the same top-level tenant map used by `MINIGENT_TENANT_EXECUTION_CONFIGS`; it also
+accepts a bundle with an `execution_configs` object. Imports validate each tenant before any
+write; use `--dry-run` to preview and `--upsert` to write valid configs. `--seed-tenants` can
+create missing registry records after a successful import. `admin execution-config export`
+uses the admin API and therefore writes redacted JSON suitable for review, diffs, and
+migration checks, not a full secret-bearing backup.
 
 `POST /admin/tenants/{tenant_id}/execution-config/validate` accepts the same payload shape as `PUT` and returns a structured preflight report covering config shape, LLM wiring, local tool policy, and MCP connectivity without persisting the config.
 

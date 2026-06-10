@@ -137,9 +137,7 @@ def test_run_sends_image_parts(monkeypatch: Any, tmp_path: Path, capsys: Any) ->
     assert capsys.readouterr().out == "image summary\n"
 
 
-def test_run_json_outputs_structured_reply(
-    monkeypatch: Any, tmp_path: Path, capsys: Any
-) -> None:
+def test_run_json_outputs_structured_reply(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     def urlopen(request: Any) -> _Response:
         if request.full_url.endswith("/threads"):
             return _Response(body={"thread_id": "thread-1"})
@@ -333,9 +331,7 @@ def test_chat_stream_text_can_hide_token_summary(
     assert "tokens:" not in captured.err
 
 
-def test_chat_stream_json_includes_usage(
-    monkeypatch: Any, tmp_path: Path, capsys: Any
-) -> None:
+def test_chat_stream_json_includes_usage(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     stream_events = [
         {"type": "run.started", "thread_id": "thread-1"},
         {"type": "assistant.message", "thread_id": "thread-1", "content": "done"},
@@ -844,7 +840,9 @@ def test_debug_bundle_json_masks_secrets_and_reports_diagnostics(
     assert "env-secret" not in dumped
 
 
-def test_debug_bundle_output_writes_human_report(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+def test_debug_bundle_output_writes_human_report(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
     def urlopen(request: Any) -> _Response:
         if request.full_url.endswith("/health"):
             return _Response(body={"status": "ok"})
@@ -1138,7 +1136,10 @@ def test_admin_tenants_seed_sends_options(monkeypatch: Any, capsys: Any) -> None
         )
     ]
     output = capsys.readouterr().out
-    assert "source=execution-configs discovered=2 existing=1 created=0 conflicts=0 dry_run=True" in output
+    assert (
+        "source=execution-configs discovered=2 existing=1 created=0 conflicts=0 dry_run=True"
+        in output
+    )
     assert "tenant-b slug=tenant-b status=active action=would_create" in output
 
 
@@ -1170,6 +1171,168 @@ def test_admin_tenants_seed_json(monkeypatch: Any, capsys: Any) -> None:
 
     assert exit_code == 0
     assert json.loads(capsys.readouterr().out) == response
+
+
+def test_admin_execution_config_import_dry_run_validates_file(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    config_path = tmp_path / "tenant-config.json"
+    config_path.write_text(
+        json.dumps({"tenant-a": {"llm": {"provider": "mock"}}}),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def urlopen(request: Any) -> _Response:
+        payload = json.loads(request.data.decode("utf-8")) if request.data else {}
+        calls.append((request.get_method(), request.full_url, payload))
+        assert request.full_url.endswith("/admin/tenants/tenant-a/execution-config/validate")
+        return _Response(body={"valid": True, "checks": []})
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        [
+            "--admin",
+            "admin",
+            "execution-config",
+            "import",
+            str(config_path),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:8000/admin/tenants/tenant-a/execution-config/validate",
+            {"config": {"llm": {"provider": "mock"}}},
+        )
+    ]
+    output = capsys.readouterr().out
+    assert "tenant_count=1 valid=1 invalid=0 written=0 dry_run=True" in output
+    assert "tenant-a valid=True written=False" in output
+
+
+def test_admin_execution_config_import_upsert_and_seed(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    config_path = tmp_path / "tenant-config.json"
+    config_path.write_text(
+        json.dumps({"execution_configs": {"tenant-a": {"llm": {"provider": "mock"}}}}),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def urlopen(request: Any) -> _Response:
+        payload = json.loads(request.data.decode("utf-8")) if request.data else {}
+        calls.append((request.get_method(), request.full_url, payload))
+        if request.full_url.endswith("/admin/tenants/tenant-a/execution-config/validate"):
+            return _Response(body={"valid": True})
+        if request.full_url.endswith("/admin/tenants/tenant-a/execution-config"):
+            return _Response(body={"tenant_id": "tenant-a", "config": payload["config"]})
+        if request.full_url.endswith("/admin/tenants/seed"):
+            return _Response(
+                body={
+                    "source": "execution-configs",
+                    "discovered": 1,
+                    "existing": 0,
+                    "created": 1,
+                    "conflicts": 0,
+                    "dry_run": False,
+                    "tenants": [],
+                }
+            )
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        [
+            "--admin",
+            "admin",
+            "execution-config",
+            "import",
+            str(config_path),
+            "--upsert",
+            "--seed-tenants",
+            "--plan",
+            "pro",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:8000/admin/tenants/tenant-a/execution-config/validate",
+            {"config": {"llm": {"provider": "mock"}}},
+        ),
+        (
+            "PUT",
+            "http://127.0.0.1:8000/admin/tenants/tenant-a/execution-config",
+            {"config": {"llm": {"provider": "mock"}}},
+        ),
+        (
+            "POST",
+            "http://127.0.0.1:8000/admin/tenants/seed",
+            {
+                "source": "execution-configs",
+                "status": "active",
+                "dry_run": False,
+                "plan": "pro",
+            },
+        ),
+    ]
+    output = capsys.readouterr().out
+    assert "tenant_count=1 valid=1 invalid=0 written=1 dry_run=False" in output
+    assert "seed created=1 existing=0 conflicts=0" in output
+
+
+def test_admin_execution_config_export_writes_redacted_json(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    output_path = tmp_path / "export.json"
+    calls: list[tuple[str, str]] = []
+
+    def urlopen(request: Any) -> _Response:
+        calls.append((request.get_method(), request.full_url))
+        if request.full_url.endswith("/admin/execution-config-tenants"):
+            return _Response(body={"tenants": ["tenant-a"]})
+        if request.full_url.endswith("/admin/tenants/tenant-a/execution-config"):
+            return _Response(
+                body={
+                    "tenant_id": "tenant-a",
+                    "config": {"llm": {"provider": "openai", "api_key": "[REDACTED]"}},
+                }
+            )
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        [
+            "--admin",
+            "admin",
+            "execution-config",
+            "export",
+            "--out",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        ("GET", "http://127.0.0.1:8000/admin/execution-config-tenants"),
+        ("GET", "http://127.0.0.1:8000/admin/tenants/tenant-a/execution-config"),
+    ]
+    assert json.loads(output_path.read_text(encoding="utf-8")) == {
+        "tenant-a": {"llm": {"provider": "openai", "api_key": "[REDACTED]"}}
+    }
+    assert capsys.readouterr().out == (
+        f"Wrote execution configs for 1 tenant(s) to {output_path}\n"
+    )
 
 
 def test_admin_tenant_users_create_list_and_show(monkeypatch: Any, capsys: Any) -> None:
@@ -1772,9 +1935,7 @@ def test_admin_audit_list_json_passes_structured_fields(monkeypatch: Any, capsys
 
     monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
 
-    exit_code = cli.main(
-        ["--admin", "--json", "admin", "audit", "list", "--tenant", "tenant-a"]
-    )
+    exit_code = cli.main(["--admin", "--json", "admin", "audit", "list", "--tenant", "tenant-a"])
 
     assert exit_code == 0
     assert json.loads(capsys.readouterr().out) == response
