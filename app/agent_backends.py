@@ -5,7 +5,7 @@ import json
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from fastapi import HTTPException
@@ -98,7 +98,9 @@ class AgentBackendRouter(AgentBackend):
         execution = self._execution_resolver.resolve(principal.tenant_id)
         backend = execution.config.agent_backend
         if backend.type == AGENT_BACKEND_NATIVE:
-            return await self._native_backend.run_thread(principal, thread_id, event_sink=event_sink)
+            return await self._native_backend.run_thread(
+                principal, thread_id, event_sink=event_sink
+            )
         if backend.type == AGENT_BACKEND_PEER_AGENT:
             if backend.peer is None or backend.cwd is None:
                 raise HTTPException(status_code=500, detail="peer_agent backend is incomplete")
@@ -410,8 +412,10 @@ class AgentBackendRouter(AgentBackend):
         tool_call_id = _peer_event_tool_call_id(event) or _peer_event_tool_call_id(sanitized_event)
         event_index = sanitized_event.get("index")
         if not tool_call_id:
-            index_suffix = event_index if isinstance(event_index, int) else len(
-                self._store.list_messages(principal.tenant_id, thread_id)
+            index_suffix = (
+                event_index
+                if isinstance(event_index, int)
+                else len(self._store.list_messages(principal.tenant_id, thread_id))
             )
             tool_call_id = f"peer-{task_id}-{index_suffix}"
         if event_type.endswith("_start"):
@@ -428,7 +432,11 @@ class AgentBackendRouter(AgentBackend):
                 ),
             )
             return
-        if event_type.endswith("_end") or sanitized_event.get("status") in {"completed", "failed", "error"}:
+        if event_type.endswith("_end") or sanitized_event.get("status") in {
+            "completed",
+            "failed",
+            "error",
+        }:
             self._store.append_message(
                 principal.tenant_id,
                 Message(
@@ -581,13 +589,19 @@ def _strip_peer_tool_arguments(value: object) -> object:
 
 def _safe_peer_tool_args_summary(tool_name: str, event: dict[object, object]) -> str:
     configured_fields = _safe_peer_tool_arg_fields()
-    safe_fields = configured_fields.get(tool_name) or configured_fields.get(_PEER_TOOL_ARG_ALLOW_ALL)
+    safe_fields = configured_fields.get(tool_name) or configured_fields.get(
+        _PEER_TOOL_ARG_ALLOW_ALL
+    )
     if not safe_fields:
         return ""
     arguments = _peer_event_tool_arguments(event)
     if not isinstance(arguments, dict):
         return ""
-    fields = tuple(str(field) for field in arguments) if _PEER_TOOL_ARG_ALLOW_ALL in safe_fields else safe_fields
+    fields = (
+        tuple(str(field) for field in arguments)
+        if _PEER_TOOL_ARG_ALLOW_ALL in safe_fields
+        else safe_fields
+    )
     parts: list[str] = []
     for field in fields:
         if field not in arguments:
@@ -656,7 +670,7 @@ def _parse_peer_tool_arg_allowlist_spec(raw: str) -> dict[str, tuple[str, ...]] 
     return parsed
 
 
-def _peer_event_tool_arguments(event: dict[object, object]) -> object:
+def _peer_event_tool_arguments(event: Mapping[Any, Any]) -> object:
     for container in _peer_tool_argument_containers(event):
         for key in _PEER_TOOL_ARGUMENT_KEYS:
             if key in container:
@@ -664,7 +678,7 @@ def _peer_event_tool_arguments(event: dict[object, object]) -> object:
     return None
 
 
-def _peer_event_tool_call_id(event: dict[object, object]) -> str:
+def _peer_event_tool_call_id(event: Mapping[Any, Any]) -> str:
     for container in _peer_tool_argument_containers(event):
         for key in ("tool_call_id", "toolCallId", "id", "call_id", "callId"):
             value = container.get(key)
@@ -692,7 +706,7 @@ def _peer_tool_result_for_context(sanitized_event: dict[str, object]) -> str:
     return json.dumps(result_fields, ensure_ascii=True, sort_keys=True, default=str)
 
 
-def _peer_tool_argument_containers(event: dict[object, object]) -> list[dict[object, object]]:
+def _peer_tool_argument_containers(event: Mapping[Any, Any]) -> list[Mapping[Any, Any]]:
     containers = [event]
     for nested_key in ("tool_call", "toolCall", "tool_result", "toolResult"):
         nested = event.get(nested_key)

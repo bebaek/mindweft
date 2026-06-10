@@ -118,7 +118,7 @@ class OpenRouterTranscriptionAdapter:
                             },
                         },
                     ],
-                }
+                },
             ],
             "stream": False,
         }
@@ -170,7 +170,9 @@ class OpenRouterTranscriptionAdapter:
             return
         path = Path(self._config.debug_path)
         path.mkdir(parents=True, exist_ok=True)
-        (path / filename).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        (path / filename).write_text(
+            json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+        )
 
 
 @dataclass(frozen=True)
@@ -213,18 +215,18 @@ def build_transcription_adapter(config: SpeechProviderConfig) -> SpeechToTextAda
     if provider == "openai":
         return OpenAITranscriptionAdapter(
             OpenAITranscriptionConfig(
-                api_key=config.api_key,
+                api_key=config.api_key or "",
                 model=config.model,
-                base_url=config.base_url,
+                base_url=config.base_url or "https://api.openai.com/v1",
                 timeout_seconds=config.timeout_seconds,
             )
         )
     if provider == "openrouter":
         return OpenRouterTranscriptionAdapter(
             OpenRouterTranscriptionConfig(
-                api_key=config.api_key,
+                api_key=config.api_key or "",
                 model=config.model,
-                base_url=config.base_url,
+                base_url=config.base_url or "https://openrouter.ai/api/v1",
                 timeout_seconds=config.timeout_seconds,
                 app_name=config.app_name,
                 http_referer=config.http_referer,

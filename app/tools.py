@@ -670,6 +670,11 @@ def _required_tool_string(arguments: dict[str, Any], field_name: str, tool_name:
 
 
 def _positive_float(value: object, *, field_name: str, tool_name: str) -> float:
+    if not isinstance(value, str | int | float):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{tool_name} requires {field_name} to be numeric",
+        )
     try:
         parsed = float(value)
     except (TypeError, ValueError) as exc:

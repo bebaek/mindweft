@@ -17,7 +17,7 @@ import time
 from dataclasses import replace
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, TextIO, cast
 
 from app.config import load_environment
 from minigent_client.api_client import MinigentAPIClient
@@ -38,7 +38,7 @@ from minigent_client.output import (
     style_text,
 )
 from minigent_client.ring_buffer import AudioRingBuffer
-from minigent_client.runtime import MinigentClientRuntime
+from minigent_client.runtime import ActivationSource, MinigentClientRuntime
 from minigent_client.speech import (
     ConsoleSpeechOutput,
     MacOsSaySpeechOutput,
@@ -432,12 +432,12 @@ def forget_remembered_client_thread(config: ClientConfig, thread_id: str) -> boo
 
 
 class RememberingMinigentAPIClient:
-    def __init__(self, client: object, config: ClientConfig) -> None:
+    def __init__(self, client: MinigentAPIClient, config: ClientConfig) -> None:
         self._client = client
         self._remembering_config = config
         self.active_agent_preset: str | None = None
 
-    def __getattr__(self, name: str) -> object:
+    def __getattr__(self, name: str) -> Any:
         return getattr(self._client, name)
 
     @property
@@ -670,9 +670,12 @@ def run_backend(backend: str, config: ClientConfig, *, once: bool = False) -> in
     client_runtime = MinigentClientRuntime(
         wake_phrase=config.wake_phrase,
         activation_source=activation_source,
-        minigent_client=RememberingMinigentAPIClient(
-            MinigentAPIClient(config, output_stream=sys.stdout),
-            config,
+        minigent_client=cast(
+            MinigentAPIClient,
+            RememberingMinigentAPIClient(
+                MinigentAPIClient(config, output_stream=sys.stdout),
+                config,
+            ),
         ),
         speech_output=speech_output,
         activation_feedback=None if backend == "passive-audio" else activation_feedback,
@@ -969,7 +972,7 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             return 0
 
 
-def _cancel_current_run_after_interrupt(client: MinigentAPIClient) -> None:
+def _cancel_current_run_after_interrupt(client: Any) -> None:
     try:
         client.cancel_current_run()
     except Exception:
@@ -1622,7 +1625,7 @@ def _read_chat_line(
     output_stream: ChatOutputStream,
     prompt_session: ChatPromptSession | None,
 ) -> str:
-    prompt_label = style_text("[user]", "user", stream=output_stream) + " "
+    prompt_label = style_text("[user]", "user", stream=cast(TextIO, output_stream)) + " "
     if prompt_session is not None:
         prompt = prompt_session.prompt
         return prompt(_prompt_toolkit_label(prompt_label))
@@ -1819,25 +1822,25 @@ def _build_chat_prompt_session(
         if submit_mode == "alt-enter":
 
             @key_bindings.add("enter")
-            def _(event: object) -> None:
+            def _(event: Any) -> None:
                 event.current_buffer.insert_text("\n")
 
             @key_bindings.add("escape", "enter")
-            def _(event: object) -> None:
+            def _(event: Any) -> None:
                 event.current_buffer.validate_and_handle()
 
         else:
 
             @key_bindings.add("enter")
-            def _(event: object) -> None:
+            def _(event: Any) -> None:
                 event.current_buffer.validate_and_handle()
 
             @key_bindings.add("escape", "enter")
-            def _(event: object) -> None:
+            def _(event: Any) -> None:
                 event.current_buffer.insert_text("\n")
 
         @key_bindings.add("c-j")
-        def _(event: object) -> None:
+        def _(event: Any) -> None:
             event.current_buffer.insert_text("\n")
 
         return PromptSession(
@@ -1856,7 +1859,7 @@ def build_activation_source(
     *,
     activation_feedback: Callable[[], None] | None = None,
     capture_ended_feedback: Callable[[], None] | None = None,
-):
+) -> ActivationSource:
     if backend == "stdin":
         return StdinActivationSource(
             input_stream=sys.stdin,
@@ -2016,7 +2019,11 @@ def wrap_feedback_with_ambient_restore(
     temporarily_restore = getattr(ambient_volume_controller, "temporarily_restore", None)
     if not callable(temporarily_restore):
         return feedback
-    return lambda: temporarily_restore(feedback, reduck_delay_seconds=reduck_delay_seconds)
+
+    def run_feedback() -> None:
+        temporarily_restore(feedback, reduck_delay_seconds=reduck_delay_seconds)
+
+    return run_feedback
 
 
 def bounded_output_volume(value: str) -> int:

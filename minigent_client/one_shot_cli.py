@@ -14,13 +14,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any, Sequence, cast
+from typing import Any, Sequence, TextIO, cast
 
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.config import ClientConfig, build_client_config
 from minigent_client.errors import MinigentAPIError
 from minigent_client.output import (
     StreamProgressRenderer,
+    TokenMode,
     format_message,
     print_json,
     style_assistant_markdown,
@@ -887,14 +888,21 @@ class _QuietProgressStream:
 
 
 def build_client(args: argparse.Namespace, trace_id: str | None) -> MinigentAPIClient:
+    progress_stream: TextIO = (
+        cast(TextIO, _QuietProgressStream()) if getattr(args, "quiet", False) else sys.stderr
+    )
+    token_mode = cast(
+        TokenMode,
+        "off" if getattr(args, "quiet", False) else getattr(args, "tokens", "auto"),
+    )
     return MinigentAPIClient(
         build_config(args, trace_id),
-        progress_stream=_QuietProgressStream() if getattr(args, "quiet", False) else sys.stderr,
+        progress_stream=progress_stream,
         progress_verbose=args.verbose and not getattr(args, "quiet", False),
         show_tool_results=getattr(args, "show_tool_results", False)
         and not getattr(args, "quiet", False),
         show_reasoning=getattr(args, "show_reasoning", False) and not getattr(args, "quiet", False),
-        token_mode="off" if getattr(args, "quiet", False) else getattr(args, "tokens", "auto"),
+        token_mode=token_mode,
     )
 
 
@@ -952,7 +960,7 @@ def _make_stream_progress_printer(
         sys.stderr,
         verbose=verbose,
         show_tool_results=show_tool_results,
-        token_mode=token_mode,
+        token_mode=cast(TokenMode, token_mode),
     )
     return renderer.render
 
@@ -2529,14 +2537,18 @@ def collect_debug_bundle(
     return bundle, success
 
 
+def _debug_dict(value: object) -> dict[str, Any]:
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+
 def _format_debug_bundle(bundle: dict[str, object]) -> str:
     lines = ["Minigent debug bundle", ""]
-    version_info = bundle.get("version") if isinstance(bundle.get("version"), dict) else {}
-    platform_info = bundle.get("platform") if isinstance(bundle.get("platform"), dict) else {}
-    client_info = bundle.get("client") if isinstance(bundle.get("client"), dict) else {}
-    server_info = bundle.get("server") if isinstance(bundle.get("server"), dict) else {}
-    mcp_info = bundle.get("mcp") if isinstance(bundle.get("mcp"), dict) else {}
-    threads_info = bundle.get("threads") if isinstance(bundle.get("threads"), dict) else {}
+    version_info = _debug_dict(bundle.get("version"))
+    platform_info = _debug_dict(bundle.get("platform"))
+    client_info = _debug_dict(bundle.get("client"))
+    server_info = _debug_dict(bundle.get("server"))
+    mcp_info = _debug_dict(bundle.get("mcp"))
+    threads_info = _debug_dict(bundle.get("threads"))
 
     lines.append(f"generated_at: {bundle.get('generated_at')}")
     lines.append(f"minigent: {version_info.get('minigent', 'unknown')}")
@@ -2549,7 +2561,7 @@ def _format_debug_bundle(bundle: dict[str, object]) -> str:
     lines.append("")
     lines.append("Client")
     lines.append(f"base_url: {client_info.get('base_url')}")
-    auth = client_info.get("auth") if isinstance(client_info.get("auth"), dict) else {}
+    auth = _debug_dict(client_info.get("auth"))
     lines.append(
         "auth: "
         f"mode={auth.get('mode')} user={auth.get('user_id')} tenant={auth.get('tenant_id')} "
@@ -2557,11 +2569,13 @@ def _format_debug_bundle(bundle: dict[str, object]) -> str:
     )
     lines.append("")
     lines.append("Checks")
-    for check in bundle.get("checks", []):
-        if isinstance(check, dict):
-            lines.append(_format_check(DiagnosticCheck(**check)))
+    checks = bundle.get("checks")
+    if isinstance(checks, list):
+        for check in checks:
+            if isinstance(check, dict):
+                lines.append(_format_check(DiagnosticCheck(**check)))
     lines.append("")
-    summary = server_info.get("summary") if isinstance(server_info.get("summary"), dict) else {}
+    summary = _debug_dict(server_info.get("summary"))
     lines.append("Server")
     lines.append(f"backend: {summary.get('backend', 'unknown')}")
     lines.append(f"provider: {summary.get('provider', 'unknown')}")

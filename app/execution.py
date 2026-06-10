@@ -448,8 +448,7 @@ def interpolate_tenant_execution_env_placeholders(
         )
     if isinstance(value, list):
         return [
-            interpolate_tenant_execution_env_placeholders(item, interpolation_env)
-            for item in value
+            interpolate_tenant_execution_env_placeholders(item, interpolation_env) for item in value
         ]
     if isinstance(value, dict):
         return {
@@ -975,7 +974,9 @@ def _parse_mcp_path_policy(
     if raw is None:
         return MCPPathPolicy()
     if not isinstance(raw, dict):
-        raise RuntimeError(f"Tenant '{tenant_id}' mcp server '{server_name}' path_policy must be an object")
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' mcp server '{server_name}' path_policy must be an object"
+        )
     deny_globs = _optional_str_list(
         tenant_id,
         raw.get("deny_globs") or raw.get("denyGlobs"),
@@ -1049,6 +1050,8 @@ def _optional_str(value: object) -> str | None:
 
 
 def _positive_float_config(tenant_id: str, value: object, label: str) -> float:
+    if not isinstance(value, str | int | float):
+        raise RuntimeError(f"Tenant '{tenant_id}' {label} must be numeric")
     try:
         parsed = float(value)
     except (TypeError, ValueError) as exc:
@@ -1298,7 +1301,9 @@ def get_skill_configs(
         resolved_skill_names = [config.skills.default_skill]
     resolved: list[TenantSkillConfig] = []
     for name in resolved_skill_names:
-        resolved.append(get_skill_config(config, name))
+        skill = get_skill_config(config, name)
+        if skill is not None:
+            resolved.append(skill)
     return resolved
 
 

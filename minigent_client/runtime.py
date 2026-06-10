@@ -122,11 +122,9 @@ class MinigentClientRuntime:
 
     def _speak_with_optional_barge_in(self, reply: str) -> Activation | None:
         self._speech_output.start(reply)
-        wait_for_barge_in = getattr(self._activation_source, "wait_for_barge_in", None)
-        if not callable(wait_for_barge_in):
-            self._speech_output.wait()
-            return None
-        activation = wait_for_barge_in(self._wake_phrase, self._speech_output.is_speaking)
+        activation = self._activation_source.wait_for_barge_in(
+            self._wake_phrase, self._speech_output.is_speaking
+        )
         if activation is not None:
             self._speech_output.stop()
         self._speech_output.wait()
@@ -135,11 +133,8 @@ class MinigentClientRuntime:
     def _capture_follow_up_activation(self) -> Activation | None:
         if self._follow_up_timeout_ms <= 0:
             return None
-        capture_follow_up = getattr(self._activation_source, "capture_follow_up_utterance", None)
-        if not callable(capture_follow_up):
-            return None
         self._set_state(ClientState.FOLLOW_UP_LISTENING)
-        utterance = capture_follow_up(self._follow_up_timeout_ms)
+        utterance = self._activation_source.capture_follow_up_utterance(self._follow_up_timeout_ms)
         if utterance is None or not utterance.strip():
             return None
         return Activation(transcript_hint=utterance)

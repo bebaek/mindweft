@@ -6,7 +6,7 @@ import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from minigent_client.ring_buffer import AudioRingBuffer
 
@@ -22,7 +22,7 @@ class ChunkSpeechDetector(Protocol):
 
 
 class RawAudioInputStream(Protocol):
-    def read(self, frames: int) -> tuple[object, bool]: ...
+    def read(self, frames: int) -> tuple[Any, bool]: ...
 
     def start(self) -> None: ...
 
@@ -109,7 +109,9 @@ class MicrophoneRecorder:
         with open_microphone_stream(self._config) as stream:
             return self.record_until_silence_from_stream(stream)
 
-    def record_after_speech(self, timeout_ms: int, *, preroll_ms: int = 250) -> RecordedAudio | None:
+    def record_after_speech(
+        self, timeout_ms: int, *, preroll_ms: int = 250
+    ) -> RecordedAudio | None:
         with open_microphone_stream(self._config) as stream:
             return self.record_after_speech_from_stream(
                 stream,

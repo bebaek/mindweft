@@ -166,9 +166,7 @@ def configure_tracing(app: FastAPI) -> None:
         return
 
     if not _TRACING_INITIALIZED:
-        provider = TracerProvider(
-            resource=Resource.create({"service.name": settings.service_name})
-        )
+        provider = TracerProvider(resource=Resource.create({"service.name": settings.service_name}))
         provider.add_span_processor(BatchSpanProcessor(_build_span_exporter(settings)))
         trace.set_tracer_provider(provider)
         HTTPXClientInstrumentor().instrument()
@@ -207,11 +205,10 @@ def load_tracing_settings_from_env() -> TracingSettings:
         exporter=os.getenv("MINIGENT_OTEL_EXPORTER", "console").lower(),
         otlp_endpoint=os.getenv("MINIGENT_OTEL_EXPORTER_OTLP_ENDPOINT"),
         otlp_headers={
-            key: str(value) for key, value in _load_json_object_env("MINIGENT_OTEL_EXPORTER_OTLP_HEADERS").items()
+            key: str(value)
+            for key, value in _load_json_object_env("MINIGENT_OTEL_EXPORTER_OTLP_HEADERS").items()
         },
-        otlp_timeout_seconds=float(
-            os.getenv("MINIGENT_OTEL_EXPORTER_OTLP_TIMEOUT_SECONDS", "10")
-        ),
+        otlp_timeout_seconds=float(os.getenv("MINIGENT_OTEL_EXPORTER_OTLP_TIMEOUT_SECONDS", "10")),
     )
 
 
@@ -254,8 +251,11 @@ def _is_successful_healthcheck_access_log(record: logging.LogRecord) -> bool:
     if path not in _HEALTHCHECK_PATHS:
         return False
 
+    status_code_raw = record.args[4]
+    if not isinstance(status_code_raw, str | int):
+        return False
     try:
-        status_code = int(record.args[4])
+        status_code = int(status_code_raw)
     except (TypeError, ValueError):
         return False
     return 200 <= status_code < 300

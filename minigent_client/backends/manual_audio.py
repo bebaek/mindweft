@@ -41,6 +41,14 @@ class ManualAudioActivationSource:
         del timeout_ms
         return None
 
+    def wait_for_barge_in(
+        self,
+        wake_phrase: str,
+        should_continue: Callable[[], bool],
+    ) -> Activation | None:
+        del wake_phrase, should_continue
+        return None
+
     def _transcribe_audio(self, audio, *, source: str) -> str:
         self.output_stream.write(
             f"[transcribing] captured {audio.duration_seconds:.2f}s of audio\n"

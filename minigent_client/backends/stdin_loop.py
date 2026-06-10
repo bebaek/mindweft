@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TextIO
+from typing import Callable, TextIO
 
 from minigent_client.runtime import Activation
 
@@ -35,3 +35,15 @@ class StdinActivationSource:
         if line == "":
             raise SystemExit(0)
         return line.strip()
+
+    def capture_follow_up_utterance(self, timeout_ms: int) -> str | None:
+        del timeout_ms
+        return None
+
+    def wait_for_barge_in(
+        self,
+        wake_phrase: str,
+        should_continue: Callable[[], bool],
+    ) -> Activation | None:
+        del wake_phrase, should_continue
+        return None
