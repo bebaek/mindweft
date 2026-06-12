@@ -1238,6 +1238,7 @@ def _messages_to_gemini_payload(
                     ],
                 }
             )
+    _ensure_gemini_contents_start_with_user(contents)
     payload: dict[str, Any] = {"contents": contents}
     if system_parts:
         payload["systemInstruction"] = {"parts": system_parts}
@@ -1257,6 +1258,22 @@ def _messages_to_gemini_payload(
     if include_thoughts:
         payload["generationConfig"] = {"thinkingConfig": {"includeThoughts": True}}
     return payload
+
+
+def _ensure_gemini_contents_start_with_user(contents: list[dict[str, Any]]) -> None:
+    if not contents or contents[0].get("role") == "user":
+        return
+    contents.insert(
+        0,
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "text": "Earlier thread history was compacted; continue from the summarized context."
+                }
+            ],
+        },
+    )
 
 
 def _gemini_tool_response(content: str) -> dict[str, Any]:

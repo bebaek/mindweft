@@ -418,14 +418,11 @@ def test_runtime_manual_compaction_keeps_tool_call_pairs_together() -> None:
     runtime.compact_thread(PRINCIPAL, thread.thread_id)
 
     retained = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
-    assert [message.role for message in retained] == [
-        MessageRole.ASSISTANT,
-        MessageRole.TOOL,
-        MessageRole.ASSISTANT,
-        MessageRole.USER,
-    ]
-    assert retained[0].tool_call_id == "call_1"
-    assert retained[1].tool_call_id == "call_1"
+    assert [message.role for message in retained] == [MessageRole.USER]
+    assert retained[0].content == "new user"
+    context = store.get_thread_context(PRINCIPAL.tenant_id, thread.thread_id)
+    assert "Assistant requested tool echo" in context.summary
+    assert 'Tool echo returned {"echo":"hello"}' in context.summary
 
 
 def test_runtime_uses_prompt_budget_to_compact_more_than_default_tail() -> None:

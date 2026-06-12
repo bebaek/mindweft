@@ -669,7 +669,7 @@ def test_google_gemini_adapter_returns_tool_call() -> None:
 def test_google_gemini_adapter_replays_tool_call_thought_signature() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read().decode())
-        function_call_part = payload["contents"][0]["parts"][0]
+        function_call_part = payload["contents"][1]["parts"][0]
         assert function_call_part["thoughtSignature"] == "signature-123"
         return httpx.Response(
             200,
@@ -713,8 +713,8 @@ def test_google_gemini_adapter_replays_tool_call_thought_signature() -> None:
 def test_google_gemini3_adapter_text_replays_tool_call_when_thought_signature_missing() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read().decode())
-        tool_call_content = payload["contents"][0]
-        tool_result_content = payload["contents"][1]
+        tool_call_content = payload["contents"][1]
+        tool_result_content = payload["contents"][2]
         assert tool_call_content == {
             "role": "model",
             "parts": [
@@ -767,6 +767,46 @@ def test_google_gemini3_adapter_text_replays_tool_call_when_thought_signature_mi
     assert response.content == "done"
 
 
+def test_google_gemini_adapter_prepends_user_context_for_compacted_leading_model() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        assert payload["contents"][0] == {
+            "role": "user",
+            "parts": [
+                {
+                    "text": "Earlier thread history was compacted; continue from the summarized context."
+                }
+            ],
+        }
+        assert payload["contents"][1]["role"] == "model"
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"text": "done"}]}}]},
+        )
+
+    adapter = GoogleGeminiAdapter(
+        base_url="https://example.com/v1beta",
+        api_key="test-key",
+        model="gemini-3.5-flash",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="previous answer",
+                ),
+                Message(thread_id="thread", role=MessageRole.USER, content="next prompt"),
+            ],
+            [],
+        )
+    )
+
+    assert response.content == "done"
+
 def test_google_gemini_adapter_truncates_large_tool_result_for_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -774,7 +814,8 @@ def test_google_gemini_adapter_truncates_large_tool_result_for_context(
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read().decode())
-        response_payload = payload["contents"][1]["parts"][0]["functionResponse"]["response"]
+        response_payload = payload["contents"][2]["parts"][0]["functionResponse"]["response"]
+
         assert response_payload["truncated"] is True
         assert response_payload["original_chars"] > 1024
         assert len(response_payload["content"]) <= 1024

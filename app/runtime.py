@@ -704,11 +704,40 @@ def _safe_compaction_boundary(
 
     first_retained = messages[boundary]
     last_summarized = messages[boundary - 1]
-    if not _is_completed_tool_pair(last_summarized, first_retained):
+    if _is_completed_tool_pair(last_summarized, first_retained):
+        if boundary - 1 >= min_boundary:
+            boundary -= 1
+        else:
+            boundary = min(len(messages), boundary + 1)
+    return _prefer_user_start_boundary(messages, boundary, min_boundary=min_boundary)
+
+
+def _prefer_user_start_boundary(
+    messages: list[Message],
+    boundary: int,
+    *,
+    min_boundary: int,
+) -> int:
+    """Choose a compaction boundary whose retained tail starts at a user turn.
+
+    Several chat providers, notably Gemini, are stricter when replayed history starts in
+    the middle of an assistant/tool turn. If the default boundary would leave a leading
+    assistant or tool message, summarize forward to the next user turn when possible. If
+    there is no later user turn, keep the preceding user turn so the retained tail remains
+    a well-formed conversation prefix.
+    """
+    if boundary <= 0 or boundary >= len(messages):
         return boundary
-    if boundary - 1 >= min_boundary:
-        return boundary - 1
-    return min(len(messages), boundary + 1)
+    if messages[boundary].role == MessageRole.USER:
+        return boundary
+
+    for candidate in range(boundary + 1, len(messages)):
+        if messages[candidate].role == MessageRole.USER:
+            return candidate
+    for candidate in range(boundary - 1, min_boundary - 1, -1):
+        if messages[candidate].role == MessageRole.USER:
+            return candidate
+    return boundary
 
 
 def _is_completed_tool_pair(assistant_message: Message, tool_message: Message) -> bool:
