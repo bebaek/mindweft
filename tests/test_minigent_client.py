@@ -538,6 +538,30 @@ def test_cli_styles_assistant_markdown_without_rendering(monkeypatch: pytest.Mon
     )
 
 
+def test_cli_styles_assistant_markdown_code_comments(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output_stream = TtyStringIO()
+    markdown = (
+        "```python\n"
+        "# setup\n"
+        "print('http://example.test')  # keep URL literal\n"
+        "/* block\n"
+        "still comment */ const value = 1;\n"
+        "```"
+    )
+
+    assert style_assistant_markdown(markdown, stream=output_stream) == (
+        "\033[38;5;248m```python\033[0m\n"
+        "\033[38;5;248m# setup\033[0m\n"
+        "\033[36mprint('http://example.test')  \033[0m"
+        "\033[38;5;248m# keep URL literal\033[0m\n"
+        "\033[38;5;248m/* block\033[0m\n"
+        "\033[38;5;248mstill comment */\033[0m"
+        "\033[36m const value = 1;\033[0m\n"
+        "\033[38;5;248m```\033[0m"
+    )
+
+
 def test_cli_styles_assistant_markdown_bold(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
     output_stream = TtyStringIO()

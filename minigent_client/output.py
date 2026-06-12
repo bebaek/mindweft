@@ -19,6 +19,7 @@ _STYLES = {
     "error": "\033[31m",
     "idle": "\033[2m",
     "markdown_code": "\033[36m",
+    "markdown_comment": "\033[38;5;248m",
     "markdown_fence": "\033[38;5;248m",
     "markdown_heading": "\033[1m",
     "markdown_bold": "\033[1m",
@@ -155,6 +156,7 @@ def style_assistant_markdown(text: str, *, stream: TextIO) -> str:
         return text
     styled_lines: list[str] = []
     in_code_block = False
+    in_code_block_comment = False
     for line in text.splitlines(keepends=True):
         newline = "\n" if line.endswith("\n") else ""
         content = line[:-1] if newline else line
@@ -162,9 +164,13 @@ def style_assistant_markdown(text: str, *, stream: TextIO) -> str:
         if stripped.startswith(("```", "~~~")):
             styled_lines.append(style_text(content, "markdown_fence", stream=stream) + newline)
             in_code_block = not in_code_block
+            in_code_block_comment = False
             continue
         if in_code_block:
-            styled_lines.append(style_text(content, "markdown_code", stream=stream) + newline)
+            styled_content, in_code_block_comment = _style_code_block_line(
+                content, in_block_comment=in_code_block_comment, stream=stream
+            )
+            styled_lines.append(styled_content + newline)
             continue
         if _MARKDOWN_HEADING_RE.match(content):
             styled_lines.append(style_text(content, "markdown_heading", stream=stream) + newline)
@@ -180,6 +186,109 @@ def style_assistant_markdown(text: str, *, stream: TextIO) -> str:
 _MARKDOWN_HEADING_RE = re.compile(r"^#{1,6}\s+\S")
 _INLINE_CODE_RE = re.compile(r"(`+)([^`\n]+?)\1")
 _BOLD_RE = re.compile(r"(\*\*|__)(.+?)\1")
+_CODE_LINE_COMMENT_MARKERS = ("//", "#", "--")
+_CODE_BLOCK_COMMENT_MARKERS = (("/*", "*/"), ("<!--", "-->"))
+
+
+def _style_code_block_line(
+    text: str, *, in_block_comment: bool, stream: TextIO
+) -> tuple[str, bool]:
+    """Style a fenced-code line while distinguishing code from comments."""
+
+    if in_block_comment:
+        end_marker = _find_earliest_marker(text, [end for _, end in _CODE_BLOCK_COMMENT_MARKERS])
+        if end_marker is None:
+            return style_text(text, "markdown_comment", stream=stream), True
+        end_index, marker = end_marker
+        comment_end = end_index + len(marker)
+        return (
+            _style_code_segment(text[:comment_end], "markdown_comment", stream=stream)
+            + _style_code_segment(text[comment_end:], "markdown_code", stream=stream),
+            False,
+        )
+
+    start_marker = _find_earliest_block_comment_start(text)
+    line_comment_index = _find_line_comment_index(text)
+    marker_index = start_marker[0] if start_marker is not None else None
+    comment_index_candidates = [
+        index for index in (marker_index, line_comment_index) if index is not None
+    ]
+    if not comment_index_candidates:
+        return style_text(text, "markdown_code", stream=stream), False
+
+    comment_index = min(comment_index_candidates)
+    if marker_index is not None and marker_index == comment_index:
+        assert start_marker is not None
+        _, start, end = start_marker
+        end_index = text.find(end, comment_index + len(start))
+        if end_index == -1:
+            return (
+                _style_code_segment(text[:comment_index], "markdown_code", stream=stream)
+                + _style_code_segment(text[comment_index:], "markdown_comment", stream=stream),
+                True,
+            )
+        comment_end = end_index + len(end)
+        return (
+            _style_code_segment(text[:comment_index], "markdown_code", stream=stream)
+            + _style_code_segment(text[comment_index:comment_end], "markdown_comment", stream=stream)
+            + _style_code_segment(text[comment_end:], "markdown_code", stream=stream),
+            False,
+        )
+
+    return (
+        _style_code_segment(text[:comment_index], "markdown_code", stream=stream)
+        + _style_code_segment(text[comment_index:], "markdown_comment", stream=stream),
+        False,
+    )
+
+
+def _style_code_segment(text: str, style: str, *, stream: TextIO) -> str:
+    if not text:
+        return ""
+    return style_text(text, style, stream=stream)
+
+
+def _find_earliest_marker(text: str, markers: list[str]) -> tuple[int, str] | None:
+    found: list[tuple[int, str]] = []
+    for marker in markers:
+        index = text.find(marker)
+        if index != -1:
+            found.append((index, marker))
+    return min(found, default=None, key=lambda item: item[0])
+
+
+def _find_earliest_block_comment_start(text: str) -> tuple[int, str, str] | None:
+    found: list[tuple[int, str, str]] = []
+    for start, end in _CODE_BLOCK_COMMENT_MARKERS:
+        index = text.find(start)
+        if index != -1:
+            found.append((index, start, end))
+    return min(found, default=None, key=lambda item: item[0])
+
+
+def _find_line_comment_index(text: str) -> int | None:
+    """Find common line-comment markers outside simple quoted strings."""
+
+    quote: str | None = None
+    escaped = False
+    for index, char in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote is not None:
+            escaped = True
+            continue
+        if quote is not None:
+            if char == quote:
+                quote = None
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            continue
+        for marker in _CODE_LINE_COMMENT_MARKERS:
+            if text.startswith(marker, index):
+                return index
+    return None
 
 
 def _style_inline_code(text: str, *, stream: TextIO) -> str:
