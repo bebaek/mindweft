@@ -5,8 +5,22 @@ import re
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-_SENSITIVE_KEY_PARTS = ("token", "secret", "password", "api_key", "authorization", "key")
+_SENSITIVE_KEY_PARTS = (
+    "token",
+    "secret",
+    "password",
+    "api_key",
+    "authorization",
+    "credential",
+    "private_key",
+    "access_key",
+    "refresh_token",
+    "key",
+)
 _URL_PATTERN = re.compile(r"https?://[^\s\"']+")
+_SECRET_TEXT_PATTERNS = (
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL),
+)
 _LOG_REDACTION_FACTORY: Callable[..., logging.LogRecord] | None = None
 
 
@@ -38,6 +52,42 @@ def redact_url_secrets(value: str) -> str:
 
 def redact_urls_in_text(value: str) -> str:
     return _URL_PATTERN.sub(lambda match: redact_url_secrets(match.group(0)), value)
+
+
+def redact_secret_patterns_in_text(value: str) -> str:
+    redacted = value
+    for pattern in _SECRET_TEXT_PATTERNS:
+        redacted = pattern.sub("<redacted>", redacted)
+    return redacted
+
+
+def sanitize_tool_result(value: Any) -> Any:
+    """Return a best-effort redacted copy of a tool result.
+
+    Tool outputs can be persisted in thread history, streamed to clients, and supplied to
+    later LLM turns. Keep this sanitizer conservative and deterministic so the value
+    leaving the tool-management layer is safe for those downstream consumers.
+    """
+    return _sanitize_tool_result_value("", value)
+
+
+def _sanitize_tool_result_value(key: str, value: Any) -> Any:
+    if is_sensitive_key(key):
+        return "<redacted>"
+    if isinstance(value, str):
+        return redact_secret_patterns_in_text(redact_urls_in_text(value))
+    if _looks_like_url_value(value):
+        return redact_urls_in_text(str(value))
+    if isinstance(value, dict):
+        return {
+            nested_key: _sanitize_tool_result_value(str(nested_key), nested_value)
+            for nested_key, nested_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_tool_result_value(key, item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_tool_result_value(key, item) for item in value)
+    return value
 
 
 def sanitize_value_for_logging(key: str, value: Any) -> Any:

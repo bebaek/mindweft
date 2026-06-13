@@ -19,6 +19,7 @@ from app.tools import (
     MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV,
     MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV,
     ToolExecutionContext,
+    ToolRegistry,
     build_local_tool_registry,
     build_tool_registry,
     build_tool_registry_from_env,
@@ -375,6 +376,37 @@ def test_fetch_url_tool_rejects_unsafe_arguments(
 
     with pytest.raises(HTTPException, match=message):
         asyncio.run(registry.execute("fetch_url", arguments))
+
+
+def test_tool_execution_redacts_sensitive_result_values() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        name="custom_secret_tool",
+        description="Return nested values that include secrets.",
+        input_schema={"type": "object", "properties": {}},
+        handler=lambda arguments, context=None: {
+            "api_key": "sk-test-secret",
+            "nested": {
+                "url": "https://example.com/callback?token=secret-value&cursor=public",
+                "items": [
+                    {"password": "hunter2"},
+                    "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----",
+                ],
+            },
+            "public": "visible",
+        },
+    )
+
+    result = asyncio.run(registry.execute("custom_secret_tool", {}))
+
+    assert result == {
+        "api_key": "<redacted>",
+        "nested": {
+            "url": "https://example.com/callback?token=%3Credacted%3E&cursor=public",
+            "items": [{"password": "<redacted>"}, "<redacted>"],
+        },
+        "public": "visible",
+    }
 
 
 def test_tool_execution_logs_start_and_success(caplog: pytest.LogCaptureFixture) -> None:

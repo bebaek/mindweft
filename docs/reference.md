@@ -37,6 +37,14 @@ The local tool registry includes:
 request headers such as `authorization` and `cookie`, and responses larger than the
 requested `max_bytes` limit are truncated in the returned text/body.
 
+All tool results pass through the tool registry's best-effort redactor before they are
+streamed, persisted in thread history, or included in later LLM context. The default
+redactor recursively removes values under sensitive-looking keys such as `token`,
+`secret`, `password`, `api_key`, `authorization`, and `private_key`, redacts sensitive
+URL query parameters, and redacts PEM private-key blocks in text. This reduces accidental
+secret propagation but is not a formal DLP boundary; avoid exposing credentials to tools
+unless the task requires it.
+
 ## Run
 
 ```bash

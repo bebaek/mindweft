@@ -23,7 +23,7 @@ from app.mcp import MCPHTTPClient, MCPServerConfig, load_mcp_server_configs_from
 from app.mcp_manager import MCPRegistrySnapshot
 from app.models import ToolSpec
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_env
-from app.redaction import sanitize_value_for_logging
+from app.redaction import sanitize_tool_result, sanitize_value_for_logging
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ class ToolRegistry:
             raise
         duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
         logger.info("tool.ok name=%s duration_ms=%s", name, duration_ms)
-        return result
+        return sanitize_tool_result(result)
 
     def set_mcp_servers(self, servers: list[dict[str, Any]]) -> None:
         self._mcp_servers = servers
