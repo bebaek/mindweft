@@ -45,6 +45,40 @@ URL query parameters, and redacts PEM private-key blocks in text. This reduces a
 secret propagation but is not a formal DLP boundary; avoid exposing credentials to tools
 unless the task requires it.
 
+Tool-result redaction can be configured at the tenant `tools` level and overridden per MCP
+server with `result_redaction` / `resultRedaction`:
+
+```json
+{
+  "tools": {
+    "result_redaction": {
+      "enabled": true,
+      "mode": "best_effort",
+      "sensitive_tools": ["filesystem.read_file", "shell.run_command"]
+    },
+    "mcp_servers": [
+      {
+        "name": "filesystem",
+        "url": "http://127.0.0.1:9001/mcp",
+        "headers": {},
+        "result_redaction": {"mode": "full"}
+      }
+    ]
+  }
+}
+```
+
+Modes are:
+
+- `best_effort`: recursively redact sensitive-looking keys, sensitive URL query params, and
+  PEM private-key blocks.
+- `full`: replace the entire result with metadata noting that it was redacted.
+- `none`: leave results unchanged. Use only for trusted-local development or when another
+  boundary already handles redaction.
+
+`sensitive_tools` forces full-result redaction for matching fully-qualified tool names even
+when `mode` is `best_effort`.
+
 ## Run
 
 ```bash

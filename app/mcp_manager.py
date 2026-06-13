@@ -51,6 +51,11 @@ class MCPServerRuntimeState:
                 "deny_globs": list(self.config.path_policy.deny_globs),
                 "allow_globs": list(self.config.path_policy.allow_globs),
             },
+            "result_redaction": {
+                "enabled": self.config.result_redaction_policy.enabled,
+                "mode": self.config.result_redaction_policy.mode,
+                "sensitive_tools": sorted(self.config.result_redaction_policy.sensitive_tools),
+            },
             "status": self.status,
             "last_error": self.last_error,
             "last_checked_at": _format_datetime(self.last_checked_at),
@@ -223,6 +228,9 @@ def _state_key(config: MCPServerConfig) -> str:
             config.allowed_tools,
             config.path_policy.deny_globs,
             config.path_policy.allow_globs,
+            config.result_redaction_policy.enabled,
+            config.result_redaction_policy.mode,
+            config.result_redaction_policy.sensitive_tools,
         )
     )
 

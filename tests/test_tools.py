@@ -12,6 +12,7 @@ from app.mcp import MCPServerConfig, MCPServerInfo
 from app.mcp_manager import MCPServerManager
 from app.models import ToolSpec
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
+from app.redaction import ToolResultRedactionPolicy
 from app.tools import (
     MINIGENT_MINIRAG_BACKEND_ENV,
     MINIGENT_MINIRAG_DB_PATH_ENV,
@@ -406,6 +407,45 @@ def test_tool_execution_redacts_sensitive_result_values() -> None:
             "items": [{"password": "<redacted>"}, "<redacted>"],
         },
         "public": "visible",
+    }
+
+
+def test_tool_execution_can_disable_result_redaction() -> None:
+    registry = ToolRegistry(
+        result_redaction_policy=ToolResultRedactionPolicy(enabled=False),
+    )
+    registry.register(
+        name="custom_secret_tool",
+        description="Return a secret value.",
+        input_schema={"type": "object", "properties": {}},
+        handler=lambda arguments, context=None: {"api_key": "sk-test-secret"},
+    )
+
+    result = asyncio.run(registry.execute("custom_secret_tool", {}))
+
+    assert result == {"api_key": "sk-test-secret"}
+
+
+def test_tool_execution_can_fully_redact_sensitive_tools() -> None:
+    registry = ToolRegistry(
+        result_redaction_policy=ToolResultRedactionPolicy(
+            sensitive_tools=frozenset({"custom_secret_tool"}),
+        ),
+    )
+    registry.register(
+        name="custom_secret_tool",
+        description="Return a secret value.",
+        input_schema={"type": "object", "properties": {}},
+        handler=lambda arguments, context=None: {"api_key": "sk-test-secret"},
+    )
+
+    result = asyncio.run(registry.execute("custom_secret_tool", {}))
+
+    assert result == {
+        "redacted": True,
+        "tool_name": "custom_secret_tool",
+        "result_type": "dict",
+        "note": "Tool result redacted by Minigent policy.",
     }
 
 
@@ -966,6 +1006,11 @@ def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(
             "tool_count": 1,
             "allowed_tools": None,
             "path_policy": {"deny_globs": [], "allow_globs": []},
+            "result_redaction": {
+                "enabled": True,
+                "mode": "best_effort",
+                "sensitive_tools": [],
+            },
             "status": "connected",
             "last_error": None,
             "last_checked_at": None,

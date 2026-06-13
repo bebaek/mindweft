@@ -1133,6 +1133,35 @@ def test_runtime_hides_cross_tenant_thread_access() -> None:
         raise AssertionError("Expected HTTPException")
 
 
+def test_parse_tenant_execution_config_supports_tool_result_redaction_policy() -> None:
+    config = parse_tenant_execution_config(
+        PRINCIPAL.tenant_id,
+        {
+            "llm": {"provider": "mock"},
+            "tools": {
+                "allowed_local_tools": ["echo"],
+                "result_redaction": {
+                    "mode": "full",
+                    "sensitive_tools": ["echo"],
+                },
+                "mcp_servers": [
+                    {
+                        "name": "docs",
+                        "url": "https://docs.example/mcp",
+                        "headers": {},
+                        "result_redaction": {"enabled": False},
+                    }
+                ],
+            },
+        },
+    )
+
+    assert config.tools.result_redaction_policy.enabled is True
+    assert config.tools.result_redaction_policy.mode == "full"
+    assert config.tools.result_redaction_policy.sensitive_tools == frozenset({"echo"})
+    assert config.tools.mcp_servers[0].result_redaction_policy.enabled is False
+
+
 def test_runtime_appends_skill_prompt_to_system_prompt() -> None:
     seen_messages: list[Message] = []
     config = parse_tenant_execution_config(

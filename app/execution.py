@@ -20,6 +20,7 @@ from app.llm import (
 )
 from app.mcp import MCPHTTPClient, MCPPathPolicy, MCPServerConfig, load_mcp_server_configs_from_env
 from app.mcp_manager import MCPServerManager
+from app.redaction import ToolResultRedactionPolicy, parse_tool_result_redaction_policy
 from app.tools import DEFAULT_LOCAL_TOOL_NAMES, LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry
 
 TENANT_EXECUTION_CONFIGS_ENV = "MINIGENT_TENANT_EXECUTION_CONFIGS"
@@ -61,6 +62,9 @@ class TenantLLMConfig:
 class TenantToolConfig:
     allowed_local_tools: list[str] | None = None
     mcp_servers: list[MCPServerConfig] = field(default_factory=list)
+    result_redaction_policy: ToolResultRedactionPolicy = field(
+        default_factory=ToolResultRedactionPolicy
+    )
 
 
 @dataclass(frozen=True)
@@ -422,6 +426,7 @@ def _build_registry_for_config(
             build_tool_registry(
                 mcp_server_configs=config.tools.mcp_servers,
                 allowed_local_tools=config.tools.allowed_local_tools,
+                result_redaction_policy=config.tools.result_redaction_policy,
             ),
             0,
         )
@@ -430,6 +435,7 @@ def _build_registry_for_config(
         build_tool_registry(
             mcp_snapshot=snapshot,
             allowed_local_tools=config.tools.allowed_local_tools,
+            result_redaction_policy=config.tools.result_redaction_policy,
         ),
         snapshot.generation,
     )
@@ -651,9 +657,14 @@ def _parse_tenant_tool_config(tenant_id: str, payload: dict[str, Any]) -> Tenant
     mcp_servers_raw = payload.get("mcp_servers", payload.get("mcpServers")) or []
     if not isinstance(mcp_servers_raw, list):
         raise RuntimeError(f"Tenant '{tenant_id}' mcp_servers must be an array")
+    result_redaction_policy = parse_tool_result_redaction_policy(
+        payload.get("result_redaction", payload.get("resultRedaction")),
+        context=f"Tenant '{tenant_id}' tools",
+    )
     return TenantToolConfig(
         allowed_local_tools=allowed_local_tools,
         mcp_servers=[_parse_mcp_server_config(tenant_id, entry) for entry in mcp_servers_raw],
+        result_redaction_policy=result_redaction_policy,
     )
 
 
@@ -948,6 +959,10 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         name,
         entry.get("path_policy") or entry.get("pathPolicy"),
     )
+    result_redaction_policy = parse_tool_result_redaction_policy(
+        entry.get("result_redaction", entry.get("resultRedaction")),
+        context=f"Tenant '{tenant_id}' mcp server '{name}'",
+    )
     if not isinstance(name, str) or not name:
         raise RuntimeError(f"Tenant '{tenant_id}' mcp server name must be a non-empty string")
     if not isinstance(url, str) or not url:
@@ -963,6 +978,7 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         protocol_version=str(protocol_version),
         allowed_tools=allowed_tools,
         path_policy=path_policy,
+        result_redaction_policy=result_redaction_policy,
     )
 
 
@@ -1350,6 +1366,7 @@ def build_tool_registry_for_skill(
         tools=TenantToolConfig(
             allowed_local_tools=allowed_local_tools,
             mcp_servers=mcp_servers,
+            result_redaction_policy=config.tools.result_redaction_policy,
         ),
         skills=config.skills,
     )
@@ -1385,6 +1402,7 @@ def build_tool_registry_for_capability_profile(
         tools=TenantToolConfig(
             allowed_local_tools=allowed_local_tools,
             mcp_servers=mcp_servers,
+            result_redaction_policy=config.tools.result_redaction_policy,
         ),
         skills=config.skills,
         capability_profiles=config.capability_profiles,

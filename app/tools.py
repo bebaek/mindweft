@@ -23,7 +23,11 @@ from app.mcp import MCPHTTPClient, MCPServerConfig, load_mcp_server_configs_from
 from app.mcp_manager import MCPRegistrySnapshot
 from app.models import ToolSpec
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_env
-from app.redaction import sanitize_tool_result, sanitize_value_for_logging
+from app.redaction import (
+    ToolResultRedactionPolicy,
+    sanitize_tool_result,
+    sanitize_value_for_logging,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,12 +85,18 @@ class ToolExecutionContext:
 
 
 class ToolRegistry:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        result_redaction_policy: ToolResultRedactionPolicy | None = None,
+    ) -> None:
+        self._result_redaction_policy = result_redaction_policy or ToolResultRedactionPolicy()
         self._tools: dict[
             str,
             tuple[
                 ToolSpec,
                 Callable[[dict[str, Any], ToolExecutionContext | None], Any],
+                ToolResultRedactionPolicy | None,
             ],
         ] = {}
         self._mcp_servers: list[dict[str, Any]] = []
@@ -97,10 +107,13 @@ class ToolRegistry:
         description: str,
         input_schema: dict[str, Any],
         handler: Callable[[dict[str, Any], ToolExecutionContext | None], Any],
+        *,
+        result_redaction_policy: ToolResultRedactionPolicy | None = None,
     ) -> None:
         self._tools[name] = (
             ToolSpec(name=name, description=description, input_schema=input_schema),
             handler,
+            result_redaction_policy,
         )
 
     def specs(self) -> list[ToolSpec]:
@@ -143,7 +156,11 @@ class ToolRegistry:
             raise
         duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
         logger.info("tool.ok name=%s duration_ms=%s", name, duration_ms)
-        return sanitize_tool_result(result)
+        return sanitize_tool_result(
+            result,
+            policy=tool[2] or self._result_redaction_policy,
+            tool_name=name,
+        )
 
     def set_mcp_servers(self, servers: list[dict[str, Any]]) -> None:
         self._mcp_servers = servers
@@ -157,8 +174,9 @@ def build_local_tool_registry(
     *,
     peer_agent_registry: PeerAgentRegistry | None = None,
     enable_peer_agent_tool: bool | None = None,
+    result_redaction_policy: ToolResultRedactionPolicy | None = None,
 ) -> ToolRegistry:
-    registry = ToolRegistry()
+    registry = ToolRegistry(result_redaction_policy=result_redaction_policy)
     peer_agent_tool_enabled = _peer_agent_tool_enabled(enable_peer_agent_tool)
     allowed_tool_set = (
         set(allowed_tools) if allowed_tools is not None else set(DEFAULT_LOCAL_TOOL_NAMES)
@@ -450,11 +468,13 @@ def build_tool_registry(
     allowed_local_tools: list[str] | None = None,
     peer_agent_registry: PeerAgentRegistry | None = None,
     enable_peer_agent_tool: bool | None = None,
+    result_redaction_policy: ToolResultRedactionPolicy | None = None,
 ) -> ToolRegistry:
     registry = build_local_tool_registry(
         allowed_tools=allowed_local_tools,
         peer_agent_registry=peer_agent_registry,
         enable_peer_agent_tool=enable_peer_agent_tool,
+        result_redaction_policy=result_redaction_policy,
     )
 
     mcp_servers: list[dict[str, Any]] = []
@@ -470,6 +490,7 @@ def build_tool_registry(
                         handler=lambda arguments, context=None, c=state.client, tool_name=raw_tool_name: (
                             c.call_tool(tool_name, arguments)
                         ),
+                        result_redaction_policy=state.config.result_redaction_policy,
                     )
             mcp_servers.append(state.public_dict())
         registry.set_mcp_servers(mcp_servers)
@@ -488,6 +509,7 @@ def build_tool_registry(
                     handler=lambda arguments, context=None, c=client, tool_name=raw_tool_name: (
                         c.call_tool(tool_name, arguments)
                     ),
+                    result_redaction_policy=config.result_redaction_policy,
                 )
             server_info = client.server_info()
             mcp_servers.append(
@@ -503,6 +525,11 @@ def build_tool_registry(
                     "path_policy": {
                         "deny_globs": list(config.path_policy.deny_globs),
                         "allow_globs": list(config.path_policy.allow_globs),
+                    },
+                    "result_redaction": {
+                        "enabled": config.result_redaction_policy.enabled,
+                        "mode": config.result_redaction_policy.mode,
+                        "sensitive_tools": sorted(config.result_redaction_policy.sensitive_tools),
                     },
                     "status": "connected",
                     "last_error": None,
@@ -525,6 +552,11 @@ def build_tool_registry(
                     "path_policy": {
                         "deny_globs": list(config.path_policy.deny_globs),
                         "allow_globs": list(config.path_policy.allow_globs),
+                    },
+                    "result_redaction": {
+                        "enabled": config.result_redaction_policy.enabled,
+                        "mode": config.result_redaction_policy.mode,
+                        "sensitive_tools": sorted(config.result_redaction_policy.sensitive_tools),
                     },
                     "status": "unavailable",
                     "last_error": _tool_error_detail(exc),

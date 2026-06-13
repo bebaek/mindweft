@@ -11,7 +11,11 @@ import httpx
 from fastapi import HTTPException
 
 from app.models import ToolSpec
-from app.redaction import redact_url_secrets
+from app.redaction import (
+    ToolResultRedactionPolicy,
+    parse_tool_result_redaction_policy,
+    redact_url_secrets,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +36,9 @@ class MCPServerConfig:
     protocol_version: str = DEFAULT_MCP_PROTOCOL_VERSION
     allowed_tools: list[str] | None = None
     path_policy: MCPPathPolicy = field(default_factory=MCPPathPolicy)
+    result_redaction_policy: ToolResultRedactionPolicy = field(
+        default_factory=ToolResultRedactionPolicy
+    )
 
 
 @dataclass(frozen=True)
@@ -146,7 +153,9 @@ class MCPHTTPClient:
             if not isinstance(text, str):
                 filtered.append(item)
                 continue
-            filtered.append({**item, "text": _filter_directory_listing_text(text, self._config.path_policy)})
+            filtered.append(
+                {**item, "text": _filter_directory_listing_text(text, self._config.path_policy)}
+            )
         return filtered
 
     async def _ensure_initialized(self) -> None:
@@ -352,6 +361,10 @@ def load_mcp_server_configs_from_env() -> list[MCPServerConfig]:
         protocol_version = entry.get("protocolVersion") or DEFAULT_MCP_PROTOCOL_VERSION
         allowed_tools = entry.get("allowed_tools", entry.get("allowedTools"))
         path_policy = _parse_path_policy(name, entry.get("path_policy", entry.get("pathPolicy")))
+        result_redaction_policy = parse_tool_result_redaction_policy(
+            entry.get("result_redaction", entry.get("resultRedaction")),
+            context=f"MCP server '{name}'",
+        )
         if not isinstance(name, str) or not name:
             raise RuntimeError("Each MINIGENT_MCP_SERVERS entry must include a non-empty 'name'")
         if not isinstance(url, str) or not url:
@@ -373,6 +386,7 @@ def load_mcp_server_configs_from_env() -> list[MCPServerConfig]:
                 protocol_version=str(protocol_version),
                 allowed_tools=list(allowed_tools) if allowed_tools is not None else None,
                 path_policy=path_policy,
+                result_redaction_policy=result_redaction_policy,
             )
         )
     return configs

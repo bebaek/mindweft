@@ -103,7 +103,9 @@ Minigent local tools.
 Tool results are redacted at the registry boundary before they are streamed to clients,
 stored in thread history, or supplied to later LLM turns. The built-in redactor removes
 values under sensitive-looking keys and secrets in URL query parameters on a best-effort
-basis; it is not a substitute for avoiding unnecessary access to credentials.
+basis; it is not a substitute for avoiding unnecessary access to credentials. Tenant and
+MCP server configs can override the tool-result redaction policy with `result_redaction`
+/ `resultRedaction` (`mode`: `best_effort`, `full`, or `none`).
 
 ## Clients
 
