@@ -69,7 +69,9 @@ def test_runtime_executes_multiple_tool_calls_in_one_iteration() -> None:
     class MultiToolThenReplyLLM(LLMAdapter):
         async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
             if messages[-1].role == MessageRole.TOOL:
-                tool_results = [message.content for message in messages if message.role == MessageRole.TOOL]
+                tool_results = [
+                    message.content for message in messages if message.role == MessageRole.TOOL
+                ]
                 return LLMResponse(content=" | ".join(tool_results))
             return LLMResponse(
                 tool_calls=[
@@ -111,6 +113,73 @@ def test_runtime_executes_multiple_tool_calls_in_one_iteration() -> None:
         "call-a",
         "call-b",
         "call-b",
+    ]
+
+
+def test_runtime_uses_redacted_tool_results_for_stream_store_and_llm_context() -> None:
+    seen_tool_content: str | None = None
+
+    class SecretToolThenReplyLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            nonlocal seen_tool_content
+            if messages[-1].role == MessageRole.TOOL:
+                seen_tool_content = messages[-1].content
+                return LLMResponse(content=f"Tool result: {messages[-1].content}")
+            return LLMResponse(
+                tool_call=ToolCall(id="call-secret", name="secret_tool", arguments={})
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    registry = ToolRegistry()
+    registry.register(
+        name="secret_tool",
+        description="Return a result containing sensitive values.",
+        input_schema={"type": "object", "properties": {}},
+        handler=lambda arguments, context=None: {
+            "api_key": "sk-test-secret",
+            "public": "visible",
+        },
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=SecretToolThenReplyLLM(),
+        tool_registry=registry,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="use secret tool"),
+    )
+    events: list[dict[str, object]] = []
+
+    async def event_sink(event: dict[str, object]) -> None:
+        events.append(event)
+
+    reply, _metadata = asyncio.run(
+        runtime.run_thread(PRINCIPAL, thread.thread_id, event_sink=event_sink)
+    )
+
+    expected_result = {
+        "api_key": "<redacted>",
+        "public": "visible",
+    }
+    expected_content = json.dumps(expected_result, ensure_ascii=True)
+    assert reply == f"Tool result: {expected_content}"
+    assert seen_tool_content == expected_content
+    messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    assert json.loads(messages[2].content) == expected_result
+    tool_result_events = [event for event in events if event.get("type") == "tool.result"]
+    assert tool_result_events == [
+        {
+            "type": "tool.result",
+            "tool_call_id": "call-secret",
+            "name": "secret_tool",
+            "is_error": False,
+            "result": expected_result,
+        }
     ]
 
 
