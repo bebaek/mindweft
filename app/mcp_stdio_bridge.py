@@ -95,9 +95,7 @@ class StdioMCPBridge:
         self._stderr_task = None
         self._process = None
 
-    async def _request_graceful_stdio_shutdown(
-        self, process: asyncio.subprocess.Process
-    ) -> None:
+    async def _request_graceful_stdio_shutdown(self, process: asyncio.subprocess.Process) -> None:
         stdin = process.stdin
         if stdin is not None and not stdin.is_closing():
             stdin.close()
@@ -154,14 +152,19 @@ class StdioMCPBridge:
         tool_name = params.get("name")
         if not isinstance(tool_name, str) or not tool_name:
             raise HTTPException(status_code=400, detail="MCP tools/call requires tool name")
-        if self._settings.allowed_tools is not None and tool_name not in self._settings.allowed_tools:
+        if (
+            self._settings.allowed_tools is not None
+            and tool_name not in self._settings.allowed_tools
+        ):
             raise HTTPException(
                 status_code=403,
                 detail=f"MCP tool '{tool_name}' is not allowed by bridge '{self._settings.name}'",
             )
         arguments = params.get("arguments") or {}
         if not isinstance(arguments, dict):
-            raise HTTPException(status_code=400, detail="MCP tools/call arguments must be an object")
+            raise HTTPException(
+                status_code=400, detail="MCP tools/call arguments must be an object"
+            )
         for path in _iter_path_arguments(arguments):
             if _path_denied(path, self._settings.path_policy):
                 logger.warning(
@@ -253,7 +256,9 @@ class StdioMCPBridge:
         except BrokenPipeError as exc:
             raise HTTPException(status_code=502, detail="MCP stdio server closed stdin") from exc
         except TimeoutError as exc:
-            raise HTTPException(status_code=504, detail="Timed out writing to MCP stdio server") from exc
+            raise HTTPException(
+                status_code=504, detail="Timed out writing to MCP stdio server"
+            ) from exc
 
     async def _read_json(self) -> dict[str, Any]:
         process = self._live_process()
@@ -263,7 +268,9 @@ class StdioMCPBridge:
         try:
             line = await asyncio.wait_for(stdout.readline(), timeout=self._settings.request_timeout)
         except TimeoutError as exc:
-            raise HTTPException(status_code=504, detail="Timed out reading from MCP stdio server") from exc
+            raise HTTPException(
+                status_code=504, detail="Timed out reading from MCP stdio server"
+            ) from exc
         except ValueError as exc:
             raise HTTPException(
                 status_code=502,
@@ -274,7 +281,9 @@ class StdioMCPBridge:
         try:
             payload = json.loads(line.decode("utf-8"))
         except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=502, detail="MCP stdio server returned invalid JSON") from exc
+            raise HTTPException(
+                status_code=502, detail="MCP stdio server returned invalid JSON"
+            ) from exc
         if not isinstance(payload, dict):
             raise HTTPException(status_code=502, detail="MCP stdio server returned non-object JSON")
         return payload
@@ -331,7 +340,9 @@ def create_bridge_app(settings: BridgeSettings) -> FastAPI:
             raise HTTPException(status_code=400, detail="Request body must be JSON") from exc
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="JSON-RPC payload must be an object")
-        return await bridge.handle(payload, {key.lower(): value for key, value in request.headers.items()})
+        return await bridge.handle(
+            payload, {key.lower(): value for key, value in request.headers.items()}
+        )
 
     return app
 
@@ -342,7 +353,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--name", required=True, help="Name used in bridge logs.")
     parser.add_argument("--host", default=DEFAULT_HOST, help="Host to bind. Defaults to 127.0.0.1.")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Port to bind. Defaults to 8765.")
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_PORT, help="Port to bind. Defaults to 8765."
+    )
     parser.add_argument(
         "--path",
         default=DEFAULT_PATH,
@@ -429,7 +442,10 @@ def _redacted_argv(argv: list[str]) -> list[str]:
             redacted.append(item)
             redact_next = True
             continue
-        if any(marker in lowered for marker in ("token=", "api_key=", "apikey=", "password=", "secret=")):
+        if any(
+            marker in lowered
+            for marker in ("token=", "api_key=", "apikey=", "password=", "secret=")
+        ):
             key, _, _ = item.partition("=")
             redacted.append(f"{key}=<redacted>")
             continue

@@ -13,7 +13,7 @@ from app.mcp_stdio_gateway import (
     load_gateway_settings,
 )
 
-FAKE_STDIO_MCP_SERVER = r'''
+FAKE_STDIO_MCP_SERVER = r"""
 import json
 import sys
 
@@ -47,7 +47,7 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "error": {"code": -32601, "message": "not found"}}), flush=True)
         continue
     print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": result}), flush=True)
-'''
+"""
 
 
 def test_stdio_gateway_routes_to_multiple_servers(tmp_path: Path) -> None:

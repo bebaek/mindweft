@@ -159,7 +159,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"Skipping read_file; file does not exist: {read_path}")
 
-        transcript = request_json("GET", f"{base_url}/threads/{thread_id}/messages", headers=headers)
+        transcript = request_json(
+            "GET", f"{base_url}/threads/{thread_id}/messages", headers=headers
+        )
         print("\ntranscript:")
         for message in transcript:
             tool_name = message.get("tool_name")
@@ -270,7 +272,9 @@ def wait_for_minigent(
     while time.monotonic() < deadline:
         for process in processes:
             if process.poll() is not None:
-                raise RuntimeError(f"Process exited early: pid={process.pid} code={process.returncode}")
+                raise RuntimeError(
+                    f"Process exited early: pid={process.pid} code={process.returncode}"
+                )
         try:
             request_json("GET", f"{base_url}/config", headers={})
             return

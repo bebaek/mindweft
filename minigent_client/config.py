@@ -131,9 +131,9 @@ class ClientConfig:
             tts_speaker=_optional_int_from_env("MINIGENT_VOICE_TTS_SPEAKER"),
             tts_length_scale=_optional_float_from_env("MINIGENT_VOICE_TTS_LENGTH_SCALE"),
             tts_sentence_silence=_float_from_env("MINIGENT_VOICE_TTS_SENTENCE_SILENCE", 0.35),
-            wakeword_provider=os.getenv(
-                "MINIGENT_VOICE_WAKEWORD_PROVIDER", "porcupine"
-            ).strip().lower(),
+            wakeword_provider=os.getenv("MINIGENT_VOICE_WAKEWORD_PROVIDER", "porcupine")
+            .strip()
+            .lower(),
             skill_name=_clean_optional(os.getenv("MINIGENT_VOICE_SKILL")),
             agent_presets=parse_agent_presets_env(os.getenv("MINIGENT_CLIENT_AGENT_PRESETS")),
             thread_id=_clean_optional(os.getenv("MINIGENT_VOICE_THREAD_ID")),
@@ -294,7 +294,9 @@ def parse_agent_presets(raw: object) -> tuple[AgentPreset, ...]:
         entries = []
         for name, payload in raw.items():
             if not isinstance(name, str) or not name.strip():
-                raise ValueError("MINIGENT_CLIENT_AGENT_PRESETS object keys must be non-empty names")
+                raise ValueError(
+                    "MINIGENT_CLIENT_AGENT_PRESETS object keys must be non-empty names"
+                )
             if not isinstance(payload, dict):
                 raise ValueError(f"Agent preset '{name}' must be an object")
             entries.append({"name": name, **payload})

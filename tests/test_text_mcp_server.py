@@ -25,9 +25,7 @@ def test_read_text_file_lines_reads_inclusive_line_range(tmp_path: Path) -> None
     file_path.write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
     server = TextMCPServer(workspace=tmp_path)
 
-    result = server.read_text_file_lines(
-        {"path": str(file_path), "start_line": 2, "end_line": 3}
-    )
+    result = server.read_text_file_lines({"path": str(file_path), "start_line": 2, "end_line": 3})
 
     assert result["path"] == str(file_path)
     assert result["start_line"] == 2

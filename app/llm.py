@@ -326,7 +326,9 @@ class GoogleGeminiAdapter(LLMAdapter):
         )
         max_malformed_retries = 2
         for attempt in range(max_malformed_retries + 1):
-            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+            async with httpx.AsyncClient(
+                timeout=self._timeout, transport=self._transport
+            ) as client:
                 try:
                     response = await _post_json_with_progress(
                         client,
@@ -336,9 +338,13 @@ class GoogleGeminiAdapter(LLMAdapter):
                     )
                     response.raise_for_status()
                 except httpx.HTTPStatusError as exc:
-                    raise _provider_http_exception(exc, provider="gemini", model=self._model) from exc
+                    raise _provider_http_exception(
+                        exc, provider="gemini", model=self._model
+                    ) from exc
                 except httpx.HTTPError as exc:
-                    raise _provider_request_exception(exc, provider="gemini", model=self._model) from exc
+                    raise _provider_request_exception(
+                        exc, provider="gemini", model=self._model
+                    ) from exc
             _debug_log_raw_llm_response(
                 "google-gemini",
                 response.text,
@@ -348,7 +354,11 @@ class GoogleGeminiAdapter(LLMAdapter):
                 return _parse_gemini_response(response.json(), tool_name_map)
             except GeminiMalformedResponseError:
                 if attempt < max_malformed_retries:
-                    logger.warning("Gemini MALFORMED_RESPONSE, retrying attempt %d/%d", attempt + 1, max_malformed_retries)
+                    logger.warning(
+                        "Gemini MALFORMED_RESPONSE, retrying attempt %d/%d",
+                        attempt + 1,
+                        max_malformed_retries,
+                    )
                     continue
                 logger.error("Gemini MALFORMED_RESPONSE after %d retries", max_malformed_retries)
                 raise HTTPException(
@@ -518,9 +528,7 @@ def _parse_provider_error_body(raw_body: str) -> dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _extract_retry_after_seconds(
-    response: httpx.Response, error_obj: object
-) -> int | None:
+def _extract_retry_after_seconds(response: httpx.Response, error_obj: object) -> int | None:
     retry_after_header = response.headers.get("retry-after")
     if retry_after_header:
         try:
@@ -820,7 +828,9 @@ async def _post_responses_request(
 
     body = "".join(body_chunks)
     if read_error is not None and not body:
-        raise _provider_request_exception(read_error, provider=provider, model=model) from read_error
+        raise _provider_request_exception(
+            read_error, provider=provider, model=model
+        ) from read_error
     return body, content_type
 
 
@@ -1106,9 +1116,7 @@ def _gemini_parts_for_message(message: Message) -> list[dict[str, Any]]:
             continue
         if isinstance(part, ImagePart):
             if part.data:
-                parts.append(
-                    {"inline_data": {"mime_type": part.mime_type, "data": part.data}}
-                )
+                parts.append({"inline_data": {"mime_type": part.mime_type, "data": part.data}})
             elif part.url:
                 parts.append({"file_data": {"mime_type": part.mime_type, "file_uri": part.url}})
     return parts or [{"text": message.content}]
@@ -1336,6 +1344,7 @@ def _gemini_tool_call_metadata(part: dict[str, Any]) -> dict[str, Any] | None:
 
 class GeminiMalformedResponseError(Exception):
     """Raised when Gemini returns a MALFORMED_RESPONSE finish reason."""
+
     pass
 
 
@@ -1524,6 +1533,7 @@ def _dedupe_responses_input_items(items: list[dict[str, Any]]) -> list[dict[str,
             seen_reasoning_ids.add(item_id)
         deduped.append(item)
     return deduped
+
 
 def _stored_responses_output_items(message: Message) -> list[dict[str, Any]]:
     metadata = message.metadata or {}
@@ -1737,7 +1747,9 @@ def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMRespons
         if event_type == "response.reasoning_summary_text.delta" and isinstance(delta, str):
             reasoning_key = item_key or current_reasoning_key
             if reasoning_key is not None:
-                reasoning_item = output_items_by_key.setdefault(reasoning_key, {"type": "reasoning"})
+                reasoning_item = output_items_by_key.setdefault(
+                    reasoning_key, {"type": "reasoning"}
+                )
                 summary = reasoning_item.setdefault("summary", [])
                 if not isinstance(summary, list):
                     summary = []
@@ -1752,7 +1764,9 @@ def _parse_responses_sse(body: str, tool_name_map: dict[str, str]) -> LLMRespons
             reasoning_key = item_key or current_reasoning_key
             part = event.get("part")
             if reasoning_key is not None and isinstance(part, dict):
-                reasoning_item = output_items_by_key.setdefault(reasoning_key, {"type": "reasoning"})
+                reasoning_item = output_items_by_key.setdefault(
+                    reasoning_key, {"type": "reasoning"}
+                )
                 summary = reasoning_item.setdefault("summary", [])
                 if isinstance(summary, list):
                     if summary and isinstance(summary[-1], dict):

@@ -536,9 +536,7 @@ class SQLiteTenantConfigStore:
                 )
                 """
             )
-            connection.execute(
-                "CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status)"
-            )
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_tenants_plan ON tenants(plan)")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tenants_updated_at ON tenants(updated_at)"
@@ -684,7 +682,9 @@ def _domain_from_row(row: sqlite3.Row) -> TenantDomain:
 def _entitlements_from_row(row: sqlite3.Row) -> TenantEntitlements:
     features = json.loads(str(row["features_json"]))
     limits = json.loads(str(row["limits_json"]))
-    if not isinstance(features, dict) or not all(isinstance(value, bool) for value in features.values()):
+    if not isinstance(features, dict) or not all(
+        isinstance(value, bool) for value in features.values()
+    ):
         raise RuntimeError(f"Stored features for tenant '{row['tenant_id']}' are invalid")
     if not isinstance(limits, dict):
         raise RuntimeError(f"Stored limits for tenant '{row['tenant_id']}' are invalid")

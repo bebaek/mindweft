@@ -248,7 +248,6 @@ def test_mcp_http_client_allows_explicitly_allowed_path_over_denied_glob() -> No
 
     assert requests == ["initialize", "notifications/initialized", "tools/call"]
 
-
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read().decode())
         method = body["method"]

@@ -80,9 +80,7 @@ class PassiveAudioActivationSource:
         return None
 
     def capture_utterance(self) -> str:
-        self.output_stream.write(
-            "[listening] wake word detected, recording until silence\n"
-        )
+        self.output_stream.write("[listening] wake word detected, recording until silence\n")
         self.output_stream.flush()
         if self.post_wake_settle_ms > 0:
             time.sleep(self.post_wake_settle_ms / 1000.0)
@@ -115,7 +113,9 @@ class PassiveAudioActivationSource:
             self.output_stream.flush()
             if self.capture_ended_feedback is not None:
                 self.capture_ended_feedback()
-            self.output_stream.write("[idle] follow-up window expired, returning to wake-word mode\n")
+            self.output_stream.write(
+                "[idle] follow-up window expired, returning to wake-word mode\n"
+            )
             self.output_stream.flush()
             return None
         self.output_stream.write("[follow-up] capture ended\n")
@@ -161,7 +161,9 @@ class PassiveAudioActivationSource:
             timeout_ms=self.post_wake_speech_timeout_ms,
         )
         if audio is None:
-            self.output_stream.write("[idle] no follow-up speech after wake word, ignoring activation\n")
+            self.output_stream.write(
+                "[idle] no follow-up speech after wake word, ignoring activation\n"
+            )
             self.output_stream.flush()
             self._cooldown_until = time.monotonic() + (self.wakeword_cooldown_ms / 1000.0)
             return ""

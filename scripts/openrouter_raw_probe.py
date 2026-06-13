@@ -37,9 +37,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--base-url", default=os.getenv("OPENROUTER_BASE_URL", DEFAULT_BASE_URL))
     parser.add_argument("--model", default=os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL))
-    parser.add_argument("--requests", type=int, default=2, help="Number of sequential requests to send.")
-    parser.add_argument("--pause", type=float, default=2.0, help="Seconds to sleep between requests.")
-    parser.add_argument("--output", default=DEFAULT_OUTPUT, help="JSONL file for request/response records.")
+    parser.add_argument(
+        "--requests", type=int, default=2, help="Number of sequential requests to send."
+    )
+    parser.add_argument(
+        "--pause", type=float, default=2.0, help="Seconds to sleep between requests."
+    )
+    parser.add_argument(
+        "--output", default=DEFAULT_OUTPUT, help="JSONL file for request/response records."
+    )
     parser.add_argument(
         "--prefix-repetitions",
         type=int,
@@ -230,7 +236,9 @@ def main(argv: list[str] | None = None) -> int:
     with output_path.open("a", encoding="utf-8") as out:
         for index in range(args.requests):
             user_prompt = prompts[index % len(prompts)]
-            payload = build_payload(args.model, static_context, user_prompt, args.temperature, tools)
+            payload = build_payload(
+                args.model, static_context, user_prompt, args.temperature, tools
+            )
             status, headers, body = request_openrouter(
                 base_url=args.base_url,
                 api_key=api_key,
@@ -259,7 +267,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"... truncated in stdout; full response written to {output_path}")
             else:
                 try:
-                    print(json.dumps(json.loads(body), ensure_ascii=False, indent=2, sort_keys=True))
+                    print(
+                        json.dumps(json.loads(body), ensure_ascii=False, indent=2, sort_keys=True)
+                    )
                 except json.JSONDecodeError:
                     print(body)
 

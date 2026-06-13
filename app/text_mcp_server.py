@@ -46,7 +46,10 @@ READ_TEXT_FILE_AROUND_TOOL = {
         "properties": {
             "path": {"type": "string", "description": "Absolute or workspace-relative file path."},
             "line": {"type": "integer", "description": "1-based center line."},
-            "before": {"type": "integer", "description": "Lines of context before the center line."},
+            "before": {
+                "type": "integer",
+                "description": "Lines of context before the center line.",
+            },
             "after": {"type": "integer", "description": "Lines of context after the center line."},
             "max_chars": {
                 "type": "integer",
@@ -170,7 +173,9 @@ class TextMCPServer:
         end_line = self._int_argument(arguments.get("end_line"), "end_line", minimum=1)
         if end_line < start_line:
             raise ValueError("end_line must be >= start_line")
-        max_chars = self._optional_int_argument(arguments.get("max_chars"), self.max_chars, minimum=1)
+        max_chars = self._optional_int_argument(
+            arguments.get("max_chars"), self.max_chars, minimum=1
+        )
         lines = self._read_lines(path)
         line_slice = _slice_lines(lines, start_line, end_line, max_chars=max_chars)
         return {
@@ -208,7 +213,9 @@ class TextMCPServer:
         max_matches = self._optional_int_argument(
             arguments.get("max_matches"), DEFAULT_MAX_MATCHES, minimum=1
         )
-        max_chars = self._optional_int_argument(arguments.get("max_chars"), self.max_chars, minimum=1)
+        max_chars = self._optional_int_argument(
+            arguments.get("max_chars"), self.max_chars, minimum=1
+        )
         matcher = re.compile(pattern) if use_regex else re.compile(re.escape(pattern))
         lines = self._read_lines(path)
         matches: list[dict[str, Any]] = []
@@ -321,7 +328,9 @@ def serve_stdio(server: TextMCPServer) -> int:
             try:
                 payload = json.loads(line)
                 if not isinstance(payload, dict):
-                    response = TextMCPServer._error(None, -32600, "JSON-RPC payload must be an object")
+                    response = TextMCPServer._error(
+                        None, -32600, "JSON-RPC payload must be an object"
+                    )
                 else:
                     response = server.handle(payload)
             except json.JSONDecodeError:

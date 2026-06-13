@@ -367,7 +367,9 @@ class InMemoryThreadStore:
             context = self._contexts[thread_id]
             if context.summarized_message_count <= 0:
                 return context.model_copy(deep=True)
-            self._messages[thread_id] = self._messages[thread_id][context.summarized_message_count :]
+            self._messages[thread_id] = self._messages[thread_id][
+                context.summarized_message_count :
+            ]
             context.summarized_message_count = 0
             context.updated_at = utc_now()
             thread.updated_at = utc_now()

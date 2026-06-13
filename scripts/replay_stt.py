@@ -84,9 +84,7 @@ def main() -> int:
             leading_ms=args.pad_leading_ms,
             trailing_ms=args.pad_trailing_ms,
         )
-        print(
-            f"pad_leading_ms={args.pad_leading_ms} pad_trailing_ms={args.pad_trailing_ms}"
-        )
+        print(f"pad_leading_ms={args.pad_leading_ms} pad_trailing_ms={args.pad_trailing_ms}")
     print_metadata(Path(args.wav_path), audio)
     if args.metadata_only:
         return 0
@@ -106,7 +104,9 @@ def print_metadata(path: Path, audio: RecordedAudio) -> None:
     )
 
 
-def build_provider_config(provider: str, model: str | None, stt_debug_path: str | None) -> SpeechProviderConfig:
+def build_provider_config(
+    provider: str, model: str | None, stt_debug_path: str | None
+) -> SpeechProviderConfig:
     normalized = provider.strip().lower()
     if normalized == "openai":
         api_key = os.getenv("OPENAI_API_KEY")

@@ -45,10 +45,7 @@ def test_demo_peer_agent_submits_and_polls_through_minigent(
                 "exit_code": 0,
                 "final_output": "summary",
             }
-        if (
-            method == "GET"
-            and url == "http://minigent.test/peer-agents/pi/tasks/task_123/events"
-        ):
+        if method == "GET" and url == "http://minigent.test/peer-agents/pi/tasks/task_123/events":
             return {
                 "task_id": "task_123",
                 "next_index": 1,

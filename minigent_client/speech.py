@@ -208,7 +208,13 @@ class PiperSpeechOutput(SpeechOutput):
         try:
             piper_executable = _resolve_piper_executable()
             model_path = _resolve_piper_model_path(self.model, self.model_dir)
-            command = [piper_executable, "--model", str(model_path), "--output_file", str(output_path)]
+            command = [
+                piper_executable,
+                "--model",
+                str(model_path),
+                "--output_file",
+                str(output_path),
+            ]
             if self.speaker is not None:
                 command.extend(["--speaker", str(self.speaker)])
             if self.length_scale is not None:
@@ -239,7 +245,13 @@ class PiperSpeechOutput(SpeechOutput):
         try:
             piper_executable = _resolve_piper_executable()
             model_path = _resolve_piper_model_path(self.model, self.model_dir)
-            command = [piper_executable, "--model", str(model_path), "--output_file", str(output_path)]
+            command = [
+                piper_executable,
+                "--model",
+                str(model_path),
+                "--output_file",
+                str(output_path),
+            ]
             if self.speaker is not None:
                 command.extend(["--speaker", str(self.speaker)])
             if self.length_scale is not None:
@@ -297,13 +309,19 @@ def _sanitize_text_for_tts(text: str) -> str:
             continue
         line = re.sub(r"^>\s?", "", line)
         if match := re.match(r"#{1,6}\s+(.+)", line):
-            parts.append(_ensure_tts_sentence(_strip_inline_markdown(match.group(1)), capitalize=True))
+            parts.append(
+                _ensure_tts_sentence(_strip_inline_markdown(match.group(1)), capitalize=True)
+            )
             continue
         if match := re.match(r"[-+*]\s+(?:\[[ xX]\]\s+)?(.+)", line):
-            parts.append(_ensure_tts_sentence(_strip_inline_markdown(match.group(1)), capitalize=True))
+            parts.append(
+                _ensure_tts_sentence(_strip_inline_markdown(match.group(1)), capitalize=True)
+            )
             continue
         if match := re.match(r"\d+[.)]\s+(?:\[[ xX]\]\s+)?(.+)", line):
-            parts.append(_ensure_tts_sentence(_strip_inline_markdown(match.group(1)), capitalize=True))
+            parts.append(
+                _ensure_tts_sentence(_strip_inline_markdown(match.group(1)), capitalize=True)
+            )
             continue
         parts.append(_strip_inline_markdown(line))
 
@@ -327,7 +345,7 @@ def _ensure_tts_sentence(text: str, *, capitalize: bool = False) -> str:
 def _capitalize_tts_sentence(text: str) -> str:
     for index, char in enumerate(text):
         if char.isalpha():
-            return f"{text[:index]}{char.upper()}{text[index + 1:]}"
+            return f"{text[:index]}{char.upper()}{text[index + 1 :]}"
     return text
 
 

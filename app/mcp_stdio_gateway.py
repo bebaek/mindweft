@@ -38,7 +38,10 @@ class GatewaySettings:
 
 
 def create_gateway_app(settings: GatewaySettings) -> FastAPI:
-    bridges = {bridge_settings.name: StdioMCPBridge(bridge_settings) for bridge_settings in settings.bridges}
+    bridges = {
+        bridge_settings.name: StdioMCPBridge(bridge_settings)
+        for bridge_settings in settings.bridges
+    }
     if len(bridges) != len(settings.bridges):
         raise RuntimeError("MCP stdio gateway server names must be unique")
 
@@ -72,12 +75,16 @@ def create_gateway_app(settings: GatewaySettings) -> FastAPI:
             raise HTTPException(status_code=400, detail="Request body must be JSON") from exc
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="JSON-RPC payload must be an object")
-        return await bridge.handle(payload, {key.lower(): value for key, value in request.headers.items()})
+        return await bridge.handle(
+            payload, {key.lower(): value for key, value in request.headers.items()}
+        )
 
     return app
 
 
-def load_gateway_settings(path: Path, *, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> GatewaySettings:
+def load_gateway_settings(
+    path: Path, *, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT
+) -> GatewaySettings:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise RuntimeError("MCP stdio gateway config must be a JSON object")
@@ -119,15 +126,20 @@ def bridge_settings_from_mapping(raw_server: Any) -> BridgeSettings:
 
     allowed_tools = raw_server.get("allowed_tools", raw_server.get("allowedTools"))
     if allowed_tools is not None and (
-        not isinstance(allowed_tools, list) or not all(isinstance(item, str) for item in allowed_tools)
+        not isinstance(allowed_tools, list)
+        or not all(isinstance(item, str) for item in allowed_tools)
     ):
-        raise RuntimeError(f"MCP stdio gateway server '{name}' allowed_tools must be a string array or null")
+        raise RuntimeError(
+            f"MCP stdio gateway server '{name}' allowed_tools must be a string array or null"
+        )
 
     path_policy = raw_server.get("path_policy", raw_server.get("pathPolicy", {}))
     if not isinstance(path_policy, dict):
         raise RuntimeError(f"MCP stdio gateway server '{name}' path_policy must be an object")
 
-    request_timeout = raw_server.get("request_timeout", raw_server.get("requestTimeout", DEFAULT_TIMEOUT_SECONDS))
+    request_timeout = raw_server.get(
+        "request_timeout", raw_server.get("requestTimeout", DEFAULT_TIMEOUT_SECONDS)
+    )
     if not isinstance(request_timeout, int | float):
         raise RuntimeError(f"MCP stdio gateway server '{name}' request_timeout must be a number")
 
@@ -136,19 +148,27 @@ def bridge_settings_from_mapping(raw_server: Any) -> BridgeSettings:
         raw_server.get("stdioStreamLimit", DEFAULT_STDIO_STREAM_LIMIT_BYTES),
     )
     if not isinstance(stdio_stream_limit, int):
-        raise RuntimeError(f"MCP stdio gateway server '{name}' stdio_stream_limit must be an integer")
+        raise RuntimeError(
+            f"MCP stdio gateway server '{name}' stdio_stream_limit must be an integer"
+        )
 
     deny_globs = path_policy.get("deny_globs", path_policy.get("denyGlobs", []))
     allow_globs = path_policy.get("allow_globs", path_policy.get("allowGlobs", []))
     if not isinstance(deny_globs, list) or not all(isinstance(item, str) for item in deny_globs):
-        raise RuntimeError(f"MCP stdio gateway server '{name}' path_policy.deny_globs must be a string array")
+        raise RuntimeError(
+            f"MCP stdio gateway server '{name}' path_policy.deny_globs must be a string array"
+        )
     if not isinstance(allow_globs, list) or not all(isinstance(item, str) for item in allow_globs):
-        raise RuntimeError(f"MCP stdio gateway server '{name}' path_policy.allow_globs must be a string array")
+        raise RuntimeError(
+            f"MCP stdio gateway server '{name}' path_policy.allow_globs must be a string array"
+        )
     extra_env = raw_server.get("env", {})
     if not isinstance(extra_env, dict) or not all(
         isinstance(key, str) and isinstance(value, str) for key, value in extra_env.items()
     ):
-        raise RuntimeError(f"MCP stdio gateway server '{name}' env must be an object of string values")
+        raise RuntimeError(
+            f"MCP stdio gateway server '{name}' env must be an object of string values"
+        )
 
     return BridgeSettings(
         name=name,
@@ -168,7 +188,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", required=True, help="JSON gateway config file.")
     parser.add_argument("--host", default=DEFAULT_HOST, help="Host to bind. Defaults to 127.0.0.1.")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Port to bind. Defaults to 8765.")
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_PORT, help="Port to bind. Defaults to 8765."
+    )
     return parser
 
 

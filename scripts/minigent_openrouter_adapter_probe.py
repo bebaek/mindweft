@@ -45,9 +45,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--base-url", default=os.getenv("OPENROUTER_BASE_URL", DEFAULT_BASE_URL))
     parser.add_argument("--model", default=os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL))
-    parser.add_argument("--requests", type=int, default=2, help="Number of sequential requests to send.")
-    parser.add_argument("--pause", type=float, default=2.0, help="Seconds to sleep between requests.")
-    parser.add_argument("--output", default=DEFAULT_OUTPUT, help="JSONL file for normalized probe records.")
+    parser.add_argument(
+        "--requests", type=int, default=2, help="Number of sequential requests to send."
+    )
+    parser.add_argument(
+        "--pause", type=float, default=2.0, help="Seconds to sleep between requests."
+    )
+    parser.add_argument(
+        "--output", default=DEFAULT_OUTPUT, help="JSONL file for normalized probe records."
+    )
     parser.add_argument(
         "--raw-output",
         default=DEFAULT_RAW_OUTPUT,

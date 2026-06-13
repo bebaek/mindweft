@@ -33,9 +33,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--agent-runtime", default=os.getenv("AGENT_RUNTIME", "pi"))
     parser.add_argument("--agent-command", default=os.getenv("AGENT_COMMAND"))
     parser.add_argument("--agent-host", default=os.getenv("AGENT_HOST", "127.0.0.1"))
-    parser.add_argument(
-        "--agent-port", type=int, default=int(os.getenv("AGENT_PORT", "8010"))
-    )
+    parser.add_argument("--agent-port", type=int, default=int(os.getenv("AGENT_PORT", "8010")))
     parser.add_argument(
         "--peer-name",
         default=os.getenv("MINIGENT_DEMO_PEER_NAME", "pi"),
@@ -109,9 +107,7 @@ def run_checks(args: argparse.Namespace) -> list[CheckResult]:
     if args.check_running:
         checks.extend(check_running_services(args))
     else:
-        checks.append(
-            check_port_free("agent wrapper port", args.agent_host, args.agent_port)
-        )
+        checks.append(check_port_free("agent wrapper port", args.agent_host, args.agent_port))
         checks.append(check_port_free("minigent port", args.minigent_host, args.minigent_port))
     return checks
 

@@ -944,7 +944,9 @@ def build_admin_router() -> APIRouter:
         request: Request,
         admin: Principal = Depends(require_admin_principal),
     ) -> AdminTenantResponse:
-        return _update_tenant_status(request, tenant_id, admin, TenantStatus.ACTIVE, "tenants.activate")
+        return _update_tenant_status(
+            request, tenant_id, admin, TenantStatus.ACTIVE, "tenants.activate"
+        )
 
     @router.post("/tenants/{tenant_id}/suspend", response_model=AdminTenantResponse)
     async def suspend_tenant(
@@ -962,7 +964,9 @@ def build_admin_router() -> APIRouter:
         request: Request,
         admin: Principal = Depends(require_admin_principal),
     ) -> AdminTenantResponse:
-        return _update_tenant_status(request, tenant_id, admin, TenantStatus.ARCHIVED, "tenants.archive")
+        return _update_tenant_status(
+            request, tenant_id, admin, TenantStatus.ARCHIVED, "tenants.archive"
+        )
 
     @router.delete("/tenants/{tenant_id}", response_model=AdminTenantDeleteResponse)
     async def delete_tenant(

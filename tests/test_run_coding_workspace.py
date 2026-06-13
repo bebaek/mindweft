@@ -9,9 +9,7 @@ from app import coding_workspace_runner as runner
 
 def test_console_script_entry_point_loads_runner_main() -> None:
     scripts = importlib.metadata.entry_points(group="console_scripts")
-    entry_point = next(
-        script for script in scripts if script.name == "minigent-coding-workspace"
-    )
+    entry_point = next(script for script in scripts if script.name == "minigent-coding-workspace")
 
     loaded = entry_point.load()
     assert loaded.__module__ == "app.coding_workspace_runner"
@@ -285,9 +283,7 @@ def test_inject_coding_workspace_skill_enriches_existing_skill_with_workspaces(
         {
             "demo-tenant": {
                 "skills": {
-                    "items": [
-                        {"name": "coding-workspace", "system_prompt": "Base coding prompt."}
-                    ]
+                    "items": [{"name": "coding-workspace", "system_prompt": "Base coding prompt."}]
                 }
             }
         }
@@ -359,7 +355,12 @@ def test_load_coding_mcp_server_specs_expands_workspace_placeholders(tmp_path: P
                 "servers": [
                     {
                         "name": "custom-workspace",
-                        "command": ["custom-mcp", "{workspace_roots}", "--root-csv", "{workspace_roots_csv}"],
+                        "command": [
+                            "custom-mcp",
+                            "{workspace_roots}",
+                            "--root-csv",
+                            "{workspace_roots_csv}",
+                        ],
                         "port": 9001,
                         "profiles": ["inspect", "test"],
                         "allowed_tools": ["inspect_repo"],

@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from app.mcp import MCPPathPolicy
 from app.mcp_stdio_bridge import BridgeSettings, build_parser, create_bridge_app
 
-FAKE_STDIO_MCP_SERVER = r'''
+FAKE_STDIO_MCP_SERVER = r"""
 import json
 import sys
 
@@ -76,7 +76,7 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "error": {"code": -32601, "message": "not found"}}), flush=True)
         continue
     print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": result}), flush=True)
-'''
+"""
 
 
 def test_stdio_bridge_initializes_lists_tools_and_calls_tool(tmp_path: Path) -> None:

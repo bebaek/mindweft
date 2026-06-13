@@ -118,7 +118,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"user: {args.message}\n")
     print("stream events:")
     final_reply = ""
-    with client.stream("POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS) as response:
+    with client.stream(
+        "POST", f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS
+    ) as response:
         if response.status_code >= 400:
             raise SystemExit(f"run stream failed: {response.status_code} {response.text}")
         for line in response.iter_lines():

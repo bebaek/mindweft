@@ -179,7 +179,9 @@ def test_configure_tracing_instruments_fastapi_and_httpx(monkeypatch) -> None:
         "app.observability.ConsoleSpanExporter",
         lambda: type("ConsoleExporter", (), {})(),
     )
-    monkeypatch.setattr("app.observability.HTTPXClientInstrumentor", lambda: FakeHTTPXInstrumentor())
+    monkeypatch.setattr(
+        "app.observability.HTTPXClientInstrumentor", lambda: FakeHTTPXInstrumentor()
+    )
     monkeypatch.setattr("app.observability.FastAPIInstrumentor", FakeFastAPIInstrumentor)
 
     tracer_provider_holder: dict[str, object] = {}

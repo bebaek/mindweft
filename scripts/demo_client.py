@@ -162,7 +162,9 @@ def main() -> int:
     )
     if trace_id is not None:
         print(f"trace_id={trace_id}")
-        print("trace: sent via traceparent header; look for this trace_id in JSON logs or your trace backend")
+        print(
+            "trace: sent via traceparent header; look for this trace_id in JSON logs or your trace backend"
+        )
     if args.api_token:
         print("principal: bearer token auth")
     else:

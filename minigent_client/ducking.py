@@ -123,7 +123,9 @@ class MacOsAmbientVolumeDucker:
         try:
             return int(result.stdout.strip())
         except ValueError as exc:
-            raise RuntimeError(f"unexpected output volume response: {result.stdout.strip()!r}") from exc
+            raise RuntimeError(
+                f"unexpected output volume response: {result.stdout.strip()!r}"
+            ) from exc
 
     def _set_output_volume(self, volume: int) -> None:
         result = subprocess.run(

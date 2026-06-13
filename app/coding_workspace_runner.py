@@ -240,7 +240,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     bridge_name = args.bridge_name or env.get("MINIGENT_CODING_BRIDGE_NAME") or DEFAULT_BRIDGE_NAME
     bridge_url = f"http://{bridge_host}:{bridge_port}/mcp"
-    gateway_enabled = args.mcp_gateway or env_flag_enabled(env.get("MINIGENT_CODING_MCP_GATEWAY_ENABLED"))
+    gateway_enabled = args.mcp_gateway or env_flag_enabled(
+        env.get("MINIGENT_CODING_MCP_GATEWAY_ENABLED")
+    )
     gateway_port = args.mcp_gateway_port or int(
         env.get("MINIGENT_CODING_MCP_GATEWAY_PORT") or bridge_port
     )
@@ -249,10 +251,14 @@ def main(argv: list[str] | None = None) -> int:
         or env.get("MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX")
         or DEFAULT_MCP_GATEWAY_PATH_PREFIX
     )
-    gateway_url_prefix = f"http://{bridge_host}:{gateway_port}{normalize_path_prefix(gateway_path_prefix)}"
+    gateway_url_prefix = (
+        f"http://{bridge_host}:{gateway_port}{normalize_path_prefix(gateway_path_prefix)}"
+    )
     text_enabled = args.enable_text or env_flag_enabled(env.get("MINIGENT_CODING_TEXT_ENABLED"))
     text_bridge_name = (
-        args.text_bridge_name or env.get("MINIGENT_CODING_TEXT_BRIDGE_NAME") or DEFAULT_TEXT_BRIDGE_NAME
+        args.text_bridge_name
+        or env.get("MINIGENT_CODING_TEXT_BRIDGE_NAME")
+        or DEFAULT_TEXT_BRIDGE_NAME
     )
     text_bridge_port = args.text_bridge_port or int(
         env.get("MINIGENT_CODING_TEXT_BRIDGE_PORT") or DEFAULT_TEXT_BRIDGE_PORT
@@ -470,7 +476,9 @@ def mcp_server_specs_for_gateway(
                     port=spec.port,
                     path=spec.path,
                     profiles=list(spec.profiles),
-                    allowed_tools=list(spec.allowed_tools) if spec.allowed_tools is not None else None,
+                    allowed_tools=list(spec.allowed_tools)
+                    if spec.allowed_tools is not None
+                    else None,
                     path_policy={key: list(value) for key, value in spec.path_policy.items()},
                     env=dict(spec.env),
                     headers=dict(spec.headers),
@@ -555,7 +563,9 @@ def load_coding_mcp_server_specs(
     payload = json.loads(path.read_text(encoding="utf-8"))
     raw_servers = payload.get("servers") if isinstance(payload, dict) else payload
     if not isinstance(raw_servers, list):
-        raise RuntimeError("coding MCP servers file must contain a JSON array or {\"servers\": [...]}")
+        raise RuntimeError(
+            'coding MCP servers file must contain a JSON array or {"servers": [...]}'
+        )
 
     specs: list[CodingMCPServerSpec] = []
     interpolation_env = dict(env or os.environ)
@@ -618,20 +628,27 @@ def coding_mcp_server_spec_from_mapping(
             [interpolate_config_string(item, env) for item in command], workspace_roots
         )
     elif transport == "stdio" or managed:
-        raise RuntimeError(f"coding MCP server '{name}' requires command for managed or stdio transport")
+        raise RuntimeError(
+            f"coding MCP server '{name}' requires command for managed or stdio transport"
+        )
 
     allowed_tools = raw_server.get("allowed_tools", raw_server.get("allowedTools"))
     if allowed_tools is not None and (
-        not isinstance(allowed_tools, list) or not all(isinstance(item, str) for item in allowed_tools)
+        not isinstance(allowed_tools, list)
+        or not all(isinstance(item, str) for item in allowed_tools)
     ):
-        raise RuntimeError(f"coding MCP server '{name}' allowed_tools must be a string array or null")
+        raise RuntimeError(
+            f"coding MCP server '{name}' allowed_tools must be a string array or null"
+        )
 
     path_policy = raw_server.get("path_policy", raw_server.get("pathPolicy", {}))
     if not isinstance(path_policy, dict):
         raise RuntimeError(f"coding MCP server '{name}' path_policy must be an object")
 
     profiles = raw_server.get("profiles", ["inspect"])
-    if not isinstance(profiles, list) or not all(isinstance(item, str) and item for item in profiles):
+    if not isinstance(profiles, list) or not all(
+        isinstance(item, str) and item for item in profiles
+    ):
         raise RuntimeError(f"coding MCP server '{name}' profiles must be a non-empty string array")
 
     extra_env = raw_server.get("env", {})
@@ -672,7 +689,9 @@ def coding_mcp_server_spec_from_mapping(
         path=path,
         profiles=list(profiles),
         allowed_tools=list(allowed_tools) if allowed_tools is not None else None,
-        path_policy={key: list(value) for key, value in path_policy.items() if isinstance(value, list)},
+        path_policy={
+            key: list(value) for key, value in path_policy.items() if isinstance(value, list)
+        },
         env=dict(extra_env),
         headers=dict(headers),
         managed=managed,
@@ -796,7 +815,9 @@ def build_builtin_mcp_server_specs(
     return specs
 
 
-def resolve_workspace_roots(cli_workspaces: list[str] | None, env_workspace: str | None) -> list[Path]:
+def resolve_workspace_roots(
+    cli_workspaces: list[str] | None, env_workspace: str | None
+) -> list[Path]:
     if cli_workspaces:
         raw_workspaces = cli_workspaces
     elif env_workspace:
@@ -1018,7 +1039,11 @@ def inject_coding_workspace_skill(
     if not isinstance(items, list):
         return raw_config
     existing_skill = next(
-        (item for item in items if isinstance(item, dict) and item.get("name") == "coding-workspace"),
+        (
+            item
+            for item in items
+            if isinstance(item, dict) and item.get("name") == "coding-workspace"
+        ),
         None,
     )
     if existing_skill is None:
@@ -1357,7 +1382,9 @@ def redacted_command_for_log(command: list[str]) -> str:
             redacted.append("<redacted>")
             redact_next = False
             continue
-        if lower_part.startswith("--") and any(marker in lower_part for marker in _SENSITIVE_ARG_MARKERS):
+        if lower_part.startswith("--") and any(
+            marker in lower_part for marker in _SENSITIVE_ARG_MARKERS
+        ):
             if "=" in part:
                 option, _value = part.split("=", 1)
                 redacted.append(f"{option}=<redacted>")
@@ -1374,9 +1401,7 @@ def redacted_command_for_log(command: list[str]) -> str:
     return " ".join(shlex.quote(part) for part in redacted)
 
 
-def wait_for_managed_http_server(
-    spec: CodingMCPServerSpec, process: subprocess.Popen[str]
-) -> None:
+def wait_for_managed_http_server(spec: CodingMCPServerSpec, process: subprocess.Popen[str]) -> None:
     if not spec.health_url:
         return
     deadline = time.monotonic() + spec.startup_timeout_seconds

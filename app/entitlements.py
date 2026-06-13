@@ -69,7 +69,9 @@ def enforce_thread_run_limit(
     if max_runs is None:
         return
     current = sum(
-        1 for message in store.list_messages(context.tenant_id, thread_id) if message.role == MessageRole.ASSISTANT
+        1
+        for message in store.list_messages(context.tenant_id, thread_id)
+        if message.role == MessageRole.ASSISTANT
     )
     if current >= max_runs:
         raise HTTPException(

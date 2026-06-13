@@ -590,7 +590,13 @@ def test_google_gemini_adapter_sanitizes_non_rate_provider_errors() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             400,
-            json={"error": {"code": 400, "message": "raw upstream details", "status": "INVALID_ARGUMENT"}},
+            json={
+                "error": {
+                    "code": 400,
+                    "message": "raw upstream details",
+                    "status": "INVALID_ARGUMENT",
+                }
+            },
         )
 
     adapter = GoogleGeminiAdapter(
@@ -636,7 +642,7 @@ def test_google_gemini_adapter_returns_tool_call() -> None:
                                         "args": {"expression": "2+2"},
                                     },
                                     "thoughtSignature": "signature-123",
-                                }
+                                },
                             ]
                         }
                     }
@@ -717,17 +723,11 @@ def test_google_gemini3_adapter_text_replays_tool_call_when_thought_signature_mi
         tool_result_content = payload["contents"][2]
         assert tool_call_content == {
             "role": "model",
-            "parts": [
-                {
-                    "text": '[tool_call]\nname: calculator\narguments: {"expression": "2+2"}'
-                }
-            ],
+            "parts": [{"text": '[tool_call]\nname: calculator\narguments: {"expression": "2+2"}'}],
         }
         assert tool_result_content == {
             "role": "user",
-            "parts": [
-                {"text": '[tool_result]\nname: calculator\nid: old-call\n{"result":4}'}
-            ],
+            "parts": [{"text": '[tool_result]\nname: calculator\nid: old-call\n{"result":4}'}],
         }
         return httpx.Response(
             200,
@@ -806,6 +806,7 @@ def test_google_gemini_adapter_prepends_user_context_for_compacted_leading_model
     )
 
     assert response.content == "done"
+
 
 def test_google_gemini_adapter_truncates_large_tool_result_for_context(
     monkeypatch: pytest.MonkeyPatch,
@@ -1230,8 +1231,12 @@ def test_openai_compatible_adapter_prunes_historical_tool_messages_for_azure() -
                     tool_name="echo",
                     tool_call_id="call_123",
                 ),
-                Message(thread_id="thread", role=MessageRole.ASSISTANT, content="It is warm today."),
-                Message(thread_id="thread", role=MessageRole.USER, content="current home temperature"),
+                Message(
+                    thread_id="thread", role=MessageRole.ASSISTANT, content="It is warm today."
+                ),
+                Message(
+                    thread_id="thread", role=MessageRole.USER, content="current home temperature"
+                ),
             ],
             build_local_tool_registry().specs(),
         )
@@ -1333,8 +1338,12 @@ def test_openai_compatible_adapter_keeps_historical_tool_messages_for_non_azure(
                     tool_name="echo",
                     tool_call_id="call_123",
                 ),
-                Message(thread_id="thread", role=MessageRole.ASSISTANT, content="It is warm today."),
-                Message(thread_id="thread", role=MessageRole.USER, content="current home temperature"),
+                Message(
+                    thread_id="thread", role=MessageRole.ASSISTANT, content="It is warm today."
+                ),
+                Message(
+                    thread_id="thread", role=MessageRole.USER, content="current home temperature"
+                ),
             ],
             build_local_tool_registry().specs(),
         )
@@ -1406,8 +1415,12 @@ def test_openai_compatible_adapter_retries_openrouter_with_azure_tool_history_pr
                     tool_name="echo",
                     tool_call_id="call_123",
                 ),
-                Message(thread_id="thread", role=MessageRole.ASSISTANT, content="It is warm today."),
-                Message(thread_id="thread", role=MessageRole.USER, content="current home temperature"),
+                Message(
+                    thread_id="thread", role=MessageRole.ASSISTANT, content="It is warm today."
+                ),
+                Message(
+                    thread_id="thread", role=MessageRole.USER, content="current home temperature"
+                ),
             ],
             build_local_tool_registry().specs(),
         )
@@ -1773,11 +1786,13 @@ def test_google_gemini_adapter_retries_malformed_response() -> None:
             return httpx.Response(
                 200,
                 json={
-                    "candidates": [{
-                        "content": {},
-                        "finishReason": "MALFORMED_RESPONSE",
-                        "index": 0,
-                    }],
+                    "candidates": [
+                        {
+                            "content": {},
+                            "finishReason": "MALFORMED_RESPONSE",
+                            "index": 0,
+                        }
+                    ],
                     "usageMetadata": {
                         "promptTokenCount": 100,
                         "totalTokenCount": 100,
@@ -1820,11 +1835,13 @@ def test_google_gemini_adapter_fails_after_max_malformed_retries() -> None:
         return httpx.Response(
             200,
             json={
-                "candidates": [{
-                    "content": {},
-                    "finishReason": "MALFORMED_RESPONSE",
-                    "index": 0,
-                }],
+                "candidates": [
+                    {
+                        "content": {},
+                        "finishReason": "MALFORMED_RESPONSE",
+                        "index": 0,
+                    }
+                ],
                 "usageMetadata": {
                     "promptTokenCount": 100,
                     "totalTokenCount": 100,

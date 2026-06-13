@@ -85,7 +85,11 @@ class MCPBrokerSessionStore:
 
     def _prune_expired(self) -> None:
         now = time.time()
-        expired = [session_id for session_id, session in self._sessions.items() if session.expires_at <= now]
+        expired = [
+            session_id
+            for session_id, session in self._sessions.items()
+            if session.expires_at <= now
+        ]
         for session_id in expired:
             del self._sessions[session_id]
 

@@ -121,7 +121,10 @@ def extract_reasoning_content(metadata: dict[str, Any] | None) -> str | None:
             summary = item.get("summary")
             if isinstance(summary, list):
                 for summary_item in summary:
-                    if isinstance(summary_item, dict) and summary_item.get("type") == "summary_text":
+                    if (
+                        isinstance(summary_item, dict)
+                        and summary_item.get("type") == "summary_text"
+                    ):
                         text = summary_item.get("text")
                         if isinstance(text, str) and text.strip():
                             summary_parts.append(text.strip())
@@ -230,7 +233,9 @@ def _style_code_block_line(
         comment_end = end_index + len(end)
         return (
             _style_code_segment(text[:comment_index], "markdown_code", stream=stream)
-            + _style_code_segment(text[comment_index:comment_end], "markdown_comment", stream=stream)
+            + _style_code_segment(
+                text[comment_index:comment_end], "markdown_comment", stream=stream
+            )
             + _style_code_segment(text[comment_end:], "markdown_code", stream=stream),
             False,
         )
@@ -457,7 +462,9 @@ class StreamProgressRenderer:
                 if content:
                     self._write_reasoning_block(content)
         elif event_type == "run.error":
-            self._write(f"✖ error {event.get('status_code')}: {_format_error_detail(event.get('detail'))}")
+            self._write(
+                f"✖ error {event.get('status_code')}: {_format_error_detail(event.get('detail'))}"
+            )
         elif event_type == "run.warning":
             self._write(f"⚠ {_format_error_detail(event.get('detail'))}")
         elif event_type == "run.completed":

@@ -197,9 +197,7 @@ class AgentRuntime:
                             )
 
                     with llm_progress_sink(_on_progress):
-                        response = await execution.llm_adapter.generate(
-                            messages, tool_specs
-                        )
+                        response = await execution.llm_adapter.generate(messages, tool_specs)
                     if response.usage is not None:
                         await _emit_run_event(
                             event_sink,
