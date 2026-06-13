@@ -118,6 +118,10 @@ class FakeActivationSource:
         self.follow_up_utterance = None
         return utterance
 
+    def wait_for_barge_in(self, wake_phrase: str, should_continue) -> Activation | None:
+        _ = wake_phrase, should_continue
+        return None
+
 
 class FakeSpeechOutput:
     def __init__(self) -> None:
