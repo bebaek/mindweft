@@ -1705,7 +1705,7 @@ def test_run_endpoint_openrouter_retries_with_azure_tool_history_pruning() -> No
 
 def test_run_endpoint_returns_reply_when_tool_fails() -> None:
     class ToolFailingLLM(LLMAdapter):
-        async def generate(self, messages: list[Message], tools: list[object]) -> LLMResponse:
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
             if messages and messages[-1].role == MessageRole.TOOL:
                 return LLMResponse(content=f"Tool result: {messages[-1].content}")
             return LLMResponse(
@@ -1750,6 +1750,62 @@ def test_run_endpoint_returns_reply_when_tool_fails() -> None:
         "reply": (
             'Tool result: {"error": {"tool_name": "fetch_url", "status_code": 502, '
             '"detail": "fetch_url failed with status 404"}}'
+        )
+    }
+
+
+def test_run_endpoint_returns_reply_when_tool_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_TOOL_TIMEOUT_SECONDS", "0.01")
+
+    class TimeoutLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            if messages and messages[-1].role == MessageRole.TOOL:
+                return LLMResponse(content=f"Tool result: {messages[-1].content}")
+            return LLMResponse(
+                tool_call=ToolCall(
+                    id="call-slow",
+                    name="slow_tool",
+                    arguments={"delay": 1},
+                )
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {
+                "provider": "test",
+                "model": None,
+                "base_url": None,
+                "headers": [],
+                "adapter": "TimeoutLLM",
+            }
+
+    class SlowRegistry:
+        def specs(self) -> list[object]:
+            return []
+
+        def mcp_servers(self) -> list[dict[str, object]]:
+            return []
+
+        async def execute(self, name: str, arguments: dict[str, object]) -> object:
+            await asyncio.sleep(1)
+            return {"ok": True}
+
+    client = TestClient(create_app(llm_adapter=TimeoutLLM(), tool_registry=SlowRegistry()))  # type: ignore[arg-type]
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "run slow tool"},
+        headers=AUTH_HEADERS,
+    )
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert run_response.status_code == 200
+    assert run_response.json() == {
+        "reply": (
+            'Tool result: {"error": {"tool_name": "slow_tool", "status_code": 504, '
+            '"code": "tool_timeout", "detail": "Tool call timed out after 0.01 seconds", '
+            '"timeout_seconds": 0.01}}'
         )
     }
 

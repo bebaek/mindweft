@@ -46,7 +46,9 @@ RUNTIME_SYSTEM_PROMPT = (
     "If tool results fail, are indirect, or are insufficient, say that you could not directly verify the answer and explain what you were able to infer."
 )
 DEFAULT_MAX_ITERATIONS = 16
+DEFAULT_TOOL_TIMEOUT_SECONDS = 60.0
 MAX_ITERATIONS_ENV = "MINIGENT_MAX_ITERATIONS"
+TOOL_TIMEOUT_SECONDS_ENV = "MINIGENT_TOOL_TIMEOUT_SECONDS"
 CONTEXT_COMPACTION_ENABLED_ENV = "MINIGENT_CONTEXT_COMPACTION_ENABLED"
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
 
@@ -75,6 +77,19 @@ def max_iterations_from_env() -> int:
     return value
 
 
+def tool_timeout_seconds_from_env() -> float:
+    raw = os.getenv(TOOL_TIMEOUT_SECONDS_ENV, "").strip()
+    if not raw:
+        return DEFAULT_TOOL_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{TOOL_TIMEOUT_SECONDS_ENV} must be a positive number") from exc
+    if value <= 0:
+        raise RuntimeError(f"{TOOL_TIMEOUT_SECONDS_ENV} must be a positive number")
+    return value
+
+
 class AgentRuntime:
     def __init__(
         self,
@@ -83,6 +98,7 @@ class AgentRuntime:
         llm_adapter: LLMAdapter | None = None,
         tool_registry: ToolRegistry | None = None,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
+        tool_timeout_seconds: float = DEFAULT_TOOL_TIMEOUT_SECONDS,
         recent_message_limit: int = 8,
         min_recent_message_limit: int = 4,
         max_summary_chars: int = 4000,
@@ -100,6 +116,9 @@ class AgentRuntime:
                 "AgentRuntime requires execution_resolver or both llm_adapter and tool_registry"
             )
         self._max_iterations = max_iterations
+        if tool_timeout_seconds <= 0:
+            raise ValueError("tool_timeout_seconds must be positive")
+        self._tool_timeout_seconds = tool_timeout_seconds
         self._recent_message_limit = max(1, recent_message_limit)
         self._min_recent_message_limit = min(
             self._recent_message_limit, max(1, min_recent_message_limit)
@@ -366,16 +385,27 @@ class AgentRuntime:
             try:
                 execute_signature = inspect.signature(tool_registry.execute)
                 if "context" in execute_signature.parameters:
-                    result = await tool_registry.execute(
-                        tool_call.name,
-                        tool_call.arguments,
-                        context=ToolExecutionContext(
-                            tenant_id=principal.tenant_id,
-                            thread_id=thread_id,
+                    result = await asyncio.wait_for(
+                        tool_registry.execute(
+                            tool_call.name,
+                            tool_call.arguments,
+                            context=ToolExecutionContext(
+                                tenant_id=principal.tenant_id,
+                                thread_id=thread_id,
+                            ),
                         ),
+                        timeout=self._tool_timeout_seconds,
                     )
                 else:
-                    result = await tool_registry.execute(tool_call.name, tool_call.arguments)
+                    result = await asyncio.wait_for(
+                        tool_registry.execute(tool_call.name, tool_call.arguments),
+                        timeout=self._tool_timeout_seconds,
+                    )
+            except TimeoutError:
+                failed_tool_calls.add(tool_call_signature)
+                return _serialize_tool_timeout(
+                    tool_call.name, timeout_seconds=self._tool_timeout_seconds
+                )
             except HTTPException as exc:
                 failed_tool_calls.add(tool_call_signature)
                 return _serialize_tool_error(tool_call.name, exc)
@@ -589,6 +619,18 @@ def _serialize_tool_error(
     return {
         "error": {
             **error,
+        }
+    }
+
+
+def _serialize_tool_timeout(tool_name: str, *, timeout_seconds: float) -> dict[str, Any]:
+    return {
+        "error": {
+            "tool_name": tool_name,
+            "status_code": 504,
+            "code": "tool_timeout",
+            "detail": f"Tool call timed out after {timeout_seconds:g} seconds",
+            "timeout_seconds": timeout_seconds,
         }
     }
 

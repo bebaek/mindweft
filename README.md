@@ -78,6 +78,7 @@ Start from [`.env.template`](.env.template) for local or deployment settings. Co
 | `MINIGENT_THREAD_DB_PATH` | Optional SQLite path for persistent thread/message storage. |
 | `MINIGENT_TENANT_EXECUTION_CONFIGS` | Optional per-tenant LLM, tool, skill, capability, backend, and quality config. |
 | `MINIGENT_MCP_BROKER_ENABLED` | Enables the peer-agent MCP broker path when using peer backends. |
+| `MINIGENT_TOOL_TIMEOUT_SECONDS` | Default wall-clock limit for each runtime tool call before returning a structured timeout error. |
 
 See the [full reference](docs/reference.md) for the complete environment and tenant config
 surface.

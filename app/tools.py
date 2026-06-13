@@ -120,9 +120,17 @@ class ToolRegistry:
         started_at = time.perf_counter()
         logger.info("tool.start name=%s arguments=%s", name, sanitized_arguments)
         try:
-            result = tool[1](arguments, context)
+            handler = tool[1]
+            if inspect.iscoroutinefunction(handler):
+                result = handler(arguments, context)
+            else:
+                result = await asyncio.to_thread(handler, arguments, context)
             if inspect.isawaitable(result):
                 result = await result
+        except asyncio.CancelledError:
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            logger.warning("tool.cancelled name=%s duration_ms=%s", name, duration_ms)
+            raise
         except Exception as exc:
             duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
             logger.warning(
