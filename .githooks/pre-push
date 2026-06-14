@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MINIGENT_RUN_E2E_TESTS=true uv run pytest
