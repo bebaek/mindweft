@@ -1648,9 +1648,11 @@ uv run python scripts/check_peer_agent_demo.py --check-running
 The same end-to-end path is available as an opt-in integration test:
 
 ```bash
-MINIGENT_RUN_INTEGRATION_TESTS=true \
+MINIGENT_RUN_PEER_AGENT_INTEGRATION_TESTS=true \
   uv run pytest tests/test_peer_agent_tool_integration.py
 ```
+
+The legacy `MINIGENT_RUN_INTEGRATION_TESTS=true` flag is still accepted for this test.
 
 The Docker Compose sidecar demo also has an opt-in integration test. It requires Docker
 and a usable local OpenCode login because that demo selects the wrapper's OpenCode profile

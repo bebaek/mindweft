@@ -6,15 +6,28 @@ from pathlib import Path
 
 import pytest
 
-RUN_INTEGRATION_ENV = "MINIGENT_RUN_INTEGRATION_TESTS"
+RUN_PEER_AGENT_INTEGRATION_ENV = "MINIGENT_RUN_PEER_AGENT_INTEGRATION_TESTS"
+LEGACY_RUN_INTEGRATION_ENV = "MINIGENT_RUN_INTEGRATION_TESTS"
 
 
 pytestmark = pytest.mark.integration
 
 
+def _peer_agent_integration_enabled() -> bool:
+    truthy = {"1", "true", "yes", "on"}
+    return (
+        os.getenv(RUN_PEER_AGENT_INTEGRATION_ENV, "").strip().lower() in truthy
+        or os.getenv(LEGACY_RUN_INTEGRATION_ENV, "").strip().lower() in truthy
+    )
+
+
 @pytest.mark.skipif(
-    os.getenv(RUN_INTEGRATION_ENV, "").strip().lower() not in {"1", "true", "yes", "on"},
-    reason=f"Set {RUN_INTEGRATION_ENV}=true to run peer-agent integration tests",
+    not _peer_agent_integration_enabled(),
+    reason=(
+        f"Set {RUN_PEER_AGENT_INTEGRATION_ENV}=true "
+        f"or legacy {LEGACY_RUN_INTEGRATION_ENV}=true "
+        "to run peer-agent integration tests"
+    ),
 )
 def test_peer_agent_tool_stack_demo_completes() -> None:
     root = Path(__file__).resolve().parents[1]
