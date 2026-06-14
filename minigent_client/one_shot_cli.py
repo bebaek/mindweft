@@ -7,6 +7,7 @@ import mimetypes
 import os
 import platform
 import secrets
+import shutil
 import sys
 import urllib.parse
 import urllib.request  # noqa: F401 - exposed for existing CLI tests that monkeypatch urlopen.
@@ -16,6 +17,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Sequence, TextIO, cast
 
+from app.unified_config import CONFIG_FILE_ENV, load_unified_config_env, resolve_config_path
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.config import ClientConfig, build_client_config
 from minigent_client.errors import MinigentAPIError
@@ -29,6 +31,35 @@ from minigent_client.output import (
 )
 from minigent_client.state import ClientState, ThreadHistoryItem
 from minigent_client.state import state_scope_key as build_state_scope_key
+
+DEFAULT_CONFIG_TEMPLATE = """# Unified Minigent config facade.
+# Copy this file to minigent.toml and keep secrets in your shell, OS keychain, or .env.
+# Existing MINIGENT_* / provider env vars still override values from this file.
+
+profile = "local-coding"
+
+[app]
+host = "127.0.0.1"
+port = 8000
+thread_db_path = ".data/minigent.db"
+
+[auth]
+mode = "development"
+
+[llm]
+provider = "mock"
+# provider = "openrouter"
+# model = "anthropic/claude-sonnet-4.5"
+# api_key_env = "OPENROUTER_API_KEY"
+
+[coding]
+enabled = true
+workspaces = ["/Users/you/code"]
+shell_enabled = false
+
+[quality]
+enabled = false
+"""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -740,6 +771,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     config_subparsers = config_parser.add_subparsers(dest="config_command")
     config_subparsers.add_parser("show", help="Show resolved API configuration as JSON.")
+    config_init_parser = config_subparsers.add_parser(
+        "init", help="Create a starter minigent.toml in the current directory."
+    )
+    config_init_parser.add_argument(
+        "--output",
+        default="minigent.toml",
+        help="Path to write. Defaults to ./minigent.toml.",
+    )
+    config_init_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the output file if it already exists.",
+    )
+    config_print_parser = config_subparsers.add_parser(
+        "print", help="Print local unified config information."
+    )
+    config_print_parser.add_argument(
+        "--resolved",
+        action="store_true",
+        help="Print the env vars resolved from minigent.toml with secrets masked.",
+    )
     config_subparsers.add_parser("doctor", help="Check common CLI/API configuration issues.")
 
     return parser
@@ -2152,6 +2204,64 @@ def run_config(client: MinigentAPIClient, trace_id: str | None) -> int:
     return 0
 
 
+def run_config_init(args: argparse.Namespace) -> int:
+    output_path = Path(args.output).expanduser()
+    if output_path.exists() and not args.force:
+        raise RuntimeError(f"{output_path} already exists; use --force to overwrite")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    template_path = _config_template_path()
+    if template_path is not None:
+        shutil.copyfile(template_path, output_path)
+    else:
+        output_path.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
+    print(f"Wrote {output_path}")
+    return 0
+
+
+def run_config_print(args: argparse.Namespace) -> int:
+    output = collect_resolved_local_config()
+    print_json(output)
+    return 0
+
+
+def collect_resolved_local_config() -> dict[str, object]:
+    cwd = Path.cwd()
+    env_snapshot = dict(os.environ)
+    dotenv_path = cwd / ".env"
+    dotenv_keys: list[str] = []
+    if dotenv_path.exists():
+        from dotenv import dotenv_values
+
+        dotenv = {key: value for key, value in dotenv_values(dotenv_path).items() if value is not None}
+        dotenv_keys = sorted(dotenv)
+        env_snapshot.update(dotenv)
+    config_path = resolve_config_path(base_dir=cwd, env=env_snapshot)
+    config_env = load_unified_config_env(config_path, source_env=env_snapshot)
+    resolved = dict(config_env)
+    for key in sorted(set(config_env) | set(env_snapshot)):
+        if key in config_env or key.startswith(("MINIGENT_", "OPENAI_", "OPENROUTER_", "GOOGLE_", "GEMINI_")):
+            if key in env_snapshot:
+                resolved[key] = env_snapshot[key]
+    return {
+        "config_file": str(config_path) if config_path is not None else None,
+        "config_file_env": os.environ.get(CONFIG_FILE_ENV),
+        "dotenv_file": str(dotenv_path) if dotenv_path.exists() else None,
+        "dotenv_keys": dotenv_keys,
+        "resolved_env": _mask_secrets(dict(sorted(resolved.items()))),
+    }
+
+
+def _config_template_path() -> Path | None:
+    candidates = [
+        Path(__file__).resolve().parents[1] / "minigent.toml.template",
+        Path.cwd() / "minigent.toml.template",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
 def run_execution_options(
     client: MinigentAPIClient,
     trace_id: str | None,
@@ -2732,6 +2842,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "config":
             if args.config_command in {None, "show"}:
                 return run_config(client, trace_id)
+            if args.config_command == "init":
+                return run_config_init(args)
+            if args.config_command == "print":
+                return run_config_print(args)
             if args.config_command == "doctor":
                 return run_config_doctor(args, client, trace_id)
     except KeyboardInterrupt:

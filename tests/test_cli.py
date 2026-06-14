@@ -701,6 +701,62 @@ def test_cli_json_errors_are_structured(monkeypatch: Any, tmp_path: Path, capsys
     }
 
 
+def test_config_init_writes_minigent_toml(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = cli.main(["config", "init"])
+
+    assert exit_code == 0
+    assert (tmp_path / "minigent.toml").exists()
+    assert "[llm]" in (tmp_path / "minigent.toml").read_text(encoding="utf-8")
+    assert capsys.readouterr().out == "Wrote minigent.toml\n"
+
+
+def test_config_init_refuses_to_overwrite(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "minigent.toml").write_text("profile = \"custom\"\n", encoding="utf-8")
+
+    exit_code = cli.main(["config", "init"])
+
+    assert exit_code == 1
+    assert "already exists; use --force" in capsys.readouterr().err
+    assert (tmp_path / "minigent.toml").read_text(encoding="utf-8") == 'profile = "custom"\n'
+
+
+def test_config_print_resolved_masks_secrets(
+    monkeypatch: Any,
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
+    monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "secret-value")
+    (tmp_path / "minigent.toml").write_text(
+        """
+[llm]
+provider = "openrouter"
+model = "openrouter-model"
+api_key_env = "OPENROUTER_API_KEY"
+
+[app]
+thread_db_path = ".data/minigent.db"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(["config", "print", "--resolved"])
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["config_file"] == str(tmp_path / "minigent.toml")
+    assert output["resolved_env"]["MINIGENT_LLM_PROVIDER"] == "openrouter"
+    assert output["resolved_env"]["OPENROUTER_MODEL"] == "openrouter-model"
+    assert output["resolved_env"]["OPENROUTER_API_KEY"] == "<set>"
+    assert "secret-value" not in json.dumps(output)
+
+
 def test_config_doctor_reports_local_and_server_checks(monkeypatch: Any, capsys: Any) -> None:
     calls: list[tuple[str, str]] = []
     config_response = {

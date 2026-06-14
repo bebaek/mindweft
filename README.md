@@ -69,11 +69,13 @@ progress, and final assistant messages.
 ## Configuration at a glance
 
 For desktop/local use, start from [`minigent.toml.template`](minigent.toml.template) and
-copy it to `minigent.toml`. This file is a friendly facade for the common app, auth, LLM,
-coding workspace, MCP, voice, and quality settings. Set `MINIGENT_CONFIG_FILE` to point at
-a different TOML file. Existing `.env` files and real environment variables still work;
-precedence is `environment > .env > minigent.toml > defaults`, so deployment and
-secret-management workflows can keep using env overrides.
+copy it to `minigent.toml` with `uv run minigent config init`. This file is a friendly
+facade for the common app, auth, LLM, coding workspace, MCP, voice, and quality settings.
+Set `MINIGENT_CONFIG_FILE` to point at a different TOML file. Existing `.env` files and
+real environment variables still work; precedence is `environment > .env > minigent.toml >
+defaults`, so deployment and secret-management workflows can keep using env overrides. Use
+`uv run minigent config print --resolved` to inspect the local resolved env mapping with
+secret-looking values masked.
 
 Start from [`.env.template`](.env.template) for full local or deployment settings. Common knobs:
 
