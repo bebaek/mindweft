@@ -195,6 +195,7 @@ it deliberately.
 
 ```bash
 uv run pytest
+MINIGENT_RUN_E2E_TESTS=true uv run pytest -m e2e
 uv run ruff check .
 uv run ruff format .
 uv run basedpyright

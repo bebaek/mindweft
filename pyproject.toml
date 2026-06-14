@@ -86,4 +86,5 @@ pythonVersion = "3.11"
 testpaths = ["tests"]
 markers = [
   "integration: opt-in tests that start local services or call external CLIs",
+  "e2e: end-to-end tests that start a live Minigent server",
 ]
