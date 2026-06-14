@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from dotenv import load_dotenv
+from app.unified_config import apply_startup_config
 
 
 def load_environment() -> None:
-    load_dotenv(dotenv_path=Path(".env"), override=False)
+    apply_startup_config()

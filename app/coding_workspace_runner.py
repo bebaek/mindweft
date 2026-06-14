@@ -17,6 +17,8 @@ from typing import Any
 
 from dotenv import dotenv_values
 
+from app.unified_config import apply_unified_config_to_env
+
 DEFAULT_API_HOST = "127.0.0.1"
 DEFAULT_API_PORT = 8000
 DEFAULT_BRIDGE_HOST = "127.0.0.1"
@@ -850,8 +852,14 @@ def resolve_workspace_roots(
 def load_env_file(env_file: str) -> dict[str, str]:
     env = dict(os.environ)
     path = Path(env_file)
+    base_dir = path.parent if path.exists() else Path.cwd()
+    values = dotenv_values(path) if path.exists() else {}
+    source_env = dict(env)
+    source_env.update({key: value for key, value in values.items() if value is not None})
+    apply_unified_config_to_env(source_env, base_dir=base_dir)
+    for key, value in source_env.items():
+        env.setdefault(key, value)
     if path.exists():
-        values = dotenv_values(path)
         for key, value in values.items():
             if value is not None:
                 env[key] = value

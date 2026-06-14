@@ -68,7 +68,14 @@ progress, and final assistant messages.
 
 ## Configuration at a glance
 
-Start from [`.env.template`](.env.template) for local or deployment settings. Common knobs:
+For desktop/local use, start from [`minigent.toml.template`](minigent.toml.template) and
+copy it to `minigent.toml`. This file is a friendly facade for the common app, auth, LLM,
+coding workspace, MCP, voice, and quality settings. Set `MINIGENT_CONFIG_FILE` to point at
+a different TOML file. Existing `.env` files and real environment variables still work;
+precedence is `environment > .env > minigent.toml > defaults`, so deployment and
+secret-management workflows can keep using env overrides.
+
+Start from [`.env.template`](.env.template) for full local or deployment settings. Common knobs:
 
 | Setting | Purpose |
 | --- | --- |
