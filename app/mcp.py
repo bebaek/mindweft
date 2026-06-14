@@ -205,11 +205,22 @@ class MCPHTTPClient:
             payload["params"] = params
 
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
-            response = await client.post(
-                self._config.url,
-                json=payload,
-                headers=headers,
-            )
+            try:
+                response = await client.post(
+                    self._config.url,
+                    json=payload,
+                    headers=headers,
+                )
+            except httpx.TimeoutException as exc:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"MCP notification timed out for server '{self._config.name}' after {self._timeout:g}s",
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"MCP notification failed for server '{self._config.name}': {exc}",
+                ) from exc
         if response.status_code not in (200, 202):
             raise HTTPException(
                 status_code=502,
@@ -269,6 +280,11 @@ class MCPHTTPClient:
                 raise HTTPException(
                     status_code=502,
                     detail=f"MCP server '{self._config.name}' HTTP error: {exc.response.text}",
+                ) from exc
+            except httpx.TimeoutException as exc:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"MCP server '{self._config.name}' request timed out after {self._timeout:g}s",
                 ) from exc
             except httpx.HTTPError as exc:
                 raise HTTPException(

@@ -4,6 +4,7 @@ import logging
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from app.mcp import MCPHTTPClient, MCPPathPolicy, MCPServerConfig, load_mcp_server_configs_from_env
 from app.redaction import RedactingLogFilter, install_log_redaction
@@ -504,6 +505,63 @@ def test_mcp_http_client_returns_error_if_reinitialized_session_is_still_rejecte
         "notifications/initialized",
         "tools/list",
     ]
+
+
+def test_mcp_http_client_maps_request_timeout_to_504() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow upstream", request=request)
+
+    client = MCPHTTPClient(
+        config=MCPServerConfig(
+            name="demo",
+            url="https://example.com/mcp",
+            headers={},
+            timeout_seconds=12,
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(client.list_tools())
+
+    assert exc_info.value.status_code == 504
+    assert exc_info.value.detail == "MCP server 'demo' request timed out after 12s"
+
+
+def test_mcp_http_client_maps_notification_timeout_to_504() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read().decode())
+        if body["method"] == "initialize":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "protocolVersion": "2025-11-25",
+                        "serverInfo": {"name": "demo-server", "version": "1.2.3"},
+                        "capabilities": {"tools": {}},
+                    },
+                },
+            )
+        raise httpx.ReadTimeout("slow notification", request=request)
+
+    client = MCPHTTPClient(
+        config=MCPServerConfig(
+            name="demo",
+            url="https://example.com/mcp",
+            headers={},
+            timeout_seconds=12,
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(client.list_tools())
+
+    assert exc_info.value.status_code == 504
+    assert exc_info.value.detail == "MCP notification timed out for server 'demo' after 12s"
 
 
 def test_redacting_log_filter_redacts_httpx_style_log_messages(
