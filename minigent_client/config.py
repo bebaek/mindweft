@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field, replace
+import tomllib
+from dataclasses import dataclass, field, fields, replace
+from pathlib import Path
 from typing import Any
 
 
@@ -97,10 +99,12 @@ class ClientConfig:
     openwakeword_threshold: float = 0.5
     principal: PrincipalConfig = PrincipalConfig(user_id="demo-user", tenant_id="demo-tenant")
     extra_headers: dict[str, str] = field(default_factory=dict)
+    config_path: str | None = None
 
     @classmethod
-    def from_env(cls) -> "ClientConfig":
-        return cls(
+    def from_env(cls, config_path: str | os.PathLike[str] | None = None) -> "ClientConfig":
+        file_overrides, loaded_config_path = load_client_config_overrides(config_path)
+        config = cls(
             base_url=os.getenv("MINIGENT_BASE_URL", "http://127.0.0.1:8000").rstrip("/"),
             wake_phrase=os.getenv("MINIGENT_VOICE_WAKE_PHRASE", "hey minigent").strip(),
             prompt_preamble=_clean_optional(os.getenv("MINIGENT_VOICE_PROMPT_PREAMBLE")),
@@ -185,7 +189,299 @@ class ClientConfig:
                 is_admin=os.getenv("MINIGENT_VOICE_ADMIN", "").lower() in {"1", "true", "yes"},
                 api_token=_clean_optional(os.getenv("MINIGENT_VOICE_API_TOKEN")),
             ),
+            config_path=loaded_config_path,
         )
+        return _apply_file_overrides(config, file_overrides)
+
+
+CLIENT_CONFIG_ENV_BY_FIELD: dict[str, tuple[str, ...]] = {
+    "base_url": ("MINIGENT_BASE_URL",),
+    "wake_phrase": ("MINIGENT_VOICE_WAKE_PHRASE",),
+    "prompt_preamble": ("MINIGENT_VOICE_PROMPT_PREAMBLE",),
+    "location": ("MINIGENT_VOICE_LOCATION",),
+    "debug_show_prompt": ("MINIGENT_VOICE_DEBUG_SHOW_PROMPT",),
+    "stream_runs": ("MINIGENT_CLIENT_STREAM_RUNS",),
+    "show_tool_results": ("MINIGENT_CLIENT_SHOW_TOOL_RESULTS",),
+    "show_reasoning": ("MINIGENT_CLIENT_SHOW_REASONING",),
+    "token_mode": ("MINIGENT_CLIENT_TOKENS",),
+    "chat_submit_mode": ("MINIGENT_CLIENT_CHAT_SUBMIT_MODE",),
+    "wake_acknowledgement": ("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT",),
+    "wake_acknowledgement_sound": ("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND",),
+    "capture_ended_acknowledgement": ("MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT",),
+    "capture_ended_acknowledgement_sound": ("MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT_SOUND",),
+    "stt_provider": ("MINIGENT_VOICE_STT_PROVIDER",),
+    "stt_device": ("MINIGENT_VOICE_STT_DEVICE",),
+    "stt_compute_type": ("MINIGENT_VOICE_STT_COMPUTE_TYPE",),
+    "stt_language": ("MINIGENT_VOICE_STT_LANGUAGE",),
+    "tts_provider": ("MINIGENT_VOICE_TTS_PROVIDER",),
+    "tts_voice": ("MINIGENT_VOICE_TTS_VOICE",),
+    "tts_model": ("MINIGENT_VOICE_TTS_MODEL",),
+    "tts_model_dir": ("MINIGENT_VOICE_TTS_MODEL_DIR",),
+    "tts_speaker": ("MINIGENT_VOICE_TTS_SPEAKER",),
+    "tts_length_scale": ("MINIGENT_VOICE_TTS_LENGTH_SCALE",),
+    "tts_sentence_silence": ("MINIGENT_VOICE_TTS_SENTENCE_SILENCE",),
+    "wakeword_provider": ("MINIGENT_VOICE_WAKEWORD_PROVIDER",),
+    "skill_name": ("MINIGENT_VOICE_SKILL",),
+    "agent_presets": ("MINIGENT_CLIENT_AGENT_PRESETS",),
+    "thread_id": ("MINIGENT_VOICE_THREAD_ID",),
+    "audio_device": ("MINIGENT_VOICE_AUDIO_DEVICE",),
+    "debug_capture_path": ("MINIGENT_VOICE_DEBUG_CAPTURE_PATH",),
+    "stt_debug_path": ("MINIGENT_VOICE_STT_DEBUG_PATH",),
+    "ducking_mode": ("MINIGENT_VOICE_DUCKING_MODE",),
+    "ducked_output_volume": ("MINIGENT_VOICE_DUCKED_OUTPUT_VOLUME",),
+    "stt_gain": ("MINIGENT_VOICE_STT_GAIN",),
+    "stt_normalize_peak": ("MINIGENT_VOICE_STT_NORMALIZE_PEAK",),
+    "stt_normalize_target_peak": ("MINIGENT_VOICE_STT_NORMALIZE_TARGET_PEAK",),
+    "audio_sample_rate": ("MINIGENT_VOICE_AUDIO_SAMPLE_RATE",),
+    "audio_block_size": ("MINIGENT_VOICE_AUDIO_BLOCK_SIZE",),
+    "speech_silence_ms": ("MINIGENT_VOICE_END_SILENCE_MS",),
+    "speech_max_seconds": ("MINIGENT_VOICE_MAX_RECORD_SECONDS",),
+    "wakeword_cooldown_ms": ("MINIGENT_VOICE_WAKEWORD_COOLDOWN_MS",),
+    "post_wake_speech_timeout_ms": ("MINIGENT_VOICE_POST_WAKE_SPEECH_TIMEOUT_MS",),
+    "follow_up_timeout_ms": ("MINIGENT_VOICE_FOLLOW_UP_TIMEOUT_MS",),
+    "post_wake_settle_ms": ("MINIGENT_VOICE_POST_WAKE_SETTLE_MS",),
+    "wakeword_preroll_ms": ("MINIGENT_VOICE_WAKEWORD_PREROLL_MS",),
+    "stt_pad_leading_ms": ("MINIGENT_VOICE_STT_PAD_LEADING_MS",),
+    "stt_pad_trailing_ms": ("MINIGENT_VOICE_STT_PAD_TRAILING_MS",),
+    "vad_threshold": ("MINIGENT_VOICE_VAD_THRESHOLD",),
+    "stt_model": ("MINIGENT_VOICE_STT_MODEL",),
+    "openai_api_key": ("OPENAI_API_KEY",),
+    "openai_base_url": ("OPENAI_BASE_URL",),
+    "openrouter_api_key": ("OPENROUTER_API_KEY",),
+    "openrouter_base_url": ("OPENROUTER_BASE_URL",),
+    "openrouter_http_referer": ("OPENROUTER_HTTP_REFERER",),
+    "openrouter_app_name": ("OPENROUTER_APP_NAME",),
+    "picovoice_access_key": ("PICOVOICE_ACCESS_KEY",),
+    "porcupine_keyword_path": ("MINIGENT_VOICE_KEYWORD_PATH",),
+    "openwakeword_model": ("MINIGENT_VOICE_OWW_MODEL",),
+    "openwakeword_threshold": ("MINIGENT_VOICE_OWW_THRESHOLD",),
+}
+
+PRINCIPAL_CONFIG_ENV_BY_FIELD: dict[str, str] = {
+    "user_id": "MINIGENT_VOICE_USER_ID",
+    "tenant_id": "MINIGENT_VOICE_TENANT_ID",
+    "is_admin": "MINIGENT_VOICE_ADMIN",
+    "api_token": "MINIGENT_VOICE_API_TOKEN",
+}
+
+VOICE_CONFIG_FIELD_ALIASES: dict[str, str] = {
+    "wake_phrase": "wake_phrase",
+    "prompt_preamble": "prompt_preamble",
+    "location": "location",
+    "debug_show_prompt": "debug_show_prompt",
+    "skill": "skill_name",
+    "skill_name": "skill_name",
+    "thread_id": "thread_id",
+    "audio_device": "audio_device",
+    "debug_capture_path": "debug_capture_path",
+    "stt_debug_path": "stt_debug_path",
+    "ducking_mode": "ducking_mode",
+    "ducked_output_volume": "ducked_output_volume",
+    "stt_provider": "stt_provider",
+    "stt_device": "stt_device",
+    "stt_compute_type": "stt_compute_type",
+    "stt_language": "stt_language",
+    "stt_model": "stt_model",
+    "stt_gain": "stt_gain",
+    "stt_normalize_peak": "stt_normalize_peak",
+    "stt_normalize_target_peak": "stt_normalize_target_peak",
+    "tts_provider": "tts_provider",
+    "tts_voice": "tts_voice",
+    "tts_model": "tts_model",
+    "tts_model_dir": "tts_model_dir",
+    "tts_speaker": "tts_speaker",
+    "tts_length_scale": "tts_length_scale",
+    "tts_sentence_silence": "tts_sentence_silence",
+    "wakeword_provider": "wakeword_provider",
+    "audio_sample_rate": "audio_sample_rate",
+    "audio_block_size": "audio_block_size",
+    "speech_silence_ms": "speech_silence_ms",
+    "speech_max_seconds": "speech_max_seconds",
+    "wakeword_cooldown_ms": "wakeword_cooldown_ms",
+    "post_wake_speech_timeout_ms": "post_wake_speech_timeout_ms",
+    "follow_up_timeout_ms": "follow_up_timeout_ms",
+    "post_wake_settle_ms": "post_wake_settle_ms",
+    "wakeword_preroll_ms": "wakeword_preroll_ms",
+    "stt_pad_leading_ms": "stt_pad_leading_ms",
+    "stt_pad_trailing_ms": "stt_pad_trailing_ms",
+    "vad_threshold": "vad_threshold",
+}
+
+WAKEWORD_CONFIG_FIELD_ALIASES: dict[str, str] = {
+    "provider": "wakeword_provider",
+    "keyword_path": "porcupine_keyword_path",
+    "porcupine_keyword_path": "porcupine_keyword_path",
+    "model": "openwakeword_model",
+    "openwakeword_model": "openwakeword_model",
+    "threshold": "openwakeword_threshold",
+    "openwakeword_threshold": "openwakeword_threshold",
+}
+
+
+def default_client_config_paths() -> tuple[Path, ...]:
+    return (
+        Path.home() / ".config" / "minigent" / "client.toml",
+        Path.home() / ".minigent" / "client.toml",
+        Path.cwd() / ".minigent-client.toml",
+    )
+
+
+def load_client_config_overrides(
+    config_path: str | os.PathLike[str] | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    explicit_path = config_path or _clean_optional(os.getenv("MINIGENT_CLIENT_CONFIG"))
+    if explicit_path is not None:
+        path = Path(explicit_path).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"Minigent client config file not found: {path}")
+        return parse_client_config_file(path), str(path)
+    for path in default_client_config_paths():
+        if path.exists():
+            return parse_client_config_file(path), str(path)
+    return {}, None
+
+
+def parse_client_config_file(path: str | os.PathLike[str]) -> dict[str, Any]:
+    config_path = Path(path).expanduser()
+    with config_path.open("rb") as handle:
+        raw = tomllib.load(handle)
+    if not isinstance(raw, dict):
+        raise ValueError("Minigent client config file must contain a TOML table")
+    return parse_client_config(raw)
+
+
+def parse_client_config(raw: dict[str, Any]) -> dict[str, Any]:
+    valid_fields = {item.name for item in fields(ClientConfig)} - {
+        "principal",
+        "extra_headers",
+        "config_path",
+    }
+    overrides: dict[str, Any] = {}
+    for key, value in raw.items():
+        if key in {"principal", "voice", "agents"}:
+            continue
+        if key in valid_fields:
+            overrides[key] = value
+
+    principal = raw.get("principal")
+    if principal is not None:
+        if not isinstance(principal, dict):
+            raise ValueError("[principal] in Minigent client config must be a table")
+        overrides["principal"] = _parse_principal_config(principal)
+
+    voice = raw.get("voice")
+    if voice is not None:
+        if not isinstance(voice, dict):
+            raise ValueError("[voice] in Minigent client config must be a table")
+        _apply_named_table(voice, VOICE_CONFIG_FIELD_ALIASES, overrides)
+        wakeword = voice.get("wakeword")
+        if wakeword is not None:
+            if not isinstance(wakeword, dict):
+                raise ValueError("[voice.wakeword] in Minigent client config must be a table")
+            _apply_named_table(wakeword, WAKEWORD_CONFIG_FIELD_ALIASES, overrides)
+
+    agents = raw.get("agents")
+    if agents is not None:
+        if not isinstance(agents, dict):
+            raise ValueError("[agents] in Minigent client config must be a table")
+        overrides["agent_presets"] = parse_agent_presets(agents)
+    return overrides
+
+
+def _apply_named_table(
+    table: dict[str, Any], aliases: dict[str, str], overrides: dict[str, Any]
+) -> None:
+    for key, value in table.items():
+        field_name = aliases.get(key)
+        if field_name is not None:
+            overrides[field_name] = value
+
+
+def _parse_principal_config(raw: dict[str, Any]) -> PrincipalConfig:
+    return PrincipalConfig(
+        user_id=str(raw.get("user_id", "demo-user")),
+        tenant_id=str(raw.get("tenant_id", "demo-tenant")),
+        is_admin=bool(raw.get("is_admin", False)),
+        api_token=_clean_optional(str(raw["api_token"]))
+        if raw.get("api_token") is not None
+        else None,
+    )
+
+
+def _apply_file_overrides(config: ClientConfig, overrides: dict[str, Any]) -> ClientConfig:
+    if not overrides:
+        return config
+    replace_values: dict[str, Any] = {}
+    for field_name, value in overrides.items():
+        if field_name == "principal":
+            replace_values["principal"] = _merge_principal_file_override(config.principal, value)
+            continue
+        if any(name in os.environ for name in CLIENT_CONFIG_ENV_BY_FIELD.get(field_name, ())):
+            continue
+        replace_values[field_name] = _coerce_config_value(field_name, value)
+    if not replace_values:
+        return config
+    return replace(config, **replace_values)
+
+
+def _merge_principal_file_override(
+    env_principal: PrincipalConfig, file_principal: PrincipalConfig
+) -> PrincipalConfig:
+    values: dict[str, Any] = {}
+    for field_name, env_name in PRINCIPAL_CONFIG_ENV_BY_FIELD.items():
+        values[field_name] = (
+            getattr(env_principal, field_name)
+            if env_name in os.environ
+            else getattr(file_principal, field_name)
+        )
+    return PrincipalConfig(**values)
+
+
+def _coerce_config_value(field_name: str, value: Any) -> Any:
+    if field_name == "agent_presets":
+        return value if isinstance(value, tuple) else parse_agent_presets(value)
+    if field_name in {
+        "debug_show_prompt",
+        "stream_runs",
+        "show_tool_results",
+        "show_reasoning",
+        "resume_last",
+        "stt_normalize_peak",
+    }:
+        return bool(value)
+    if field_name in {
+        "tts_speaker",
+        "ducked_output_volume",
+        "audio_sample_rate",
+        "audio_block_size",
+        "speech_silence_ms",
+        "wakeword_cooldown_ms",
+        "post_wake_speech_timeout_ms",
+        "follow_up_timeout_ms",
+        "post_wake_settle_ms",
+        "wakeword_preroll_ms",
+        "stt_pad_leading_ms",
+        "stt_pad_trailing_ms",
+    }:
+        return int(value) if value is not None else None
+    if field_name in {
+        "tts_length_scale",
+        "tts_sentence_silence",
+        "stt_gain",
+        "stt_normalize_target_peak",
+        "speech_max_seconds",
+        "vad_threshold",
+        "openwakeword_threshold",
+    }:
+        return float(value) if value is not None else None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if field_name in {"base_url", "openai_base_url", "openrouter_base_url"}:
+            return stripped.rstrip("/")
+        return stripped
+    return value
 
 
 def build_client_config(

@@ -87,6 +87,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Interaction backend. `chat` is a plain terminal chat loop, `stdin` keeps the text wake-phrase scaffold, `manual-audio` uses the microphone after manual activation, and `passive-audio` adds continuous wake-word listening.",
     )
     parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to a TOML client config file. Defaults to MINIGENT_CLIENT_CONFIG, ~/.config/minigent/client.toml, ~/.minigent/client.toml, or ./.minigent-client.toml.",
+    )
+    parser.add_argument(
         "--base-url",
         default=None,
         help="Base URL for the Minigent API. Defaults to MINIGENT_BASE_URL or http://127.0.0.1:8000.",
@@ -279,6 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_config(args: argparse.Namespace) -> ClientConfig:
+    env_config = ClientConfig.from_env(config_path=args.config)
     env_config = build_client_config(
         base_url=args.base_url,
         api_token=args.api_token,
@@ -287,6 +293,7 @@ def build_config(args: argparse.Namespace) -> ClientConfig:
         admin=args.admin if args.admin else None,
         stream_runs=args.stream_runs or None,
         wake_phrase=args.wake_phrase,
+        env_config=env_config,
     )
     principal = env_config.principal
     config = ClientConfig(
@@ -366,7 +373,9 @@ def build_config(args: argparse.Namespace) -> ClientConfig:
         openwakeword_model=args.oww_model or env_config.openwakeword_model,
         openwakeword_threshold=env_config.openwakeword_threshold,
         principal=principal,
+        extra_headers=env_config.extra_headers,
         resume_last=args.resume_last,
+        config_path=env_config.config_path,
     )
     if args.resume_last:
         config = replace(config, thread_id=load_remembered_client_thread(config))
@@ -552,6 +561,7 @@ _BACKEND_SUBCOMMANDS = {
 
 _OPTIONS_WITH_VALUES = {
     "--backend",
+    "--config",
     "--base-url",
     "--wake-phrase",
     "--wake-acknowledgement",

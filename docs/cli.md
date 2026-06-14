@@ -14,6 +14,52 @@ uv run minigent-client chat
 
 After installing globally (`uv tool install '.[voice]'`), drop the `uv run` prefix.
 
+## `minigent-client` config file
+
+Interactive `minigent-client` can load a TOML config file for stable local defaults. The
+lookup order is:
+
+1. `--config <path>`
+2. `MINIGENT_CLIENT_CONFIG`
+3. `~/.config/minigent/client.toml`
+4. `~/.minigent/client.toml`
+5. `./.minigent-client.toml`
+
+Environment variables still override file values, and CLI flags override both. Prefer
+keeping secrets such as API tokens and provider keys in environment variables rather than in
+this file.
+
+Example:
+
+```toml
+base_url = "http://127.0.0.1:8000"
+stream_runs = true
+show_reasoning = true
+chat_submit_mode = "alt-enter"
+
+[principal]
+user_id = "demo-user"
+tenant_id = "demo-tenant"
+
+[voice]
+wake_phrase = "hey minigent"
+stt_provider = "faster-whisper"
+stt_device = "cpu"
+tts_provider = "say"
+tts_voice = "Samantha"
+follow_up_timeout_ms = 3000
+
+[voice.wakeword]
+provider = "openwakeword"
+model = "okay_nabu"
+threshold = 0.5
+
+[agents.coding-inspect]
+skill_names = ["coding-workspace"]
+capability_profile = "inspect"
+description = "Read-only coding assistant"
+```
+
 ## Installation
 
 ```bash

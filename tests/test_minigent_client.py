@@ -36,6 +36,8 @@ from minigent_client.cli import (
     run_chat_loop,
 )
 from minigent_client.config import (
+    CLIENT_CONFIG_ENV_BY_FIELD,
+    PRINCIPAL_CONFIG_ENV_BY_FIELD,
     AgentPreset,
     ClientConfig,
     PrincipalConfig,
@@ -1625,6 +1627,107 @@ def test_minigent_client_config_from_env(monkeypatch) -> None:
     )
 
 
+def test_minigent_client_config_file_supplies_defaults_and_agent_presets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for env_names in CLIENT_CONFIG_ENV_BY_FIELD.values():
+        for env_name in env_names:
+            monkeypatch.delenv(env_name, raising=False)
+    for env_name in PRINCIPAL_CONFIG_ENV_BY_FIELD.values():
+        monkeypatch.delenv(env_name, raising=False)
+    config_path = tmp_path / "client.toml"
+    config_path.write_text(
+        """
+base_url = "http://api.example.test/"
+stream_runs = true
+show_reasoning = true
+chat_submit_mode = "alt-enter"
+
+[principal]
+user_id = "file-user"
+tenant_id = "file-tenant"
+is_admin = true
+api_token = "file-token"
+
+[voice]
+wake_phrase = "computer"
+stt_provider = "faster-whisper"
+stt_device = "cpu"
+tts_provider = "say"
+tts_voice = "Samantha"
+follow_up_timeout_ms = 3000
+
+[voice.wakeword]
+provider = "openwakeword"
+model = "okay_nabu"
+threshold = 0.7
+
+[agents.coding-inspect]
+skill_names = ["coding-workspace"]
+capability_profile = "inspect"
+description = "Read-only coding agent"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = ClientConfig.from_env(config_path=config_path)
+
+    assert config.config_path == str(config_path)
+    assert config.base_url == "http://api.example.test"
+    assert config.stream_runs is True
+    assert config.show_reasoning is True
+    assert config.chat_submit_mode == "alt-enter"
+    assert config.wake_phrase == "computer"
+    assert config.stt_provider == "faster-whisper"
+    assert config.stt_device == "cpu"
+    assert config.tts_provider == "say"
+    assert config.tts_voice == "Samantha"
+    assert config.follow_up_timeout_ms == 3000
+    assert config.wakeword_provider == "openwakeword"
+    assert config.openwakeword_model == "okay_nabu"
+    assert config.openwakeword_threshold == 0.7
+    assert config.principal == PrincipalConfig(
+        user_id="file-user",
+        tenant_id="file-tenant",
+        is_admin=True,
+        api_token="file-token",
+    )
+    assert config.agent_presets == (
+        AgentPreset(
+            name="coding-inspect",
+            skills=("coding-workspace",),
+            capability_profile="inspect",
+            description="Read-only coding agent",
+        ),
+    )
+
+    monkeypatch.setenv("MINIGENT_BASE_URL", "http://env.example.test")
+    monkeypatch.setenv("MINIGENT_VOICE_USER_ID", "env-user")
+    overridden = ClientConfig.from_env(config_path=config_path)
+
+    assert overridden.base_url == "http://env.example.test"
+    assert overridden.principal.user_id == "env-user"
+    assert overridden.principal.tenant_id == "file-tenant"
+
+
+def test_build_config_accepts_explicit_config_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("MINIGENT_BASE_URL", raising=False)
+    config_path = tmp_path / "client.toml"
+    config_path.write_text(
+        'base_url = "http://api.example.test"\n[voice]\nwake_phrase = "computer"\n',
+        encoding="utf-8",
+    )
+
+    args = build_parser().parse_args(["--config", str(config_path), "--wake-phrase", "jarvis"])
+    config = build_config(args)
+
+    assert config.config_path == str(config_path)
+    assert config.base_url == "http://api.example.test"
+    assert config.wake_phrase == "jarvis"
+
+
 def test_minigent_client_sends_raw_message_when_location_is_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2490,6 +2593,13 @@ def test_parser_accepts_chat_backend() -> None:
     args = build_parser().parse_args(["--backend", "chat"])
 
     assert args.backend == "chat"
+
+
+def test_backend_subcommand_skips_config_value() -> None:
+    backend, argv = voice_cli._consume_backend_subcommand(["--config", "client.toml", "chat"])
+
+    assert backend == "chat"
+    assert argv == ["--config", "client.toml"]
 
 
 def test_wrap_feedback_with_ambient_restore_uses_controller_hook() -> None:
