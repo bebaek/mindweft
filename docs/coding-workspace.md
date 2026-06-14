@@ -189,6 +189,10 @@ The file can be a JSON array or an object with a `servers` array. Each server en
   Defaults to `false`; unmanaged HTTP entries are only registered as external endpoints.
 - `health_url`: optional URL to poll for a managed HTTP server before starting the API.
 - `startup_timeout_seconds`: optional managed HTTP health-check timeout; defaults to `30`.
+- `request_timeout`: optional stdio bridge/gateway timeout while waiting for one MCP response;
+  defaults to `30`.
+- `timeout_seconds`: optional Minigent HTTP client timeout for calls to this MCP server;
+  defaults to `request_timeout` for coding MCP server files and to `30` in tenant configs.
 
 String values in `command`, `env`, `headers`, `url`, and `health_url` can reference dotenv or
 environment values with `${NAME}` placeholders. Prefer passing credentials through `env` or

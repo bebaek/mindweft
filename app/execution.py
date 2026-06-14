@@ -963,6 +963,11 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         entry.get("result_redaction", entry.get("resultRedaction")),
         context=f"Tenant '{tenant_id}' mcp server '{name}'",
     )
+    timeout_seconds = _positive_float_config(
+        tenant_id,
+        entry.get("timeout_seconds", entry.get("timeoutSeconds", 30.0)),
+        f"mcp server '{name}' timeout_seconds",
+    )
     if not isinstance(name, str) or not name:
         raise RuntimeError(f"Tenant '{tenant_id}' mcp server name must be a non-empty string")
     if not isinstance(url, str) or not url:
@@ -979,6 +984,7 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         allowed_tools=allowed_tools,
         path_policy=path_policy,
         result_redaction_policy=result_redaction_policy,
+        timeout_seconds=timeout_seconds,
     )
 
 

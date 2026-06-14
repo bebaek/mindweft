@@ -231,6 +231,7 @@ def _state_key(config: MCPServerConfig) -> str:
             config.result_redaction_policy.enabled,
             config.result_redaction_policy.mode,
             config.result_redaction_policy.sensitive_tools,
+            config.timeout_seconds,
         )
     )
 

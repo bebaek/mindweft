@@ -444,6 +444,8 @@ def test_load_coding_mcp_server_specs_loads_managed_http_server(tmp_path: Path) 
                         "url": "http://127.0.0.1:8766/mcp",
                         "health_url": "http://127.0.0.1:8766/ping",
                         "startup_timeout_seconds": 2,
+                        "request_timeout": 45,
+                        "timeout_seconds": 50,
                         "env": {"SEARCH_API_KEY": "${SEARCH_API_KEY}"},
                         "headers": {"Authorization": "Bearer ${SEARCH_API_KEY}"},
                         "profiles": ["inspect"],
@@ -476,6 +478,8 @@ def test_load_coding_mcp_server_specs_loads_managed_http_server(tmp_path: Path) 
     assert specs[0].url == "http://127.0.0.1:8766/mcp"
     assert specs[0].health_url == "http://127.0.0.1:8766/ping"
     assert specs[0].startup_timeout_seconds == 2
+    assert specs[0].request_timeout == 45
+    assert specs[0].timeout_seconds == 50
     assert specs[0].env == {"SEARCH_API_KEY": "secret-token"}
     assert specs[0].headers == {"Authorization": "Bearer secret-token"}
 
@@ -487,12 +491,14 @@ def test_tenant_mcp_server_from_spec_preserves_headers() -> None:
         transport="http",
         headers={"Authorization": "Bearer token"},
         allowed_tools=["search"],
+        timeout_seconds=50,
     )
 
     assert runner.tenant_mcp_server_from_spec(spec) == {
         "name": "remote-tools",
         "url": "https://example.com/mcp",
         "headers": {"Authorization": "Bearer token"},
+        "timeout_seconds": 50,
         "allowed_tools": ["search"],
     }
 
@@ -542,12 +548,14 @@ def test_default_tenant_config_from_servers_builds_profiles() -> None:
             "name": "fs-workspace",
             "url": "http://127.0.0.1:8765/mcp",
             "headers": {},
+            "timeout_seconds": 30.0,
             "allowed_tools": ["read_file"],
         },
         {
             "name": "git-workspace",
             "url": "http://127.0.0.1:8770/mcp",
             "headers": {},
+            "timeout_seconds": 30.0,
             "allowed_tools": ["git_status"],
         },
     ]
@@ -578,6 +586,7 @@ def test_build_mcp_stdio_bridge_command_uses_declarative_spec() -> None:
         port=9001,
         path="/custom",
         allowed_tools=["inspect_repo"],
+        request_timeout=45,
         path_policy={"deny_globs": ["**/.env*"], "allow_globs": ["**/.env*.template"]},
     )
 
@@ -585,6 +594,7 @@ def test_build_mcp_stdio_bridge_command_uses_declarative_spec() -> None:
 
     assert "--path" in command
     assert command[command.index("--path") + 1] == "/custom"
+    assert command[command.index("--request-timeout") + 1] == "45"
     assert command[command.index("--allowed-tool") + 1] == "inspect_repo"
     assert command[command.index("--deny-glob") + 1] == "**/.env*"
     assert command[command.index("--allow-glob") + 1] == "**/.env*.template"
@@ -620,6 +630,7 @@ def test_mcp_gateway_config_from_specs_includes_stdio_servers_only() -> None:
             allowed_tools=["read_file"],
             path_policy={"deny_globs": ["**/.env*"]},
             env={"EXAMPLE": "1"},
+            request_timeout=45,
         ),
         runner.CodingMCPServerSpec(
             name="http-workspace",
@@ -633,6 +644,7 @@ def test_mcp_gateway_config_from_specs_includes_stdio_servers_only() -> None:
             {
                 "name": "stdio-workspace",
                 "command": ["stdio-server"],
+                "request_timeout": 45,
                 "allowed_tools": ["read_file"],
                 "path_policy": {"deny_globs": ["**/.env*"]},
                 "env": {"EXAMPLE": "1"},

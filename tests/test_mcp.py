@@ -19,6 +19,7 @@ def test_load_mcp_server_configs_from_env(monkeypatch) -> None:
                     "url": "https://example.com/mcp",
                     "headers": {"Authorization": "Bearer token"},
                     "allowed_tools": ["list_directory", "read_file"],
+                    "timeout_seconds": 45,
                     "path_policy": {
                         "deny_globs": ["**/.env*", "**/.git/**"],
                         "allow_globs": ["**/.env*.template"],
@@ -35,6 +36,7 @@ def test_load_mcp_server_configs_from_env(monkeypatch) -> None:
     assert configs[0].url == "https://example.com/mcp"
     assert configs[0].headers == {"Authorization": "Bearer token"}
     assert configs[0].allowed_tools == ["list_directory", "read_file"]
+    assert configs[0].timeout_seconds == 45
     assert configs[0].path_policy.deny_globs == ["**/.env*", "**/.git/**"]
     assert configs[0].path_policy.allow_globs == ["**/.env*.template"]
 

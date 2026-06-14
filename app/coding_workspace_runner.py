@@ -76,6 +76,8 @@ class CodingMCPServerSpec:
         managed: bool = False,
         health_url: str | None = None,
         startup_timeout_seconds: float = 30.0,
+        request_timeout: float = 30.0,
+        timeout_seconds: float = 30.0,
         enabled: bool = True,
     ) -> None:
         self.name = name
@@ -93,6 +95,8 @@ class CodingMCPServerSpec:
         self.managed = managed
         self.health_url = health_url
         self.startup_timeout_seconds = startup_timeout_seconds
+        self.request_timeout = request_timeout
+        self.timeout_seconds = timeout_seconds
         self.enabled = enabled
 
 
@@ -485,6 +489,8 @@ def mcp_server_specs_for_gateway(
                     managed=spec.managed,
                     health_url=spec.health_url,
                     startup_timeout_seconds=spec.startup_timeout_seconds,
+                    request_timeout=spec.request_timeout,
+                    timeout_seconds=spec.timeout_seconds,
                     enabled=spec.enabled,
                 )
             )
@@ -503,6 +509,7 @@ def mcp_gateway_config_from_specs(specs: list[CodingMCPServerSpec]) -> dict[str,
         server: dict[str, Any] = {
             "name": spec.name,
             "command": spec.command,
+            "request_timeout": spec.request_timeout,
         }
         if spec.allowed_tools is not None:
             server["allowed_tools"] = spec.allowed_tools
@@ -678,6 +685,14 @@ def coding_mcp_server_spec_from_mapping(
         raise RuntimeError(
             f"coding MCP server '{name}' startup_timeout_seconds must be a non-negative number"
         )
+    request_timeout = raw_server.get("request_timeout", raw_server.get("requestTimeout", 30.0))
+    if not isinstance(request_timeout, int | float) or request_timeout <= 0:
+        raise RuntimeError(f"coding MCP server '{name}' request_timeout must be a positive number")
+    timeout_seconds = raw_server.get(
+        "timeout_seconds", raw_server.get("timeoutSeconds", request_timeout)
+    )
+    if not isinstance(timeout_seconds, int | float) or timeout_seconds <= 0:
+        raise RuntimeError(f"coding MCP server '{name}' timeout_seconds must be a positive number")
 
     return CodingMCPServerSpec(
         name=name,
@@ -697,6 +712,8 @@ def coding_mcp_server_spec_from_mapping(
         managed=managed,
         health_url=health_url,
         startup_timeout_seconds=float(startup_timeout_seconds),
+        request_timeout=float(request_timeout),
+        timeout_seconds=float(timeout_seconds),
         enabled=env_flag_enabled(str(raw_server.get("enabled", "true"))),
     )
 
@@ -866,6 +883,7 @@ def tenant_mcp_server_from_spec(spec: CodingMCPServerSpec) -> dict[str, Any]:
         "name": spec.name,
         "url": spec.url,
         "headers": dict(spec.headers),
+        "timeout_seconds": spec.timeout_seconds,
     }
     if spec.allowed_tools is not None:
         server["allowed_tools"] = list(spec.allowed_tools)
@@ -1199,6 +1217,8 @@ def build_mcp_stdio_bridge_command(spec: CodingMCPServerSpec) -> list[str]:
         str(spec.port),
         "--path",
         spec.path,
+        "--request-timeout",
+        str(spec.request_timeout),
         *allowed_tool_args,
         *deny_glob_args,
         *allow_glob_args,

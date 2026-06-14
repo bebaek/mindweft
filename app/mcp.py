@@ -20,6 +20,7 @@ from app.redaction import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_MCP_PROTOCOL_VERSION = "2025-11-25"
+DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class MCPServerConfig:
     result_redaction_policy: ToolResultRedactionPolicy = field(
         default_factory=ToolResultRedactionPolicy
     )
+    timeout_seconds: float = DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -56,11 +58,11 @@ class MCPHTTPClient:
         self,
         config: MCPServerConfig,
         transport: httpx.AsyncBaseTransport | None = None,
-        timeout: float = 15.0,
+        timeout: float | None = None,
     ) -> None:
         self._config = config
         self._transport = transport
-        self._timeout = timeout
+        self._timeout = timeout if timeout is not None else config.timeout_seconds
         self._session_id: str | None = None
         self._negotiated_protocol_version: str = config.protocol_version
         self._initialized = False
@@ -365,6 +367,13 @@ def load_mcp_server_configs_from_env() -> list[MCPServerConfig]:
             entry.get("result_redaction", entry.get("resultRedaction")),
             context=f"MCP server '{name}'",
         )
+        timeout_seconds = _parse_positive_float_config(
+            entry.get(
+                "timeout_seconds",
+                entry.get("timeoutSeconds", DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS),
+            ),
+            f"MCP server '{name}' timeout_seconds",
+        )
         if not isinstance(name, str) or not name:
             raise RuntimeError("Each MINIGENT_MCP_SERVERS entry must include a non-empty 'name'")
         if not isinstance(url, str) or not url:
@@ -387,9 +396,22 @@ def load_mcp_server_configs_from_env() -> list[MCPServerConfig]:
                 allowed_tools=list(allowed_tools) if allowed_tools is not None else None,
                 path_policy=path_policy,
                 result_redaction_policy=result_redaction_policy,
+                timeout_seconds=timeout_seconds,
             )
         )
     return configs
+
+
+def _parse_positive_float_config(value: object, label: str) -> float:
+    if not isinstance(value, str | int | float):
+        raise RuntimeError(f"{label} must be numeric")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{label} must be numeric") from exc
+    if parsed <= 0:
+        raise RuntimeError(f"{label} must be positive")
+    return parsed
 
 
 def _parse_path_policy(server_name: object, raw: object) -> MCPPathPolicy:

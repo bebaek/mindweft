@@ -1609,6 +1609,7 @@ def _serialize_config_payload(config: TenantExecutionConfig) -> dict[str, Any]:
                         "deny_globs": list(server.path_policy.deny_globs),
                         "allow_globs": list(server.path_policy.allow_globs),
                     },
+                    "timeout_seconds": server.timeout_seconds,
                 }
                 for server in config.tools.mcp_servers
             ],

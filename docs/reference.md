@@ -61,6 +61,7 @@ server with `result_redaction` / `resultRedaction`:
         "name": "filesystem",
         "url": "http://127.0.0.1:9001/mcp",
         "headers": {},
+        "timeout_seconds": 60,
         "result_redaction": {"mode": "full"}
       }
     ]
