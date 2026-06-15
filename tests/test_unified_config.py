@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from app.config import load_environment
 from app.unified_config import apply_unified_config_to_env, load_unified_config_env
 
@@ -118,3 +120,39 @@ shell_enabled = true
 
     assert env["MINIGENT_CODING_WORKSPACES"] == "/from/dotenv"
     assert env["MINIGENT_CODING_SHELL_ENABLED"] == "true"
+
+
+def test_unified_config_rejects_unknown_keys(tmp_path: Path) -> None:
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[llm]
+provider = "mock"
+unknown = "value"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unknown key: llm.unknown"):
+        load_unified_config_env(config_path)
+
+
+def test_unified_config_rejects_wrong_value_types(tmp_path: Path) -> None:
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[app]
+port = "not-a-number"
+
+[coding]
+workspaces = ["/tmp", 123]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        load_unified_config_env(config_path)
+
+    message = str(exc_info.value)
+    assert "app.port must be an integer" in message
+    assert "coding.workspaces must be a string or list of strings" in message

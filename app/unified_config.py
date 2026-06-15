@@ -8,6 +8,8 @@ from typing import Any
 
 from dotenv import dotenv_values
 
+from app.unified_config_schema import parse_unified_config
+
 CONFIG_FILE_ENV = "MINIGENT_CONFIG_FILE"
 DEFAULT_CONFIG_FILE = "minigent.toml"
 
@@ -138,6 +140,7 @@ def load_unified_config_env(
         return {}
     with path.open("rb") as file:
         data = tomllib.load(file)
+    parse_unified_config(data)
     env: dict[str, str] = {}
     _collect_simple_sections(data, env)
     _collect_llm_config(data.get("llm"), env, source_env=source_env)

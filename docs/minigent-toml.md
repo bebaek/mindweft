@@ -26,6 +26,9 @@ Check common config problems:
 uv run minigent config doctor
 ```
 
+Minigent validates `minigent.toml` against a typed schema before mapping it to environment
+variables. Unknown keys and wrong value types are reported as configuration errors.
+
 ## Loading and precedence
 
 By default Minigent looks for `minigent.toml` in the current working directory. Set
@@ -139,6 +142,10 @@ servers = [
 ```
 
 ## Supported keys
+
+`minigent.toml` is schema-checked. Unknown top-level keys, unknown section keys, and wrong
+basic value types fail validation before Minigent maps the file to environment variables.
+Use the tables below as the supported key reference.
 
 ### Top-level
 
@@ -271,6 +278,7 @@ Detailed audio and VAD tuning remain available through `MINIGENT_VOICE_*` env va
 - `minigent config print --resolved` shows the local mapping after applying `minigent.toml`,
   `.env`, and real environment variables. Secret-looking keys are masked.
 - `minigent config doctor` validates local config first. If a blocking local problem is
-  found, it does not attempt to contact the API.
+  found, it does not attempt to contact the API. Schema validation catches unknown keys and
+  wrong value types before env mapping.
 - If a value looks wrong, check precedence. A real environment variable will override both
   `.env` and `minigent.toml`.
