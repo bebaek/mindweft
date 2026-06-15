@@ -71,13 +71,14 @@ progress, and final assistant messages.
 For desktop/local use, start from [`minigent.toml.template`](minigent.toml.template) and
 copy it to `minigent.toml` with `uv run minigent config init`. This file is a friendly
 facade for the common app, auth, LLM, coding workspace, MCP, voice, and quality settings.
-Set `MINIGENT_CONFIG_FILE` to point at a different TOML file. Existing `.env` files and
-real environment variables still work; precedence is `environment > .env > minigent.toml >
-defaults`, so deployment and secret-management workflows can keep using env overrides. Use
-`uv run minigent config print --resolved` to inspect the local resolved env mapping with
-secret-looking values masked. `uv run minigent config doctor` also checks the unified config
-file, LLM provider prerequisites, coding workspace paths, shell allowlists, and MCP server
-shape before probing a running API.
+See [`docs/minigent-toml.md`](docs/minigent-toml.md) for the schema, examples, precedence,
+and troubleshooting commands. Set `MINIGENT_CONFIG_FILE` to point at a different TOML file.
+Existing `.env` files and real environment variables still work; precedence is `environment
+> .env > minigent.toml > defaults`, so deployment and secret-management workflows can keep
+using env overrides. Use `uv run minigent config print --resolved` to inspect the local
+resolved env mapping with secret-looking values masked. `uv run minigent config doctor`
+also checks the unified config file, LLM provider prerequisites, coding workspace paths,
+shell allowlists, and MCP server shape before probing a running API.
 
 Start from [`.env.template`](.env.template) for full local or deployment settings. Common knobs:
 

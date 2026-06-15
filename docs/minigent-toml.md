@@ -1,0 +1,254 @@
+# `minigent.toml` unified config
+
+`minigent.toml` is Minigent's user-facing config facade for local and desktop-style use.
+It keeps common app, LLM, coding workspace, MCP, voice, and quality settings in one file
+while preserving the existing environment-variable based internals for deployment and
+advanced overrides.
+
+Create a starter file:
+
+```bash
+uv run minigent config init
+```
+
+Inspect the local resolved mapping:
+
+```bash
+uv run minigent config print --resolved
+```
+
+Check common config problems:
+
+```bash
+uv run minigent config doctor
+```
+
+## Loading and precedence
+
+By default Minigent looks for `minigent.toml` in the current working directory. Set
+`MINIGENT_CONFIG_FILE` to choose a different TOML file:
+
+```bash
+MINIGENT_CONFIG_FILE=~/.config/minigent/config.toml uv run uvicorn app.main:app
+```
+
+Precedence is:
+
+```text
+real environment > .env / .env.coding > minigent.toml > built-in defaults
+```
+
+This means `minigent.toml` is safe to use as a friendly baseline while keeping secrets and
+deployment-specific overrides in the environment or `.env` files.
+
+## Secrets
+
+Prefer references such as `api_key_env` over raw secret values:
+
+```toml
+[llm]
+provider = "openrouter"
+model = "anthropic/claude-sonnet-4.5"
+api_key_env = "OPENROUTER_API_KEY"
+```
+
+Then provide the secret out of band:
+
+```bash
+export OPENROUTER_API_KEY=...
+```
+
+Raw `api_key` entries are supported for convenience for provider-backed LLMs, but avoid
+committing them.
+
+## Examples
+
+### Basic local mock chat
+
+```toml
+profile = "basic-chat"
+
+[auth]
+mode = "development"
+
+[llm]
+provider = "mock"
+
+[app]
+thread_db_path = ".data/minigent.db"
+```
+
+### OpenRouter
+
+```toml
+[llm]
+provider = "openrouter"
+model = "anthropic/claude-sonnet-4.5"
+api_key_env = "OPENROUTER_API_KEY"
+```
+
+### Local coding workspace
+
+```toml
+profile = "local-coding"
+
+[llm]
+provider = "openrouter"
+model = "anthropic/claude-sonnet-4.5"
+api_key_env = "OPENROUTER_API_KEY"
+
+[coding]
+enabled = true
+workspaces = ["/Users/you/code"]
+shell_enabled = true
+shell_allowed_command_prefixes = ["uv ", "pytest ", "git "]
+bridge_deny_globs = ["**/.env*", "**/.git/**"]
+bridge_allow_globs = ["**/.env*.template"]
+```
+
+### HTTP MCP servers
+
+```toml
+[mcp]
+servers = [
+  { name = "filesystem", url = "http://127.0.0.1:8765/mcp", headers = {} },
+  { name = "tools", url = "https://example.com/mcp", headers = { Authorization = "Bearer token" } },
+]
+```
+
+## Supported keys
+
+### Top-level
+
+| Key | Maps to | Notes |
+| --- | --- | --- |
+| `profile` | no direct env var | Used by tooling and docs to describe the intended local setup. |
+| `peer_agents` | `MINIGENT_PEER_AGENTS` | Serialized as compact JSON. |
+| `tenant_execution_configs` | `MINIGENT_TENANT_EXECUTION_CONFIGS` | Serialized as compact JSON. |
+
+### `[app]`
+
+| Key | Maps to |
+| --- | --- |
+| `host` | `MINIGENT_HOST` |
+| `port` | `MINIGENT_PORT` |
+| `base_url` | `MINIGENT_BASE_URL` |
+| `thread_db_path` | `MINIGENT_THREAD_DB_PATH` |
+| `max_iterations` | `MINIGENT_MAX_ITERATIONS` |
+| `tool_timeout_seconds` | `MINIGENT_TOOL_TIMEOUT_SECONDS` |
+| `context_compaction_enabled` | `MINIGENT_CONTEXT_COMPACTION_ENABLED` |
+
+### `[auth]`
+
+| Key | Maps to |
+| --- | --- |
+| `mode` | `MINIGENT_AUTH_MODE` |
+| `tokens` | `MINIGENT_AUTH_TOKENS` |
+| `jwt_issuer` | `MINIGENT_JWT_ISSUER` |
+| `jwt_audience` | `MINIGENT_JWT_AUDIENCE` |
+| `jwt_shared_secret` | `MINIGENT_JWT_SHARED_SECRET` |
+| `jwt_jwks_url` | `MINIGENT_JWT_JWKS_URL` |
+| `jwt_jwks_cache_seconds` | `MINIGENT_JWT_JWKS_CACHE_SECONDS` |
+| `jwt_algorithms` | `MINIGENT_JWT_ALGORITHMS` |
+| `jwt_user_claim` | `MINIGENT_JWT_USER_CLAIM` |
+| `jwt_tenant_claim` | `MINIGENT_JWT_TENANT_CLAIM` |
+| `jwt_admin_claim` | `MINIGENT_JWT_ADMIN_CLAIM` |
+
+### `[llm]`
+
+| Key | Maps to | Notes |
+| --- | --- | --- |
+| `provider` | `MINIGENT_LLM_PROVIDER` | Examples: `mock`, `openai`, `openrouter`, `google`, `gemini`, `generic-oauth`. |
+| `model` | `MINIGENT_LLM_MODEL` plus provider model env | Also maps to `OPENAI_MODEL`, `OPENROUTER_MODEL`, or Gemini/Google model env when applicable. |
+| `url` | `MINIGENT_LLM_URL` | Useful for `generic-oauth` / compatible endpoints. |
+| `base_url` | provider base URL env or `MINIGENT_LLM_URL` | Maps to `OPENAI_BASE_URL`, `OPENROUTER_BASE_URL`, or `GOOGLE_BASE_URL` for known providers. |
+| `extra_headers` | `MINIGENT_LLM_EXTRA_HEADERS` | Serialized as compact JSON. |
+| `account_id_header` | `MINIGENT_LLM_ACCOUNT_ID_HEADER` | Generic OAuth/account routing. |
+| `api_key_env` | provider API key env | Copies the named env value into the provider-specific key env when present. |
+| `api_key` | provider API key env | Convenience only; prefer `api_key_env`. |
+
+Provider key targets:
+
+| Provider | Target env |
+| --- | --- |
+| `openai` | `OPENAI_API_KEY` |
+| `openrouter` | `OPENROUTER_API_KEY` |
+| `google`, `gemini`, `google-generative-ai` | `GEMINI_API_KEY` |
+
+### `[coding]`
+
+| Key | Maps to |
+| --- | --- |
+| `enabled` | `MINIGENT_CODING_MCP_GATEWAY_ENABLED` |
+| `tenant_id` | `MINIGENT_CODING_TENANT_ID` |
+| `workspace` | `MINIGENT_CODING_WORKSPACE` |
+| `workspaces` | `MINIGENT_CODING_WORKSPACES` |
+| `inject_workspace_skill` | `MINIGENT_CODING_INJECT_WORKSPACE_SKILL` |
+| `shell_enabled` | `MINIGENT_CODING_SHELL_ENABLED` |
+| `shell_allowed_command_prefixes` | `MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES` |
+| `bridge_host` | `MINIGENT_CODING_BRIDGE_HOST` |
+| `bridge_port` | `MINIGENT_CODING_BRIDGE_PORT` |
+| `bridge_allow_globs` | `MINIGENT_CODING_BRIDGE_ALLOW_GLOBS` |
+| `bridge_deny_globs` | `MINIGENT_CODING_BRIDGE_DENY_GLOBS` |
+| `mcp_servers_file` | `MINIGENT_CODING_MCP_SERVERS_FILE` |
+
+List values such as `workspaces`, `shell_allowed_command_prefixes`, and bridge glob lists
+are converted to comma-separated env strings.
+
+### `[mcp]`
+
+| Key | Maps to | Notes |
+| --- | --- | --- |
+| `broker_enabled` | `MINIGENT_MCP_BROKER_ENABLED` | Enables broker path for compatible peer backends. |
+| `broker_url` | `MINIGENT_MCP_BROKER_URL` | Broker URL. |
+| `servers` | `MINIGENT_MCP_SERVERS` | Serialized as compact JSON. |
+
+`config doctor` validates that `servers` is a list and each entry has a unique `name` and a
+`url`.
+
+### `[voice]`
+
+The unified facade intentionally exposes only common voice identity/provider settings.
+Detailed audio and VAD tuning remain available through `MINIGENT_VOICE_*` env vars.
+
+| Key | Maps to |
+| --- | --- |
+| `api_token` | `MINIGENT_VOICE_API_TOKEN` |
+| `tenant_id` | `MINIGENT_VOICE_TENANT_ID` |
+| `user_id` | `MINIGENT_VOICE_USER_ID` |
+| `thread_id` | `MINIGENT_VOICE_THREAD_ID` |
+| `skill` | `MINIGENT_VOICE_SKILL` |
+| `location` | `MINIGENT_VOICE_LOCATION` |
+| `wake_phrase` | `MINIGENT_VOICE_WAKE_PHRASE` |
+| `wakeword_provider` | `MINIGENT_VOICE_WAKEWORD_PROVIDER` |
+| `stt_provider` | `MINIGENT_VOICE_STT_PROVIDER` |
+| `tts_provider` | `MINIGENT_VOICE_TTS_PROVIDER` |
+
+### `[quality]`
+
+| Key | Maps to |
+| --- | --- |
+| `enabled` | `MINIGENT_REMOTE_QUALITY_ENABLED` |
+| `provider` | `MINIGENT_REMOTE_QUALITY_PROVIDER` |
+| `model` | `MINIGENT_REMOTE_QUALITY_MODEL` |
+| `base_url` | `MINIGENT_REMOTE_QUALITY_BASE_URL` |
+| `api_key` | `MINIGENT_REMOTE_QUALITY_API_KEY` |
+| `mode` | `MINIGENT_REMOTE_QUALITY_MODE` |
+| `timeout` | `MINIGENT_REMOTE_QUALITY_TIMEOUT` |
+| `max_payload_chars` | `MINIGENT_REMOTE_QUALITY_MAX_PAYLOAD_CHARS` |
+
+### `[logging]`
+
+| Key | Maps to |
+| --- | --- |
+| `level` | `MINIGENT_LOG_LEVEL` |
+| `format` | `MINIGENT_LOG_FORMAT` |
+
+## Troubleshooting
+
+- `minigent config print --resolved` shows the local mapping after applying `minigent.toml`,
+  `.env`, and real environment variables. Secret-looking keys are masked.
+- `minigent config doctor` validates local config first. If a blocking local problem is
+  found, it does not attempt to contact the API.
+- If a value looks wrong, check precedence. A real environment variable will override both
+  `.env` and `minigent.toml`.
