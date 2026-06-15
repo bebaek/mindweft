@@ -68,9 +68,11 @@ progress, and final assistant messages.
 
 ## Configuration at a glance
 
-For desktop/local use, start from [`minigent.toml.template`](minigent.toml.template) and
-copy it to `minigent.toml` with `uv run minigent config init`. This file is a friendly
-facade for the common app, auth, LLM, coding workspace, MCP, voice, and quality settings.
+For desktop/local use, start from [`minigent.toml.template`](minigent.toml.template) or
+write a focused starter config with `uv run minigent config init --profile local-coding`
+(`basic-chat`, `openrouter`, and `voice` profiles are also available). This file is a
+friendly facade for the common app, auth, LLM, coding workspace, MCP, voice, and quality
+settings.
 See [`docs/minigent-toml.md`](docs/minigent-toml.md) for the schema, examples, precedence,
 and troubleshooting commands. Set `MINIGENT_CONFIG_FILE` to point at a different TOML file.
 Existing `.env` files and real environment variables still work; precedence is `environment

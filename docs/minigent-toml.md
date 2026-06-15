@@ -8,8 +8,11 @@ advanced overrides.
 Create a starter file:
 
 ```bash
-uv run minigent config init
+uv run minigent config init --profile local-coding
 ```
+
+Available init profiles are `basic-chat`, `openrouter`, `local-coding`, and `voice`.
+Use `--output` to write a different path and `--force` to overwrite an existing file.
 
 Inspect the local resolved mapping:
 
@@ -60,6 +63,25 @@ export OPENROUTER_API_KEY=...
 
 Raw `api_key` entries are supported for convenience for provider-backed LLMs, but avoid
 committing them.
+
+## Init profiles
+
+`minigent config init` can generate a few focused starter configs:
+
+| Profile | Purpose |
+| --- | --- |
+| `basic-chat` | Minimal local chat using the mock LLM provider. |
+| `openrouter` | OpenRouter-backed chat with `api_key_env = "OPENROUTER_API_KEY"`. |
+| `local-coding` | Coding workspace-oriented config; this is the default. |
+| `voice` | Voice-oriented identity/provider facade; detailed audio tuning remains env-based. |
+
+Examples:
+
+```bash
+uv run minigent config init --profile basic-chat
+uv run minigent config init --profile openrouter --output openrouter.toml
+uv run minigent config init --profile voice --force
+```
 
 ## Examples
 

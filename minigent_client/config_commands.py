@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import tomllib
 import urllib.parse
 from dataclasses import dataclass
@@ -15,8 +14,11 @@ from minigent_client.api_client import MinigentAPIClient
 from minigent_client.errors import MinigentAPIError
 from minigent_client.output import print_json
 
+DEFAULT_CONFIG_PROFILE = "local-coding"
+CONFIG_INIT_PROFILES = ("basic-chat", "openrouter", "local-coding", "voice")
+
 DEFAULT_CONFIG_TEMPLATE = """# Unified Minigent config facade.
-# Copy this file to minigent.toml and keep secrets in your shell, OS keychain, or .env.
+# Keep secrets in your shell, OS keychain, or .env.
 # Existing MINIGENT_* / provider env vars still override values from this file.
 
 profile = "local-coding"
@@ -39,10 +41,91 @@ provider = "mock"
 enabled = true
 workspaces = ["/Users/you/code"]
 shell_enabled = false
+# shell_allowed_command_prefixes = ["uv ", "pytest ", "git "]
 
 [quality]
 enabled = false
 """
+
+BASIC_CHAT_CONFIG_TEMPLATE = """# Basic local Minigent config.
+# Uses the mock LLM provider so no API key is required.
+
+profile = "basic-chat"
+
+[app]
+host = "127.0.0.1"
+port = 8000
+thread_db_path = ".data/minigent.db"
+
+[auth]
+mode = "development"
+
+[llm]
+provider = "mock"
+
+[quality]
+enabled = false
+"""
+
+OPENROUTER_CONFIG_TEMPLATE = """# Minigent config for OpenRouter-backed chat.
+# Keep OPENROUTER_API_KEY in your environment or .env; do not commit it.
+
+profile = "openrouter"
+
+[app]
+host = "127.0.0.1"
+port = 8000
+thread_db_path = ".data/minigent.db"
+
+[auth]
+mode = "development"
+
+[llm]
+provider = "openrouter"
+model = "anthropic/claude-sonnet-4.5"
+api_key_env = "OPENROUTER_API_KEY"
+
+[quality]
+enabled = false
+"""
+
+VOICE_CONFIG_TEMPLATE = """# Minigent voice-oriented config facade.
+# Detailed audio/VAD tuning remains available through MINIGENT_VOICE_* env vars.
+
+profile = "voice"
+
+[app]
+host = "127.0.0.1"
+port = 8000
+thread_db_path = ".data/minigent-voice.db"
+
+[auth]
+mode = "development"
+
+[llm]
+provider = "mock"
+# provider = "openrouter"
+# model = "anthropic/claude-sonnet-4.5"
+# api_key_env = "OPENROUTER_API_KEY"
+
+[voice]
+tenant_id = "demo-tenant"
+user_id = "voice-user"
+skill = "assistant"
+wake_phrase = "hey minigent"
+stt_provider = "whisper"
+tts_provider = "piper"
+
+[quality]
+enabled = false
+"""
+
+CONFIG_PROFILE_TEMPLATES = {
+    "basic-chat": BASIC_CHAT_CONFIG_TEMPLATE,
+    "openrouter": OPENROUTER_CONFIG_TEMPLATE,
+    "local-coding": DEFAULT_CONFIG_TEMPLATE,
+    "voice": VOICE_CONFIG_TEMPLATE,
+}
 
 
 @dataclass(frozen=True)
@@ -76,12 +159,10 @@ def run_config_init(args: argparse.Namespace) -> int:
     if output_path.exists() and not args.force:
         raise RuntimeError(f"{output_path} already exists; use --force to overwrite")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    template_path = _config_template_path()
-    if template_path is not None:
-        shutil.copyfile(template_path, output_path)
-    else:
-        output_path.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
-    print(f"Wrote {output_path}")
+    profile = getattr(args, "profile", DEFAULT_CONFIG_PROFILE)
+    template = CONFIG_PROFILE_TEMPLATES[profile]
+    output_path.write_text(template, encoding="utf-8")
+    print(f"Wrote {output_path} ({profile})")
     return 0
 
 
@@ -557,14 +638,3 @@ def package_version() -> str:
         return version("minigent")
     except PackageNotFoundError:
         return "unknown"
-
-
-def _config_template_path() -> Path | None:
-    candidates = [
-        Path(__file__).resolve().parents[1] / "minigent.toml.template",
-        Path.cwd() / "minigent.toml.template",
-    ]
-    for path in candidates:
-        if path.exists():
-            return path
-    return None

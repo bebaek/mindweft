@@ -709,7 +709,39 @@ def test_config_init_writes_minigent_toml(monkeypatch: Any, tmp_path: Path, caps
     assert exit_code == 0
     assert (tmp_path / "minigent.toml").exists()
     assert "[llm]" in (tmp_path / "minigent.toml").read_text(encoding="utf-8")
-    assert capsys.readouterr().out == "Wrote minigent.toml\n"
+    assert capsys.readouterr().out == "Wrote minigent.toml (local-coding)\n"
+
+
+def test_config_init_writes_requested_profile(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = cli.main(["config", "init", "--profile", "openrouter"])
+
+    assert exit_code == 0
+    content = (tmp_path / "minigent.toml").read_text(encoding="utf-8")
+    assert 'profile = "openrouter"' in content
+    assert 'provider = "openrouter"' in content
+    assert 'api_key_env = "OPENROUTER_API_KEY"' in content
+    assert capsys.readouterr().out == "Wrote minigent.toml (openrouter)\n"
+
+
+def test_config_init_profile_supports_output_and_force(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    output_path = tmp_path / "custom.toml"
+    output_path.write_text('profile = "old"\n', encoding="utf-8")
+
+    exit_code = cli.main(
+        ["config", "init", "--profile", "voice", "--output", str(output_path), "--force"]
+    )
+
+    assert exit_code == 0
+    content = output_path.read_text(encoding="utf-8")
+    assert 'profile = "voice"' in content
+    assert "[voice]" in content
+    assert capsys.readouterr().out == f"Wrote {output_path} (voice)\n"
 
 
 def test_config_init_refuses_to_overwrite(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:

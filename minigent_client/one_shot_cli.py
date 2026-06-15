@@ -17,6 +17,8 @@ from typing import Any, Sequence, TextIO, cast
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.config import ClientConfig, build_client_config
 from minigent_client.config_commands import (
+    CONFIG_INIT_PROFILES,
+    DEFAULT_CONFIG_PROFILE,
     DiagnosticCheck,
     collect_connection_checks,
     format_check,
@@ -758,6 +760,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         default="minigent.toml",
         help="Path to write. Defaults to ./minigent.toml.",
+    )
+    config_init_parser.add_argument(
+        "--profile",
+        choices=CONFIG_INIT_PROFILES,
+        default=DEFAULT_CONFIG_PROFILE,
+        help="Starter config profile to write. Defaults to local-coding.",
     )
     config_init_parser.add_argument(
         "--force",
