@@ -757,6 +757,125 @@ thread_db_path = ".data/minigent.db"
     assert "secret-value" not in json.dumps(output)
 
 
+def test_config_doctor_reports_unified_config_checks(
+    monkeypatch: Any,
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
+    monkeypatch.delenv("MINIGENT_LLM_URL", raising=False)
+    (tmp_path / "minigent.toml").write_text(
+        f"""
+profile = "local-coding"
+
+[llm]
+provider = "mock"
+
+[coding]
+enabled = true
+workspaces = ["{tmp_path}"]
+
+[mcp]
+servers = [{{ name = "filesystem", url = "http://127.0.0.1:8765/mcp" }}]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/health"):
+            return _Response(body={"status": "ok"})
+        if request.full_url.endswith("/config"):
+            return _Response(
+                body={
+                    "llm": {"provider": "mock", "model": "mock-model"},
+                    "agent_backend": {"type": "native", "mcp_broker_enabled": False},
+                    "quality": {"enabled": False},
+                    "mcp_servers": [],
+                }
+            )
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["config", "doctor"])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "✓ Unified config parses:" in output
+    assert "✓ LLM provider: mock" in output
+    assert "✓ Coding workspace paths: 1 configured" in output
+    assert "✓ MCP server config: 1 configured" in output
+
+
+def test_config_doctor_blocks_on_invalid_unified_config(
+    monkeypatch: Any,
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "minigent.toml").write_text("[llm\nprovider = \"mock\"\n", encoding="utf-8")
+
+    exit_code = cli.main(["config", "doctor"])
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "✗ Unified config parses:" in output
+    assert "Blocking issues found." in output
+
+
+def test_config_doctor_blocks_when_provider_key_missing(
+    monkeypatch: Any,
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
+    (tmp_path / "minigent.toml").write_text(
+        """
+[llm]
+provider = "openrouter"
+model = "openrouter-model"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(["config", "doctor"])
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "✓ LLM provider: openrouter" in output
+    assert "✗ LLM API key configured: set one of: OPENROUTER_API_KEY" in output
+
+
+def test_config_doctor_blocks_on_malformed_mcp_servers(
+    monkeypatch: Any,
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "minigent.toml").write_text(
+        """
+[llm]
+provider = "mock"
+
+[mcp]
+servers = [{ name = "dup", url = "http://one.example/mcp" }, { name = "dup" }]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(["config", "doctor"])
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "✗ MCP server config:" in output
+    assert "#1: missing url" in output
+    assert "duplicate names: dup" in output
+
+
 def test_config_doctor_reports_local_and_server_checks(monkeypatch: Any, capsys: Any) -> None:
     calls: list[tuple[str, str]] = []
     config_response = {

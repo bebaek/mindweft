@@ -75,7 +75,9 @@ Set `MINIGENT_CONFIG_FILE` to point at a different TOML file. Existing `.env` fi
 real environment variables still work; precedence is `environment > .env > minigent.toml >
 defaults`, so deployment and secret-management workflows can keep using env overrides. Use
 `uv run minigent config print --resolved` to inspect the local resolved env mapping with
-secret-looking values masked.
+secret-looking values masked. `uv run minigent config doctor` also checks the unified config
+file, LLM provider prerequisites, coding workspace paths, shell allowlists, and MCP server
+shape before probing a running API.
 
 Start from [`.env.template`](.env.template) for full local or deployment settings. Common knobs:
 
