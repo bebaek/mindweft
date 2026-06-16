@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import tomllib
 import urllib.parse
@@ -9,7 +10,13 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from app.unified_config import CONFIG_FILE_ENV, load_unified_config_env, resolve_config_path
+from app.unified_config import (
+    CONFIG_FILE_ENV,
+    DOTENV_FILE_ENV,
+    load_unified_config_env,
+    resolve_config_path,
+    resolve_dotenv_path,
+)
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.errors import MinigentAPIError
 from minigent_client.output import print_json
@@ -172,12 +179,278 @@ def run_config_print(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_config_export(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    server_config = client.config(export=True)
+    export = export_unified_config_from_server(server_config)
+    if not getattr(args, "include_runtime", False):
+        export.pop("runtime", None)
+    if trace_id is not None:
+        export = {**export, "trace_id": trace_id}
+    text = json.dumps(export, indent=2, sort_keys=True) + "\n" if args.json else render_unified_config_toml(export)
+    output_path = getattr(args, "output", None)
+    if output_path:
+        Path(output_path).write_text(text, encoding="utf-8")
+        if not args.json:
+            print(f"Wrote {output_path}")
+    else:
+        print(text, end="")
+    return 0
+
+
+def export_unified_config_from_server(server_config: dict[str, Any]) -> dict[str, object]:
+    export: dict[str, object] = {
+        "profile": "exported",
+        "_comments": [
+            "Generated from a running Minigent server via /config.",
+            "This is a best-effort export from public server config output.",
+            "Secrets and original source files are not recoverable; set API keys in your environment.",
+        ],
+    }
+    llm = server_config.get("llm")
+    if isinstance(llm, dict):
+        llm_export = _export_llm_config(llm)
+        if llm_export:
+            export["llm"] = llm_export
+    quality = server_config.get("quality")
+    if isinstance(quality, dict):
+        quality_export = _export_quality_config(quality)
+        if quality_export:
+            export["quality"] = quality_export
+    mcp_servers = server_config.get("mcp_servers")
+    if isinstance(mcp_servers, list) and mcp_servers:
+        export["mcp"] = {"servers": [_export_mcp_server(server) for server in mcp_servers]}
+    agent_backend = server_config.get("agent_backend")
+    if isinstance(agent_backend, dict) and agent_backend.get("mcp_broker_enabled") is True:
+        mcp_export = export.setdefault("mcp", {})
+        if isinstance(mcp_export, dict):
+            mcp_export["broker_enabled"] = True
+    detailed_export = server_config.get("unified_config_export")
+    if isinstance(detailed_export, dict):
+        _merge_export_details(export, detailed_export)
+    if "tenant_execution_configs" in export:
+        mcp_export = export.get("mcp")
+        if isinstance(mcp_export, dict):
+            mcp_export.pop("servers", None)
+    pruned_export = _prune_empty_values(export)
+    return pruned_export if isinstance(pruned_export, dict) else export
+
+
+def _prune_empty_values(value: object) -> object:
+    if isinstance(value, dict):
+        pruned: dict[object, object] = {}
+        for key, item in value.items():
+            pruned_item = _prune_empty_values(item)
+            if pruned_item is None:
+                continue
+            if pruned_item == {} or pruned_item == []:
+                continue
+            pruned[key] = pruned_item
+        return pruned
+    if isinstance(value, list):
+        return [item for item in (_prune_empty_values(item) for item in value) if item is not None]
+    if value == "None":
+        return None
+    return value
+
+
+def _merge_export_details(export: dict[str, object], details: dict[str, Any]) -> None:
+    for key, value in details.items():
+        existing = export.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            existing.update(value)
+        else:
+            export[key] = value
+
+
+def _export_llm_config(llm: dict[str, Any]) -> dict[str, object]:
+    provider = llm.get("provider")
+    model = llm.get("model")
+    base_url = llm.get("base_url")
+    exported: dict[str, object] = {}
+    if isinstance(provider, str) and provider:
+        exported["provider"] = provider
+        api_key_env = _api_key_env_for_provider(provider)
+        if api_key_env:
+            exported["api_key_env"] = api_key_env
+    if isinstance(model, str) and model:
+        exported["model"] = model
+    if isinstance(base_url, str) and base_url:
+        exported["base_url"] = base_url
+    return exported
+
+
+def _api_key_env_for_provider(provider: str) -> str | None:
+    provider = provider.lower()
+    if provider == "openai":
+        return "OPENAI_API_KEY"
+    if provider == "openrouter":
+        return "OPENROUTER_API_KEY"
+    if provider in {"google", "gemini", "google-generative-ai"}:
+        return "GEMINI_API_KEY"
+    return None
+
+
+def _export_quality_config(quality: dict[str, Any]) -> dict[str, object]:
+    exported = _export_public_dict(
+        quality,
+        allowed={"enabled", "provider", "model", "base_url", "mode", "timeout", "max_payload_chars"},
+    )
+    defaults: dict[str, object] = {
+        "enabled": False,
+        "mode": "critique_draft",
+        "provider": "mock",
+        "timeout": 30.0,
+        "max_payload_chars": 6000,
+    }
+    return {key: value for key, value in exported.items() if defaults.get(key) != value}
+
+
+def _export_public_dict(value: dict[str, Any], *, allowed: set[str]) -> dict[str, object]:
+    return {
+        key: item
+        for key, item in value.items()
+        if key in allowed and isinstance(item, str | int | float | bool)
+    }
+
+
+def _export_mcp_server(server: object) -> dict[str, object]:
+    if not isinstance(server, dict):
+        return {"name": "unknown", "url": ""}
+    exported: dict[str, object] = {}
+    name = server.get("name")
+    url = server.get("url")
+    if isinstance(name, str):
+        exported["name"] = name
+    if isinstance(url, str):
+        exported["url"] = url
+    headers = server.get("headers")
+    if isinstance(headers, dict):
+        exported["headers"] = mask_secrets(headers)
+    return exported
+
+
+def render_unified_config_toml(export: dict[str, object]) -> str:
+    lines: list[str] = []
+    comments = export.get("_comments")
+    if isinstance(comments, list):
+        for comment in comments:
+            lines.append(f"# {comment}")
+        lines.append("")
+    profile = export.get("profile")
+    if isinstance(profile, str):
+        lines.append(f"profile = {_toml_value(profile)}")
+        lines.append("")
+    for section in (
+        "app",
+        "auth",
+        "oauth",
+        "llm",
+        "coding",
+        "mcp",
+        "voice",
+        "quality",
+        "logging",
+    ):
+        value = export.get(section)
+        if isinstance(value, dict) and value:
+            _append_toml_table(lines, [section], value)
+    for key in ("peer_agents", "tenant_execution_configs", "runtime"):
+        value = export.get(key)
+        if isinstance(value, dict):
+            _append_toml_table(lines, [key], value)
+        elif isinstance(value, list) and all(isinstance(item, dict) for item in value):
+            for item in value:
+                _append_toml_array_table(lines, [key], item)
+        elif value is not None:
+            lines.append(f"{_toml_key(key)} = {_toml_value(value)}")
+            lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _append_toml_table(lines: list[str], path: list[str], table: dict[object, object]) -> None:
+    lines.append("[" + ".".join(_toml_key(str(part)) for part in path) + "]")
+    nested_tables: list[tuple[str, dict[object, object]]] = []
+    array_tables: list[tuple[str, list[object]]] = []
+    for key, value in table.items():
+        key_str = str(key)
+        if isinstance(value, dict):
+            nested_tables.append((key_str, value))
+        elif isinstance(value, list) and all(isinstance(item, dict) for item in value):
+            array_tables.append((key_str, value))
+        else:
+            lines.append(f"{_toml_key(key_str)} = {_toml_value(value)}")
+    lines.append("")
+    for key, value in nested_tables:
+        _append_toml_table(lines, [*path, key], value)
+    for key, values in array_tables:
+        for item in values:
+            if isinstance(item, dict):
+                _append_toml_array_table(lines, [*path, key], item)
+
+
+def _append_toml_array_table(
+    lines: list[str],
+    path: list[str],
+    table: dict[object, object],
+) -> None:
+    lines.append("[[" + ".".join(_toml_key(str(part)) for part in path) + "]]")
+    array_tables: list[tuple[str, list[object]]] = []
+    for key, value in table.items():
+        key_str = str(key)
+        if isinstance(value, dict):
+            lines.append(f"{_toml_key(key_str)} = {_toml_value(value)}")
+        elif isinstance(value, list) and all(isinstance(item, dict) for item in value):
+            array_tables.append((key_str, value))
+        else:
+            lines.append(f"{_toml_key(key_str)} = {_toml_value(value)}")
+    lines.append("")
+    for key, values in array_tables:
+        for item in values:
+            if isinstance(item, dict):
+                _append_toml_array_table(lines, [*path, key], item)
+
+
+def _toml_value(value: object, *, multiline_lists: bool = True) -> str:
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, list):
+        if all(isinstance(item, dict) for item in value):
+            rendered = ",\n  ".join(_toml_inline_table(item) for item in value)
+            if multiline_lists:
+                return f"[\n  {rendered},\n]"
+            return "[" + ", ".join(_toml_inline_table(item) for item in value) + "]"
+        return "[" + ", ".join(_toml_value(item, multiline_lists=False) for item in value) + "]"
+    if isinstance(value, dict):
+        return _toml_inline_table(value)
+    return json.dumps(str(value))
+
+
+def _toml_inline_table(value: dict[object, object]) -> str:
+    parts = [
+        f"{_toml_key(str(key))} = {_toml_value(item, multiline_lists=False)}"
+        for key, item in value.items()
+    ]
+    return "{ " + ", ".join(parts) + " }"
+
+
+def _toml_key(key: str) -> str:
+    return key if key.replace("_", "").replace("-", "").isalnum() else json.dumps(key)
+
+
 def collect_resolved_local_config() -> dict[str, object]:
     cwd = Path.cwd()
     env_snapshot = dict(os.environ)
-    dotenv_path = cwd / ".env"
+    dotenv_path = resolve_dotenv_path(base_dir=cwd, env=env_snapshot)
     dotenv_keys: list[str] = []
-    if dotenv_path.exists():
+    if dotenv_path is not None and dotenv_path.exists():
         from dotenv import dotenv_values
 
         dotenv = {key: value for key, value in dotenv_values(dotenv_path).items() if value is not None}
@@ -195,7 +468,8 @@ def collect_resolved_local_config() -> dict[str, object]:
     return {
         "config_file": str(config_path) if config_path is not None else None,
         "config_file_env": os.environ.get(CONFIG_FILE_ENV),
-        "dotenv_file": str(dotenv_path) if dotenv_path.exists() else None,
+        "dotenv_file_env": os.environ.get(DOTENV_FILE_ENV),
+        "dotenv_file": str(dotenv_path) if dotenv_path is not None and dotenv_path.exists() else None,
         "dotenv_keys": dotenv_keys,
         "resolved_env": mask_secrets(dict(sorted(resolved.items()))),
     }
@@ -364,8 +638,8 @@ def _unified_config_checks() -> list[DiagnosticCheck]:
 
 def _env_snapshot_with_dotenv(cwd: Path) -> dict[str, str]:
     env_snapshot = dict(os.environ)
-    dotenv_path = cwd / ".env"
-    if dotenv_path.exists():
+    dotenv_path = resolve_dotenv_path(base_dir=cwd, env=env_snapshot)
+    if dotenv_path is not None and dotenv_path.exists():
         from dotenv import dotenv_values
 
         env_snapshot.update(

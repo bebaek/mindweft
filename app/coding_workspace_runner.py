@@ -290,6 +290,13 @@ def main(argv: list[str] | None = None) -> int:
             workspace_roots=workspace_roots,
             env=env,
         )
+    elif env.get("MINIGENT_CODING_MCP_SERVER_SPECS"):
+        mcp_server_specs = load_coding_mcp_server_specs_from_json(
+            env["MINIGENT_CODING_MCP_SERVER_SPECS"],
+            bridge_host=bridge_host,
+            workspace_roots=workspace_roots,
+            env=env,
+        )
     else:
         mcp_server_specs = build_builtin_mcp_server_specs(
             env,
@@ -569,7 +576,22 @@ def load_coding_mcp_server_specs(
     workspace_roots: list[Path],
     env: dict[str, str] | None = None,
 ) -> list[CodingMCPServerSpec]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    return load_coding_mcp_server_specs_from_json(
+        path.read_text(encoding="utf-8"),
+        bridge_host=bridge_host,
+        workspace_roots=workspace_roots,
+        env=env,
+    )
+
+
+def load_coding_mcp_server_specs_from_json(
+    raw_json: str,
+    *,
+    bridge_host: str,
+    workspace_roots: list[Path],
+    env: dict[str, str] | None = None,
+) -> list[CodingMCPServerSpec]:
+    payload = json.loads(raw_json)
     raw_servers = payload.get("servers") if isinstance(payload, dict) else payload
     if not isinstance(raw_servers, list):
         raise RuntimeError(

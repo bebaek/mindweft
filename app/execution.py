@@ -4,6 +4,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from threading import Lock
 from typing import Any, Mapping
 
@@ -20,6 +21,18 @@ from app.llm import (
 )
 from app.mcp import MCPHTTPClient, MCPPathPolicy, MCPServerConfig, load_mcp_server_configs_from_env
 from app.mcp_manager import MCPServerManager
+from app.oauth import (
+    GENERIC_OAUTH_PROVIDER,
+    OAUTH_ACCOUNT_ID_JWT_CLAIM_ENV,
+    OAUTH_AUTH_PARAMS_ENV,
+    OAUTH_AUTHORIZE_URL_ENV,
+    OAUTH_CLIENT_ID_ENV,
+    OAUTH_PROVIDER_ID_ENV,
+    OAUTH_REDIRECT_URI_ENV,
+    OAUTH_SCOPE_ENV,
+    OAUTH_STORE_PATH_ENV,
+    OAUTH_TOKEN_URL_ENV,
+)
 from app.redaction import ToolResultRedactionPolicy, parse_tool_result_redaction_policy
 from app.tools import DEFAULT_LOCAL_TOOL_NAMES, LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry
 
@@ -161,7 +174,12 @@ class TenantExecutionResolver:
     def resolve(self, tenant_id: str) -> TenantExecutionContext:
         raise NotImplementedError
 
-    def describe(self, tenant_id: str | None = None) -> dict[str, object]:
+    def describe(
+        self,
+        tenant_id: str | None = None,
+        *,
+        include_export: bool = False,
+    ) -> dict[str, object]:
         raise NotImplementedError
 
     def invalidate(self, tenant_id: str) -> None:
@@ -192,19 +210,19 @@ class FixedTenantExecutionResolver(TenantExecutionResolver):
         self._refresh_context_if_needed()
         return self._context
 
-    def describe(self, tenant_id: str | None = None) -> dict[str, object]:
+    def describe(
+        self,
+        tenant_id: str | None = None,
+        *,
+        include_export: bool = False,
+    ) -> dict[str, object]:
         _ = tenant_id
         self._refresh_context_if_needed()
-        return {
-            "tenant_id": DEFAULT_TENANT_KEY,
-            "llm": self._context.llm_adapter.describe(),
-            "agent_backend": _agent_backend_public_dict(self._context.config.agent_backend),
-            "quality": _quality_public_dict(self._context.config.quality),
-            "mcp_servers": self._context.tool_registry.mcp_servers(),
-            "local_tools": sorted(
-                spec.name for spec in self._context.tool_registry.specs() if "." not in spec.name
-            ),
-        }
+        return _describe_context(
+            DEFAULT_TENANT_KEY,
+            self._context,
+            include_export=include_export,
+        )
 
     def _refresh_context_if_needed(self) -> None:
         if self._mcp_manager is None or not self._context.config.tools.mcp_servers:
@@ -271,39 +289,26 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
             self._contexts[tenant_id] = context
             return context
 
-    def describe(self, tenant_id: str | None = None) -> dict[str, object]:
+    def describe(
+        self,
+        tenant_id: str | None = None,
+        *,
+        include_export: bool = False,
+    ) -> dict[str, object]:
         if tenant_id is None:
             if self._default_context is not None:
-                return {
-                    "tenant_id": DEFAULT_TENANT_KEY,
-                    "llm": self._default_context.llm_adapter.describe(),
-                    "agent_backend": _agent_backend_public_dict(
-                        self._default_context.config.agent_backend
-                    ),
-                    "quality": _quality_public_dict(self._default_context.config.quality),
-                    "mcp_servers": self._default_context.tool_registry.mcp_servers(),
-                    "local_tools": sorted(
-                        spec.name
-                        for spec in self._default_context.tool_registry.specs()
-                        if "." not in spec.name
-                    ),
-                }
+                return _describe_context(
+                    DEFAULT_TENANT_KEY,
+                    self._default_context,
+                    include_export=include_export,
+                )
             if DEFAULT_TENANT_KEY not in self._tenant_configs and self._tenant_configs:
                 tenant_id = sorted(self._tenant_configs)[0]
             else:
                 tenant_id = DEFAULT_TENANT_KEY
 
         context = self.resolve(tenant_id)
-        return {
-            "tenant_id": tenant_id,
-            "llm": context.llm_adapter.describe(),
-            "agent_backend": _agent_backend_public_dict(context.config.agent_backend),
-            "quality": _quality_public_dict(context.config.quality),
-            "mcp_servers": context.tool_registry.mcp_servers(),
-            "local_tools": sorted(
-                spec.name for spec in context.tool_registry.specs() if "." not in spec.name
-            ),
-        }
+        return _describe_context(tenant_id, context, include_export=include_export)
 
     def invalidate(self, tenant_id: str) -> None:
         with self._lock:
@@ -376,21 +381,17 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
             self._contexts[tenant_id] = context
             return context
 
-    def describe(self, tenant_id: str | None = None) -> dict[str, object]:
+    def describe(
+        self,
+        tenant_id: str | None = None,
+        *,
+        include_export: bool = False,
+    ) -> dict[str, object]:
         if tenant_id is not None:
             context = self.resolve(tenant_id)
-            return {
-                "tenant_id": tenant_id,
-                "llm": context.llm_adapter.describe(),
-                "agent_backend": _agent_backend_public_dict(context.config.agent_backend),
-                "quality": _quality_public_dict(context.config.quality),
-                "mcp_servers": context.tool_registry.mcp_servers(),
-                "local_tools": sorted(
-                    spec.name for spec in context.tool_registry.specs() if "." not in spec.name
-                ),
-            }
+            return _describe_context(tenant_id, context, include_export=include_export)
         if self._fallback_resolver is not None:
-            return self._fallback_resolver.describe()
+            return self._fallback_resolver.describe(include_export=include_export)
         return {"tenant_id": None, "llm": None, "mcp_servers": [], "local_tools": []}
 
     def invalidate(self, tenant_id: str) -> None:
@@ -414,6 +415,329 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
             mcp_manager=self._mcp_manager,
         )
         return True
+
+
+def _describe_context(
+    tenant_id: str,
+    context: TenantExecutionContext,
+    *,
+    include_export: bool,
+) -> dict[str, object]:
+    llm = context.llm_adapter.describe()
+    result: dict[str, object] = {
+        "tenant_id": tenant_id,
+        "llm": llm,
+        "agent_backend": _agent_backend_public_dict(context.config.agent_backend),
+        "quality": _quality_public_dict(context.config.quality),
+        "mcp_servers": context.tool_registry.mcp_servers(),
+        "local_tools": sorted(
+            spec.name for spec in context.tool_registry.specs() if "." not in spec.name
+        ),
+    }
+    if include_export:
+        result["unified_config_export"] = _unified_config_export_public_dict(context, llm)
+    return result
+
+
+def _unified_config_export_public_dict(
+    context: TenantExecutionContext,
+    llm_description: dict[str, Any],
+) -> dict[str, object]:
+    config = context.config
+    export: dict[str, object] = {}
+    coding = _coding_config_export_public_dict()
+    if coding:
+        export["coding"] = coding
+    llm = _llm_export_public_dict(config.llm, llm_description)
+    if llm:
+        export["llm"] = llm
+    oauth = _generic_oauth_public_dict(llm)
+    if oauth:
+        export["oauth"] = oauth
+    if config.agent_backend.mcp_broker_enabled:
+        export["mcp"] = {"broker_enabled": True}
+    tenant_config = _tenant_execution_config_public_dict(config)
+    if tenant_config:
+        export["tenant_execution_configs"] = {config.tenant_id: tenant_config}
+    export["runtime"] = _runtime_export_public_dict(context)
+    return export
+
+
+def _runtime_export_public_dict(context: TenantExecutionContext) -> dict[str, object]:
+    return {
+        "mcp_servers": [
+            _runtime_mcp_server_public_dict(server)
+            for server in context.tool_registry.mcp_servers()
+        ],
+        "tools": [spec.name for spec in context.tool_registry.specs()],
+    }
+
+
+def _runtime_mcp_server_public_dict(server: dict[str, Any]) -> dict[str, object]:
+    exported: dict[str, object] = {}
+    for key in ("name", "status", "server_name", "server_version", "tool_count"):
+        value = server.get(key)
+        if value not in (None, "None"):
+            exported[key] = value
+    return exported
+
+
+def _coding_config_export_public_dict() -> dict[str, object]:
+    exported: dict[str, object] = {}
+    raw_path = os.getenv("MINIGENT_CODING_MCP_SERVERS_FILE", "").strip()
+    if raw_path:
+        exported["mcp_servers_file"] = raw_path
+        path = Path(raw_path).expanduser()
+        if path.exists() and path.is_file():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                payload = None
+            if isinstance(payload, dict):
+                servers = payload.get("servers")
+            else:
+                servers = payload
+            if isinstance(servers, list):
+                exported["mcp_server_specs"] = [
+                    _sanitize_coding_mcp_server_spec(server)
+                    for server in servers
+                    if isinstance(server, dict)
+                ]
+    return exported
+
+
+def _sanitize_coding_mcp_server_spec(server: dict[str, Any]) -> dict[str, object]:
+    exported: dict[str, object] = {}
+    for key, value in server.items():
+        if key == "headers" and isinstance(value, dict):
+            exported[key] = {header: "<set>" for header in sorted(value)}
+        elif key == "env" and isinstance(value, dict):
+            exported[key] = {env_key: "<set>" for env_key in sorted(value)}
+        elif _is_public_config_value(value):
+            exported[key] = value
+    return exported
+
+
+def _is_public_config_value(value: object) -> bool:
+    if isinstance(value, str | int | float | bool) or value is None:
+        return True
+    if isinstance(value, list):
+        return all(_is_public_config_value(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _is_public_config_value(item) for key, item in value.items())
+    return False
+
+
+def _llm_export_public_dict(
+    config: TenantLLMConfig,
+    llm_description: dict[str, Any],
+) -> dict[str, object]:
+    provider = _string_value(llm_description.get("provider")) or config.provider
+    exported: dict[str, object] = {}
+    if provider:
+        exported["provider"] = provider
+    model = _string_value(llm_description.get("model")) or config.model
+    if model:
+        exported["model"] = model
+    url = _string_value(llm_description.get("url")) or _string_value(
+        llm_description.get("base_url")
+    ) or config.base_url
+    if url:
+        exported["url" if provider == GENERIC_OAUTH_PROVIDER else "base_url"] = url
+    if config.extra_headers:
+        exported["extra_headers"] = dict(config.extra_headers)
+    return exported
+
+
+def _tenant_execution_config_public_dict(config: TenantExecutionConfig) -> dict[str, object]:
+    exported: dict[str, object] = {}
+    tools = _tenant_tool_config_public_dict(config.tools)
+    if tools:
+        exported["tools"] = tools
+    skills = _tenant_skills_config_public_dict(config.skills)
+    if skills:
+        exported["skills"] = skills
+    capability_profiles = _tenant_capability_profiles_public_dict(config.capability_profiles)
+    if capability_profiles:
+        exported["capability_profiles"] = capability_profiles
+    agent_backend = _agent_backend_export_public_dict(config.agent_backend)
+    if agent_backend:
+        exported["agent_backend"] = agent_backend
+    quality = _quality_export_public_dict(config.quality)
+    if quality:
+        exported["quality"] = quality
+    return exported
+
+
+def _agent_backend_export_public_dict(config: TenantAgentBackendConfig) -> dict[str, object]:
+    defaults = TenantAgentBackendConfig()
+    exported: dict[str, object] = {}
+    if config.type != defaults.type:
+        exported["type"] = config.type
+    if config.peer is not None:
+        exported["peer"] = config.peer
+    if config.cwd is not None:
+        exported["cwd"] = config.cwd
+    if config.timeout_seconds != defaults.timeout_seconds:
+        exported["timeout_seconds"] = config.timeout_seconds
+    if config.poll_interval_seconds != defaults.poll_interval_seconds:
+        exported["poll_interval_seconds"] = config.poll_interval_seconds
+    if config.mcp_broker_enabled != defaults.mcp_broker_enabled:
+        exported["mcp_broker_enabled"] = config.mcp_broker_enabled
+    return exported
+
+
+def _quality_export_public_dict(config: TenantQualityConfig) -> dict[str, object]:
+    defaults = TenantQualityConfig()
+    exported: dict[str, object] = {}
+    if config.enabled != defaults.enabled:
+        exported["enabled"] = config.enabled
+    if config.mode != defaults.mode:
+        exported["mode"] = config.mode
+    if config.provider != defaults.provider:
+        exported["provider"] = config.provider
+    if config.model is not None:
+        exported["model"] = config.model
+    if config.base_url is not None:
+        exported["base_url"] = config.base_url
+    if config.extra_headers:
+        exported["headers"] = sorted(config.extra_headers.keys())
+    if config.timeout != defaults.timeout:
+        exported["timeout"] = config.timeout
+    if config.max_payload_chars != defaults.max_payload_chars:
+        exported["max_payload_chars"] = config.max_payload_chars
+    return exported
+
+
+def _tenant_tool_config_public_dict(config: TenantToolConfig) -> dict[str, object]:
+    exported: dict[str, object] = {}
+    if config.allowed_local_tools is not None:
+        exported["allowed_local_tools"] = list(config.allowed_local_tools)
+    if config.mcp_servers:
+        exported["mcp_servers"] = [
+            _mcp_server_config_public_dict(server) for server in config.mcp_servers
+        ]
+    result_redaction = _result_redaction_public_dict(config.result_redaction_policy)
+    if result_redaction:
+        exported["result_redaction"] = result_redaction
+    return exported
+
+
+def _mcp_server_config_public_dict(config: MCPServerConfig) -> dict[str, object]:
+    exported: dict[str, object] = {
+        "name": config.name,
+        "url": config.url,
+    }
+    if config.headers:
+        exported["headers"] = {key: "<set>" for key in sorted(config.headers)}
+    if config.allowed_tools is not None:
+        exported["allowed_tools"] = list(config.allowed_tools)
+    if config.path_policy.deny_globs or config.path_policy.allow_globs:
+        exported["path_policy"] = {
+            "deny_globs": list(config.path_policy.deny_globs),
+            "allow_globs": list(config.path_policy.allow_globs),
+        }
+    result_redaction = _result_redaction_public_dict(config.result_redaction_policy)
+    if result_redaction:
+        exported["result_redaction"] = result_redaction
+    return exported
+
+
+def _result_redaction_public_dict(policy: ToolResultRedactionPolicy) -> dict[str, object]:
+    if not policy.enabled or policy.mode != "best_effort" or policy.sensitive_tools:
+        return {
+            "enabled": policy.enabled,
+            "mode": policy.mode,
+            "sensitive_tools": sorted(policy.sensitive_tools),
+        }
+    return {}
+
+
+def _tenant_skills_config_public_dict(config: TenantSkillsConfig) -> dict[str, object]:
+    exported: dict[str, object] = {}
+    if config.default_skill is not None:
+        exported["default_skill"] = config.default_skill
+    if config.items:
+        exported["items"] = [
+            _tenant_skill_config_public_dict(skill)
+            for skill in config.items
+        ]
+    return exported
+
+
+def _tenant_skill_config_public_dict(config: TenantSkillConfig) -> dict[str, object]:
+    exported: dict[str, object] = {
+        "name": config.name,
+        "system_prompt": config.system_prompt,
+    }
+    if config.description is not None:
+        exported["description"] = config.description
+    if config.allowed_local_tools is not None:
+        exported["allowed_local_tools"] = list(config.allowed_local_tools)
+    if config.mcp_server_names is not None:
+        exported["mcp_server_names"] = list(config.mcp_server_names)
+    return exported
+
+
+def _tenant_capability_profiles_public_dict(
+    config: TenantCapabilityProfilesConfig,
+) -> dict[str, object]:
+    exported: dict[str, object] = {}
+    if config.default_profile is not None:
+        exported["default_profile"] = config.default_profile
+    if config.items:
+        exported["items"] = [
+            _tenant_capability_profile_public_dict(profile)
+            for profile in config.items
+        ]
+    return exported
+
+
+def _tenant_capability_profile_public_dict(
+    config: TenantCapabilityProfileConfig,
+) -> dict[str, object]:
+    exported: dict[str, object] = {"name": config.name}
+    if config.description is not None:
+        exported["description"] = config.description
+    if config.allowed_local_tools is not None:
+        exported["allowed_local_tools"] = list(config.allowed_local_tools)
+    if config.mcp_server_names is not None:
+        exported["mcp_server_names"] = list(config.mcp_server_names)
+    return exported
+
+
+def _generic_oauth_public_dict(llm: dict[str, object]) -> dict[str, object]:
+    if llm.get("provider") != GENERIC_OAUTH_PROVIDER:
+        return {}
+    env_map = {
+        "store_path": OAUTH_STORE_PATH_ENV,
+        "provider_id": OAUTH_PROVIDER_ID_ENV,
+        "client_id": OAUTH_CLIENT_ID_ENV,
+        "authorize_url": OAUTH_AUTHORIZE_URL_ENV,
+        "token_url": OAUTH_TOKEN_URL_ENV,
+        "redirect_uri": OAUTH_REDIRECT_URI_ENV,
+        "scope": OAUTH_SCOPE_ENV,
+        "account_id_jwt_claim": OAUTH_ACCOUNT_ID_JWT_CLAIM_ENV,
+    }
+    exported: dict[str, object] = {}
+    for key, env_key in env_map.items():
+        value = os.getenv(env_key, "").strip()
+        if value:
+            exported[key] = value
+    auth_params = os.getenv(OAUTH_AUTH_PARAMS_ENV, "").strip()
+    if auth_params:
+        try:
+            parsed = json.loads(auth_params)
+        except json.JSONDecodeError:
+            exported["auth_params"] = auth_params
+        else:
+            if isinstance(parsed, dict):
+                exported["auth_params"] = parsed
+    return exported
+
+
+def _string_value(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _build_registry_for_config(

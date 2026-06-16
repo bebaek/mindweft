@@ -58,8 +58,11 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent health response must be an object")
         return cast(dict[str, Any], response)
 
-    def config(self) -> dict[str, Any]:
-        response = self.request_json("GET", f"{self._config.base_url}/config")
+    def config(self, *, export: bool = False) -> dict[str, Any]:
+        url = f"{self._config.base_url}/config"
+        if export:
+            url = f"{url}?export=true"
+        response = self.request_json("GET", url)
         if not isinstance(response, dict):
             raise RuntimeError("Minigent config response must be an object")
         return cast(dict[str, Any], response)

@@ -33,6 +33,7 @@ enabled = true
 workspaces = ["/Users/example/code", "/tmp/work"]
 shell_enabled = true
 shell_allowed_command_prefixes = ["uv ", "pytest ", "git "]
+mcp_server_specs = [{ name = "custom", transport = "stdio", command = ["custom-mcp"] }]
 
 [mcp]
 servers = [{ name = "filesystem", url = "http://127.0.0.1:8765/mcp", headers = {} }]
@@ -55,6 +56,9 @@ enabled = false
     assert env["MINIGENT_CODING_MCP_GATEWAY_ENABLED"] == "true"
     assert env["MINIGENT_CODING_WORKSPACES"] == "/Users/example/code,/tmp/work"
     assert env["MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES"] == "uv ,pytest ,git "
+    assert env["MINIGENT_CODING_MCP_SERVER_SPECS"] == (
+        '[{"name":"custom","transport":"stdio","command":["custom-mcp"]}]'
+    )
     assert env["MINIGENT_MCP_SERVERS"] == (
         '[{"name":"filesystem","url":"http://127.0.0.1:8765/mcp","headers":{}}]'
     )
@@ -66,6 +70,7 @@ def test_load_environment_precedence_real_env_then_dotenv_then_minigent_toml(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     config_path = tmp_path / "minigent.toml"
     config_path.write_text(
         """
@@ -95,10 +100,43 @@ thread_db_path = "from-toml.db"
     assert os.environ["MINIGENT_LLM_MODEL"] == "from-toml"
 
 
+def test_load_environment_supports_custom_dotenv_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "minigent.toml").write_text(
+        """
+[llm]
+provider = "openrouter"
+model = "from-toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text("MINIGENT_LLM_PROVIDER=default-dotenv\n", encoding="utf-8")
+    custom_dotenv = tmp_path / "custom.env"
+    custom_dotenv.write_text(
+        "MINIGENT_LLM_PROVIDER=mock\nMINIGENT_THREAD_DB_PATH=from-custom-dotenv.db\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MINIGENT_DOTENV_FILE", str(custom_dotenv))
+    monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
+    monkeypatch.delenv("MINIGENT_THREAD_DB_PATH", raising=False)
+
+    load_environment()
+
+    assert os.environ["MINIGENT_LLM_PROVIDER"] == "mock"
+    assert os.environ["MINIGENT_LLM_MODEL"] == "from-toml"
+    assert os.environ["MINIGENT_THREAD_DB_PATH"] == "from-custom-dotenv.db"
+
+
 def test_coding_runner_env_applies_minigent_toml_then_env_file_override(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CODING_WORKSPACES", raising=False)
     monkeypatch.delenv("MINIGENT_CODING_SHELL_ENABLED", raising=False)
     (tmp_path / "minigent.toml").write_text(

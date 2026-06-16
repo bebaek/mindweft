@@ -31,6 +31,19 @@ class AuthConfig:
 
 
 @dataclass(frozen=True)
+class OAuthConfig:
+    store_path: object = None
+    provider_id: object = None
+    client_id: object = None
+    authorize_url: object = None
+    token_url: object = None
+    redirect_uri: object = None
+    scope: object = None
+    auth_params: object = None
+    account_id_jwt_claim: object = None
+
+
+@dataclass(frozen=True)
 class LLMConfig:
     provider: object = None
     model: object = None
@@ -56,6 +69,7 @@ class CodingConfig:
     bridge_allow_globs: object = None
     bridge_deny_globs: object = None
     mcp_servers_file: object = None
+    mcp_server_specs: object = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +116,7 @@ class UnifiedConfig:
     profile: object = None
     app: AppConfig = field(default_factory=AppConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
+    oauth: OAuthConfig = field(default_factory=OAuthConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     coding: CodingConfig = field(default_factory=CodingConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
@@ -110,11 +125,13 @@ class UnifiedConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     peer_agents: object = None
     tenant_execution_configs: object = None
+    runtime: object = None
 
 
 SECTION_FIELDS: dict[str, set[str]] = {
     "app": set(AppConfig.__dataclass_fields__),
     "auth": set(AuthConfig.__dataclass_fields__),
+    "oauth": set(OAuthConfig.__dataclass_fields__),
     "llm": set(LLMConfig.__dataclass_fields__),
     "coding": set(CodingConfig.__dataclass_fields__),
     "mcp": set(MCPConfig.__dataclass_fields__),
@@ -127,6 +144,7 @@ TOP_LEVEL_KEYS = {
     "profile",
     "app",
     "auth",
+    "oauth",
     "llm",
     "coding",
     "mcp",
@@ -135,11 +153,13 @@ TOP_LEVEL_KEYS = {
     "logging",
     "peer_agents",
     "tenant_execution_configs",
+    "runtime",
 }
 
 SECTION_TYPES = {
     "app": AppConfig,
     "auth": AuthConfig,
+    "oauth": OAuthConfig,
     "llm": LLMConfig,
     "coding": CodingConfig,
     "mcp": MCPConfig,
@@ -162,6 +182,14 @@ _STRING_KEYS = {
     "auth.jwt_user_claim",
     "auth.jwt_tenant_claim",
     "auth.jwt_admin_claim",
+    "oauth.store_path",
+    "oauth.provider_id",
+    "oauth.client_id",
+    "oauth.authorize_url",
+    "oauth.token_url",
+    "oauth.redirect_uri",
+    "oauth.scope",
+    "oauth.account_id_jwt_claim",
     "llm.provider",
     "llm.model",
     "llm.url",
@@ -224,16 +252,19 @@ _STRING_LIST_KEYS = {
 
 _DICT_KEYS = {
     "auth.tokens",
+    "oauth.auth_params",
     "llm.extra_headers",
 }
 
 _LIST_KEYS = {
     "mcp.servers",
+    "coding.mcp_server_specs",
     "peer_agents",
 }
 
 _DICT_OR_LIST_KEYS = {
     "tenant_execution_configs",
+    "runtime",
 }
 
 
@@ -249,6 +280,7 @@ def parse_unified_config(data: dict[str, Any]) -> UnifiedConfig:
         profile=data.get("profile"),
         peer_agents=data.get("peer_agents"),
         tenant_execution_configs=data.get("tenant_execution_configs"),
+        runtime=data.get("runtime"),
         **sections,
     )
 
@@ -273,7 +305,7 @@ def validate_unified_config_data(data: object) -> list[str]:
                 errors.append(f"unknown key: {dotted}")
                 continue
             errors.extend(_validate_value_type(dotted, value))
-    for key in ("profile", "peer_agents", "tenant_execution_configs"):
+    for key in ("profile", "peer_agents", "tenant_execution_configs", "runtime"):
         if key in data:
             errors.extend(_validate_value_type(key, data[key]))
     return errors

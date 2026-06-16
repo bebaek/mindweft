@@ -11,7 +11,9 @@ from dotenv import dotenv_values
 from app.unified_config_schema import parse_unified_config
 
 CONFIG_FILE_ENV = "MINIGENT_CONFIG_FILE"
+DOTENV_FILE_ENV = "MINIGENT_DOTENV_FILE"
 DEFAULT_CONFIG_FILE = "minigent.toml"
+DEFAULT_DOTENV_FILE = ".env"
 
 _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
     "app": {
@@ -35,6 +37,17 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "jwt_user_claim": "MINIGENT_JWT_USER_CLAIM",
         "jwt_tenant_claim": "MINIGENT_JWT_TENANT_CLAIM",
         "jwt_admin_claim": "MINIGENT_JWT_ADMIN_CLAIM",
+    },
+    "oauth": {
+        "store_path": "MINIGENT_OAUTH_STORE_PATH",
+        "provider_id": "MINIGENT_OAUTH_PROVIDER_ID",
+        "client_id": "MINIGENT_OAUTH_CLIENT_ID",
+        "authorize_url": "MINIGENT_OAUTH_AUTHORIZE_URL",
+        "token_url": "MINIGENT_OAUTH_TOKEN_URL",
+        "redirect_uri": "MINIGENT_OAUTH_REDIRECT_URI",
+        "scope": "MINIGENT_OAUTH_SCOPE",
+        "auth_params": "MINIGENT_OAUTH_AUTH_PARAMS",
+        "account_id_jwt_claim": "MINIGENT_OAUTH_ACCOUNT_ID_JWT_CLAIM",
     },
     "coding": {
         "enabled": "MINIGENT_CODING_MCP_GATEWAY_ENABLED",
@@ -82,17 +95,18 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
 def apply_startup_config(*, cwd: Path | None = None) -> None:
     """Load minigent.toml and .env into process env without overriding real env vars.
 
-    Precedence is: existing process environment > .env > minigent.toml > built-in defaults.
+    Precedence is: existing process environment > selected .env > minigent.toml > built-in defaults.
     That keeps deployment overrides compatible while allowing a single friendly config file
-    to replace most local .env entries.
+    to replace most local .env entries. Set MINIGENT_DOTENV_FILE to use a dotenv file other
+    than .env.
     """
 
     base_dir = Path.cwd() if cwd is None else cwd
     initial_keys = set(os.environ)
-    dotenv_path = base_dir / ".env"
+    dotenv_path = resolve_dotenv_path(base_dir=base_dir)
     dotenv_env = (
         {key: value for key, value in dotenv_values(dotenv_path).items() if value is not None}
-        if dotenv_path.exists()
+        if dotenv_path is not None and dotenv_path.exists()
         else {}
     )
     source_env = dict(os.environ)
@@ -104,7 +118,8 @@ def apply_startup_config(*, cwd: Path | None = None) -> None:
     )
     _apply_env(config_env, protected_keys=initial_keys)
 
-    # .env is a local override for the unified config, but still must not override real env.
+    # The selected dotenv file is a local override for the unified config, but still must
+    # not override real env.
     _apply_env(dotenv_env, protected_keys=initial_keys)
 
 
@@ -115,10 +130,30 @@ def apply_unified_config_to_env(env: dict[str, str], *, base_dir: Path) -> None:
     an explicit child-process environment rather than relying on os.environ mutation.
     """
 
-    path = resolve_config_path(base_dir=base_dir, env=env)
-    config_env = load_unified_config_env(path, source_env=env)
+    dotenv_path = resolve_dotenv_path(base_dir=base_dir, env=env)
+    dotenv_env = (
+        {key: value for key, value in dotenv_values(dotenv_path).items() if value is not None}
+        if dotenv_path is not None and dotenv_path.exists()
+        else {}
+    )
+    source_env = dict(env)
+    source_env.update(dotenv_env)
+    path = resolve_config_path(base_dir=base_dir, env=source_env)
+    config_env = load_unified_config_env(path, source_env=source_env)
     for key, value in config_env.items():
         env.setdefault(key, value)
+    for key, value in dotenv_env.items():
+        env.setdefault(key, value)
+
+
+def resolve_dotenv_path(*, base_dir: Path, env: dict[str, str] | None = None) -> Path | None:
+    lookup_env = os.environ if env is None else env
+    configured = lookup_env.get(DOTENV_FILE_ENV, "").strip()
+    if configured:
+        path = Path(configured).expanduser()
+        return path if path.is_absolute() else base_dir / path
+    default_path = base_dir / DEFAULT_DOTENV_FILE
+    return default_path if default_path.exists() else None
 
 
 def resolve_config_path(*, base_dir: Path, env: dict[str, str] | None = None) -> Path | None:
@@ -144,6 +179,7 @@ def load_unified_config_env(
     env: dict[str, str] = {}
     _collect_simple_sections(data, env)
     _collect_llm_config(data.get("llm"), env, source_env=source_env)
+    _collect_coding_inline_config(data.get("coding"), env)
     _collect_mcp_config(data.get("mcp"), env)
     _collect_peer_agents(data.get("peer_agents"), env)
     _collect_tenant_execution_configs(data.get("tenant_execution_configs"), env)
@@ -222,6 +258,15 @@ def _collect_mcp_config(section: object, env: dict[str, str]) -> None:
         env["MINIGENT_MCP_BROKER_URL"] = _format_env_value(section["broker_url"])
     if "servers" in section:
         env["MINIGENT_MCP_SERVERS"] = _format_json_env_value(section["servers"])
+
+
+def _collect_coding_inline_config(section: object, env: dict[str, str]) -> None:
+    if not isinstance(section, dict):
+        return
+    if "mcp_server_specs" in section:
+        env["MINIGENT_CODING_MCP_SERVER_SPECS"] = _format_json_env_value(
+            section["mcp_server_specs"]
+        )
 
 
 def _collect_peer_agents(section: object, env: dict[str, str]) -> None:

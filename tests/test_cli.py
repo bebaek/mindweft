@@ -1,4 +1,5 @@
 import json
+import tomllib
 import urllib.error
 from collections.abc import Iterator, Mapping, Sequence
 from email.message import Message
@@ -789,6 +790,156 @@ thread_db_path = ".data/minigent.db"
     assert "secret-value" not in json.dumps(output)
 
 
+def test_config_export_prints_toml_from_server(monkeypatch: Any, capsys: Any) -> None:
+    def urlopen(request: Any) -> _Response:
+        assert request.full_url.endswith("/config?export=true")
+        return _Response(
+            body={
+                "llm": {
+                    "provider": "openrouter",
+                    "model": "openrouter-model",
+                    "base_url": "https://openrouter.ai/api/v1",
+                },
+                "quality": {"enabled": False},
+                "agent_backend": {"mcp_broker_enabled": True},
+                "mcp_servers": [
+                    {
+                        "name": "filesystem",
+                        "url": "http://127.0.0.1:8765/mcp",
+                        "headers": {"Authorization": "Bearer secret"},
+                    }
+                ],
+                "unified_config_export": {
+                    "oauth": {
+                        "provider_id": "chatgpt",
+                        "client_id": "client-id",
+                        "authorize_url": "https://auth.example/authorize",
+                        "token_url": "https://auth.example/token",
+                    },
+                    "coding": {
+                        "mcp_servers_file": "mcp-servers.json",
+                        "mcp_server_specs": [
+                            {
+                                "name": "custom-stdio",
+                                "transport": "stdio",
+                                "command": ["uvx", "custom-mcp"],
+                                "env": {"API_KEY": "<set>"},
+                            }
+                        ],
+                    },
+                    "tenant_execution_configs": {
+                        "*": {
+                            "skills": {
+                                "default_skill": "coding-workspace",
+                                "items": [
+                                    {
+                                        "name": "coding-workspace",
+                                        "system_prompt": "You are a coding agent.",
+                                        "mcp_server_names": ["filesystem"],
+                                    }
+                                ],
+                            }
+                        }
+                    },
+                    "runtime": {
+                        "mcp_servers": [
+                            {"name": "filesystem", "status": "connected", "tool_count": 1}
+                        ],
+                        "tools": [
+                            {"name": "filesystem.read_file", "description": "Read file"}
+                        ],
+                    },
+                },
+            }
+        )
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["config", "export", "--include-runtime"])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Generated from a running Minigent server" in output
+    assert 'profile = "exported"' in output
+    assert "[llm]" in output
+    assert 'provider = "openrouter"' in output
+    assert 'api_key_env = "OPENROUTER_API_KEY"' in output
+    assert "[mcp]" in output
+    assert "broker_enabled = true" in output
+    assert 'Authorization = "<set>"' not in output
+    assert "[oauth]" in output
+    assert 'provider_id = "chatgpt"' in output
+    assert "[[coding.mcp_server_specs]]" in output
+    assert 'transport = "stdio"' in output
+    assert 'command = ["uvx", "custom-mcp"]' in output
+    assert "tenant_execution_configs" in output
+    assert "coding-workspace" in output
+    assert "system_prompt" in output
+    assert "runtime" in output
+    assert "filesystem.read_file" in output
+    assert "[[mcp.servers]]" not in output
+    assert 'model = "None"' not in output
+    assert 'base_url = "None"' not in output
+    parsed = tomllib.loads(output)
+    assert parsed["oauth"]["provider_id"] == "chatgpt"
+    assert parsed["coding"]["mcp_server_specs"][0]["transport"] == "stdio"
+    assert parsed["coding"]["mcp_server_specs"][0]["command"] == ["uvx", "custom-mcp"]
+    assert parsed["tenant_execution_configs"]["*"]["skills"]["default_skill"] == "coding-workspace"
+    assert parsed["runtime"]["tools"][0]["name"] == "filesystem.read_file"
+    assert "secret" not in output
+
+
+def test_config_export_writes_json(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    def urlopen(request: Any) -> _Response:
+        assert request.full_url.endswith("/config?export=true")
+        return _Response(body={"llm": {"provider": "google", "model": "gemini-model"}})
+
+    output_path = tmp_path / "export.json"
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["--json", "config", "export", "--output", str(output_path)])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == ""
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert output["profile"] == "exported"
+    assert output["llm"] == {
+        "provider": "google",
+        "model": "gemini-model",
+        "api_key_env": "GEMINI_API_KEY",
+    }
+
+
+def test_config_print_resolved_uses_custom_env_file(
+    monkeypatch: Any,
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
+    monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
+    (tmp_path / "minigent.toml").write_text(
+        """
+[llm]
+provider = "openrouter"
+model = "from-toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    custom_env = tmp_path / "custom.env"
+    custom_env.write_text("MINIGENT_LLM_PROVIDER=mock\n", encoding="utf-8")
+
+    exit_code = cli.main(["--env-file", str(custom_env), "config", "print", "--resolved"])
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["dotenv_file_env"] == str(custom_env)
+    assert output["dotenv_file"] == str(custom_env)
+    assert output["resolved_env"]["MINIGENT_LLM_PROVIDER"] == "mock"
+    assert output["resolved_env"]["MINIGENT_LLM_MODEL"] == "from-toml"
+
+
 def test_config_doctor_reports_unified_config_checks(
     monkeypatch: Any,
     tmp_path: Path,
@@ -863,6 +1014,7 @@ def test_config_doctor_blocks_when_provider_key_missing(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
     (tmp_path / "minigent.toml").write_text(

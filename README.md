@@ -75,10 +75,12 @@ friendly facade for the common app, auth, LLM, coding workspace, MCP, voice, and
 settings.
 See [`docs/minigent-toml.md`](docs/minigent-toml.md) for the schema, examples, precedence,
 and troubleshooting commands. Set `MINIGENT_CONFIG_FILE` to point at a different TOML file.
-Existing `.env` files and real environment variables still work; precedence is `environment
-> .env > minigent.toml > defaults`, so deployment and secret-management workflows can keep
+Existing `.env` files and real environment variables still work; set `MINIGENT_DOTENV_FILE`
+to load a dotenv file other than `.env`. Precedence is `environment > selected .env >
+minigent.toml > defaults`, so deployment and secret-management workflows can keep
 using env overrides. Use `uv run minigent config print --resolved` to inspect the local
-resolved env mapping with secret-looking values masked. `uv run minigent config doctor`
+resolved env mapping with secret-looking values masked, or `uv run minigent config export`
+to generate a best-effort TOML facade from a running server. `uv run minigent config doctor`
 also checks the unified config file, LLM provider prerequisites, coding workspace paths,
 shell allowlists, and MCP server shape before probing a running API.
 

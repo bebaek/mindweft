@@ -361,8 +361,8 @@ def create_app(
         return {"status": "ok"}
 
     @app.get("/config")
-    async def config(request: Request) -> dict[str, object]:
-        return request.app.state.execution_resolver.describe()
+    async def config(request: Request, export: bool = False) -> dict[str, object]:
+        return request.app.state.execution_resolver.describe(include_export=export)
 
     @app.get("/execution-options", response_model=ExecutionOptionsResponse)
     async def execution_options(

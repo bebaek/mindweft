@@ -20,32 +20,68 @@ Inspect the local resolved mapping:
 uv run minigent config print --resolved
 ```
 
+Export a best-effort unified config from a running server:
+
+```bash
+uv run minigent config export --output minigent.exported.toml
+```
+
 Check common config problems:
 
 ```bash
 uv run minigent config doctor
 ```
 
+
 Minigent validates `minigent.toml` against a typed schema before mapping it to environment
 variables. Unknown keys and wrong value types are reported as configuration errors.
 
-## Loading and precedence
+## Exporting from a running server
 
-By default Minigent looks for `minigent.toml` in the current working directory. Set
-`MINIGENT_CONFIG_FILE` to choose a different TOML file:
+`minigent config export` converts the public `/config` response from a running API into a
+best-effort `minigent.toml` facade:
 
 ```bash
-MINIGENT_CONFIG_FILE=~/.config/minigent/config.toml uv run uvicorn app.main:app
+uv run minigent config export
+uv run minigent config export --output minigent.exported.toml
+uv run minigent config export --include-runtime --output minigent.snapshot.toml
+uv run minigent --json config export --output minigent.exported.json
+```
+
+The export cannot recover the original source files or secret values. When the server supports
+`/config?export=true`, it also includes richer runtime-derived details such as generic OAuth
+settings, tenant execution configs with skill prompts, capability profiles, detailed MCP server
+config, and the raw `MINIGENT_CODING_MCP_SERVERS_FILE` server specs when available. Runtime
+status/tools are informational and are included only with `--include-runtime`. Provider API keys
+are emitted as environment references such as `api_key_env = "OPENROUTER_API_KEY"`, and
+secret-looking MCP headers/env values are masked.
+
+## Loading and precedence
+
+By default Minigent looks for `minigent.toml` and `.env` in the current working directory. Set
+`MINIGENT_CONFIG_FILE` to choose a different TOML file, and `MINIGENT_DOTENV_FILE` to choose a
+different dotenv file:
+
+```bash
+MINIGENT_CONFIG_FILE=~/.config/minigent/config.toml \
+MINIGENT_DOTENV_FILE=~/.config/minigent/secrets.env \
+uv run uvicorn app.main:app
+```
+
+The `minigent` CLI also accepts `--env-file` for client-side commands:
+
+```bash
+uv run minigent --env-file ~/.config/minigent/client.env config doctor
 ```
 
 Precedence is:
 
 ```text
-real environment > .env / .env.coding > minigent.toml > built-in defaults
+real environment > selected .env > minigent.toml > built-in defaults
 ```
 
 This means `minigent.toml` is safe to use as a friendly baseline while keeping secrets and
-deployment-specific overrides in the environment or `.env` files.
+deployment-specific overrides in the environment or selected `.env` file.
 
 ## Secrets
 

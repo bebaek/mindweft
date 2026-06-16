@@ -27,6 +27,7 @@ from minigent_client.config_commands import (
     package_version,
     run_config,
     run_config_doctor,
+    run_config_export,
     run_config_init,
     run_config_print,
     server_summary,
@@ -50,6 +51,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--base-url",
         default="http://127.0.0.1:8000",
         help="Base URL for the running API service.",
+    )
+    parser.add_argument(
+        "--env-file",
+        default=None,
+        help="Dotenv file to load for this command. Also sets MINIGENT_DOTENV_FILE.",
     )
     parser.add_argument(
         "--api-token",
@@ -779,6 +785,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--resolved",
         action="store_true",
         help="Print the env vars resolved from minigent.toml with secrets masked.",
+    )
+    config_export_parser = config_subparsers.add_parser(
+        "export", help="Export a best-effort minigent.toml from a running server."
+    )
+    config_export_parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional path to write instead of stdout.",
+    )
+    config_export_parser.add_argument(
+        "--include-runtime",
+        action="store_true",
+        help="Include informational runtime status/tool snapshots in the export.",
     )
     config_subparsers.add_parser("doctor", help="Check common CLI/API configuration issues.")
 
@@ -2455,9 +2474,27 @@ def _print_abort_message(args: argparse.Namespace) -> None:
     print(f"[idle] locally aborted current run; {detail}.", file=sys.stderr)
 
 
+def _apply_cli_env_file(args: argparse.Namespace) -> None:
+    env_file = getattr(args, "env_file", None)
+    if not env_file:
+        return
+    path = Path(env_file).expanduser()
+    os.environ["MINIGENT_DOTENV_FILE"] = str(path)
+    if not path.exists():
+        return
+    from dotenv import dotenv_values
+
+    for key, value in dotenv_values(path).items():
+        if value is not None:
+            os.environ.setdefault(key, value)
+    if args.base_url == "http://127.0.0.1:8000" and os.environ.get("MINIGENT_BASE_URL"):
+        args.base_url = os.environ["MINIGENT_BASE_URL"]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    _apply_cli_env_file(args)
 
     trace_id = secrets.token_hex(16) if args.trace else None
     if args.command == "run":
@@ -2543,6 +2580,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return run_config_init(args)
             if args.config_command == "print":
                 return run_config_print(args)
+            if args.config_command == "export":
+                return run_config_export(args, client, trace_id)
             if args.config_command == "doctor":
                 return run_config_doctor(args, client, trace_id)
     except KeyboardInterrupt:
