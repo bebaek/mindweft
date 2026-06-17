@@ -33,8 +33,6 @@ def test_coding_config_export_builds_client_argv(monkeypatch) -> None:
     )
 
     assert runner.build_coding_config_export_client_argv(args) == [
-        "--env-file",
-        ".env.test",
         "--base-url",
         "http://127.0.0.1:9000",
         "config",
@@ -53,8 +51,6 @@ def test_coding_config_export_uses_env_base_url(monkeypatch) -> None:
     args = runner.parse_config_args(["config", "export", "--env-file", ".env.coding"])
 
     assert runner.build_coding_config_export_client_argv(args) == [
-        "--env-file",
-        ".env.coding",
         "--base-url",
         "http://127.0.0.1:9100",
         "config",
@@ -63,6 +59,24 @@ def test_coding_config_export_uses_env_base_url(monkeypatch) -> None:
         "--coding-env-file",
         ".env.coding",
     ]
+
+def test_load_config_command_env_sets_dotenv_without_overriding(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env_path = tmp_path / ".env.coding"
+    env_path.write_text(
+        "MINIGENT_BASE_URL=http://from-dotenv.example\nMINIGENT_CODING_TENANT_ID=tenant\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MINIGENT_BASE_URL", "http://from-env.example")
+    monkeypatch.delenv("MINIGENT_CODING_TENANT_ID", raising=False)
+
+    runner.load_config_command_env(str(env_path))
+
+    assert runner.os.environ["MINIGENT_DOTENV_FILE"] == str(env_path)
+    assert runner.os.environ["MINIGENT_BASE_URL"] == "http://from-env.example"
+    assert runner.os.environ["MINIGENT_CODING_TENANT_ID"] == "tenant"
+
 
 def test_load_env_file_reads_file_backed_values(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("MINIGENT_TENANT_EXECUTION_CONFIGS", raising=False)

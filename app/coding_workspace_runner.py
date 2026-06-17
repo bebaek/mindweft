@@ -140,7 +140,7 @@ def parse_config_args(argv: list[str]) -> argparse.Namespace:
 
 
 def build_coding_config_export_client_argv(args: argparse.Namespace) -> list[str]:
-    argv = ["--env-file", args.env_file]
+    argv: list[str] = []
     base_url = args.base_url or os.getenv("MINIGENT_BASE_URL")
     if base_url:
         argv.extend(["--base-url", base_url])
@@ -154,9 +154,22 @@ def build_coding_config_export_client_argv(args: argparse.Namespace) -> list[str
     return argv
 
 
+def load_config_command_env(env_file: str) -> None:
+    from dotenv import dotenv_values
+
+    path = Path(env_file).expanduser()
+    os.environ["MINIGENT_DOTENV_FILE"] = str(path)
+    if not path.exists():
+        return
+    for key, value in dotenv_values(path).items():
+        if value is not None:
+            os.environ.setdefault(key, value)
+
+
 def run_config_command(argv: list[str]) -> int:
     args = parse_config_args(argv)
     if args.command == "config" and args.config_command == "export":
+        load_config_command_env(args.env_file)
         from minigent_client.one_shot_cli import main as client_main
 
         return client_main(build_coding_config_export_client_argv(args))

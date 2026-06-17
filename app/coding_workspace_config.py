@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app import coding_workspace_runner as runner
+from app.unified_config import DOTENV_FILE_ENV, load_unified_config_env, resolve_config_path
 
 
 def export_local_coding_config(args: Namespace) -> dict[str, object]:
@@ -14,8 +15,7 @@ def export_local_coding_config(args: Namespace) -> dict[str, object]:
 
     env_file = getattr(args, "coding_env_file", None) or getattr(args, "env_file", None) or ".env.coding"
     env_path = Path(env_file).expanduser()
-    env = runner.load_env_file(str(env_path)) if env_path.exists() else dict(os.environ)
-    env_base_dir = env_path.resolve().parent if env_path.exists() else Path.cwd()
+    env, env_base_dir = load_coding_workspace_export_env(env_path)
     workspace_roots = runner.resolve_workspace_roots(
         None,
         env.get("MINIGENT_CODING_WORKSPACES") or env.get("MINIGENT_CODING_WORKSPACE"),
@@ -91,6 +91,55 @@ def export_local_coding_config(args: Namespace) -> dict[str, object]:
     if bridge_host != runner.DEFAULT_BRIDGE_HOST:
         coding["bridge_host"] = bridge_host
     return {"coding": coding}
+
+
+def load_coding_workspace_export_env(env_path: Path) -> tuple[dict[str, str], Path]:
+    """Load coding env for export without rereading a preloaded dotenv file.
+
+    `sops exec-file` and similar tools may provide the dotenv as a one-shot file or FIFO.
+    The main CLI has already loaded `--env-file` into `os.environ`, so avoid reading the same
+    path again when `MINIGENT_DOTENV_FILE` points at it.
+    """
+
+    base_dir = env_path.resolve().parent if env_path.exists() else Path.cwd()
+    if env_path.exists() and not _env_file_already_loaded(env_path):
+        return runner.load_env_file(str(env_path)), base_dir
+
+    env = dict(os.environ)
+    config_env = load_unified_config_env(resolve_config_path(base_dir=base_dir, env=env), source_env=env)
+    for key, value in config_env.items():
+        env.setdefault(key, value)
+    _apply_selected_file_env_values(env, base_dir=base_dir)
+    return env, base_dir
+
+
+def _apply_selected_file_env_values(env: dict[str, str], *, base_dir: Path) -> None:
+    """Expand only file-backed env vars needed for coding config export.
+
+    Avoid scanning every inherited ``*_FILE`` variable from the shell; some may point at
+    FIFOs, device files, or unrelated credential helpers and can block local export.
+    """
+
+    for file_key in ("MINIGENT_TENANT_EXECUTION_CONFIGS_FILE",):
+        raw_path = env.get(file_key, "").strip()
+        if not raw_path:
+            continue
+        target_key = file_key[: -len("_FILE")]
+        value_path = Path(raw_path).expanduser()
+        if not value_path.is_absolute():
+            value_path = base_dir / value_path
+        env[target_key] = value_path.read_text(encoding="utf-8").strip()
+
+
+def _env_file_already_loaded(env_path: Path) -> bool:
+    configured = os.environ.get(DOTENV_FILE_ENV, "").strip()
+    if not configured:
+        return False
+    configured_path = Path(configured).expanduser()
+    try:
+        return configured_path.resolve() == env_path.resolve()
+    except OSError:
+        return configured_path == env_path
 
 
 def _coding_mcp_specs_from_raw_json(raw_json: str) -> list[dict[str, object]]:
