@@ -60,7 +60,9 @@ registration config. Runtime status/tools are informational and are included onl
 Use `--local-coding` when exporting a local coding workspace stack. The CLI then resolves the
 local coding runner config from `--coding-env-file`, `--env-file`, or `.env.coding`, converts
 legacy `MINIGENT_CODING_MCP_SERVERS_FILE` contents into inline `[[coding.mcp_server_specs]]`,
-and merges those runner-owned launch settings with the API-owned server export.
+and merges those runner-owned launch settings with the API-owned server export. If the API-only
+export contains local coding gateway MCP URLs without a `coding` launch section, the command adds
+a TOML comment pointing you to `--local-coding` / `minigent-coding-workspace config export`.
 
 ## Loading and precedence
 

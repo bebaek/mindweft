@@ -187,9 +187,16 @@ def run_config_export(
 ) -> int:
     server_config = client.config(export=True)
     export = export_unified_config_from_server(server_config)
-    if getattr(args, "local_coding", False):
+    local_coding = getattr(args, "local_coding", False)
+    if local_coding:
         _merge_export_details(export, export_local_coding_config(args))
         export["profile"] = "exported-coding"
+    elif _export_has_coding_gateway_mcp_urls(export):
+        _append_export_comment(
+            export,
+            "This API-only export includes tenant MCP gateway URLs but not coding runner launch specs; "
+            "use --local-coding or minigent-coding-workspace config export for a restartable coding stack.",
+        )
     if not getattr(args, "include_runtime", False):
         export.pop("runtime", None)
     if trace_id is not None:
@@ -245,6 +252,46 @@ def export_unified_config_from_server(server_config: dict[str, Any]) -> dict[str
             mcp_export.pop("servers", None)
     pruned_export = _prune_empty_values(export)
     return pruned_export if isinstance(pruned_export, dict) else export
+
+
+def _append_export_comment(export: dict[str, object], comment: str) -> None:
+    comments = export.setdefault("_comments", [])
+    if isinstance(comments, list) and comment not in comments:
+        comments.append(comment)
+
+
+def _export_has_coding_gateway_mcp_urls(export: dict[str, object]) -> bool:
+    if isinstance(export.get("coding"), dict):
+        return False
+    tenant_configs = export.get("tenant_execution_configs")
+    if not isinstance(tenant_configs, dict):
+        return False
+    for tenant in tenant_configs.values():
+        if not isinstance(tenant, dict):
+            continue
+        tools = tenant.get("tools")
+        if not isinstance(tools, dict):
+            continue
+        mcp_servers = tools.get("mcp_servers", tools.get("mcpServers"))
+        if not isinstance(mcp_servers, list):
+            continue
+        for server in mcp_servers:
+            if not isinstance(server, dict):
+                continue
+            url = server.get("url")
+            if isinstance(url, str) and _looks_like_local_coding_gateway_url(url):
+                return True
+    return False
+
+
+def _looks_like_local_coding_gateway_url(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return False
+    parts = [part for part in parsed.path.split("/") if part]
+    return len(parts) >= 2 and parts[-2] == "mcp"
 
 
 def _prune_empty_values(value: object) -> object:

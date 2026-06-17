@@ -890,6 +890,44 @@ def test_config_export_prints_toml_from_server(monkeypatch: Any, capsys: Any) ->
     assert "secret" not in output
 
 
+def test_config_export_warns_when_api_only_coding_gateway_urls(
+    monkeypatch: Any, capsys: Any
+) -> None:
+    def urlopen(request: Any) -> _Response:
+        assert request.full_url.endswith("/config?export=true")
+        return _Response(
+            body={
+                "llm": {"provider": "mock"},
+                "unified_config_export": {
+                    "tenant_execution_configs": {
+                        "demo-tenant": {
+                            "tools": {
+                                "mcp_servers": [
+                                    {
+                                        "name": "text-workspace",
+                                        "url": "http://127.0.0.1:8765/mcp/text-workspace",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+            }
+        )
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["config", "export"])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "API-only export includes tenant MCP gateway URLs" in output
+    assert "--local-coding" in output
+    assert "[[coding.mcp_server_specs]]" not in output
+    parsed = tomllib.loads(output)
+    assert "coding" not in parsed
+
+
 def test_config_export_local_coding_merges_runner_config(
     monkeypatch: Any, tmp_path: Path, capsys: Any
 ) -> None:
