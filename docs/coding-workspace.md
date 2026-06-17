@@ -340,6 +340,10 @@ URLs to the gateway paths; the runner does not rewrite explicit tenant config. I
 mode, per-server `host`, `port`, `path`, and `url` fields in the stdio server specs are legacy
 compatibility settings and are not needed unless you also run without the gateway.
 
+If an explicit tenant config references a gateway URL like `/mcp/text-workspace` but no matching
+`[[coding.mcp_server_specs]]` entry or legacy MCP server-file entry was loaded, the runner prints
+a warning before startup because those calls would otherwise fail with gateway 404 responses.
+
 You can also run the gateway directly with a gateway config file:
 
 ```bash

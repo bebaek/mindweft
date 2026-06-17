@@ -405,6 +405,19 @@ def main(argv: list[str] | None = None) -> int:
         env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = inject_coding_workspace_skill(
             env["MINIGENT_TENANT_EXECUTION_CONFIGS"], tenant_id, workspace_roots=workspace_roots
         )
+    if gateway_enabled:
+        for missing_name in tenant_gateway_mcp_server_mismatches(
+            env,
+            tenant_id,
+            gateway_url_prefix=gateway_url_prefix,
+            specs=mcp_server_specs,
+        ):
+            print(
+                "WARNING: tenant MCP server "
+                f"'{missing_name}' points at the coding MCP gateway but no matching "
+                "coding.mcp_server_specs entry was loaded; calls may return 404.",
+                file=sys.stderr,
+            )
 
     processes: list[subprocess.Popen[str]] = []
     managed_http_processes: list[tuple[CodingMCPServerSpec, subprocess.Popen[str]]] = []
@@ -1200,6 +1213,51 @@ def append_workspace_roots_to_prompt(system_prompt: str, workspace_roots: list[P
     roots = ", ".join(str(workspace) for workspace in workspace_roots)
     root_label = "a workspace root" if len(workspace_roots) == 1 else "workspace roots"
     return f"{system_prompt} {marker} {roots}. Treat each listed path as {root_label}."
+
+
+def tenant_gateway_mcp_server_mismatches(
+    env: dict[str, str],
+    tenant_id: str,
+    *,
+    gateway_url_prefix: str,
+    specs: list[CodingMCPServerSpec],
+) -> list[str]:
+    """Return tenant gateway MCP server names with no loaded stdio server spec."""
+
+    raw_config = env.get("MINIGENT_TENANT_EXECUTION_CONFIGS")
+    if not raw_config:
+        return []
+    try:
+        payload = json.loads(raw_config)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    tenant = payload.get(tenant_id)
+    if not isinstance(tenant, dict):
+        return []
+    tools = tenant.get("tools")
+    if not isinstance(tools, dict):
+        return []
+    mcp_servers = tools.get("mcp_servers", tools.get("mcpServers"))
+    if not isinstance(mcp_servers, list):
+        return []
+
+    gateway_prefix = gateway_url_prefix.rstrip("/") + "/"
+    gateway_server_names = {spec.name for spec in specs if spec.transport == "stdio"}
+    missing: list[str] = []
+    for server in mcp_servers:
+        if not isinstance(server, dict):
+            continue
+        name = server.get("name")
+        url = server.get("url")
+        if not isinstance(name, str) or not isinstance(url, str):
+            continue
+        if not url.startswith(gateway_prefix):
+            continue
+        if name not in gateway_server_names and name not in missing:
+            missing.append(name)
+    return missing
 
 
 def bridge_allowed_tools_from_config(

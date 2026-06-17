@@ -371,6 +371,90 @@ def test_shell_allowed_command_prefixes_from_env() -> None:
     ) == ["git", "uv run pytest", "rg"]
 
 
+def test_tenant_gateway_mcp_server_mismatches_detects_missing_stdio_spec() -> None:
+    env = {
+        "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(
+            {
+                "demo-tenant": {
+                    "tools": {
+                        "mcp_servers": [
+                            {
+                                "name": "fs-workspace",
+                                "url": "http://127.0.0.1:8765/mcp/fs-workspace",
+                            },
+                            {
+                                "name": "text-workspace",
+                                "url": "http://127.0.0.1:8765/mcp/text-workspace",
+                            },
+                            {
+                                "name": "web-search",
+                                "url": "http://127.0.0.1:8766/mcp",
+                            },
+                        ]
+                    }
+                }
+            }
+        )
+    }
+    specs = [
+        runner.CodingMCPServerSpec(
+            name="fs-workspace",
+            url="http://127.0.0.1:8765/mcp/fs-workspace",
+            transport="stdio",
+            command=["fs-server"],
+        ),
+        runner.CodingMCPServerSpec(
+            name="web-search",
+            url="http://127.0.0.1:8766/mcp",
+            transport="http",
+        ),
+    ]
+
+    assert runner.tenant_gateway_mcp_server_mismatches(
+        env,
+        "demo-tenant",
+        gateway_url_prefix="http://127.0.0.1:8765/mcp",
+        specs=specs,
+    ) == ["text-workspace"]
+
+
+def test_tenant_gateway_mcp_server_mismatches_accepts_loaded_stdio_specs() -> None:
+    env = {
+        "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(
+            {
+                "demo-tenant": {
+                    "tools": {
+                        "mcp_servers": [
+                            {
+                                "name": "text-workspace",
+                                "url": "http://127.0.0.1:8765/mcp/text-workspace",
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+    }
+    specs = [
+        runner.CodingMCPServerSpec(
+            name="text-workspace",
+            url="http://127.0.0.1:8765/mcp/text-workspace",
+            transport="stdio",
+            command=["text-server"],
+        )
+    ]
+
+    assert (
+        runner.tenant_gateway_mcp_server_mismatches(
+            env,
+            "demo-tenant",
+            gateway_url_prefix="http://127.0.0.1:8765/mcp",
+            specs=specs,
+        )
+        == []
+    )
+
+
 def test_bridge_allowed_tools_allows_unfiltered_explicit_null() -> None:
     env = {
         "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(
