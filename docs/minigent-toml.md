@@ -50,12 +50,11 @@ uv run minigent --json config export --output minigent.exported.json
 ```
 
 The export cannot recover the original source files or secret values. When the server supports
-`/config?export=true`, it also includes richer runtime-derived details such as generic OAuth
-settings, tenant execution configs with skill prompts, capability profiles, and detailed MCP server
-config including inline `coding.mcp_server_specs` when available. Runtime status/tools are
-informational and are included only with `--include-runtime`. Provider API keys are emitted as
-environment references such as `api_key_env = "OPENROUTER_API_KEY"`, and secret-looking MCP
-headers/env values are masked.
+`/config?export=true`, it also includes richer API-owned details such as generic OAuth settings,
+tenant execution configs with skill prompts, capability profiles, and runtime MCP server
+registration config. Runtime status/tools are informational and are included only with
+`--include-runtime`. Provider API keys are emitted as environment references such as
+`api_key_env = "OPENROUTER_API_KEY"`, and secret-looking MCP headers/env values are masked.
 
 Use `--local-coding` when exporting a local coding workspace stack. The CLI then resolves the
 local coding runner config from `--coding-env-file`, `--env-file`, or `.env.coding`, converts

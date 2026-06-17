@@ -4,7 +4,6 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from threading import Lock
 from typing import Any, Mapping
 
@@ -445,9 +444,6 @@ def _unified_config_export_public_dict(
 ) -> dict[str, object]:
     config = context.config
     export: dict[str, object] = {}
-    coding = _coding_config_export_public_dict()
-    if coding:
-        export["coding"] = coding
     llm = _llm_export_public_dict(config.llm, llm_description)
     if llm:
         export["llm"] = llm
@@ -480,59 +476,6 @@ def _runtime_mcp_server_public_dict(server: dict[str, Any]) -> dict[str, object]
         if value not in (None, "None"):
             exported[key] = value
     return exported
-
-
-def _coding_config_export_public_dict() -> dict[str, object]:
-    exported: dict[str, object] = {}
-    raw_specs = os.getenv("MINIGENT_CODING_MCP_SERVER_SPECS", "").strip()
-    payload: object = None
-    if raw_specs:
-        try:
-            payload = json.loads(raw_specs)
-        except json.JSONDecodeError:
-            payload = None
-    else:
-        raw_path = os.getenv("MINIGENT_CODING_MCP_SERVERS_FILE", "").strip()
-        if raw_path:
-            path = Path(raw_path).expanduser()
-            if path.exists() and path.is_file():
-                try:
-                    payload = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    payload = None
-    if isinstance(payload, dict):
-        servers = payload.get("servers")
-    else:
-        servers = payload
-    if isinstance(servers, list):
-        exported["mcp_server_specs"] = [
-            _sanitize_coding_mcp_server_spec(server)
-            for server in servers
-            if isinstance(server, dict)
-        ]
-    return exported
-
-
-def _sanitize_coding_mcp_server_spec(server: dict[str, Any]) -> dict[str, object]:
-    exported: dict[str, object] = {}
-    for key, value in server.items():
-        if key == "headers" and isinstance(value, dict):
-            exported[key] = {header: "<set>" for header in sorted(value)}
-        elif key == "env" and isinstance(value, dict):
-            exported[key] = {env_key: f"${{{env_key}}}" for env_key in sorted(value)}
-        elif _is_public_config_value(value):
-            exported[key] = value
-    return exported
-
-
-def _is_public_config_value(value: object) -> bool:
-    if isinstance(value, str | int | float | bool) or value is None:
-        return True
-    if isinstance(value, list):
-        return all(_is_public_config_value(item) for item in value)
-    if isinstance(value, dict):
-        return all(isinstance(key, str) and _is_public_config_value(item) for key, item in value.items())
-    return False
 
 
 def _llm_export_public_dict(

@@ -118,6 +118,22 @@ def test_thread_lifecycle_endpoints() -> None:
     assert missing_response.status_code == 404
 
 
+def test_config_export_does_not_collect_coding_runner_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_CODING_MCP_SERVER_SPECS",
+        json.dumps([{"name": "web-fetch", "command": ["uvx", "mcp-server-fetch"]}]),
+    )
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    response = client.get("/config?export=true")
+
+    assert response.status_code == 200
+    export = response.json()["unified_config_export"]
+    assert "coding" not in export
+
+
 def test_add_message_rejects_image_when_disabled() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
