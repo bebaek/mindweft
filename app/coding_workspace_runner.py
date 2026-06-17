@@ -102,6 +102,67 @@ class CodingMCPServerSpec:
         self.enabled = enabled
 
 
+def parse_config_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Coding workspace configuration commands.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    config_parser = subparsers.add_parser("config", help="Configuration helpers.")
+    config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
+    export_parser = config_subparsers.add_parser(
+        "export",
+        help="Export a restartable local coding workspace config by merging API and runner config.",
+    )
+    export_parser.add_argument(
+        "--env-file",
+        default=".env.coding",
+        help="Coding runner dotenv file. Defaults to .env.coding.",
+    )
+    export_parser.add_argument(
+        "--base-url",
+        default=None,
+        help="Running Minigent API URL. Defaults to MINIGENT_BASE_URL or http://127.0.0.1:8000.",
+    )
+    export_parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional path to write instead of stdout.",
+    )
+    export_parser.add_argument(
+        "--include-runtime",
+        action="store_true",
+        help="Include informational runtime status/tool snapshots in the export.",
+    )
+    export_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Write JSON instead of TOML.",
+    )
+    return parser.parse_args(argv)
+
+
+def build_coding_config_export_client_argv(args: argparse.Namespace) -> list[str]:
+    argv = ["--env-file", args.env_file]
+    base_url = args.base_url or os.getenv("MINIGENT_BASE_URL")
+    if base_url:
+        argv.extend(["--base-url", base_url])
+    if args.json:
+        argv.append("--json")
+    argv.extend(["config", "export", "--local-coding", "--coding-env-file", args.env_file])
+    if args.output:
+        argv.extend(["--output", args.output])
+    if args.include_runtime:
+        argv.append("--include-runtime")
+    return argv
+
+
+def run_config_command(argv: list[str]) -> int:
+    args = parse_config_args(argv)
+    if args.command == "config" and args.config_command == "export":
+        from minigent_client.one_shot_cli import main as client_main
+
+        return client_main(build_coding_config_export_client_argv(args))
+    raise RuntimeError("unsupported coding workspace config command")
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -226,7 +287,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    if raw_argv[:1] == ["config"]:
+        return run_config_command(raw_argv)
+    args = parse_args(raw_argv)
     env = load_env_file(args.env_file)
 
     workspace_roots = resolve_workspace_roots(

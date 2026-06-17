@@ -16,6 +16,54 @@ def test_console_script_entry_point_loads_runner_main() -> None:
     assert loaded.__name__ == "main"
 
 
+def test_coding_config_export_builds_client_argv(monkeypatch) -> None:
+    monkeypatch.delenv("MINIGENT_BASE_URL", raising=False)
+    args = runner.parse_config_args(
+        [
+            "config",
+            "export",
+            "--env-file",
+            ".env.test",
+            "--base-url",
+            "http://127.0.0.1:9000",
+            "--output",
+            "export.toml",
+            "--include-runtime",
+        ]
+    )
+
+    assert runner.build_coding_config_export_client_argv(args) == [
+        "--env-file",
+        ".env.test",
+        "--base-url",
+        "http://127.0.0.1:9000",
+        "config",
+        "export",
+        "--local-coding",
+        "--coding-env-file",
+        ".env.test",
+        "--output",
+        "export.toml",
+        "--include-runtime",
+    ]
+
+
+def test_coding_config_export_uses_env_base_url(monkeypatch) -> None:
+    monkeypatch.setenv("MINIGENT_BASE_URL", "http://127.0.0.1:9100")
+    args = runner.parse_config_args(["config", "export", "--env-file", ".env.coding"])
+
+    assert runner.build_coding_config_export_client_argv(args) == [
+        "--env-file",
+        ".env.coding",
+        "--base-url",
+        "http://127.0.0.1:9100",
+        "config",
+        "export",
+        "--local-coding",
+        "--coding-env-file",
+        ".env.coding",
+    ]
+
 def test_load_env_file_reads_file_backed_values(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("MINIGENT_TENANT_EXECUTION_CONFIGS", raising=False)
     config_path = tmp_path / "tenant-config.json"

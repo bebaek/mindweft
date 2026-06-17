@@ -295,6 +295,8 @@ the locally resolved runner config:
 
 ```bash
 uv run minigent --env-file .env.coding config export --local-coding --output minigent.coding.toml
+# Equivalent coding-runner wrapper:
+uv run minigent-coding-workspace config export --env-file .env.coding --output minigent.coding.toml
 ```
 
 On first use, ask the coding agent to index the repository, for example: "Index this

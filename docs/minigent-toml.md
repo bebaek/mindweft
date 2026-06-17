@@ -45,6 +45,7 @@ best-effort `minigent.toml` facade:
 uv run minigent config export
 uv run minigent config export --output minigent.exported.toml
 uv run minigent config export --local-coding --coding-env-file .env.coding --output minigent.coding.toml
+uv run minigent-coding-workspace config export --env-file .env.coding --output minigent.coding.toml
 uv run minigent config export --include-runtime --output minigent.snapshot.toml
 uv run minigent --json config export --output minigent.exported.json
 ```
