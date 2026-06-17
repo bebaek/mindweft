@@ -290,6 +290,13 @@ Start the runner as usual:
 uv run minigent-coding-workspace --env-file .env.coding
 ```
 
+To export a restartable TOML for the full local coding stack, merge the API-owned config with
+the locally resolved runner config:
+
+```bash
+uv run minigent --env-file .env.coding config export --local-coding --output minigent.coding.toml
+```
+
 On first use, ask the coding agent to index the repository, for example: "Index this
 project." After that, prefer this workflow:
 

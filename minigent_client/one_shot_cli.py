@@ -799,6 +799,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include informational runtime status/tool snapshots in the export.",
     )
+    config_export_parser.add_argument(
+        "--local-coding",
+        action="store_true",
+        help="Merge locally resolved coding workspace runner config into the export.",
+    )
+    config_export_parser.add_argument(
+        "--coding-env-file",
+        default=None,
+        help="Dotenv file for --local-coding. Defaults to --env-file or .env.coding.",
+    )
     config_subparsers.add_parser("doctor", help="Check common CLI/API configuration issues.")
 
     return parser

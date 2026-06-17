@@ -68,6 +68,9 @@ class CodingConfig:
     bridge_port: object = None
     bridge_allow_globs: object = None
     bridge_deny_globs: object = None
+    mcp_gateway_enabled: object = None
+    mcp_gateway_port: object = None
+    mcp_gateway_path_prefix: object = None
     mcp_server_specs: object = None
 
 
@@ -199,6 +202,7 @@ _STRING_KEYS = {
     "coding.tenant_id",
     "coding.workspace",
     "coding.bridge_host",
+    "coding.mcp_gateway_path_prefix",
     "mcp.broker_url",
     "voice.api_token",
     "voice.tenant_id",
@@ -224,6 +228,7 @@ _INT_KEYS = {
     "app.max_iterations",
     "auth.jwt_jwks_cache_seconds",
     "coding.bridge_port",
+    "coding.mcp_gateway_port",
     "quality.max_payload_chars",
 }
 
@@ -237,6 +242,7 @@ _BOOL_KEYS = {
     "coding.enabled",
     "coding.inject_workspace_skill",
     "coding.shell_enabled",
+    "coding.mcp_gateway_enabled",
     "mcp.broker_enabled",
     "quality.enabled",
 }

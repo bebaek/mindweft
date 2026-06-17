@@ -262,6 +262,18 @@ def _collect_mcp_config(section: object, env: dict[str, str]) -> None:
 def _collect_coding_inline_config(section: object, env: dict[str, str]) -> None:
     if not isinstance(section, dict):
         return
+    if "mcp_gateway_enabled" in section:
+        env["MINIGENT_CODING_MCP_GATEWAY_ENABLED"] = _format_env_value(
+            section["mcp_gateway_enabled"]
+        )
+    if "mcp_gateway_port" in section:
+        env["MINIGENT_CODING_MCP_GATEWAY_PORT"] = _format_env_value(
+            section["mcp_gateway_port"]
+        )
+    if "mcp_gateway_path_prefix" in section:
+        env["MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX"] = _format_env_value(
+            section["mcp_gateway_path_prefix"]
+        )
     if "mcp_server_specs" in section:
         env["MINIGENT_CODING_MCP_SERVER_SPECS"] = _format_json_env_value(
             section["mcp_server_specs"]

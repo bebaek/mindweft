@@ -44,6 +44,7 @@ best-effort `minigent.toml` facade:
 ```bash
 uv run minigent config export
 uv run minigent config export --output minigent.exported.toml
+uv run minigent config export --local-coding --coding-env-file .env.coding --output minigent.coding.toml
 uv run minigent config export --include-runtime --output minigent.snapshot.toml
 uv run minigent --json config export --output minigent.exported.json
 ```
@@ -55,6 +56,11 @@ config including inline `coding.mcp_server_specs` when available. Runtime status
 informational and are included only with `--include-runtime`. Provider API keys are emitted as
 environment references such as `api_key_env = "OPENROUTER_API_KEY"`, and secret-looking MCP
 headers/env values are masked.
+
+Use `--local-coding` when exporting a local coding workspace stack. The CLI then resolves the
+local coding runner config from `--coding-env-file`, `--env-file`, or `.env.coding`, converts
+legacy `MINIGENT_CODING_MCP_SERVERS_FILE` contents into inline `[[coding.mcp_server_specs]]`,
+and merges those runner-owned launch settings with the API-owned server export.
 
 ## Loading and precedence
 
@@ -163,6 +169,9 @@ enabled = true
 workspaces = ["/Users/you/code"]
 shell_enabled = true
 shell_allowed_command_prefixes = ["uv ", "pytest ", "git "]
+mcp_gateway_enabled = true
+mcp_gateway_port = 8765
+mcp_gateway_path_prefix = "/mcp"
 bridge_deny_globs = ["**/.env*", "**/.git/**"]
 bridge_allow_globs = ["**/.env*.template"]
 ```
@@ -280,6 +289,9 @@ Provider key targets:
 | `bridge_port` | `MINIGENT_CODING_BRIDGE_PORT` |
 | `bridge_allow_globs` | `MINIGENT_CODING_BRIDGE_ALLOW_GLOBS` |
 | `bridge_deny_globs` | `MINIGENT_CODING_BRIDGE_DENY_GLOBS` |
+| `mcp_gateway_enabled` | `MINIGENT_CODING_MCP_GATEWAY_ENABLED` |
+| `mcp_gateway_port` | `MINIGENT_CODING_MCP_GATEWAY_PORT` |
+| `mcp_gateway_path_prefix` | `MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX` |
 | `mcp_server_specs` | `MINIGENT_CODING_MCP_SERVER_SPECS` |
 
 List values such as `workspaces`, `shell_allowed_command_prefixes`, and bridge glob lists

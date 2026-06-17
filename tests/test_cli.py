@@ -890,6 +890,71 @@ def test_config_export_prints_toml_from_server(monkeypatch: Any, capsys: Any) ->
     assert "secret" not in output
 
 
+def test_config_export_local_coding_merges_runner_config(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    def urlopen(request: Any) -> _Response:
+        assert request.full_url.endswith("/config?export=true")
+        return _Response(body={"llm": {"provider": "mock"}})
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    specs_path = tmp_path / "mcp-servers.json"
+    specs_path.write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "web-fetch",
+                        "transport": "stdio",
+                        "command": ["uvx", "mcp-server-fetch"],
+                        "env": {"FETCH_TOKEN": "secret-value"},
+                        "profiles": ["inspect"],
+                        "allowed_tools": ["fetch"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    env_file = tmp_path / ".env.coding"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"MINIGENT_CODING_WORKSPACES={workspace}",
+                "MINIGENT_CODING_TENANT_ID=coding-tenant",
+                "MINIGENT_CODING_MCP_GATEWAY_ENABLED=true",
+                "MINIGENT_CODING_MCP_GATEWAY_PORT=9876",
+                "MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX=/tools",
+                "MINIGENT_CODING_MCP_SERVERS_FILE=mcp-servers.json",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        ["config", "export", "--local-coding", "--coding-env-file", str(env_file)]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    parsed = tomllib.loads(output)
+    assert parsed["profile"] == "exported-coding"
+    assert parsed["coding"]["workspaces"] == [str(workspace)]
+    assert parsed["coding"]["tenant_id"] == "coding-tenant"
+    assert parsed["coding"]["mcp_gateway_enabled"] is True
+    assert parsed["coding"]["mcp_gateway_port"] == 9876
+    assert parsed["coding"]["mcp_gateway_path_prefix"] == "/tools"
+    assert parsed["coding"]["mcp_server_specs"][0]["name"] == "web-fetch"
+    assert parsed["coding"]["mcp_server_specs"][0]["env"] == {
+        "FETCH_TOKEN": "${FETCH_TOKEN}"
+    }
+    assert "mcp_servers_file" not in output
+    assert "secret-value" not in output
+
+
 def test_config_export_writes_json(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     def urlopen(request: Any) -> _Response:
         assert request.full_url.endswith("/config?export=true")
