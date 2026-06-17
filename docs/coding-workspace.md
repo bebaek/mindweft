@@ -157,17 +157,12 @@ MINIGENT_CODING_BRIDGE_ALLOW_GLOBS=**/.env*.template,**/.env*.driver.sh
 
 Direct bridge env vars take precedence over the mirrored tenant path policy.
 
-### Declarative MCP server lists
+### Declarative MCP server specs
 
-For more than the built-in filesystem/text/shell tools, point the runner at a JSON MCP server
-list instead of adding more runner-specific flags. Relative paths are resolved from the dotenv
-file directory:
-
-```dotenv
-MINIGENT_CODING_MCP_SERVERS_FILE=.data/coding-mcp-servers.json
-```
-
-The file can be a JSON array or an object with a `servers` array. Each server entry can define:
+For more than the built-in filesystem/text/shell tools, keep MCP server launch/connect
+definitions directly in `minigent.toml` with `[[coding.mcp_server_specs]]`. This keeps the
+unified config self-contained instead of pointing at a secondary MCP server file. Each server
+entry can define:
 
 - `name`: MCP server name registered in tenant config.
 - `transport`: `stdio` to start it behind the stdio bridge/gateway, or `http` to register an
@@ -192,7 +187,7 @@ The file can be a JSON array or an object with a `servers` array. Each server en
 - `request_timeout`: optional stdio bridge/gateway timeout while waiting for one MCP response;
   defaults to `30`.
 - `timeout_seconds`: optional Minigent HTTP client timeout for calls to this MCP server;
-  defaults to `request_timeout` for coding MCP server files and to `30` in tenant configs.
+  defaults to `request_timeout` for coding MCP server specs and to `30` in tenant configs.
 
 String values in `command`, `env`, `headers`, `url`, and `health_url` can reference dotenv or
 environment values with `${NAME}` placeholders. Prefer passing credentials through `env` or
@@ -200,55 +195,47 @@ environment values with `${NAME}` placeholders. Prefer passing credentials throu
 
 Example:
 
-```json
-{
-  "servers": [
-    {
-      "name": "fs-workspace",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "{workspace_roots}"],
-      "profiles": ["inspect"],
-      "allowed_tools": ["list_allowed_directories", "list_directory", "read_file"],
-      "path_policy": {
-        "deny_globs": ["**/.env*", "**/.git/**", "**/.venv/**"],
-        "allow_globs": ["**/.env*.template"]
-      }
-    },
-    {
-      "name": "custom-workspace",
-      "command": ["custom-mcp-server", "--workspace", "{workspace}"],
-      "profiles": ["inspect", "test"],
-      "allowed_tools": ["inspect_repo", "run_repo_check"]
-    },
-    {
-      "name": "web-search",
-      "transport": "http",
-      "managed": true,
-      "command": [
-        "npx",
-        "-y",
-        "@brave/brave-search-mcp-server",
-        "--transport",
-        "http",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "8766"
-      ],
-      "url": "http://127.0.0.1:8766/mcp",
-      "health_url": "http://127.0.0.1:8766/ping",
-      "env": {"BRAVE_API_KEY": "${BRAVE_API_KEY}"},
-      "profiles": ["inspect"],
-      "allowed_tools": ["brave_web_search", "brave_news_search", "brave_llm_context"]
-    },
-    {
-      "name": "remote-company-tools",
-      "transport": "http",
-      "url": "https://mcp.example.com/mcp",
-      "headers": {"Authorization": "Bearer ${COMPANY_MCP_TOKEN}"},
-      "profiles": ["inspect", "edit"]
-    }
-  ]
-}
+```toml
+[[coding.mcp_server_specs]]
+name = "fs-workspace"
+command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "{workspace_roots}"]
+profiles = ["inspect"]
+allowed_tools = ["list_allowed_directories", "list_directory", "read_file"]
+path_policy = { deny_globs = ["**/.env*", "**/.git/**", "**/.venv/**"], allow_globs = ["**/.env*.template"] }
+
+[[coding.mcp_server_specs]]
+name = "custom-workspace"
+command = ["custom-mcp-server", "--workspace", "{workspace}"]
+profiles = ["inspect", "test"]
+allowed_tools = ["inspect_repo", "run_repo_check"]
+
+[[coding.mcp_server_specs]]
+name = "web-search"
+transport = "http"
+managed = true
+command = [
+  "npx",
+  "-y",
+  "@brave/brave-search-mcp-server",
+  "--transport",
+  "http",
+  "--host",
+  "127.0.0.1",
+  "--port",
+  "8766",
+]
+url = "http://127.0.0.1:8766/mcp"
+health_url = "http://127.0.0.1:8766/ping"
+env = { BRAVE_API_KEY = "${BRAVE_API_KEY}" }
+profiles = ["inspect"]
+allowed_tools = ["brave_web_search", "brave_news_search", "brave_llm_context"]
+
+[[coding.mcp_server_specs]]
+name = "remote-company-tools"
+transport = "http"
+url = "https://mcp.example.com/mcp"
+headers = { Authorization = "Bearer ${COMPANY_MCP_TOKEN}" }
+profiles = ["inspect", "edit"]
 ```
 
 ### Optional codebase-memory-mcp graph navigation
@@ -262,45 +249,36 @@ existing file, verify the current contents through `fs-workspace` or `text-works
 Install the `codebase-memory-mcp` binary separately and prefer an install mode that does not
 modify your editor/agent configuration automatically. For example, download a release binary
 or use the project's installer options such as `--skip-config` when appropriate, then make
-sure `codebase-memory-mcp` is on `PATH` or use an absolute command path in the server file.
+sure `codebase-memory-mcp` is on `PATH` or use an absolute command path in `minigent.toml`.
 
-Add it to the declarative server list alongside filesystem/text/shell tools:
+Add it to `[[coding.mcp_server_specs]]` alongside filesystem/text/shell tools:
 
-```json
-{
-  "servers": [
-    {
-      "name": "fs-workspace",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "{workspace_roots}"],
-      "profiles": ["inspect"],
-      "allowed_tools": ["list_allowed_directories", "list_directory", "read_file"],
-      "path_policy": {
-        "deny_globs": ["**/.env*", "**/.git/**", "**/.venv/**"],
-        "allow_globs": ["**/.env*.template"]
-      }
-    },
-    {
-      "name": "codebase-memory",
-      "command": ["codebase-memory-mcp"],
-      "profiles": ["inspect"],
-      "allowed_tools": [
-        "index_repository",
-        "search_graph",
-        "search_code",
-        "semantic_query",
-        "get_architecture",
-        "trace_call_path",
-        "detect_changes"
-      ]
-    }
-  ]
-}
+```toml
+[[coding.mcp_server_specs]]
+name = "fs-workspace"
+command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "{workspace_roots}"]
+profiles = ["inspect"]
+allowed_tools = ["list_allowed_directories", "list_directory", "read_file"]
+path_policy = { deny_globs = ["**/.env*", "**/.git/**", "**/.venv/**"], allow_globs = ["**/.env*.template"] }
+
+[[coding.mcp_server_specs]]
+name = "codebase-memory"
+command = ["codebase-memory-mcp"]
+profiles = ["inspect"]
+allowed_tools = [
+  "index_repository",
+  "search_graph",
+  "search_code",
+  "semantic_query",
+  "get_architecture",
+  "trace_call_path",
+  "detect_changes",
+]
 ```
 
-Then enable the server file and, for multi-server setups, the shared gateway:
+For multi-server setups, prefer the shared gateway:
 
 ```dotenv
-MINIGENT_CODING_MCP_SERVERS_FILE=.data/coding-mcp-servers.json
 MINIGENT_CODING_MCP_GATEWAY_ENABLED=true
 MINIGENT_CODING_MCP_GATEWAY_PORT=8765
 MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX=/mcp
@@ -321,13 +299,14 @@ project." After that, prefer this workflow:
 4. Re-index or refresh graph queries after meaningful changes when graph freshness matters.
 
 The exact `allowed_tools` list should match the installed `codebase-memory-mcp` release. If a
-listed tool is unavailable, remove it from the JSON file or omit `allowed_tools` to expose the
+listed tool is unavailable, remove it from `allowed_tools` or omit `allowed_tools` to expose the
 server's full tool list to the selected profile.
 
 When the runner generates `MINIGENT_TENANT_EXECUTION_CONFIGS`, it derives
-`tools.mcp_servers` and `capability_profiles.items[*].mcp_server_names` from this file. If you
-provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, the file still controls process startup,
-but your explicit tenant config remains authoritative for tool registration and profiles.
+`tools.mcp_servers` and `capability_profiles.items[*].mcp_server_names` from the inline
+`coding.mcp_server_specs`. If you provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, the
+inline specs still control process startup, but your explicit tenant config remains
+authoritative for tool registration and profiles.
 
 By default, each stdio server still runs behind its own local bridge/port for backwards
 compatibility; if `port` is omitted, the runner assigns sequential local bridge ports. For new
@@ -349,8 +328,8 @@ http://127.0.0.1:8765/mcp/shell-workspace
 
 If you provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, update the `tools.mcp_servers`
 URLs to the gateway paths; the runner does not rewrite explicit tenant config. In gateway
-mode, per-server `host`, `port`, `path`, and `url` fields in the stdio server-list file are
-legacy compatibility settings and are not needed unless you also run without the gateway.
+mode, per-server `host`, `port`, `path`, and `url` fields in the stdio server specs are legacy
+compatibility settings and are not needed unless you also run without the gateway.
 
 You can also run the gateway directly with a gateway config file:
 

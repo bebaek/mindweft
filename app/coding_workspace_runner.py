@@ -110,6 +110,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         )
     )
     parser.add_argument(
+        "--mcp-servers-file",
+        default=None,
+        help=(
+            "Legacy JSON file declaring MCP servers to register/start. Prefer "
+            "[[coding.mcp_server_specs]] in minigent.toml for new configs. Defaults to "
+            "MINIGENT_CODING_MCP_SERVERS_FILE when set."
+        ),
+    )
+    parser.add_argument(
         "--env-file",
         default=".env.coding",
         help="dotenv file to load before starting processes. Defaults to .env.coding.",
@@ -121,14 +130,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Workspace root to expose. Repeat for multiple roots. Defaults to "
             "MINIGENT_CODING_WORKSPACES, MINIGENT_CODING_WORKSPACE, or cwd."
-        ),
-    )
-    parser.add_argument(
-        "--mcp-servers-file",
-        default=None,
-        help=(
-            "JSON file declaring MCP servers to register/start. Defaults to "
-            "MINIGENT_CODING_MCP_SERVERS_FILE when set."
         ),
     )
     parser.add_argument(
@@ -283,16 +284,16 @@ def main(argv: list[str] | None = None) -> int:
     mcp_servers_file = resolve_mcp_servers_file(
         args.mcp_servers_file, env, base_dir=Path(args.env_file).expanduser().resolve().parent
     )
-    if mcp_servers_file is not None:
-        mcp_server_specs = load_coding_mcp_server_specs(
-            mcp_servers_file,
+    if env.get("MINIGENT_CODING_MCP_SERVER_SPECS"):
+        mcp_server_specs = load_coding_mcp_server_specs_from_json(
+            env["MINIGENT_CODING_MCP_SERVER_SPECS"],
             bridge_host=bridge_host,
             workspace_roots=workspace_roots,
             env=env,
         )
-    elif env.get("MINIGENT_CODING_MCP_SERVER_SPECS"):
-        mcp_server_specs = load_coding_mcp_server_specs_from_json(
-            env["MINIGENT_CODING_MCP_SERVER_SPECS"],
+    elif mcp_servers_file is not None:
+        mcp_server_specs = load_coding_mcp_server_specs(
+            mcp_servers_file,
             bridge_host=bridge_host,
             workspace_roots=workspace_roots,
             env=env,
@@ -348,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     print("workspaces=" + ", ".join(str(workspace) for workspace in workspace_roots))
     print(f"tenant_id={tenant_id}")
     if mcp_servers_file is not None:
-        print(f"mcp_servers_file={mcp_servers_file}")
+        print(f"mcp_servers_file={mcp_servers_file} (legacy input; export emits inline specs)")
     for spec, tenant_spec in zip(mcp_server_specs, tenant_mcp_server_specs, strict=True):
         if spec.url == tenant_spec.url:
             print(
@@ -557,6 +558,7 @@ def build_mcp_gateway_command(config_path: Path, host: str, port: int) -> list[s
     ]
 
 
+
 def resolve_mcp_servers_file(
     cli_path: str | None, env: dict[str, str], *, base_dir: Path | None = None
 ) -> Path | None:
@@ -595,7 +597,7 @@ def load_coding_mcp_server_specs_from_json(
     raw_servers = payload.get("servers") if isinstance(payload, dict) else payload
     if not isinstance(raw_servers, list):
         raise RuntimeError(
-            'coding MCP servers file must contain a JSON array or {"servers": [...]}'
+            'coding.mcp_server_specs must be a JSON array or {"servers": [...]}'
         )
 
     specs: list[CodingMCPServerSpec] = []

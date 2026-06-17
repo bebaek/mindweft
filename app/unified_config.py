@@ -61,7 +61,6 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "bridge_port": "MINIGENT_CODING_BRIDGE_PORT",
         "bridge_allow_globs": "MINIGENT_CODING_BRIDGE_ALLOW_GLOBS",
         "bridge_deny_globs": "MINIGENT_CODING_BRIDGE_DENY_GLOBS",
-        "mcp_servers_file": "MINIGENT_CODING_MCP_SERVERS_FILE",
     },
     "voice": {
         "api_token": "MINIGENT_VOICE_API_TOKEN",

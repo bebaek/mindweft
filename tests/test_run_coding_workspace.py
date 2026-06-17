@@ -372,8 +372,8 @@ def test_load_coding_mcp_server_specs_expands_workspace_placeholders(tmp_path: P
         encoding="utf-8",
     )
 
-    specs = runner.load_coding_mcp_server_specs(
-        specs_path,
+    specs = runner.load_coding_mcp_server_specs_from_json(
+        specs_path.read_text(encoding="utf-8"),
         bridge_host="127.0.0.1",
         workspace_roots=[tmp_path, other_workspace],
     )
@@ -411,8 +411,8 @@ def test_load_coding_mcp_server_specs_defaults_stdio_port_when_omitted(tmp_path:
         encoding="utf-8",
     )
 
-    specs = runner.load_coding_mcp_server_specs(
-        specs_path,
+    specs = runner.load_coding_mcp_server_specs_from_json(
+        specs_path.read_text(encoding="utf-8"),
         bridge_host="127.0.0.1",
         workspace_roots=[tmp_path],
     )
@@ -457,8 +457,8 @@ def test_load_coding_mcp_server_specs_loads_managed_http_server(tmp_path: Path) 
         encoding="utf-8",
     )
 
-    specs = runner.load_coding_mcp_server_specs(
-        specs_path,
+    specs = runner.load_coding_mcp_server_specs_from_json(
+        specs_path.read_text(encoding="utf-8"),
         bridge_host="127.0.0.1",
         workspace_roots=[tmp_path],
         env={"SEARCH_API_KEY": "secret-token"},
@@ -511,8 +511,8 @@ def test_load_coding_mcp_server_specs_requires_command_for_managed_http(tmp_path
     )
 
     try:
-        runner.load_coding_mcp_server_specs(
-            specs_path,
+        runner.load_coding_mcp_server_specs_from_json(
+            specs_path.read_text(encoding="utf-8"),
             bridge_host="127.0.0.1",
             workspace_roots=[tmp_path],
         )

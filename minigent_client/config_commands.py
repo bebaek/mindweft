@@ -231,6 +231,9 @@ def export_unified_config_from_server(server_config: dict[str, Any]) -> dict[str
     detailed_export = server_config.get("unified_config_export")
     if isinstance(detailed_export, dict):
         _merge_export_details(export, detailed_export)
+    coding_export = export.get("coding")
+    if isinstance(coding_export, dict):
+        coding_export.pop("mcp_servers_file", None)
     if "tenant_execution_configs" in export:
         mcp_export = export.get("mcp")
         if isinstance(mcp_export, dict):

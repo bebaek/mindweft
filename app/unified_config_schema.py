@@ -68,7 +68,6 @@ class CodingConfig:
     bridge_port: object = None
     bridge_allow_globs: object = None
     bridge_deny_globs: object = None
-    mcp_servers_file: object = None
     mcp_server_specs: object = None
 
 
@@ -200,7 +199,6 @@ _STRING_KEYS = {
     "coding.tenant_id",
     "coding.workspace",
     "coding.bridge_host",
-    "coding.mcp_servers_file",
     "mcp.broker_url",
     "voice.api_token",
     "voice.tenant_id",

@@ -484,25 +484,32 @@ def _runtime_mcp_server_public_dict(server: dict[str, Any]) -> dict[str, object]
 
 def _coding_config_export_public_dict() -> dict[str, object]:
     exported: dict[str, object] = {}
-    raw_path = os.getenv("MINIGENT_CODING_MCP_SERVERS_FILE", "").strip()
-    if raw_path:
-        exported["mcp_servers_file"] = raw_path
-        path = Path(raw_path).expanduser()
-        if path.exists() and path.is_file():
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                payload = None
-            if isinstance(payload, dict):
-                servers = payload.get("servers")
-            else:
-                servers = payload
-            if isinstance(servers, list):
-                exported["mcp_server_specs"] = [
-                    _sanitize_coding_mcp_server_spec(server)
-                    for server in servers
-                    if isinstance(server, dict)
-                ]
+    raw_specs = os.getenv("MINIGENT_CODING_MCP_SERVER_SPECS", "").strip()
+    payload: object = None
+    if raw_specs:
+        try:
+            payload = json.loads(raw_specs)
+        except json.JSONDecodeError:
+            payload = None
+    else:
+        raw_path = os.getenv("MINIGENT_CODING_MCP_SERVERS_FILE", "").strip()
+        if raw_path:
+            path = Path(raw_path).expanduser()
+            if path.exists() and path.is_file():
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    payload = None
+    if isinstance(payload, dict):
+        servers = payload.get("servers")
+    else:
+        servers = payload
+    if isinstance(servers, list):
+        exported["mcp_server_specs"] = [
+            _sanitize_coding_mcp_server_spec(server)
+            for server in servers
+            if isinstance(server, dict)
+        ]
     return exported
 
 
@@ -512,7 +519,7 @@ def _sanitize_coding_mcp_server_spec(server: dict[str, Any]) -> dict[str, object
         if key == "headers" and isinstance(value, dict):
             exported[key] = {header: "<set>" for header in sorted(value)}
         elif key == "env" and isinstance(value, dict):
-            exported[key] = {env_key: "<set>" for env_key in sorted(value)}
+            exported[key] = {env_key: f"${{{env_key}}}" for env_key in sorted(value)}
         elif _is_public_config_value(value):
             exported[key] = value
     return exported

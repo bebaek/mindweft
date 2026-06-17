@@ -50,11 +50,11 @@ uv run minigent --json config export --output minigent.exported.json
 
 The export cannot recover the original source files or secret values. When the server supports
 `/config?export=true`, it also includes richer runtime-derived details such as generic OAuth
-settings, tenant execution configs with skill prompts, capability profiles, detailed MCP server
-config, and the raw `MINIGENT_CODING_MCP_SERVERS_FILE` server specs when available. Runtime
-status/tools are informational and are included only with `--include-runtime`. Provider API keys
-are emitted as environment references such as `api_key_env = "OPENROUTER_API_KEY"`, and
-secret-looking MCP headers/env values are masked.
+settings, tenant execution configs with skill prompts, capability profiles, and detailed MCP server
+config including inline `coding.mcp_server_specs` when available. Runtime status/tools are
+informational and are included only with `--include-runtime`. Provider API keys are emitted as
+environment references such as `api_key_env = "OPENROUTER_API_KEY"`, and secret-looking MCP
+headers/env values are masked.
 
 ## Loading and precedence
 
@@ -167,6 +167,31 @@ bridge_deny_globs = ["**/.env*", "**/.git/**"]
 bridge_allow_globs = ["**/.env*.template"]
 ```
 
+### Coding MCP server specs
+
+Use `[[coding.mcp_server_specs]]` to keep workspace MCP launch/connect definitions directly in
+`minigent.toml`:
+
+```toml
+[[coding.mcp_server_specs]]
+name = "web-fetch"
+transport = "stdio"
+command = ["uvx", "mcp-server-fetch"]
+profiles = ["inspect"]
+allowed_tools = ["fetch"]
+
+[[coding.mcp_server_specs]]
+name = "web-search"
+transport = "http"
+managed = true
+command = ["npx", "-y", "@brave/brave-search-mcp-server", "--transport", "http", "--host", "127.0.0.1", "--port", "8766"]
+url = "http://127.0.0.1:8766/mcp"
+health_url = "http://127.0.0.1:8766/ping"
+env = { BRAVE_API_KEY = "${BRAVE_API_KEY}" }
+profiles = ["inspect"]
+allowed_tools = ["brave_web_search", "brave_news_search", "brave_llm_context"]
+```
+
 ### HTTP MCP servers
 
 ```toml
@@ -255,10 +280,10 @@ Provider key targets:
 | `bridge_port` | `MINIGENT_CODING_BRIDGE_PORT` |
 | `bridge_allow_globs` | `MINIGENT_CODING_BRIDGE_ALLOW_GLOBS` |
 | `bridge_deny_globs` | `MINIGENT_CODING_BRIDGE_DENY_GLOBS` |
-| `mcp_servers_file` | `MINIGENT_CODING_MCP_SERVERS_FILE` |
+| `mcp_server_specs` | `MINIGENT_CODING_MCP_SERVER_SPECS` |
 
 List values such as `workspaces`, `shell_allowed_command_prefixes`, and bridge glob lists
-are converted to comma-separated env strings.
+are converted to comma-separated env strings. `mcp_server_specs` is serialized as compact JSON.
 
 ### `[mcp]`
 

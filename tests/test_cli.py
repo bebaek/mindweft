@@ -870,6 +870,7 @@ def test_config_export_prints_toml_from_server(monkeypatch: Any, capsys: Any) ->
     assert "[oauth]" in output
     assert 'provider_id = "chatgpt"' in output
     assert "[[coding.mcp_server_specs]]" in output
+    assert "mcp_servers_file" not in output
     assert 'transport = "stdio"' in output
     assert 'command = ["uvx", "custom-mcp"]' in output
     assert "tenant_execution_configs" in output
