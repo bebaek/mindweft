@@ -993,6 +993,85 @@ def test_config_export_local_coding_merges_runner_config(
     assert "secret-value" not in output
 
 
+def test_config_export_local_coding_unifies_split_mcp_server_config(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    def urlopen(request: Any) -> _Response:
+        assert request.full_url.endswith("/config?export=true")
+        return _Response(
+            body={
+                "llm": {"provider": "mock"},
+                "unified_config_export": {
+                    "tenant_execution_configs": {
+                        "coding-tenant": {
+                            "tools": {
+                                "allowed_local_tools": ["calculator"],
+                                "mcp_servers": [
+                                    {
+                                        "name": "web-fetch",
+                                        "url": "http://127.0.0.1:8765/mcp/web-fetch",
+                                        "allowed_tools": ["fetch"],
+                                        "path_policy": {"deny_globs": ["**/.env*"]},
+                                    }
+                                ],
+                            },
+                            "skills": {"default_skill": "coding-workspace"},
+                        }
+                    }
+                },
+            }
+        )
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    specs_path = tmp_path / "mcp-servers.json"
+    specs_path.write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "web-fetch",
+                        "transport": "stdio",
+                        "command": ["uvx", "mcp-server-fetch"],
+                        "allowed_tools": ["fetch", "extra_fetch"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    env_file = tmp_path / ".env.coding"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"MINIGENT_CODING_WORKSPACES={workspace}",
+                "MINIGENT_CODING_TENANT_ID=coding-tenant",
+                "MINIGENT_CODING_MCP_SERVERS_FILE=mcp-servers.json",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(
+        ["config", "export", "--local-coding", "--coding-env-file", str(env_file)]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    parsed = tomllib.loads(output)
+    assert parsed["coding"]["mcp_server_specs"][0]["allowed_tools"] == ["fetch"]
+    assert parsed["coding"]["mcp_server_specs"][0]["path_policy"] == {
+        "deny_globs": ["**/.env*"]
+    }
+    assert "mcp_servers" not in parsed["tenant_execution_configs"]["coding-tenant"]["tools"]
+    assert parsed["tenant_execution_configs"]["coding-tenant"]["tools"] == {
+        "allowed_local_tools": ["calculator"]
+    }
+    assert "exported their intersection" in output
+
+
 def test_config_export_writes_json(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     def urlopen(request: Any) -> _Response:
         assert request.full_url.endswith("/config?export=true")

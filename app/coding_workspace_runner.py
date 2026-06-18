@@ -410,7 +410,13 @@ def main(argv: list[str] | None = None) -> int:
             ),
             separators=(",", ":"),
         )
-    elif env.get("MINIGENT_CODING_INJECT_WORKSPACE_SKILL", "true").lower() not in {
+    else:
+        env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = inject_coding_mcp_servers(
+            env["MINIGENT_TENANT_EXECUTION_CONFIGS"], tenant_id, tenant_mcp_server_specs
+        )
+    if "MINIGENT_CODING_INJECT_WORKSPACE_SKILL" not in env or env[
+        "MINIGENT_CODING_INJECT_WORKSPACE_SKILL"
+    ].lower() not in {
         "0",
         "false",
         "no",
@@ -1161,6 +1167,49 @@ def default_tenant_config(
             },
         }
     }
+
+
+def inject_coding_mcp_servers(
+    raw_config: str, tenant_id: str, specs: list[CodingMCPServerSpec]
+) -> str:
+    payload = json.loads(raw_config)
+    if not isinstance(payload, dict):
+        raise RuntimeError("MINIGENT_TENANT_EXECUTION_CONFIGS must be a JSON object")
+    tenant = payload.get(tenant_id)
+    if not isinstance(tenant, dict):
+        return raw_config
+    tools = tenant.setdefault("tools", {})
+    if not isinstance(tools, dict):
+        return raw_config
+    servers = tools.setdefault("mcp_servers", [])
+    if not isinstance(servers, list):
+        return raw_config
+    existing_by_name = {
+        server.get("name"): server
+        for server in servers
+        if isinstance(server, dict) and isinstance(server.get("name"), str)
+    }
+    for spec in specs:
+        generated = tenant_mcp_server_from_spec(spec)
+        existing = existing_by_name.get(spec.name)
+        if not isinstance(existing, dict):
+            servers.append(generated)
+            existing_by_name[spec.name] = generated
+            continue
+        existing_allowed_tools = _string_list(existing.get("allowed_tools"))
+        generated_allowed_tools = _string_list(generated.get("allowed_tools"))
+        existing.update(generated)
+        if existing_allowed_tools is not None and generated_allowed_tools is not None:
+            existing["allowed_tools"] = [
+                tool for tool in generated_allowed_tools if tool in set(existing_allowed_tools)
+            ]
+    return json.dumps(payload, separators=(",", ":"))
+
+
+def _string_list(value: object) -> list[str] | None:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return None
+    return list(value)
 
 
 def inject_coding_workspace_skill(

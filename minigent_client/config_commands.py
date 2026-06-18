@@ -190,6 +190,8 @@ def run_config_export(
     local_coding = getattr(args, "local_coding", False)
     if local_coding:
         _merge_export_details(export, export_local_coding_config(args))
+        _unify_coding_mcp_server_config(export)
+        export = _prune_export(export)
         export["profile"] = "exported-coding"
     elif _export_has_coding_gateway_mcp_urls(export):
         _append_export_comment(
@@ -250,8 +252,16 @@ def export_unified_config_from_server(server_config: dict[str, Any]) -> dict[str
         mcp_export = export.get("mcp")
         if isinstance(mcp_export, dict):
             mcp_export.pop("servers", None)
-    pruned_export = _prune_empty_values(export)
+    _unify_coding_mcp_server_config(export)
+    pruned_export = _prune_export(export)
     return pruned_export if isinstance(pruned_export, dict) else export
+
+
+def _prune_export(export: dict[str, object]) -> object:
+    pruned = _prune_empty_values(export)
+    if isinstance(pruned, dict) and "_comments" in export:
+        pruned["_comments"] = export["_comments"]
+    return pruned
 
 
 def _append_export_comment(export: dict[str, object], comment: str) -> None:
@@ -319,6 +329,111 @@ def _merge_export_details(export: dict[str, object], details: dict[str, Any]) ->
             existing.update(value)
         else:
             export[key] = value
+
+
+def _unify_coding_mcp_server_config(export: dict[str, object]) -> None:
+    """Make coding.mcp_server_specs the canonical MCP server source.
+
+    Older/public server exports can contain the same logical MCP server in both
+    coding.mcp_server_specs and tenant tools.mcp_servers.  Collapse those split
+    entries into the coding spec and remove the derived tenant-side projection.
+    """
+
+    coding = export.get("coding")
+    if not isinstance(coding, dict):
+        return
+    coding_specs = coding.get("mcp_server_specs")
+    if not isinstance(coding_specs, list):
+        return
+    tenant_servers = _tenant_mcp_servers_by_name(export)
+    for spec in coding_specs:
+        if not isinstance(spec, dict):
+            continue
+        name = spec.get("name")
+        if not isinstance(name, str):
+            continue
+        for tenant_server in tenant_servers.get(name, []):
+            _merge_split_mcp_server_spec(export, spec, tenant_server)
+    _remove_tenant_mcp_server_entries(export)
+
+
+def _tenant_mcp_servers_by_name(export: dict[str, object]) -> dict[str, list[dict[str, object]]]:
+    servers_by_name: dict[str, list[dict[str, object]]] = {}
+    tenant_configs = export.get("tenant_execution_configs")
+    if not isinstance(tenant_configs, dict):
+        return servers_by_name
+    for tenant in tenant_configs.values():
+        if not isinstance(tenant, dict):
+            continue
+        tools = tenant.get("tools")
+        if not isinstance(tools, dict):
+            continue
+        servers = tools.get("mcp_servers", tools.get("mcpServers"))
+        if not isinstance(servers, list):
+            continue
+        for server in servers:
+            if not isinstance(server, dict):
+                continue
+            name = server.get("name")
+            if isinstance(name, str):
+                servers_by_name.setdefault(name, []).append(server)
+    return servers_by_name
+
+
+def _merge_split_mcp_server_spec(
+    export: dict[str, object],
+    coding_spec: dict[object, object],
+    tenant_server: dict[str, object],
+) -> None:
+    merged_tools, lossy = _merge_allowed_tools(
+        _string_list(coding_spec.get("allowed_tools")),
+        _string_list(tenant_server.get("allowed_tools")),
+    )
+    if merged_tools is not None:
+        coding_spec["allowed_tools"] = merged_tools
+    if lossy:
+        _append_export_comment(
+            export,
+            f"MCP server {coding_spec.get('name')!r} had different coding and tenant allowed_tools; exported their intersection.",
+        )
+    if "path_policy" not in coding_spec and isinstance(tenant_server.get("path_policy"), dict):
+        coding_spec["path_policy"] = tenant_server["path_policy"]
+    if "result_redaction" not in coding_spec and isinstance(tenant_server.get("result_redaction"), dict):
+        coding_spec["result_redaction"] = tenant_server["result_redaction"]
+
+
+def _merge_allowed_tools(
+    coding_tools: list[str] | None,
+    tenant_tools: list[str] | None,
+) -> tuple[list[str] | None, bool]:
+    if coding_tools is None:
+        return (tenant_tools, False)
+    if tenant_tools is None:
+        return (coding_tools, False)
+    if set(coding_tools) == set(tenant_tools):
+        return (coding_tools, False)
+    tenant_tool_set = set(tenant_tools)
+    return ([tool for tool in coding_tools if tool in tenant_tool_set], True)
+
+
+def _string_list(value: object) -> list[str] | None:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return None
+    return list(value)
+
+
+def _remove_tenant_mcp_server_entries(export: dict[str, object]) -> None:
+    tenant_configs = export.get("tenant_execution_configs")
+    if not isinstance(tenant_configs, dict):
+        return
+    for tenant in tenant_configs.values():
+        if not isinstance(tenant, dict):
+            continue
+        tools = tenant.get("tools")
+        if not isinstance(tools, dict):
+            continue
+        tools.pop("mcp_servers", None)
+        tools.pop("mcpServers", None)
 
 
 def _export_llm_config(llm: dict[str, Any]) -> dict[str, object]:
@@ -427,9 +542,9 @@ def render_unified_config_toml(export: dict[str, object]) -> str:
 
 
 def _append_toml_table(lines: list[str], path: list[str], table: dict[object, object]) -> None:
-    lines.append("[" + ".".join(_toml_key(str(part)) for part in path) + "]")
     nested_tables: list[tuple[str, dict[object, object]]] = []
     array_tables: list[tuple[str, list[object]]] = []
+    scalar_lines: list[str] = []
     for key, value in table.items():
         key_str = str(key)
         if isinstance(value, dict):
@@ -437,8 +552,11 @@ def _append_toml_table(lines: list[str], path: list[str], table: dict[object, ob
         elif isinstance(value, list) and all(isinstance(item, dict) for item in value):
             array_tables.append((key_str, value))
         else:
-            lines.append(f"{_toml_key(key_str)} = {_toml_value(value)}")
-    lines.append("")
+            scalar_lines.append(f"{_toml_key(key_str)} = {_toml_value(value)}")
+    if scalar_lines:
+        lines.append("[" + ".".join(_toml_key(str(part)) for part in path) + "]")
+        lines.extend(scalar_lines)
+        lines.append("")
     for key, value in nested_tables:
         _append_toml_table(lines, [*path, key], value)
     for key, values in array_tables:

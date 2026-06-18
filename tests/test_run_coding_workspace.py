@@ -767,6 +767,52 @@ def test_mcp_server_specs_for_gateway_rewrites_stdio_urls_only() -> None:
     assert transformed[1].url == "http://127.0.0.1:9002/mcp"
 
 
+def test_inject_coding_mcp_servers_synthesizes_tenant_projection() -> None:
+    raw_config = json.dumps(
+        {
+            "demo-tenant": {
+                "tools": {
+                    "allowed_local_tools": ["calculator"],
+                    "mcp_servers": [
+                        {
+                            "name": "fs-workspace",
+                            "url": "http://old.example/mcp",
+                            "allowed_tools": ["read_file", "write_file"],
+                        }
+                    ],
+                }
+            }
+        }
+    )
+    specs = [
+        runner.CodingMCPServerSpec(
+            name="fs-workspace",
+            url="http://127.0.0.1:8765/mcp/fs-workspace",
+            allowed_tools=["write_file", "edit_file"],
+            path_policy={"deny_globs": ["**/.env*"]},
+        ),
+        runner.CodingMCPServerSpec(
+            name="text-workspace",
+            url="http://127.0.0.1:8765/mcp/text-workspace",
+            allowed_tools=["read_text_file_lines"],
+        ),
+    ]
+
+    injected = json.loads(runner.inject_coding_mcp_servers(raw_config, "demo-tenant", specs))
+
+    servers = injected["demo-tenant"]["tools"]["mcp_servers"]
+    assert servers[0] == {
+        "name": "fs-workspace",
+        "url": "http://127.0.0.1:8765/mcp/fs-workspace",
+        "headers": {},
+        "timeout_seconds": 30.0,
+        "allowed_tools": ["write_file"],
+        "path_policy": {"deny_globs": ["**/.env*"]},
+    }
+    assert servers[1]["name"] == "text-workspace"
+    assert servers[1]["allowed_tools"] == ["read_text_file_lines"]
+
+
 def test_mcp_gateway_config_from_specs_includes_stdio_servers_only() -> None:
     specs = [
         runner.CodingMCPServerSpec(
