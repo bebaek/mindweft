@@ -1002,22 +1002,25 @@ def test_config_export_local_coding_unifies_split_mcp_server_config(
             body={
                 "llm": {"provider": "mock"},
                 "unified_config_export": {
+                    "coding": {
+                        "system_prompt": "You may use read_file and write_file.",
+                    },
                     "tenant_execution_configs": {
                         "coding-tenant": {
                             "tools": {
                                 "allowed_local_tools": ["calculator"],
                                 "mcp_servers": [
                                     {
-                                        "name": "web-fetch",
-                                        "url": "http://127.0.0.1:8765/mcp/web-fetch",
-                                        "allowed_tools": ["fetch"],
+                                        "name": "fs-workspace",
+                                        "url": "http://127.0.0.1:8765/mcp/fs-workspace",
+                                        "allowed_tools": ["write_file", "search_files"],
                                         "path_policy": {"deny_globs": ["**/.env*"]},
                                     }
                                 ],
                             },
                             "skills": {"default_skill": "coding-workspace"},
                         }
-                    }
+                    },
                 },
             }
         )
@@ -1030,10 +1033,10 @@ def test_config_export_local_coding_unifies_split_mcp_server_config(
             {
                 "servers": [
                     {
-                        "name": "web-fetch",
+                        "name": "fs-workspace",
                         "transport": "stdio",
-                        "command": ["uvx", "mcp-server-fetch"],
-                        "allowed_tools": ["fetch", "extra_fetch"],
+                        "command": ["uvx", "mcp-server-fs"],
+                        "allowed_tools": ["read_file", "write_file", "edit_file"],
                     }
                 ]
             }
@@ -1061,7 +1064,8 @@ def test_config_export_local_coding_unifies_split_mcp_server_config(
     assert exit_code == 0
     output = capsys.readouterr().out
     parsed = tomllib.loads(output)
-    assert parsed["coding"]["mcp_server_specs"][0]["allowed_tools"] == ["fetch"]
+    assert parsed["coding"]["system_prompt"] == "You may use read_file and write_file."
+    assert parsed["coding"]["mcp_server_specs"][0]["allowed_tools"] == ["write_file"]
     assert parsed["coding"]["mcp_server_specs"][0]["path_policy"] == {
         "deny_globs": ["**/.env*"]
     }
