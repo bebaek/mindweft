@@ -960,6 +960,7 @@ def test_config_export_local_coding_merges_runner_config(
         "\n".join(
             [
                 f"MINIGENT_CODING_WORKSPACES={workspace}",
+                "MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db",
                 "MINIGENT_CODING_TENANT_ID=coding-tenant",
                 "MINIGENT_CODING_MCP_GATEWAY_ENABLED=true",
                 "MINIGENT_CODING_MCP_GATEWAY_PORT=9876",
@@ -980,6 +981,7 @@ def test_config_export_local_coding_merges_runner_config(
     output = capsys.readouterr().out
     parsed = tomllib.loads(output)
     assert parsed["profile"] == "exported-coding"
+    assert parsed["app"]["thread_db_path"] == ".data/minigent-coding-threads.db"
     assert parsed["coding"]["workspaces"] == [str(workspace)]
     assert parsed["coding"]["tenant_id"] == "coding-tenant"
     assert parsed["coding"]["mcp_gateway_enabled"] is True

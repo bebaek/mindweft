@@ -689,6 +689,7 @@ def test_default_tenant_config_from_servers_builds_profiles() -> None:
     config = runner.default_tenant_config_from_servers("demo-tenant", specs)
 
     tenant = config["demo-tenant"]
+    assert "llm" not in tenant
     assert tenant["tools"]["mcp_servers"] == [
         {
             "name": "fs-workspace",

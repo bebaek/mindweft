@@ -999,6 +999,12 @@ def apply_file_env_values(env: dict[str, str], *, base_dir: Path) -> None:
     for file_key, raw_path in list(env.items()):
         if not file_key.endswith("_FILE") or not raw_path.strip():
             continue
+        if file_key in {
+            "MINIGENT_CONFIG_FILE",
+            "MINIGENT_DOTENV_FILE",
+            "MINIGENT_CODING_MCP_SERVERS_FILE",
+        }:
+            continue
         target_key = file_key[: -len("_FILE")]
         value_path = Path(raw_path).expanduser()
         if not value_path.is_absolute():
@@ -1049,7 +1055,6 @@ def default_tenant_config_from_servers(
 ) -> dict[str, Any]:
     return {
         tenant_id: {
-            "llm": {"provider": "mock"},
             "tools": {
                 "allowed_local_tools": ["current_time", "calculator"],
                 "mcp_servers": [tenant_mcp_server_from_spec(spec) for spec in specs],
@@ -1152,7 +1157,6 @@ def default_tenant_config(
         )
     return {
         tenant_id: {
-            "llm": {"provider": "mock"},
             "tools": {
                 "allowed_local_tools": ["current_time", "calculator"],
                 "mcp_servers": mcp_servers,

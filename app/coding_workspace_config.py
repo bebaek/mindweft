@@ -90,7 +90,15 @@ def export_local_coding_config(args: Namespace) -> dict[str, object]:
         coding["mcp_gateway_path_prefix"] = runner.normalize_path_prefix(gateway_path_prefix)
     if bridge_host != runner.DEFAULT_BRIDGE_HOST:
         coding["bridge_host"] = bridge_host
-    return {"coding": coding}
+    app: dict[str, object] = {}
+    thread_db_path = env.get("MINIGENT_THREAD_DB_PATH", "").strip()
+    if thread_db_path:
+        app["thread_db_path"] = thread_db_path
+
+    result: dict[str, object] = {"coding": coding}
+    if app:
+        result["app"] = app
+    return result
 
 
 def load_coding_workspace_export_env(env_path: Path) -> tuple[dict[str, str], Path]:

@@ -2035,6 +2035,47 @@ def test_tenant_execution_env_interpolation_replaces_nested_string_values(
     assert server.headers == {"Authorization": "Bearer mcp-secret"}
 
 
+def test_tenant_execution_config_inherits_global_llm_when_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_LLM_PROVIDER", "generic-oauth")
+    monkeypatch.setenv("MINIGENT_LLM_MODEL", "gpt-test")
+    monkeypatch.setenv("MINIGENT_LLM_URL", "https://example.test/responses")
+    monkeypatch.setenv(
+        "MINIGENT_LLM_EXTRA_HEADERS",
+        json.dumps({"OpenAI-Beta": "responses=experimental"}),
+    )
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps({"tenant-1": {"tools": {"allowed_local_tools": ["calculator"]}}}),
+    )
+
+    context = build_execution_resolver_from_env().resolve("tenant-1")
+
+    assert context.config.llm.provider == "generic-oauth"
+    assert context.config.llm.model == "gpt-test"
+    assert context.config.llm.base_url == "https://example.test/responses"
+    assert context.config.llm.extra_headers == {"OpenAI-Beta": "responses=experimental"}
+    assert context.llm_adapter.describe()["provider"] == "generic-oauth"
+
+
+def test_tenant_execution_config_explicit_llm_overrides_global_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_LLM_PROVIDER", "generic-oauth")
+    monkeypatch.setenv("MINIGENT_LLM_MODEL", "gpt-test")
+    monkeypatch.setenv("MINIGENT_LLM_URL", "https://example.test/responses")
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps({"tenant-1": {"llm": {"provider": "mock"}}}),
+    )
+
+    context = build_execution_resolver_from_env().resolve("tenant-1")
+
+    assert context.config.llm.provider == "mock"
+    assert context.llm_adapter.describe()["provider"] == "mock"
+
+
 def test_tenant_execution_env_interpolation_preserves_non_string_values() -> None:
     payload = {
         "enabled": True,

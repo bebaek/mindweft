@@ -365,7 +365,11 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
                     detail=f"Tenant '{tenant_id}' has no execution configuration",
                 )
 
-            config = parse_tenant_execution_config(tenant_id, payload)
+            config = parse_tenant_execution_config(
+                tenant_id,
+                payload,
+                default_llm=_tenant_llm_config_from_env(),
+            )
             registry, generation = _build_registry_for_config(
                 config,
                 mcp_manager=self._mcp_manager,
@@ -769,6 +773,7 @@ def build_execution_resolver_from_env(
 
     tenant_configs: dict[str, TenantExecutionConfig] = {}
     parsed = interpolate_tenant_execution_env_placeholders(parsed)
+    default_llm = _tenant_llm_config_from_env()
     for tenant_id, value in parsed.items():
         if not isinstance(tenant_id, str) or not tenant_id:
             raise RuntimeError(
@@ -778,7 +783,11 @@ def build_execution_resolver_from_env(
             raise RuntimeError(
                 f"{TENANT_EXECUTION_CONFIGS_ENV} values must be objects with llm/tools config"
             )
-        tenant_configs[tenant_id] = parse_tenant_execution_config(tenant_id, value)
+        tenant_configs[tenant_id] = parse_tenant_execution_config(
+            tenant_id,
+            value,
+            default_llm=default_llm,
+        )
     return InMemoryTenantExecutionResolver(tenant_configs, mcp_manager=mcp_manager)
 
 
@@ -807,7 +816,12 @@ def resolve_tenant_config_source(
     )
 
 
-def parse_tenant_execution_config(tenant_id: str, payload: dict[str, Any]) -> TenantExecutionConfig:
+def parse_tenant_execution_config(
+    tenant_id: str,
+    payload: dict[str, Any],
+    *,
+    default_llm: TenantLLMConfig | None = None,
+) -> TenantExecutionConfig:
     llm_payload = payload.get("llm") or {}
     tools_payload = payload.get("tools") or {}
     backend_payload = payload.get("agent_backend") or payload.get("agentBackend") or {}
@@ -833,7 +847,11 @@ def parse_tenant_execution_config(tenant_id: str, payload: dict[str, Any]) -> Te
 
     return TenantExecutionConfig(
         tenant_id=tenant_id,
-        llm=_parse_tenant_llm_config(tenant_id, llm_payload),
+        llm=(
+            default_llm
+            if "llm" not in payload and default_llm is not None
+            else _parse_tenant_llm_config(tenant_id, llm_payload)
+        ),
         tools=tool_config,
         agent_backend=_parse_tenant_agent_backend_config(tenant_id, backend_payload),
         quality=_parse_tenant_quality_config(tenant_id, quality_payload),
@@ -890,6 +908,64 @@ async def validate_tenant_execution_config(
         llm=llm,
         tools=tools,
     )
+
+
+def _tenant_llm_config_from_env() -> TenantLLMConfig:
+    provider = os.getenv("MINIGENT_LLM_PROVIDER", "mock").strip().lower()
+    extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS")
+    if provider == GENERIC_OAUTH_PROVIDER:
+        return TenantLLMConfig(
+            provider=provider,
+            model=_optional_str(os.getenv("MINIGENT_LLM_MODEL")),
+            base_url=_optional_str(os.getenv("MINIGENT_LLM_URL")),
+            extra_headers=extra_headers,
+        )
+    if provider in {"google", "google-generative-ai", "gemini"}:
+        return TenantLLMConfig(
+            provider=provider,
+            model=_optional_str(
+                os.getenv("GEMINI_MODEL")
+                or os.getenv("GOOGLE_MODEL")
+                or os.getenv("MINIGENT_LLM_MODEL")
+            ),
+            base_url=_optional_str(os.getenv("GOOGLE_BASE_URL")),
+            api_key=_optional_str(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")),
+            extra_headers=extra_headers,
+        )
+    if provider == "openai":
+        return TenantLLMConfig(
+            provider=provider,
+            model=_optional_str(os.getenv("OPENAI_MODEL") or os.getenv("MINIGENT_LLM_MODEL")),
+            base_url=_optional_str(os.getenv("OPENAI_BASE_URL")),
+            api_key=_optional_str(os.getenv("OPENAI_API_KEY")),
+            extra_headers=extra_headers,
+        )
+    if provider == "openrouter":
+        return TenantLLMConfig(
+            provider=provider,
+            model=_optional_str(
+                os.getenv("OPENROUTER_MODEL") or os.getenv("MINIGENT_LLM_MODEL")
+            ),
+            base_url=_optional_str(os.getenv("OPENROUTER_BASE_URL")),
+            api_key=_optional_str(os.getenv("OPENROUTER_API_KEY")),
+            extra_headers=extra_headers,
+        )
+    return TenantLLMConfig(provider=provider or "mock", extra_headers=extra_headers)
+
+
+def _json_string_map_env(name: str) -> dict[str, str]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{name} must be valid JSON") from exc
+    if not isinstance(parsed, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in parsed.items()
+    ):
+        raise RuntimeError(f"{name} must be a JSON object of strings")
+    return dict(parsed)
 
 
 def _parse_tenant_llm_config(tenant_id: str, payload: dict[str, Any]) -> TenantLLMConfig:
