@@ -2,6 +2,7 @@
 .env.*
 !.env.template
 !.env.*.template
+minigent.toml
 .data/
 .codebase-memory/
 .venv/
