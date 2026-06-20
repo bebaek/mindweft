@@ -103,11 +103,46 @@ def export_local_coding_config(args: Namespace) -> dict[str, object]:
     thread_db_path = env.get("MINIGENT_THREAD_DB_PATH", "").strip()
     if thread_db_path:
         app["thread_db_path"] = thread_db_path
+    max_iterations = _optional_int_env(env, "MINIGENT_MAX_ITERATIONS")
+    if max_iterations is not None:
+        app["max_iterations"] = max_iterations
+    tool_timeout_seconds = _optional_float_env(env, "MINIGENT_TOOL_TIMEOUT_SECONDS")
+    if tool_timeout_seconds is not None:
+        app["tool_timeout_seconds"] = tool_timeout_seconds
+    context_compaction_enabled = _optional_bool_env(env, "MINIGENT_CONTEXT_COMPACTION_ENABLED")
+    if context_compaction_enabled is not None:
+        app["context_compaction_enabled"] = context_compaction_enabled
 
     result: dict[str, object] = {"coding": coding}
     if app:
         result["app"] = app
     return result
+
+
+def _optional_int_env(env: dict[str, str], key: str) -> int | None:
+    raw = env.get(key, "").strip()
+    if not raw:
+        return None
+    return int(raw)
+
+
+def _optional_float_env(env: dict[str, str], key: str) -> float | int | None:
+    raw = env.get(key, "").strip()
+    if not raw:
+        return None
+    value = float(raw)
+    return int(value) if value.is_integer() else value
+
+
+def _optional_bool_env(env: dict[str, str], key: str) -> bool | None:
+    raw = env.get(key, "").strip().lower()
+    if not raw:
+        return None
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{key} must be a boolean")
 
 
 def load_coding_workspace_export_env(env_path: Path) -> tuple[dict[str, str], Path]:

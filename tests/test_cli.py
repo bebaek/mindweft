@@ -961,6 +961,9 @@ def test_config_export_local_coding_merges_runner_config(
             [
                 f"MINIGENT_CODING_WORKSPACES={workspace}",
                 "MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db",
+                "MINIGENT_MAX_ITERATIONS=64",
+                "MINIGENT_TOOL_TIMEOUT_SECONDS=90",
+                "MINIGENT_CONTEXT_COMPACTION_ENABLED=true",
                 "MINIGENT_CODING_TENANT_ID=coding-tenant",
                 "MINIGENT_CODING_MCP_GATEWAY_ENABLED=true",
                 "MINIGENT_CODING_MCP_GATEWAY_PORT=9876",
@@ -982,6 +985,9 @@ def test_config_export_local_coding_merges_runner_config(
     parsed = tomllib.loads(output)
     assert parsed["profile"] == "exported-coding"
     assert parsed["app"]["thread_db_path"] == ".data/minigent-coding-threads.db"
+    assert parsed["app"]["max_iterations"] == 64
+    assert parsed["app"]["tool_timeout_seconds"] == 90
+    assert parsed["app"]["context_compaction_enabled"] is True
     assert parsed["coding"]["workspaces"] == [str(workspace)]
     assert parsed["coding"]["tenant_id"] == "coding-tenant"
     assert parsed["coding"]["mcp_gateway_enabled"] is True
