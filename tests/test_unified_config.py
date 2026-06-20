@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -68,6 +69,51 @@ enabled = false
         '[{"name":"filesystem","url":"http://127.0.0.1:8765/mcp","headers":{}}]'
     )
     assert env["MINIGENT_REMOTE_QUALITY_ENABLED"] == "false"
+
+
+def test_unified_config_projects_coding_mcp_specs_into_tenant_config(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[coding]
+mcp_gateway_enabled = true
+mcp_gateway_port = 9876
+mcp_gateway_path_prefix = "/tools"
+mcp_server_specs = [
+  { name = "fs-workspace", transport = "stdio", command = ["fs-mcp"], allowed_tools = ["read_file"] },
+  { name = "web-fetch", url = "http://127.0.0.1:9001/mcp", allowed_tools = ["fetch"] },
+]
+
+[tenant_execution_configs.demo-tenant.tools]
+allowed_local_tools = ["calculator"]
+
+[tenant_execution_configs.demo-tenant.capability_profiles]
+default_profile = "inspect"
+items = [
+  { name = "inspect", mcp_server_names = ["fs-workspace", "web-fetch"] },
+]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    env = load_unified_config_env(config_path)
+    tenant_configs = json.loads(env["MINIGENT_TENANT_EXECUTION_CONFIGS"])
+
+    servers = tenant_configs["demo-tenant"]["tools"]["mcp_servers"]
+    assert servers == [
+        {
+            "name": "fs-workspace",
+            "url": "http://127.0.0.1:9876/tools/fs-workspace",
+            "allowed_tools": ["read_file"],
+        },
+        {
+            "name": "web-fetch",
+            "url": "http://127.0.0.1:9001/mcp",
+            "allowed_tools": ["fetch"],
+        },
+    ]
 
 
 def test_load_environment_precedence_real_env_then_dotenv_then_minigent_toml(

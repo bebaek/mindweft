@@ -185,7 +185,9 @@ def load_unified_config_env(
     _collect_coding_inline_config(data.get("coding"), env)
     _collect_mcp_config(data.get("mcp"), env)
     _collect_peer_agents(data.get("peer_agents"), env)
-    _collect_tenant_execution_configs(data.get("tenant_execution_configs"), env)
+    _collect_tenant_execution_configs(
+        data.get("tenant_execution_configs"), env, coding_section=data.get("coding")
+    )
     return env
 
 
@@ -289,9 +291,110 @@ def _collect_peer_agents(section: object, env: dict[str, str]) -> None:
         env["MINIGENT_PEER_AGENTS"] = _format_json_env_value(section)
 
 
-def _collect_tenant_execution_configs(section: object, env: dict[str, str]) -> None:
+def _collect_tenant_execution_configs(
+    section: object,
+    env: dict[str, str],
+    *,
+    coding_section: object = None,
+) -> None:
     if section is not None:
-        env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = _format_json_env_value(section)
+        env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = _format_json_env_value(
+            _with_coding_mcp_server_projections(section, coding_section)
+        )
+
+
+def _with_coding_mcp_server_projections(section: object, coding_section: object) -> object:
+    """Project restartable coding MCP specs into tenant runtime config.
+
+    ``minigent config export --local-coding`` writes MCP definitions once under
+    ``coding.mcp_server_specs`` and intentionally removes the derived
+    ``tenant_execution_configs.*.tools.mcp_servers`` entries. The runtime still validates
+    skill/profile ``mcp_server_names`` against tenant tools, so recreate that projection
+    while loading the unified config.
+    """
+
+    if not isinstance(section, dict) or not isinstance(coding_section, dict):
+        return section
+    specs = coding_section.get("mcp_server_specs")
+    if not isinstance(specs, list):
+        return section
+    projected_servers = _tenant_mcp_servers_from_coding_specs(specs, coding_section)
+    if not projected_servers:
+        return section
+
+    projected: dict[object, object] = {}
+    for tenant_id, tenant_config in section.items():
+        if not isinstance(tenant_config, dict):
+            projected[tenant_id] = tenant_config
+            continue
+        tenant_copy = dict(tenant_config)
+        tools = dict(tenant_copy.get("tools")) if isinstance(tenant_copy.get("tools"), dict) else {}
+        if "mcp_servers" not in tools and "mcpServers" not in tools:
+            tools["mcp_servers"] = projected_servers
+        tenant_copy["tools"] = tools
+        projected[tenant_id] = tenant_copy
+    return projected
+
+
+def _tenant_mcp_servers_from_coding_specs(
+    specs: list[object], coding_section: dict[object, object]
+) -> list[dict[str, object]]:
+    servers: list[dict[str, object]] = []
+    gateway_prefix = _coding_gateway_url_prefix(coding_section)
+    for spec in specs:
+        if not isinstance(spec, dict):
+            continue
+        name = spec.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        url = spec.get("url")
+        if not isinstance(url, str) or not url:
+            if spec.get("transport") == "stdio" and gateway_prefix is not None:
+                url = f"{gateway_prefix}/{name}"
+            else:
+                continue
+        server: dict[str, object] = {"name": name, "url": url}
+        headers = spec.get("headers")
+        if isinstance(headers, dict):
+            server["headers"] = headers
+        allowed_tools = spec.get("allowed_tools")
+        if isinstance(allowed_tools, list) and all(isinstance(item, str) for item in allowed_tools):
+            server["allowed_tools"] = allowed_tools
+        path_policy = spec.get("path_policy")
+        if isinstance(path_policy, dict):
+            server["path_policy"] = path_policy
+        result_redaction = spec.get("result_redaction")
+        if isinstance(result_redaction, dict):
+            server["result_redaction"] = result_redaction
+        timeout_seconds = spec.get("timeout_seconds")
+        if isinstance(timeout_seconds, int | float):
+            server["timeout_seconds"] = timeout_seconds
+        servers.append(server)
+    return servers
+
+
+def _coding_gateway_url_prefix(coding_section: dict[object, object]) -> str | None:
+    if not _config_bool(coding_section.get("mcp_gateway_enabled")):
+        return None
+    host = str(coding_section.get("bridge_host") or "127.0.0.1").strip() or "127.0.0.1"
+    port = coding_section.get("mcp_gateway_port") or coding_section.get("bridge_port") or 8765
+    try:
+        port_int = int(port)
+    except (TypeError, ValueError):
+        port_int = 8765
+    path_prefix = str(coding_section.get("mcp_gateway_path_prefix") or "/mcp")
+    if not path_prefix.startswith("/"):
+        path_prefix = f"/{path_prefix}"
+    path_prefix = path_prefix.rstrip("/") or "/mcp"
+    return f"http://{host}:{port_int}{path_prefix}"
+
+
+def _config_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
 
 
 def _provider_api_key_env(provider: str) -> str | None:

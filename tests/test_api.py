@@ -2037,10 +2037,20 @@ def test_tenant_execution_env_interpolation_replaces_nested_string_values(
 
 def test_tenant_execution_config_inherits_global_llm_when_omitted(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("MINIGENT_LLM_PROVIDER", "generic-oauth")
     monkeypatch.setenv("MINIGENT_LLM_MODEL", "gpt-test")
     monkeypatch.setenv("MINIGENT_LLM_URL", "https://example.test/responses")
+    monkeypatch.setenv("MINIGENT_OAUTH_PROVIDER_ID", "test-oauth")
+    monkeypatch.setenv("MINIGENT_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("MINIGENT_OAUTH_AUTHORIZE_URL", "https://auth.example/authorize")
+    monkeypatch.setenv("MINIGENT_OAUTH_TOKEN_URL", "https://auth.example/token")
+    monkeypatch.setenv("MINIGENT_OAUTH_SCOPE", "openid")
+    monkeypatch.setenv("MINIGENT_OAUTH_STORE_PATH", str(tmp_path / "oauth.json"))
+    monkeypatch.setenv(
+        "MINIGENT_OAUTH_REDIRECT_URI", "http://127.0.0.1:8000/oauth/generic/callback"
+    )
     monkeypatch.setenv(
         "MINIGENT_LLM_EXTRA_HEADERS",
         json.dumps({"OpenAI-Beta": "responses=experimental"}),
