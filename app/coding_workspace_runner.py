@@ -17,7 +17,7 @@ from typing import Any
 
 from dotenv import dotenv_values
 
-from app.unified_config import apply_unified_config_to_env
+from app.unified_config import DEFAULT_CODING_DOTENV_FILE, apply_unified_config_to_env
 
 DEFAULT_API_HOST = "127.0.0.1"
 DEFAULT_API_PORT = 8000
@@ -113,8 +113,8 @@ def parse_config_args(argv: list[str]) -> argparse.Namespace:
     )
     export_parser.add_argument(
         "--env-file",
-        default=".env.coding",
-        help="Coding runner dotenv file. Defaults to .env.coding.",
+        default=DEFAULT_CODING_DOTENV_FILE,
+        help=f"Coding runner dotenv file. Defaults to {DEFAULT_CODING_DOTENV_FILE}.",
     )
     export_parser.add_argument(
         "--base-url",
@@ -180,7 +180,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run Minigent as a coding assistant with a workspace-scoped filesystem MCP server. "
-            "Loads .env.coding by default."
+            f"Loads {DEFAULT_CODING_DOTENV_FILE} by default."
         )
     )
     parser.add_argument(
@@ -194,8 +194,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--env-file",
-        default=".env.coding",
-        help="dotenv file to load before starting processes. Defaults to .env.coding.",
+        default=DEFAULT_CODING_DOTENV_FILE,
+        help=f"dotenv file to load before starting processes. Defaults to {DEFAULT_CODING_DOTENV_FILE}.",
     )
     parser.add_argument(
         "--workspace",

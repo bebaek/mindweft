@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence, TextIO, cast
 
+from app.unified_config import DEFAULT_CODING_DOTENV_FILE, DEFAULT_CONFIG_FILE
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.config import ClientConfig, build_client_config
 from minigent_client.config_commands import (
@@ -760,12 +761,12 @@ def build_parser() -> argparse.ArgumentParser:
     config_subparsers = config_parser.add_subparsers(dest="config_command")
     config_subparsers.add_parser("show", help="Show resolved API configuration as JSON.")
     config_init_parser = config_subparsers.add_parser(
-        "init", help="Create a starter minigent.toml in the current directory."
+        "init", help=f"Create a starter {DEFAULT_CONFIG_FILE} in the current directory."
     )
     config_init_parser.add_argument(
         "--output",
-        default="minigent.toml",
-        help="Path to write. Defaults to ./minigent.toml.",
+        default=DEFAULT_CONFIG_FILE,
+        help=f"Path to write. Defaults to ./{DEFAULT_CONFIG_FILE}.",
     )
     config_init_parser.add_argument(
         "--profile",
@@ -807,7 +808,10 @@ def build_parser() -> argparse.ArgumentParser:
     config_export_parser.add_argument(
         "--coding-env-file",
         default=None,
-        help="Dotenv file for --local-coding. Defaults to --env-file or .env.coding.",
+        help=(
+            "Dotenv file for --local-coding. Defaults to --env-file or "
+            f"{DEFAULT_CODING_DOTENV_FILE}."
+        ),
     )
     config_subparsers.add_parser("doctor", help="Check common CLI/API configuration issues.")
 

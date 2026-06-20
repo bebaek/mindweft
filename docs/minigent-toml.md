@@ -44,8 +44,8 @@ best-effort `minigent.toml` facade:
 ```bash
 uv run minigent config export
 uv run minigent config export --output minigent.exported.toml
-uv run minigent config export --local-coding --coding-env-file .env.coding --output minigent.coding.toml
-uv run minigent-coding-workspace config export --env-file .env.coding --output minigent.coding.toml
+uv run minigent config export --local-coding --coding-env-file .env.coding --output minigent.toml
+uv run minigent-coding-workspace config export --env-file .env.coding --output minigent.toml
 uv run minigent config export --include-runtime --output minigent.snapshot.toml
 uv run minigent --json config export --output minigent.exported.json
 ```
@@ -69,7 +69,9 @@ MCP URLs without a `coding` launch section, the command adds a TOML comment poin
 
 ## Loading and precedence
 
-By default Minigent looks for `minigent.toml` and `.env` in the current working directory. Set
+By default Minigent looks for `minigent.toml` and `.env` in the current working directory.
+The unified TOML config default is always `./minigent.toml`; coding-workspace commands only
+use `./.env.coding` as their runner dotenv default. Set
 `MINIGENT_CONFIG_FILE` to choose a different TOML file, and `MINIGENT_DOTENV_FILE` to choose a
 different dotenv file:
 
@@ -147,7 +149,7 @@ mode = "development"
 provider = "mock"
 
 [app]
-thread_db_path = ".data/minigent.db"
+thread_db_path = ".data/minigent-threads.db"
 ```
 
 ### OpenRouter

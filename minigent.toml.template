@@ -7,7 +7,7 @@ profile = "local-coding"
 [app]
 host = "127.0.0.1"
 port = 8000
-thread_db_path = ".data/minigent.db"
+thread_db_path = ".data/minigent-coding-threads.db"
 # max_iterations = 16
 # tool_timeout_seconds = 60
 

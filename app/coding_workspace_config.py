@@ -7,13 +7,22 @@ from pathlib import Path
 from typing import Any
 
 from app import coding_workspace_runner as runner
-from app.unified_config import DOTENV_FILE_ENV, load_unified_config_env, resolve_config_path
+from app.unified_config import (
+    DEFAULT_CODING_DOTENV_FILE,
+    DOTENV_FILE_ENV,
+    load_unified_config_env,
+    resolve_config_path,
+)
 
 
 def export_local_coding_config(args: Namespace) -> dict[str, object]:
     """Resolve local coding runner config for orchestrator-side export."""
 
-    env_file = getattr(args, "coding_env_file", None) or getattr(args, "env_file", None) or ".env.coding"
+    env_file = (
+        getattr(args, "coding_env_file", None)
+        or getattr(args, "env_file", None)
+        or DEFAULT_CODING_DOTENV_FILE
+    )
     env_path = Path(env_file).expanduser()
     env, env_base_dir = load_coding_workspace_export_env(env_path)
     workspace_roots = runner.resolve_workspace_roots(

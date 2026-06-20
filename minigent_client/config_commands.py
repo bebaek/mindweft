@@ -13,6 +13,11 @@ from typing import Any
 from app.coding_workspace_config import export_local_coding_config
 from app.unified_config import (
     CONFIG_FILE_ENV,
+    DEFAULT_CODING_THREAD_DB_PATH,
+    DEFAULT_CONFIG_FILE,
+    DEFAULT_DOTENV_FILE,
+    DEFAULT_THREAD_DB_PATH,
+    DEFAULT_VOICE_THREAD_DB_PATH,
     DOTENV_FILE_ENV,
     load_unified_config_env,
     resolve_config_path,
@@ -25,8 +30,8 @@ from minigent_client.output import print_json
 DEFAULT_CONFIG_PROFILE = "local-coding"
 CONFIG_INIT_PROFILES = ("basic-chat", "openrouter", "local-coding", "voice")
 
-DEFAULT_CONFIG_TEMPLATE = """# Unified Minigent config facade.
-# Keep secrets in your shell, OS keychain, or .env.
+DEFAULT_CONFIG_TEMPLATE = f"""# Unified Minigent config facade.
+# Keep secrets in your shell, OS keychain, or {DEFAULT_DOTENV_FILE}.
 # Existing MINIGENT_* / provider env vars still override values from this file.
 
 profile = "local-coding"
@@ -34,7 +39,7 @@ profile = "local-coding"
 [app]
 host = "127.0.0.1"
 port = 8000
-thread_db_path = ".data/minigent.db"
+thread_db_path = "{DEFAULT_CODING_THREAD_DB_PATH}"
 
 [auth]
 mode = "development"
@@ -55,7 +60,7 @@ shell_enabled = false
 enabled = false
 """
 
-BASIC_CHAT_CONFIG_TEMPLATE = """# Basic local Minigent config.
+BASIC_CHAT_CONFIG_TEMPLATE = f"""# Basic local Minigent config.
 # Uses the mock LLM provider so no API key is required.
 
 profile = "basic-chat"
@@ -63,7 +68,7 @@ profile = "basic-chat"
 [app]
 host = "127.0.0.1"
 port = 8000
-thread_db_path = ".data/minigent.db"
+thread_db_path = "{DEFAULT_THREAD_DB_PATH}"
 
 [auth]
 mode = "development"
@@ -75,15 +80,15 @@ provider = "mock"
 enabled = false
 """
 
-OPENROUTER_CONFIG_TEMPLATE = """# Minigent config for OpenRouter-backed chat.
-# Keep OPENROUTER_API_KEY in your environment or .env; do not commit it.
+OPENROUTER_CONFIG_TEMPLATE = f"""# Minigent config for OpenRouter-backed chat.
+# Keep OPENROUTER_API_KEY in your environment or {DEFAULT_DOTENV_FILE}; do not commit it.
 
 profile = "openrouter"
 
 [app]
 host = "127.0.0.1"
 port = 8000
-thread_db_path = ".data/minigent.db"
+thread_db_path = "{DEFAULT_THREAD_DB_PATH}"
 
 [auth]
 mode = "development"
@@ -97,7 +102,7 @@ api_key_env = "OPENROUTER_API_KEY"
 enabled = false
 """
 
-VOICE_CONFIG_TEMPLATE = """# Minigent voice-oriented config facade.
+VOICE_CONFIG_TEMPLATE = f"""# Minigent voice-oriented config facade.
 # Detailed audio/VAD tuning remains available through MINIGENT_VOICE_* env vars.
 
 profile = "voice"
@@ -105,7 +110,7 @@ profile = "voice"
 [app]
 host = "127.0.0.1"
 port = 8000
-thread_db_path = ".data/minigent-voice.db"
+thread_db_path = "{DEFAULT_VOICE_THREAD_DB_PATH}"
 
 [auth]
 mode = "development"
@@ -761,7 +766,7 @@ def _unified_config_checks() -> list[DiagnosticCheck]:
             DiagnosticCheck(
                 "warning",
                 "Unified config file",
-                "not found; run `minigent config init` to create minigent.toml",
+                f"not found; run `minigent config init` to create {DEFAULT_CONFIG_FILE}",
             )
         )
         return checks

@@ -72,7 +72,8 @@ For desktop/local use, start from [`minigent.toml.template`](minigent.toml.templ
 write a focused starter config with `uv run minigent config init --profile local-coding`
 (`basic-chat`, `openrouter`, and `voice` profiles are also available). This file is a
 friendly facade for the common app, auth, LLM, coding workspace, MCP, voice, and quality
-settings.
+settings. The unified TOML config default is always `./minigent.toml`; the coding-workspace
+runner separately defaults its dotenv file to `./.env.coding`.
 See [`docs/minigent-toml.md`](docs/minigent-toml.md) for the schema, examples, precedence,
 and troubleshooting commands. Set `MINIGENT_CONFIG_FILE` to point at a different TOML file.
 Existing `.env` files and real environment variables still work; set `MINIGENT_DOTENV_FILE`

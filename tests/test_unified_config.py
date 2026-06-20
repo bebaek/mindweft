@@ -17,7 +17,7 @@ def test_unified_config_maps_common_desktop_settings(tmp_path: Path, monkeypatch
 profile = "local-coding"
 
 [app]
-thread_db_path = ".data/minigent.db"
+thread_db_path = ".data/minigent-threads.db"
 port = 9000
 
 [auth]
@@ -49,7 +49,7 @@ enabled = false
 
     env = load_unified_config_env(config_path)
 
-    assert env["MINIGENT_THREAD_DB_PATH"] == ".data/minigent.db"
+    assert env["MINIGENT_THREAD_DB_PATH"] == ".data/minigent-threads.db"
     assert env["MINIGENT_PORT"] == "9000"
     assert env["MINIGENT_AUTH_MODE"] == "development"
     assert env["MINIGENT_LLM_PROVIDER"] == "openrouter"

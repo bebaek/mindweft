@@ -774,7 +774,7 @@ model = "openrouter-model"
 api_key_env = "OPENROUTER_API_KEY"
 
 [app]
-thread_db_path = ".data/minigent.db"
+thread_db_path = ".data/minigent-threads.db"
 """.strip(),
         encoding="utf-8",
     )

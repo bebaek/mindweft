@@ -294,9 +294,9 @@ To export a restartable TOML for the full local coding stack, merge the API-owne
 the locally resolved runner config:
 
 ```bash
-uv run minigent --env-file .env.coding config export --local-coding --output minigent.coding.toml
+uv run minigent --env-file .env.coding config export --local-coding --output minigent.toml
 # Equivalent coding-runner wrapper:
-uv run minigent-coding-workspace config export --env-file .env.coding --output minigent.coding.toml
+uv run minigent-coding-workspace config export --env-file .env.coding --output minigent.toml
 ```
 
 On first use, ask the coding agent to index the repository, for example: "Index this

@@ -14,6 +14,10 @@ CONFIG_FILE_ENV = "MINIGENT_CONFIG_FILE"
 DOTENV_FILE_ENV = "MINIGENT_DOTENV_FILE"
 DEFAULT_CONFIG_FILE = "minigent.toml"
 DEFAULT_DOTENV_FILE = ".env"
+DEFAULT_CODING_DOTENV_FILE = ".env.coding"
+DEFAULT_THREAD_DB_PATH = ".data/minigent-threads.db"
+DEFAULT_CODING_THREAD_DB_PATH = ".data/minigent-coding-threads.db"
+DEFAULT_VOICE_THREAD_DB_PATH = ".data/minigent-voice-threads.db"
 
 _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
     "app": {
