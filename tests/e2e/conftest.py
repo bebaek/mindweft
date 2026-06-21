@@ -25,6 +25,8 @@ def live_minigent_server(tmp_path: Path, repo_root: Path) -> Iterator[str]:
     base_url = f"http://127.0.0.1:{port}"
     env = {
         **os.environ,
+        "MINIGENT_CONFIG_FILE": str(tmp_path / "no-minigent.toml"),
+        "MINIGENT_DOTENV_FILE": str(tmp_path / "no-minigent.env"),
         "MINIGENT_AUTH_MODE": "dev-headers",
         "MINIGENT_LLM_PROVIDER": "mock",
         "MINIGENT_THREAD_DB_PATH": str(tmp_path / "threads.db"),
