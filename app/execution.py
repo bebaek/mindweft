@@ -493,9 +493,11 @@ def _llm_export_public_dict(
     model = _string_value(llm_description.get("model")) or config.model
     if model:
         exported["model"] = model
-    url = _string_value(llm_description.get("url")) or _string_value(
-        llm_description.get("base_url")
-    ) or config.base_url
+    url = (
+        _string_value(llm_description.get("url"))
+        or _string_value(llm_description.get("base_url"))
+        or config.base_url
+    )
     if url:
         exported["url" if provider == GENERIC_OAUTH_PROVIDER else "base_url"] = url
     if config.extra_headers:
@@ -612,10 +614,7 @@ def _tenant_skills_config_public_dict(config: TenantSkillsConfig) -> dict[str, o
     if config.default_skill is not None:
         exported["default_skill"] = config.default_skill
     if config.items:
-        exported["items"] = [
-            _tenant_skill_config_public_dict(skill)
-            for skill in config.items
-        ]
+        exported["items"] = [_tenant_skill_config_public_dict(skill) for skill in config.items]
     return exported
 
 
@@ -641,8 +640,7 @@ def _tenant_capability_profiles_public_dict(
         exported["default_profile"] = config.default_profile
     if config.items:
         exported["items"] = [
-            _tenant_capability_profile_public_dict(profile)
-            for profile in config.items
+            _tenant_capability_profile_public_dict(profile) for profile in config.items
         ]
     return exported
 
@@ -943,9 +941,7 @@ def _tenant_llm_config_from_env() -> TenantLLMConfig:
     if provider == "openrouter":
         return TenantLLMConfig(
             provider=provider,
-            model=_optional_str(
-                os.getenv("OPENROUTER_MODEL") or os.getenv("MINIGENT_LLM_MODEL")
-            ),
+            model=_optional_str(os.getenv("OPENROUTER_MODEL") or os.getenv("MINIGENT_LLM_MODEL")),
             base_url=_optional_str(os.getenv("OPENROUTER_BASE_URL")),
             api_key=_optional_str(os.getenv("OPENROUTER_API_KEY")),
             extra_headers=extra_headers,

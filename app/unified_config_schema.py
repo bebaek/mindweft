@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 
 @dataclass(frozen=True)
@@ -158,7 +158,7 @@ TOP_LEVEL_KEYS = {
     "runtime",
 }
 
-SECTION_TYPES = {
+SECTION_TYPES: dict[str, type[Any]] = {
     "app": AppConfig,
     "auth": AuthConfig,
     "oauth": OAuthConfig,
@@ -276,15 +276,17 @@ def parse_unified_config(data: dict[str, Any]) -> UnifiedConfig:
     errors = validate_unified_config_data(data)
     if errors:
         raise ValueError("; ".join(errors))
-    sections: dict[str, object] = {}
+    sections: dict[str, Any] = {}
     for section_name, section_type in SECTION_TYPES.items():
         raw_section = data.get(section_name)
-        sections[section_name] = section_type(**raw_section) if isinstance(raw_section, dict) else section_type()
+        sections[section_name] = (
+            section_type(**raw_section) if isinstance(raw_section, dict) else section_type()
+        )
     return UnifiedConfig(
         profile=data.get("profile"),
-        peer_agents=data.get("peer_agents"),
-        tenant_execution_configs=data.get("tenant_execution_configs"),
-        runtime=data.get("runtime"),
+        peer_agents=cast(object, data.get("peer_agents")),
+        tenant_execution_configs=cast(object, data.get("tenant_execution_configs")),
+        runtime=cast(object, data.get("runtime")),
         **sections,
     )
 
@@ -319,9 +321,17 @@ def _validate_value_type(dotted: str, value: object) -> list[str]:
     if dotted in _STRING_KEYS:
         return [] if isinstance(value, str) else [f"{dotted} must be a string"]
     if dotted in _INT_KEYS:
-        return [] if isinstance(value, int) and not isinstance(value, bool) else [f"{dotted} must be an integer"]
+        return (
+            []
+            if isinstance(value, int) and not isinstance(value, bool)
+            else [f"{dotted} must be an integer"]
+        )
     if dotted in _NUMBER_KEYS:
-        return [] if isinstance(value, int | float) and not isinstance(value, bool) else [f"{dotted} must be a number"]
+        return (
+            []
+            if isinstance(value, int | float) and not isinstance(value, bool)
+            else [f"{dotted} must be a number"]
+        )
     if dotted in _BOOL_KEYS:
         return [] if isinstance(value, bool) else [f"{dotted} must be a boolean"]
     if dotted in _STRING_LIST_KEYS:
@@ -335,5 +345,7 @@ def _validate_value_type(dotted: str, value: object) -> list[str]:
     if dotted in _LIST_KEYS:
         return [] if isinstance(value, list) else [f"{dotted} must be a list"]
     if dotted in _DICT_OR_LIST_KEYS:
-        return [] if isinstance(value, dict | list) else [f"{dotted} must be a table/object or list"]
+        return (
+            [] if isinstance(value, dict | list) else [f"{dotted} must be a table/object or list"]
+        )
     return []

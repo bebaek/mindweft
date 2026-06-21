@@ -747,7 +747,7 @@ def test_config_init_profile_supports_output_and_force(
 
 def test_config_init_refuses_to_overwrite(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "minigent.toml").write_text("profile = \"custom\"\n", encoding="utf-8")
+    (tmp_path / "minigent.toml").write_text('profile = "custom"\n', encoding="utf-8")
 
     exit_code = cli.main(["config", "init"])
 
@@ -845,9 +845,7 @@ def test_config_export_prints_toml_from_server(monkeypatch: Any, capsys: Any) ->
                         "mcp_servers": [
                             {"name": "filesystem", "status": "connected", "tool_count": 1}
                         ],
-                        "tools": [
-                            {"name": "filesystem.read_file", "description": "Read file"}
-                        ],
+                        "tools": [{"name": "filesystem.read_file", "description": "Read file"}],
                     },
                 },
             }
@@ -976,9 +974,7 @@ def test_config_export_local_coding_merges_runner_config(
     )
     monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
 
-    exit_code = cli.main(
-        ["config", "export", "--local-coding", "--coding-env-file", str(env_file)]
-    )
+    exit_code = cli.main(["config", "export", "--local-coding", "--coding-env-file", str(env_file)])
 
     assert exit_code == 0
     output = capsys.readouterr().out
@@ -994,9 +990,7 @@ def test_config_export_local_coding_merges_runner_config(
     assert parsed["coding"]["mcp_gateway_port"] == 9876
     assert parsed["coding"]["mcp_gateway_path_prefix"] == "/tools"
     assert parsed["coding"]["mcp_server_specs"][0]["name"] == "web-fetch"
-    assert parsed["coding"]["mcp_server_specs"][0]["env"] == {
-        "FETCH_TOKEN": "${FETCH_TOKEN}"
-    }
+    assert parsed["coding"]["mcp_server_specs"][0]["env"] == {"FETCH_TOKEN": "${FETCH_TOKEN}"}
     assert "mcp_servers_file" not in output
     assert "secret-value" not in output
 
@@ -1065,18 +1059,14 @@ def test_config_export_local_coding_unifies_split_mcp_server_config(
     )
     monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
 
-    exit_code = cli.main(
-        ["config", "export", "--local-coding", "--coding-env-file", str(env_file)]
-    )
+    exit_code = cli.main(["config", "export", "--local-coding", "--coding-env-file", str(env_file)])
 
     assert exit_code == 0
     output = capsys.readouterr().out
     parsed = tomllib.loads(output)
     assert parsed["coding"]["system_prompt"] == "You may use read_file and write_file."
     assert parsed["coding"]["mcp_server_specs"][0]["allowed_tools"] == ["write_file"]
-    assert parsed["coding"]["mcp_server_specs"][0]["path_policy"] == {
-        "deny_globs": ["**/.env*"]
-    }
+    assert parsed["coding"]["mcp_server_specs"][0]["path_policy"] == {"deny_globs": ["**/.env*"]}
     assert "mcp_servers" not in parsed["tenant_execution_configs"]["coding-tenant"]["tools"]
     assert parsed["tenant_execution_configs"]["coding-tenant"]["tools"] == {
         "allowed_local_tools": ["calculator"]
@@ -1193,7 +1183,7 @@ def test_config_doctor_blocks_on_invalid_unified_config(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "minigent.toml").write_text("[llm\nprovider = \"mock\"\n", encoding="utf-8")
+    (tmp_path / "minigent.toml").write_text('[llm\nprovider = "mock"\n', encoding="utf-8")
 
     exit_code = cli.main(["config", "doctor"])
 

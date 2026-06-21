@@ -132,7 +132,10 @@ allowed_local_tools = ["calculator"]
     exported_text = exported_config_path.read_text(encoding="utf-8")
     exported = tomllib.loads(exported_text)
     assert exported["llm"]["provider"] == "mock"
-    assert exported["tenant_execution_configs"]["e2e-tenant"]["skills"]["default_skill"] == "math-helper"
+    assert (
+        exported["tenant_execution_configs"]["e2e-tenant"]["skills"]["default_skill"]
+        == "math-helper"
+    )
     assert exported["tenant_execution_configs"]["e2e-tenant"]["tools"]["allowed_local_tools"] == [
         "current_time",
         "calculator",

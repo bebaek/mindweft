@@ -60,6 +60,7 @@ def test_coding_config_export_uses_env_base_url(monkeypatch) -> None:
         ".env.coding",
     ]
 
+
 def test_load_config_command_env_sets_dotenv_without_overriding(
     tmp_path: Path, monkeypatch
 ) -> None:

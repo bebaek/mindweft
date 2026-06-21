@@ -21,6 +21,7 @@ DEFAULT_THREAD_DB_PATH = ".data/minigent-threads.db"
 DEFAULT_CODING_THREAD_DB_PATH = ".data/minigent-coding-threads.db"
 DEFAULT_VOICE_THREAD_DB_PATH = ".data/minigent-voice-threads.db"
 
+
 @dataclass(frozen=True)
 class ResolvedConfig:
     """Resolved startup configuration and the files that contributed to it.
@@ -111,7 +112,9 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
 }
 
 
-def apply_startup_config(*, cwd: Path | None = None, discover_default_files: bool | None = None) -> None:
+def apply_startup_config(
+    *, cwd: Path | None = None, discover_default_files: bool | None = None
+) -> None:
     """Load minigent.toml and .env into process env without overriding real env vars.
 
     Precedence is: existing process environment > selected .env > minigent.toml > built-in defaults.
@@ -348,9 +351,7 @@ def _collect_coding_inline_config(section: object, env: dict[str, str]) -> None:
             section["mcp_gateway_enabled"]
         )
     if "mcp_gateway_port" in section:
-        env["MINIGENT_CODING_MCP_GATEWAY_PORT"] = _format_env_value(
-            section["mcp_gateway_port"]
-        )
+        env["MINIGENT_CODING_MCP_GATEWAY_PORT"] = _format_env_value(section["mcp_gateway_port"])
     if "mcp_gateway_path_prefix" in section:
         env["MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX"] = _format_env_value(
             section["mcp_gateway_path_prefix"]
@@ -402,8 +403,9 @@ def _with_coding_mcp_server_projections(section: object, coding_section: object)
         if not isinstance(tenant_config, dict):
             projected[tenant_id] = tenant_config
             continue
-        tenant_copy = dict(tenant_config)
-        tools = dict(tenant_copy.get("tools")) if isinstance(tenant_copy.get("tools"), dict) else {}
+        tenant_copy: dict[object, object] = dict(tenant_config)
+        raw_tools = tenant_copy.get("tools")
+        tools: dict[object, object] = dict(raw_tools) if isinstance(raw_tools, dict) else {}
         if "mcp_servers" not in tools and "mcpServers" not in tools:
             tools["mcp_servers"] = projected_servers
         tenant_copy["tools"] = tools
@@ -452,7 +454,8 @@ def _coding_gateway_url_prefix(coding_section: dict[object, object]) -> str | No
     if not _config_bool(coding_section.get("mcp_gateway_enabled")):
         return None
     host = str(coding_section.get("bridge_host") or "127.0.0.1").strip() or "127.0.0.1"
-    port = coding_section.get("mcp_gateway_port") or coding_section.get("bridge_port") or 8765
+    raw_port = coding_section.get("mcp_gateway_port") or coding_section.get("bridge_port")
+    port = raw_port if isinstance(raw_port, int | str) else 8765
     try:
         port_int = int(port)
     except (TypeError, ValueError):

@@ -36,11 +36,12 @@ def export_local_coding_config(args: Namespace) -> dict[str, object]:
     gateway_enabled = runner.env_flag_enabled(env.get("MINIGENT_CODING_MCP_GATEWAY_ENABLED"))
     gateway_port = int(env.get("MINIGENT_CODING_MCP_GATEWAY_PORT") or bridge_port)
     gateway_path_prefix = (
-        env.get("MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX")
-        or runner.DEFAULT_MCP_GATEWAY_PATH_PREFIX
+        env.get("MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX") or runner.DEFAULT_MCP_GATEWAY_PATH_PREFIX
     )
     text_enabled = runner.env_flag_enabled(env.get("MINIGENT_CODING_TEXT_ENABLED"))
-    text_bridge_name = env.get("MINIGENT_CODING_TEXT_BRIDGE_NAME") or runner.DEFAULT_TEXT_BRIDGE_NAME
+    text_bridge_name = (
+        env.get("MINIGENT_CODING_TEXT_BRIDGE_NAME") or runner.DEFAULT_TEXT_BRIDGE_NAME
+    )
     text_bridge_port = int(
         env.get("MINIGENT_CODING_TEXT_BRIDGE_PORT") or runner.DEFAULT_TEXT_BRIDGE_PORT
     )
@@ -158,7 +159,9 @@ def load_coding_workspace_export_env(env_path: Path) -> tuple[dict[str, str], Pa
         return runner.load_env_file(str(env_path)), base_dir
 
     env = dict(os.environ)
-    config_env = load_unified_config_env(resolve_config_path(base_dir=base_dir, env=env), source_env=env)
+    config_env = load_unified_config_env(
+        resolve_config_path(base_dir=base_dir, env=env), source_env=env
+    )
     for key, value in config_env.items():
         env.setdefault(key, value)
     _apply_selected_file_env_values(env, base_dir=base_dir)
@@ -264,5 +267,7 @@ def _is_public_config_value(value: object) -> bool:
     if isinstance(value, list):
         return all(_is_public_config_value(item) for item in value)
     if isinstance(value, dict):
-        return all(isinstance(key, str) and _is_public_config_value(item) for key, item in value.items())
+        return all(
+            isinstance(key, str) and _is_public_config_value(item) for key, item in value.items()
+        )
     return False

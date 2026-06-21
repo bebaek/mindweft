@@ -6,9 +6,7 @@ from pathlib import Path
 from app import coding_workspace_config
 
 
-def test_export_local_coding_config_reuses_preloaded_env_file(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_export_local_coding_config_reuses_preloaded_env_file(tmp_path: Path, monkeypatch) -> None:
     env_path = tmp_path / ".env.coding"
     env_path.write_text("MINIGENT_CODING_WORKSPACES=/should/not/read\n", encoding="utf-8")
     workspace = tmp_path / "workspace"

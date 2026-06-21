@@ -208,7 +208,11 @@ def run_config_export(
         export.pop("runtime", None)
     if trace_id is not None:
         export = {**export, "trace_id": trace_id}
-    text = json.dumps(export, indent=2, sort_keys=True) + "\n" if args.json else render_unified_config_toml(export)
+    text = (
+        json.dumps(export, indent=2, sort_keys=True) + "\n"
+        if args.json
+        else render_unified_config_toml(export)
+    )
     output_path = getattr(args, "output", None)
     if output_path:
         Path(output_path).write_text(text, encoding="utf-8")
@@ -217,7 +221,6 @@ def run_config_export(
     else:
         print(text, end="")
     return 0
-
 
 
 def export_unified_config_from_server(server_config: dict[str, Any]) -> dict[str, object]:
@@ -262,11 +265,14 @@ def export_unified_config_from_server(server_config: dict[str, Any]) -> dict[str
     return pruned_export if isinstance(pruned_export, dict) else export
 
 
-def _prune_export(export: dict[str, object]) -> object:
+def _prune_export(export: dict[str, object]) -> dict[str, object]:
     pruned = _prune_empty_values(export)
-    if isinstance(pruned, dict) and "_comments" in export:
-        pruned["_comments"] = export["_comments"]
-    return pruned
+    if not isinstance(pruned, dict):
+        return export
+    pruned_export: dict[str, object] = dict(pruned)
+    if "_comments" in export:
+        pruned_export["_comments"] = export["_comments"]
+    return pruned_export
 
 
 def _append_export_comment(export: dict[str, object], comment: str) -> None:
@@ -403,7 +409,9 @@ def _merge_split_mcp_server_spec(
         )
     if "path_policy" not in coding_spec and isinstance(tenant_server.get("path_policy"), dict):
         coding_spec["path_policy"] = tenant_server["path_policy"]
-    if "result_redaction" not in coding_spec and isinstance(tenant_server.get("result_redaction"), dict):
+    if "result_redaction" not in coding_spec and isinstance(
+        tenant_server.get("result_redaction"), dict
+    ):
         coding_spec["result_redaction"] = tenant_server["result_redaction"]
 
 
@@ -472,7 +480,15 @@ def _api_key_env_for_provider(provider: str) -> str | None:
 def _export_quality_config(quality: dict[str, Any]) -> dict[str, object]:
     exported = _export_public_dict(
         quality,
-        allowed={"enabled", "provider", "model", "base_url", "mode", "timeout", "max_payload_chars"},
+        allowed={
+            "enabled",
+            "provider",
+            "model",
+            "base_url",
+            "mode",
+            "timeout",
+            "max_payload_chars",
+        },
     )
     defaults: dict[str, object] = {
         "enabled": False,
@@ -631,7 +647,9 @@ def collect_resolved_local_config() -> dict[str, object]:
     if dotenv_path is not None and dotenv_path.exists():
         from dotenv import dotenv_values
 
-        dotenv = {key: value for key, value in dotenv_values(dotenv_path).items() if value is not None}
+        dotenv = {
+            key: value for key, value in dotenv_values(dotenv_path).items() if value is not None
+        }
         dotenv_keys = sorted(dotenv)
         env_snapshot.update(dotenv)
     config_path = resolve_config_path(base_dir=cwd, env=env_snapshot)
@@ -647,7 +665,9 @@ def collect_resolved_local_config() -> dict[str, object]:
         "config_file": str(config_path) if config_path is not None else None,
         "config_file_env": os.environ.get(CONFIG_FILE_ENV),
         "dotenv_file_env": os.environ.get(DOTENV_FILE_ENV),
-        "dotenv_file": str(dotenv_path) if dotenv_path is not None and dotenv_path.exists() else None,
+        "dotenv_file": str(dotenv_path)
+        if dotenv_path is not None and dotenv_path.exists()
+        else None,
         "dotenv_keys": dotenv_keys,
         "resolved_env": mask_secrets(dict(sorted(resolved.items()))),
     }
@@ -854,9 +874,7 @@ def _llm_config_checks(data: dict[str, Any], resolved_env: dict[str, str]) -> li
         return checks
     if provider == "generic-oauth":
         missing = [
-            key
-            for key in ("MINIGENT_LLM_MODEL", "MINIGENT_LLM_URL")
-            if not resolved_env.get(key)
+            key for key in ("MINIGENT_LLM_MODEL", "MINIGENT_LLM_URL") if not resolved_env.get(key)
         ]
         checks.append(
             DiagnosticCheck(
@@ -869,11 +887,15 @@ def _llm_config_checks(data: dict[str, Any], resolved_env: dict[str, str]) -> li
         return checks
     llm_section = data.get("llm") if isinstance(data, dict) else None
     if isinstance(llm_section, dict) and provider:
-        checks.append(DiagnosticCheck("warning", "LLM provider supported", "not recognized locally"))
+        checks.append(
+            DiagnosticCheck("warning", "LLM provider supported", "not recognized locally")
+        )
     return checks
 
 
-def _coding_config_checks(data: dict[str, Any], resolved_env: dict[str, str]) -> list[DiagnosticCheck]:
+def _coding_config_checks(
+    data: dict[str, Any], resolved_env: dict[str, str]
+) -> list[DiagnosticCheck]:
     coding = data.get("coding") if isinstance(data, dict) else None
     if not isinstance(coding, dict):
         return []
@@ -895,7 +917,9 @@ def _coding_config_checks(data: dict[str, Any], resolved_env: dict[str, str]) ->
             DiagnosticCheck(
                 "ok" if not missing else "warning",
                 "Coding workspace paths",
-                f"{len(workspaces)} configured" if not missing else f"missing: {', '.join(missing)}",
+                f"{len(workspaces)} configured"
+                if not missing
+                else f"missing: {', '.join(missing)}",
             )
         )
     shell_enabled = _config_bool(coding.get("shell_enabled")) or _env_bool_value(
@@ -903,7 +927,9 @@ def _coding_config_checks(data: dict[str, Any], resolved_env: dict[str, str]) ->
     )
     prefixes = [
         prefix.strip()
-        for prefix in resolved_env.get("MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES", "").split(",")
+        for prefix in resolved_env.get("MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES", "").split(
+            ","
+        )
         if prefix.strip()
     ]
     if shell_enabled and not prefixes:

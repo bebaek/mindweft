@@ -654,7 +654,6 @@ def build_mcp_gateway_command(config_path: Path, host: str, port: int) -> list[s
     ]
 
 
-
 def resolve_mcp_servers_file(
     cli_path: str | None, env: dict[str, str], *, base_dir: Path | None = None
 ) -> Path | None:
@@ -692,9 +691,7 @@ def load_coding_mcp_server_specs_from_json(
     payload = json.loads(raw_json)
     raw_servers = payload.get("servers") if isinstance(payload, dict) else payload
     if not isinstance(raw_servers, list):
-        raise RuntimeError(
-            'coding.mcp_server_specs must be a JSON array or {"servers": [...]}'
-        )
+        raise RuntimeError('coding.mcp_server_specs must be a JSON array or {"servers": [...]}')
 
     specs: list[CodingMCPServerSpec] = []
     interpolation_env = dict(env or os.environ)
