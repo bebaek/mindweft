@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import Depends, HTTPException, Request
@@ -21,14 +23,43 @@ TENANT_USER_REGISTRY_REQUIRED_ENV = "MINIGENT_TENANT_USER_REGISTRY_REQUIRED"
 _REQUIRE_PRINCIPAL = Depends(require_principal)
 
 
+@dataclass(frozen=True)
+class TenantRegistrySettings:
+    tenant_registry_required: bool = False
+    tenant_user_registry_required: bool = False
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> TenantRegistrySettings:
+        lookup = os.environ if env is None else env
+        return cls(
+            tenant_registry_required=_parse_bool_env(lookup, TENANT_REGISTRY_REQUIRED_ENV),
+            tenant_user_registry_required=_parse_bool_env(
+                lookup, TENANT_USER_REGISTRY_REQUIRED_ENV
+            ),
+        )
+
+
+def tenant_registry_settings_from_env() -> TenantRegistrySettings:
+    return TenantRegistrySettings.from_env()
+
+
 def tenant_registry_required_from_env() -> bool:
-    value = os.getenv(TENANT_REGISTRY_REQUIRED_ENV, "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    return TenantRegistrySettings.from_env().tenant_registry_required
 
 
 def tenant_user_registry_required_from_env() -> bool:
-    value = os.getenv(TENANT_USER_REGISTRY_REQUIRED_ENV, "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    return TenantRegistrySettings.from_env().tenant_user_registry_required
+
+
+def _parse_bool_env(env: Mapping[str, str], name: str) -> bool:
+    value = env.get(name, "").strip().lower()
+    if not value:
+        return False
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be a boolean")
 
 
 async def require_tenant_context(
