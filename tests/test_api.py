@@ -24,7 +24,7 @@ from app.execution import (
     parse_tenant_execution_config,
 )
 from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter
-from app.main import create_app
+from app.main import DEFAULT_IMAGE_INPUT_MAX_BYTES, ImageInputSettings, create_app
 from app.mcp import MCPServerInfo
 from app.mcp_broker import MINIGENT_MCP_BROKER_TOKEN_ENV, MINIGENT_MCP_BROKER_URL_ENV
 from app.models import (
@@ -132,6 +132,44 @@ def test_config_export_does_not_collect_coding_runner_env(monkeypatch: pytest.Mo
     assert response.status_code == 200
     export = response.json()["unified_config_export"]
     assert "coding" not in export
+
+
+def test_image_input_settings_from_env_mapping_uses_defaults() -> None:
+    settings = ImageInputSettings.from_env({})
+
+    assert settings == ImageInputSettings(
+        enabled=False,
+        max_bytes=DEFAULT_IMAGE_INPUT_MAX_BYTES,
+        allowed_mime_types=frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"}),
+    )
+
+
+def test_image_input_settings_from_env_mapping_parses_values() -> None:
+    settings = ImageInputSettings.from_env(
+        {
+            "MINIGENT_IMAGE_INPUT_ENABLED": "yes",
+            "MINIGENT_IMAGE_INPUT_MAX_BYTES": "1234",
+            "MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES": "image/png, image/avif",
+        }
+    )
+
+    assert settings == ImageInputSettings(
+        enabled=True,
+        max_bytes=1234,
+        allowed_mime_types=frozenset({"image/png", "image/avif"}),
+    )
+
+
+def test_image_input_settings_from_env_mapping_rejects_invalid_values() -> None:
+    with pytest.raises(RuntimeError) as exc_info:
+        ImageInputSettings.from_env(
+            {
+                "MINIGENT_IMAGE_INPUT_ENABLED": "true",
+                "MINIGENT_IMAGE_INPUT_MAX_BYTES": "0",
+            }
+        )
+
+    assert str(exc_info.value) == "MINIGENT_IMAGE_INPUT_MAX_BYTES must be a positive integer"
 
 
 def test_add_message_rejects_image_when_disabled() -> None:

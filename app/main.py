@@ -6,8 +6,9 @@ import binascii
 import json
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -89,48 +90,80 @@ IMAGE_INPUT_ENABLED_ENV = "MINIGENT_IMAGE_INPUT_ENABLED"
 IMAGE_INPUT_MAX_BYTES_ENV = "MINIGENT_IMAGE_INPUT_MAX_BYTES"
 IMAGE_INPUT_ALLOWED_MIME_TYPES_ENV = "MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES"
 DEFAULT_IMAGE_INPUT_MAX_BYTES = 5 * 1024 * 1024
-DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES = frozenset(
+    {"image/png", "image/jpeg", "image/webp", "image/gif"}
+)
 
 
-def _env_bool(name: str, *, default: bool = False) -> bool:
-    value = os.getenv(name)
+@dataclass(frozen=True)
+class ImageInputSettings:
+    enabled: bool = False
+    max_bytes: int = DEFAULT_IMAGE_INPUT_MAX_BYTES
+    allowed_mime_types: frozenset[str] = DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> ImageInputSettings:
+        lookup = os.environ if env is None else env
+        return cls(
+            enabled=_parse_image_input_enabled(lookup),
+            max_bytes=_parse_image_input_max_bytes(lookup),
+            allowed_mime_types=_parse_image_input_allowed_mime_types(lookup),
+        )
+
+
+def image_input_settings_from_env() -> ImageInputSettings:
+    return ImageInputSettings.from_env()
+
+
+def _parse_image_input_enabled(env: Mapping[str, str]) -> bool:
+    value = env.get(IMAGE_INPUT_ENABLED_ENV)
     if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+        return False
+    normalized = value.strip().lower()
+    if not normalized:
+        return False
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{IMAGE_INPUT_ENABLED_ENV} must be a boolean")
 
 
-def _allowed_image_mime_types() -> set[str]:
-    configured = os.getenv(IMAGE_INPUT_ALLOWED_MIME_TYPES_ENV, "").strip()
+def _parse_image_input_allowed_mime_types(env: Mapping[str, str]) -> frozenset[str]:
+    configured = env.get(IMAGE_INPUT_ALLOWED_MIME_TYPES_ENV, "").strip()
     if not configured:
         return DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES
-    return {item.strip().lower() for item in configured.split(",") if item.strip()}
+    return frozenset(item.strip().lower() for item in configured.split(",") if item.strip())
 
 
-def _max_image_input_bytes() -> int:
-    configured = os.getenv(IMAGE_INPUT_MAX_BYTES_ENV, "").strip()
+def _parse_image_input_max_bytes(env: Mapping[str, str]) -> int:
+    configured = env.get(IMAGE_INPUT_MAX_BYTES_ENV, "").strip()
     if not configured:
         return DEFAULT_IMAGE_INPUT_MAX_BYTES
     try:
-        return int(configured)
-    except ValueError:
-        return DEFAULT_IMAGE_INPUT_MAX_BYTES
+        value = int(configured)
+    except ValueError as exc:
+        raise RuntimeError(f"{IMAGE_INPUT_MAX_BYTES_ENV} must be a positive integer") from exc
+    if value < 1:
+        raise RuntimeError(f"{IMAGE_INPUT_MAX_BYTES_ENV} must be a positive integer")
+    return value
 
 
-def _validate_and_normalize_message_request(request: AddMessageRequest) -> AddMessageRequest:
+def _validate_and_normalize_message_request(
+    request: AddMessageRequest, settings: ImageInputSettings
+) -> AddMessageRequest:
     if not request.parts:
         if not request.content:
             raise HTTPException(status_code=400, detail="message content is required")
         return request
     has_image = any(part.type == "image" for part in request.parts)
-    if has_image and not _env_bool(IMAGE_INPUT_ENABLED_ENV):
+    if has_image and not settings.enabled:
         raise HTTPException(status_code=400, detail="image input is disabled")
-    allowed_mime_types = _allowed_image_mime_types()
-    max_bytes = _max_image_input_bytes()
     for part in request.parts:
         if part.type != "image":
             continue
         mime_type = part.mime_type.lower()
-        if mime_type not in allowed_mime_types:
+        if mime_type not in settings.allowed_mime_types:
             raise HTTPException(
                 status_code=400, detail=f"unsupported image MIME type: {part.mime_type}"
             )
@@ -143,7 +176,7 @@ def _validate_and_normalize_message_request(request: AddMessageRequest) -> AddMe
                 decoded = base64.b64decode(part.data, validate=True)
             except (binascii.Error, ValueError) as exc:
                 raise HTTPException(status_code=400, detail="image data must be base64") from exc
-            if len(decoded) > max_bytes:
+            if len(decoded) > settings.max_bytes:
                 raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
     if request.content:
         return request
@@ -334,6 +367,7 @@ def create_app(
     app.state.execution_resolver = execution_resolver
     app.state.quality_enhancer = QualityEnhancer()
     runtime_settings = runtime_settings_from_env()
+    app.state.image_input_settings = image_input_settings_from_env()
     app.state.runtime_settings = runtime_settings
     app.state.runtime = AgentRuntime(
         store=app.state.store,
@@ -571,7 +605,9 @@ def create_app(
             store=app_request.app.state.store,
             thread_id=thread_id,
         )
-        request = _validate_and_normalize_message_request(request)
+        request = _validate_and_normalize_message_request(
+            request, app_request.app.state.image_input_settings
+        )
         return app_request.app.state.store.append_message(
             principal.tenant_id,
             Message(
