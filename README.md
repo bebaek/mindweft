@@ -220,13 +220,14 @@ uv run ruff format .
 uv run basedpyright
 ```
 
-To use the tracked pre-push hook, run once per clone:
+To use the tracked pre-commit and pre-push hooks, run once per clone:
 
 ```bash
 ./scripts/install-git-hooks.sh
 ```
 
-The hook runs `MINIGENT_RUN_E2E_TESTS=true uv run pytest` before each push.
+The pre-commit hook runs formatting, lint, and type checks. The pre-push hook runs
+`MINIGENT_RUN_E2E_TESTS=true uv run pytest` before each push.
 
 ### Repository rules
 
