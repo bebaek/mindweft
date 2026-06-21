@@ -87,6 +87,10 @@ The `minigent` CLI also accepts `--env-file` for client-side commands:
 uv run minigent --env-file ~/.config/minigent/client.env config doctor
 ```
 
+For isolated tests or subprocesses that must ignore cwd-local default files while still
+honoring explicit config paths, set `MINIGENT_CONFIG_DISCOVERY=disabled` or call the config
+loader with default discovery disabled.
+
 Precedence is:
 
 ```text

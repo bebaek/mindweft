@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from app.config import load_environment
-from app.unified_config import apply_unified_config_to_env, load_unified_config_env
+from app.unified_config import (
+    apply_unified_config_to_env,
+    load_unified_config_env,
+    resolve_unified_config,
+)
 
 
 def test_unified_config_maps_common_desktop_settings(tmp_path: Path, monkeypatch) -> None:
@@ -180,6 +184,92 @@ model = "from-toml"
     assert os.environ["MINIGENT_LLM_PROVIDER"] == "mock"
     assert os.environ["MINIGENT_LLM_MODEL"] == "from-toml"
     assert os.environ["MINIGENT_THREAD_DB_PATH"] == "from-custom-dotenv.db"
+
+
+def test_load_environment_can_disable_default_config_discovery(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
+    monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
+    monkeypatch.delenv("MINIGENT_THREAD_DB_PATH", raising=False)
+    (tmp_path / "minigent.toml").write_text(
+        """
+[llm]
+provider = "openrouter"
+model = "from-toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text("MINIGENT_THREAD_DB_PATH=from-dotenv.db\n", encoding="utf-8")
+
+    load_environment(discover_default_files=False)
+
+    assert "MINIGENT_LLM_PROVIDER" not in os.environ
+    assert "MINIGENT_LLM_MODEL" not in os.environ
+    assert "MINIGENT_THREAD_DB_PATH" not in os.environ
+
+
+def test_resolve_unified_config_honors_explicit_files_when_default_discovery_disabled(
+    tmp_path: Path,
+) -> None:
+    default_config = tmp_path / "minigent.toml"
+    default_config.write_text(
+        """
+[llm]
+provider = "openrouter"
+model = "default"
+""".strip(),
+        encoding="utf-8",
+    )
+    explicit_config = tmp_path / "explicit.toml"
+    explicit_config.write_text(
+        """
+[llm]
+provider = "mock"
+""".strip(),
+        encoding="utf-8",
+    )
+    explicit_dotenv = tmp_path / "explicit.env"
+    explicit_dotenv.write_text("MINIGENT_THREAD_DB_PATH=explicit.db\n", encoding="utf-8")
+
+    resolved = resolve_unified_config(
+        base_dir=tmp_path,
+        env={
+            "MINIGENT_CONFIG_FILE": str(explicit_config),
+            "MINIGENT_DOTENV_FILE": str(explicit_dotenv),
+        },
+        discover_default_files=False,
+    )
+
+    assert resolved.config_path == explicit_config
+    assert resolved.dotenv_path == explicit_dotenv
+    assert resolved.env["MINIGENT_LLM_PROVIDER"] == "mock"
+    assert resolved.env["MINIGENT_THREAD_DB_PATH"] == "explicit.db"
+    assert resolved.env.get("MINIGENT_LLM_MODEL") != "default"
+
+
+def test_resolve_unified_config_env_can_disable_default_discovery(tmp_path: Path) -> None:
+    (tmp_path / "minigent.toml").write_text(
+        """
+[llm]
+provider = "openrouter"
+model = "default"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    resolved = resolve_unified_config(
+        base_dir=tmp_path,
+        env={"MINIGENT_CONFIG_DISCOVERY": "disabled"},
+    )
+
+    assert resolved.config_path is None
+    assert resolved.dotenv_path is None
+    assert resolved.env == {}
 
 
 def test_coding_runner_env_applies_minigent_toml_then_env_file_override(
