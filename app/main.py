@@ -17,8 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.admin_api import (
-    admin_encryption_key_from_env,
-    admin_store_path_from_env,
+    admin_store_settings_from_env,
     build_admin_router,
 )
 from app.admin_store import SQLiteTenantConfigStore
@@ -312,9 +311,11 @@ def create_app(
     app.state.mcp_manager = mcp_manager
     app.state.mcp_broker_sessions = MCPBrokerSessionStore()
     app.state.oauth_flows = OAuthFlowStore()
-    admin_encryption_key = admin_encryption_key_from_env()
+    admin_store_settings = admin_store_settings_from_env()
+    app.state.admin_store_settings = admin_store_settings
+    admin_encryption_key = admin_store_settings.encryption_key
     if admin_store is None:
-        admin_db_path = admin_store_path_from_env()
+        admin_db_path = admin_store_settings.db_path
         if admin_db_path is not None:
             admin_store = SQLiteTenantConfigStore(
                 admin_db_path,
@@ -337,7 +338,7 @@ def create_app(
                         "MINIGENT_ADMIN_DB_PATH or admin_store is required when "
                         "MINIGENT_TENANT_CONFIG_SOURCE=store"
                     )
-                if admin_encryption_key is None and admin_store_path_from_env() is not None:
+                if admin_encryption_key is None and admin_store_settings.db_path is not None:
                     raise RuntimeError(
                         "MINIGENT_ADMIN_ENCRYPTION_KEY is required when "
                         "MINIGENT_TENANT_CONFIG_SOURCE=store"
@@ -352,7 +353,7 @@ def create_app(
                         "MINIGENT_ADMIN_DB_PATH or admin_store is required when "
                         "MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults"
                     )
-                if admin_encryption_key is None and admin_store_path_from_env() is not None:
+                if admin_encryption_key is None and admin_store_settings.db_path is not None:
                     raise RuntimeError(
                         "MINIGENT_ADMIN_ENCRYPTION_KEY is required when "
                         "MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults"

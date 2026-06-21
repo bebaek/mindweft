@@ -16,6 +16,12 @@ from jwt.algorithms import RSAAlgorithm
 
 from app import auth as auth_module
 from app import store as store_module
+from app.admin_api import (
+    AdminStoreSettings,
+    admin_encryption_key_from_env,
+    admin_store_path_from_env,
+    admin_store_settings_from_env,
+)
 from app.agent_backends import _sanitize_peer_task_event
 from app.execution import (
     InMemoryTenantExecutionResolver,
@@ -63,6 +69,49 @@ ADMIN_HEADERS = {
 
 TOKEN_HEADERS = {"Authorization": "Bearer token-1"}
 OTHER_TOKEN_HEADERS = {"Authorization": "Bearer token-2"}
+
+
+def test_admin_store_settings_from_env_mapping_uses_defaults() -> None:
+    assert AdminStoreSettings.from_env({}) == AdminStoreSettings(
+        db_path=None,
+        encryption_key=None,
+    )
+
+
+def test_admin_store_settings_from_env_mapping_parses_values() -> None:
+    assert AdminStoreSettings.from_env(
+        {
+            "MINIGENT_ADMIN_DB_PATH": " .data/admin.db ",
+            "MINIGENT_ADMIN_ENCRYPTION_KEY": " secret-key ",
+        }
+    ) == AdminStoreSettings(
+        db_path=".data/admin.db",
+        encryption_key="secret-key",
+    )
+
+
+def test_admin_store_settings_from_env_mapping_treats_blank_as_none() -> None:
+    assert AdminStoreSettings.from_env(
+        {
+            "MINIGENT_ADMIN_DB_PATH": " ",
+            "MINIGENT_ADMIN_ENCRYPTION_KEY": "\t",
+        }
+    ) == AdminStoreSettings(
+        db_path=None,
+        encryption_key=None,
+    )
+
+
+def test_admin_store_settings_from_env_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_ADMIN_DB_PATH", ".data/admin.db")
+    monkeypatch.setenv("MINIGENT_ADMIN_ENCRYPTION_KEY", "secret-key")
+
+    assert admin_store_settings_from_env() == AdminStoreSettings(
+        db_path=".data/admin.db",
+        encryption_key="secret-key",
+    )
+    assert admin_store_path_from_env() == ".data/admin.db"
+    assert admin_encryption_key_from_env() == "secret-key"
 
 
 def _jwt_claims(

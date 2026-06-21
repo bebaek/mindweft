@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -40,6 +42,24 @@ TENANT_SLUG_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 DOMAIN_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
+
+
+@dataclass(frozen=True)
+class AdminStoreSettings:
+    db_path: str | None = None
+    encryption_key: str | None = None
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> AdminStoreSettings:
+        lookup = os.environ if env is None else env
+        return cls(
+            db_path=_optional_str_env(lookup, ADMIN_DB_PATH_ENV),
+            encryption_key=_optional_str_env(lookup, ADMIN_ENCRYPTION_KEY_ENV),
+        )
+
+
+def admin_store_settings_from_env() -> AdminStoreSettings:
+    return AdminStoreSettings.from_env()
 
 
 class AdminTenantResponse(BaseModel):
@@ -1253,15 +1273,15 @@ def build_admin_router() -> APIRouter:
 
 
 def admin_store_path_from_env() -> str | None:
-    value = os.getenv(ADMIN_DB_PATH_ENV)
-    if value is None:
-        return None
-    stripped = value.strip()
-    return stripped or None
+    return AdminStoreSettings.from_env().db_path
 
 
 def admin_encryption_key_from_env() -> str | None:
-    value = os.getenv(ADMIN_ENCRYPTION_KEY_ENV)
+    return AdminStoreSettings.from_env().encryption_key
+
+
+def _optional_str_env(env: Mapping[str, str], name: str) -> str | None:
+    value = env.get(name)
     if value is None:
         return None
     stripped = value.strip()
