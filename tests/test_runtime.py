@@ -29,8 +29,10 @@ from app.peer_agents import PeerAgentConfig, PeerAgentRegistry
 from app.quality import QualityEnhancer
 from app.runtime import (
     DEFAULT_MAX_ITERATIONS,
+    DEFAULT_TOOL_TIMEOUT_SECONDS,
     RUNTIME_SYSTEM_PROMPT,
     AgentRuntime,
+    RuntimeSettings,
     max_iterations_from_env,
 )
 from app.store import InMemoryThreadStore
@@ -1032,6 +1034,47 @@ def test_runtime_marks_thread_error_when_max_iterations_exceeded() -> None:
         raise AssertionError("Expected HTTPException")
 
     assert store._threads[thread.thread_id].status == ThreadStatus.ERROR
+
+
+def test_runtime_settings_from_env_mapping_uses_defaults() -> None:
+    settings = RuntimeSettings.from_env({})
+
+    assert settings == RuntimeSettings(
+        max_iterations=DEFAULT_MAX_ITERATIONS,
+        tool_timeout_seconds=DEFAULT_TOOL_TIMEOUT_SECONDS,
+        context_compaction_enabled=False,
+    )
+
+
+def test_runtime_settings_from_env_mapping_parses_values() -> None:
+    settings = RuntimeSettings.from_env(
+        {
+            "MINIGENT_MAX_ITERATIONS": "24",
+            "MINIGENT_TOOL_TIMEOUT_SECONDS": "2.5",
+            "MINIGENT_CONTEXT_COMPACTION_ENABLED": "true",
+        }
+    )
+
+    assert settings == RuntimeSettings(
+        max_iterations=24,
+        tool_timeout_seconds=2.5,
+        context_compaction_enabled=True,
+    )
+
+
+def test_runtime_settings_from_env_mapping_rejects_invalid_values() -> None:
+    try:
+        RuntimeSettings.from_env(
+            {
+                "MINIGENT_MAX_ITERATIONS": "24",
+                "MINIGENT_TOOL_TIMEOUT_SECONDS": "0",
+                "MINIGENT_CONTEXT_COMPACTION_ENABLED": "true",
+            }
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "MINIGENT_TOOL_TIMEOUT_SECONDS must be a positive number"
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("Expected RuntimeError")
 
 
 def test_max_iterations_from_env_uses_practical_default(monkeypatch) -> None:

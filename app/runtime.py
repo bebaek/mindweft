@@ -6,7 +6,8 @@ import json
 import os
 import textwrap
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import HTTPException
@@ -53,8 +54,40 @@ CONTEXT_COMPACTION_ENABLED_ENV = "MINIGENT_CONTEXT_COMPACTION_ENABLED"
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
 
 
+@dataclass(frozen=True)
+class RuntimeSettings:
+    max_iterations: int = DEFAULT_MAX_ITERATIONS
+    tool_timeout_seconds: float = DEFAULT_TOOL_TIMEOUT_SECONDS
+    context_compaction_enabled: bool = False
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> RuntimeSettings:
+        lookup = os.environ if env is None else env
+        return cls(
+            max_iterations=_parse_max_iterations(lookup),
+            tool_timeout_seconds=_parse_tool_timeout_seconds(lookup),
+            context_compaction_enabled=_parse_context_compaction_enabled(lookup),
+        )
+
+
+def runtime_settings_from_env() -> RuntimeSettings:
+    return RuntimeSettings.from_env()
+
+
 def context_compaction_enabled_from_env() -> bool:
-    raw = os.getenv(CONTEXT_COMPACTION_ENABLED_ENV, "").strip().lower()
+    return RuntimeSettings.from_env().context_compaction_enabled
+
+
+def max_iterations_from_env() -> int:
+    return RuntimeSettings.from_env().max_iterations
+
+
+def tool_timeout_seconds_from_env() -> float:
+    return RuntimeSettings.from_env().tool_timeout_seconds
+
+
+def _parse_context_compaction_enabled(env: Mapping[str, str]) -> bool:
+    raw = env.get(CONTEXT_COMPACTION_ENABLED_ENV, "").strip().lower()
     if not raw:
         return False
     if raw in {"1", "true", "yes", "on"}:
@@ -64,8 +97,8 @@ def context_compaction_enabled_from_env() -> bool:
     raise RuntimeError(f"{CONTEXT_COMPACTION_ENABLED_ENV} must be a boolean")
 
 
-def max_iterations_from_env() -> int:
-    raw = os.getenv(MAX_ITERATIONS_ENV, "").strip()
+def _parse_max_iterations(env: Mapping[str, str]) -> int:
+    raw = env.get(MAX_ITERATIONS_ENV, "").strip()
     if not raw:
         return DEFAULT_MAX_ITERATIONS
     try:
@@ -77,8 +110,8 @@ def max_iterations_from_env() -> int:
     return value
 
 
-def tool_timeout_seconds_from_env() -> float:
-    raw = os.getenv(TOOL_TIMEOUT_SECONDS_ENV, "").strip()
+def _parse_tool_timeout_seconds(env: Mapping[str, str]) -> float:
+    raw = env.get(TOOL_TIMEOUT_SECONDS_ENV, "").strip()
     if not raw:
         return DEFAULT_TOOL_TIMEOUT_SECONDS
     try:

@@ -69,11 +69,9 @@ from app.quality import QualityEnhancer
 from app.redaction import install_log_redaction
 from app.runtime import (
     AgentRuntime,
-    context_compaction_enabled_from_env,
     estimate_thread_context_usage,
-    max_iterations_from_env,
     render_raw_thread_context,
-    tool_timeout_seconds_from_env,
+    runtime_settings_from_env,
 )
 from app.store import ThreadStore, build_thread_store_from_env
 from app.tenants import require_active_tenant_principal, require_tenant_context
@@ -335,13 +333,15 @@ def create_app(
                 raise RuntimeError(f"Unhandled tenant config source '{config_source}'")
     app.state.execution_resolver = execution_resolver
     app.state.quality_enhancer = QualityEnhancer()
+    runtime_settings = runtime_settings_from_env()
+    app.state.runtime_settings = runtime_settings
     app.state.runtime = AgentRuntime(
         store=app.state.store,
         execution_resolver=execution_resolver,
-        max_iterations=max_iterations_from_env(),
-        tool_timeout_seconds=tool_timeout_seconds_from_env(),
+        max_iterations=runtime_settings.max_iterations,
+        tool_timeout_seconds=runtime_settings.tool_timeout_seconds,
         quality_enhancer=app.state.quality_enhancer,
-        context_compaction_enabled=context_compaction_enabled_from_env(),
+        context_compaction_enabled=runtime_settings.context_compaction_enabled,
     )
     app.state.peer_agent_registry = peer_agent_registry or build_peer_agent_registry_from_env()
     app.state.active_run_tasks = {}
