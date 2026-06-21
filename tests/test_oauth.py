@@ -20,7 +20,11 @@ from app.oauth import (
     GenericOAuthConfig,
     GenericOAuthProvider,
     OAuthCredentials,
+    OAuthSettings,
+    OAuthStoreSettings,
     extract_jwt_claim,
+    generic_oauth_config_from_env,
+    oauth_store_path_from_env,
 )
 from app.tools import build_local_tool_registry
 
@@ -40,6 +44,73 @@ def _config(tmp_path: Path) -> GenericOAuthConfig:
         auth_params={"prompt": "login"},
         account_id_jwt_claim="auth.account_id",
     )
+
+
+def _oauth_env(tmp_path: Path) -> dict[str, str]:
+    return {
+        "MINIGENT_OAUTH_STORE_PATH": str(tmp_path / "oauth.json"),
+        "MINIGENT_OAUTH_PROVIDER_ID": "test-oauth",
+        "MINIGENT_OAUTH_CLIENT_ID": "client-id",
+        "MINIGENT_OAUTH_AUTHORIZE_URL": "https://auth.example/authorize",
+        "MINIGENT_OAUTH_TOKEN_URL": "https://auth.example/token",
+        "MINIGENT_OAUTH_REDIRECT_URI": "http://127.0.0.1:8000/oauth/generic/callback",
+        "MINIGENT_OAUTH_SCOPE": "openid offline_access",
+        "MINIGENT_OAUTH_AUTH_PARAMS": '{"prompt":"login"}',
+        "MINIGENT_OAUTH_ACCOUNT_ID_JWT_CLAIM": "auth.account_id",
+    }
+
+
+def test_oauth_settings_from_env_mapping_parses_values(tmp_path: Path) -> None:
+    settings = OAuthSettings.from_env(_oauth_env(tmp_path))
+
+    assert settings == OAuthSettings(
+        store=OAuthStoreSettings(path=tmp_path / "oauth.json"),
+        provider=_config(tmp_path),
+    )
+
+
+def test_generic_oauth_config_from_env_mapping_allows_missing_store_path(tmp_path: Path) -> None:
+    env = _oauth_env(tmp_path)
+    env.pop("MINIGENT_OAUTH_STORE_PATH")
+
+    assert GenericOAuthConfig.from_env(env) == _config(tmp_path)
+
+
+def test_oauth_store_path_from_env_expands_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_OAUTH_STORE_PATH", "~/minigent-oauth.json")
+
+    assert oauth_store_path_from_env() == Path("~/minigent-oauth.json").expanduser()
+
+
+def test_generic_oauth_config_from_env_rejects_missing_required_value() -> None:
+    env = _oauth_env(Path("/tmp"))
+    env.pop("MINIGENT_OAUTH_CLIENT_ID")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        GenericOAuthConfig.from_env(env)
+
+    assert str(exc_info.value) == "MINIGENT_OAUTH_CLIENT_ID is required"
+
+
+def test_generic_oauth_config_from_env_rejects_invalid_auth_params() -> None:
+    env = _oauth_env(Path("/tmp"))
+    env["MINIGENT_OAUTH_AUTH_PARAMS"] = '{"prompt": true}'
+
+    with pytest.raises(RuntimeError) as exc_info:
+        GenericOAuthConfig.from_env(env)
+
+    assert (
+        str(exc_info.value) == "MINIGENT_OAUTH_AUTH_PARAMS must be a JSON object of string values"
+    )
+
+
+def test_generic_oauth_config_from_env_reads_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for key, value in _oauth_env(tmp_path).items():
+        monkeypatch.setenv(key, value)
+
+    assert generic_oauth_config_from_env() == _config(tmp_path)
 
 
 def test_generic_oauth_extracts_jwt_claim() -> None:

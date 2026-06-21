@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,44 @@ class GenericOAuthConfig:
     scope: str
     auth_params: dict[str, str]
     account_id_jwt_claim: str | None = None
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> GenericOAuthConfig:
+        lookup = os.environ if env is None else env
+        return cls(
+            provider_id=_required_env(lookup, OAUTH_PROVIDER_ID_ENV),
+            client_id=_required_env(lookup, OAUTH_CLIENT_ID_ENV),
+            authorize_url=_required_env(lookup, OAUTH_AUTHORIZE_URL_ENV),
+            token_url=_required_env(lookup, OAUTH_TOKEN_URL_ENV),
+            redirect_uri=_required_env(lookup, OAUTH_REDIRECT_URI_ENV),
+            scope=_required_env(lookup, OAUTH_SCOPE_ENV),
+            auth_params=_json_string_map_env(lookup, OAUTH_AUTH_PARAMS_ENV),
+            account_id_jwt_claim=lookup.get(OAUTH_ACCOUNT_ID_JWT_CLAIM_ENV, "").strip() or None,
+        )
+
+
+@dataclass(frozen=True)
+class OAuthStoreSettings:
+    path: Path
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> OAuthStoreSettings:
+        lookup = os.environ if env is None else env
+        return cls(path=Path(_required_env(lookup, OAUTH_STORE_PATH_ENV)).expanduser())
+
+
+@dataclass(frozen=True)
+class OAuthSettings:
+    store: OAuthStoreSettings
+    provider: GenericOAuthConfig
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> OAuthSettings:
+        lookup = os.environ if env is None else env
+        return cls(
+            store=OAuthStoreSettings.from_env(lookup),
+            provider=GenericOAuthConfig.from_env(lookup),
+        )
 
 
 class OAuthFlowStore:
@@ -293,32 +332,26 @@ def extract_jwt_claim(access_token: str, claim_path: str | None) -> str | None:
 
 
 def oauth_store_path_from_env() -> Path:
-    raw = _required_env(OAUTH_STORE_PATH_ENV)
-    return Path(raw).expanduser()
+    return OAuthStoreSettings.from_env().path
 
 
 def generic_oauth_config_from_env() -> GenericOAuthConfig:
-    return GenericOAuthConfig(
-        provider_id=_required_env(OAUTH_PROVIDER_ID_ENV),
-        client_id=_required_env(OAUTH_CLIENT_ID_ENV),
-        authorize_url=_required_env(OAUTH_AUTHORIZE_URL_ENV),
-        token_url=_required_env(OAUTH_TOKEN_URL_ENV),
-        redirect_uri=_required_env(OAUTH_REDIRECT_URI_ENV),
-        scope=_required_env(OAUTH_SCOPE_ENV),
-        auth_params=_json_string_map_env(OAUTH_AUTH_PARAMS_ENV),
-        account_id_jwt_claim=os.getenv(OAUTH_ACCOUNT_ID_JWT_CLAIM_ENV, "").strip() or None,
-    )
+    return GenericOAuthConfig.from_env()
 
 
-def _required_env(name: str) -> str:
-    value = os.getenv(name, "").strip()
+def oauth_settings_from_env() -> OAuthSettings:
+    return OAuthSettings.from_env()
+
+
+def _required_env(env: Mapping[str, str], name: str) -> str:
+    value = env.get(name, "").strip()
     if not value:
         raise RuntimeError(f"{name} is required")
     return value
 
 
-def _json_string_map_env(name: str) -> dict[str, str]:
-    raw = os.getenv(name, "").strip()
+def _json_string_map_env(env: Mapping[str, str], name: str) -> dict[str, str]:
+    raw = env.get(name, "").strip()
     if not raw:
         return {}
     payload = json.loads(raw)
