@@ -6,8 +6,28 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from app.mcp import MCPHTTPClient, MCPPathPolicy, MCPServerConfig, load_mcp_server_configs_from_env
+from app.mcp import (
+    MCPHTTPClient,
+    MCPPathPolicy,
+    MCPServerConfig,
+    MCPSettings,
+    load_mcp_server_configs_from_env,
+    mcp_settings_from_env,
+)
 from app.redaction import RedactingLogFilter, install_log_redaction
+
+
+def test_mcp_settings_from_env_mapping_defaults_to_empty() -> None:
+    assert MCPSettings.from_env({}) == MCPSettings(servers=[])
+
+
+def test_mcp_settings_from_env_reads_environment(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_MCP_SERVERS",
+        json.dumps([{"name": "demo", "url": "https://example.com/mcp"}]),
+    )
+
+    assert mcp_settings_from_env().servers[0].name == "demo"
 
 
 def test_load_mcp_server_configs_from_env(monkeypatch) -> None:

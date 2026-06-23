@@ -5,11 +5,31 @@ from fastapi import FastAPI
 
 from app.observability import (
     JsonLogFormatter,
+    LoggingSettings,
     SuccessfulHealthcheckAccessFilter,
+    TracingSettings,
     configure_tracing,
     load_logging_settings_from_env,
     load_tracing_settings_from_env,
 )
+
+
+def test_logging_settings_from_env_mapping_parses_values() -> None:
+    settings = LoggingSettings.from_env(
+        {
+            "MINIGENT_LOG_LEVEL": "debug",
+            "MINIGENT_LOG_FORMAT": "json",
+            "MINIGENT_LOG_JSON_ROOT_KEY": "log",
+            "MINIGENT_LOG_JSON_FIELDS": '{"service":"minigent"}',
+            "MINIGENT_LOG_JSON_INCLUDE_TRACE_CONTEXT": "false",
+        }
+    )
+
+    assert settings.level == "DEBUG"
+    assert settings.output_format == "json"
+    assert settings.json_root_key == "log"
+    assert settings.json_static_fields == {"service": "minigent"}
+    assert settings.json_include_trace_context is False
 
 
 def test_load_logging_settings_from_env(monkeypatch) -> None:
@@ -124,6 +144,26 @@ def test_successful_healthcheck_access_filter_keeps_regular_requests() -> None:
     )
 
     assert SuccessfulHealthcheckAccessFilter().filter(record) is True
+
+
+def test_tracing_settings_from_env_mapping_parses_values() -> None:
+    settings = TracingSettings.from_env(
+        {
+            "MINIGENT_OTEL_ENABLED": "true",
+            "MINIGENT_OTEL_SERVICE_NAME": "svc",
+            "MINIGENT_OTEL_EXPORTER": "otlp",
+            "MINIGENT_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example/v1/traces",
+            "MINIGENT_OTEL_EXPORTER_OTLP_HEADERS": '{"authorization":"Bearer token"}',
+            "MINIGENT_OTEL_EXPORTER_OTLP_TIMEOUT_SECONDS": "3.5",
+        }
+    )
+
+    assert settings.enabled is True
+    assert settings.service_name == "svc"
+    assert settings.exporter == "otlp"
+    assert settings.otlp_endpoint == "https://otel.example/v1/traces"
+    assert settings.otlp_headers == {"authorization": "Bearer token"}
+    assert settings.otlp_timeout_seconds == 3.5
 
 
 def test_load_tracing_settings_from_env(monkeypatch) -> None:

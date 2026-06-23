@@ -4,7 +4,7 @@ import json
 import logging
 import logging.config
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -45,6 +45,25 @@ class LoggingSettings:
     json_static_fields: dict[str, Any]
     json_include_trace_context: bool
 
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> LoggingSettings:
+        lookup = os.environ if env is None else env
+        return cls(
+            level=lookup.get("MINIGENT_LOG_LEVEL", "INFO").upper(),
+            output_format=lookup.get("MINIGENT_LOG_FORMAT", "plaintext").lower(),
+            plaintext_format=lookup.get("MINIGENT_LOG_PLAINTEXT_FORMAT", _DEFAULT_PLAINTEXT_FORMAT),
+            json_root_key=_optional_env(lookup, "MINIGENT_LOG_JSON_ROOT_KEY"),
+            json_message_key=lookup.get("MINIGENT_LOG_JSON_MESSAGE_KEY", "message"),
+            json_level_key=lookup.get("MINIGENT_LOG_JSON_LEVEL_KEY", "level"),
+            json_logger_key=lookup.get("MINIGENT_LOG_JSON_LOGGER_KEY", "logger"),
+            json_timestamp_key=lookup.get("MINIGENT_LOG_JSON_TIMESTAMP_KEY", "timestamp"),
+            json_exception_key=lookup.get("MINIGENT_LOG_JSON_EXCEPTION_KEY", "exception"),
+            json_static_fields=_load_json_object_env(lookup, "MINIGENT_LOG_JSON_FIELDS"),
+            json_include_trace_context=_env_flag(
+                lookup, "MINIGENT_LOG_JSON_INCLUDE_TRACE_CONTEXT", default=True
+            ),
+        )
+
 
 @dataclass(frozen=True)
 class TracingSettings:
@@ -54,6 +73,25 @@ class TracingSettings:
     otlp_endpoint: str | None
     otlp_headers: dict[str, str]
     otlp_timeout_seconds: float
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> TracingSettings:
+        lookup = os.environ if env is None else env
+        return cls(
+            enabled=_env_flag(lookup, "MINIGENT_OTEL_ENABLED", default=False),
+            service_name=lookup.get("MINIGENT_OTEL_SERVICE_NAME", "minigent"),
+            exporter=lookup.get("MINIGENT_OTEL_EXPORTER", "console").lower(),
+            otlp_endpoint=lookup.get("MINIGENT_OTEL_EXPORTER_OTLP_ENDPOINT"),
+            otlp_headers={
+                key: str(value)
+                for key, value in _load_json_object_env(
+                    lookup, "MINIGENT_OTEL_EXPORTER_OTLP_HEADERS"
+                ).items()
+            },
+            otlp_timeout_seconds=float(
+                lookup.get("MINIGENT_OTEL_EXPORTER_OTLP_TIMEOUT_SECONDS", "10")
+            ),
+        )
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -181,35 +219,11 @@ def configure_tracing(app: FastAPI) -> None:
 
 
 def load_logging_settings_from_env() -> LoggingSettings:
-    return LoggingSettings(
-        level=os.getenv("MINIGENT_LOG_LEVEL", "INFO").upper(),
-        output_format=os.getenv("MINIGENT_LOG_FORMAT", "plaintext").lower(),
-        plaintext_format=os.getenv("MINIGENT_LOG_PLAINTEXT_FORMAT", _DEFAULT_PLAINTEXT_FORMAT),
-        json_root_key=_optional_env("MINIGENT_LOG_JSON_ROOT_KEY"),
-        json_message_key=os.getenv("MINIGENT_LOG_JSON_MESSAGE_KEY", "message"),
-        json_level_key=os.getenv("MINIGENT_LOG_JSON_LEVEL_KEY", "level"),
-        json_logger_key=os.getenv("MINIGENT_LOG_JSON_LOGGER_KEY", "logger"),
-        json_timestamp_key=os.getenv("MINIGENT_LOG_JSON_TIMESTAMP_KEY", "timestamp"),
-        json_exception_key=os.getenv("MINIGENT_LOG_JSON_EXCEPTION_KEY", "exception"),
-        json_static_fields=_load_json_object_env("MINIGENT_LOG_JSON_FIELDS"),
-        json_include_trace_context=_env_flag(
-            "MINIGENT_LOG_JSON_INCLUDE_TRACE_CONTEXT", default=True
-        ),
-    )
+    return LoggingSettings.from_env()
 
 
 def load_tracing_settings_from_env() -> TracingSettings:
-    return TracingSettings(
-        enabled=_env_flag("MINIGENT_OTEL_ENABLED", default=False),
-        service_name=os.getenv("MINIGENT_OTEL_SERVICE_NAME", "minigent"),
-        exporter=os.getenv("MINIGENT_OTEL_EXPORTER", "console").lower(),
-        otlp_endpoint=os.getenv("MINIGENT_OTEL_EXPORTER_OTLP_ENDPOINT"),
-        otlp_headers={
-            key: str(value)
-            for key, value in _load_json_object_env("MINIGENT_OTEL_EXPORTER_OTLP_HEADERS").items()
-        },
-        otlp_timeout_seconds=float(os.getenv("MINIGENT_OTEL_EXPORTER_OTLP_TIMEOUT_SECONDS", "10")),
-    )
+    return TracingSettings.from_env()
 
 
 def _build_span_exporter(settings: TracingSettings) -> SpanExporter:
@@ -269,23 +283,23 @@ def _healthcheck_log_path(raw_path: object) -> str:
     return urlsplit(raw_path).path
 
 
-def _env_flag(name: str, *, default: bool) -> bool:
-    raw = os.getenv(name)
+def _env_flag(env: Mapping[str, str], name: str, *, default: bool) -> bool:
+    raw = env.get(name)
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _optional_env(name: str) -> str | None:
-    raw = os.getenv(name)
+def _optional_env(env: Mapping[str, str], name: str) -> str | None:
+    raw = env.get(name)
     if raw is None:
         return None
     value = raw.strip()
     return value or None
 
 
-def _load_json_object_env(name: str) -> dict[str, Any]:
-    raw = os.getenv(name, "").strip()
+def _load_json_object_env(env: Mapping[str, str], name: str) -> dict[str, Any]:
+    raw = env.get(name, "").strip()
     if not raw:
         return {}
     parsed = json.loads(raw)

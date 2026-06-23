@@ -8,9 +8,24 @@ from fastapi import HTTPException
 from app.peer_agents import (
     PEER_AGENTS_ENV,
     PeerAgentRegistry,
+    PeerAgentSettings,
     load_peer_agent_configs_from_env,
     parse_peer_agent_configs,
+    peer_agent_settings_from_env,
 )
+
+
+def test_peer_agent_settings_from_env_mapping_defaults_to_empty() -> None:
+    assert PeerAgentSettings.from_env({}) == PeerAgentSettings(agents=[])
+
+
+def test_peer_agent_settings_from_env_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        PEER_AGENTS_ENV,
+        json.dumps([{"name": "codex", "base_url": "http://127.0.0.1:8010"}]),
+    )
+
+    assert peer_agent_settings_from_env().agents[0].name == "codex"
 
 
 def test_parse_peer_agent_configs_accepts_valid_entries() -> None:

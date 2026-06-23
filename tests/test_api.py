@@ -22,7 +22,7 @@ from app.admin_api import (
     admin_store_path_from_env,
     admin_store_settings_from_env,
 )
-from app.agent_backends import _sanitize_peer_task_event
+from app.agent_backends import PeerBackendSettings, _sanitize_peer_task_event
 from app.execution import (
     InMemoryTenantExecutionResolver,
     build_execution_resolver_from_env,
@@ -69,6 +69,30 @@ ADMIN_HEADERS = {
 
 TOKEN_HEADERS = {"Authorization": "Bearer token-1"}
 OTHER_TOKEN_HEADERS = {"Authorization": "Bearer token-2"}
+
+
+def test_peer_backend_settings_from_env_mapping_uses_defaults() -> None:
+    settings = PeerBackendSettings.from_env({})
+
+    assert settings.mcp_broker_base_url == "http://127.0.0.1:8000"
+    assert settings.safe_tool_arg_fields == {
+        "read": ("path", "limit", "offset"),
+        "grep": ("pattern", "path", "glob", "limit"),
+        "find": ("pattern", "path", "limit"),
+        "ls": ("path", "limit"),
+    }
+
+
+def test_peer_backend_settings_from_env_mapping_parses_values() -> None:
+    settings = PeerBackendSettings.from_env(
+        {
+            "MINIGENT_MCP_BROKER_BASE_URL": "http://127.0.0.1:9000/",
+            "MINIGENT_PEER_TOOL_ARG_ALLOWLIST": '{"read":["path"]}',
+        }
+    )
+
+    assert settings.mcp_broker_base_url == "http://127.0.0.1:9000"
+    assert settings.safe_tool_arg_fields == {"read": ("path",)}
 
 
 def test_admin_store_settings_from_env_mapping_uses_defaults() -> None:

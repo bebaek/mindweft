@@ -6,6 +6,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import HTTPException
@@ -44,6 +45,27 @@ _DEFAULT_SAFE_PEER_TOOL_ARG_FIELDS: dict[str, tuple[str, ...]] = {
 _PEER_TOOL_ARG_ALLOW_ALL = "*"
 _PEER_TOOL_ARGUMENT_KEYS = {"arguments", "args", "input", "params"}
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class PeerBackendSettings:
+    mcp_broker_base_url: str = "http://127.0.0.1:8000"
+    safe_tool_arg_fields: dict[str, tuple[str, ...]] | None = None
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> PeerBackendSettings:
+        lookup = os.environ if env is None else env
+        base_url = lookup.get(MINIGENT_MCP_BROKER_BASE_URL_ENV, "http://127.0.0.1:8000").rstrip("/")
+        return cls(
+            mcp_broker_base_url=base_url,
+            safe_tool_arg_fields=_safe_peer_tool_arg_fields_from_raw(
+                lookup.get(PEER_TOOL_ARG_ALLOWLIST_ENV, "")
+            ),
+        )
+
+
+def peer_backend_settings_from_env() -> PeerBackendSettings:
+    return PeerBackendSettings.from_env()
 
 
 class AgentBackend(ABC):
@@ -288,7 +310,7 @@ class AgentBackendRouter(AgentBackend):
             tool_registry=tool_registry,
             ttl_seconds=ttl_seconds,
         )
-        base_url = os.getenv(MINIGENT_MCP_BROKER_BASE_URL_ENV, "http://127.0.0.1:8000").rstrip("/")
+        base_url = peer_backend_settings_from_env().mcp_broker_base_url
         return {
             MINIGENT_MCP_BROKER_URL_ENV: f"{base_url}/mcp/peer/{session.session_id}",
             MINIGENT_MCP_BROKER_TOKEN_ENV: session.token,
@@ -615,7 +637,11 @@ def _safe_peer_tool_args_summary(tool_name: str, event: dict[object, object]) ->
 
 
 def _safe_peer_tool_arg_fields() -> dict[str, tuple[str, ...]]:
-    raw = os.getenv(PEER_TOOL_ARG_ALLOWLIST_ENV, "").strip()
+    return peer_backend_settings_from_env().safe_tool_arg_fields or {}
+
+
+def _safe_peer_tool_arg_fields_from_raw(raw_value: str) -> dict[str, tuple[str, ...]]:
+    raw = raw_value.strip()
     if not raw:
         return _DEFAULT_SAFE_PEER_TOOL_ARG_FIELDS
     if raw.lower() in {"off", "none", "false", "0"}:

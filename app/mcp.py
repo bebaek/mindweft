@@ -4,6 +4,7 @@ import fnmatch
 import json
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,6 +22,17 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MCP_PROTOCOL_VERSION = "2025-11-25"
 DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS = 30.0
+MCP_SERVERS_ENV = "MINIGENT_MCP_SERVERS"
+
+
+@dataclass(frozen=True)
+class MCPSettings:
+    servers: list[MCPServerConfig] = field(default_factory=list)
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> MCPSettings:
+        lookup = os.environ if env is None else env
+        return cls(servers=_parse_mcp_server_configs(lookup.get(MCP_SERVERS_ENV, "")))
 
 
 @dataclass(frozen=True)
@@ -359,15 +371,23 @@ class MCPHTTPClient:
 
 
 def load_mcp_server_configs_from_env() -> list[MCPServerConfig]:
-    raw = os.getenv("MINIGENT_MCP_SERVERS", "").strip()
+    return MCPSettings.from_env().servers
+
+
+def mcp_settings_from_env() -> MCPSettings:
+    return MCPSettings.from_env()
+
+
+def _parse_mcp_server_configs(raw_value: str) -> list[MCPServerConfig]:
+    raw = raw_value.strip()
     if not raw:
         return []
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("MINIGENT_MCP_SERVERS must be valid JSON") from exc
+        raise RuntimeError(f"{MCP_SERVERS_ENV} must be valid JSON") from exc
     if not isinstance(parsed, list):
-        raise RuntimeError("MINIGENT_MCP_SERVERS must be a JSON array")
+        raise RuntimeError(f"{MCP_SERVERS_ENV} must be a JSON array")
 
     configs: list[MCPServerConfig] = []
     for entry in parsed:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,6 +47,16 @@ class PeerAgentConfig:
         if self.version is not None:
             payload["version"] = self.version
         return payload
+
+
+@dataclass(frozen=True)
+class PeerAgentSettings:
+    agents: list[PeerAgentConfig]
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> PeerAgentSettings:
+        lookup = os.environ if env is None else env
+        return cls(agents=_parse_peer_agent_configs_env_value(lookup.get(PEER_AGENTS_ENV, "")))
 
 
 @dataclass(frozen=True)
@@ -224,7 +235,15 @@ class PeerAgentRegistry:
 
 
 def load_peer_agent_configs_from_env() -> list[PeerAgentConfig]:
-    raw = os.getenv(PEER_AGENTS_ENV, "").strip()
+    return PeerAgentSettings.from_env().agents
+
+
+def peer_agent_settings_from_env() -> PeerAgentSettings:
+    return PeerAgentSettings.from_env()
+
+
+def _parse_peer_agent_configs_env_value(raw_value: str) -> list[PeerAgentConfig]:
+    raw = raw_value.strip()
     if not raw:
         return []
     try:

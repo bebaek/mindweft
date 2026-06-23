@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -14,6 +16,21 @@ from fastapi import HTTPException
 from app.models import AuditRecord, Message, Thread, ThreadContext, ThreadStatus, utc_now
 
 THREAD_DB_PATH_ENV = "MINIGENT_THREAD_DB_PATH"
+
+
+@dataclass(frozen=True)
+class ThreadStoreSettings:
+    db_path: str | None = None
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> ThreadStoreSettings:
+        lookup = os.environ if env is None else env
+        db_path = lookup.get(THREAD_DB_PATH_ENV, "").strip()
+        return cls(db_path=db_path or None)
+
+
+def thread_store_settings_from_env() -> ThreadStoreSettings:
+    return ThreadStoreSettings.from_env()
 
 
 class ThreadStore(Protocol):
@@ -877,9 +894,9 @@ class SQLiteThreadStore:
 
 
 def build_thread_store_from_env() -> ThreadStore:
-    db_path = os.getenv(THREAD_DB_PATH_ENV, "").strip()
-    if db_path:
-        return SQLiteThreadStore(db_path)
+    settings = thread_store_settings_from_env()
+    if settings.db_path is not None:
+        return SQLiteThreadStore(settings.db_path)
     return InMemoryThreadStore()
 
 
