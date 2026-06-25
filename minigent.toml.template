@@ -20,6 +20,10 @@ provider = "mock"
 # model = "anthropic/claude-sonnet-4.5"
 # api_key_env = "OPENROUTER_API_KEY"
 # base_url = "https://openrouter.ai/api/v1"
+# provider = "anthropic"
+# model = "claude-haiku-4-5"
+# api_key_env = "ANTHROPIC_API_KEY"
+# base_url = "https://api.anthropic.com/v1"
 
 [coding]
 enabled = true

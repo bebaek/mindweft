@@ -75,6 +75,29 @@ enabled = false
     assert env["MINIGENT_REMOTE_QUALITY_ENABLED"] == "false"
 
 
+def test_unified_config_maps_anthropic_provider(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MY_ANTHROPIC_KEY", "anthropic-secret")
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[llm]
+provider = "anthropic"
+model = "claude-test"
+base_url = "https://example.com/anthropic/v1"
+api_key_env = "MY_ANTHROPIC_KEY"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    env = load_unified_config_env(config_path)
+
+    assert env["MINIGENT_LLM_PROVIDER"] == "anthropic"
+    assert env["MINIGENT_LLM_MODEL"] == "claude-test"
+    assert env["ANTHROPIC_MODEL"] == "claude-test"
+    assert env["ANTHROPIC_BASE_URL"] == "https://example.com/anthropic/v1"
+    assert env["ANTHROPIC_API_KEY"] == "anthropic-secret"
+
+
 def test_unified_config_projects_coding_mcp_specs_into_tenant_config(
     tmp_path: Path,
 ) -> None:

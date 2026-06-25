@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 from app.admin_store import SQLiteTenantConfigStore
 from app.llm import (
+    AnthropicMessagesAdapter,
     GenericOAuthResponsesAdapter,
     GoogleGeminiAdapter,
     LLMAdapter,
@@ -1384,6 +1385,18 @@ def _build_llm_adapter(config: TenantLLMConfig) -> LLMAdapter:
             extra_headers=config.extra_headers,
             timeout=config.timeout,
         )
+    if config.provider == "anthropic":
+        if not config.api_key:
+            raise RuntimeError(f"Tenant LLM provider '{config.provider}' requires api_key")
+        if not config.model:
+            raise RuntimeError(f"Tenant LLM provider '{config.provider}' requires model")
+        return AnthropicMessagesAdapter(
+            base_url=config.base_url or "https://api.anthropic.com/v1",
+            api_key=config.api_key,
+            model=config.model,
+            extra_headers=config.extra_headers,
+            timeout=config.timeout,
+        )
     if config.provider in {"openai", "openrouter", "openai-compatible"}:
         if not config.api_key:
             raise RuntimeError(f"Tenant LLM provider '{config.provider}' requires api_key")
@@ -1405,6 +1418,8 @@ def _default_base_url_for_provider(provider: str) -> str:
         return "https://openrouter.ai/api/v1"
     if provider in {"google", "google-generative-ai", "gemini"}:
         return "https://generativelanguage.googleapis.com/v1beta"
+    if provider == "anthropic":
+        return "https://api.anthropic.com/v1"
     return "https://api.openai.com/v1"
 
 

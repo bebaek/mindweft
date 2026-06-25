@@ -28,10 +28,14 @@ LLM_PROMPT_CACHE_KEY_ENV = "MINIGENT_LLM_PROMPT_CACHE_KEY"
 LLM_REASONING_EFFORT_ENV = "MINIGENT_LLM_REASONING_EFFORT"
 LLM_REASONING_SUMMARY_ENV = "MINIGENT_LLM_REASONING_SUMMARY"
 LLM_MAX_TOOL_RESULT_CHARS_ENV = "MINIGENT_LLM_MAX_TOOL_RESULT_CHARS"
+ANTHROPIC_MAX_TOKENS_ENV = "ANTHROPIC_MAX_TOKENS"
+ANTHROPIC_VERSION_ENV = "ANTHROPIC_VERSION"
 RESPONSES_OUTPUT_ITEMS_METADATA_KEY = "generic_oauth_responses_output_items"
 GEMINI_THOUGHT_SIGNATURE_METADATA_KEY = "gemini_thought_signature"
 DEFAULT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS = 20000
 DEFAULT_LLM_MAX_TOOL_RESULT_CHARS = 200000
+DEFAULT_ANTHROPIC_MAX_TOKENS = 4096
+DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
 
 
 ProgressSink = Callable[[int], Awaitable[None]] | None
@@ -378,6 +382,93 @@ class GoogleGeminiAdapter(LLMAdapter):
         }
 
 
+class AnthropicMessagesAdapter(LLMAdapter):
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        base_url: str = "https://api.anthropic.com/v1",
+        extra_headers: dict[str, str] | None = None,
+        timeout: float = 30.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+        max_tokens: int = DEFAULT_ANTHROPIC_MAX_TOKENS,
+        anthropic_version: str = DEFAULT_ANTHROPIC_VERSION,
+    ) -> None:
+        self._api_key = api_key
+        self._model = model
+        self._base_url = base_url.rstrip("/")
+        self._extra_headers = extra_headers or {}
+        self._timeout = timeout
+        self._transport = transport
+        self._max_tokens = max_tokens
+        self._anthropic_version = anthropic_version
+
+    async def generate(
+        self,
+        messages: list[Message],
+        tools: list[ToolSpec],
+    ) -> LLMResponse:
+        tools = _stable_tool_order(tools)
+        tool_name_map = _build_provider_tool_name_map(tools)
+        system, anthropic_messages = _messages_to_anthropic_payload(messages, tool_name_map)
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": self._api_key,
+            "anthropic-version": self._anthropic_version,
+            **self._extra_headers,
+        }
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": self._max_tokens,
+            "messages": anthropic_messages,
+        }
+        if system:
+            payload["system"] = system
+        if tools:
+            payload["tools"] = [_tool_to_anthropic_payload(tool, tool_name_map) for tool in tools]
+        _debug_log_llm_request(
+            "anthropic",
+            payload,
+            model=self._model,
+            message_count=len(messages),
+            tool_count=len(tools),
+        )
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+            try:
+                response = await _post_json_with_progress(
+                    client,
+                    f"{self._base_url}/messages",
+                    payload,
+                    headers,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise _provider_http_exception(
+                    exc, provider="anthropic", model=self._model
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise _provider_request_exception(
+                    exc, provider="anthropic", model=self._model
+                ) from exc
+        _debug_log_raw_llm_response(
+            "anthropic",
+            response.text,
+            content_type=response.headers.get("content-type"),
+        )
+        return _parse_anthropic_response(response.json(), tool_name_map)
+
+    def describe(self) -> dict[str, Any]:
+        return {
+            "provider": "anthropic",
+            "model": self._model,
+            "base_url": self._base_url,
+            "headers": sorted(self._extra_headers.keys()),
+            "adapter": "AnthropicMessagesAdapter",
+            "max_tokens": self._max_tokens,
+        }
+
+
 def _provider_http_exception(
     exc: httpx.HTTPStatusError,
     *,
@@ -505,6 +596,7 @@ def _provider_display_name(provider: str) -> str:
         "azure-openai": "Azure OpenAI",
         "gemini": "Gemini",
         "generic-oauth": "Generic OAuth LLM",
+        "anthropic": "Anthropic",
         "openai": "OpenAI",
         "openai-compatible": "OpenAI-compatible provider",
         "openrouter": "OpenRouter",
@@ -878,6 +970,26 @@ def build_llm_adapter_from_env() -> LLMAdapter:
             base_url=base_url,
             extra_headers=extra_headers,
         )
+    if provider == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY is required when MINIGENT_LLM_PROVIDER=anthropic")
+        model = (
+            os.getenv("ANTHROPIC_MODEL") or os.getenv("MINIGENT_LLM_MODEL") or "claude-haiku-4-5"
+        )
+        base_url = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")
+        extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS")
+        max_tokens = _env_int(ANTHROPIC_MAX_TOKENS_ENV, DEFAULT_ANTHROPIC_MAX_TOKENS)
+        anthropic_version = os.getenv(ANTHROPIC_VERSION_ENV, DEFAULT_ANTHROPIC_VERSION)
+        logger.info("LLM config: provider=%s model=%s base_url=%s", provider, model, base_url)
+        return AnthropicMessagesAdapter(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            extra_headers=extra_headers,
+            max_tokens=max_tokens,
+            anthropic_version=anthropic_version,
+        )
 
     config = load_provider_config(provider)
     logger.info(
@@ -1160,6 +1272,156 @@ def _tool_to_payload(tool: ToolSpec, tool_name_map: dict[str, str]) -> dict[str,
             "parameters": _canonical_jsonish(tool.input_schema),
         },
     }
+
+
+def _tool_to_anthropic_payload(tool: ToolSpec, tool_name_map: dict[str, str]) -> dict[str, Any]:
+    return {
+        "name": tool_name_map[tool.name],
+        "description": tool.description,
+        "input_schema": _canonical_jsonish(tool.input_schema),
+    }
+
+
+def _messages_to_anthropic_payload(
+    messages: list[Message],
+    tool_name_map: dict[str, str],
+) -> tuple[str | None, list[dict[str, Any]]]:
+    system_parts: list[str] = []
+    anthropic_messages: list[dict[str, Any]] = []
+    for message in messages:
+        if message.role == MessageRole.SYSTEM:
+            if message.content:
+                system_parts.append(message.content)
+            continue
+        if message.role == MessageRole.TOOL:
+            anthropic_messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": message.tool_call_id or "",
+                            "content": message.content,
+                        }
+                    ],
+                }
+            )
+            continue
+        anthropic_messages.append(_message_to_anthropic_message(message, tool_name_map))
+    return "\n\n".join(system_parts) or None, anthropic_messages
+
+
+def _message_to_anthropic_message(
+    message: Message,
+    tool_name_map: dict[str, str],
+) -> dict[str, Any]:
+    role = "assistant" if message.role == MessageRole.ASSISTANT else "user"
+    content = _message_to_anthropic_content(message)
+    if message.role == MessageRole.ASSISTANT and message.tool_call_id and message.tool_name:
+        if message.content and not any(part.get("type") == "text" for part in content):
+            content.insert(0, {"type": "text", "text": message.content})
+        content.append(
+            {
+                "type": "tool_use",
+                "id": message.tool_call_id,
+                "name": tool_name_map.get(
+                    message.tool_name, _sanitize_tool_name(message.tool_name)
+                ),
+                "input": _canonical_jsonish(message.tool_arguments or {}),
+            }
+        )
+    return {"role": role, "content": content or [{"type": "text", "text": message.content}]}
+
+
+def _message_to_anthropic_content(message: Message) -> list[dict[str, Any]]:
+    if not message.parts or message.role != MessageRole.USER:
+        return [{"type": "text", "text": message.content}] if message.content else []
+    content: list[dict[str, Any]] = []
+    for part in message.parts:
+        if isinstance(part, TextPart):
+            if part.text:
+                content.append({"type": "text", "text": part.text})
+            continue
+        if isinstance(part, ImagePart):
+            image = _anthropic_image_block(part)
+            if image:
+                content.append(image)
+    return content or ([{"type": "text", "text": message.content}] if message.content else [])
+
+
+def _anthropic_image_block(part: ImagePart) -> dict[str, Any] | None:
+    if part.data:
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": part.mime_type,
+                "data": part.data,
+            },
+        }
+    if part.url:
+        return {
+            "type": "image",
+            "source": {
+                "type": "url",
+                "url": part.url,
+            },
+        }
+    return None
+
+
+def _parse_anthropic_response(
+    payload: dict[str, Any], tool_name_map: dict[str, str]
+) -> LLMResponse:
+    content = payload.get("content") or []
+    if not isinstance(content, list):
+        logger.error("Anthropic response has invalid content: %s", _truncate_json(payload))
+        raise HTTPException(status_code=502, detail="Anthropic provider returned invalid content")
+    reverse_tool_name_map = {value: key for key, value in tool_name_map.items()}
+    text_parts: list[str] = []
+    tool_calls: list[ToolCall] = []
+    for index, part in enumerate(content):
+        if not isinstance(part, dict):
+            continue
+        part_type = part.get("type")
+        if part_type == "text":
+            text = part.get("text")
+            if isinstance(text, str):
+                text_parts.append(text)
+            continue
+        if part_type == "tool_use":
+            raw_name = part.get("name")
+            if not isinstance(raw_name, str):
+                continue
+            raw_input = part.get("input") or {}
+            if not isinstance(raw_input, dict):
+                raise HTTPException(
+                    status_code=502, detail="Anthropic provider returned non-object tool arguments"
+                )
+            tool_calls.append(
+                ToolCall(
+                    id=part.get("id") or f"anthropic-tool-call-{index}",
+                    name=reverse_tool_name_map.get(raw_name, raw_name),
+                    arguments=raw_input,
+                )
+            )
+    usage = _normalize_llm_usage(payload.get("usage"))
+    metadata = _anthropic_response_metadata(payload)
+    if tool_calls:
+        return LLMResponse(tool_calls=tool_calls, usage=usage, metadata=metadata)
+    if text_parts:
+        return LLMResponse(content="".join(text_parts), usage=usage, metadata=metadata)
+    logger.error("Anthropic response missing text/tool content: %s", _truncate_json(payload))
+    raise HTTPException(status_code=502, detail="Anthropic provider returned no message content")
+
+
+def _anthropic_response_metadata(payload: dict[str, Any]) -> dict[str, Any] | None:
+    metadata: dict[str, Any] = {}
+    for key in ("id", "model", "role", "stop_reason", "stop_sequence", "type"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            metadata[key] = value
+    return metadata or None
 
 
 def _messages_to_gemini_payload(

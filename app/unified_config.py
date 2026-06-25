@@ -306,6 +306,8 @@ def _collect_llm_config(
         elif provider in {"google", "google-generative-ai", "gemini"}:
             env["GEMINI_MODEL"] = model
             env["GOOGLE_MODEL"] = model
+        elif provider == "anthropic":
+            env["ANTHROPIC_MODEL"] = model
     if "url" in section:
         env["MINIGENT_LLM_URL"] = _format_env_value(section["url"])
     if "base_url" in section:
@@ -316,6 +318,8 @@ def _collect_llm_config(
             env["OPENROUTER_BASE_URL"] = base_url
         elif provider in {"google", "google-generative-ai", "gemini"}:
             env["GOOGLE_BASE_URL"] = base_url
+        elif provider == "anthropic":
+            env["ANTHROPIC_BASE_URL"] = base_url
         else:
             env["MINIGENT_LLM_URL"] = base_url
     if "extra_headers" in section:
@@ -482,6 +486,8 @@ def _provider_api_key_env(provider: str) -> str | None:
         return "OPENROUTER_API_KEY"
     if provider in {"google", "google-generative-ai", "gemini"}:
         return "GEMINI_API_KEY"
+    if provider == "anthropic":
+        return "ANTHROPIC_API_KEY"
     if provider in {"generic-oauth"}:
         return None
     return None

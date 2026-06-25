@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.llm import (
+    AnthropicMessagesAdapter,
     GenericOAuthResponsesAdapter,
     GoogleGeminiAdapter,
     MockLLMAdapter,
@@ -58,6 +59,224 @@ def test_openai_compatible_adapter_returns_text_response() -> None:
 
     assert response.content == "hello from provider"
     assert response.tool_call is None
+
+
+def test_anthropic_adapter_returns_text_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://example.com/v1/messages"
+        assert request.headers["x-api-key"] == "test-key"
+        assert request.headers["anthropic-version"] == "2023-06-01"
+        payload = json.loads(request.read().decode())
+        assert payload["model"] == "claude-test"
+        assert payload["max_tokens"] == 123
+        assert payload["system"] == "be concise"
+        assert payload["messages"] == [
+            {"role": "user", "content": [{"type": "text", "text": "hello"}]}
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-test",
+                "content": [{"type": "text", "text": "hello from anthropic"}],
+                "usage": {"input_tokens": 7, "output_tokens": 3},
+                "stop_reason": "end_turn",
+            },
+        )
+
+    adapter = AnthropicMessagesAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="claude-test",
+        max_tokens=123,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(thread_id="thread", role=MessageRole.SYSTEM, content="be concise"),
+                Message(thread_id="thread", role=MessageRole.USER, content="hello"),
+            ],
+            [],
+        )
+    )
+
+    assert response.content == "hello from anthropic"
+    assert response.tool_call is None
+    assert response.usage == {
+        "prompt_tokens": 7,
+        "input_tokens": 7,
+        "completion_tokens": 3,
+        "output_tokens": 3,
+        "total_tokens": 10,
+    }
+    assert response.metadata["stop_reason"] == "end_turn"
+
+
+def test_anthropic_adapter_sends_image_parts() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        content = payload["messages"][0]["content"]
+        assert content == [
+            {"type": "text", "text": "describe it"},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "aGk=",
+                },
+            },
+        ]
+        return httpx.Response(
+            200,
+            json={"content": [{"type": "text", "text": "image reply"}]},
+        )
+
+    adapter = AnthropicMessagesAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="claude-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.USER,
+                    content="describe it",
+                    parts=[
+                        {"type": "text", "text": "describe it"},
+                        {
+                            "type": "image",
+                            "mime_type": "image/png",
+                            "data": "aGk=",
+                            "detail": "low",
+                        },
+                    ],
+                )
+            ],
+            [],
+        )
+    )
+
+    assert response.content == "image reply"
+
+
+def test_anthropic_adapter_returns_tool_call_and_replays_tool_result() -> None:
+    seen_payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        seen_payloads.append(payload)
+        return httpx.Response(
+            200,
+            json={
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_123",
+                        "name": "current_time",
+                        "input": {"timezone": "UTC"},
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 2},
+            },
+        )
+
+    adapter = AnthropicMessagesAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="claude-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(thread_id="thread", role=MessageRole.USER, content="what time is it?"),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name="current_time",
+                    tool_call_id="toolu_old",
+                    tool_arguments={},
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content='{"time":"now"}',
+                    tool_name="current_time",
+                    tool_call_id="toolu_old",
+                ),
+            ],
+            [
+                ToolSpec(
+                    name="current_time",
+                    description="Return the current time",
+                    input_schema={"type": "object", "properties": {}},
+                )
+            ],
+        )
+    )
+
+    assert seen_payloads[0]["tools"] == [
+        {
+            "name": "current_time",
+            "description": "Return the current time",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+    assert seen_payloads[0]["messages"][1]["content"] == [
+        {"type": "tool_use", "id": "toolu_old", "name": "current_time", "input": {}}
+    ]
+    assert seen_payloads[0]["messages"][2]["content"] == [
+        {"type": "tool_result", "tool_use_id": "toolu_old", "content": '{"time":"now"}'}
+    ]
+    assert response.tool_call is not None
+    assert response.tool_call.id == "toolu_123"
+    assert response.tool_call.name == "current_time"
+    assert response.tool_call.arguments == {"timezone": "UTC"}
+
+
+def test_anthropic_adapter_normalizes_rate_limit_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            headers={"Retry-After": "5"},
+            json={"error": {"type": "rate_limit_error", "message": "slow down"}},
+        )
+
+    adapter = AnthropicMessagesAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="claude-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            adapter.generate(
+                [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+                [],
+            )
+        )
+
+    exc = exc_info.value
+    assert exc.status_code == 429
+    assert exc.headers == {"Retry-After": "5"}
+    assert exc.detail == {
+        "type": "provider_rate_limited",
+        "message": "Anthropic rate limit exceeded. Retry in about 5s.",
+        "provider": "anthropic",
+        "retry_after_seconds": 5,
+    }
 
 
 def test_openai_compatible_adapter_sends_image_parts() -> None:
@@ -1039,6 +1258,29 @@ def test_build_llm_adapter_from_env_supports_google(monkeypatch: pytest.MonkeyPa
 
     assert isinstance(adapter, GoogleGeminiAdapter)
     assert adapter.describe()["model"] == "gemini-test"
+
+
+def test_build_llm_adapter_from_env_supports_anthropic(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-test")
+    monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "99")
+
+    adapter = build_llm_adapter_from_env()
+
+    assert isinstance(adapter, AnthropicMessagesAdapter)
+    assert adapter.describe()["model"] == "claude-test"
+    assert adapter.describe()["max_tokens"] == 99
+
+
+def test_build_llm_adapter_from_env_rejects_missing_anthropic_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_LLM_PROVIDER", "anthropic")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+        build_llm_adapter_from_env()
 
 
 def test_build_llm_adapter_from_env_rejects_missing_key(monkeypatch: pytest.MonkeyPatch) -> None:

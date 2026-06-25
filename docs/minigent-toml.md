@@ -165,6 +165,17 @@ model = "anthropic/claude-sonnet-4.5"
 api_key_env = "OPENROUTER_API_KEY"
 ```
 
+### Anthropic
+
+```toml
+[llm]
+provider = "anthropic"
+model = "claude-haiku-4-5"
+api_key_env = "ANTHROPIC_API_KEY"
+# Optional override; defaults to https://api.anthropic.com/v1.
+base_url = "https://api.anthropic.com/v1"
+```
+
 ### Local coding workspace
 
 ```toml
