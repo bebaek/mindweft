@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -9,6 +10,7 @@ from app.mcp_stdio_bridge import BridgeSettings, build_parser, create_bridge_app
 FAKE_STDIO_MCP_SERVER = r"""
 import json
 import sys
+import time
 
 mode = sys.argv[1]
 
@@ -23,6 +25,8 @@ for line in sys.stdin:
     if mode == "invalid-json" and method == "tools/list":
         print("not json", flush=True)
         continue
+    if mode == "delayed-tools-list" and method == "tools/list":
+        time.sleep(0.25)
     if mode == "large-line" and method == "tools/list":
         print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": {"content": "x" * 200000}}), flush=True)
         continue
@@ -201,6 +205,38 @@ def test_stdio_bridge_reports_oversized_subprocess_response_lines(tmp_path: Path
     assert response.json()["detail"] == "MCP stdio server response exceeded stream buffer limit"
 
 
+def test_stdio_bridge_skips_stale_response_after_timeout(tmp_path: Path) -> None:
+    client = _client(tmp_path, "delayed-tools-list", request_timeout=0.1)
+
+    with client:
+        initialize = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        session_id = initialize.headers["mcp-session-id"]
+        timed_out = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": session_id},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        )
+        time.sleep(0.3)
+        response = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": session_id},
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "echo", "arguments": {"text": "fresh"}},
+            },
+        )
+
+    assert timed_out.status_code == 504
+    assert response.status_code == 200
+    assert response.json()["id"] == 3
+    assert response.json()["result"]["structuredContent"] == {"echo": "fresh"}
+
+
 def test_stdio_bridge_reports_exited_subprocess(tmp_path: Path) -> None:
     client = _client(tmp_path, "exit")
 
@@ -349,13 +385,14 @@ def _client(
     allowed_tools: list[str] | None = None,
     path_policy: MCPPathPolicy | None = None,
     stdio_stream_limit: int | None = None,
+    request_timeout: float = 2.0,
 ) -> TestClient:
     script = tmp_path / "fake_stdio_mcp.py"
     script.write_text(FAKE_STDIO_MCP_SERVER)
     settings = BridgeSettings(
         name="fake",
         command=[sys.executable, str(script), mode],
-        request_timeout=2.0,
+        request_timeout=request_timeout,
         stdio_stream_limit=stdio_stream_limit or 16 * 1024 * 1024,
         allowed_tools=allowed_tools,
         path_policy=path_policy or MCPPathPolicy(),

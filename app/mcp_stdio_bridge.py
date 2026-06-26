@@ -240,9 +240,10 @@ class StdioMCPBridge:
             raise HTTPException(status_code=400, detail="No valid MCP session ID provided")
 
     async def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        expected_id = payload.get("id")
         async with self._request_lock:
             await self._write_json(payload)
-            return await self._read_json()
+            return await self._read_json(expected_id=expected_id)
 
     async def _write_json(self, payload: dict[str, Any]) -> None:
         process = self._live_process()
@@ -260,33 +261,50 @@ class StdioMCPBridge:
                 status_code=504, detail="Timed out writing to MCP stdio server"
             ) from exc
 
-    async def _read_json(self) -> dict[str, Any]:
+    async def _read_json(self, *, expected_id: Any) -> dict[str, Any]:
         process = self._live_process()
         stdout = process.stdout
         if stdout is None:
             raise HTTPException(status_code=502, detail="MCP stdio server stdout is unavailable")
-        try:
-            line = await asyncio.wait_for(stdout.readline(), timeout=self._settings.request_timeout)
-        except TimeoutError as exc:
-            raise HTTPException(
-                status_code=504, detail="Timed out reading from MCP stdio server"
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail="MCP stdio server response exceeded stream buffer limit",
-            ) from exc
-        if not line:
-            raise HTTPException(status_code=502, detail="MCP stdio server closed stdout")
-        try:
-            payload = json.loads(line.decode("utf-8"))
-        except json.JSONDecodeError as exc:
-            raise HTTPException(
-                status_code=502, detail="MCP stdio server returned invalid JSON"
-            ) from exc
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=502, detail="MCP stdio server returned non-object JSON")
-        return payload
+        deadline = asyncio.get_running_loop().time() + self._settings.request_timeout
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise HTTPException(
+                    status_code=504, detail="Timed out reading from MCP stdio server"
+                )
+            try:
+                line = await asyncio.wait_for(stdout.readline(), timeout=remaining)
+            except TimeoutError as exc:
+                raise HTTPException(
+                    status_code=504, detail="Timed out reading from MCP stdio server"
+                ) from exc
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail="MCP stdio server response exceeded stream buffer limit",
+                ) from exc
+            if not line:
+                raise HTTPException(status_code=502, detail="MCP stdio server closed stdout")
+            try:
+                payload = json.loads(line.decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status_code=502, detail="MCP stdio server returned invalid JSON"
+                ) from exc
+            if not isinstance(payload, dict):
+                raise HTTPException(
+                    status_code=502, detail="MCP stdio server returned non-object JSON"
+                )
+            response_id = payload.get("id")
+            if response_id == expected_id:
+                return payload
+            logger.warning(
+                "Ignoring stale or unrelated MCP stdio response: name=%s expected_id=%r response_id=%r",
+                self._settings.name,
+                expected_id,
+                response_id,
+            )
 
     def _live_process(self) -> asyncio.subprocess.Process:
         process = self._process

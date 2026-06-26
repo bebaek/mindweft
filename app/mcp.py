@@ -252,10 +252,11 @@ class MCPHTTPClient:
         retry_invalid_session: bool = True,
     ) -> tuple[dict[str, Any], httpx.Headers]:
         self._request_id += 1
+        request_id = self._request_id
         headers = self._build_headers(include_protocol=use_protocol_header)
         payload: dict[str, Any] = {
             "jsonrpc": "2.0",
-            "id": self._request_id,
+            "id": request_id,
             "method": method,
         }
         if params is not None:
@@ -310,13 +311,23 @@ class MCPHTTPClient:
         elif "text/event-stream" in content_type:
             body = _parse_sse_jsonrpc_response(
                 response.text,
-                request_id=self._request_id,
+                request_id=request_id,
                 server_name=self._config.name,
             )
         else:
             raise HTTPException(
                 status_code=502,
                 detail=f"MCP server '{self._config.name}' returned unsupported content type '{content_type}'",
+            )
+        if not isinstance(body, dict):
+            raise HTTPException(
+                status_code=502,
+                detail=f"MCP server '{self._config.name}' returned non-object JSON-RPC response",
+            )
+        if body.get("id") != request_id:
+            raise HTTPException(
+                status_code=502,
+                detail=f"MCP server '{self._config.name}' returned mismatched JSON-RPC response id",
             )
         if "error" in body:
             raise HTTPException(

@@ -148,6 +148,27 @@ def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
     assert requests[3]["body"]["method"] == "tools/call"
 
 
+def test_mcp_http_client_rejects_mismatched_jsonrpc_response_id() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read().decode())
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={"jsonrpc": "2.0", "id": body["id"] + 100, "result": {}},
+        )
+
+    client = MCPHTTPClient(
+        config=MCPServerConfig(name="demo", url="https://example.com/mcp", headers={}),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(client.list_tools())
+
+    assert exc_info.value.status_code == 502
+    assert "mismatched JSON-RPC response id" in str(exc_info.value.detail)
+
+
 def test_mcp_http_client_filters_disallowed_tools() -> None:
     requests: list[dict[str, object]] = []
 
