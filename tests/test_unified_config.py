@@ -85,6 +85,10 @@ provider = "anthropic"
 model = "claude-test"
 base_url = "https://example.com/anthropic/v1"
 api_key_env = "MY_ANTHROPIC_KEY"
+max_tokens = 8192
+anthropic_version = "2023-06-01"
+thinking_enabled = true
+thinking_budget_tokens = 1024
 """.strip(),
         encoding="utf-8",
     )
@@ -96,6 +100,10 @@ api_key_env = "MY_ANTHROPIC_KEY"
     assert env["ANTHROPIC_MODEL"] == "claude-test"
     assert env["ANTHROPIC_BASE_URL"] == "https://example.com/anthropic/v1"
     assert env["ANTHROPIC_API_KEY"] == "anthropic-secret"
+    assert env["ANTHROPIC_MAX_TOKENS"] == "8192"
+    assert env["ANTHROPIC_VERSION"] == "2023-06-01"
+    assert env["ANTHROPIC_THINKING_ENABLED"] == "true"
+    assert env["ANTHROPIC_THINKING_BUDGET_TOKENS"] == "1024"
 
 
 def test_unified_config_projects_coding_mcp_specs_into_tenant_config(

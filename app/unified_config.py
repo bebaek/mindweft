@@ -324,6 +324,17 @@ def _collect_llm_config(
             env["MINIGENT_LLM_URL"] = base_url
     if "extra_headers" in section:
         env["MINIGENT_LLM_EXTRA_HEADERS"] = _format_json_env_value(section["extra_headers"])
+    if provider == "anthropic":
+        if "max_tokens" in section:
+            env["ANTHROPIC_MAX_TOKENS"] = _format_env_value(section["max_tokens"])
+        if "anthropic_version" in section:
+            env["ANTHROPIC_VERSION"] = _format_env_value(section["anthropic_version"])
+        if "thinking_enabled" in section:
+            env["ANTHROPIC_THINKING_ENABLED"] = _format_env_value(section["thinking_enabled"])
+        if "thinking_budget_tokens" in section:
+            env["ANTHROPIC_THINKING_BUDGET_TOKENS"] = _format_env_value(
+                section["thinking_budget_tokens"]
+            )
     if "account_id_header" in section:
         env["MINIGENT_LLM_ACCOUNT_ID_HEADER"] = _format_env_value(section["account_id_header"])
 

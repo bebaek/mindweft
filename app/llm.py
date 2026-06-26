@@ -30,7 +30,10 @@ LLM_REASONING_SUMMARY_ENV = "MINIGENT_LLM_REASONING_SUMMARY"
 LLM_MAX_TOOL_RESULT_CHARS_ENV = "MINIGENT_LLM_MAX_TOOL_RESULT_CHARS"
 ANTHROPIC_MAX_TOKENS_ENV = "ANTHROPIC_MAX_TOKENS"
 ANTHROPIC_VERSION_ENV = "ANTHROPIC_VERSION"
+ANTHROPIC_THINKING_ENABLED_ENV = "ANTHROPIC_THINKING_ENABLED"
+ANTHROPIC_THINKING_BUDGET_TOKENS_ENV = "ANTHROPIC_THINKING_BUDGET_TOKENS"
 RESPONSES_OUTPUT_ITEMS_METADATA_KEY = "generic_oauth_responses_output_items"
+ANTHROPIC_THINKING_BLOCKS_METADATA_KEY = "anthropic_thinking_blocks"
 GEMINI_THOUGHT_SIGNATURE_METADATA_KEY = "gemini_thought_signature"
 DEFAULT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS = 20000
 DEFAULT_LLM_MAX_TOOL_RESULT_CHARS = 200000
@@ -394,6 +397,7 @@ class AnthropicMessagesAdapter(LLMAdapter):
         transport: httpx.AsyncBaseTransport | None = None,
         max_tokens: int = DEFAULT_ANTHROPIC_MAX_TOKENS,
         anthropic_version: str = DEFAULT_ANTHROPIC_VERSION,
+        thinking_budget_tokens: int | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -403,6 +407,7 @@ class AnthropicMessagesAdapter(LLMAdapter):
         self._transport = transport
         self._max_tokens = max_tokens
         self._anthropic_version = anthropic_version
+        self._thinking_budget_tokens = thinking_budget_tokens
 
     async def generate(
         self,
@@ -425,6 +430,11 @@ class AnthropicMessagesAdapter(LLMAdapter):
         }
         if system:
             payload["system"] = system
+        if self._thinking_budget_tokens is not None:
+            payload["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": self._thinking_budget_tokens,
+            }
         if tools:
             payload["tools"] = [_tool_to_anthropic_payload(tool, tool_name_map) for tool in tools]
         _debug_log_llm_request(
@@ -466,6 +476,7 @@ class AnthropicMessagesAdapter(LLMAdapter):
             "headers": sorted(self._extra_headers.keys()),
             "adapter": "AnthropicMessagesAdapter",
             "max_tokens": self._max_tokens,
+            "thinking_budget_tokens": self._thinking_budget_tokens,
         }
 
 
@@ -981,6 +992,7 @@ def build_llm_adapter_from_env() -> LLMAdapter:
         extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS")
         max_tokens = _env_int(ANTHROPIC_MAX_TOKENS_ENV, DEFAULT_ANTHROPIC_MAX_TOKENS)
         anthropic_version = os.getenv(ANTHROPIC_VERSION_ENV, DEFAULT_ANTHROPIC_VERSION)
+        thinking_budget_tokens = _anthropic_thinking_budget_tokens_from_env()
         logger.info("LLM config: provider=%s model=%s base_url=%s", provider, model, base_url)
         return AnthropicMessagesAdapter(
             api_key=api_key,
@@ -989,6 +1001,7 @@ def build_llm_adapter_from_env() -> LLMAdapter:
             extra_headers=extra_headers,
             max_tokens=max_tokens,
             anthropic_version=anthropic_version,
+            thinking_budget_tokens=thinking_budget_tokens,
         )
 
     config = load_provider_config(provider)
@@ -1169,6 +1182,26 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _anthropic_thinking_budget_tokens_from_env() -> int | None:
+    enabled_raw = os.getenv(ANTHROPIC_THINKING_ENABLED_ENV, "").strip().lower()
+    budget_raw = os.getenv(ANTHROPIC_THINKING_BUDGET_TOKENS_ENV, "").strip()
+    if enabled_raw in {"0", "false", "no", "off", "none", "null"}:
+        return None
+    if not budget_raw:
+        return 1024 if enabled_raw in {"1", "true", "yes", "on"} else None
+    try:
+        budget_tokens = int(budget_raw)
+    except ValueError:
+        logger.warning(
+            "Ignoring invalid integer value for %s", ANTHROPIC_THINKING_BUDGET_TOKENS_ENV
+        )
+        return None
+    if budget_tokens <= 0:
+        logger.warning("Ignoring non-positive value for %s", ANTHROPIC_THINKING_BUDGET_TOKENS_ENV)
+        return None
+    return budget_tokens
+
+
 def _parse_mock_tool_arguments(tool_name: str, payload: str) -> dict[str, Any]:
     stripped = payload.strip()
     if not stripped:
@@ -1318,8 +1351,11 @@ def _message_to_anthropic_message(
     role = "assistant" if message.role == MessageRole.ASSISTANT else "user"
     content = _message_to_anthropic_content(message)
     if message.role == MessageRole.ASSISTANT and message.tool_call_id and message.tool_name:
+        thinking_blocks = _anthropic_thinking_blocks_from_metadata(message.metadata)
+        if thinking_blocks:
+            content = [*thinking_blocks, *content]
         if message.content and not any(part.get("type") == "text" for part in content):
-            content.insert(0, {"type": "text", "text": message.content})
+            content.insert(len(thinking_blocks), {"type": "text", "text": message.content})
         content.append(
             {
                 "type": "tool_use",
@@ -1421,7 +1457,57 @@ def _anthropic_response_metadata(payload: dict[str, Any]) -> dict[str, Any] | No
         value = payload.get(key)
         if isinstance(value, str):
             metadata[key] = value
+    content = payload.get("content")
+    if isinstance(content, list):
+        thinking_blocks = _anthropic_thinking_blocks_from_content(content)
+        if thinking_blocks:
+            metadata[ANTHROPIC_THINKING_BLOCKS_METADATA_KEY] = thinking_blocks
+        reasoning_content = _anthropic_reasoning_content_from_blocks(thinking_blocks)
+        if reasoning_content:
+            metadata["reasoning_content"] = reasoning_content
     return metadata or None
+
+
+def _anthropic_thinking_blocks_from_content(content: list[Any]) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        part_type = part.get("type")
+        if part_type not in {"thinking", "redacted_thinking"}:
+            continue
+        block = _canonical_jsonish(part)
+        if isinstance(block, dict):
+            blocks.append(block)
+    return blocks
+
+
+def _anthropic_reasoning_content_from_blocks(blocks: list[dict[str, Any]]) -> str | None:
+    reasoning_parts: list[str] = []
+    for block in blocks:
+        if block.get("type") != "thinking":
+            continue
+        thinking = block.get("thinking")
+        if isinstance(thinking, str) and thinking.strip():
+            reasoning_parts.append(thinking.strip())
+    return "\n\n".join(reasoning_parts) or None
+
+
+def _anthropic_thinking_blocks_from_metadata(
+    metadata: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not metadata:
+        return []
+    raw_blocks = metadata.get(ANTHROPIC_THINKING_BLOCKS_METADATA_KEY)
+    if not isinstance(raw_blocks, list):
+        return []
+    blocks: list[dict[str, Any]] = []
+    for block in raw_blocks:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") in {"thinking", "redacted_thinking"}:
+            blocks.append(_canonical_jsonish(block))
+    return blocks
 
 
 def _messages_to_gemini_payload(

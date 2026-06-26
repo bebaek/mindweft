@@ -53,6 +53,10 @@ class LLMConfig:
     account_id_header: object = None
     api_key_env: object = None
     api_key: object = None
+    max_tokens: object = None
+    anthropic_version: object = None
+    thinking_enabled: object = None
+    thinking_budget_tokens: object = None
 
 
 @dataclass(frozen=True)
@@ -199,6 +203,7 @@ _STRING_KEYS = {
     "llm.account_id_header",
     "llm.api_key_env",
     "llm.api_key",
+    "llm.anthropic_version",
     "coding.tenant_id",
     "coding.workspace",
     "coding.bridge_host",
@@ -227,6 +232,8 @@ _INT_KEYS = {
     "app.port",
     "app.max_iterations",
     "auth.jwt_jwks_cache_seconds",
+    "llm.max_tokens",
+    "llm.thinking_budget_tokens",
     "coding.bridge_port",
     "coding.mcp_gateway_port",
     "quality.max_payload_chars",
@@ -239,6 +246,7 @@ _NUMBER_KEYS = {
 
 _BOOL_KEYS = {
     "app.context_compaction_enabled",
+    "llm.thinking_enabled",
     "coding.enabled",
     "coding.inject_workspace_skill",
     "coding.shell_enabled",

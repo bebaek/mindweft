@@ -174,7 +174,15 @@ model = "claude-haiku-4-5"
 api_key_env = "ANTHROPIC_API_KEY"
 # Optional override; defaults to https://api.anthropic.com/v1.
 base_url = "https://api.anthropic.com/v1"
+# Optional extended thinking / reasoning for supported Claude models.
+thinking_enabled = true
+thinking_budget_tokens = 1024
 ```
+
+`thinking_budget_tokens` maps to `ANTHROPIC_THINKING_BUDGET_TOKENS`; setting it enables
+Anthropic's `thinking: { type = "enabled", budget_tokens = ... }` request field. You can
+also set `thinking_enabled = true` without a budget to use Minigent's default budget of
+1024 tokens.
 
 ### Local coding workspace
 

@@ -263,12 +263,19 @@ ANTHROPIC_MODEL=claude-haiku-4-5
 ANTHROPIC_BASE_URL=https://api.anthropic.com/v1
 ANTHROPIC_MAX_TOKENS=4096
 ANTHROPIC_VERSION=2023-06-01
+# Optional extended thinking / reasoning summaries for supported Claude models.
+ANTHROPIC_THINKING_ENABLED=true
+ANTHROPIC_THINKING_BUDGET_TOKENS=1024
 ```
 
 For tenant execution config, use `llm.provider: "anthropic"` and put the Anthropic API key
 in `llm.api_key`. Minigent calls `POST /messages`, maps Minigent system messages to the
 Messages API top-level `system` field, and supports text responses, image parts, and native
-Anthropic tool-use/tool-result content blocks for Minigent tools.
+Anthropic tool-use/tool-result content blocks for Minigent tools. When Anthropic thinking is
+enabled, Minigent sends `thinking: {"type":"enabled","budget_tokens":...}`, exposes
+returned `thinking` blocks through the existing reasoning metadata/stream events, and
+preserves Anthropic thinking blocks on tool-use turns so they can be replayed with the tool
+result.
 
 ## Generic OAuth LLM Provider
 

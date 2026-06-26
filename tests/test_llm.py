@@ -116,6 +116,114 @@ def test_anthropic_adapter_returns_text_response() -> None:
     assert response.metadata["stop_reason"] == "end_turn"
 
 
+def test_anthropic_adapter_sends_thinking_config_and_extracts_reasoning() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        assert payload["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+        return httpx.Response(
+            200,
+            json={
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "I should answer briefly.",
+                        "signature": "opaque-signature",
+                    },
+                    {"type": "text", "text": "brief answer"},
+                ]
+            },
+        )
+
+    adapter = AnthropicMessagesAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="claude-test",
+        thinking_budget_tokens=1024,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate([Message(thread_id="thread", role=MessageRole.USER, content="hello")], [])
+    )
+
+    assert response.content == "brief answer"
+    assert response.metadata["reasoning_content"] == "I should answer briefly."
+    assert response.metadata["anthropic_thinking_blocks"] == [
+        {
+            "type": "thinking",
+            "thinking": "I should answer briefly.",
+            "signature": "opaque-signature",
+        }
+    ]
+
+
+def test_anthropic_adapter_replays_thinking_blocks_before_tool_use() -> None:
+    seen_payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        seen_payloads.append(payload)
+        return httpx.Response(
+            200,
+            json={"content": [{"type": "text", "text": "done"}]},
+        )
+
+    adapter = AnthropicMessagesAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="claude-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(thread_id="thread", role=MessageRole.USER, content="use a tool"),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    tool_name="current_time",
+                    tool_call_id="toolu_123",
+                    tool_arguments={"timezone": "UTC"},
+                    metadata={
+                        "anthropic_thinking_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": "Need current time.",
+                                "signature": "opaque-signature",
+                            }
+                        ]
+                    },
+                ),
+                Message(
+                    thread_id="thread",
+                    role=MessageRole.TOOL,
+                    content='{"time":"now"}',
+                    tool_name="current_time",
+                    tool_call_id="toolu_123",
+                ),
+            ],
+            [],
+        )
+    )
+
+    assert response.content == "done"
+    assert seen_payloads[0]["messages"][1]["content"] == [
+        {
+            "type": "thinking",
+            "thinking": "Need current time.",
+            "signature": "opaque-signature",
+        },
+        {
+            "type": "tool_use",
+            "id": "toolu_123",
+            "name": "current_time",
+            "input": {"timezone": "UTC"},
+        },
+    ]
+
+
 def test_anthropic_adapter_sends_image_parts() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read().decode())
@@ -1265,12 +1373,14 @@ def test_build_llm_adapter_from_env_supports_anthropic(monkeypatch: pytest.Monke
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
     monkeypatch.setenv("ANTHROPIC_MODEL", "claude-test")
     monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "99")
+    monkeypatch.setenv("ANTHROPIC_THINKING_BUDGET_TOKENS", "1024")
 
     adapter = build_llm_adapter_from_env()
 
     assert isinstance(adapter, AnthropicMessagesAdapter)
     assert adapter.describe()["model"] == "claude-test"
     assert adapter.describe()["max_tokens"] == 99
+    assert adapter.describe()["thinking_budget_tokens"] == 1024
 
 
 def test_build_llm_adapter_from_env_rejects_missing_anthropic_key(

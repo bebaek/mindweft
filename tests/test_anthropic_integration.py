@@ -9,11 +9,13 @@ from fastapi.testclient import TestClient
 from app.llm import AnthropicMessagesAdapter
 from app.main import create_app
 from app.models import Message, MessageRole, ToolSpec
-from app.tools import build_local_tool_registry
+from app.tools import ToolRegistry
 
 RUN_ANTHROPIC_INTEGRATION_ENV = "MINIGENT_RUN_ANTHROPIC_INTEGRATION_TESTS"
+RUN_ANTHROPIC_REASONING_ENV = "MINIGENT_RUN_ANTHROPIC_REASONING_TESTS"
 ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
 ANTHROPIC_MODEL_ENV = "ANTHROPIC_MODEL"
+ANTHROPIC_REASONING_MODEL_ENV = "ANTHROPIC_REASONING_MODEL"
 AUTH_HEADERS = {
     "X-Minigent-User-Id": "anthropic-integration-user",
     "X-Minigent-Tenant-Id": "anthropic-integration-tenant",
@@ -148,6 +150,59 @@ def test_live_anthropic_messages_adapter_uses_and_replays_tool_result() -> None:
 
 
 @pytest.mark.skipif(
+    not _truthy_env(RUN_ANTHROPIC_INTEGRATION_ENV)
+    or not _truthy_env(RUN_ANTHROPIC_REASONING_ENV)
+    or not os.getenv(ANTHROPIC_API_KEY_ENV),
+    reason=(
+        f"Set {RUN_ANTHROPIC_INTEGRATION_ENV}=true, "
+        f"{RUN_ANTHROPIC_REASONING_ENV}=true, and {ANTHROPIC_API_KEY_ENV} "
+        "to run live Anthropic reasoning integration tests"
+    ),
+)
+def test_live_anthropic_messages_adapter_returns_reasoning_metadata() -> None:
+    api_key = os.environ[ANTHROPIC_API_KEY_ENV]
+    model = (
+        os.getenv(ANTHROPIC_REASONING_MODEL_ENV)
+        or os.getenv(ANTHROPIC_MODEL_ENV)
+        or "claude-sonnet-4-5"
+    )
+    adapter = AnthropicMessagesAdapter(
+        api_key=api_key,
+        model=model,
+        max_tokens=2048,
+        thinking_budget_tokens=1024,
+        timeout=60.0,
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [
+                Message(
+                    thread_id="anthropic-integration-reasoning",
+                    role=MessageRole.USER,
+                    content=(
+                        "Think through the arithmetic briefly, then answer with only the final "
+                        "sentence: The answer is 42."
+                    ),
+                )
+            ],
+            [],
+        )
+    )
+
+    assert response.tool_call is None
+    assert response.content is not None
+    assert response.metadata is not None
+    thinking_blocks = response.metadata.get("anthropic_thinking_blocks")
+    assert isinstance(thinking_blocks, list)
+    assert thinking_blocks
+    assert all(isinstance(block, dict) for block in thinking_blocks)
+    assert all(block.get("type") in {"thinking", "redacted_thinking"} for block in thinking_blocks)
+    reasoning_content = response.metadata.get("reasoning_content")
+    assert reasoning_content is None or isinstance(reasoning_content, str)
+
+
+@pytest.mark.skipif(
     not _truthy_env(RUN_ANTHROPIC_INTEGRATION_ENV) or not os.getenv(ANTHROPIC_API_KEY_ENV),
     reason=(
         f"Set {RUN_ANTHROPIC_INTEGRATION_ENV}=true and {ANTHROPIC_API_KEY_ENV} "
@@ -163,7 +218,7 @@ def test_live_anthropic_runtime_api_smoke() -> None:
         max_tokens=48,
         timeout=60.0,
     )
-    client = TestClient(create_app(llm_adapter=adapter, tool_registry=build_local_tool_registry()))
+    client = TestClient(create_app(llm_adapter=adapter, tool_registry=ToolRegistry()))
 
     create_response = client.post("/threads", headers=AUTH_HEADERS)
     assert create_response.status_code == 200
@@ -171,14 +226,14 @@ def test_live_anthropic_runtime_api_smoke() -> None:
 
     add_response = client.post(
         f"/threads/{thread_id}/messages",
-        json={"content": "Respond with exactly MINIGENT_ANTHROPIC_RUNTIME_OK."},
+        json={"content": "What is 2 + 2? Answer with the numeral only."},
         headers=AUTH_HEADERS,
     )
     assert add_response.status_code == 200
 
     run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
     assert run_response.status_code == 200
-    assert "MINIGENT_ANTHROPIC_RUNTIME_OK" in run_response.json()["reply"]
+    assert "4" in run_response.json()["reply"]
 
     messages_response = client.get(f"/threads/{thread_id}/messages", headers=AUTH_HEADERS)
     assert messages_response.status_code == 200
@@ -187,4 +242,4 @@ def test_live_anthropic_runtime_api_smoke() -> None:
         MessageRole.USER,
         MessageRole.ASSISTANT,
     ]
-    assert "MINIGENT_ANTHROPIC_RUNTIME_OK" in messages[1]["content"]
+    assert "4" in messages[1]["content"]
