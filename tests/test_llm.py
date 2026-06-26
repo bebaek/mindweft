@@ -69,6 +69,7 @@ def test_anthropic_adapter_returns_text_response() -> None:
         payload = json.loads(request.read().decode())
         assert payload["model"] == "claude-test"
         assert payload["max_tokens"] == 123
+        assert payload["cache_control"] == {"type": "ephemeral"}
         assert payload["system"] == "be concise"
         assert payload["messages"] == [
             {"role": "user", "content": [{"type": "text", "text": "hello"}]}
@@ -81,7 +82,12 @@ def test_anthropic_adapter_returns_text_response() -> None:
                 "role": "assistant",
                 "model": "claude-test",
                 "content": [{"type": "text", "text": "hello from anthropic"}],
-                "usage": {"input_tokens": 7, "output_tokens": 3},
+                "usage": {
+                    "input_tokens": 7,
+                    "output_tokens": 3,
+                    "cache_read_input_tokens": 1024,
+                    "cache_creation_input_tokens": 256,
+                },
                 "stop_reason": "end_turn",
             },
         )
@@ -112,8 +118,31 @@ def test_anthropic_adapter_returns_text_response() -> None:
         "completion_tokens": 3,
         "output_tokens": 3,
         "total_tokens": 10,
+        "cache_read_tokens": 1024,
+        "cache_write_tokens": 256,
     }
     assert response.metadata["stop_reason"] == "end_turn"
+
+
+def test_anthropic_adapter_can_disable_prompt_cache() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        assert "cache_control" not in payload
+        return httpx.Response(200, json={"content": [{"type": "text", "text": "ok"}]})
+
+    adapter = AnthropicMessagesAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="claude-test",
+        prompt_cache_enabled=False,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate([Message(thread_id="thread", role=MessageRole.USER, content="hello")], [])
+    )
+
+    assert response.content == "ok"
 
 
 def test_anthropic_adapter_sends_thinking_config_and_extracts_reasoning() -> None:
@@ -1374,6 +1403,7 @@ def test_build_llm_adapter_from_env_supports_anthropic(monkeypatch: pytest.Monke
     monkeypatch.setenv("ANTHROPIC_MODEL", "claude-test")
     monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "99")
     monkeypatch.setenv("ANTHROPIC_THINKING_BUDGET_TOKENS", "1024")
+    monkeypatch.setenv("ANTHROPIC_PROMPT_CACHE_ENABLED", "false")
 
     adapter = build_llm_adapter_from_env()
 
@@ -1381,6 +1411,7 @@ def test_build_llm_adapter_from_env_supports_anthropic(monkeypatch: pytest.Monke
     assert adapter.describe()["model"] == "claude-test"
     assert adapter.describe()["max_tokens"] == 99
     assert adapter.describe()["thinking_budget_tokens"] == 1024
+    assert adapter.describe()["prompt_cache_enabled"] is False
 
 
 def test_build_llm_adapter_from_env_rejects_missing_anthropic_key(

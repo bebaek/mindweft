@@ -32,6 +32,7 @@ ANTHROPIC_MAX_TOKENS_ENV = "ANTHROPIC_MAX_TOKENS"
 ANTHROPIC_VERSION_ENV = "ANTHROPIC_VERSION"
 ANTHROPIC_THINKING_ENABLED_ENV = "ANTHROPIC_THINKING_ENABLED"
 ANTHROPIC_THINKING_BUDGET_TOKENS_ENV = "ANTHROPIC_THINKING_BUDGET_TOKENS"
+ANTHROPIC_PROMPT_CACHE_ENABLED_ENV = "ANTHROPIC_PROMPT_CACHE_ENABLED"
 RESPONSES_OUTPUT_ITEMS_METADATA_KEY = "generic_oauth_responses_output_items"
 ANTHROPIC_THINKING_BLOCKS_METADATA_KEY = "anthropic_thinking_blocks"
 GEMINI_THOUGHT_SIGNATURE_METADATA_KEY = "gemini_thought_signature"
@@ -398,6 +399,7 @@ class AnthropicMessagesAdapter(LLMAdapter):
         max_tokens: int = DEFAULT_ANTHROPIC_MAX_TOKENS,
         anthropic_version: str = DEFAULT_ANTHROPIC_VERSION,
         thinking_budget_tokens: int | None = None,
+        prompt_cache_enabled: bool = True,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -408,6 +410,7 @@ class AnthropicMessagesAdapter(LLMAdapter):
         self._max_tokens = max_tokens
         self._anthropic_version = anthropic_version
         self._thinking_budget_tokens = thinking_budget_tokens
+        self._prompt_cache_enabled = prompt_cache_enabled
 
     async def generate(
         self,
@@ -435,6 +438,8 @@ class AnthropicMessagesAdapter(LLMAdapter):
                 "type": "enabled",
                 "budget_tokens": self._thinking_budget_tokens,
             }
+        if self._prompt_cache_enabled:
+            payload["cache_control"] = {"type": "ephemeral"}
         if tools:
             payload["tools"] = [_tool_to_anthropic_payload(tool, tool_name_map) for tool in tools]
         _debug_log_llm_request(
@@ -477,6 +482,7 @@ class AnthropicMessagesAdapter(LLMAdapter):
             "adapter": "AnthropicMessagesAdapter",
             "max_tokens": self._max_tokens,
             "thinking_budget_tokens": self._thinking_budget_tokens,
+            "prompt_cache_enabled": self._prompt_cache_enabled,
         }
 
 
@@ -993,6 +999,7 @@ def build_llm_adapter_from_env() -> LLMAdapter:
         max_tokens = _env_int(ANTHROPIC_MAX_TOKENS_ENV, DEFAULT_ANTHROPIC_MAX_TOKENS)
         anthropic_version = os.getenv(ANTHROPIC_VERSION_ENV, DEFAULT_ANTHROPIC_VERSION)
         thinking_budget_tokens = _anthropic_thinking_budget_tokens_from_env()
+        prompt_cache_enabled = _anthropic_prompt_cache_enabled_from_env()
         logger.info("LLM config: provider=%s model=%s base_url=%s", provider, model, base_url)
         return AnthropicMessagesAdapter(
             api_key=api_key,
@@ -1002,6 +1009,7 @@ def build_llm_adapter_from_env() -> LLMAdapter:
             max_tokens=max_tokens,
             anthropic_version=anthropic_version,
             thinking_budget_tokens=thinking_budget_tokens,
+            prompt_cache_enabled=prompt_cache_enabled,
         )
 
     config = load_provider_config(provider)
@@ -1200,6 +1208,11 @@ def _anthropic_thinking_budget_tokens_from_env() -> int | None:
         logger.warning("Ignoring non-positive value for %s", ANTHROPIC_THINKING_BUDGET_TOKENS_ENV)
         return None
     return budget_tokens
+
+
+def _anthropic_prompt_cache_enabled_from_env() -> bool:
+    raw = os.getenv(ANTHROPIC_PROMPT_CACHE_ENABLED_ENV, "true").strip().lower()
+    return raw not in {"0", "false", "no", "off", "none", "null"}
 
 
 def _parse_mock_tool_arguments(tool_name: str, payload: str) -> dict[str, Any]:

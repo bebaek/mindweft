@@ -57,6 +57,7 @@ class LLMConfig:
     anthropic_version: object = None
     thinking_enabled: object = None
     thinking_budget_tokens: object = None
+    prompt_cache_enabled: object = None
 
 
 @dataclass(frozen=True)
@@ -247,6 +248,7 @@ _NUMBER_KEYS = {
 _BOOL_KEYS = {
     "app.context_compaction_enabled",
     "llm.thinking_enabled",
+    "llm.prompt_cache_enabled",
     "coding.enabled",
     "coding.inject_workspace_skill",
     "coding.shell_enabled",

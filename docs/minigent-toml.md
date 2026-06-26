@@ -174,10 +174,16 @@ model = "claude-haiku-4-5"
 api_key_env = "ANTHROPIC_API_KEY"
 # Optional override; defaults to https://api.anthropic.com/v1.
 base_url = "https://api.anthropic.com/v1"
+# Optional Anthropic prompt caching; defaults to true.
+prompt_cache_enabled = true
 # Optional extended thinking / reasoning for supported Claude models.
 thinking_enabled = true
 thinking_budget_tokens = 1024
 ```
+
+`prompt_cache_enabled` maps to `ANTHROPIC_PROMPT_CACHE_ENABLED`. Prompt caching defaults to
+true for Anthropic and sends top-level `cache_control = { type = "ephemeral" }`; set it to
+false to omit `cache_control`.
 
 `thinking_budget_tokens` maps to `ANTHROPIC_THINKING_BUDGET_TOKENS`; setting it enables
 Anthropic's `thinking: { type = "enabled", budget_tokens = ... }` request field. You can

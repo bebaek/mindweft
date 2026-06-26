@@ -335,6 +335,10 @@ def _collect_llm_config(
             env["ANTHROPIC_THINKING_BUDGET_TOKENS"] = _format_env_value(
                 section["thinking_budget_tokens"]
             )
+        if "prompt_cache_enabled" in section:
+            env["ANTHROPIC_PROMPT_CACHE_ENABLED"] = _format_env_value(
+                section["prompt_cache_enabled"]
+            )
     if "account_id_header" in section:
         env["MINIGENT_LLM_ACCOUNT_ID_HEADER"] = _format_env_value(section["account_id_header"])
 

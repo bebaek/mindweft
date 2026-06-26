@@ -13,9 +13,11 @@ from app.tools import ToolRegistry
 
 RUN_ANTHROPIC_INTEGRATION_ENV = "MINIGENT_RUN_ANTHROPIC_INTEGRATION_TESTS"
 RUN_ANTHROPIC_REASONING_ENV = "MINIGENT_RUN_ANTHROPIC_REASONING_TESTS"
+RUN_ANTHROPIC_CACHE_ENV = "MINIGENT_RUN_ANTHROPIC_CACHE_TESTS"
 ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
 ANTHROPIC_MODEL_ENV = "ANTHROPIC_MODEL"
 ANTHROPIC_REASONING_MODEL_ENV = "ANTHROPIC_REASONING_MODEL"
+ANTHROPIC_CACHE_MODEL_ENV = "ANTHROPIC_CACHE_MODEL"
 AUTH_HEADERS = {
     "X-Minigent-User-Id": "anthropic-integration-user",
     "X-Minigent-Tenant-Id": "anthropic-integration-tenant",
@@ -200,6 +202,64 @@ def test_live_anthropic_messages_adapter_returns_reasoning_metadata() -> None:
     assert all(block.get("type") in {"thinking", "redacted_thinking"} for block in thinking_blocks)
     reasoning_content = response.metadata.get("reasoning_content")
     assert reasoning_content is None or isinstance(reasoning_content, str)
+
+
+@pytest.mark.skipif(
+    not _truthy_env(RUN_ANTHROPIC_INTEGRATION_ENV)
+    or not _truthy_env(RUN_ANTHROPIC_CACHE_ENV)
+    or not os.getenv(ANTHROPIC_API_KEY_ENV),
+    reason=(
+        f"Set {RUN_ANTHROPIC_INTEGRATION_ENV}=true, "
+        f"{RUN_ANTHROPIC_CACHE_ENV}=true, and {ANTHROPIC_API_KEY_ENV} "
+        "to run live Anthropic prompt-cache integration tests"
+    ),
+)
+def test_live_anthropic_messages_adapter_uses_prompt_cache() -> None:
+    api_key = os.environ[ANTHROPIC_API_KEY_ENV]
+    model = (
+        os.getenv(ANTHROPIC_CACHE_MODEL_ENV) or os.getenv(ANTHROPIC_MODEL_ENV) or "claude-haiku-4-5"
+    )
+    adapter = AnthropicMessagesAdapter(
+        api_key=api_key,
+        model=model,
+        max_tokens=16,
+        timeout=60.0,
+    )
+    stable_prompt = "\n".join(
+        [
+            "You are a prompt-cache integration test fixture.",
+            *(
+                f"Stable cache line {index}: The deterministic value is 42."
+                for index in range(1, 500)
+            ),
+        ]
+    )
+    messages = [
+        Message(
+            thread_id="anthropic-integration-cache",
+            role=MessageRole.SYSTEM,
+            content=stable_prompt,
+        ),
+        Message(
+            thread_id="anthropic-integration-cache",
+            role=MessageRole.USER,
+            content="Reply with only: cache ok",
+        ),
+    ]
+
+    first_response = asyncio.run(adapter.generate(messages, []))
+    second_response = asyncio.run(adapter.generate(messages, []))
+
+    assert first_response.content is not None
+    assert second_response.content is not None
+    assert first_response.usage is not None
+    assert second_response.usage is not None
+    first_cache_activity = max(
+        first_response.usage.get("cache_read_tokens", 0),
+        first_response.usage.get("cache_write_tokens", 0),
+    )
+    assert first_cache_activity > 0
+    assert second_response.usage.get("cache_read_tokens", 0) > 0
 
 
 @pytest.mark.skipif(

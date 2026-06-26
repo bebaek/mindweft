@@ -89,6 +89,7 @@ max_tokens = 8192
 anthropic_version = "2023-06-01"
 thinking_enabled = true
 thinking_budget_tokens = 1024
+prompt_cache_enabled = false
 """.strip(),
         encoding="utf-8",
     )
@@ -104,6 +105,7 @@ thinking_budget_tokens = 1024
     assert env["ANTHROPIC_VERSION"] == "2023-06-01"
     assert env["ANTHROPIC_THINKING_ENABLED"] == "true"
     assert env["ANTHROPIC_THINKING_BUDGET_TOKENS"] == "1024"
+    assert env["ANTHROPIC_PROMPT_CACHE_ENABLED"] == "false"
 
 
 def test_unified_config_projects_coding_mcp_specs_into_tenant_config(
