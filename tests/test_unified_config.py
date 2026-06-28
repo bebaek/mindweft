@@ -36,12 +36,17 @@ api_key_env = "OPENROUTER_API_KEY"
 [coding]
 enabled = true
 workspaces = ["/Users/example/code", "/tmp/work"]
+default_workspace_scope = "minigent"
 shell_enabled = true
 mcp_gateway_enabled = true
 mcp_gateway_port = 9876
 mcp_gateway_path_prefix = "/tools"
 shell_allowed_command_prefixes = ["uv ", "pytest ", "git "]
 mcp_server_specs = [{ name = "custom", transport = "stdio", command = ["custom-mcp"] }]
+
+[coding.workspace_scopes.minigent]
+roots = ["/Users/example/code/minigent"]
+description = "Minigent repo"
 
 [mcp]
 servers = [{ name = "filesystem", url = "http://127.0.0.1:8765/mcp", headers = {} }]
@@ -65,6 +70,10 @@ enabled = false
     assert env["MINIGENT_CODING_MCP_GATEWAY_PORT"] == "9876"
     assert env["MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX"] == "/tools"
     assert env["MINIGENT_CODING_WORKSPACES"] == "/Users/example/code,/tmp/work"
+    assert env["MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE"] == "minigent"
+    assert env["MINIGENT_CODING_WORKSPACE_SCOPES"] == (
+        '{"minigent":{"roots":["/Users/example/code/minigent"],"description":"Minigent repo"}}'
+    )
     assert env["MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES"] == "uv ,pytest ,git "
     assert env["MINIGENT_CODING_MCP_SERVER_SPECS"] == (
         '[{"name":"custom","transport":"stdio","command":["custom-mcp"]}]'

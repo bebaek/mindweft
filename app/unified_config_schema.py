@@ -66,6 +66,9 @@ class CodingConfig:
     tenant_id: object = None
     workspace: object = None
     workspaces: object = None
+    default_workspace_scope: object = None
+    workspace_scope: object = None
+    workspace_scopes: object = None
     inject_workspace_skill: object = None
     shell_enabled: object = None
     shell_allowed_command_prefixes: object = None
@@ -207,6 +210,8 @@ _STRING_KEYS = {
     "llm.anthropic_version",
     "coding.tenant_id",
     "coding.workspace",
+    "coding.default_workspace_scope",
+    "coding.workspace_scope",
     "coding.bridge_host",
     "coding.mcp_gateway_path_prefix",
     "mcp.broker_url",
@@ -268,6 +273,7 @@ _DICT_KEYS = {
     "auth.tokens",
     "oauth.auth_params",
     "llm.extra_headers",
+    "coding.workspace_scopes",
 }
 
 _LIST_KEYS = {
@@ -320,10 +326,40 @@ def validate_unified_config_data(data: object) -> list[str]:
             if key not in allowed_keys:
                 errors.append(f"unknown key: {dotted}")
                 continue
+            if dotted == "coding.workspace_scopes":
+                errors.extend(_validate_workspace_scopes(value))
+                continue
             errors.extend(_validate_value_type(dotted, value))
     for key in ("profile", "peer_agents", "tenant_execution_configs", "runtime"):
         if key in data:
             errors.extend(_validate_value_type(key, data[key]))
+    return errors
+
+
+def _validate_workspace_scopes(value: object) -> list[str]:
+    if not isinstance(value, dict):
+        return ["coding.workspace_scopes must be a table/object"]
+    errors: list[str] = []
+    for name, scope in value.items():
+        if not isinstance(name, str) or not name:
+            errors.append("coding.workspace_scopes names must be non-empty strings")
+            continue
+        prefix = f"coding.workspace_scopes.{name}"
+        if not isinstance(scope, dict):
+            errors.append(f"{prefix} must be a table/object")
+            continue
+        unknown_keys = sorted(set(scope) - {"roots", "description"})
+        for key in unknown_keys:
+            errors.append(f"unknown key: {prefix}.{key}")
+        roots = scope.get("roots")
+        if (
+            not isinstance(roots, list)
+            or not roots
+            or not all(isinstance(item, str) for item in roots)
+        ):
+            errors.append(f"{prefix}.roots must be a non-empty list of strings")
+        if "description" in scope and not isinstance(scope["description"], str):
+            errors.append(f"{prefix}.description must be a string")
     return errors
 
 

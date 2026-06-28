@@ -56,42 +56,50 @@ def export_local_coding_config(args: Namespace) -> dict[str, object]:
     shell_bridge_url = f"http://{bridge_host}:{shell_bridge_port}/mcp"
     tenant_id = env.get("MINIGENT_CODING_TENANT_ID") or runner.DEFAULT_TENANT_ID
 
+    mcp_servers_file = runner.resolve_mcp_servers_file(None, env, base_dir=env_base_dir)
     raw_specs = env.get("MINIGENT_CODING_MCP_SERVER_SPECS", "").strip()
-    if raw_specs:
+    if mcp_servers_file is not None:
+        try:
+            mcp_server_specs = _coding_mcp_specs_from_raw_json(
+                mcp_servers_file.read_text(encoding="utf-8")
+            )
+        except OSError:
+            mcp_server_specs = []
+    elif raw_specs:
         mcp_server_specs = _coding_mcp_specs_from_raw_json(raw_specs)
     else:
-        mcp_servers_file = runner.resolve_mcp_servers_file(None, env, base_dir=env_base_dir)
-        if mcp_servers_file is not None:
-            try:
-                mcp_server_specs = _coding_mcp_specs_from_raw_json(
-                    mcp_servers_file.read_text(encoding="utf-8")
-                )
-            except OSError:
-                mcp_server_specs = []
-        else:
-            specs = runner.build_builtin_mcp_server_specs(
-                env,
-                tenant_id,
-                bridge_name=bridge_name,
-                bridge_host=bridge_host,
-                bridge_port=bridge_port,
-                bridge_url=bridge_url,
-                workspace_roots=workspace_roots,
-                text_enabled=text_enabled,
-                text_bridge_name=text_bridge_name,
-                text_bridge_port=text_bridge_port,
-                text_bridge_url=text_bridge_url,
-                shell_enabled=shell_enabled,
-                shell_bridge_name=shell_bridge_name,
-                shell_bridge_port=shell_bridge_port,
-                shell_bridge_url=shell_bridge_url,
-            )
-            mcp_server_specs = [_coding_mcp_server_spec_to_export_dict(spec) for spec in specs]
+        specs = runner.build_builtin_mcp_server_specs(
+            env,
+            tenant_id,
+            bridge_name=bridge_name,
+            bridge_host=bridge_host,
+            bridge_port=bridge_port,
+            bridge_url=bridge_url,
+            workspace_roots=workspace_roots,
+            text_enabled=text_enabled,
+            text_bridge_name=text_bridge_name,
+            text_bridge_port=text_bridge_port,
+            text_bridge_url=text_bridge_url,
+            shell_enabled=shell_enabled,
+            shell_bridge_name=shell_bridge_name,
+            shell_bridge_port=shell_bridge_port,
+            shell_bridge_url=shell_bridge_url,
+        )
+        mcp_server_specs = [_coding_mcp_server_spec_to_export_dict(spec) for spec in specs]
 
     coding: dict[str, object] = {
         "workspaces": [str(workspace) for workspace in workspace_roots],
         "mcp_server_specs": mcp_server_specs,
     }
+    workspace_scope = env.get("MINIGENT_CODING_WORKSPACE_SCOPE", "").strip()
+    if workspace_scope:
+        coding["workspace_scope"] = workspace_scope
+    default_workspace_scope = env.get("MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE", "").strip()
+    if default_workspace_scope:
+        coding["default_workspace_scope"] = default_workspace_scope
+    workspace_scopes = _optional_json_object_env(env, "MINIGENT_CODING_WORKSPACE_SCOPES")
+    if workspace_scopes is not None:
+        coding["workspace_scopes"] = workspace_scopes
     if tenant_id:
         coding["tenant_id"] = tenant_id
     if gateway_enabled:
@@ -144,6 +152,17 @@ def _optional_bool_env(env: dict[str, str], key: str) -> bool | None:
     if raw in {"0", "false", "no", "off"}:
         return False
     raise ValueError(f"{key} must be a boolean")
+
+
+def _optional_json_object_env(env: dict[str, str], key: str) -> dict[str, object] | None:
+    raw = env.get(key, "").strip()
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def load_coding_workspace_export_env(env_path: Path) -> tuple[dict[str, str], Path]:

@@ -13,7 +13,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from dotenv import dotenv_values
 
@@ -44,6 +44,12 @@ DEFAULT_BRIDGE_DENY_GLOBS = (
     "**/.uv-cache/**",
 )
 DEFAULT_BRIDGE_ALLOW_GLOBS = ("**/.env*.template",)
+
+
+class WorkspaceScope(NamedTuple):
+    name: str
+    roots: list[Path]
+    description: str | None = None
 
 
 class CodingMCPServerSpec:
@@ -207,6 +213,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--workspace-scope",
+        default=None,
+        help=(
+            "Named coding workspace scope to activate. Defaults to "
+            "MINIGENT_CODING_WORKSPACE_SCOPE, a skill workspace_scope, "
+            "MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE, or all configured workspaces."
+        ),
+    )
+    parser.add_argument(
         "--mcp-gateway",
         action="store_true",
         help=(
@@ -310,12 +325,28 @@ def main(argv: list[str] | None = None) -> int:
         args.workspace,
         env.get("MINIGENT_CODING_WORKSPACES") or env.get("MINIGENT_CODING_WORKSPACE"),
     )
+
+    tenant_id = args.tenant_id or env.get("MINIGENT_CODING_TENANT_ID") or DEFAULT_TENANT_ID
+    try:
+        workspace_roots, active_workspace_scope = resolve_active_workspace_scope(
+            workspace_roots,
+            env,
+            tenant_id=tenant_id,
+            explicit_scope=args.workspace_scope,
+            validate_under_configured_roots=bool(
+                args.workspace
+                or env.get("MINIGENT_CODING_WORKSPACES")
+                or env.get("MINIGENT_CODING_WORKSPACE")
+            ),
+        )
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     for workspace in workspace_roots:
         if not workspace.exists() or not workspace.is_dir():
             print(f"Workspace does not exist or is not a directory: {workspace}", file=sys.stderr)
             return 2
 
-    tenant_id = args.tenant_id or env.get("MINIGENT_CODING_TENANT_ID") or DEFAULT_TENANT_ID
     api_host = args.api_host or env.get("MINIGENT_HOST") or DEFAULT_API_HOST
     api_port = args.api_port or int(env.get("MINIGENT_PORT") or DEFAULT_API_PORT)
     bridge_host = args.bridge_host or env.get("MINIGENT_CODING_BRIDGE_HOST") or DEFAULT_BRIDGE_HOST
@@ -407,6 +438,7 @@ def main(argv: list[str] | None = None) -> int:
                 tenant_id,
                 tenant_mcp_server_specs,
                 workspace_roots=workspace_roots,
+                workspace_scope=active_workspace_scope.name if active_workspace_scope else None,
             ),
             separators=(",", ":"),
         )
@@ -422,7 +454,10 @@ def main(argv: list[str] | None = None) -> int:
         "no",
     }:
         env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = inject_coding_workspace_skill(
-            env["MINIGENT_TENANT_EXECUTION_CONFIGS"], tenant_id, workspace_roots=workspace_roots
+            env["MINIGENT_TENANT_EXECUTION_CONFIGS"],
+            tenant_id,
+            workspace_roots=workspace_roots,
+            workspace_scope=active_workspace_scope.name if active_workspace_scope else None,
         )
     if gateway_enabled:
         for missing_name in tenant_gateway_mcp_server_mismatches(
@@ -443,6 +478,8 @@ def main(argv: list[str] | None = None) -> int:
     generated_files: list[Path] = []
     print(f"env_file={args.env_file}")
     print("workspaces=" + ", ".join(str(workspace) for workspace in workspace_roots))
+    if active_workspace_scope is not None:
+        print(f"workspace_scope={active_workspace_scope.name}")
     print(f"tenant_id={tenant_id}")
     if mcp_servers_file is not None:
         print(f"mcp_servers_file={mcp_servers_file} (legacy input; export emits inline specs)")
@@ -966,6 +1003,117 @@ def resolve_workspace_roots(
     return [Path(workspace).expanduser().resolve() for workspace in raw_workspaces]
 
 
+def load_workspace_scopes_from_env(env: dict[str, str]) -> dict[str, WorkspaceScope]:
+    raw = env.get("MINIGENT_CODING_WORKSPACE_SCOPES", "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("MINIGENT_CODING_WORKSPACE_SCOPES must be valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("MINIGENT_CODING_WORKSPACE_SCOPES must be a JSON object")
+    scopes: dict[str, WorkspaceScope] = {}
+    for name, entry in payload.items():
+        if not isinstance(name, str) or not name.strip():
+            raise RuntimeError("coding workspace scope names must be non-empty strings")
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"coding workspace scope '{name}' must be an object")
+        raw_roots = entry.get("roots")
+        if (
+            not isinstance(raw_roots, list)
+            or not raw_roots
+            or not all(isinstance(root, str) and root.strip() for root in raw_roots)
+        ):
+            raise RuntimeError(
+                f"coding workspace scope '{name}' roots must be a non-empty string array"
+            )
+        description = entry.get("description")
+        if description is not None and not isinstance(description, str):
+            raise RuntimeError(f"coding workspace scope '{name}' description must be a string")
+        scopes[name] = WorkspaceScope(
+            name=name,
+            roots=[Path(root).expanduser().resolve() for root in raw_roots],
+            description=description,
+        )
+    return scopes
+
+
+def skill_workspace_scope_from_env(env: dict[str, str], tenant_id: str) -> str | None:
+    raw_config = env.get("MINIGENT_TENANT_EXECUTION_CONFIGS")
+    if not raw_config:
+        return None
+    try:
+        payload = json.loads(raw_config)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    tenant = payload.get(tenant_id)
+    if not isinstance(tenant, dict):
+        return None
+    skills = tenant.get("skills")
+    if not isinstance(skills, dict):
+        return None
+    default_skill = skills.get("default_skill") or skills.get("defaultSkill")
+    if not isinstance(default_skill, str) or not default_skill:
+        return None
+    items = skills.get("items")
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if not isinstance(item, dict) or item.get("name") != default_skill:
+            continue
+        scope = item.get("workspace_scope") or item.get("workspaceScope")
+        return scope if isinstance(scope, str) and scope else None
+    return None
+
+
+def resolve_active_workspace_scope(
+    workspace_roots: list[Path],
+    env: dict[str, str],
+    *,
+    tenant_id: str,
+    explicit_scope: str | None = None,
+    validate_under_configured_roots: bool = False,
+) -> tuple[list[Path], WorkspaceScope | None]:
+    scopes = load_workspace_scopes_from_env(env)
+    requested_scope = (
+        explicit_scope
+        or env.get("MINIGENT_CODING_WORKSPACE_SCOPE")
+        or skill_workspace_scope_from_env(env, tenant_id)
+        or env.get("MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE")
+    )
+    if not requested_scope:
+        return workspace_roots, None
+    if not scopes:
+        raise RuntimeError(
+            f"coding workspace scope '{requested_scope}' was requested, but no workspace scopes are configured"
+        )
+    scope = scopes.get(requested_scope)
+    if scope is None:
+        available = ", ".join(sorted(scopes)) or "none"
+        raise RuntimeError(
+            f"unknown coding workspace scope '{requested_scope}'. Available scopes: {available}"
+        )
+    if validate_under_configured_roots:
+        outside_roots = [
+            root
+            for root in scope.roots
+            if not any(
+                root == workspace or workspace in root.parents for workspace in workspace_roots
+            )
+        ]
+        if outside_roots:
+            configured = ", ".join(str(root) for root in workspace_roots)
+            outside = ", ".join(str(root) for root in outside_roots)
+            raise RuntimeError(
+                f"coding workspace scope '{scope.name}' contains roots outside configured workspaces: "
+                f"{outside}. Configured workspaces: {configured}"
+            )
+    return scope.roots, scope
+
+
 def load_env_file(env_file: str) -> dict[str, str]:
     env = dict(os.environ)
     path = Path(env_file)
@@ -1049,6 +1197,7 @@ def default_tenant_config_from_servers(
     specs: list[CodingMCPServerSpec],
     *,
     workspace_roots: list[Path] | None = None,
+    workspace_scope: str | None = None,
 ) -> dict[str, Any]:
     return {
         tenant_id: {
@@ -1058,7 +1207,11 @@ def default_tenant_config_from_servers(
             },
             "skills": {
                 "default_skill": "coding-workspace",
-                "items": [coding_workspace_skill(workspace_roots=workspace_roots)],
+                "items": [
+                    coding_workspace_skill(
+                        workspace_roots=workspace_roots, workspace_scope=workspace_scope
+                    )
+                ],
             },
             "capability_profiles": {
                 "default_profile": "inspect",
@@ -1214,7 +1367,11 @@ def _string_list(value: object) -> list[str] | None:
 
 
 def inject_coding_workspace_skill(
-    raw_config: str, tenant_id: str, *, workspace_roots: list[Path] | None = None
+    raw_config: str,
+    tenant_id: str,
+    *,
+    workspace_roots: list[Path] | None = None,
+    workspace_scope: str | None = None,
 ) -> str:
     payload = json.loads(raw_config)
     if not isinstance(payload, dict):
@@ -1237,14 +1394,20 @@ def inject_coding_workspace_skill(
         None,
     )
     if existing_skill is None:
-        items.append(coding_workspace_skill(workspace_roots=workspace_roots))
+        items.append(
+            coding_workspace_skill(workspace_roots=workspace_roots, workspace_scope=workspace_scope)
+        )
     elif workspace_roots:
-        enrich_coding_workspace_skill(existing_skill, workspace_roots)
+        enrich_coding_workspace_skill(
+            existing_skill, workspace_roots, workspace_scope=workspace_scope
+        )
     skills.setdefault("default_skill", "coding-workspace")
     return json.dumps(payload, separators=(",", ":"))
 
 
-def coding_workspace_skill(*, workspace_roots: list[Path] | None = None) -> dict[str, str]:
+def coding_workspace_skill(
+    *, workspace_roots: list[Path] | None = None, workspace_scope: str | None = None
+) -> dict[str, str]:
     system_prompt = (
         "You are assisting with a code workspace. When the user says current directory, "
         "workspace, repo, or repository root, use its absolute path. Filesystem MCP tools "
@@ -1257,25 +1420,48 @@ def coding_workspace_skill(*, workspace_roots: list[Path] | None = None) -> dict
         "explicitly asks and the active tool policy permits it."
     )
     if workspace_roots:
-        system_prompt = append_workspace_roots_to_prompt(system_prompt, workspace_roots)
-    return {"name": "coding-workspace", "system_prompt": system_prompt}
+        system_prompt = append_workspace_roots_to_prompt(
+            system_prompt, workspace_roots, workspace_scope=workspace_scope
+        )
+    skill = {"name": "coding-workspace", "system_prompt": system_prompt}
+    if workspace_scope:
+        skill["workspace_scope"] = workspace_scope
+    return skill
 
 
-def enrich_coding_workspace_skill(skill: dict[str, Any], workspace_roots: list[Path]) -> None:
+def enrich_coding_workspace_skill(
+    skill: dict[str, Any], workspace_roots: list[Path], *, workspace_scope: str | None = None
+) -> None:
     system_prompt = skill.get("system_prompt", skill.get("systemPrompt"))
     if not isinstance(system_prompt, str):
         return
-    skill["system_prompt"] = append_workspace_roots_to_prompt(system_prompt, workspace_roots)
+    skill["system_prompt"] = append_workspace_roots_to_prompt(
+        system_prompt, workspace_roots, workspace_scope=workspace_scope
+    )
+    if workspace_scope:
+        skill["workspace_scope"] = workspace_scope
     skill.pop("systemPrompt", None)
 
 
-def append_workspace_roots_to_prompt(system_prompt: str, workspace_roots: list[Path]) -> str:
+def append_workspace_roots_to_prompt(
+    system_prompt: str, workspace_roots: list[Path], *, workspace_scope: str | None = None
+) -> str:
     marker = "Configured workspace roots:"
     if marker in system_prompt:
         return system_prompt
     roots = ", ".join(str(workspace) for workspace in workspace_roots)
     root_label = "a workspace root" if len(workspace_roots) == 1 else "workspace roots"
-    return f"{system_prompt} {marker} {roots}. Treat each listed path as {root_label}."
+    scope_text = f" Active workspace scope: {workspace_scope}." if workspace_scope else ""
+    stay_within = (
+        " Stay within these roots for file inspection and edits unless the user explicitly asks "
+        "to switch scope."
+        if workspace_scope
+        else ""
+    )
+    return (
+        f"{system_prompt} {marker} {roots}. Treat each listed path as {root_label}."
+        f"{scope_text}{stay_within}"
+    )
 
 
 def tenant_gateway_mcp_server_mismatches(

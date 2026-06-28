@@ -123,6 +123,7 @@ class TenantSkillConfig:
     description: str | None = None
     allowed_local_tools: list[str] | None = None
     mcp_server_names: list[str] | None = None
+    workspace_scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -630,6 +631,8 @@ def _tenant_skill_config_public_dict(config: TenantSkillConfig) -> dict[str, obj
         exported["allowed_local_tools"] = list(config.allowed_local_tools)
     if config.mcp_server_names is not None:
         exported["mcp_server_names"] = list(config.mcp_server_names)
+    if config.workspace_scope is not None:
+        exported["workspace_scope"] = config.workspace_scope
     return exported
 
 
@@ -1202,6 +1205,9 @@ def _parse_tenant_skills_config(
                 system_prompt=system_prompt,
                 allowed_local_tools=skill_allowed_local_tools,
                 mcp_server_names=mcp_server_names,
+                workspace_scope=_optional_str(
+                    entry.get("workspace_scope") or entry.get("workspaceScope")
+                ),
             )
         )
 

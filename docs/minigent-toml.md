@@ -203,6 +203,7 @@ api_key_env = "OPENROUTER_API_KEY"
 [coding]
 enabled = true
 workspaces = ["/Users/you/code"]
+default_workspace_scope = "my-app"
 shell_enabled = true
 shell_allowed_command_prefixes = ["uv ", "pytest ", "git "]
 mcp_gateway_enabled = true
@@ -210,6 +211,10 @@ mcp_gateway_port = 8765
 mcp_gateway_path_prefix = "/mcp"
 bridge_deny_globs = ["**/.env*", "**/.git/**"]
 bridge_allow_globs = ["**/.env*.template"]
+
+[coding.workspace_scopes.my-app]
+roots = ["/Users/you/code/my-app"]
+description = "Primary app repository"
 ```
 
 ### Coding MCP server specs
@@ -318,6 +323,9 @@ Provider key targets:
 | `tenant_id` | `MINIGENT_CODING_TENANT_ID` |
 | `workspace` | `MINIGENT_CODING_WORKSPACE` |
 | `workspaces` | `MINIGENT_CODING_WORKSPACES` |
+| `default_workspace_scope` | `MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE` |
+| `workspace_scope` | `MINIGENT_CODING_WORKSPACE_SCOPE` |
+| `workspace_scopes` | `MINIGENT_CODING_WORKSPACE_SCOPES` |
 | `inject_workspace_skill` | `MINIGENT_CODING_INJECT_WORKSPACE_SKILL` |
 | `shell_enabled` | `MINIGENT_CODING_SHELL_ENABLED` |
 | `shell_allowed_command_prefixes` | `MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES` |
@@ -331,7 +339,10 @@ Provider key targets:
 | `mcp_server_specs` | `MINIGENT_CODING_MCP_SERVER_SPECS` |
 
 List values such as `workspaces`, `shell_allowed_command_prefixes`, and bridge glob lists
-are converted to comma-separated env strings. `mcp_server_specs` is serialized as compact JSON.
+are converted to comma-separated env strings. `mcp_server_specs` and `workspace_scopes` are
+serialized as compact JSON. Workspace scopes use nested tables like
+`[coding.workspace_scopes.<name>]` with `roots = [...]` and optional `description`; the coding
+runner treats them as advisory prompt/runner narrowing until tool-level enforcement is added.
 
 ### `[mcp]`
 

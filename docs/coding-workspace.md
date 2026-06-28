@@ -143,6 +143,40 @@ uv run minigent-coding-workspace --workspace /path/to/repo1 --workspace /path/to
 When trusted-local shell support is enabled, shell `cwd` values may be under any configured
 workspace root and default to the first root.
 
+### Workspace scopes
+
+When a runner config exposes multiple workspace roots, you can define named scopes in
+`minigent.toml` and select one scope for the run. The MVP scope behavior is advisory: it
+narrows the roots passed to the runner-generated MCP server commands and coding skill prompt,
+but it is not a standalone security boundary for already-running external tools. Keep the
+outer `coding.workspaces` list as the broad set of allowed roots; scope roots should sit
+inside those configured roots.
+
+```toml
+[coding]
+workspaces = ["/Users/example/code", "/Users/example/dotfiles"]
+default_workspace_scope = "minigent"
+
+[coding.workspace_scopes.minigent]
+roots = ["/Users/example/code/minigent"]
+description = "Minigent runtime and coding workspace development"
+
+[coding.workspace_scopes.dotfiles]
+roots = ["/Users/example/dotfiles"]
+description = "Personal shell/editor configuration"
+```
+
+Resolution order is:
+
+1. `--workspace-scope` or `MINIGENT_CODING_WORKSPACE_SCOPE`;
+2. the active default skill's `workspace_scope` / `workspaceScope`, when present in tenant config;
+3. `coding.default_workspace_scope` / `MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE`;
+4. all configured workspace roots when no scope is selected.
+
+Unknown scope names fail before the runner starts. When a scope is active, the generated
+coding prompt includes `Active workspace scope: <name>` and tells the model to stay within
+those roots unless the user explicitly asks to switch scope.
+
 The runner starts the bridge with read-only filesystem tools by default. If you provide
 `MINIGENT_TENANT_EXECUTION_CONFIGS` with an `allowed_tools` list for the configured
 `fs-workspace` server, the runner mirrors that list into the bridge's `--allowed-tool` filter

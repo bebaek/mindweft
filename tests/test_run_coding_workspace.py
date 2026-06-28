@@ -328,6 +328,129 @@ def test_resolve_workspace_roots_splits_env_value(tmp_path: Path) -> None:
     assert runner.resolve_workspace_roots(None, f"{one},{two}") == [one.resolve(), two.resolve()]
 
 
+def test_resolve_active_workspace_scope_without_scopes_preserves_roots(tmp_path: Path) -> None:
+    roots = [tmp_path]
+
+    resolved_roots, scope = runner.resolve_active_workspace_scope(
+        roots, {}, tenant_id="demo-tenant"
+    )
+
+    assert resolved_roots == roots
+    assert scope is None
+
+
+def test_resolve_active_workspace_scope_uses_default_scope(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {
+        "MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE": "repo",
+        "MINIGENT_CODING_WORKSPACE_SCOPES": json.dumps(
+            {"repo": {"roots": [str(repo)], "description": "Repo work"}}
+        ),
+    }
+
+    resolved_roots, scope = runner.resolve_active_workspace_scope(
+        [tmp_path], env, tenant_id="demo-tenant", validate_under_configured_roots=True
+    )
+
+    assert resolved_roots == [repo.resolve()]
+    assert scope is not None
+    assert scope.name == "repo"
+    assert scope.description == "Repo work"
+
+
+def test_resolve_active_workspace_scope_explicit_overrides_default(tmp_path: Path) -> None:
+    one = tmp_path / "one"
+    two = tmp_path / "two"
+    one.mkdir()
+    two.mkdir()
+    env = {
+        "MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE": "one",
+        "MINIGENT_CODING_WORKSPACE_SCOPES": json.dumps(
+            {"one": {"roots": [str(one)]}, "two": {"roots": [str(two)]}}
+        ),
+    }
+
+    resolved_roots, scope = runner.resolve_active_workspace_scope(
+        [tmp_path], env, tenant_id="demo-tenant", explicit_scope="two"
+    )
+
+    assert resolved_roots == [two.resolve()]
+    assert scope is not None
+    assert scope.name == "two"
+
+
+def test_resolve_active_workspace_scope_uses_default_skill_scope(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {
+        "MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE": "fallback",
+        "MINIGENT_CODING_WORKSPACE_SCOPES": json.dumps(
+            {"repo": {"roots": [str(repo)]}, "fallback": {"roots": [str(tmp_path)]}}
+        ),
+        "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(
+            {
+                "demo-tenant": {
+                    "skills": {
+                        "default_skill": "repo-skill",
+                        "items": [
+                            {
+                                "name": "repo-skill",
+                                "system_prompt": "Work here.",
+                                "workspace_scope": "repo",
+                            }
+                        ],
+                    }
+                }
+            }
+        ),
+    }
+
+    resolved_roots, scope = runner.resolve_active_workspace_scope(
+        [tmp_path], env, tenant_id="demo-tenant"
+    )
+
+    assert resolved_roots == [repo.resolve()]
+    assert scope is not None
+    assert scope.name == "repo"
+
+
+def test_resolve_active_workspace_scope_unknown_fails(tmp_path: Path) -> None:
+    env = {
+        "MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE": "missing",
+        "MINIGENT_CODING_WORKSPACE_SCOPES": json.dumps({"known": {"roots": [str(tmp_path)]}}),
+    }
+
+    try:
+        runner.resolve_active_workspace_scope([tmp_path], env, tenant_id="demo-tenant")
+    except RuntimeError as exc:
+        assert "unknown coding workspace scope 'missing'" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_resolve_active_workspace_scope_rejects_roots_outside_configured_workspace(
+    tmp_path: Path,
+) -> None:
+    configured = tmp_path / "configured"
+    outside = tmp_path / "outside"
+    configured.mkdir()
+    outside.mkdir()
+    env = {
+        "MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE": "outside",
+        "MINIGENT_CODING_WORKSPACE_SCOPES": json.dumps({"outside": {"roots": [str(outside)]}}),
+    }
+
+    try:
+        runner.resolve_active_workspace_scope(
+            [configured], env, tenant_id="demo-tenant", validate_under_configured_roots=True
+        )
+    except RuntimeError as exc:
+        assert "contains roots outside configured workspaces" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
 def test_coding_workspace_skill_lists_multiple_workspace_roots(tmp_path: Path) -> None:
     one = tmp_path / "one"
     two = tmp_path / "two"
@@ -337,6 +460,14 @@ def test_coding_workspace_skill_lists_multiple_workspace_roots(tmp_path: Path) -
     assert "Configured workspace roots:" in skill["system_prompt"]
     assert str(one) in skill["system_prompt"]
     assert str(two) in skill["system_prompt"]
+
+
+def test_coding_workspace_skill_includes_active_scope(tmp_path: Path) -> None:
+    skill = runner.coding_workspace_skill(workspace_roots=[tmp_path], workspace_scope="repo")
+
+    assert skill["workspace_scope"] == "repo"
+    assert "Active workspace scope: repo" in skill["system_prompt"]
+    assert "Stay within these roots" in skill["system_prompt"]
 
 
 def test_inject_coding_workspace_skill_enriches_existing_skill_with_workspaces(

@@ -55,6 +55,11 @@ enabled = true
 workspaces = ["/Users/you/code"]
 shell_enabled = false
 # shell_allowed_command_prefixes = ["uv ", "pytest ", "git "]
+# default_workspace_scope = "my-app"
+#
+# [coding.workspace_scopes.my-app]
+# roots = ["/Users/you/code/my-app"]
+# description = "Primary app repository"
 
 [quality]
 enabled = false
@@ -944,16 +949,17 @@ def _coding_config_checks(
 
 
 def _workspace_paths(coding: dict[str, Any], resolved_env: dict[str, str]) -> list[Path]:
-    raw = resolved_env.get("MINIGENT_CODING_WORKSPACES") or resolved_env.get(
-        "MINIGENT_CODING_WORKSPACE", ""
-    )
-    values = [value.strip() for value in raw.split(",") if value.strip()]
+    values: list[str] = []
+    configured = coding.get("workspaces", coding.get("workspace", []))
+    if isinstance(configured, str):
+        values = [configured]
+    elif isinstance(configured, list):
+        values = [str(value) for value in configured if str(value).strip()]
     if not values:
-        configured = coding.get("workspaces", coding.get("workspace", []))
-        if isinstance(configured, str):
-            values = [configured]
-        elif isinstance(configured, list):
-            values = [str(value) for value in configured if str(value).strip()]
+        raw = resolved_env.get("MINIGENT_CODING_WORKSPACES") or resolved_env.get(
+            "MINIGENT_CODING_WORKSPACE", ""
+        )
+        values = [value.strip() for value in raw.split(",") if value.strip()]
     return [Path(value).expanduser() for value in values]
 
 

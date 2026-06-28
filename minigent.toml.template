@@ -35,6 +35,10 @@ shell_enabled = false
 # shell_allowed_command_prefixes = ["uv ", "pytest ", "git "]
 # bridge_deny_globs = ["**/.env*", "**/.git/**"]
 # bridge_allow_globs = ["**/.env*.template"]
+# default_workspace_scope = "my-app"
+# [coding.workspace_scopes.my-app]
+# roots = ["/Users/you/code/my-app"]
+# description = "Primary app repository"
 
 [mcp]
 # servers = [

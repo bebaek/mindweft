@@ -75,6 +75,8 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "tenant_id": "MINIGENT_CODING_TENANT_ID",
         "workspace": "MINIGENT_CODING_WORKSPACE",
         "workspaces": "MINIGENT_CODING_WORKSPACES",
+        "default_workspace_scope": "MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE",
+        "workspace_scope": "MINIGENT_CODING_WORKSPACE_SCOPE",
         "inject_workspace_skill": "MINIGENT_CODING_INJECT_WORKSPACE_SKILL",
         "shell_enabled": "MINIGENT_CODING_SHELL_ENABLED",
         "shell_allowed_command_prefixes": "MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES",
@@ -365,6 +367,10 @@ def _collect_mcp_config(section: object, env: dict[str, str]) -> None:
 def _collect_coding_inline_config(section: object, env: dict[str, str]) -> None:
     if not isinstance(section, dict):
         return
+    if "workspace_scopes" in section:
+        env["MINIGENT_CODING_WORKSPACE_SCOPES"] = _format_json_env_value(
+            section["workspace_scopes"]
+        )
     if "mcp_gateway_enabled" in section:
         env["MINIGENT_CODING_MCP_GATEWAY_ENABLED"] = _format_env_value(
             section["mcp_gateway_enabled"]
