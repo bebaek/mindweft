@@ -261,6 +261,21 @@ def test_text_bridge_command_runs_text_mcp_server(tmp_path: Path) -> None:
     assert command[-2:] == ["--workspace", str(tmp_path)]
 
 
+def test_text_bridge_command_allows_multiple_workspaces(tmp_path: Path) -> None:
+    other_workspace = tmp_path / "other"
+    other_workspace.mkdir()
+
+    command = runner.build_text_bridge_command(
+        "text-workspace", "127.0.0.1", 8767, [tmp_path, other_workspace]
+    )
+
+    workspace_indexes = [index for index, value in enumerate(command) if value == "--workspace"]
+    assert [command[index + 1] for index in workspace_indexes] == [
+        str(tmp_path),
+        str(other_workspace),
+    ]
+
+
 def test_default_tenant_config_adds_shell_test_profile_when_enabled() -> None:
     config = runner.default_tenant_config(
         "demo-tenant",
@@ -669,6 +684,64 @@ def test_load_coding_mcp_server_specs_expands_workspace_placeholders(tmp_path: P
     assert specs[0].profiles == ["inspect", "test"]
     assert specs[0].allowed_tools == ["inspect_repo"]
     assert specs[0].path_policy == {"deny_globs": ["**/.env*"]}
+
+
+def test_load_coding_mcp_server_specs_expands_workspace_flag_pair_for_each_root(
+    tmp_path: Path,
+) -> None:
+    other_workspace = tmp_path / "other"
+    other_workspace.mkdir()
+    specs = runner.load_coding_mcp_server_specs_from_json(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "text-workspace",
+                        "command": ["text-server", "--workspace", "{workspace}"],
+                    }
+                ]
+            }
+        ),
+        bridge_host="127.0.0.1",
+        workspace_roots=[tmp_path, other_workspace],
+    )
+
+    assert specs[0].command == [
+        "text-server",
+        "--workspace",
+        str(tmp_path),
+        "--workspace",
+        str(other_workspace),
+    ]
+
+
+def test_load_coding_mcp_server_specs_expands_workspace_args_placeholder(
+    tmp_path: Path,
+) -> None:
+    other_workspace = tmp_path / "other"
+    other_workspace.mkdir()
+    specs = runner.load_coding_mcp_server_specs_from_json(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "text-workspace",
+                        "command": ["text-server", "{workspace_args}"],
+                    }
+                ]
+            }
+        ),
+        bridge_host="127.0.0.1",
+        workspace_roots=[tmp_path, other_workspace],
+    )
+
+    assert specs[0].command == [
+        "text-server",
+        "--workspace",
+        str(tmp_path),
+        "--workspace",
+        str(other_workspace),
+    ]
 
 
 def test_load_coding_mcp_server_specs_defaults_stdio_port_when_omitted(tmp_path: Path) -> None:

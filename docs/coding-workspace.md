@@ -203,7 +203,9 @@ entry can define:
   HTTP MCP server. Defaults to `stdio`.
 - `command`: argv for stdio servers and for managed HTTP servers. Use `{workspace}` for the
   first workspace, `{workspace_roots}` as an argv item that expands to all workspace roots,
-  or `{workspace_roots_csv}` for a comma-separated root list.
+  `{workspace_roots_csv}` for a comma-separated root list, or `{workspace_args}` to expand
+  to repeated `--workspace <root>` pairs. For compatibility, `--workspace {workspace}` also
+  expands to one `--workspace <root>` pair for each active workspace root.
 - `host`, `port`, and `path`: local bridge bind settings for `http` servers and for the
   legacy compatibility mode where the runner starts one bridge process per stdio server. The
   tenant `url` defaults to `http://<host>:<port><path>` unless `url` is set explicitly.
@@ -239,7 +241,7 @@ path_policy = { deny_globs = ["**/.env*", "**/.git/**", "**/.venv/**"], allow_gl
 
 [[coding.mcp_server_specs]]
 name = "custom-workspace"
-command = ["custom-mcp-server", "--workspace", "{workspace}"]
+command = ["custom-mcp-server", "{workspace_args}"]
 profiles = ["inspect", "test"]
 allowed_tools = ["inspect_repo", "run_repo_check"]
 

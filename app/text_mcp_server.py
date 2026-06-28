@@ -16,7 +16,7 @@ DEFAULT_MAX_MATCHES = 20
 
 READ_TEXT_FILE_LINES_TOOL = {
     "name": "read_text_file_lines",
-    "description": "Read an exact inclusive line range from a text file in the configured workspace.",
+    "description": "Read an exact inclusive line range from a text file under the configured workspace roots.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -40,7 +40,7 @@ READ_TEXT_FILE_LINES_TOOL = {
 
 READ_TEXT_FILE_AROUND_TOOL = {
     "name": "read_text_file_around",
-    "description": "Read text around a 1-based line number from a file in the configured workspace.",
+    "description": "Read text around a 1-based line number from a file under the configured workspace roots.",
     "inputSchema": {
         "type": "object",
         "properties": {

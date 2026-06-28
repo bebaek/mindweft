@@ -878,15 +878,33 @@ def expand_coding_mcp_command(command: list[str], workspace_roots: list[Path]) -
     expanded: list[str] = []
     first_workspace = str(workspace_roots[0])
     workspace_roots_csv = ",".join(str(workspace) for workspace in workspace_roots)
-    for item in command:
+    index = 0
+    while index < len(command):
+        item = command[index]
         if item == "{workspace_roots}":
             expanded.extend(str(workspace) for workspace in workspace_roots)
+            index += 1
+            continue
+        if item == "{workspace_args}":
+            for workspace in workspace_roots:
+                expanded.extend(["--workspace", str(workspace)])
+            index += 1
+            continue
+        if (
+            item == "--workspace"
+            and index + 1 < len(command)
+            and command[index + 1] == "{workspace}"
+        ):
+            for workspace in workspace_roots:
+                expanded.extend(["--workspace", str(workspace)])
+            index += 2
             continue
         expanded.append(
             item.replace("{workspace}", first_workspace).replace(
                 "{workspace_roots_csv}", workspace_roots_csv
             )
         )
+        index += 1
     return expanded
 
 

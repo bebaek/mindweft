@@ -46,6 +46,38 @@ def test_read_text_file_lines_allows_workspace_relative_paths(tmp_path: Path) ->
     assert result["content"] == "alpha\n"
 
 
+def test_read_text_file_lines_allows_absolute_paths_in_any_workspace_root(tmp_path: Path) -> None:
+    workspace_one = tmp_path / "one"
+    workspace_two = tmp_path / "two"
+    workspace_one.mkdir()
+    workspace_two.mkdir()
+    file_path = workspace_two / "sample.txt"
+    file_path.write_text("from second root\n", encoding="utf-8")
+    server = TextMCPServer(workspaces=[workspace_one, workspace_two])
+
+    result = server.read_text_file_lines({"path": str(file_path), "start_line": 1, "end_line": 1})
+
+    assert result["path"] == str(file_path)
+    assert result["content"] == "from second root\n"
+
+
+def test_read_text_file_lines_resolves_relative_paths_against_first_workspace_root(
+    tmp_path: Path,
+) -> None:
+    workspace_one = tmp_path / "one"
+    workspace_two = tmp_path / "two"
+    workspace_one.mkdir()
+    workspace_two.mkdir()
+    file_path = workspace_one / "sample.txt"
+    file_path.write_text("from first root\n", encoding="utf-8")
+    server = TextMCPServer(workspaces=[workspace_one, workspace_two])
+
+    result = server.read_text_file_lines({"path": "sample.txt", "start_line": 1, "end_line": 1})
+
+    assert result["path"] == str(file_path)
+    assert result["content"] == "from first root\n"
+
+
 def test_read_text_file_around_adds_context(tmp_path: Path) -> None:
     file_path = tmp_path / "sample.txt"
     file_path.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
