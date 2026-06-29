@@ -202,10 +202,23 @@ class ExecutionOptionSection(BaseModel):
     items: list[ExecutionOptionItem] = Field(default_factory=list)
 
 
+class ExecutionAgentOptionItem(BaseModel):
+    name: str
+    description: str | None = None
+    skill_name: str | None = None
+    skills: list[str] | None = None
+    capability_profile: str | None = None
+
+
+class ExecutionAgentOptionSection(BaseModel):
+    items: list[ExecutionAgentOptionItem] = Field(default_factory=list)
+
+
 class ExecutionOptionsResponse(BaseModel):
     tenant_id: str
     skills: ExecutionOptionSection
     capability_profiles: ExecutionOptionSection
+    agents: ExecutionAgentOptionSection = Field(default_factory=ExecutionAgentOptionSection)
 
 
 class AddMessageRequest(BaseModel):

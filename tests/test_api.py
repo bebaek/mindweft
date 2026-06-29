@@ -2337,6 +2337,21 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
                             },
                         ],
                     },
+                    "agents": {
+                        "items": [
+                            {
+                                "name": "support",
+                                "description": "Support mode",
+                                "skill_name": "support",
+                                "capability_profile": "inspect",
+                            },
+                            {
+                                "name": "math",
+                                "skills": ["coding"],
+                                "capability_profile": "math",
+                            },
+                        ],
+                    },
                 }
             }
         ),
@@ -2360,6 +2375,24 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
             "items": [
                 {"name": "inspect", "description": "Inspection tools"},
                 {"name": "math", "description": None},
+            ],
+        },
+        "agents": {
+            "items": [
+                {
+                    "name": "support",
+                    "description": "Support mode",
+                    "skill_name": "support",
+                    "skills": None,
+                    "capability_profile": "inspect",
+                },
+                {
+                    "name": "math",
+                    "description": None,
+                    "skill_name": None,
+                    "skills": ["coding"],
+                    "capability_profile": "math",
+                },
             ],
         },
     }

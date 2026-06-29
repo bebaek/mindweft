@@ -1179,19 +1179,25 @@ def _handle_chat_agent(
 ) -> None:
     selection = utterance.removeprefix("/agent").strip()
     if not selection:
-        _write_agent_preset_list(config.agent_presets, output_stream)
+        _write_agent_preset_list(
+            _merged_agent_presets(config.agent_presets, _server_agent_presets(client)),
+            output_stream,
+        )
         return
     if selection == "current":
         _write_current_agent(client, config, output_stream)
         return
-    preset = _find_agent_preset(config.agent_presets, selection)
+    preset = _find_agent_preset(
+        _merged_agent_presets(config.agent_presets, _server_agent_presets(client)), selection
+    )
     if preset is None:
         output_stream.write(f"[idle] unknown agent preset '{selection}'\n")
-        if config.agent_presets:
+        all_presets = _merged_agent_presets(config.agent_presets, _server_agent_presets(client))
+        if all_presets:
             output_stream.write("[idle] use /agent to list available presets\n")
         else:
             output_stream.write(
-                "[idle] no agent presets configured; set MINIGENT_CLIENT_AGENT_PRESETS\n"
+                "[idle] no agent presets configured; add server agents or set MINIGENT_CLIENT_AGENT_PRESETS\n"
             )
         output_stream.flush()
         return
@@ -1217,6 +1223,59 @@ def _handle_chat_agent(
     if detail:
         output_stream.write(f"[idle] {detail}\n")
     output_stream.flush()
+
+
+def _server_agent_presets(client: RememberingMinigentAPIClient) -> tuple[AgentPreset, ...]:
+    try:
+        response = client.execution_options()
+    except (AttributeError, RuntimeError):
+        return ()
+    agents = response.get("agents")
+    if not isinstance(agents, dict):
+        return ()
+    items = agents.get("items")
+    if not isinstance(items, list):
+        return ()
+    presets: list[AgentPreset] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        skill_name = item.get("skill_name") or item.get("skillName")
+        raw_skills = item.get("skills") or item.get("skill_names") or item.get("skillNames")
+        capability_profile = item.get("capability_profile") or item.get("capabilityProfile")
+        description = item.get("description")
+        presets.append(
+            AgentPreset(
+                name=name.strip(),
+                skill_name=skill_name if isinstance(skill_name, str) and skill_name else None,
+                skills=tuple(raw_skills)
+                if isinstance(raw_skills, list)
+                and all(isinstance(skill, str) for skill in raw_skills)
+                else None,
+                capability_profile=capability_profile
+                if isinstance(capability_profile, str) and capability_profile
+                else None,
+                description=description if isinstance(description, str) and description else None,
+            )
+        )
+    return tuple(presets)
+
+
+def _merged_agent_presets(
+    local_presets: tuple[AgentPreset, ...], server_presets: tuple[AgentPreset, ...]
+) -> tuple[AgentPreset, ...]:
+    merged: list[AgentPreset] = []
+    seen: set[str] = set()
+    for preset in (*local_presets, *server_presets):
+        normalized = preset.name.casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(preset)
+    return tuple(merged)
 
 
 def _write_agent_preset_list(

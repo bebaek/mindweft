@@ -2229,7 +2229,42 @@ def _format_execution_options(response: dict[str, Any], *, section: str | None =
                 "Capability profiles", response.get("capability_profiles")
             )
         )
+    if section in {None, "agents"}:
+        sections.append(_format_execution_agent_section("Agents", response.get("agents")))
     return "\n".join(part for part in sections if part) + ("\n" if sections else "")
+
+
+def _format_execution_agent_section(title: str, payload: object) -> str:
+    if not isinstance(payload, dict):
+        return f"{title}:\n  none reported\n"
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return f"{title}:\n  none configured\n"
+    lines = [f"{title}:"]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        suffix_parts: list[str] = []
+        skill_name = item.get("skill_name") or item.get("skillName")
+        skills = item.get("skills") or item.get("skill_names") or item.get("skillNames")
+        capability_profile = item.get("capability_profile") or item.get("capabilityProfile")
+        description = item.get("description")
+        if isinstance(skill_name, str) and skill_name:
+            suffix_parts.append(f"skill={skill_name}")
+        if isinstance(skills, list) and all(isinstance(skill, str) for skill in skills):
+            suffix_parts.append("skills=" + ",".join(skills))
+        if isinstance(capability_profile, str) and capability_profile:
+            suffix_parts.append(f"profile={capability_profile}")
+        if isinstance(description, str) and description:
+            suffix_parts.append(description)
+        suffix = " — " + " · ".join(suffix_parts) if suffix_parts else ""
+        lines.append(f"  {name}{suffix}")
+    if len(lines) == 1:
+        lines.append("  none configured")
+    return "\n".join(lines) + "\n"
 
 
 def _format_execution_option_section(title: str, payload: object) -> str:

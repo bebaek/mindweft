@@ -51,6 +51,8 @@ from app.models import (
     AddMessageRequest,
     CreateThreadRequest,
     CreateThreadResponse,
+    ExecutionAgentOptionItem,
+    ExecutionAgentOptionSection,
     ExecutionOptionItem,
     ExecutionOptionSection,
     ExecutionOptionsResponse,
@@ -424,6 +426,18 @@ def create_app(
                 items=[
                     ExecutionOptionItem(name=profile.name, description=profile.description)
                     for profile in config.capability_profiles.items
+                ],
+            ),
+            agents=ExecutionAgentOptionSection(
+                items=[
+                    ExecutionAgentOptionItem(
+                        name=agent.name,
+                        description=agent.description,
+                        skill_name=agent.skill_name,
+                        skills=agent.skills,
+                        capability_profile=agent.capability_profile,
+                    )
+                    for agent in config.agents.items
                 ],
             ),
         )

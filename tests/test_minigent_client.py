@@ -4807,6 +4807,72 @@ def test_run_chat_loop_handles_agent_command(
     assert "[idle] current thread: thread-agent\n" in output
 
 
+def test_run_chat_loop_handles_server_agent_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("/agent\n/agent plain-qa\n/exit\n")
+    create_calls: list[dict[str, object]] = []
+
+    class FakeChatClient:
+        thread_id: str | None = None
+
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def execution_options(self) -> dict[str, object]:
+            return {
+                "agents": {
+                    "items": [
+                        {
+                            "name": "plain-qa",
+                            "skill_name": "plain-qa",
+                            "capability_profile": "plain-qa",
+                            "description": "Plain Q&A",
+                        }
+                    ]
+                }
+            }
+
+        def create_thread(
+            self,
+            *,
+            skill_name: str | None = None,
+            skills: list[str] | None = None,
+            capability_profile: str | None = None,
+        ) -> dict[str, str]:
+            create_calls.append(
+                {
+                    "skill_name": skill_name,
+                    "skills": skills,
+                    "capability_profile": capability_profile,
+                }
+            )
+            self.thread_id = "thread-plain"
+            return {"thread_id": "thread-plain"}
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            raise AssertionError(f"local chat command should not be sent: {content}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+    )
+
+    assert exit_code == 0
+    assert create_calls == [
+        {"skill_name": "plain-qa", "skills": None, "capability_profile": "plain-qa"}
+    ]
+    output = output_stream.getvalue()
+    assert "[idle] - plain-qa  skill=plain-qa profile=plain-qa - Plain Q&A" in output
+    assert "[idle] switched to agent plain-qa; created thread thread-plain\n" in output
+
+
 def test_run_chat_loop_handles_cancel_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

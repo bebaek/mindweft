@@ -1349,6 +1349,7 @@ Supported fields:
 - `tools.mcp_servers`: per-tenant MCP server definitions
 - `skills.default_skill`, `skills.items`: available prompt-overlay skills
 - `capability_profiles.default_profile`, `capability_profiles.items`: explicit tool/MCP narrowing profiles
+- `agents.items`: named server-side presets that combine skills and capability profiles for clients
 
 String values in `MINIGENT_TENANT_EXECUTION_CONFIGS` can reference environment values with
 `${NAME}` placeholders. Placeholder replacement is recursive across nested objects and arrays,
@@ -1896,7 +1897,7 @@ uv run python scripts/demo_client.py \
 Skills are execution overlays. They primarily customize the system prompt. Capability profiles
 control the effective local-tool and MCP-server surface for a thread.
 
-Users can discover the current tenant's sanitized skill/profile names and descriptions with
+Users can discover the current tenant's sanitized skill/profile/agent names and descriptions with
 `GET /execution-options`, `minigent options`, or the interactive `/options`, `/skills`, and
 `/profiles` chat commands. This discovery surface intentionally omits skill prompts, MCP URLs,
 headers, secrets, and raw tool allowlist internals.
@@ -1911,6 +1912,10 @@ is set. New configs should prefer prompt-only skills plus `capability_profiles`.
 The runtime always keeps its built-in tool-use and verification instructions, then appends the
 selected skill prompts in order. In other words, skill prompts are overlays, not full replacements
 for the runtime prompt, and `POST /threads` does not accept a raw `system_prompt` override.
+
+Clients can use server-side agent presets as named shortcuts for common skill/profile combinations.
+For example, `minigent-client chat` exposes them through `/agent` and creates a new thread with the
+preset's configured skills and capability profile.
 
 Use this tenant config with the mock adapter to demo default and explicit skills plus capability
 profiles:
@@ -1948,6 +1953,22 @@ MINIGENT_TENANT_EXECUTION_CONFIGS={
         {
           "name":"math",
           "allowed_local_tools":["calculator"]
+        }
+      ]
+    },
+    "agents":{
+      "items":[
+        {
+          "name":"support",
+          "skill_name":"support",
+          "capability_profile":"support",
+          "description":"Concise support agent"
+        },
+        {
+          "name":"math",
+          "skill_name":"math",
+          "capability_profile":"math",
+          "description":"Calculator-backed math agent"
         }
       ]
     }

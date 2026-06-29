@@ -114,6 +114,7 @@ class TenantExecutionConfig:
     capability_profiles: "TenantCapabilityProfilesConfig" = field(
         default_factory=lambda: TenantCapabilityProfilesConfig()
     )
+    agents: "TenantAgentPresetsConfig" = field(default_factory=lambda: TenantAgentPresetsConfig())
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,20 @@ class TenantCapabilityProfileConfig:
 class TenantCapabilityProfilesConfig:
     default_profile: str | None = None
     items: list[TenantCapabilityProfileConfig] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class TenantAgentPresetConfig:
+    name: str
+    description: str | None = None
+    skill_name: str | None = None
+    skills: list[str] | None = None
+    capability_profile: str | None = None
+
+
+@dataclass(frozen=True)
+class TenantAgentPresetsConfig:
+    items: list[TenantAgentPresetConfig] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -518,6 +533,9 @@ def _tenant_execution_config_public_dict(config: TenantExecutionConfig) -> dict[
     capability_profiles = _tenant_capability_profiles_public_dict(config.capability_profiles)
     if capability_profiles:
         exported["capability_profiles"] = capability_profiles
+    agents = _tenant_agent_presets_public_dict(config.agents)
+    if agents:
+        exported["agents"] = agents
     agent_backend = _agent_backend_export_public_dict(config.agent_backend)
     if agent_backend:
         exported["agent_backend"] = agent_backend
@@ -659,6 +677,26 @@ def _tenant_capability_profile_public_dict(
         exported["allowed_local_tools"] = list(config.allowed_local_tools)
     if config.mcp_server_names is not None:
         exported["mcp_server_names"] = list(config.mcp_server_names)
+    return exported
+
+
+def _tenant_agent_presets_public_dict(config: TenantAgentPresetsConfig) -> dict[str, object]:
+    exported: dict[str, object] = {}
+    if config.items:
+        exported["items"] = [_tenant_agent_preset_public_dict(agent) for agent in config.items]
+    return exported
+
+
+def _tenant_agent_preset_public_dict(config: TenantAgentPresetConfig) -> dict[str, object]:
+    exported: dict[str, object] = {"name": config.name}
+    if config.description is not None:
+        exported["description"] = config.description
+    if config.skill_name is not None:
+        exported["skill_name"] = config.skill_name
+    if config.skills is not None:
+        exported["skills"] = list(config.skills)
+    if config.capability_profile is not None:
+        exported["capability_profile"] = config.capability_profile
     return exported
 
 
@@ -832,6 +870,9 @@ def parse_tenant_execution_config(
     capability_profiles_payload = (
         payload.get("capability_profiles") or payload.get("capabilityProfiles") or {}
     )
+    agents_payload = (
+        payload.get("agents") or payload.get("agent_presets") or payload.get("agentPresets") or {}
+    )
     if not isinstance(llm_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' llm config must be an object")
     if not isinstance(tools_payload, dict):
@@ -844,8 +885,14 @@ def parse_tenant_execution_config(
         raise RuntimeError(f"Tenant '{tenant_id}' skills config must be an object")
     if not isinstance(capability_profiles_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' capability_profiles config must be an object")
+    if not isinstance(agents_payload, dict):
+        raise RuntimeError(f"Tenant '{tenant_id}' agents config must be an object")
 
     tool_config = _parse_tenant_tool_config(tenant_id, tools_payload)
+    skills_config = _parse_tenant_skills_config(tenant_id, skills_payload, tool_config)
+    capability_profiles_config = _parse_tenant_capability_profiles_config(
+        tenant_id, capability_profiles_payload, tool_config
+    )
 
     return TenantExecutionConfig(
         tenant_id=tenant_id,
@@ -857,9 +904,10 @@ def parse_tenant_execution_config(
         tools=tool_config,
         agent_backend=_parse_tenant_agent_backend_config(tenant_id, backend_payload),
         quality=_parse_tenant_quality_config(tenant_id, quality_payload),
-        skills=_parse_tenant_skills_config(tenant_id, skills_payload, tool_config),
-        capability_profiles=_parse_tenant_capability_profiles_config(
-            tenant_id, capability_profiles_payload, tool_config
+        skills=skills_config,
+        capability_profiles=capability_profiles_config,
+        agents=_parse_tenant_agent_presets_config(
+            tenant_id, agents_payload, skills_config, capability_profiles_config
         ),
     )
 
@@ -1216,6 +1264,70 @@ def _parse_tenant_skills_config(
             f"Tenant '{tenant_id}' skills.default_skill must reference a configured skill"
         )
     return TenantSkillsConfig(default_skill=default_skill, items=items)
+
+
+def _parse_tenant_agent_presets_config(
+    tenant_id: str,
+    payload: dict[str, Any],
+    skills_config: TenantSkillsConfig,
+    capability_profiles_config: TenantCapabilityProfilesConfig,
+) -> TenantAgentPresetsConfig:
+    items_raw = payload.get("items") or []
+    if not isinstance(items_raw, list):
+        raise RuntimeError(f"Tenant '{tenant_id}' agents.items must be an array")
+
+    configured_skill_names = {skill.name for skill in skills_config.items}
+    configured_profile_names = {profile.name for profile in capability_profiles_config.items}
+    seen_names: set[str] = set()
+    items: list[TenantAgentPresetConfig] = []
+    for entry in items_raw:
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"Tenant '{tenant_id}' agents.items entries must be objects")
+        name = _required_non_empty_str(tenant_id, entry.get("name"), "agents.items[].name")
+        if name in seen_names:
+            raise RuntimeError(
+                f"Tenant '{tenant_id}' agent preset '{name}' is defined more than once"
+            )
+        seen_names.add(name)
+        skill_name = _optional_str(entry.get("skill_name") or entry.get("skillName"))
+        skills = _optional_str_list(
+            tenant_id,
+            entry.get("skill_names") or entry.get("skillNames") or entry.get("skills"),
+            f"agent preset '{name}' skill_names",
+        )
+        if skill_name is not None and skills is not None:
+            raise RuntimeError(
+                f"Tenant '{tenant_id}' agent preset '{name}' cannot set both skill_name and skill_names"
+            )
+        capability_profile = _optional_str(
+            entry.get("capability_profile") or entry.get("capabilityProfile")
+        )
+        if skill_name is None and skills is None and capability_profile is None:
+            raise RuntimeError(
+                f"Tenant '{tenant_id}' agent preset '{name}' must set skill_name, skill_names, or capability_profile"
+            )
+        referenced_skills = [skill_name] if skill_name is not None else list(skills or [])
+        unknown_skills = sorted(set(referenced_skills) - configured_skill_names)
+        if unknown_skills:
+            raise RuntimeError(
+                f"Tenant '{tenant_id}' agent preset '{name}' references unknown skills: "
+                + ", ".join(unknown_skills)
+            )
+        if capability_profile is not None and capability_profile not in configured_profile_names:
+            raise RuntimeError(
+                f"Tenant '{tenant_id}' agent preset '{name}' references unknown capability profile: "
+                f"{capability_profile}"
+            )
+        items.append(
+            TenantAgentPresetConfig(
+                name=name,
+                description=_optional_str(entry.get("description")),
+                skill_name=skill_name,
+                skills=skills,
+                capability_profile=capability_profile,
+            )
+        )
+    return TenantAgentPresetsConfig(items=items)
 
 
 def _parse_tenant_capability_profiles_config(
