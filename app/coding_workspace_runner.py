@@ -117,10 +117,16 @@ def parse_config_args(argv: list[str]) -> argparse.Namespace:
         "export",
         help="Export a restartable local coding workspace config by merging API and runner config.",
     )
-    export_parser.add_argument(
+    env_file_group = export_parser.add_mutually_exclusive_group()
+    env_file_group.add_argument(
         "--env-file",
         default=DEFAULT_CODING_DOTENV_FILE,
         help=f"Coding runner dotenv file. Defaults to {DEFAULT_CODING_DOTENV_FILE}.",
+    )
+    env_file_group.add_argument(
+        "--no-env-file",
+        action="store_true",
+        help="Do not load a coding runner dotenv file for this command.",
     )
     export_parser.add_argument(
         "--base-url",
@@ -152,7 +158,11 @@ def build_coding_config_export_client_argv(args: argparse.Namespace) -> list[str
         argv.extend(["--base-url", base_url])
     if args.json:
         argv.append("--json")
-    argv.extend(["config", "export", "--local-coding", "--coding-env-file", args.env_file])
+    argv.extend(["config", "export", "--local-coding"])
+    if args.no_env_file:
+        argv.append("--no-coding-env-file")
+    else:
+        argv.extend(["--coding-env-file", args.env_file])
     if args.output:
         argv.extend(["--output", args.output])
     if args.include_runtime:
@@ -175,7 +185,8 @@ def load_config_command_env(env_file: str) -> None:
 def run_config_command(argv: list[str]) -> int:
     args = parse_config_args(argv)
     if args.command == "config" and args.config_command == "export":
-        load_config_command_env(args.env_file)
+        if not args.no_env_file:
+            load_config_command_env(args.env_file)
         from minigent_client.one_shot_cli import main as client_main
 
         return client_main(build_coding_config_export_client_argv(args))
@@ -198,10 +209,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "MINIGENT_CODING_MCP_SERVERS_FILE when set."
         ),
     )
-    parser.add_argument(
+    env_file_group = parser.add_mutually_exclusive_group()
+    env_file_group.add_argument(
         "--env-file",
         default=DEFAULT_CODING_DOTENV_FILE,
         help=f"dotenv file to load before starting processes. Defaults to {DEFAULT_CODING_DOTENV_FILE}.",
+    )
+    env_file_group.add_argument(
+        "--no-env-file",
+        action="store_true",
+        help="Do not load a coding runner dotenv file before starting processes.",
     )
     parser.add_argument(
         "--workspace",
@@ -319,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
     if raw_argv[:1] == ["config"]:
         return run_config_command(raw_argv)
     args = parse_args(raw_argv)
-    env = load_env_file(args.env_file)
+    env = load_env_file(None if args.no_env_file else args.env_file)
 
     workspace_roots = resolve_workspace_roots(
         args.workspace,
@@ -1132,8 +1149,16 @@ def resolve_active_workspace_scope(
     return scope.roots, scope
 
 
-def load_env_file(env_file: str) -> dict[str, str]:
+def load_env_file(env_file: str | None) -> dict[str, str]:
     env = dict(os.environ)
+    if env_file is None:
+        source_env = dict(env)
+        apply_unified_config_to_env(source_env, base_dir=Path.cwd())
+        for key, value in source_env.items():
+            env.setdefault(key, value)
+        apply_file_env_values(env, base_dir=Path.cwd())
+        return env
+
     path = Path(env_file)
     base_dir = path.parent if path.exists() else Path.cwd()
     values = dotenv_values(path) if path.exists() else {}

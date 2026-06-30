@@ -813,6 +813,11 @@ def build_parser() -> argparse.ArgumentParser:
             f"{DEFAULT_CODING_DOTENV_FILE}."
         ),
     )
+    config_export_parser.add_argument(
+        "--no-coding-env-file",
+        action="store_true",
+        help="With --local-coding, do not load a coding runner dotenv file.",
+    )
     config_subparsers.add_parser("doctor", help="Check common CLI/API configuration issues.")
 
     return parser

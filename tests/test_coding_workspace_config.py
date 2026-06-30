@@ -36,6 +36,28 @@ def test_export_local_coding_config_reuses_preloaded_env_file(tmp_path: Path, mo
     assert exported["coding"]["tenant_id"] == "preloaded-tenant"
 
 
+def test_export_local_coding_config_can_skip_env_file(tmp_path: Path, monkeypatch) -> None:
+    env_path = tmp_path / ".env.coding"
+    env_path.write_text("MINIGENT_CODING_WORKSPACES=/should/not/read\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINIGENT_CODING_WORKSPACES", str(workspace))
+    monkeypatch.setenv("MINIGENT_CODING_TENANT_ID", "env-only-tenant")
+
+    def fail_load_env_file(_path: str) -> dict[str, str]:
+        raise AssertionError("env file should not be read")
+
+    monkeypatch.setattr(coding_workspace_config.runner, "load_env_file", fail_load_env_file)
+
+    exported = coding_workspace_config.export_local_coding_config(
+        Namespace(no_coding_env_file=True, coding_env_file=str(env_path), env_file=str(env_path))
+    )
+
+    assert exported["coding"]["workspaces"] == [str(workspace)]
+    assert exported["coding"]["tenant_id"] == "env-only-tenant"
+
+
 def test_load_coding_workspace_export_env_applies_file_values_without_dotenv_reread(
     tmp_path: Path, monkeypatch
 ) -> None:

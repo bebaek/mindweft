@@ -61,6 +61,18 @@ def test_coding_config_export_uses_env_base_url(monkeypatch) -> None:
     ]
 
 
+def test_coding_config_export_can_skip_env_file(monkeypatch) -> None:
+    monkeypatch.delenv("MINIGENT_BASE_URL", raising=False)
+    args = runner.parse_config_args(["config", "export", "--no-env-file"])
+
+    assert runner.build_coding_config_export_client_argv(args) == [
+        "config",
+        "export",
+        "--local-coding",
+        "--no-coding-env-file",
+    ]
+
+
 def test_load_config_command_env_sets_dotenv_without_overriding(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -93,6 +105,17 @@ def test_load_env_file_reads_file_backed_values(tmp_path: Path, monkeypatch) -> 
     assert env["MINIGENT_TENANT_EXECUTION_CONFIGS"] == (
         '{"demo-tenant":{"llm":{"provider":"mock"}}}'
     )
+
+
+def test_load_env_file_can_skip_dotenv(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CODING_WORKSPACES", raising=False)
+    env_path = tmp_path / ".env.coding"
+    env_path.write_text("MINIGENT_CODING_WORKSPACES=/should/not/read\n", encoding="utf-8")
+
+    env = runner.load_env_file(None)
+
+    assert env.get("MINIGENT_CODING_WORKSPACES") != "/should/not/read"
 
 
 def test_bridge_command_uses_default_read_only_tools(tmp_path: Path) -> None:

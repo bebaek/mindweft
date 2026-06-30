@@ -18,12 +18,14 @@ from app.unified_config import (
 def export_local_coding_config(args: Namespace) -> dict[str, object]:
     """Resolve local coding runner config for orchestrator-side export."""
 
-    env_file = (
-        getattr(args, "coding_env_file", None)
-        or getattr(args, "env_file", None)
-        or DEFAULT_CODING_DOTENV_FILE
-    )
-    env_path = Path(env_file).expanduser()
+    env_file = None
+    if not getattr(args, "no_coding_env_file", False):
+        env_file = (
+            getattr(args, "coding_env_file", None)
+            or getattr(args, "env_file", None)
+            or DEFAULT_CODING_DOTENV_FILE
+        )
+    env_path = Path(env_file).expanduser() if env_file is not None else None
     env, env_base_dir = load_coding_workspace_export_env(env_path)
     workspace_roots = runner.resolve_workspace_roots(
         None,
@@ -165,13 +167,24 @@ def _optional_json_object_env(env: dict[str, str], key: str) -> dict[str, object
     return value if isinstance(value, dict) else None
 
 
-def load_coding_workspace_export_env(env_path: Path) -> tuple[dict[str, str], Path]:
+def load_coding_workspace_export_env(env_path: Path | None) -> tuple[dict[str, str], Path]:
     """Load coding env for export without rereading a preloaded dotenv file.
 
     `sops exec-file` and similar tools may provide the dotenv as a one-shot file or FIFO.
     The main CLI has already loaded `--env-file` into `os.environ`, so avoid reading the same
     path again when `MINIGENT_DOTENV_FILE` points at it.
     """
+
+    if env_path is None:
+        base_dir = Path.cwd()
+        env = dict(os.environ)
+        config_env = load_unified_config_env(
+            resolve_config_path(base_dir=base_dir, env=env), source_env=env
+        )
+        for key, value in config_env.items():
+            env.setdefault(key, value)
+        _apply_selected_file_env_values(env, base_dir=base_dir)
+        return env, base_dir
 
     base_dir = env_path.resolve().parent if env_path.exists() else Path.cwd()
     if env_path.exists() and not _env_file_already_loaded(env_path):

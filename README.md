@@ -42,7 +42,9 @@ uv run minigent chat
 For the reusable coding-workspace runner, copy `.env.coding.template` to `.env.coding`.
 The template sets `MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db` so threads
 survive restarts. `MINIGENT_CODING_WORKSPACES` can be one path or a comma-separated list of
-workspace roots (`MINIGENT_CODING_WORKSPACE` is still accepted for compatibility). See
+workspace roots (`MINIGENT_CODING_WORKSPACE` is still accepted for compatibility). Pass
+`--no-env-file` to `minigent-coding-workspace` to skip reading `.env.coding` and use only the
+process environment plus unified config. See
 [Coding workspace setup](docs/coding-workspace.md) for the MCP-based
 workspace tool model, bridge path glob controls, optional trusted-local shell command
 support, and optional codebase-memory/code-navigation MCP setup.
@@ -73,7 +75,7 @@ write a focused starter config with `uv run minigent config init --profile local
 (`basic-chat`, `openrouter`, and `voice` profiles are also available). This file is a
 friendly facade for the common app, auth, LLM, coding workspace, MCP, voice, and quality
 settings. The unified TOML config default is always `./minigent.toml`; the coding-workspace
-runner separately defaults its dotenv file to `./.env.coding`.
+runner separately defaults its dotenv file to `./.env.coding` unless `--no-env-file` is set.
 See [`docs/minigent-toml.md`](docs/minigent-toml.md) for the schema, examples, precedence,
 and troubleshooting commands. Set `MINIGENT_CONFIG_FILE` to point at a different TOML file.
 Existing `.env` files and real environment variables still work; set `MINIGENT_DOTENV_FILE`

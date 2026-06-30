@@ -113,14 +113,17 @@ them to separate profiles such as `inspect`, `edit`, and `test`.
 ## Convenience runner
 
 To run this as a reusable local coding-assistant stack, copy the coding env template and start
-the convenience runner. It loads `.env.coding`, starts the filesystem stdio bridge, starts the
-Minigent API, and prints a ready-to-run demo client command:
+the convenience runner. It loads `.env.coding` by default, starts the filesystem stdio bridge,
+starts the Minigent API, and prints a ready-to-run demo client command:
 
 ```bash
 cp .env.coding.template .env.coding
 # edit MINIGENT_CODING_WORKSPACES=/path/to/workspace
 uv run minigent-coding-workspace --env-file .env.coding
 ```
+
+Use `uv run minigent-coding-workspace --no-env-file` when you want to inherit only the
+process environment and unified config, without reading a coding dotenv file.
 
 The template sets `MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db` so coding threads
 survive runner/API restarts. Remove that setting only if you intentionally want in-memory,
@@ -333,6 +336,8 @@ the locally resolved runner config:
 uv run minigent --env-file .env.coding config export --local-coding --output minigent.toml
 # Equivalent coding-runner wrapper:
 uv run minigent-coding-workspace config export --env-file .env.coding --output minigent.toml
+# Export without reading a coding dotenv file:
+uv run minigent-coding-workspace config export --no-env-file --output minigent.toml
 ```
 
 On first use, ask the coding agent to index the repository, for example: "Index this
