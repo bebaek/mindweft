@@ -215,7 +215,11 @@ Minigent also sends `include: ["reasoning.encrypted_content"]` and requests reas
 summaries with `reasoning: {"effort":"medium","summary":"auto"}` by default, matching
 Pi's visible-thinking request shape. Override those defaults with
 `MINIGENT_LLM_REASONING_EFFORT` and `MINIGENT_LLM_REASONING_SUMMARY`; set either value to
-`off`, `none`, `null`, `false`, or `0` to omit that field. Set
+`off`, `none`, `null`, `false`, or `0` to omit that field. If the endpoint returns only
+encrypted reasoning state and no assistant message or tool call, Minigent automatically
+continues the Responses request with that reasoning state up to
+`MINIGENT_RESPONSES_REASONING_ONLY_RETRIES` times (default `3`) before returning a
+structured retryable `provider_reasoning_only` error. Set
 `MINIGENT_LLM_PROMPT_CACHE_KEY` to a literal value to
 override the cache key, or to `thread`/`auto` to explicitly use thread-ID mode.
 For OpenRouter,

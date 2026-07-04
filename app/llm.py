@@ -27,6 +27,7 @@ LLM_DEBUG_REQUEST_LOG_PATH_ENV = "MINIGENT_LLM_DEBUG_REQUEST_LOG_PATH"
 LLM_PROMPT_CACHE_KEY_ENV = "MINIGENT_LLM_PROMPT_CACHE_KEY"
 LLM_REASONING_EFFORT_ENV = "MINIGENT_LLM_REASONING_EFFORT"
 LLM_REASONING_SUMMARY_ENV = "MINIGENT_LLM_REASONING_SUMMARY"
+LLM_RESPONSES_REASONING_ONLY_RETRIES_ENV = "MINIGENT_RESPONSES_REASONING_ONLY_RETRIES"
 LLM_MAX_TOOL_RESULT_CHARS_ENV = "MINIGENT_LLM_MAX_TOOL_RESULT_CHARS"
 ANTHROPIC_MAX_TOKENS_ENV = "ANTHROPIC_MAX_TOKENS"
 ANTHROPIC_VERSION_ENV = "ANTHROPIC_VERSION"
@@ -38,6 +39,7 @@ ANTHROPIC_THINKING_BLOCKS_METADATA_KEY = "anthropic_thinking_blocks"
 GEMINI_THOUGHT_SIGNATURE_METADATA_KEY = "gemini_thought_signature"
 DEFAULT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS = 20000
 DEFAULT_LLM_MAX_TOOL_RESULT_CHARS = 200000
+DEFAULT_RESPONSES_REASONING_ONLY_RETRIES = 3
 DEFAULT_ANTHROPIC_MAX_TOKENS = 4096
 DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
 
@@ -777,8 +779,9 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
         prompt_cache_key = _prompt_cache_key_for_request(messages)
         if prompt_cache_key:
             payload["prompt_cache_key"] = prompt_cache_key
+        max_reasoning_only_retries = _responses_reasoning_only_retries()
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
-            for attempt in range(2):
+            for attempt in range(max_reasoning_only_retries + 1):
                 _debug_log_llm_request(
                     "generic-oauth-responses",
                     payload,
@@ -815,16 +818,29 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
                         detail="Generic OAuth LLM returned a non-JSON, non-SSE response",
                     ) from exc
                 except HTTPException as exc:
-                    if not _is_no_responses_output_error(exc) or attempt > 0:
+                    if not _is_no_responses_output_error(exc):
                         raise
                     reasoning_items = _responses_reasoning_input_items_from_body(body)
                     if not reasoning_items:
                         raise
+                    if attempt >= max_reasoning_only_retries:
+                        logger.error(
+                            "Generic OAuth LLM returned reasoning-only output after %s continuation attempt(s)",
+                            max_reasoning_only_retries,
+                        )
+                        raise _responses_reasoning_only_exception(
+                            reasoning_item_count=len(reasoning_items),
+                            retries=max_reasoning_only_retries,
+                        ) from exc
                     logger.info(
-                        "Generic OAuth LLM returned reasoning-only output; retrying once with %s reasoning item(s)",
+                        "Generic OAuth LLM returned reasoning-only output; continuing request %s/%s with %s reasoning item(s)",
+                        attempt + 1,
+                        max_reasoning_only_retries,
                         len(reasoning_items),
                     )
-                    payload["input"] = [*payload["input"], *reasoning_items]
+                    payload["input"] = _dedupe_responses_input_items(
+                        [*payload["input"], *reasoning_items]
+                    )
 
         raise HTTPException(
             status_code=502, detail="Generic OAuth LLM returned no assistant output"
@@ -2358,7 +2374,37 @@ def _is_no_responses_output_error(exc: HTTPException) -> bool:
     return exc.status_code == 502 and exc.detail == "Generic OAuth LLM returned no assistant output"
 
 
+def _responses_reasoning_only_retries() -> int:
+    return max(
+        0,
+        _env_int(
+            LLM_RESPONSES_REASONING_ONLY_RETRIES_ENV,
+            DEFAULT_RESPONSES_REASONING_ONLY_RETRIES,
+        ),
+    )
+
+
+def _responses_reasoning_only_exception(
+    *, reasoning_item_count: int, retries: int
+) -> HTTPException:
+    return HTTPException(
+        status_code=502,
+        detail={
+            "type": "provider_reasoning_only",
+            "message": (
+                "Generic OAuth LLM returned reasoning state but no assistant message or tool call."
+            ),
+            "provider": GENERIC_OAUTH_PROVIDER,
+            "retryable": True,
+            "reasoning_item_count": reasoning_item_count,
+            "continuation_attempts": retries,
+        },
+    )
+
+
 def _responses_reasoning_input_items_from_body(body: str) -> list[dict[str, Any]]:
+    if _looks_like_sse(body):
+        return _responses_reasoning_input_items_from_sse(body)
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
@@ -2369,6 +2415,32 @@ def _responses_reasoning_input_items_from_body(body: str) -> list[dict[str, Any]
     if not isinstance(output, list):
         return []
     return _responses_reasoning_items_from_output(output)
+
+
+def _responses_reasoning_input_items_from_sse(body: str) -> list[dict[str, Any]]:
+    output_items: list[dict[str, Any]] = []
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line.removeprefix("data:").strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        item = event.get("item")
+        if isinstance(item, dict):
+            output_items.extend(_responses_reasoning_items_from_output([item]))
+        response = event.get("response")
+        if isinstance(response, dict):
+            output = response.get("output")
+            if isinstance(output, list):
+                output_items.extend(_responses_reasoning_items_from_output(output))
+    return _dedupe_responses_input_items(output_items)
 
 
 def _responses_reasoning_summary(item: dict[str, Any]) -> list[Any]:

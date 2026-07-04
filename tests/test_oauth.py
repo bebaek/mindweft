@@ -699,6 +699,142 @@ def test_generic_oauth_adapter_retries_once_after_reasoning_only_output(tmp_path
     }
 
 
+def test_generic_oauth_adapter_auto_continues_repeated_reasoning_only_output(
+    tmp_path: Path,
+) -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.read().decode()))
+        if len(requests) <= 3:
+            return httpx.Response(
+                200,
+                json={
+                    "output": [
+                        {
+                            "id": f"rs_retry_{len(requests)}",
+                            "type": "reasoning",
+                            "summary": [],
+                            "encrypted_content": f"retry-reasoning-{len(requests)}",
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "continued ok"}],
+                    }
+                ]
+            },
+        )
+
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://example.test/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    assert response.content == "continued ok"
+    assert len(requests) == 4
+    assert [item["id"] for item in requests[-1]["input"][-3:]] == [
+        "rs_retry_1",
+        "rs_retry_2",
+        "rs_retry_3",
+    ]
+
+
+def test_generic_oauth_adapter_reports_reasoning_only_stall_after_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.read().decode()))
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "id": f"rs_retry_{len(requests)}",
+                        "type": "reasoning",
+                        "summary": [],
+                        "encrypted_content": f"retry-reasoning-{len(requests)}",
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setenv("MINIGENT_RESPONSES_REASONING_ONLY_RETRIES", "1")
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    store.set(
+        "test-oauth",
+        OAuthCredentials(
+            access_token=_token("acct_test"),
+            refresh_token="refresh-token",
+            expires_at=time.time() + 3600,
+            account_id="acct_test",
+        ),
+    )
+    provider = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    adapter = GenericOAuthResponsesAdapter(
+        url="https://example.test/responses",
+        model="test-model",
+        oauth_provider=provider,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            adapter.generate(
+                [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+                [],
+            )
+        )
+
+    assert len(requests) == 2
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == {
+        "type": "provider_reasoning_only",
+        "message": "Generic OAuth LLM returned reasoning state but no assistant message or tool call.",
+        "provider": GENERIC_OAUTH_PROVIDER,
+        "retryable": True,
+        "reasoning_item_count": 1,
+        "continuation_attempts": 1,
+    }
+
+
 def test_generic_oauth_adapter_can_log_raw_response_for_debugging(
     tmp_path: Path,
     monkeypatch,
