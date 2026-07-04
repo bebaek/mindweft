@@ -1660,6 +1660,14 @@ def _serialize_config_payload(config: TenantExecutionConfig) -> dict[str, Any]:
                     "name": skill.name,
                     "description": skill.description,
                     "system_prompt": skill.system_prompt,
+                    "instruction_source": (
+                        {
+                            "type": skill.instruction_source.type,
+                            "path": skill.instruction_source.path,
+                        }
+                        if skill.instruction_source is not None
+                        else None
+                    ),
                     "allowed_local_tools": skill.allowed_local_tools,
                     "mcp_server_names": skill.mcp_server_names,
                 }

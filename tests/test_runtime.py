@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import HTTPException
 
@@ -1326,6 +1327,89 @@ def test_runtime_appends_multiple_skill_prompts_in_order() -> None:
         "[Skill: support]\nAnswer as a concise support agent.\n\n"
         "[Skill: safe-actions]\nRequire confirmation before risky actions."
     )
+
+
+def test_runtime_lazily_loads_active_agent_skill_body(tmp_path: Path) -> None:
+    active_dir = tmp_path / "active"
+    active_dir.mkdir()
+    active_skill = active_dir / "SKILL.md"
+    active_skill.write_text(
+        "---\nname: agent-reviewer\ndescription: Reviews work.\n---\n\n"
+        "Loaded active Agent Skill instructions.",
+        encoding="utf-8",
+    )
+    inactive_dir = tmp_path / "inactive"
+    inactive_dir.mkdir()
+    inactive_skill = inactive_dir / "SKILL.md"
+    inactive_skill.write_text(
+        "---\nname: inactive\ndescription: Should stay unloaded.\n---\n\n"
+        "Inactive Agent Skill instructions must not appear.",
+        encoding="utf-8",
+    )
+    seen_messages: list[Message] = []
+    config = parse_tenant_execution_config(
+        PRINCIPAL.tenant_id,
+        {
+            "llm": {"provider": "mock"},
+            "skills": {
+                "items": [
+                    {
+                        "name": "agent-reviewer",
+                        "description": "Reviews work.",
+                        "instruction_source": {
+                            "type": "agent_skill",
+                            "path": str(active_skill),
+                        },
+                    },
+                    {
+                        "name": "inactive",
+                        "description": "Should stay unloaded.",
+                        "instruction_source": {
+                            "type": "agent_skill",
+                            "path": str(inactive_skill),
+                        },
+                    },
+                ]
+            },
+        },
+    )
+
+    class InspectingLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            nonlocal seen_messages
+            seen_messages = messages
+            return LLMResponse(content="ok")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    store = InMemoryThreadStore()
+    resolver = InMemoryTenantExecutionResolver(
+        {PRINCIPAL.tenant_id: config},
+        default_context=None,
+    )
+    resolver._contexts[PRINCIPAL.tenant_id] = TenantExecutionContext(
+        llm_adapter=InspectingLLM(),
+        tool_registry=build_local_tool_registry(),
+        config=config,
+    )
+    runtime = AgentRuntime(store=store, execution_resolver=resolver)
+    thread = store.create_thread(PRINCIPAL.tenant_id, skill_name="agent-reviewer")
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="hello",
+            created_by=PRINCIPAL.user_id,
+        ),
+    )
+
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert reply == "ok"
+    assert "Loaded active Agent Skill instructions." in seen_messages[0].content
+    assert "Inactive Agent Skill instructions must not appear." not in seen_messages[0].content
 
 
 def test_runtime_skill_can_narrow_tools_for_thread() -> None:

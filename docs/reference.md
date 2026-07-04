@@ -1363,6 +1363,38 @@ This also applies when the JSON is loaded through `MINIGENT_TENANT_EXECUTION_CON
 For a developer-oriented example that combines multiple skills with explicit capability profiles,
 see the commented block in [.env.template](/Users/burm/code/minigent/.env.template).
 
+#### Agent Skill instruction sources
+
+Minigent skills can either define native `system_prompt` text or point to a local
+Claude/Agent Skill `SKILL.md` file with `instruction_source`. Agent Skill sources preserve
+progressive disclosure: only metadata such as `name` and `description` is part of the skill
+catalog, and the `SKILL.md` body is read only when that Minigent skill is selected or used as
+the default skill for a thread.
+
+```json
+{
+  "demo-tenant": {
+    "skills": {
+      "items": [
+        {
+          "name": "code-reviewer",
+          "description": "Reviews code changes for correctness and maintainability.",
+          "instruction_source": {
+            "type": "agent_skill",
+            "path": "/opt/minigent/skills/code-reviewer/SKILL.md"
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+The Agent Skill body becomes active instructions only for selected/default skills. Supporting
+files such as `references/`, `scripts/`, and `assets/` are not loaded or executed
+automatically. Tool permissions still come from tenant tool config and capability profiles;
+Agent Skill metadata such as `allowed-tools` must not be treated as a permission grant.
+
 ### Coding workspace access
 
 Coding workspace setup, including the reusable runner, filesystem MCP bridge, and the

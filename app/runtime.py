@@ -8,13 +8,16 @@ import textwrap
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
 
+from app.agent_skills import load_agent_skill_body
 from app.execution import (
     FixedTenantExecutionResolver,
     TenantExecutionResolver,
+    TenantSkillConfig,
     build_tool_registry_for_capability_profile,
     build_tool_registry_for_skill,
     get_capability_profile,
@@ -123,6 +126,14 @@ def _parse_tool_timeout_seconds(env: Mapping[str, str]) -> float:
     return value
 
 
+def _load_active_skill_instructions(skill: TenantSkillConfig) -> str:
+    if skill.system_prompt is not None:
+        return skill.system_prompt
+    if skill.instruction_source is not None and skill.instruction_source.type == "agent_skill":
+        return load_agent_skill_body(Path(skill.instruction_source.path))
+    raise RuntimeError(f"Skill '{skill.name}' has no active instructions")
+
+
 class AgentRuntime:
     def __init__(
         self,
@@ -198,7 +209,7 @@ class AgentRuntime:
                 messages = self._messages_for_llm(
                     principal,
                     thread_id,
-                    skill_prompts=[skill.system_prompt for skill in skills],
+                    skill_prompts=[_load_active_skill_instructions(skill) for skill in skills],
                     skill_names=[skill.name for skill in skills],
                 )
                 tool_specs = tool_registry.specs()

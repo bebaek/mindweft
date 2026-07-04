@@ -5,7 +5,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 from fastapi import HTTPException
 
@@ -118,10 +118,17 @@ class TenantExecutionConfig:
 
 
 @dataclass(frozen=True)
+class SkillInstructionSource:
+    type: Literal["agent_skill"]
+    path: str
+
+
+@dataclass(frozen=True)
 class TenantSkillConfig:
     name: str
-    system_prompt: str
+    system_prompt: str | None = None
     description: str | None = None
+    instruction_source: SkillInstructionSource | None = None
     allowed_local_tools: list[str] | None = None
     mcp_server_names: list[str] | None = None
     workspace_scope: str | None = None
@@ -639,10 +646,14 @@ def _tenant_skills_config_public_dict(config: TenantSkillsConfig) -> dict[str, o
 
 
 def _tenant_skill_config_public_dict(config: TenantSkillConfig) -> dict[str, object]:
-    exported: dict[str, object] = {
-        "name": config.name,
-        "system_prompt": config.system_prompt,
-    }
+    exported: dict[str, object] = {"name": config.name}
+    if config.system_prompt is not None:
+        exported["system_prompt"] = config.system_prompt
+    if config.instruction_source is not None:
+        exported["instruction_source"] = {
+            "type": config.instruction_source.type,
+            "path": config.instruction_source.path,
+        }
     if config.description is not None:
         exported["description"] = config.description
     if config.allowed_local_tools is not None:
@@ -1210,11 +1221,16 @@ def _parse_tenant_skills_config(
         if name in seen_names:
             raise RuntimeError(f"Tenant '{tenant_id}' skill '{name}' is defined more than once")
         seen_names.add(name)
-        system_prompt = _required_non_empty_str(
+        system_prompt = _optional_str(entry.get("system_prompt") or entry.get("systemPrompt"))
+        instruction_source = _parse_skill_instruction_source(
             tenant_id,
-            entry.get("system_prompt") or entry.get("systemPrompt"),
-            f"skill '{name}' system_prompt",
+            name,
+            entry.get("instruction_source") or entry.get("instructionSource"),
         )
+        if system_prompt is None and instruction_source is None:
+            raise RuntimeError(
+                f"Tenant '{tenant_id}' skill '{name}' must define system_prompt or instruction_source"
+            )
         skill_allowed_local_tools = _optional_str_list(
             tenant_id,
             entry.get("allowed_local_tools") or entry.get("allowedLocalTools"),
@@ -1251,6 +1267,7 @@ def _parse_tenant_skills_config(
                 name=name,
                 description=_optional_str(entry.get("description")),
                 system_prompt=system_prompt,
+                instruction_source=instruction_source,
                 allowed_local_tools=skill_allowed_local_tools,
                 mcp_server_names=mcp_server_names,
                 workspace_scope=_optional_str(
@@ -1631,6 +1648,32 @@ def _required_non_empty_str(tenant_id: str, value: object, label: str) -> str:
     if parsed is None:
         raise RuntimeError(f"Tenant '{tenant_id}' {label} must be a non-empty string")
     return parsed
+
+
+def _parse_skill_instruction_source(
+    tenant_id: str, skill_name: str, value: object
+) -> SkillInstructionSource | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' skill '{skill_name}' instruction_source must be an object"
+        )
+    source_type = _required_non_empty_str(
+        tenant_id,
+        value.get("type"),
+        f"skill '{skill_name}' instruction_source.type",
+    )
+    if source_type != "agent_skill":
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' skill '{skill_name}' instruction_source.type must be 'agent_skill'"
+        )
+    path = _required_non_empty_str(
+        tenant_id,
+        value.get("path"),
+        f"skill '{skill_name}' instruction_source.path",
+    )
+    return SkillInstructionSource(type="agent_skill", path=path)
 
 
 def _optional_str_list(tenant_id: str, value: object, label: str) -> list[str] | None:
