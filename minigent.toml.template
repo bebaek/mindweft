@@ -40,6 +40,10 @@ shell_enabled = false
 # roots = ["/Users/you/code/my-app"]
 # description = "Primary app repository"
 
+[agent_skills]
+# Import local Claude/Agent Skill packages. Each child directory should contain SKILL.md.
+# dirs = ["./skills", "~/.claude/skills"]
+
 [mcp]
 # servers = [
 #   { name = "filesystem", url = "http://127.0.0.1:8765/mcp", headers = {} },

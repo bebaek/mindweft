@@ -263,6 +263,7 @@ Use the tables below as the supported key reference.
 | Key | Maps to | Notes |
 | --- | --- | --- |
 | `profile` | no direct env var | Used by tooling and docs to describe the intended local setup. |
+| `agent_skills` | projects into `MINIGENT_TENANT_EXECUTION_CONFIGS` | Imports local Agent Skill `SKILL.md` metadata into each tenant skill catalog. |
 | `peer_agents` | `MINIGENT_PEER_AGENTS` | Serialized as compact JSON. |
 | `tenant_execution_configs` | `MINIGENT_TENANT_EXECUTION_CONFIGS` | Serialized as compact JSON. |
 
@@ -343,6 +344,18 @@ are converted to comma-separated env strings. `mcp_server_specs` and `workspace_
 serialized as compact JSON. Workspace scopes use nested tables like
 `[coding.workspace_scopes.<name>]` with `roots = [...]` and optional `description`; the coding
 runner treats them as advisory prompt/runner narrowing until tool-level enforcement is added.
+
+### `[agent_skills]`
+
+| Key | Maps to | Notes |
+| --- | --- | --- |
+| `dirs` | projects into `tenant_execution_configs.*.skills.items` | String or list of local directories containing child Agent Skill packages. Relative paths resolve from `minigent.toml`. |
+| `directories` | same as `dirs` | Alias for `dirs`. |
+
+Each direct child directory with a `SKILL.md` is imported as a Minigent-selectable skill with
+`instruction_source = { type = "agent_skill", path = ".../SKILL.md" }`. Only frontmatter
+metadata is read for the catalog; the `SKILL.md` body is loaded lazily when selected. Imported
+Agent Skill names must not duplicate each other or existing configured skill names.
 
 ### `[mcp]`
 

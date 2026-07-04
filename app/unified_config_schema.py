@@ -122,6 +122,12 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True)
+class AgentSkillsConfig:
+    dirs: object = None
+    directories: object = None
+
+
+@dataclass(frozen=True)
 class UnifiedConfig:
     profile: object = None
     app: AppConfig = field(default_factory=AppConfig)
@@ -133,6 +139,7 @@ class UnifiedConfig:
     voice: VoiceConfig = field(default_factory=VoiceConfig)
     quality: QualityConfig = field(default_factory=QualityConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    agent_skills: AgentSkillsConfig = field(default_factory=AgentSkillsConfig)
     peer_agents: object = None
     tenant_execution_configs: object = None
     runtime: object = None
@@ -148,6 +155,7 @@ SECTION_FIELDS: dict[str, set[str]] = {
     "voice": set(VoiceConfig.__dataclass_fields__),
     "quality": set(QualityConfig.__dataclass_fields__),
     "logging": set(LoggingConfig.__dataclass_fields__),
+    "agent_skills": set(AgentSkillsConfig.__dataclass_fields__),
 }
 
 TOP_LEVEL_KEYS = {
@@ -161,6 +169,7 @@ TOP_LEVEL_KEYS = {
     "voice",
     "quality",
     "logging",
+    "agent_skills",
     "peer_agents",
     "tenant_execution_configs",
     "runtime",
@@ -176,6 +185,7 @@ SECTION_TYPES: dict[str, type[Any]] = {
     "voice": VoiceConfig,
     "quality": QualityConfig,
     "logging": LoggingConfig,
+    "agent_skills": AgentSkillsConfig,
 }
 
 _STRING_KEYS = {
@@ -267,6 +277,8 @@ _STRING_LIST_KEYS = {
     "coding.shell_allowed_command_prefixes",
     "coding.bridge_allow_globs",
     "coding.bridge_deny_globs",
+    "agent_skills.dirs",
+    "agent_skills.directories",
 }
 
 _DICT_KEYS = {

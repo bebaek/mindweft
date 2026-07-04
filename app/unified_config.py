@@ -9,6 +9,7 @@ from typing import Any
 
 from dotenv import dotenv_values
 
+from app.agent_skills import discover_agent_skills
 from app.unified_config_schema import parse_unified_config
 
 CONFIG_FILE_ENV = "MINIGENT_CONFIG_FILE"
@@ -266,7 +267,11 @@ def load_unified_config_env(
     _collect_mcp_config(data.get("mcp"), env)
     _collect_peer_agents(data.get("peer_agents"), env)
     _collect_tenant_execution_configs(
-        data.get("tenant_execution_configs"), env, coding_section=data.get("coding")
+        data.get("tenant_execution_configs"),
+        env,
+        coding_section=data.get("coding"),
+        agent_skills_section=data.get("agent_skills"),
+        base_dir=path.parent,
     )
     return env
 
@@ -397,11 +402,90 @@ def _collect_tenant_execution_configs(
     env: dict[str, str],
     *,
     coding_section: object = None,
+    agent_skills_section: object = None,
+    base_dir: Path | None = None,
 ) -> None:
     if section is not None:
-        env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = _format_json_env_value(
-            _with_coding_mcp_server_projections(section, coding_section)
+        projected = _with_coding_mcp_server_projections(section, coding_section)
+        projected = _with_agent_skill_imports(projected, agent_skills_section, base_dir=base_dir)
+        env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = _format_json_env_value(projected)
+
+
+def _with_agent_skill_imports(
+    section: object,
+    agent_skills_section: object,
+    *,
+    base_dir: Path | None,
+) -> object:
+    if not isinstance(section, dict) or not isinstance(agent_skills_section, dict):
+        return section
+    dirs = _agent_skill_dirs(agent_skills_section, base_dir=base_dir)
+    if not dirs:
+        return section
+    imported_skills = discover_agent_skills(dirs)
+    if not imported_skills:
+        return section
+    imported_names: set[str] = set()
+    imported_items: list[dict[str, object]] = []
+    for skill in imported_skills:
+        if skill.name in imported_names:
+            raise RuntimeError(f"Agent Skill '{skill.name}' is imported more than once")
+        imported_names.add(skill.name)
+        imported_items.append(
+            {
+                "name": skill.name,
+                "description": skill.description,
+                "instruction_source": {
+                    "type": "agent_skill",
+                    "path": str(skill.skill_md_path),
+                },
+            }
         )
+
+    projected: dict[object, object] = {}
+    for tenant_id, tenant_config in section.items():
+        if not isinstance(tenant_config, dict):
+            projected[tenant_id] = tenant_config
+            continue
+        tenant_copy: dict[object, object] = dict(tenant_config)
+        raw_skills = tenant_copy.get("skills")
+        skills: dict[object, object] = dict(raw_skills) if isinstance(raw_skills, dict) else {}
+        raw_items = skills.get("items")
+        items = list(raw_items) if isinstance(raw_items, list) else []
+        existing_names = {
+            item.get("name")
+            for item in items
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        conflicts = sorted(imported_names & existing_names)
+        if conflicts:
+            raise RuntimeError(
+                f"Tenant '{tenant_id}' Agent Skill imports conflict with configured skills: "
+                + ", ".join(conflicts)
+            )
+        skills["items"] = [*items, *imported_items]
+        tenant_copy["skills"] = skills
+        projected[tenant_id] = tenant_copy
+    return projected
+
+
+def _agent_skill_dirs(section: dict[object, object], *, base_dir: Path | None) -> list[Path]:
+    raw_dirs = section.get("dirs") or section.get("directories")
+    if raw_dirs is None:
+        return []
+    if isinstance(raw_dirs, str):
+        values = [part.strip() for part in raw_dirs.split(",") if part.strip()]
+    elif isinstance(raw_dirs, list) and all(isinstance(item, str) for item in raw_dirs):
+        values = raw_dirs
+    else:
+        raise RuntimeError("agent_skills.dirs must be a string or list of strings")
+    dirs: list[Path] = []
+    for value in values:
+        path = Path(value).expanduser()
+        if not path.is_absolute() and base_dir is not None:
+            path = base_dir / path
+        dirs.append(path)
+    return dirs
 
 
 def _with_coding_mcp_server_projections(section: object, coding_section: object) -> object:

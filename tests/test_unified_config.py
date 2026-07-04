@@ -162,6 +162,79 @@ items = [
     ]
 
 
+def test_unified_config_imports_agent_skills_into_tenant_configs(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "code-reviewer"
+    skill_dir.mkdir(parents=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(
+        "---\n"
+        "name: code-reviewer\n"
+        "description: Reviews code changes.\n"
+        "allowed-tools: Read Grep\n"
+        "---\n\n"
+        "Review code carefully.\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[agent_skills]
+dirs = ["./skills"]
+
+[tenant_execution_configs.demo-tenant.llm]
+provider = "mock"
+
+[tenant_execution_configs.demo-tenant.skills]
+default_skill = "native"
+items = [
+  { name = "native", system_prompt = "Native prompt." },
+]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    env = load_unified_config_env(config_path)
+    tenant_configs = json.loads(env["MINIGENT_TENANT_EXECUTION_CONFIGS"])
+
+    items = tenant_configs["demo-tenant"]["skills"]["items"]
+    assert items == [
+        {"name": "native", "system_prompt": "Native prompt."},
+        {
+            "name": "code-reviewer",
+            "description": "Reviews code changes.",
+            "instruction_source": {
+                "type": "agent_skill",
+                "path": str(skill_md),
+            },
+        },
+    ]
+
+
+def test_unified_config_rejects_agent_skill_name_conflicts(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "code-reviewer"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: code-reviewer\ndescription: Reviews code changes.\n---\n\nReview.\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[agent_skills]
+dirs = ["./skills"]
+
+[tenant_execution_configs.demo-tenant.skills]
+items = [
+  { name = "code-reviewer", system_prompt = "Native prompt." },
+]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="conflict"):
+        load_unified_config_env(config_path)
+
+
 def test_load_environment_precedence_real_env_then_dotenv_then_minigent_toml(
     tmp_path: Path,
     monkeypatch,
