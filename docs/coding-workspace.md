@@ -125,6 +125,40 @@ uv run minigent-coding-workspace --env-file .env.coding
 Use `uv run minigent-coding-workspace --no-env-file` when you want to inherit only the
 process environment and unified config, without reading a coding dotenv file.
 
+### Optional encrypted coding env with SOPS
+
+For local real-LLM demos, you can keep API keys and other coding-workspace settings in an
+encrypted dotenv file instead of a plaintext `.env.coding`. Create a temporary plaintext file
+from the template, edit it locally, encrypt it with your age recipient, then delete the
+plaintext copy:
+
+```bash
+cp .env.coding.template .coding.env
+# edit .coding.env with workspace paths and provider settings such as OPENROUTER_API_KEY
+sops --config /dev/null \
+  --encrypt \
+  --input-type dotenv \
+  --output-type dotenv \
+  --age "$(age-keygen -y "$HOME/.config/sops/age/keys.txt")" \
+  .coding.env > .coding.sops.env
+rm .coding.env
+chmod 600 .coding.sops.env
+```
+
+Run the coding-workspace stack by decrypting the SOPS file into the child process
+environment. `--no-env-file` keeps the runner from also loading `.env.coding`:
+
+```bash
+SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/keys.txt" \
+sops exec-env .coding.sops.env \
+  'uv run minigent-coding-workspace --no-env-file'
+```
+
+Use the same pattern for one-off real-provider skill demos by pointing `MINIGENT_CONFIG_FILE`
+at a local TOML config and keeping provider keys in `.coding.sops.env`. Do not commit
+decrypted dotenv files or place API keys in `minigent.toml`; `.coding.sops*.env` is ignored
+for local encrypted dotenv files.
+
 The template sets `MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db` so coding threads
 survive runner/API restarts. Remove that setting only if you intentionally want in-memory,
 restart-discarded threads.

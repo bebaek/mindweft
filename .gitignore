@@ -1,5 +1,6 @@
 .env
 .env.*
+.coding.sops*.env
 !.env.template
 !.env.*.template
 minigent.toml
