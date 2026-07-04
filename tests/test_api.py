@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from jwt.algorithms import RSAAlgorithm
 
 from app import auth as auth_module
+from app import execution as execution_module
 from app import store as store_module
 from app.admin_api import (
     AdminStoreSettings,
@@ -23,6 +24,7 @@ from app.admin_api import (
     admin_store_settings_from_env,
 )
 from app.agent_backends import PeerBackendSettings, _sanitize_peer_task_event
+from app.config import load_environment
 from app.execution import (
     InMemoryTenantExecutionResolver,
     build_execution_resolver_from_env,
@@ -2398,6 +2400,90 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
     }
     assert "system_prompt" not in response.text
     assert "allowed_local_tools" not in response.text
+
+
+def test_imported_agent_skill_is_listed_and_loaded_through_api_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill_dir = tmp_path / "skills" / "code-reviewer"
+    skill_dir.mkdir(parents=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(
+        "---\n"
+        "name: code-reviewer\n"
+        "description: Reviews code changes.\n"
+        "---\n\n"
+        "Loaded imported skill instructions.\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[agent_skills]
+dirs = ["./skills"]
+
+[tenant_execution_configs.tenant-1.llm]
+provider = "mock"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    seen_messages: list[Message] = []
+
+    class RecordingLLMAdapter(LLMAdapter):
+        async def generate(
+            self,
+            messages: list[Message],
+            tools: list[ToolSpec],
+        ) -> LLMResponse:
+            seen_messages.extend(messages)
+            return LLMResponse(content="imported skill reply")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "recording"}
+
+    monkeypatch.delenv("MINIGENT_TENANT_EXECUTION_CONFIGS", raising=False)
+    monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
+    monkeypatch.setenv("MINIGENT_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv("MINIGENT_THREAD_DB_PATH", str(tmp_path / "threads.db"))
+    monkeypatch.setattr(
+        execution_module,
+        "_build_llm_adapter",
+        lambda _config: RecordingLLMAdapter(),
+    )
+    load_environment(discover_default_files=False)
+    client = TestClient(create_app())
+
+    options_response = client.get("/execution-options", headers=AUTH_HEADERS)
+    assert options_response.status_code == 200
+    assert options_response.json()["skills"] == {
+        "default": None,
+        "items": [{"name": "code-reviewer", "description": "Reviews code changes."}],
+    }
+    assert "Loaded imported skill instructions" not in options_response.text
+
+    create_response = client.post(
+        "/threads",
+        json={"skill_name": "code-reviewer"},
+        headers=AUTH_HEADERS,
+    )
+    assert create_response.status_code == 200
+    thread_id = create_response.json()["thread_id"]
+    message_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "please review this diff"},
+        headers=AUTH_HEADERS,
+    )
+    assert message_response.status_code == 200
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert run_response.status_code == 200
+    assert run_response.json() == {"reply": "imported skill reply"}
+    assert seen_messages
+    assert "[Skill: code-reviewer]" in seen_messages[0].content
+    assert "Loaded imported skill instructions." in seen_messages[0].content
 
 
 def test_create_thread_can_select_skill_and_skill_narrows_runtime_tools(
