@@ -525,7 +525,24 @@ uv run python scripts/demo_client.py \
 
 The shell MCP server requires command working directories to stay under one of the configured
 workspace roots, passes through only a small environment allowlist, disables stdin, enforces a
-timeout, and truncates stdout/stderr. You can also add a command-prefix allowlist:
+timeout, and truncates stdout/stderr. Commands run through `/bin/sh` by default. If you define
+`shell-workspace` explicitly in unified config and want zsh, configure the server command itself:
+
+```toml
+[[coding.mcp_server_specs]]
+name = "shell-workspace"
+transport = "stdio"
+command = [
+  "python",
+  "-c",
+  "from app.shell_mcp_server import main; raise SystemExit(main())",
+  "{workspace_args}",
+  "--shell",
+  "/bin/zsh",
+]
+```
+
+You can also add a command-prefix allowlist:
 
 ```dotenv
 MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES=git,rg,find,ls,pwd,uv run pytest,uv run ruff check,uv run basedpyright
