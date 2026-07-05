@@ -128,6 +128,23 @@ class TenantQualityConfig:
     timeout: float = 30.0
     max_payload_chars: int = 6000
 
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> TenantQualityConfig:
+        lookup = os.environ if env is None else env
+        max_payload_chars = int(_positive_float_env(QUALITY_MAX_PAYLOAD_CHARS_ENV, 6000.0, lookup))
+        if max_payload_chars < 256:
+            raise RuntimeError(f"{QUALITY_MAX_PAYLOAD_CHARS_ENV} must be at least 256")
+        return cls(
+            enabled=_bool_env(QUALITY_ENABLED_ENV, False, lookup),
+            mode=lookup.get(QUALITY_MODE_ENV, "critique_draft").strip().lower(),
+            provider=lookup.get(QUALITY_PROVIDER_ENV, "mock").strip().lower(),
+            model=lookup.get(QUALITY_MODEL_ENV, "").strip() or None,
+            base_url=lookup.get(QUALITY_BASE_URL_ENV, "").strip() or None,
+            api_key=lookup.get(QUALITY_API_KEY_ENV, "").strip() or None,
+            timeout=_positive_float_env(QUALITY_TIMEOUT_ENV, 30.0, lookup),
+            max_payload_chars=max_payload_chars,
+        )
+
 
 @dataclass(frozen=True)
 class TenantExecutionConfig:
@@ -1187,20 +1204,8 @@ def _parse_tenant_quality_config(tenant_id: str, payload: dict[str, Any]) -> Ten
     )
 
 
-def _quality_config_from_env() -> TenantQualityConfig:
-    max_payload_chars = int(_positive_float_env(QUALITY_MAX_PAYLOAD_CHARS_ENV, 6000.0))
-    if max_payload_chars < 256:
-        raise RuntimeError(f"{QUALITY_MAX_PAYLOAD_CHARS_ENV} must be at least 256")
-    return TenantQualityConfig(
-        enabled=_bool_env(QUALITY_ENABLED_ENV, False),
-        mode=os.getenv(QUALITY_MODE_ENV, "critique_draft").strip().lower(),
-        provider=os.getenv(QUALITY_PROVIDER_ENV, "mock").strip().lower(),
-        model=os.getenv(QUALITY_MODEL_ENV, "").strip() or None,
-        base_url=os.getenv(QUALITY_BASE_URL_ENV, "").strip() or None,
-        api_key=os.getenv(QUALITY_API_KEY_ENV, "").strip() or None,
-        timeout=_positive_float_env(QUALITY_TIMEOUT_ENV, 30.0),
-        max_payload_chars=max_payload_chars,
-    )
+def _quality_config_from_env(env: Mapping[str, str] | None = None) -> TenantQualityConfig:
+    return TenantQualityConfig.from_env(env)
 
 
 def _parse_tenant_skills_config(

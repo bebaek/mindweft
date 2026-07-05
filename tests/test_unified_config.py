@@ -128,6 +128,16 @@ description = "Local peer"
 [logging]
 level = "debug"
 format = "json"
+
+[quality]
+enabled = true
+provider = "openai-compatible"
+model = "quality-model"
+base_url = "https://example.com/quality/v1"
+api_key = "quality-secret"
+mode = "critique_draft"
+timeout = 12.5
+max_payload_chars = 4096
 """.strip(),
         encoding="utf-8",
     )
@@ -159,6 +169,14 @@ format = "json"
     assert settings.agent_backend.timeout_seconds == 42
     assert settings.agent_backend.poll_interval_seconds == 0.5
     assert settings.agent_backend.mcp_broker_enabled is False
+    assert settings.quality.enabled is True
+    assert settings.quality.provider == "openai-compatible"
+    assert settings.quality.model == "quality-model"
+    assert settings.quality.base_url == "https://example.com/quality/v1"
+    assert settings.quality.api_key == "quality-secret"
+    assert settings.quality.mode == "critique_draft"
+    assert settings.quality.timeout == 12.5
+    assert settings.quality.max_payload_chars == 4096
     assert settings.image_input.enabled is True
     assert settings.image_input.max_bytes == 1234
     assert settings.image_input.allowed_mime_types == frozenset({"image/png", "image/webp"})

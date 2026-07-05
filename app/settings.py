@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.admin_api import AdminStoreSettings
-from app.execution import TenantAgentBackendConfig
+from app.execution import TenantAgentBackendConfig, TenantQualityConfig
 from app.llm import LLMSettings
 from app.mcp import MCPSettings
 from app.observability import LoggingSettings, TracingSettings
@@ -47,6 +47,7 @@ class MinigentSettings:
     logging: LoggingSettings
     mcp: MCPSettings
     peer_agents: PeerAgentSettings
+    quality: TenantQualityConfig
     runtime: RuntimeSettings
     thread_store: ThreadStoreSettings
     tracing: TracingSettings
@@ -62,6 +63,7 @@ class MinigentSettings:
             logging=LoggingSettings.from_env(lookup),
             mcp=MCPSettings.from_env(lookup),
             peer_agents=PeerAgentSettings.from_env(lookup),
+            quality=TenantQualityConfig.from_env(lookup),
             runtime=RuntimeSettings.from_env(lookup),
             thread_store=ThreadStoreSettings.from_env(lookup),
             tracing=TracingSettings.from_env(lookup),
