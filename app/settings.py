@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.admin_api import AdminStoreSettings
+from app.auth import AuthSettings
 from app.execution import TenantAgentBackendConfig, TenantQualityConfig
 from app.llm import LLMSettings
 from app.mcp import MCPSettings
@@ -42,6 +43,7 @@ class ImageInputSettings:
 class MinigentSettings:
     admin_store: AdminStoreSettings
     agent_backend: TenantAgentBackendConfig
+    auth: AuthSettings
     image_input: ImageInputSettings
     llm: LLMSettings
     logging: LoggingSettings
@@ -58,6 +60,7 @@ class MinigentSettings:
         return cls(
             admin_store=AdminStoreSettings.from_env(lookup),
             agent_backend=TenantAgentBackendConfig.from_env(lookup),
+            auth=AuthSettings.from_env(lookup),
             image_input=ImageInputSettings.from_env(lookup),
             llm=LLMSettings.from_env(lookup),
             logging=LoggingSettings.from_env(lookup),

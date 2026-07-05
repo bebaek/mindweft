@@ -151,6 +151,16 @@ max_payload_chars = 4096
             "MINIGENT_AGENT_BACKEND_TIMEOUT_SECONDS": "42",
             "MINIGENT_AGENT_BACKEND_POLL_INTERVAL_SECONDS": "0.5",
             "MINIGENT_MCP_BROKER_ENABLED": "false",
+            "MINIGENT_AUTH_MODE": "static-tokens",
+            "MINIGENT_AUTH_TOKENS": json.dumps(
+                {
+                    "token-1": {
+                        "user_id": "user-1",
+                        "tenant_id": "tenant-1",
+                        "is_admin": True,
+                    }
+                }
+            ),
         }
     )
     settings = load_settings(env)
@@ -169,6 +179,10 @@ max_payload_chars = 4096
     assert settings.agent_backend.timeout_seconds == 42
     assert settings.agent_backend.poll_interval_seconds == 0.5
     assert settings.agent_backend.mcp_broker_enabled is False
+    assert settings.auth.mode == "static-tokens"
+    assert settings.auth.static_tokens["token-1"].user_id == "user-1"
+    assert settings.auth.static_tokens["token-1"].tenant_id == "tenant-1"
+    assert settings.auth.static_tokens["token-1"].is_admin is True
     assert settings.quality.enabled is True
     assert settings.quality.provider == "openai-compatible"
     assert settings.quality.model == "quality-model"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -49,6 +50,29 @@ class AuthSettings:
     jwt_user_claim: str
     jwt_admin_claim: str
     jwt_jwks_cache_seconds: int
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> AuthSettings:
+        lookup = os.environ if env is None else env
+        mode = (
+            lookup.get(AUTH_MODE_ENV, AUTH_MODE_DEV_HEADERS).strip().lower()
+            or AUTH_MODE_DEV_HEADERS
+        )
+        static_tokens = _load_token_principals(lookup) if mode == AUTH_MODE_STATIC_TOKENS else {}
+        jwt_algorithms = _load_json_or_csv_list_env(JWT_ALGORITHMS_ENV, lookup)
+        return cls(
+            mode=mode,
+            static_tokens=static_tokens,
+            jwt_issuer=_optional_env(JWT_ISSUER_ENV, lookup),
+            jwt_audience=_optional_env(JWT_AUDIENCE_ENV, lookup),
+            jwt_algorithms=jwt_algorithms or ["RS256"],
+            jwt_shared_secret=_optional_env(JWT_SHARED_SECRET_ENV, lookup),
+            jwt_jwks_url=_optional_env(JWT_JWKS_URL_ENV, lookup),
+            jwt_tenant_claim=lookup.get(JWT_TENANT_CLAIM_ENV, "tenant_id"),
+            jwt_user_claim=lookup.get(JWT_USER_CLAIM_ENV, "sub"),
+            jwt_admin_claim=lookup.get(JWT_ADMIN_CLAIM_ENV, "is_admin"),
+            jwt_jwks_cache_seconds=int(lookup.get(JWT_JWKS_CACHE_SECONDS_ENV, "300")),
+        )
 
 
 def validate_auth_settings() -> AuthSettings:
@@ -125,8 +149,9 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return token.strip()
 
 
-def _load_token_principals() -> dict[str, Principal]:
-    raw = os.getenv(AUTH_TOKENS_ENV, "").strip()
+def _load_token_principals(env: Mapping[str, str] | None = None) -> dict[str, Principal]:
+    lookup = os.environ if env is None else env
+    raw = lookup.get(AUTH_TOKENS_ENV, "").strip()
     if not raw:
         return {}
 
@@ -150,35 +175,22 @@ def _load_token_principals() -> dict[str, Principal]:
     return principals
 
 
-def _load_auth_settings() -> AuthSettings:
-    mode = os.getenv(AUTH_MODE_ENV, AUTH_MODE_DEV_HEADERS).strip().lower() or AUTH_MODE_DEV_HEADERS
-    static_tokens = _load_token_principals() if mode == AUTH_MODE_STATIC_TOKENS else {}
-    jwt_algorithms = _load_json_or_csv_list_env(JWT_ALGORITHMS_ENV)
-    return AuthSettings(
-        mode=mode,
-        static_tokens=static_tokens,
-        jwt_issuer=_optional_env(JWT_ISSUER_ENV),
-        jwt_audience=_optional_env(JWT_AUDIENCE_ENV),
-        jwt_algorithms=jwt_algorithms or ["RS256"],
-        jwt_shared_secret=_optional_env(JWT_SHARED_SECRET_ENV),
-        jwt_jwks_url=_optional_env(JWT_JWKS_URL_ENV),
-        jwt_tenant_claim=os.getenv(JWT_TENANT_CLAIM_ENV, "tenant_id"),
-        jwt_user_claim=os.getenv(JWT_USER_CLAIM_ENV, "sub"),
-        jwt_admin_claim=os.getenv(JWT_ADMIN_CLAIM_ENV, "is_admin"),
-        jwt_jwks_cache_seconds=int(os.getenv(JWT_JWKS_CACHE_SECONDS_ENV, "300")),
-    )
+def _load_auth_settings(env: Mapping[str, str] | None = None) -> AuthSettings:
+    return AuthSettings.from_env(env)
 
 
-def _optional_env(name: str) -> str | None:
-    value = os.getenv(name)
+def _optional_env(name: str, env: Mapping[str, str] | None = None) -> str | None:
+    lookup = os.environ if env is None else env
+    value = lookup.get(name)
     if value is None:
         return None
     stripped = value.strip()
     return stripped or None
 
 
-def _load_json_or_csv_list_env(name: str) -> list[str]:
-    raw = os.getenv(name, "").strip()
+def _load_json_or_csv_list_env(name: str, env: Mapping[str, str] | None = None) -> list[str]:
+    lookup = os.environ if env is None else env
+    raw = lookup.get(name, "").strip()
     if not raw:
         return []
     if raw.startswith("["):
