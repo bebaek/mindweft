@@ -302,8 +302,12 @@ def parse_peer_agent_configs(payload: object) -> list[PeerAgentConfig]:
     return configs
 
 
+def build_peer_agent_registry(settings: PeerAgentSettings) -> PeerAgentRegistry:
+    return PeerAgentRegistry(settings.agents)
+
+
 def build_peer_agent_registry_from_env() -> PeerAgentRegistry:
-    return PeerAgentRegistry(load_peer_agent_configs_from_env())
+    return build_peer_agent_registry(peer_agent_settings_from_env())
 
 
 def _optional_string_tuple(value: object, label: str) -> tuple[str, ...]:

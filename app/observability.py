@@ -139,8 +139,8 @@ class SuccessfulHealthcheckAccessFilter(logging.Filter):
         return not _is_successful_healthcheck_access_log(record)
 
 
-def configure_logging() -> None:
-    settings = load_logging_settings_from_env()
+def configure_logging(settings: LoggingSettings | None = None) -> None:
+    settings = settings or load_logging_settings_from_env()
     formatter: dict[str, Any]
     if settings.output_format == "json":
         formatter = {
@@ -196,10 +196,10 @@ def configure_logging() -> None:
     )
 
 
-def configure_tracing(app: FastAPI) -> None:
+def configure_tracing(app: FastAPI, settings: TracingSettings | None = None) -> None:
     global _TRACING_INITIALIZED
 
-    settings = load_tracing_settings_from_env()
+    settings = settings or load_tracing_settings_from_env()
     if not settings.enabled:
         return
 

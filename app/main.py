@@ -61,7 +61,7 @@ from app.models import (
 )
 from app.oauth import GenericOAuthProvider, OAuthFlowStore
 from app.observability import configure_logging, configure_tracing
-from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_env
+from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry
 from app.quality import QualityEnhancer
 from app.redaction import install_log_redaction
 from app.runtime import (
@@ -269,7 +269,7 @@ def create_app(
                 await mcp_manager.stop()
 
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0", lifespan=lifespan)
-    configure_tracing(app)
+    configure_tracing(app, settings.tracing)
     if thread_store is not None:
         app.state.store = thread_store
     elif settings_was_provided:
@@ -346,7 +346,11 @@ def create_app(
         quality_enhancer=app.state.quality_enhancer,
         context_compaction_enabled=runtime_settings.context_compaction_enabled,
     )
-    app.state.peer_agent_registry = peer_agent_registry or build_peer_agent_registry_from_env()
+    app.state.peer_agent_registry = (
+        peer_agent_registry
+        if peer_agent_registry is not None
+        else build_peer_agent_registry(settings.peer_agents)
+    )
     app.state.active_run_tasks = {}
     app.state.agent_backend = AgentBackendRouter(
         store=app.state.store,

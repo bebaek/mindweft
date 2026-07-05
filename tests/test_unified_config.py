@@ -107,6 +107,18 @@ context_compaction_enabled = true
 enabled = true
 max_bytes = 1234
 allowed_mime_types = ["image/png", "image/webp"]
+
+[mcp]
+servers = [{ name = "filesystem", url = "http://127.0.0.1:8765/mcp", headers = {} }]
+
+[[peer_agents]]
+name = "local-agent"
+base_url = "http://127.0.0.1:9000"
+description = "Local peer"
+
+[logging]
+level = "debug"
+format = "json"
 """.strip(),
         encoding="utf-8",
     )
@@ -121,6 +133,10 @@ allowed_mime_types = ["image/png", "image/webp"]
     assert settings.image_input.enabled is True
     assert settings.image_input.max_bytes == 1234
     assert settings.image_input.allowed_mime_types == frozenset({"image/png", "image/webp"})
+    assert settings.mcp.servers[0].name == "filesystem"
+    assert settings.peer_agents.agents[0].name == "local-agent"
+    assert settings.logging.level == "DEBUG"
+    assert settings.logging.output_format == "json"
 
 
 def test_unified_config_maps_anthropic_provider(tmp_path: Path, monkeypatch) -> None:

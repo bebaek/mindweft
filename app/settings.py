@@ -5,6 +5,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.admin_api import AdminStoreSettings
+from app.mcp import MCPSettings
+from app.observability import LoggingSettings, TracingSettings
+from app.peer_agents import PeerAgentSettings
 from app.runtime import RuntimeSettings
 from app.store import ThreadStoreSettings
 
@@ -37,8 +40,12 @@ class ImageInputSettings:
 class MinigentSettings:
     admin_store: AdminStoreSettings
     image_input: ImageInputSettings
+    logging: LoggingSettings
+    mcp: MCPSettings
+    peer_agents: PeerAgentSettings
     runtime: RuntimeSettings
     thread_store: ThreadStoreSettings
+    tracing: TracingSettings
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> MinigentSettings:
@@ -46,8 +53,12 @@ class MinigentSettings:
         return cls(
             admin_store=AdminStoreSettings.from_env(lookup),
             image_input=ImageInputSettings.from_env(lookup),
+            logging=LoggingSettings.from_env(lookup),
+            mcp=MCPSettings.from_env(lookup),
+            peer_agents=PeerAgentSettings.from_env(lookup),
             runtime=RuntimeSettings.from_env(lookup),
             thread_store=ThreadStoreSettings.from_env(lookup),
+            tracing=TracingSettings.from_env(lookup),
         )
 
 
