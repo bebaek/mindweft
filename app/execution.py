@@ -212,6 +212,56 @@ class TenantAgentPresetsConfig:
 
 
 @dataclass(frozen=True)
+class GenericOAuthExportSettings:
+    store_path: str | None = None
+    provider_id: str | None = None
+    client_id: str | None = None
+    authorize_url: str | None = None
+    token_url: str | None = None
+    redirect_uri: str | None = None
+    scope: str | None = None
+    account_id_jwt_claim: str | None = None
+    auth_params: dict[str, object] | str | None = None
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> GenericOAuthExportSettings:
+        lookup = os.environ if env is None else env
+        auth_params = _generic_oauth_auth_params_for_export(lookup)
+        return cls(
+            store_path=_optional_env_value(lookup, OAUTH_STORE_PATH_ENV),
+            provider_id=_optional_env_value(lookup, OAUTH_PROVIDER_ID_ENV),
+            client_id=_optional_env_value(lookup, OAUTH_CLIENT_ID_ENV),
+            authorize_url=_optional_env_value(lookup, OAUTH_AUTHORIZE_URL_ENV),
+            token_url=_optional_env_value(lookup, OAUTH_TOKEN_URL_ENV),
+            redirect_uri=_optional_env_value(lookup, OAUTH_REDIRECT_URI_ENV),
+            scope=_optional_env_value(lookup, OAUTH_SCOPE_ENV),
+            account_id_jwt_claim=_optional_env_value(lookup, OAUTH_ACCOUNT_ID_JWT_CLAIM_ENV),
+            auth_params=auth_params,
+        )
+
+    def public_dict(self, llm: dict[str, object]) -> dict[str, object]:
+        if llm.get("provider") != GENERIC_OAUTH_PROVIDER:
+            return {}
+        exported: dict[str, object] = {}
+        for key in (
+            "store_path",
+            "provider_id",
+            "client_id",
+            "authorize_url",
+            "token_url",
+            "redirect_uri",
+            "scope",
+            "account_id_jwt_claim",
+        ):
+            value = getattr(self, key)
+            if value:
+                exported[key] = value
+        if self.auth_params:
+            exported["auth_params"] = self.auth_params
+        return exported
+
+
+@dataclass(frozen=True)
 class TenantExecutionSettings:
     config_source: str = TENANT_CONFIG_SOURCE_ENV_ONLY
     tenant_configs: dict[str, Any] | None = None
@@ -773,33 +823,23 @@ def _tenant_agent_preset_public_dict(config: TenantAgentPresetConfig) -> dict[st
 
 
 def _generic_oauth_public_dict(llm: dict[str, object]) -> dict[str, object]:
-    if llm.get("provider") != GENERIC_OAUTH_PROVIDER:
-        return {}
-    env_map = {
-        "store_path": OAUTH_STORE_PATH_ENV,
-        "provider_id": OAUTH_PROVIDER_ID_ENV,
-        "client_id": OAUTH_CLIENT_ID_ENV,
-        "authorize_url": OAUTH_AUTHORIZE_URL_ENV,
-        "token_url": OAUTH_TOKEN_URL_ENV,
-        "redirect_uri": OAUTH_REDIRECT_URI_ENV,
-        "scope": OAUTH_SCOPE_ENV,
-        "account_id_jwt_claim": OAUTH_ACCOUNT_ID_JWT_CLAIM_ENV,
-    }
-    exported: dict[str, object] = {}
-    for key, env_key in env_map.items():
-        value = os.getenv(env_key, "").strip()
-        if value:
-            exported[key] = value
-    auth_params = os.getenv(OAUTH_AUTH_PARAMS_ENV, "").strip()
-    if auth_params:
-        try:
-            parsed = json.loads(auth_params)
-        except json.JSONDecodeError:
-            exported["auth_params"] = auth_params
-        else:
-            if isinstance(parsed, dict):
-                exported["auth_params"] = parsed
-    return exported
+    return GenericOAuthExportSettings.from_env().public_dict(llm)
+
+
+def _generic_oauth_auth_params_for_export(env: Mapping[str, str]) -> dict[str, object] | str | None:
+    auth_params = env.get(OAUTH_AUTH_PARAMS_ENV, "").strip()
+    if not auth_params:
+        return None
+    try:
+        parsed = json.loads(auth_params)
+    except json.JSONDecodeError:
+        return auth_params
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _optional_env_value(env: Mapping[str, str], name: str) -> str | None:
+    value = env.get(name, "").strip()
+    return value or None
 
 
 def _string_value(value: object) -> str | None:

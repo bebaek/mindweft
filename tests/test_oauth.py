@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from app.execution import GenericOAuthExportSettings
 from app.llm import GenericOAuthResponsesAdapter, build_llm_adapter_from_env
 from app.main import create_app
 from app.models import Message, MessageRole, ToolSpec
@@ -31,6 +32,35 @@ from app.tools import build_local_tool_registry
 
 def _token(account_id: str) -> str:
     return jwt.encode({"auth": {"account_id": account_id}}, "secret", algorithm="HS256")
+
+
+def test_generic_oauth_export_settings_from_env_mapping(tmp_path: Path) -> None:
+    settings = GenericOAuthExportSettings.from_env(
+        {
+            "MINIGENT_OAUTH_STORE_PATH": str(tmp_path / "oauth.json"),
+            "MINIGENT_OAUTH_PROVIDER_ID": "chatgpt",
+            "MINIGENT_OAUTH_CLIENT_ID": "client-id",
+            "MINIGENT_OAUTH_AUTHORIZE_URL": "https://example.com/authorize",
+            "MINIGENT_OAUTH_TOKEN_URL": "https://example.com/token",
+            "MINIGENT_OAUTH_REDIRECT_URI": "http://127.0.0.1/callback",
+            "MINIGENT_OAUTH_SCOPE": "openid profile",
+            "MINIGENT_OAUTH_ACCOUNT_ID_JWT_CLAIM": "auth.account_id",
+            "MINIGENT_OAUTH_AUTH_PARAMS": json.dumps({"prompt": "login"}),
+        }
+    )
+
+    assert settings.public_dict({"provider": GENERIC_OAUTH_PROVIDER}) == {
+        "store_path": str(tmp_path / "oauth.json"),
+        "provider_id": "chatgpt",
+        "client_id": "client-id",
+        "authorize_url": "https://example.com/authorize",
+        "token_url": "https://example.com/token",
+        "redirect_uri": "http://127.0.0.1/callback",
+        "scope": "openid profile",
+        "account_id_jwt_claim": "auth.account_id",
+        "auth_params": {"prompt": "login"},
+    }
+    assert settings.public_dict({"provider": "mock"}) == {}
 
 
 def _config(tmp_path: Path) -> GenericOAuthConfig:
