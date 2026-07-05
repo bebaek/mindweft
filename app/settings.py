@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.admin_api import AdminStoreSettings
+from app.llm import LLMSettings
 from app.mcp import MCPSettings
 from app.observability import LoggingSettings, TracingSettings
 from app.peer_agents import PeerAgentSettings
@@ -40,6 +41,7 @@ class ImageInputSettings:
 class MinigentSettings:
     admin_store: AdminStoreSettings
     image_input: ImageInputSettings
+    llm: LLMSettings
     logging: LoggingSettings
     mcp: MCPSettings
     peer_agents: PeerAgentSettings
@@ -53,6 +55,7 @@ class MinigentSettings:
         return cls(
             admin_store=AdminStoreSettings.from_env(lookup),
             image_input=ImageInputSettings.from_env(lookup),
+            llm=LLMSettings.from_env(lookup),
             logging=LoggingSettings.from_env(lookup),
             mcp=MCPSettings.from_env(lookup),
             peer_agents=PeerAgentSettings.from_env(lookup),

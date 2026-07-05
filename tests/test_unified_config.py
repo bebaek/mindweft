@@ -93,7 +93,10 @@ enabled = false
     assert env["MINIGENT_REMOTE_QUALITY_ENABLED"] == "false"
 
 
-def test_centralized_settings_loader_uses_resolved_env_mapping(tmp_path: Path) -> None:
+def test_centralized_settings_loader_uses_resolved_env_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")
     config_path = tmp_path / "minigent.toml"
     config_path.write_text(
         """
@@ -102,6 +105,12 @@ thread_db_path = "threads.db"
 max_iterations = 7
 tool_timeout_seconds = 12.5
 context_compaction_enabled = true
+
+[llm]
+provider = "openrouter"
+model = "openai/gpt-test"
+api_key_env = "OPENROUTER_API_KEY"
+base_url = "https://example.com/openrouter/v1"
 
 [image_input]
 enabled = true
@@ -130,6 +139,10 @@ format = "json"
     assert settings.runtime.max_iterations == 7
     assert settings.runtime.tool_timeout_seconds == 12.5
     assert settings.runtime.context_compaction_enabled is True
+    assert settings.llm.provider == "openrouter"
+    assert settings.llm.openrouter.model == "openai/gpt-test"
+    assert settings.llm.openrouter.base_url == "https://example.com/openrouter/v1"
+    assert settings.llm.openrouter.api_key == "router-secret"
     assert settings.image_input.enabled is True
     assert settings.image_input.max_bytes == 1234
     assert settings.image_input.allowed_mime_types == frozenset({"image/png", "image/webp"})

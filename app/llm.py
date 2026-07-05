@@ -7,7 +7,7 @@ import logging
 import os
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Iterator
+from collections.abc import Awaitable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -968,67 +968,150 @@ class ProviderConfig:
     extra_headers: dict[str, str]
 
 
-def build_llm_adapter_from_env() -> LLMAdapter:
-    provider = os.getenv("MINIGENT_LLM_PROVIDER", "mock").lower()
+@dataclass(frozen=True)
+class GenericOAuthLLMSettings:
+    model: str | None
+    url: str | None
+    extra_headers: dict[str, str]
+
+
+@dataclass(frozen=True)
+class GoogleLLMSettings:
+    api_key: str | None
+    model: str
+    base_url: str
+    extra_headers: dict[str, str]
+
+
+@dataclass(frozen=True)
+class AnthropicLLMSettings:
+    api_key: str | None
+    model: str
+    base_url: str
+    extra_headers: dict[str, str]
+    max_tokens: int
+    anthropic_version: str
+    thinking_budget_tokens: int | None
+    prompt_cache_enabled: bool
+
+
+@dataclass(frozen=True)
+class LLMSettings:
+    provider: str
+    generic_oauth: GenericOAuthLLMSettings
+    google: GoogleLLMSettings
+    anthropic: AnthropicLLMSettings
+    openai: ProviderConfig
+    openrouter: ProviderConfig
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> LLMSettings:
+        lookup = os.environ if env is None else env
+        extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS", lookup)
+        return cls(
+            provider=lookup.get("MINIGENT_LLM_PROVIDER", "mock").lower(),
+            generic_oauth=GenericOAuthLLMSettings(
+                model=_optional_env("MINIGENT_LLM_MODEL", lookup),
+                url=_optional_env("MINIGENT_LLM_URL", lookup),
+                extra_headers=extra_headers,
+            ),
+            google=GoogleLLMSettings(
+                api_key=_optional_env("GEMINI_API_KEY", lookup)
+                or _optional_env("GOOGLE_API_KEY", lookup),
+                model=(
+                    _optional_env("GEMINI_MODEL", lookup)
+                    or _optional_env("GOOGLE_MODEL", lookup)
+                    or _optional_env("MINIGENT_LLM_MODEL", lookup)
+                    or "gemini-3.5-flash"
+                ),
+                base_url=lookup.get(
+                    "GOOGLE_BASE_URL",
+                    "https://generativelanguage.googleapis.com/v1beta",
+                ),
+                extra_headers=extra_headers,
+            ),
+            anthropic=AnthropicLLMSettings(
+                api_key=_optional_env("ANTHROPIC_API_KEY", lookup),
+                model=(
+                    _optional_env("ANTHROPIC_MODEL", lookup)
+                    or _optional_env("MINIGENT_LLM_MODEL", lookup)
+                    or "claude-haiku-4-5"
+                ),
+                base_url=lookup.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1"),
+                extra_headers=extra_headers,
+                max_tokens=_env_int(ANTHROPIC_MAX_TOKENS_ENV, DEFAULT_ANTHROPIC_MAX_TOKENS, lookup),
+                anthropic_version=lookup.get(ANTHROPIC_VERSION_ENV, DEFAULT_ANTHROPIC_VERSION),
+                thinking_budget_tokens=_anthropic_thinking_budget_tokens_from_env(lookup),
+                prompt_cache_enabled=_anthropic_prompt_cache_enabled_from_env(lookup),
+            ),
+            openai=_openai_provider_config_from_env(lookup),
+            openrouter=_openrouter_provider_config_from_env(lookup),
+        )
+
+
+def build_llm_adapter_from_env(env: Mapping[str, str] | None = None) -> LLMAdapter:
+    return build_llm_adapter(LLMSettings.from_env(env))
+
+
+def build_llm_adapter(settings: LLMSettings) -> LLMAdapter:
+    provider = settings.provider
     if provider == "mock":
         logger.info("LLM config: provider=mock adapter=MockLLMAdapter")
         return MockLLMAdapter()
     if provider == GENERIC_OAUTH_PROVIDER:
-        model = _required_env("MINIGENT_LLM_MODEL")
-        url = _required_env("MINIGENT_LLM_URL")
-        extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS")
-        logger.info("LLM config: provider=%s model=%s url=%s", provider, model, url)
-        return GenericOAuthResponsesAdapter(model=model, url=url, extra_headers=extra_headers)
+        if not settings.generic_oauth.model:
+            raise RuntimeError("MINIGENT_LLM_MODEL is required")
+        if not settings.generic_oauth.url:
+            raise RuntimeError("MINIGENT_LLM_URL is required")
+        logger.info(
+            "LLM config: provider=%s model=%s url=%s",
+            provider,
+            settings.generic_oauth.model,
+            settings.generic_oauth.url,
+        )
+        return GenericOAuthResponsesAdapter(
+            model=settings.generic_oauth.model,
+            url=settings.generic_oauth.url,
+            extra_headers=settings.generic_oauth.extra_headers,
+        )
     if provider in {"google", "google-generative-ai", "gemini"}:
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if not api_key:
+        if not settings.google.api_key:
             raise RuntimeError(
                 "GEMINI_API_KEY or GOOGLE_API_KEY is required when MINIGENT_LLM_PROVIDER=google"
             )
-        model = (
-            os.getenv("GEMINI_MODEL")
-            or os.getenv("GOOGLE_MODEL")
-            or os.getenv("MINIGENT_LLM_MODEL")
-            or "gemini-3.5-flash"
+        logger.info(
+            "LLM config: provider=%s model=%s base_url=%s",
+            provider,
+            settings.google.model,
+            settings.google.base_url,
         )
-        base_url = os.getenv(
-            "GOOGLE_BASE_URL",
-            "https://generativelanguage.googleapis.com/v1beta",
-        )
-        extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS")
-        logger.info("LLM config: provider=%s model=%s base_url=%s", provider, model, base_url)
         return GoogleGeminiAdapter(
-            api_key=api_key,
-            model=model,
-            base_url=base_url,
-            extra_headers=extra_headers,
+            api_key=settings.google.api_key,
+            model=settings.google.model,
+            base_url=settings.google.base_url,
+            extra_headers=settings.google.extra_headers,
         )
     if provider == "anthropic":
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
+        if not settings.anthropic.api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is required when MINIGENT_LLM_PROVIDER=anthropic")
-        model = (
-            os.getenv("ANTHROPIC_MODEL") or os.getenv("MINIGENT_LLM_MODEL") or "claude-haiku-4-5"
+        logger.info(
+            "LLM config: provider=%s model=%s base_url=%s",
+            provider,
+            settings.anthropic.model,
+            settings.anthropic.base_url,
         )
-        base_url = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")
-        extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS")
-        max_tokens = _env_int(ANTHROPIC_MAX_TOKENS_ENV, DEFAULT_ANTHROPIC_MAX_TOKENS)
-        anthropic_version = os.getenv(ANTHROPIC_VERSION_ENV, DEFAULT_ANTHROPIC_VERSION)
-        thinking_budget_tokens = _anthropic_thinking_budget_tokens_from_env()
-        prompt_cache_enabled = _anthropic_prompt_cache_enabled_from_env()
-        logger.info("LLM config: provider=%s model=%s base_url=%s", provider, model, base_url)
         return AnthropicMessagesAdapter(
-            api_key=api_key,
-            model=model,
-            base_url=base_url,
-            extra_headers=extra_headers,
-            max_tokens=max_tokens,
-            anthropic_version=anthropic_version,
-            thinking_budget_tokens=thinking_budget_tokens,
-            prompt_cache_enabled=prompt_cache_enabled,
+            api_key=settings.anthropic.api_key,
+            model=settings.anthropic.model,
+            base_url=settings.anthropic.base_url,
+            extra_headers=settings.anthropic.extra_headers,
+            max_tokens=settings.anthropic.max_tokens,
+            anthropic_version=settings.anthropic.anthropic_version,
+            thinking_budget_tokens=settings.anthropic.thinking_budget_tokens,
+            prompt_cache_enabled=settings.anthropic.prompt_cache_enabled,
         )
 
-    config = load_provider_config(provider)
+    config = _provider_config_for_settings(settings)
     logger.info(
         "LLM config: provider=%s model=%s base_url=%s headers=%s",
         config.provider,
@@ -1044,45 +1127,60 @@ def build_llm_adapter_from_env() -> LLMAdapter:
     )
 
 
-def load_provider_config(provider: str) -> ProviderConfig:
-    if provider == "openai":
-        api_key = os.getenv("OPENAI_API_KEY")
-        model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
-        base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is required when MINIGENT_LLM_PROVIDER=openai")
-        return ProviderConfig(
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            api_key=api_key,
-            extra_headers={},
-        )
+def load_provider_config(provider: str, env: Mapping[str, str] | None = None) -> ProviderConfig:
+    settings = LLMSettings.from_env(env)
+    settings = LLMSettings(
+        provider=provider,
+        generic_oauth=settings.generic_oauth,
+        google=settings.google,
+        anthropic=settings.anthropic,
+        openai=settings.openai,
+        openrouter=settings.openrouter,
+    )
+    return _provider_config_for_settings(settings)
 
-    if provider == "openrouter":
-        api_key = os.getenv("OPENROUTER_API_KEY")
-        model = os.getenv("OPENROUTER_MODEL", "openai/gpt-5.4-mini")
-        base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-        if not api_key:
+
+def _provider_config_for_settings(settings: LLMSettings) -> ProviderConfig:
+    if settings.provider == "openai":
+        if not settings.openai.api_key:
+            raise RuntimeError("OPENAI_API_KEY is required when MINIGENT_LLM_PROVIDER=openai")
+        return settings.openai
+
+    if settings.provider == "openrouter":
+        if not settings.openrouter.api_key:
             raise RuntimeError(
                 "OPENROUTER_API_KEY is required when MINIGENT_LLM_PROVIDER=openrouter"
             )
-        extra_headers: dict[str, str] = {}
-        site_url = os.getenv("OPENROUTER_HTTP_REFERER")
-        app_name = os.getenv("OPENROUTER_APP_NAME")
-        if site_url:
-            extra_headers["HTTP-Referer"] = site_url
-        if app_name:
-            extra_headers["X-OpenRouter-Title"] = app_name
-        return ProviderConfig(
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            api_key=api_key,
-            extra_headers=extra_headers,
-        )
+        return settings.openrouter
 
-    raise RuntimeError(f"Unsupported MINIGENT_LLM_PROVIDER '{provider}'")
+    raise RuntimeError(f"Unsupported MINIGENT_LLM_PROVIDER '{settings.provider}'")
+
+
+def _openai_provider_config_from_env(env: Mapping[str, str]) -> ProviderConfig:
+    return ProviderConfig(
+        provider="openai",
+        model=env.get("OPENAI_MODEL", "gpt-5.4-mini"),
+        base_url=env.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        api_key=_optional_env("OPENAI_API_KEY", env) or "",
+        extra_headers={},
+    )
+
+
+def _openrouter_provider_config_from_env(env: Mapping[str, str]) -> ProviderConfig:
+    extra_headers: dict[str, str] = {}
+    site_url = _optional_env("OPENROUTER_HTTP_REFERER", env)
+    app_name = _optional_env("OPENROUTER_APP_NAME", env)
+    if site_url:
+        extra_headers["HTTP-Referer"] = site_url
+    if app_name:
+        extra_headers["X-OpenRouter-Title"] = app_name
+    return ProviderConfig(
+        provider="openrouter",
+        model=env.get("OPENROUTER_MODEL", "openai/gpt-5.4-mini"),
+        base_url=env.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        api_key=_optional_env("OPENROUTER_API_KEY", env) or "",
+        extra_headers=extra_headers,
+    )
 
 
 def serialize_tool_result(result: object) -> str:
@@ -1195,8 +1293,9 @@ def _env_bool(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name, "").strip()
+def _env_int(name: str, default: int, env: Mapping[str, str] | None = None) -> int:
+    lookup = os.environ if env is None else env
+    raw = lookup.get(name, "").strip()
     if not raw:
         return default
     try:
@@ -1206,9 +1305,12 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _anthropic_thinking_budget_tokens_from_env() -> int | None:
-    enabled_raw = os.getenv(ANTHROPIC_THINKING_ENABLED_ENV, "").strip().lower()
-    budget_raw = os.getenv(ANTHROPIC_THINKING_BUDGET_TOKENS_ENV, "").strip()
+def _anthropic_thinking_budget_tokens_from_env(
+    env: Mapping[str, str] | None = None,
+) -> int | None:
+    lookup = os.environ if env is None else env
+    enabled_raw = lookup.get(ANTHROPIC_THINKING_ENABLED_ENV, "").strip().lower()
+    budget_raw = lookup.get(ANTHROPIC_THINKING_BUDGET_TOKENS_ENV, "").strip()
     if enabled_raw in {"0", "false", "no", "off", "none", "null"}:
         return None
     if not budget_raw:
@@ -1226,8 +1328,11 @@ def _anthropic_thinking_budget_tokens_from_env() -> int | None:
     return budget_tokens
 
 
-def _anthropic_prompt_cache_enabled_from_env() -> bool:
-    raw = os.getenv(ANTHROPIC_PROMPT_CACHE_ENABLED_ENV, "true").strip().lower()
+def _anthropic_prompt_cache_enabled_from_env(
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    lookup = os.environ if env is None else env
+    raw = lookup.get(ANTHROPIC_PROMPT_CACHE_ENABLED_ENV, "true").strip().lower()
     return raw not in {"0", "false", "no", "off", "none", "null"}
 
 
@@ -1947,15 +2052,14 @@ def _tool_to_responses_payload(tool: ToolSpec, tool_name_map: dict[str, str]) ->
     }
 
 
-def _required_env(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value:
-        raise RuntimeError(f"{name} is required")
-    return value
+def _optional_env(name: str, env: Mapping[str, str]) -> str | None:
+    value = env.get(name, "").strip()
+    return value or None
 
 
-def _json_string_map_env(name: str) -> dict[str, str]:
-    raw = os.getenv(name, "").strip()
+def _json_string_map_env(name: str, env: Mapping[str, str] | None = None) -> dict[str, str]:
+    lookup = os.environ if env is None else env
+    raw = lookup.get(name, "").strip()
     if not raw:
         return {}
     payload = json.loads(raw)
