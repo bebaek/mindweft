@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.config import load_environment
+from app.settings import load_settings
 from app.unified_config import (
     apply_unified_config_to_env,
     load_unified_config_env,
@@ -90,6 +91,36 @@ enabled = false
         '[{"name":"filesystem","url":"http://127.0.0.1:8765/mcp","headers":{}}]'
     )
     assert env["MINIGENT_REMOTE_QUALITY_ENABLED"] == "false"
+
+
+def test_centralized_settings_loader_uses_resolved_env_mapping(tmp_path: Path) -> None:
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[app]
+thread_db_path = "threads.db"
+max_iterations = 7
+tool_timeout_seconds = 12.5
+context_compaction_enabled = true
+
+[image_input]
+enabled = true
+max_bytes = 1234
+allowed_mime_types = ["image/png", "image/webp"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    env = load_unified_config_env(config_path)
+    settings = load_settings(env)
+
+    assert settings.thread_store.db_path == "threads.db"
+    assert settings.runtime.max_iterations == 7
+    assert settings.runtime.tool_timeout_seconds == 12.5
+    assert settings.runtime.context_compaction_enabled is True
+    assert settings.image_input.enabled is True
+    assert settings.image_input.max_bytes == 1234
+    assert settings.image_input.allowed_mime_types == frozenset({"image/png", "image/webp"})
 
 
 def test_unified_config_maps_anthropic_provider(tmp_path: Path, monkeypatch) -> None:

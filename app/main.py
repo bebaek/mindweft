@@ -5,10 +5,8 @@ import base64
 import binascii
 import json
 import logging
-import os
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +14,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.admin_api import (
-    admin_store_settings_from_env,
-    build_admin_router,
-)
+from app.admin_api import build_admin_router
 from app.admin_store import SQLiteTenantConfigStore
 from app.agent_backends import AgentBackendRouter, NativeAgentBackend
 from app.auth import validate_auth_settings
@@ -73,11 +68,26 @@ from app.runtime import (
     AgentRuntime,
     estimate_thread_context_usage,
     render_raw_thread_context,
-    runtime_settings_from_env,
 )
-from app.store import ThreadStore, build_thread_store_from_env
+from app.settings import (
+    DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES,
+    DEFAULT_IMAGE_INPUT_MAX_BYTES,
+    ImageInputSettings,
+    MinigentSettings,
+    _image_input_export_public_dict,
+    _image_input_public_dict,
+    load_settings,
+)
+from app.store import InMemoryThreadStore, SQLiteThreadStore, ThreadStore, ThreadStoreSettings
 from app.tenants import require_active_tenant_principal, require_tenant_context
 from app.tools import ToolRegistry, build_tool_registry_from_env
+
+__all__ = [
+    "DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES",
+    "DEFAULT_IMAGE_INPUT_MAX_BYTES",
+    "ImageInputSettings",
+    "create_app",
+]
 
 load_environment()
 # Redact secrets in third-party logs like httpx request lines before any handler formats the record.
@@ -87,86 +97,15 @@ configure_logging()
 logger = logging.getLogger(__name__)
 WEB_CLIENT_DIR = Path(__file__).resolve().parent / "static" / "web"
 
-IMAGE_INPUT_ENABLED_ENV = "MINIGENT_IMAGE_INPUT_ENABLED"
-IMAGE_INPUT_MAX_BYTES_ENV = "MINIGENT_IMAGE_INPUT_MAX_BYTES"
-IMAGE_INPUT_ALLOWED_MIME_TYPES_ENV = "MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES"
-DEFAULT_IMAGE_INPUT_MAX_BYTES = 5 * 1024 * 1024
-DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES = frozenset(
-    {"image/png", "image/jpeg", "image/webp", "image/gif"}
-)
+
+def build_thread_store(settings: ThreadStoreSettings) -> ThreadStore:
+    if settings.db_path is not None:
+        return SQLiteThreadStore(settings.db_path)
+    return InMemoryThreadStore()
 
 
-@dataclass(frozen=True)
-class ImageInputSettings:
-    enabled: bool = False
-    max_bytes: int = DEFAULT_IMAGE_INPUT_MAX_BYTES
-    allowed_mime_types: frozenset[str] = DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES
-
-    @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> ImageInputSettings:
-        lookup = os.environ if env is None else env
-        return cls(
-            enabled=_parse_image_input_enabled(lookup),
-            max_bytes=_parse_image_input_max_bytes(lookup),
-            allowed_mime_types=_parse_image_input_allowed_mime_types(lookup),
-        )
-
-
-def image_input_settings_from_env() -> ImageInputSettings:
-    return ImageInputSettings.from_env()
-
-
-def _image_input_public_dict(settings: ImageInputSettings) -> dict[str, object]:
-    return {
-        "enabled": settings.enabled,
-        "max_bytes": settings.max_bytes,
-        "allowed_mime_types": sorted(settings.allowed_mime_types),
-    }
-
-
-def _image_input_export_public_dict(settings: ImageInputSettings) -> dict[str, object]:
-    exported: dict[str, object] = {}
-    if settings.enabled:
-        exported["enabled"] = True
-    if settings.max_bytes != DEFAULT_IMAGE_INPUT_MAX_BYTES:
-        exported["max_bytes"] = settings.max_bytes
-    if settings.allowed_mime_types != DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES:
-        exported["allowed_mime_types"] = sorted(settings.allowed_mime_types)
-    return exported
-
-
-def _parse_image_input_enabled(env: Mapping[str, str]) -> bool:
-    value = env.get(IMAGE_INPUT_ENABLED_ENV)
-    if value is None:
-        return False
-    normalized = value.strip().lower()
-    if not normalized:
-        return False
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise RuntimeError(f"{IMAGE_INPUT_ENABLED_ENV} must be a boolean")
-
-
-def _parse_image_input_allowed_mime_types(env: Mapping[str, str]) -> frozenset[str]:
-    configured = env.get(IMAGE_INPUT_ALLOWED_MIME_TYPES_ENV, "").strip()
-    if not configured:
-        return DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES
-    return frozenset(item.strip().lower() for item in configured.split(",") if item.strip())
-
-
-def _parse_image_input_max_bytes(env: Mapping[str, str]) -> int:
-    configured = env.get(IMAGE_INPUT_MAX_BYTES_ENV, "").strip()
-    if not configured:
-        return DEFAULT_IMAGE_INPUT_MAX_BYTES
-    try:
-        value = int(configured)
-    except ValueError as exc:
-        raise RuntimeError(f"{IMAGE_INPUT_MAX_BYTES_ENV} must be a positive integer") from exc
-    if value < 1:
-        raise RuntimeError(f"{IMAGE_INPUT_MAX_BYTES_ENV} must be a positive integer")
-    return value
+def build_thread_store_from_env() -> ThreadStore:
+    return build_thread_store(load_settings().thread_store)
 
 
 def _validate_and_normalize_message_request(
@@ -309,7 +248,10 @@ def create_app(
     tenant_config_source: str | None = None,
     peer_agent_registry: PeerAgentRegistry | None = None,
     thread_store: ThreadStore | None = None,
+    settings: MinigentSettings | None = None,
 ) -> FastAPI:
+    settings_was_provided = settings is not None
+    settings = settings or load_settings()
     validate_auth_settings()
     mcp_manager = (
         MCPServerManager() if execution_resolver is None and tool_registry is None else None
@@ -328,11 +270,16 @@ def create_app(
 
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0", lifespan=lifespan)
     configure_tracing(app)
-    app.state.store = thread_store or build_thread_store_from_env()
+    if thread_store is not None:
+        app.state.store = thread_store
+    elif settings_was_provided:
+        app.state.store = build_thread_store(settings.thread_store)
+    else:
+        app.state.store = build_thread_store_from_env()
     app.state.mcp_manager = mcp_manager
     app.state.mcp_broker_sessions = MCPBrokerSessionStore()
     app.state.oauth_flows = OAuthFlowStore()
-    admin_store_settings = admin_store_settings_from_env()
+    admin_store_settings = settings.admin_store
     app.state.admin_store_settings = admin_store_settings
     admin_encryption_key = admin_store_settings.encryption_key
     if admin_store is None:
@@ -388,8 +335,8 @@ def create_app(
                 raise RuntimeError(f"Unhandled tenant config source '{config_source}'")
     app.state.execution_resolver = execution_resolver
     app.state.quality_enhancer = QualityEnhancer()
-    runtime_settings = runtime_settings_from_env()
-    app.state.image_input_settings = image_input_settings_from_env()
+    runtime_settings = settings.runtime
+    app.state.image_input_settings = settings.image_input
     app.state.runtime_settings = runtime_settings
     app.state.runtime = AgentRuntime(
         store=app.state.store,
