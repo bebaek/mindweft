@@ -89,6 +89,32 @@ class TenantAgentBackendConfig:
     poll_interval_seconds: float = 1.0
     mcp_broker_enabled: bool = True
 
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> TenantAgentBackendConfig:
+        lookup = os.environ if env is None else env
+        backend_type = lookup.get(AGENT_BACKEND_ENV, AGENT_BACKEND_NATIVE).strip().lower()
+        if backend_type == AGENT_BACKEND_NATIVE:
+            return cls()
+        if backend_type != AGENT_BACKEND_PEER_AGENT:
+            raise RuntimeError(
+                f"Unsupported {AGENT_BACKEND_ENV} '{backend_type}'. Expected "
+                f"'{AGENT_BACKEND_NATIVE}' or '{AGENT_BACKEND_PEER_AGENT}'."
+            )
+        peer = lookup.get(AGENT_BACKEND_PEER_ENV, "").strip()
+        cwd = lookup.get(AGENT_BACKEND_CWD_ENV, "").strip()
+        if not peer:
+            raise RuntimeError(f"{AGENT_BACKEND_PEER_ENV} is required for peer_agent backend")
+        if not cwd:
+            raise RuntimeError(f"{AGENT_BACKEND_CWD_ENV} is required for peer_agent backend")
+        return cls(
+            type=AGENT_BACKEND_PEER_AGENT,
+            peer=peer,
+            cwd=cwd,
+            timeout_seconds=_positive_float_env(AGENT_BACKEND_TIMEOUT_ENV, 180.0, lookup),
+            poll_interval_seconds=_positive_float_env(AGENT_BACKEND_POLL_INTERVAL_ENV, 1.0, lookup),
+            mcp_broker_enabled=_bool_env(AGENT_BACKEND_MCP_BROKER_ENABLED_ENV, True, lookup),
+        )
+
 
 @dataclass(frozen=True)
 class TenantQualityConfig:
@@ -1116,29 +1142,10 @@ def _parse_tenant_agent_backend_config(
     )
 
 
-def _agent_backend_config_from_env() -> TenantAgentBackendConfig:
-    backend_type = os.getenv(AGENT_BACKEND_ENV, AGENT_BACKEND_NATIVE).strip().lower()
-    if backend_type == AGENT_BACKEND_NATIVE:
-        return TenantAgentBackendConfig()
-    if backend_type != AGENT_BACKEND_PEER_AGENT:
-        raise RuntimeError(
-            f"Unsupported {AGENT_BACKEND_ENV} '{backend_type}'. Expected "
-            f"'{AGENT_BACKEND_NATIVE}' or '{AGENT_BACKEND_PEER_AGENT}'."
-        )
-    peer = os.getenv(AGENT_BACKEND_PEER_ENV, "").strip()
-    cwd = os.getenv(AGENT_BACKEND_CWD_ENV, "").strip()
-    if not peer:
-        raise RuntimeError(f"{AGENT_BACKEND_PEER_ENV} is required for peer_agent backend")
-    if not cwd:
-        raise RuntimeError(f"{AGENT_BACKEND_CWD_ENV} is required for peer_agent backend")
-    return TenantAgentBackendConfig(
-        type=AGENT_BACKEND_PEER_AGENT,
-        peer=peer,
-        cwd=cwd,
-        timeout_seconds=_positive_float_env(AGENT_BACKEND_TIMEOUT_ENV, 180.0),
-        poll_interval_seconds=_positive_float_env(AGENT_BACKEND_POLL_INTERVAL_ENV, 1.0),
-        mcp_broker_enabled=_bool_env(AGENT_BACKEND_MCP_BROKER_ENABLED_ENV, True),
-    )
+def _agent_backend_config_from_env(
+    env: Mapping[str, str] | None = None,
+) -> TenantAgentBackendConfig:
+    return TenantAgentBackendConfig.from_env(env)
 
 
 def _parse_tenant_quality_config(tenant_id: str, payload: dict[str, Any]) -> TenantQualityConfig:
@@ -1579,8 +1586,9 @@ def _positive_float_config(tenant_id: str, value: object, label: str) -> float:
     return parsed
 
 
-def _positive_float_env(name: str, default: float) -> float:
-    raw = os.getenv(name, "").strip()
+def _positive_float_env(name: str, default: float, env: Mapping[str, str] | None = None) -> float:
+    lookup = os.environ if env is None else env
+    raw = lookup.get(name, "").strip()
     if not raw:
         return default
     try:
@@ -1604,8 +1612,9 @@ def _bool_config(tenant_id: str, value: object, label: str) -> bool:
     raise RuntimeError(f"Tenant '{tenant_id}' {label} must be boolean")
 
 
-def _bool_env(name: str, default: bool) -> bool:
-    raw = os.getenv(name, "").strip().lower()
+def _bool_env(name: str, default: bool, env: Mapping[str, str] | None = None) -> bool:
+    lookup = os.environ if env is None else env
+    raw = lookup.get(name, "").strip().lower()
     if not raw:
         return default
     if raw in {"1", "true", "yes", "on"}:

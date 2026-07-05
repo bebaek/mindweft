@@ -133,6 +133,16 @@ format = "json"
     )
 
     env = load_unified_config_env(config_path)
+    env.update(
+        {
+            "MINIGENT_AGENT_BACKEND": "peer_agent",
+            "MINIGENT_AGENT_BACKEND_PEER": "local-agent",
+            "MINIGENT_AGENT_BACKEND_CWD": "/tmp/work",
+            "MINIGENT_AGENT_BACKEND_TIMEOUT_SECONDS": "42",
+            "MINIGENT_AGENT_BACKEND_POLL_INTERVAL_SECONDS": "0.5",
+            "MINIGENT_MCP_BROKER_ENABLED": "false",
+        }
+    )
     settings = load_settings(env)
 
     assert settings.thread_store.db_path == "threads.db"
@@ -143,6 +153,12 @@ format = "json"
     assert settings.llm.openrouter.model == "openai/gpt-test"
     assert settings.llm.openrouter.base_url == "https://example.com/openrouter/v1"
     assert settings.llm.openrouter.api_key == "router-secret"
+    assert settings.agent_backend.type == "peer_agent"
+    assert settings.agent_backend.peer == "local-agent"
+    assert settings.agent_backend.cwd == "/tmp/work"
+    assert settings.agent_backend.timeout_seconds == 42
+    assert settings.agent_backend.poll_interval_seconds == 0.5
+    assert settings.agent_backend.mcp_broker_enabled is False
     assert settings.image_input.enabled is True
     assert settings.image_input.max_bytes == 1234
     assert settings.image_input.allowed_mime_types == frozenset({"image/png", "image/webp"})
