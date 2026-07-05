@@ -161,6 +161,15 @@ max_payload_chars = 4096
                     }
                 }
             ),
+            "MINIGENT_TENANT_CONFIG_SOURCE": "store-with-defaults",
+            "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(
+                {
+                    "tenant-1": {
+                        "llm": {"provider": "mock"},
+                        "tools": {"allowed_local_tools": ["calculator"]},
+                    }
+                }
+            ),
         }
     )
     settings = load_settings(env)
@@ -183,6 +192,13 @@ max_payload_chars = 4096
     assert settings.auth.static_tokens["token-1"].user_id == "user-1"
     assert settings.auth.static_tokens["token-1"].tenant_id == "tenant-1"
     assert settings.auth.static_tokens["token-1"].is_admin is True
+    assert settings.tenant_execution.config_source == "store-with-defaults"
+    assert settings.tenant_execution.tenant_configs is not None
+    assert settings.tenant_execution.tenant_configs["tenant-1"]["tools"] == {
+        "allowed_local_tools": ["calculator"]
+    }
+    assert settings.tenant_execution.default_llm.provider == "openrouter"
+    assert settings.tenant_execution.default_llm.model == "openai/gpt-test"
     assert settings.quality.enabled is True
     assert settings.quality.provider == "openai-compatible"
     assert settings.quality.model == "quality-model"

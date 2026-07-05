@@ -381,8 +381,8 @@ class MCPHTTPClient:
         return headers
 
 
-def load_mcp_server_configs_from_env() -> list[MCPServerConfig]:
-    return MCPSettings.from_env().servers
+def load_mcp_server_configs_from_env(env: Mapping[str, str] | None = None) -> list[MCPServerConfig]:
+    return MCPSettings.from_env(env).servers
 
 
 def mcp_settings_from_env() -> MCPSettings:
