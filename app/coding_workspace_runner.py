@@ -336,7 +336,13 @@ def main(argv: list[str] | None = None) -> int:
     if raw_argv[:1] == ["config"]:
         return run_config_command(raw_argv)
     args = parse_args(raw_argv)
-    env = load_env_file(None if args.no_env_file else args.env_file)
+    env_file_explicit = any(
+        item == "--env-file" or item.startswith("--env-file=") for item in raw_argv
+    )
+    env = load_env_file(
+        None if args.no_env_file else args.env_file,
+        warn_if_missing=env_file_explicit,
+    )
 
     workspace_roots = resolve_workspace_roots(
         args.workspace,
@@ -493,7 +499,12 @@ def main(argv: list[str] | None = None) -> int:
     processes: list[subprocess.Popen[str]] = []
     managed_http_processes: list[tuple[CodingMCPServerSpec, subprocess.Popen[str]]] = []
     generated_files: list[Path] = []
-    print(f"env_file={args.env_file}")
+    env_path = Path(args.env_file)
+    if not args.no_env_file:
+        if env_path.exists():
+            print(f"loaded_env_file={args.env_file}")
+        elif not env_file_explicit:
+            print(f"optional_env_file_not_found={args.env_file}")
     print("workspaces=" + ", ".join(str(workspace) for workspace in workspace_roots))
     if active_workspace_scope is not None:
         print(f"workspace_scope={active_workspace_scope.name}")
@@ -1149,7 +1160,7 @@ def resolve_active_workspace_scope(
     return scope.roots, scope
 
 
-def load_env_file(env_file: str | None) -> dict[str, str]:
+def load_env_file(env_file: str | None, *, warn_if_missing: bool = True) -> dict[str, str]:
     env = dict(os.environ)
     if env_file is None:
         source_env = dict(env)
@@ -1173,7 +1184,8 @@ def load_env_file(env_file: str | None) -> dict[str, str]:
                 env[key] = value
         apply_file_env_values(env, base_dir=path.parent)
     else:
-        print(f"env file not found; continuing with current environment: {env_file}")
+        if warn_if_missing:
+            print(f"env file not found; continuing with current environment: {env_file}")
         apply_file_env_values(env, base_dir=Path.cwd())
     return env
 

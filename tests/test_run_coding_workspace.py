@@ -118,6 +118,27 @@ def test_load_env_file_can_skip_dotenv(tmp_path: Path, monkeypatch) -> None:
     assert env.get("MINIGENT_CODING_WORKSPACES") != "/should/not/read"
 
 
+def test_load_env_file_can_suppress_missing_default_message(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    runner.load_env_file(".env.coding", warn_if_missing=False)
+
+    assert "env file not found" not in capsys.readouterr().out
+
+
+def test_load_env_file_warns_for_explicit_missing_file(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    runner.load_env_file("missing.env", warn_if_missing=True)
+
+    assert (
+        "env file not found; continuing with current environment: missing.env"
+        in capsys.readouterr().out
+    )
+
+
 def test_bridge_command_uses_default_read_only_tools(tmp_path: Path) -> None:
     command = runner.build_bridge_command(
         {}, "demo-tenant", "fs-workspace", "127.0.0.1", 8765, tmp_path
