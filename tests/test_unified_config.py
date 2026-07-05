@@ -111,6 +111,8 @@ provider = "openrouter"
 model = "openai/gpt-test"
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://example.com/openrouter/v1"
+extra_headers = { "X-Test" = "yes" }
+account_id_header = "X-Account-ID"
 
 [image_input]
 enabled = true
@@ -162,6 +164,15 @@ max_payload_chars = 4096
                 }
             ),
             "MINIGENT_TENANT_CONFIG_SOURCE": "store-with-defaults",
+            "MINIGENT_LLM_PROMPT_CACHE_KEY": "thread",
+            "MINIGENT_LLM_REASONING_EFFORT": "low",
+            "MINIGENT_LLM_REASONING_SUMMARY": "off",
+            "MINIGENT_RESPONSES_REASONING_ONLY_RETRIES": "2",
+            "MINIGENT_LLM_MAX_TOOL_RESULT_CHARS": "4096",
+            "MINIGENT_LLM_DEBUG_LOG_RESPONSES": "true",
+            "MINIGENT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS": "1234",
+            "MINIGENT_LLM_DEBUG_REQUEST_LOG_PATH": "/tmp/llm-requests.jsonl",
+            "MINIGENT_LLM_DEBUG_RESPONSE_LOG_PATH": "/tmp/llm-responses.jsonl",
             "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(
                 {
                     "tenant-1": {
@@ -182,6 +193,16 @@ max_payload_chars = 4096
     assert settings.llm.openrouter.model == "openai/gpt-test"
     assert settings.llm.openrouter.base_url == "https://example.com/openrouter/v1"
     assert settings.llm.openrouter.api_key == "router-secret"
+    assert settings.llm.runtime.account_id_header == "X-Account-ID"
+    assert settings.llm.runtime.prompt_cache_key == "thread"
+    assert settings.llm.runtime.reasoning_effort == "low"
+    assert settings.llm.runtime.reasoning_summary == "off"
+    assert settings.llm.runtime.responses_reasoning_only_retries == 2
+    assert settings.llm.runtime.max_tool_result_chars == 4096
+    assert settings.llm.runtime.debug_log_responses is True
+    assert settings.llm.runtime.debug_log_response_max_chars == 1234
+    assert settings.llm.runtime.debug_request_log_path == "/tmp/llm-requests.jsonl"
+    assert settings.llm.runtime.debug_response_log_path == "/tmp/llm-responses.jsonl"
     assert settings.agent_backend.type == "peer_agent"
     assert settings.agent_backend.peer == "local-agent"
     assert settings.agent_backend.cwd == "/tmp/work"

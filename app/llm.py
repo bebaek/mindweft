@@ -724,7 +724,7 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
                 status_code=401,
                 detail="Generic OAuth credentials are missing. Start login at /oauth/generic/login.",
             )
-        account_id_header = os.getenv("MINIGENT_LLM_ACCOUNT_ID_HEADER", "").strip()
+        account_id_header = LLMRuntimeSettings.from_env().account_id_header or ""
         if account_id_header and not credentials.account_id:
             raise HTTPException(status_code=401, detail="OAuth credentials are missing account_id")
 
@@ -853,7 +853,7 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
             "url": self._url,
             "headers": sorted(self._extra_headers.keys()),
             "adapter": "GenericOAuthResponsesAdapter",
-            "prompt_cache_key_configured": bool(os.getenv(LLM_PROMPT_CACHE_KEY_ENV, "").strip()),
+            "prompt_cache_key_configured": bool(LLMRuntimeSettings.from_env().prompt_cache_key),
         }
 
 
@@ -960,6 +960,50 @@ async def _post_responses_request(
 
 
 @dataclass(frozen=True)
+class LLMRuntimeSettings:
+    account_id_header: str | None = None
+    prompt_cache_key: str | None = None
+    reasoning_effort: str = "medium"
+    reasoning_summary: str = "auto"
+    responses_reasoning_only_retries: int = DEFAULT_RESPONSES_REASONING_ONLY_RETRIES
+    max_tool_result_chars: int = DEFAULT_LLM_MAX_TOOL_RESULT_CHARS
+    debug_log_responses: bool = False
+    debug_log_response_max_chars: int = DEFAULT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS
+    debug_request_log_path: str | None = None
+    debug_response_log_path: str | None = None
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> LLMRuntimeSettings:
+        lookup = os.environ if env is None else env
+        return cls(
+            account_id_header=_optional_env("MINIGENT_LLM_ACCOUNT_ID_HEADER", lookup),
+            prompt_cache_key=_optional_env(LLM_PROMPT_CACHE_KEY_ENV, lookup),
+            reasoning_effort=lookup.get(LLM_REASONING_EFFORT_ENV, "medium").strip().lower(),
+            reasoning_summary=lookup.get(LLM_REASONING_SUMMARY_ENV, "auto").strip().lower(),
+            responses_reasoning_only_retries=max(
+                0,
+                _env_int(
+                    LLM_RESPONSES_REASONING_ONLY_RETRIES_ENV,
+                    DEFAULT_RESPONSES_REASONING_ONLY_RETRIES,
+                    lookup,
+                ),
+            ),
+            max_tool_result_chars=max(
+                1024,
+                _env_int(LLM_MAX_TOOL_RESULT_CHARS_ENV, DEFAULT_LLM_MAX_TOOL_RESULT_CHARS, lookup),
+            ),
+            debug_log_responses=_env_bool(LLM_DEBUG_LOG_RESPONSES_ENV, lookup),
+            debug_log_response_max_chars=_env_int(
+                LLM_DEBUG_LOG_RESPONSE_MAX_CHARS_ENV,
+                DEFAULT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS,
+                lookup,
+            ),
+            debug_request_log_path=_optional_env(LLM_DEBUG_REQUEST_LOG_PATH_ENV, lookup),
+            debug_response_log_path=_optional_env(LLM_DEBUG_RESPONSE_LOG_PATH_ENV, lookup),
+        )
+
+
+@dataclass(frozen=True)
 class ProviderConfig:
     provider: str
     model: str
@@ -998,6 +1042,7 @@ class AnthropicLLMSettings:
 @dataclass(frozen=True)
 class LLMSettings:
     provider: str
+    runtime: LLMRuntimeSettings
     generic_oauth: GenericOAuthLLMSettings
     google: GoogleLLMSettings
     anthropic: AnthropicLLMSettings
@@ -1010,6 +1055,7 @@ class LLMSettings:
         extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS", lookup)
         return cls(
             provider=lookup.get("MINIGENT_LLM_PROVIDER", "mock").lower(),
+            runtime=LLMRuntimeSettings.from_env(lookup),
             generic_oauth=GenericOAuthLLMSettings(
                 model=_optional_env("MINIGENT_LLM_MODEL", lookup),
                 url=_optional_env("MINIGENT_LLM_URL", lookup),
@@ -1131,6 +1177,7 @@ def load_provider_config(provider: str, env: Mapping[str, str] | None = None) ->
     settings = LLMSettings.from_env(env)
     settings = LLMSettings(
         provider=provider,
+        runtime=settings.runtime,
         generic_oauth=settings.generic_oauth,
         google=settings.google,
         anthropic=settings.anthropic,
@@ -1189,7 +1236,7 @@ def serialize_tool_result(result: object) -> str:
 
 
 def _max_tool_result_chars() -> int:
-    return max(1024, _env_int(LLM_MAX_TOOL_RESULT_CHARS_ENV, DEFAULT_LLM_MAX_TOOL_RESULT_CHARS))
+    return LLMRuntimeSettings.from_env().max_tool_result_chars
 
 
 def _truncate_tool_result_text(text: str) -> str:
@@ -1219,7 +1266,7 @@ def _debug_log_llm_request(
     message_count: int,
     tool_count: int,
 ) -> None:
-    log_path = os.getenv(LLM_DEBUG_REQUEST_LOG_PATH_ENV, "").strip()
+    log_path = LLMRuntimeSettings.from_env().debug_request_log_path
     if not log_path:
         return
     try:
@@ -1252,12 +1299,10 @@ def _debug_log_raw_llm_response(
     *,
     content_type: str | None = None,
 ) -> None:
-    if not _env_bool(LLM_DEBUG_LOG_RESPONSES_ENV):
+    settings = LLMRuntimeSettings.from_env()
+    if not settings.debug_log_responses:
         return
-    max_chars = _env_int(
-        LLM_DEBUG_LOG_RESPONSE_MAX_CHARS_ENV,
-        DEFAULT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS,
-    )
+    max_chars = settings.debug_log_response_max_chars
     truncated = max_chars >= 0 and len(body) > max_chars
     logged_body = body[:max_chars] if truncated else body
     logger.info(
@@ -1268,7 +1313,7 @@ def _debug_log_raw_llm_response(
         truncated,
         logged_body,
     )
-    log_path = os.getenv(LLM_DEBUG_RESPONSE_LOG_PATH_ENV, "").strip()
+    log_path = settings.debug_response_log_path
     if log_path:
         try:
             with open(log_path, "a", encoding="utf-8") as file:
@@ -1289,8 +1334,9 @@ def _debug_log_raw_llm_response(
             logger.exception("Failed to write raw LLM response debug log")
 
 
-def _env_bool(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+def _env_bool(name: str, env: Mapping[str, str] | None = None) -> bool:
+    lookup = os.environ if env is None else env
+    return lookup.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _env_int(name: str, default: int, env: Mapping[str, str] | None = None) -> int:
@@ -1786,7 +1832,7 @@ def _gemini_requires_thought_signatures(model: str) -> bool:
 
 def _gemini_include_thought_summaries(model: str) -> bool:
     """Return whether Gemini requests should ask for displayable thought summaries."""
-    summary = os.getenv(LLM_REASONING_SUMMARY_ENV, "auto").strip().lower()
+    summary = LLMRuntimeSettings.from_env().reasoning_summary
     if summary in {"", "off", "none", "null", "false", "0"}:
         return False
     normalized = model.removeprefix("models/").lower()
@@ -1923,8 +1969,9 @@ def _responses_request_reasoning_config() -> dict[str, str] | None:
     displayable summary. Request an automatic summary by default while allowing
     deployments to tune or disable this behavior via environment variables.
     """
-    effort = os.getenv(LLM_REASONING_EFFORT_ENV, "medium").strip().lower()
-    summary = os.getenv(LLM_REASONING_SUMMARY_ENV, "auto").strip().lower()
+    settings = LLMRuntimeSettings.from_env()
+    effort = settings.reasoning_effort
+    summary = settings.reasoning_summary
 
     reasoning: dict[str, str] = {}
     if effort not in {"", "off", "none", "null", "false", "0"}:
@@ -1940,7 +1987,7 @@ def _thread_id_for_prompt_cache(messages: list[Message]) -> str | None:
 
 
 def _prompt_cache_key_for_request(messages: list[Message]) -> str | None:
-    configured = os.getenv(LLM_PROMPT_CACHE_KEY_ENV, "").strip()
+    configured = LLMRuntimeSettings.from_env().prompt_cache_key or ""
     if configured and configured.lower() not in {"thread", "thread_id", "auto"}:
         return configured
     return _thread_id_for_prompt_cache(messages)
@@ -2479,13 +2526,7 @@ def _is_no_responses_output_error(exc: HTTPException) -> bool:
 
 
 def _responses_reasoning_only_retries() -> int:
-    return max(
-        0,
-        _env_int(
-            LLM_RESPONSES_REASONING_ONLY_RETRIES_ENV,
-            DEFAULT_RESPONSES_REASONING_ONLY_RETRIES,
-        ),
-    )
+    return LLMRuntimeSettings.from_env().responses_reasoning_only_retries
 
 
 def _responses_reasoning_only_exception(
