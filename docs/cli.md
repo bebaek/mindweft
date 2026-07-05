@@ -115,7 +115,7 @@ reply prints to stdout with no extra noise. Useful flags:
 | `--skill <name>` | Skill to apply when creating a thread. |
 | `--skills <name>...` | Ordered list of prompt-overlay skills. |
 | `--capability-profile <name>` | Capability profile to apply. |
-| `--image <path>` | Attach an image file; can be repeated. Requires server-side `MINIGENT_IMAGE_INPUT_ENABLED=true` and a vision-capable model/provider. |
+| `--image <path>` | Attach an image file; can be repeated. Requires server-side `[image_input].enabled = true` (or `MINIGENT_IMAGE_INPUT_ENABLED=true`) and a vision-capable model/provider. |
 | `--image-detail auto\|low\|high` | Vision detail hint for attached images. |
 
 ### Chat (one-shot)
@@ -288,7 +288,7 @@ Available during interactive chat:
 | `/tokens` | Show estimated current thread size. |
 | `/debug` | Toggle debug mode. |
 | `/editor` | Open `$EDITOR` for long prompt composition. |
-| `/image <path...>` | Queue one or more image files for the next message. Requires server-side `MINIGENT_IMAGE_INPUT_ENABLED=true` and a vision-capable model/provider. |
+| `/image <path...>` | Queue one or more image files for the next message. Requires server-side `[image_input].enabled = true` (or `MINIGENT_IMAGE_INPUT_ENABLED=true`) and a vision-capable model/provider. |
 | `/image paste`, `/image clipboard` | On macOS, use `pngpaste` to queue a PNG image from the system clipboard for the next message. |
 | `/image list` | Show images queued for the next message. |
 | `/image clear` | Clear queued images without sending them. |

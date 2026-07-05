@@ -816,6 +816,11 @@ def test_config_export_prints_toml_from_server(monkeypatch: Any, capsys: Any) ->
                         "authorize_url": "https://auth.example/authorize",
                         "token_url": "https://auth.example/token",
                     },
+                    "image_input": {
+                        "enabled": True,
+                        "max_bytes": 123456,
+                        "allowed_mime_types": ["image/png", "image/webp"],
+                    },
                     "coding": {
                         "mcp_servers_file": "mcp-servers.json",
                         "mcp_server_specs": [
@@ -867,6 +872,10 @@ def test_config_export_prints_toml_from_server(monkeypatch: Any, capsys: Any) ->
     assert 'Authorization = "<set>"' not in output
     assert "[oauth]" in output
     assert 'provider_id = "chatgpt"' in output
+    assert "[image_input]" in output
+    assert "enabled = true" in output
+    assert "max_bytes = 123456" in output
+    assert 'allowed_mime_types = ["image/png", "image/webp"]' in output
     assert "[[coding.mcp_server_specs]]" in output
     assert "mcp_servers_file" not in output
     assert 'transport = "stdio"' in output
@@ -881,6 +890,8 @@ def test_config_export_prints_toml_from_server(monkeypatch: Any, capsys: Any) ->
     assert 'base_url = "None"' not in output
     parsed = tomllib.loads(output)
     assert parsed["oauth"]["provider_id"] == "chatgpt"
+    assert parsed["image_input"]["enabled"] is True
+    assert parsed["image_input"]["allowed_mime_types"] == ["image/png", "image/webp"]
     assert parsed["coding"]["mcp_server_specs"][0]["transport"] == "stdio"
     assert parsed["coding"]["mcp_server_specs"][0]["command"] == ["uvx", "custom-mcp"]
     assert parsed["tenant_execution_configs"]["*"]["skills"]["default_skill"] == "coding-workspace"

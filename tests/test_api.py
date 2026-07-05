@@ -247,6 +247,30 @@ def test_image_input_settings_from_env_mapping_rejects_invalid_values() -> None:
     assert str(exc_info.value) == "MINIGENT_IMAGE_INPUT_MAX_BYTES must be a positive integer"
 
 
+def test_config_reports_and_exports_image_input_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_BYTES", "1234")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES", "image/png,image/webp")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    response = client.get("/config?export=true")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["image_input"] == {
+        "enabled": True,
+        "max_bytes": 1234,
+        "allowed_mime_types": ["image/png", "image/webp"],
+    }
+    assert body["unified_config_export"]["image_input"] == {
+        "enabled": True,
+        "max_bytes": 1234,
+        "allowed_mime_types": ["image/png", "image/webp"],
+    }
+
+
 def test_add_message_rejects_image_when_disabled() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())

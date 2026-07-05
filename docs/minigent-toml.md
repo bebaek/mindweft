@@ -200,6 +200,12 @@ provider = "openrouter"
 model = "anthropic/claude-sonnet-4.5"
 api_key_env = "OPENROUTER_API_KEY"
 
+[image_input]
+# Enable --image and /image attachments when using a vision-capable model/provider.
+enabled = true
+# max_bytes = 5242880
+# allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
+
 [coding]
 enabled = true
 workspaces = ["/Users/you/code"]
@@ -263,6 +269,7 @@ Use the tables below as the supported key reference.
 | Key | Maps to | Notes |
 | --- | --- | --- |
 | `profile` | no direct env var | Used by tooling and docs to describe the intended local setup. |
+| `image_input` | `MINIGENT_IMAGE_INPUT_*` | Enables and limits image attachments for multimodal providers. |
 | `agent_skills` | projects into `MINIGENT_TENANT_EXECUTION_CONFIGS` | Imports local Agent Skill `SKILL.md` metadata into each tenant skill catalog. |
 | `peer_agents` | `MINIGENT_PEER_AGENTS` | Serialized as compact JSON. |
 | `tenant_execution_configs` | `MINIGENT_TENANT_EXECUTION_CONFIGS` | Serialized as compact JSON. |
@@ -315,6 +322,14 @@ Provider key targets:
 | `openai` | `OPENAI_API_KEY` |
 | `openrouter` | `OPENROUTER_API_KEY` |
 | `google`, `gemini`, `google-generative-ai` | `GEMINI_API_KEY` |
+
+### `[image_input]`
+
+| Key | Maps to | Notes |
+| --- | --- | --- |
+| `enabled` | `MINIGENT_IMAGE_INPUT_ENABLED` | Enables image parts from `--image` and `/image`; requires a vision-capable model/provider. |
+| `max_bytes` | `MINIGENT_IMAGE_INPUT_MAX_BYTES` | Maximum base64-decoded image size in bytes. |
+| `allowed_mime_types` | `MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES` | String or list of image MIME types; lists are converted to comma-separated env strings. |
 
 ### `[coding]`
 

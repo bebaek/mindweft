@@ -28,6 +28,12 @@ provider = "mock"
 # thinking_enabled = true
 # thinking_budget_tokens = 1024
 
+[image_input]
+# Enable attaching images with --image or /image when using a vision-capable model/provider.
+enabled = false
+# max_bytes = 5242880
+# allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
+
 [coding]
 enabled = true
 workspaces = ["/Users/you/code"]

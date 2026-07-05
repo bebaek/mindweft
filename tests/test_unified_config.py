@@ -33,6 +33,11 @@ provider = "openrouter"
 model = "anthropic/claude-sonnet-4.5"
 api_key_env = "OPENROUTER_API_KEY"
 
+[image_input]
+enabled = true
+max_bytes = 123456
+allowed_mime_types = ["image/png", "image/webp"]
+
 [coding]
 enabled = true
 workspaces = ["/Users/example/code", "/tmp/work"]
@@ -66,6 +71,9 @@ enabled = false
     assert env["MINIGENT_LLM_MODEL"] == "anthropic/claude-sonnet-4.5"
     assert env["OPENROUTER_MODEL"] == "anthropic/claude-sonnet-4.5"
     assert env["OPENROUTER_API_KEY"] == "secret-from-env"
+    assert env["MINIGENT_IMAGE_INPUT_ENABLED"] == "true"
+    assert env["MINIGENT_IMAGE_INPUT_MAX_BYTES"] == "123456"
+    assert env["MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES"] == "image/png,image/webp"
     assert env["MINIGENT_CODING_MCP_GATEWAY_ENABLED"] == "true"
     assert env["MINIGENT_CODING_MCP_GATEWAY_PORT"] == "9876"
     assert env["MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX"] == "/tools"
@@ -438,6 +446,11 @@ def test_unified_config_rejects_wrong_value_types(tmp_path: Path) -> None:
 [app]
 port = "not-a-number"
 
+[image_input]
+enabled = "yes"
+max_bytes = "big"
+allowed_mime_types = ["image/png", 123]
+
 [coding]
 workspaces = ["/tmp", 123]
 """.strip(),
@@ -449,4 +462,7 @@ workspaces = ["/tmp", 123]
 
     message = str(exc_info.value)
     assert "app.port must be an integer" in message
+    assert "image_input.enabled must be a boolean" in message
+    assert "image_input.max_bytes must be an integer" in message
+    assert "image_input.allowed_mime_types must be a string or list of strings" in message
     assert "coding.workspaces must be a string or list of strings" in message

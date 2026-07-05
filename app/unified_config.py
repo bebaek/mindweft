@@ -71,6 +71,11 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "auth_params": "MINIGENT_OAUTH_AUTH_PARAMS",
         "account_id_jwt_claim": "MINIGENT_OAUTH_ACCOUNT_ID_JWT_CLAIM",
     },
+    "image_input": {
+        "enabled": "MINIGENT_IMAGE_INPUT_ENABLED",
+        "max_bytes": "MINIGENT_IMAGE_INPUT_MAX_BYTES",
+        "allowed_mime_types": "MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES",
+    },
     "coding": {
         "enabled": "MINIGENT_CODING_MCP_GATEWAY_ENABLED",
         "tenant_id": "MINIGENT_CODING_TENANT_ID",

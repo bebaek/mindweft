@@ -61,6 +61,13 @@ class LLMConfig:
 
 
 @dataclass(frozen=True)
+class ImageInputConfig:
+    enabled: object = None
+    max_bytes: object = None
+    allowed_mime_types: object = None
+
+
+@dataclass(frozen=True)
 class CodingConfig:
     enabled: object = None
     tenant_id: object = None
@@ -134,6 +141,7 @@ class UnifiedConfig:
     auth: AuthConfig = field(default_factory=AuthConfig)
     oauth: OAuthConfig = field(default_factory=OAuthConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    image_input: ImageInputConfig = field(default_factory=ImageInputConfig)
     coding: CodingConfig = field(default_factory=CodingConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
@@ -150,6 +158,7 @@ SECTION_FIELDS: dict[str, set[str]] = {
     "auth": set(AuthConfig.__dataclass_fields__),
     "oauth": set(OAuthConfig.__dataclass_fields__),
     "llm": set(LLMConfig.__dataclass_fields__),
+    "image_input": set(ImageInputConfig.__dataclass_fields__),
     "coding": set(CodingConfig.__dataclass_fields__),
     "mcp": set(MCPConfig.__dataclass_fields__),
     "voice": set(VoiceConfig.__dataclass_fields__),
@@ -164,6 +173,7 @@ TOP_LEVEL_KEYS = {
     "auth",
     "oauth",
     "llm",
+    "image_input",
     "coding",
     "mcp",
     "voice",
@@ -180,6 +190,7 @@ SECTION_TYPES: dict[str, type[Any]] = {
     "auth": AuthConfig,
     "oauth": OAuthConfig,
     "llm": LLMConfig,
+    "image_input": ImageInputConfig,
     "coding": CodingConfig,
     "mcp": MCPConfig,
     "voice": VoiceConfig,
@@ -250,6 +261,7 @@ _INT_KEYS = {
     "auth.jwt_jwks_cache_seconds",
     "llm.max_tokens",
     "llm.thinking_budget_tokens",
+    "image_input.max_bytes",
     "coding.bridge_port",
     "coding.mcp_gateway_port",
     "quality.max_payload_chars",
@@ -264,6 +276,7 @@ _BOOL_KEYS = {
     "app.context_compaction_enabled",
     "llm.thinking_enabled",
     "llm.prompt_cache_enabled",
+    "image_input.enabled",
     "coding.enabled",
     "coding.inject_workspace_skill",
     "coding.shell_enabled",
@@ -273,6 +286,7 @@ _BOOL_KEYS = {
 }
 
 _STRING_LIST_KEYS = {
+    "image_input.allowed_mime_types",
     "coding.workspaces",
     "coding.shell_allowed_command_prefixes",
     "coding.bridge_allow_globs",

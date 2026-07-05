@@ -116,6 +116,25 @@ def image_input_settings_from_env() -> ImageInputSettings:
     return ImageInputSettings.from_env()
 
 
+def _image_input_public_dict(settings: ImageInputSettings) -> dict[str, object]:
+    return {
+        "enabled": settings.enabled,
+        "max_bytes": settings.max_bytes,
+        "allowed_mime_types": sorted(settings.allowed_mime_types),
+    }
+
+
+def _image_input_export_public_dict(settings: ImageInputSettings) -> dict[str, object]:
+    exported: dict[str, object] = {}
+    if settings.enabled:
+        exported["enabled"] = True
+    if settings.max_bytes != DEFAULT_IMAGE_INPUT_MAX_BYTES:
+        exported["max_bytes"] = settings.max_bytes
+    if settings.allowed_mime_types != DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES:
+        exported["allowed_mime_types"] = sorted(settings.allowed_mime_types)
+    return exported
+
+
 def _parse_image_input_enabled(env: Mapping[str, str]) -> bool:
     value = env.get(IMAGE_INPUT_ENABLED_ENV)
     if value is None:
@@ -399,7 +418,15 @@ def create_app(
 
     @app.get("/config")
     async def config(request: Request, export: bool = False) -> dict[str, object]:
-        return request.app.state.execution_resolver.describe(include_export=export)
+        result = request.app.state.execution_resolver.describe(include_export=export)
+        image_input_settings = request.app.state.image_input_settings
+        result["image_input"] = _image_input_public_dict(image_input_settings)
+        if export:
+            image_input_export = _image_input_export_public_dict(image_input_settings)
+            unified_export = result.get("unified_config_export")
+            if image_input_export and isinstance(unified_export, dict):
+                unified_export["image_input"] = image_input_export
+        return result
 
     @app.get("/execution-options", response_model=ExecutionOptionsResponse)
     async def execution_options(

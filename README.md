@@ -96,6 +96,7 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | `MINIGENT_AUTH_MODE` | Authentication mode: development headers, static tokens, or JWT. |
 | `MINIGENT_LLM_PROVIDER` | LLM provider such as `mock`, `openai`, `openrouter`, `openai-compatible`, `generic-oauth`, `google`, or `anthropic`. |
 | `MINIGENT_LLM_MODEL` | Model identifier for the selected provider. |
+| `MINIGENT_IMAGE_INPUT_ENABLED` | Enables image attachments from CLI/chat clients; unified config key is `[image_input].enabled`. |
 | `MINIGENT_THREAD_DB_PATH` | Optional SQLite path for persistent thread/message storage. |
 | `MINIGENT_TENANT_EXECUTION_CONFIGS` | Optional per-tenant LLM, tool, skill, capability, backend, and quality config. |
 | `MINIGENT_MCP_BROKER_ENABLED` | Enables the peer-agent MCP broker path when using peer backends. |

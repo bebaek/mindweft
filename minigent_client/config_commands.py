@@ -50,6 +50,12 @@ provider = "mock"
 # model = "anthropic/claude-sonnet-4.5"
 # api_key_env = "OPENROUTER_API_KEY"
 
+[image_input]
+# Enable attaching images with --image or /image when using a vision-capable model/provider.
+enabled = false
+# max_bytes = 5242880
+# allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
+
 [coding]
 enabled = true
 workspaces = ["/Users/you/code"]
@@ -81,6 +87,10 @@ mode = "development"
 [llm]
 provider = "mock"
 
+[image_input]
+# Enable attaching images with --image or /image when using a vision-capable model/provider.
+enabled = false
+
 [quality]
 enabled = false
 """
@@ -102,6 +112,10 @@ mode = "development"
 provider = "openrouter"
 model = "anthropic/claude-sonnet-4.5"
 api_key_env = "OPENROUTER_API_KEY"
+
+[image_input]
+# Enable attaching images with --image or /image when using a vision-capable model/provider.
+enabled = false
 
 [quality]
 enabled = false
@@ -125,6 +139,10 @@ provider = "mock"
 # provider = "openrouter"
 # model = "anthropic/claude-sonnet-4.5"
 # api_key_env = "OPENROUTER_API_KEY"
+
+[image_input]
+# Enable attaching images with --image or /image when using a vision-capable model/provider.
+enabled = false
 
 [voice]
 tenant_id = "demo-tenant"
@@ -545,6 +563,7 @@ def render_unified_config_toml(export: dict[str, object]) -> str:
         "auth",
         "oauth",
         "llm",
+        "image_input",
         "coding",
         "mcp",
         "voice",
