@@ -14,7 +14,7 @@ from app.mcp import (
     load_mcp_server_configs_from_env,
     mcp_settings_from_env,
 )
-from app.redaction import RedactingLogFilter, install_log_redaction
+from app.redaction import RedactingLogFilter, install_log_redaction, redact_urls_in_text
 
 
 def test_mcp_settings_from_env_mapping_defaults_to_empty() -> None:
@@ -620,6 +620,12 @@ def test_redacting_log_filter_redacts_httpx_style_log_messages(
 
     assert "tavilyApiKey=%3Credacted%3E" in caplog.text
     assert "tvly-dev-secret" not in caplog.text
+
+
+def test_redact_urls_in_text_ignores_malformed_bracketed_hosts() -> None:
+    malformed = "see " + "http" + "://[not-ip]/path?token=secret"
+
+    assert redact_urls_in_text(malformed) == malformed
 
 
 def test_install_log_redaction_redacts_new_log_records() -> None:

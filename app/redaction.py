@@ -46,7 +46,10 @@ def is_sensitive_key(key: str) -> bool:
 
 
 def redact_url_secrets(value: str) -> str:
-    parts = urlsplit(value)
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return value
     if not parts.scheme or not parts.netloc or not parts.query:
         return value
 
