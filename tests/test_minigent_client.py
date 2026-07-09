@@ -4433,6 +4433,75 @@ def test_run_chat_loop_continues_after_backend_error(
     assert "[assistant] good reply\n" in output_stream.getvalue()
 
 
+def test_run_chat_loop_summarizes_stream_errors_already_rendered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("bad request\n")
+
+    class FakeChatClient:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            assert content == "bad request"
+            return {"id": "message-1"}
+
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
+            raise MinigentAPIError(
+                "Minigent server error (502). upstream exploded",
+                category="server_error",
+                detail="run.error event: status_code=502 detail=upstream exploded",
+                status_code=502,
+            )
+
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent", stream_runs=True)
+    )
+
+    assert exit_code == 0
+    output = output_stream.getvalue()
+    assert "[idle] request failed, staying in chat mode: stream request failed (502)\n" in output
+    assert "upstream exploded" not in output
+
+
+def test_minigent_client_runtime_summarizes_stream_errors_already_rendered() -> None:
+    class FailingMinigentClient(FakeMinigentClient):
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
+            raise MinigentAPIError(
+                "Minigent server error (502). upstream exploded",
+                category="server_error",
+                detail="run.error event: status_code=502 detail=upstream exploded",
+                status_code=502,
+            )
+
+    activation_source = FakeActivationSource(Activation(), utterance="okay")
+    minigent_client = FailingMinigentClient(reply="")
+    speech_output = FakeSpeechOutput()
+    output_stream = StringIO()
+    daemon = MinigentClientRuntime(
+        wake_phrase="hey minigent",
+        activation_source=activation_source,
+        minigent_client=minigent_client,
+        speech_output=speech_output,
+        output_stream=output_stream,
+    )
+
+    reply = daemon.run_once()
+
+    assert reply == ""
+    output = output_stream.getvalue()
+    assert (
+        "[idle] request failed, returning to wake-word mode: stream request failed (502)\n"
+        in output
+    )
+    assert "upstream exploded" not in output
+
+
 def test_run_chat_loop_remembers_thread_after_successful_turn(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

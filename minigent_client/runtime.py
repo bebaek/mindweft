@@ -6,6 +6,11 @@ from enum import Enum
 from typing import Callable, Protocol, TextIO
 
 from minigent_client.api_client import MinigentAPIClient
+from minigent_client.errors import (
+    MinigentAPIError,
+    format_stream_run_error_summary,
+    is_stream_run_error,
+)
 
 
 class ClientState(str, Enum):
@@ -113,7 +118,13 @@ class MinigentClientRuntime:
                 return reply
 
     def _handle_backend_error(self, exc: RuntimeError) -> None:
-        self._output_stream.write(f"[idle] request failed, returning to wake-word mode: {exc}\n")
+        if is_stream_run_error(exc) and isinstance(exc, MinigentAPIError):
+            message = format_stream_run_error_summary(exc)
+        else:
+            message = str(exc)
+        self._output_stream.write(
+            f"[idle] request failed, returning to wake-word mode: {message}\n"
+        )
         self._output_stream.flush()
         try:
             self._speech_output.speak("I hit an upstream error.")

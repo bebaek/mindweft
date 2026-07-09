@@ -28,7 +28,11 @@ from minigent_client.backends.stdin_loop import StdinActivationSource
 from minigent_client.config import AgentPreset, ClientConfig, build_client_config
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.ducking import MacOsAmbientVolumeDucker
-from minigent_client.errors import MinigentAPIError
+from minigent_client.errors import (
+    MinigentAPIError,
+    format_stream_run_error_summary,
+    is_stream_run_error,
+)
 from minigent_client.one_shot_cli import _format_execution_options, _format_markdown_transcript
 from minigent_client.output import (
     estimate_thread_token_usage,
@@ -965,7 +969,11 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             output_stream.flush()
             continue
         except RuntimeError as exc:
-            output_stream.write(f"[idle] request failed, staying in chat mode: {exc}\n")
+            if is_stream_run_error(exc) and isinstance(exc, MinigentAPIError):
+                message = format_stream_run_error_summary(exc)
+            else:
+                message = str(exc)
+            output_stream.write(f"[idle] request failed, staying in chat mode: {message}\n")
             output_stream.flush()
             continue
         # Display reasoning content if present and enabled (only for non-streaming mode)
