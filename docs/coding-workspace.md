@@ -262,6 +262,12 @@ entry can define:
 - `timeout_seconds`: optional Minigent HTTP client timeout for calls to this MCP server;
   defaults to `request_timeout` for coding MCP server specs and to `30` in tenant configs.
 
+- `restart_on_timeout`: optional bool for stdio gateway entries. When true, the gateway
+  restarts that stdio subprocess after a bridge read/write timeout or request cancellation;
+  this is useful for state-light servers such as `shell-workspace` where a long-running
+  command can otherwise block later requests behind the serialized stdio request lock.
+  Defaults to `false`.
+
 String values in `command`, `env`, `headers`, `url`, and `health_url` can reference dotenv or
 environment values with `${NAME}` placeholders. Prefer passing credentials through `env` or
 `headers` rather than command-line arguments so they are not exposed in process listings.
@@ -525,7 +531,9 @@ uv run python scripts/demo_client.py \
 
 The shell MCP server requires command working directories to stay under one of the configured
 workspace roots, passes through only a small environment allowlist, disables stdin, enforces a
-timeout, and truncates stdout/stderr. Commands run through `/bin/sh` by default. If you define
+timeout, and truncates stdout/stderr. Keep `[app].tool_timeout_seconds` greater than or equal
+to the shell MCP `request_timeout`/`timeout_seconds`; `minigent config doctor` warns when the
+outer runtime timeout is shorter. Commands run through `/bin/sh` by default. If you define
 `shell-workspace` explicitly in unified config and want zsh, configure the server command itself:
 
 ```toml
@@ -540,6 +548,9 @@ command = [
   "--shell",
   "/bin/zsh",
 ]
+request_timeout = 180
+timeout_seconds = 180
+restart_on_timeout = true
 ```
 
 You can also add a command-prefix allowlist:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -40,6 +41,7 @@ class BridgeSettings(BaseModel):
     allowed_tools: list[str] | None = None
     path_policy: MCPPathPolicy = Field(default_factory=MCPPathPolicy)
     env: dict[str, str] = Field(default_factory=dict)
+    restart_on_timeout: bool = False
 
 
 class StdioMCPBridge:
@@ -73,27 +75,29 @@ class StdioMCPBridge:
             self._process.pid,
         )
 
-    async def stop(self) -> None:
+    async def stop(self, *, force: bool = False) -> None:
         process = self._process
         if process is None:
             return
-        if process.returncode is None:
+        if process.returncode is None and not force:
             await self._request_graceful_stdio_shutdown(process)
         if process.returncode is None:
             process.terminate()
             try:
-                await asyncio.wait_for(process.wait(), timeout=5.0)
+                await asyncio.wait_for(process.wait(), timeout=5.0 if not force else 1.0)
             except TimeoutError:
                 process.kill()
                 await process.wait()
         if self._stderr_task is not None:
             self._stderr_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._stderr_task
-            except asyncio.CancelledError:
-                pass
         self._stderr_task = None
         self._process = None
+
+    async def restart(self, *, force: bool = True) -> None:
+        await self.stop(force=force)
+        await self.start()
 
     async def _request_graceful_stdio_shutdown(self, process: asyncio.subprocess.Process) -> None:
         stdin = process.stdin
@@ -242,8 +246,13 @@ class StdioMCPBridge:
     async def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
         expected_id = payload.get("id")
         async with self._request_lock:
-            await self._write_json(payload)
-            return await self._read_json(expected_id=expected_id)
+            try:
+                await self._write_json(payload)
+                return await self._read_json(expected_id=expected_id)
+            except asyncio.CancelledError:
+                if self._settings.restart_on_timeout:
+                    await self.restart(force=True)
+                raise
 
     async def _write_json(self, payload: dict[str, Any]) -> None:
         process = self._live_process()
@@ -257,6 +266,8 @@ class StdioMCPBridge:
         except BrokenPipeError as exc:
             raise HTTPException(status_code=502, detail="MCP stdio server closed stdin") from exc
         except TimeoutError as exc:
+            if self._settings.restart_on_timeout:
+                await self.restart(force=True)
             raise HTTPException(
                 status_code=504, detail="Timed out writing to MCP stdio server"
             ) from exc
@@ -270,12 +281,16 @@ class StdioMCPBridge:
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
+                if self._settings.restart_on_timeout:
+                    await self.restart(force=True)
                 raise HTTPException(
                     status_code=504, detail="Timed out reading from MCP stdio server"
                 )
             try:
                 line = await asyncio.wait_for(stdout.readline(), timeout=remaining)
             except TimeoutError as exc:
+                if self._settings.restart_on_timeout:
+                    await self.restart(force=True)
                 raise HTTPException(
                     status_code=504, detail="Timed out reading from MCP stdio server"
                 ) from exc

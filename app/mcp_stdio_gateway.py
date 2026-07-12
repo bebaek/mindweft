@@ -151,6 +151,13 @@ def bridge_settings_from_mapping(raw_server: Any) -> BridgeSettings:
         raise RuntimeError(
             f"MCP stdio gateway server '{name}' stdio_stream_limit must be an integer"
         )
+    restart_on_timeout = raw_server.get(
+        "restart_on_timeout", raw_server.get("restartOnTimeout", False)
+    )
+    if not isinstance(restart_on_timeout, bool):
+        raise RuntimeError(
+            f"MCP stdio gateway server '{name}' restart_on_timeout must be a boolean"
+        )
 
     deny_globs = path_policy.get("deny_globs", path_policy.get("denyGlobs", []))
     allow_globs = path_policy.get("allow_globs", path_policy.get("allowGlobs", []))
@@ -179,6 +186,7 @@ def bridge_settings_from_mapping(raw_server: Any) -> BridgeSettings:
         allowed_tools=list(allowed_tools) if allowed_tools is not None else None,
         path_policy=MCPPathPolicy(deny_globs=list(deny_globs), allow_globs=list(allow_globs)),
         env=dict(extra_env),
+        restart_on_timeout=restart_on_timeout,
     )
 
 

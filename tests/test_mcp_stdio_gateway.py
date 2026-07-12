@@ -157,6 +157,7 @@ def test_load_gateway_settings_reads_config(tmp_path: Path) -> None:
                             "deny_globs": ["**/.env*"],
                             "allow_globs": ["**/.env*.template"],
                         },
+                        "restart_on_timeout": True,
                     }
                 ],
             }
@@ -175,6 +176,7 @@ def test_load_gateway_settings_reads_config(tmp_path: Path) -> None:
     assert settings.bridges[0].allowed_tools == ["read_file"]
     assert settings.bridges[0].path_policy.deny_globs == ["**/.env*"]
     assert settings.bridges[0].path_policy.allow_globs == ["**/.env*.template"]
+    assert settings.bridges[0].restart_on_timeout is True
 
 
 def test_bridge_settings_from_mapping_validates_command() -> None:

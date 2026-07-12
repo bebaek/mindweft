@@ -86,6 +86,7 @@ class CodingMCPServerSpec:
         startup_timeout_seconds: float = 30.0,
         request_timeout: float = 30.0,
         timeout_seconds: float = 30.0,
+        restart_on_timeout: bool = False,
         enabled: bool = True,
     ) -> None:
         self.name = name
@@ -105,6 +106,7 @@ class CodingMCPServerSpec:
         self.startup_timeout_seconds = startup_timeout_seconds
         self.request_timeout = request_timeout
         self.timeout_seconds = timeout_seconds
+        self.restart_on_timeout = restart_on_timeout
         self.enabled = enabled
 
 
@@ -662,6 +664,7 @@ def mcp_server_specs_for_gateway(
                     startup_timeout_seconds=spec.startup_timeout_seconds,
                     request_timeout=spec.request_timeout,
                     timeout_seconds=spec.timeout_seconds,
+                    restart_on_timeout=spec.restart_on_timeout,
                     enabled=spec.enabled,
                 )
             )
@@ -682,6 +685,8 @@ def mcp_gateway_config_from_specs(specs: list[CodingMCPServerSpec]) -> dict[str,
             "command": spec.command,
             "request_timeout": spec.request_timeout,
         }
+        if spec.restart_on_timeout:
+            server["restart_on_timeout"] = True
         if spec.allowed_tools is not None:
             server["allowed_tools"] = spec.allowed_tools
         if spec.path_policy:
@@ -877,6 +882,11 @@ def coding_mcp_server_spec_from_mapping(
     )
     if not isinstance(timeout_seconds, int | float) or timeout_seconds <= 0:
         raise RuntimeError(f"coding MCP server '{name}' timeout_seconds must be a positive number")
+    restart_on_timeout = raw_server.get(
+        "restart_on_timeout", raw_server.get("restartOnTimeout", False)
+    )
+    if not isinstance(restart_on_timeout, bool):
+        raise RuntimeError(f"coding MCP server '{name}' restart_on_timeout must be a boolean")
 
     return CodingMCPServerSpec(
         name=name,
@@ -898,6 +908,7 @@ def coding_mcp_server_spec_from_mapping(
         startup_timeout_seconds=float(startup_timeout_seconds),
         request_timeout=float(request_timeout),
         timeout_seconds=float(timeout_seconds),
+        restart_on_timeout=restart_on_timeout,
         enabled=env_flag_enabled(str(raw_server.get("enabled", "true"))),
     )
 

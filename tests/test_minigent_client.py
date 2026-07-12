@@ -5682,3 +5682,48 @@ def test_build_wake_word_detector_supports_openwakeword() -> None:
     assert isinstance(detector, FakeOpenWakeWordDetector)
     assert detector.model_name == "okay_nabu"
     assert detector.threshold == 0.7
+
+
+def test_coding_mcp_timeout_checks_warn_when_runtime_timeout_is_short() -> None:
+    from minigent_client.config_commands import _coding_mcp_timeout_checks
+
+    checks = _coding_mcp_timeout_checks(
+        {
+            "mcp_server_specs": [
+                {
+                    "name": "shell-workspace",
+                    "request_timeout": 180,
+                    "timeout_seconds": 180,
+                    "restart_on_timeout": True,
+                }
+            ]
+        },
+        {"MINIGENT_TOOL_TIMEOUT_SECONDS": "60"},
+    )
+
+    assert any(
+        check.status == "warning"
+        and check.label == "Runtime/MCP timeout alignment"
+        and "shell-workspace=180s" in (check.detail or "")
+        for check in checks
+    )
+    assert any(
+        check.status == "ok"
+        and check.label == "MCP stdio timeout recovery"
+        and "shell-workspace" in (check.detail or "")
+        for check in checks
+    )
+
+
+def test_coding_mcp_timeout_checks_ok_when_runtime_timeout_covers_mcp() -> None:
+    from minigent_client.config_commands import _coding_mcp_timeout_checks
+
+    checks = _coding_mcp_timeout_checks(
+        {"mcp_server_specs": [{"name": "shell-workspace", "request_timeout": 180}]},
+        {"MINIGENT_TOOL_TIMEOUT_SECONDS": "240"},
+    )
+
+    assert any(
+        check.status == "ok" and check.label == "Runtime/MCP timeout alignment" for check in checks
+    )
+    assert not any(check.status == "warning" for check in checks)

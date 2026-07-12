@@ -237,6 +237,37 @@ def test_stdio_bridge_skips_stale_response_after_timeout(tmp_path: Path) -> None
     assert response.json()["result"]["structuredContent"] == {"echo": "fresh"}
 
 
+def test_stdio_bridge_can_restart_subprocess_after_timeout(tmp_path: Path) -> None:
+    client = _client(tmp_path, "delayed-tools-list", request_timeout=0.1, restart_on_timeout=True)
+
+    with client:
+        initialize = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        session_id = initialize.headers["mcp-session-id"]
+        timed_out = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": session_id},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        )
+        response = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": session_id},
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "echo", "arguments": {"text": "after restart"}},
+            },
+        )
+
+    assert timed_out.status_code == 504
+    assert response.status_code == 200
+    assert response.json()["id"] == 3
+    assert response.json()["result"]["structuredContent"] == {"echo": "after restart"}
+
+
 def test_stdio_bridge_reports_exited_subprocess(tmp_path: Path) -> None:
     client = _client(tmp_path, "exit")
 
@@ -386,6 +417,7 @@ def _client(
     path_policy: MCPPathPolicy | None = None,
     stdio_stream_limit: int | None = None,
     request_timeout: float = 2.0,
+    restart_on_timeout: bool = False,
 ) -> TestClient:
     script = tmp_path / "fake_stdio_mcp.py"
     script.write_text(FAKE_STDIO_MCP_SERVER)
@@ -396,5 +428,6 @@ def _client(
         stdio_stream_limit=stdio_stream_limit or 16 * 1024 * 1024,
         allowed_tools=allowed_tools,
         path_policy=path_policy or MCPPathPolicy(),
+        restart_on_timeout=restart_on_timeout,
     )
     return TestClient(create_bridge_app(settings))

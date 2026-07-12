@@ -964,7 +964,83 @@ def _coding_config_checks(
                 "shell is enabled but no allowed command prefixes are configured",
             )
         )
+    checks.extend(_coding_mcp_timeout_checks(coding, resolved_env))
     return checks
+
+
+def _coding_mcp_timeout_checks(
+    coding: dict[str, Any], resolved_env: dict[str, str]
+) -> list[DiagnosticCheck]:
+    raw_tool_timeout = resolved_env.get("MINIGENT_TOOL_TIMEOUT_SECONDS", "60")
+    try:
+        tool_timeout = float(raw_tool_timeout)
+    except ValueError:
+        return [
+            DiagnosticCheck(
+                "error",
+                "Runtime tool timeout",
+                "MINIGENT_TOOL_TIMEOUT_SECONDS must be numeric",
+                blocking=True,
+            )
+        ]
+    specs = coding.get("mcp_server_specs", coding.get("mcpServerSpecs", []))
+    if not isinstance(specs, list):
+        return []
+    oversized: list[str] = []
+    restart_enabled: list[str] = []
+    for spec in specs:
+        if not isinstance(spec, dict):
+            continue
+        name = str(spec.get("name", "<unnamed>"))
+        request_timeout = _positive_float_or_none(
+            spec.get("request_timeout", spec.get("requestTimeout"))
+        )
+        timeout_seconds = _positive_float_or_none(
+            spec.get("timeout_seconds", spec.get("timeoutSeconds"))
+        )
+        server_timeout = (
+            max(value for value in (request_timeout, timeout_seconds) if value is not None)
+            if (request_timeout is not None or timeout_seconds is not None)
+            else None
+        )
+        if server_timeout is not None and tool_timeout < server_timeout:
+            oversized.append(f"{name}={server_timeout:g}s")
+        if spec.get("restart_on_timeout", spec.get("restartOnTimeout")) is True:
+            restart_enabled.append(name)
+    checks: list[DiagnosticCheck] = []
+    if oversized:
+        checks.append(
+            DiagnosticCheck(
+                "warning",
+                "Runtime/MCP timeout alignment",
+                f"app.tool_timeout_seconds ({tool_timeout:g}s) is shorter than: {', '.join(oversized)}",
+            )
+        )
+    elif specs:
+        checks.append(
+            DiagnosticCheck(
+                "ok",
+                "Runtime/MCP timeout alignment",
+                f"app.tool_timeout_seconds={tool_timeout:g}s",
+            )
+        )
+    if restart_enabled:
+        checks.append(
+            DiagnosticCheck(
+                "ok",
+                "MCP stdio timeout recovery",
+                f"restart_on_timeout enabled for: {', '.join(restart_enabled)}",
+            )
+        )
+    return checks
+
+
+def _positive_float_or_none(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value) if value > 0 else None
+    return None
 
 
 def _workspace_paths(coding: dict[str, Any], resolved_env: dict[str, str]) -> list[Path]:
