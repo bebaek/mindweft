@@ -52,6 +52,11 @@
 
       <section id="messages" class="messages" aria-live="polite"></section>
 
+      <button id="activity-button" class="run-status" type="button" hidden>
+        <span id="run-status-label">Ready</span>
+        <span class="run-status-hint">Activity</span>
+      </button>
+
       <form id="composer" class="composer">
         <textarea
           id="message-input"
@@ -59,9 +64,31 @@
           placeholder="Message Minigent"
           autocomplete="off"
         ></textarea>
-        <button id="send-button" type="submit">Send</button>
+        <div class="composer-actions">
+          <button id="send-button" type="submit">Send</button>
+          <button id="stop-button" class="stop-button" type="button" hidden>Stop</button>
+        </div>
       </form>
     </main>
+
+    <div id="activity-backdrop" class="activity-backdrop" hidden></div>
+    <aside
+      id="activity-sheet"
+      class="activity-sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="activity-title"
+      hidden
+    >
+      <header class="activity-header">
+        <div>
+          <h2 id="activity-title">Run activity</h2>
+          <p id="activity-summary">No activity yet</p>
+        </div>
+        <button id="activity-close" type="button" aria-label="Close activity">Close</button>
+      </header>
+      <ol id="activity-list" class="activity-list"></ol>
+    </aside>
 
     <script src="./app.js"></script>
   </body>

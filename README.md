@@ -134,8 +134,43 @@ MCP server configs can override the tool-result redaction policy with `result_re
 
 ### Browser
 
-The API serves a dependency-free development browser client at `/web/`. It uses the
-streaming run endpoint to show live LLM, tool, and peer-agent progress.
+The API serves a dependency-free browser client at `/web/`. It uses the streaming run
+endpoint to show live LLM, tool, and peer-agent progress, with mobile-friendly run
+controls, a stop action, and a collapsible activity sheet for run details.
+
+#### Mobile UI demo
+
+The `/web/` client is designed to work in a narrow mobile viewport. To demo it on macOS
+without a phone, use a browser device emulator:
+
+- Chrome/Brave: open DevTools with `Option+Command+I`, then toggle device mode with
+  `Command+Shift+M`.
+- Safari: enable developer features, then use `Develop → Enter Responsive Design Mode`
+  or `Option+Command+R`.
+
+Use a viewport around `390 × 844` to approximate a modern phone. Send a prompt, then tap
+the Activity bar to open the mobile bottom sheet with run events. During a running request,
+Send changes to Stop.
+
+To demo on an actual mobile device, bind the development server to your LAN interface.
+For the plain API server, pass uvicorn's `--host` option:
+
+```bash
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+ipconfig getifaddr en0
+```
+
+If you start Minigent through the coding-workspace runner, use its API-specific option
+instead:
+
+```bash
+uv run minigent-coding-workspace --api-host 0.0.0.0 --api-port 8000
+ipconfig getifaddr en0
+```
+
+Open `http://<mac-lan-ip>:8000/web/` from a phone on the same network, replacing
+`<mac-lan-ip>` with the address printed by `ipconfig`. Use a trusted local network only;
+the development auth and browser client are not intended to be exposed publicly.
 
 ### CLI
 

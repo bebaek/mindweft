@@ -11,6 +11,12 @@ const defaults = {
 };
 
 const state = { ...defaults, ...loadState() };
+const runState = {
+  abortController: null,
+  activityEvents: [],
+  cancelRequested: false,
+  currentThreadId: "",
+};
 
 const elements = {
   status: document.querySelector("#status"),
@@ -24,9 +30,17 @@ const elements = {
   skill: document.querySelector("#skill"),
   capabilityProfile: document.querySelector("#capability-profile"),
   messages: document.querySelector("#messages"),
+  activityButton: document.querySelector("#activity-button"),
+  runStatusLabel: document.querySelector("#run-status-label"),
+  activityBackdrop: document.querySelector("#activity-backdrop"),
+  activitySheet: document.querySelector("#activity-sheet"),
+  activityClose: document.querySelector("#activity-close"),
+  activitySummary: document.querySelector("#activity-summary"),
+  activityList: document.querySelector("#activity-list"),
   composer: document.querySelector("#composer"),
   messageInput: document.querySelector("#message-input"),
   sendButton: document.querySelector("#send-button"),
+  stopButton: document.querySelector("#stop-button"),
 };
 
 syncViewportHeight();
@@ -42,11 +56,26 @@ elements.settingsButton.addEventListener("click", () => {
 });
 
 elements.newThreadButton.addEventListener("click", () => {
+  if (runState.abortController) {
+    return;
+  }
   state.threadId = "";
   saveFormState();
   renderMessages([]);
+  clearActivity();
   setStatus("Ready");
   elements.messageInput.focus();
+});
+
+elements.activityButton.addEventListener("click", openActivitySheet);
+elements.activityClose.addEventListener("click", closeActivitySheet);
+elements.activityBackdrop.addEventListener("click", closeActivitySheet);
+elements.stopButton.addEventListener("click", cancelActiveRun);
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeActivitySheet();
+  }
 });
 
 for (const input of [
@@ -113,8 +142,19 @@ elements.composer.addEventListener("submit", async (event) => {
     await streamRun(threadId);
     setStatus(`Thread ${threadId}`);
   } catch (error) {
-    setStatus(error.message, true);
+    if (runState.cancelRequested || error.name === "AbortError") {
+      appendNotice("Run cancelled.");
+      setRunStatus("Cancelled", true);
+      setStatus(`Thread ${threadId}`);
+    } else {
+      appendNotice(`Run failed: ${error.message}`);
+      setRunStatus("Run failed", true);
+      setStatus(error.message, true);
+    }
   } finally {
+    runState.abortController = null;
+    runState.cancelRequested = false;
+    runState.currentThreadId = "";
     setBusy(false);
     elements.messageInput.focus();
   }
@@ -195,33 +235,50 @@ async function ensureThread() {
 async function streamRun(threadId) {
   let assistantMessage = null;
   let runFailed = false;
+  let runErrorMessage = "Run failed";
   const peerTaskStatuses = new Map();
   const seenProgressLabels = new Set();
+  runState.abortController = new AbortController();
+  runState.currentThreadId = threadId;
+  runState.cancelRequested = false;
+  clearActivity();
+  setRunStatus("Thinking…");
+  addActivityEvent("Run started");
   await requestNdjson(`/threads/${encodeURIComponent(threadId)}/run/stream`, {
     method: "POST",
+    signal: runState.abortController.signal,
     onEvent(event) {
       if (event.type === "assistant.message") {
         assistantMessage = appendMessage({ role: "assistant", content: event.content || "" });
+        setRunStatus("Response ready");
+        addActivityEvent("Assistant response received", event);
         return;
       }
       if (event.type === "run.error") {
         runFailed = true;
-        appendNotice(`Run failed: ${event.status_code || "error"} ${event.detail || ""}`.trim());
+        runErrorMessage = `${event.status_code || "error"} ${event.detail || ""}`.trim();
+        addActivityEvent(`Run failed: ${runErrorMessage}`, event, true);
         setStatus(event.detail || "Run failed", true);
         return;
       }
       const label = formatRunEvent(event, peerTaskStatuses);
       if (label && !seenProgressLabels.has(label)) {
         seenProgressLabels.add(label);
-        appendProgress(label);
+        addActivityEvent(label, event);
+        setRunStatus(label);
         setStatus(label);
       }
     },
   });
-  if (runFailed) {
-    throw new Error("Run failed");
+  if (runState.cancelRequested) {
+    const error = new Error("Run cancelled");
+    error.name = "AbortError";
+    throw error;
   }
-  if (!assistantMessage) {
+  if (runFailed) {
+    throw new Error(runErrorMessage);
+  }
+  if (!assistantMessage && !runState.cancelRequested) {
     throw new Error("Run stream ended without an assistant message.");
   }
 }
@@ -257,6 +314,7 @@ async function requestNdjson(path, options = {}) {
       ...authHeaders(),
       Accept: "application/x-ndjson",
     },
+    signal: options.signal,
   });
 
   if (!response.ok) {
@@ -340,6 +398,7 @@ function appendMessage(message) {
   item.append(role, content);
   elements.messages.append(item);
   scrollMessagesToBottom();
+  return item;
 }
 
 function appendNotice(content) {
@@ -348,6 +407,84 @@ function appendNotice(content) {
 
 function appendProgress(content) {
   return appendInlineMessage("progress", content);
+}
+
+function clearActivity() {
+  runState.activityEvents = [];
+  elements.activityList.replaceChildren();
+  elements.activitySummary.textContent = "No activity yet";
+  elements.runStatusLabel.textContent = "Ready";
+  elements.activityButton.hidden = true;
+}
+
+function addActivityEvent(label, event = null, isError = false) {
+  if (!label) {
+    return;
+  }
+  const activityEvent = { label, event, isError, time: new Date() };
+  runState.activityEvents.push(activityEvent);
+  elements.activityButton.hidden = false;
+  elements.activitySummary.textContent = `${runState.activityEvents.length} event${
+    runState.activityEvents.length === 1 ? "" : "s"
+  }`;
+
+  const item = document.createElement("li");
+  item.className = isError ? "activity-event error" : "activity-event";
+  const time = document.createElement("time");
+  time.dateTime = activityEvent.time.toISOString();
+  time.textContent = activityEvent.time.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const text = document.createElement("span");
+  text.textContent = label;
+  item.append(time, text);
+  elements.activityList.append(item);
+}
+
+function setRunStatus(label, forceVisible = false) {
+  elements.runStatusLabel.textContent = label;
+  elements.activityButton.hidden = !forceVisible && runState.activityEvents.length === 0;
+}
+
+function openActivitySheet() {
+  elements.activityBackdrop.hidden = false;
+  elements.activitySheet.hidden = false;
+  requestAnimationFrame(() => {
+    elements.activityBackdrop.classList.add("open");
+    elements.activitySheet.classList.add("open");
+  });
+}
+
+function closeActivitySheet() {
+  elements.activityBackdrop.classList.remove("open");
+  elements.activitySheet.classList.remove("open");
+  window.setTimeout(() => {
+    if (!elements.activitySheet.classList.contains("open")) {
+      elements.activityBackdrop.hidden = true;
+      elements.activitySheet.hidden = true;
+    }
+  }, 180);
+}
+
+async function cancelActiveRun() {
+  if (!runState.currentThreadId || runState.cancelRequested) {
+    return;
+  }
+  runState.cancelRequested = true;
+  elements.stopButton.disabled = true;
+  setRunStatus("Cancelling…", true);
+  addActivityEvent("Cancellation requested");
+  try {
+    await requestJson(`/threads/${encodeURIComponent(runState.currentThreadId)}/run/cancel`, {
+      method: "POST",
+    });
+  } catch (error) {
+    addActivityEvent(`Cancel request failed: ${error.message}`, null, true);
+  } finally {
+    runState.abortController?.abort();
+  }
 }
 
 function appendInlineMessage(kind, content) {
@@ -470,6 +607,9 @@ function shouldSubmitOnEnter(event) {
 
 function setBusy(isBusy) {
   elements.sendButton.disabled = isBusy;
+  elements.sendButton.hidden = isBusy;
+  elements.stopButton.hidden = !isBusy;
+  elements.stopButton.disabled = !isBusy;
   elements.newThreadButton.disabled = isBusy;
 }
 
