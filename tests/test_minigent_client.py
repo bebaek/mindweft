@@ -4811,7 +4811,7 @@ def test_run_chat_loop_handles_agent_command(
     tmp_path: Path,
 ) -> None:
     output_stream = StringIO()
-    input_stream = StringIO("/agent\n/agent coding-inspect\n/agent current\n/exit\n")
+    input_stream = StringIO("/agent\n/agent coding-inspect\n/new\n/agent current\n/exit\n")
     create_calls: list[dict[str, object]] = []
 
     class FakeChatClient:
@@ -4866,12 +4866,18 @@ def test_run_chat_loop_handles_agent_command(
             "skill_name": None,
             "skills": ["coding-workspace"],
             "capability_profile": "inspect",
-        }
+        },
+        {
+            "skill_name": None,
+            "skills": ["coding-workspace"],
+            "capability_profile": "inspect",
+        },
     ]
     output = output_stream.getvalue()
     assert "[idle] available agents:\n" in output
     assert "[idle] - coding-inspect  skills=coding-workspace profile=inspect" in output
     assert "[idle] switched to agent coding-inspect; created thread thread-agent\n" in output
+    assert "[idle] created thread thread-agent with agent coding-inspect\n" in output
     assert "[idle] current agent: coding-inspect\n" in output
     assert "[idle] current thread: thread-agent\n" in output
 

@@ -273,7 +273,7 @@ Available during interactive chat:
 | Command | Description |
 | --- | --- |
 | `/help` | Show available commands. |
-| `/new` | Create a new thread. |
+| `/new` | Create a new thread, preserving the currently selected agent preset when one is active. |
 | `/agent` | List configured agent presets. |
 | `/agent current` | Show the current client-side agent label. |
 | `/agent <preset>` | Create and switch to a new thread using that preset. |
@@ -310,7 +310,9 @@ MINIGENT_CLIENT_AGENT_PRESETS={"coding-inspect":{"skill_names":["coding-workspac
 ```
 
 Selecting a preset with `/agent <name>` creates a new thread with that preset's
-`skill_name`/`skill_names` and optional `capability_profile`.
+`skill_name`/`skill_names` and optional `capability_profile`. Subsequent `/new` commands
+inherit the selected preset so you can start a fresh thread without re-selecting the same
+agent.
 
 ## Voice and stdin modes
 

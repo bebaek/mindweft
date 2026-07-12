@@ -449,6 +449,7 @@ class RememberingMinigentAPIClient:
         self._client = client
         self._remembering_config = config
         self.active_agent_preset: str | None = None
+        self.active_agent_preset_config: AgentPreset | None = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._client, name)
@@ -471,6 +472,7 @@ class RememberingMinigentAPIClient:
             capability_profile=capability_profile,
         )
         self.active_agent_preset = None
+        self.active_agent_preset_config = None
         return response if isinstance(response, dict) else {}
 
     def execution_options(self) -> dict[str, Any]:
@@ -484,6 +486,7 @@ class RememberingMinigentAPIClient:
         else:
             self._client.thread_id = thread_id  # type: ignore[attr-defined]
         self.active_agent_preset = None
+        self.active_agent_preset_config = None
 
     def set_debug_enabled(self, enabled: bool) -> None:
         setter = getattr(self._client, "set_debug_enabled", None)
@@ -1169,13 +1172,30 @@ def _handle_chat_new(
     config: ClientConfig,
     output_stream: ChatOutputStream,
 ) -> None:
-    response = client.create_thread(skill_name=config.skill_name)
+    active_preset = client.active_agent_preset_config
+    if active_preset is None:
+        response = client.create_thread(skill_name=config.skill_name)
+        title = "New thread"
+    else:
+        response = client.create_thread(
+            skill_name=active_preset.skill_name,
+            skills=list(active_preset.skills) if active_preset.skills is not None else None,
+            capability_profile=active_preset.capability_profile,
+        )
+        # create_thread resets the client-side active label for ordinary thread creation;
+        # /new is expected to keep the selected agent context.
+        client.active_agent_preset = active_preset.name
+        client.active_agent_preset_config = active_preset
+        title = f"Agent: {active_preset.name}"
     thread_id = response.get("thread_id") if isinstance(response, dict) else None
     if not isinstance(thread_id, str) or not thread_id:
         output_stream.write("[idle] failed to create thread: missing thread_id\n")
     else:
-        remember_client_thread(config, thread_id, title="New thread")
-        output_stream.write(f"[idle] created thread {thread_id}\n")
+        remember_client_thread(config, thread_id, title=title)
+        output_stream.write(f"[idle] created thread {thread_id}")
+        if active_preset is not None:
+            output_stream.write(f" with agent {active_preset.name}")
+        output_stream.write("\n")
     output_stream.flush()
 
 
@@ -1225,6 +1245,7 @@ def _handle_chat_agent(
         output_stream.flush()
         return
     client.active_agent_preset = preset.name
+    client.active_agent_preset_config = preset
     remember_client_thread(config, thread_id, title=f"Agent: {preset.name}")
     output_stream.write(f"[idle] switched to agent {preset.name}; created thread {thread_id}\n")
     detail = _format_agent_preset_detail(preset)
