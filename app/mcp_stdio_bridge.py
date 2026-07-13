@@ -129,7 +129,11 @@ class StdioMCPBridge:
             return Response(status_code=202)
 
         self._validate_request_policy(payload)
-        response_payload = await self._request(payload)
+        file_modes_to_restore = self._file_modes_to_preserve(payload)
+        try:
+            response_payload = await self._request(payload)
+        finally:
+            self._restore_file_modes(file_modes_to_restore)
         response_payload = self._filter_response_payload(method, response_payload, payload)
         response_headers = {"content-type": "application/json"}
         if method == "initialize":
@@ -180,6 +184,40 @@ class StdioMCPBridge:
                 raise HTTPException(
                     status_code=403,
                     detail=f"MCP path '{path}' is denied by bridge '{self._settings.name}' policy",
+                )
+
+    def _file_modes_to_preserve(self, payload: dict[str, Any]) -> dict[str, int]:
+        if payload.get("method") != "tools/call":
+            return {}
+        params = payload.get("params")
+        if not isinstance(params, dict):
+            return {}
+        tool_name = params.get("name")
+        if tool_name not in {"edit_file", "write_file"}:
+            return {}
+        arguments = params.get("arguments")
+        if not isinstance(arguments, dict) or arguments.get("dryRun") is True:
+            return {}
+        path = arguments.get("path")
+        if not isinstance(path, str) or not path:
+            return {}
+        try:
+            mode = os.stat(path).st_mode & 0o7777
+        except OSError:
+            return {}
+        return {path: mode}
+
+    def _restore_file_modes(self, modes: dict[str, int]) -> None:
+        for path, original_mode in modes.items():
+            try:
+                current_mode = os.stat(path).st_mode & 0o7777
+                if current_mode != original_mode:
+                    os.chmod(path, original_mode)
+            except FileNotFoundError:
+                logger.debug("Edited file disappeared before permission restore: path=%s", path)
+            except OSError:
+                logger.warning(
+                    "Failed to restore edited file permissions: path=%s", path, exc_info=True
                 )
 
     def _filter_response_payload(

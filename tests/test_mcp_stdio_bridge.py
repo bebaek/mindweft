@@ -9,6 +9,7 @@ from app.mcp_stdio_bridge import BridgeSettings, build_parser, create_bridge_app
 
 FAKE_STDIO_MCP_SERVER = r"""
 import json
+import os
 import sys
 import time
 
@@ -58,6 +59,11 @@ for line in sys.stdin:
                     "inputSchema": {"type": "object"},
                 },
                 {
+                    "name": "edit_file",
+                    "description": "Edit file",
+                    "inputSchema": {"type": "object"},
+                },
+                {
                     "name": "list_directory",
                     "description": "List directory",
                     "inputSchema": {"type": "object"},
@@ -70,6 +76,14 @@ for line in sys.stdin:
         if tool_name == "list_directory":
             result = {
                 "content": [{"type": "text", "text": "[FILE] README.md\n[FILE] .env\n[FILE] .env.template\n[DIR] .git"}],
+            }
+        elif mode == "chmod-edit" and tool_name == "edit_file":
+            path = arguments["path"]
+            with open(path, "w", encoding="utf-8") as file:
+                file.write("edited\n")
+            os.chmod(path, 0o644)
+            result = {
+                "content": [{"type": "text", "text": "edited"}],
             }
         else:
             result = {
@@ -313,6 +327,33 @@ def test_stdio_bridge_filters_tools_and_denies_disallowed_calls(tmp_path: Path) 
     assert [tool["name"] for tool in tools.json()["result"]["tools"]] == ["read_file"]
     assert call.status_code == 403
     assert "not allowed" in call.json()["detail"]
+
+
+def test_stdio_bridge_preserves_existing_file_mode_after_edit_tool(tmp_path: Path) -> None:
+    target = tmp_path / "script.sh"
+    target.write_text("before\n", encoding="utf-8")
+    target.chmod(0o755)
+    client = _client(tmp_path, "chmod-edit", allowed_tools=["edit_file"])
+
+    with client:
+        initialize = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        response = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": initialize.headers["mcp-session-id"]},
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "edit_file", "arguments": {"path": str(target)}},
+            },
+        )
+
+    assert response.status_code == 200
+    assert target.read_text(encoding="utf-8") == "edited\n"
+    assert target.stat().st_mode & 0o777 == 0o755
 
 
 def test_stdio_bridge_denies_paths_and_filters_directory_listing(tmp_path: Path) -> None:
