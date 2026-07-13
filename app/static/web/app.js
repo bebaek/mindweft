@@ -28,7 +28,10 @@ const elements = {
   userId: document.querySelector("#user-id"),
   tenantId: document.querySelector("#tenant-id"),
   skill: document.querySelector("#skill"),
+  skillOptions: document.querySelector("#skill-options"),
   capabilityProfile: document.querySelector("#capability-profile"),
+  capabilityProfileOptions: document.querySelector("#capability-profile-options"),
+  executionOptionsStatus: document.querySelector("#execution-options-status"),
   messages: document.querySelector("#messages"),
   activityButton: document.querySelector("#activity-button"),
   runStatusLabel: document.querySelector("#run-status-label"),
@@ -46,6 +49,7 @@ const elements = {
 
 syncViewportHeight();
 hydrateForm();
+loadExecutionOptions();
 renderMessages([]);
 setStatus(state.threadId ? `Thread ${state.threadId}` : "Ready");
 if (state.threadId) {
@@ -79,15 +83,15 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
-for (const input of [
-  elements.baseUrl,
-  elements.apiToken,
-  elements.userId,
-  elements.tenantId,
-  elements.skill,
-  elements.capabilityProfile,
-]) {
+for (const input of [elements.skill, elements.capabilityProfile]) {
   input.addEventListener("change", saveFormState);
+}
+
+for (const input of [elements.baseUrl, elements.apiToken, elements.userId, elements.tenantId]) {
+  input.addEventListener("change", () => {
+    saveFormState();
+    loadExecutionOptions();
+  });
 }
 
 elements.messageInput.addEventListener("input", () => {
@@ -189,6 +193,62 @@ async function refreshMessages() {
     renderMessages([]);
     setStatus(error.message, true);
   }
+}
+
+async function loadExecutionOptions() {
+  saveFormState();
+  elements.executionOptionsStatus.textContent = "Loading execution options…";
+  try {
+    const options = await requestJson("/execution-options");
+    hydrateOptionList(elements.skillOptions, options.skills?.items || []);
+    hydrateOptionList(
+      elements.capabilityProfileOptions,
+      options.capability_profiles?.items || []
+    );
+    const skillSummary = summarizeOptionSection("skill", options.skills);
+    const capabilitySummary = summarizeOptionSection(
+      "capability profile",
+      options.capability_profiles
+    );
+    elements.executionOptionsStatus.textContent = `${skillSummary}; ${capabilitySummary}. You can still type a custom value.`;
+    if (!elements.skill.placeholder || elements.skill.placeholder === "default") {
+      elements.skill.placeholder = options.skills?.default || "default";
+    }
+    if (
+      !elements.capabilityProfile.placeholder ||
+      elements.capabilityProfile.placeholder === "default"
+    ) {
+      elements.capabilityProfile.placeholder = options.capability_profiles?.default || "default";
+    }
+  } catch (error) {
+    elements.executionOptionsStatus.textContent =
+      "Could not load execution options; manual skill/profile entry is still available.";
+  }
+}
+
+function hydrateOptionList(datalist, items) {
+  datalist.replaceChildren();
+  for (const item of items) {
+    if (!item?.name) {
+      continue;
+    }
+    const option = document.createElement("option");
+    option.value = item.name;
+    if (item.description) {
+      option.label = item.description;
+    }
+    datalist.append(option);
+  }
+}
+
+function summarizeOptionSection(label, section) {
+  const count = section?.items?.length || 0;
+  const defaultName = section?.default;
+  const suffix = count === 1 ? "" : "s";
+  if (defaultName) {
+    return `${count} ${label}${suffix}, default ${defaultName}`;
+  }
+  return `${count} ${label}${suffix}`;
 }
 
 function hydrateForm() {

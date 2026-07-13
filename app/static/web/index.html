@@ -42,12 +42,21 @@
         </div>
         <label>
           Skill
-          <input id="skill" type="text" autocomplete="off" placeholder="optional" />
+          <input id="skill" type="text" autocomplete="off" list="skill-options" placeholder="default" />
+          <datalist id="skill-options"></datalist>
         </label>
         <label>
           Capability profile
-          <input id="capability-profile" type="text" autocomplete="off" placeholder="optional" />
+          <input
+            id="capability-profile"
+            type="text"
+            autocomplete="off"
+            list="capability-profile-options"
+            placeholder="default"
+          />
+          <datalist id="capability-profile-options"></datalist>
         </label>
+        <p id="execution-options-status" class="hint">Loading execution options…</p>
       </section>
 
       <section id="messages" class="messages" aria-live="polite"></section>
