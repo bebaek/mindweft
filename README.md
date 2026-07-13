@@ -141,7 +141,7 @@ The API serves a dependency-free browser client at `/web/`. It uses the streamin
 endpoint to show live LLM, tool, and peer-agent progress, with mobile-friendly run
 controls, a stop action, basic assistant markdown rendering, execution option selectors,
 a thread context sheet with compaction controls, a thread drawer backed by `GET /threads`,
-and a collapsible activity sheet for run details.
+thread refresh/delete actions, and a collapsible activity sheet for run details.
 
 #### Mobile UI demo
 

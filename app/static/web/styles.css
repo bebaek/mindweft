@@ -488,12 +488,22 @@ textarea {
   overflow-y: auto;
 }
 
-#threads-new-button {
-  width: 100%;
+.threads-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
   margin-bottom: 12px;
+}
+
+#threads-new-button {
   background: var(--accent);
   border-color: var(--accent);
   color: #ffffff;
+}
+
+#threads-new-button,
+#threads-refresh-button {
+  width: 100%;
 }
 
 .threads-list {
@@ -502,6 +512,13 @@ textarea {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.thread-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: stretch;
 }
 
 .thread-item {
@@ -531,6 +548,11 @@ textarea {
 .thread-empty {
   color: var(--muted);
   font-size: 0.8rem;
+}
+
+.thread-delete {
+  min-height: 58px;
+  color: var(--danger);
 }
 
 .context-body h3 {

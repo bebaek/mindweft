@@ -60,6 +60,7 @@ const elements = {
   threadsSummary: document.querySelector("#threads-summary"),
   threadsList: document.querySelector("#threads-list"),
   threadsNewButton: document.querySelector("#threads-new-button"),
+  threadsRefreshButton: document.querySelector("#threads-refresh-button"),
   composer: document.querySelector("#composer"),
   messageInput: document.querySelector("#message-input"),
   sendButton: document.querySelector("#send-button"),
@@ -89,6 +90,7 @@ elements.threadsNewButton.addEventListener("click", () => {
   startNewThread();
   closeThreadsSheet();
 });
+elements.threadsRefreshButton.addEventListener("click", loadThreadList);
 elements.activityButton.addEventListener("click", openActivitySheet);
 elements.activityClose.addEventListener("click", closeActivitySheet);
 elements.activityBackdrop.addEventListener("click", closeActivitySheet);
@@ -669,6 +671,7 @@ async function loadThreadList() {
   saveFormState();
   elements.threadsSummary.textContent = "Loading recent conversations…";
   elements.threadsList.replaceChildren();
+  elements.threadsRefreshButton.disabled = true;
   try {
     const response = await requestJson("/threads?limit=50");
     renderThreadList(response.threads || []);
@@ -677,6 +680,8 @@ async function loadThreadList() {
     }`;
   } catch (error) {
     elements.threadsSummary.textContent = `Could not load threads: ${error.message}`;
+  } finally {
+    elements.threadsRefreshButton.disabled = false;
   }
 }
 
@@ -691,6 +696,7 @@ function renderThreadList(threads) {
   }
   for (const thread of threads) {
     const item = document.createElement("li");
+    item.className = "thread-row";
     const button = document.createElement("button");
     button.type = "button";
     button.className = thread.thread_id === state.threadId ? "thread-item current" : "thread-item";
@@ -704,8 +710,17 @@ function renderThreadList(threads) {
     meta.className = "thread-meta";
     meta.textContent = formatThreadMeta(thread);
 
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "thread-delete";
+    deleteButton.textContent = "Delete";
+    deleteButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteThread(thread);
+    });
+
     button.append(title, meta);
-    item.append(button);
+    item.append(button, deleteButton);
     elements.threadsList.append(item);
   }
 }
@@ -761,6 +776,33 @@ async function selectThread(threadId) {
   renderMessages([]);
   closeThreadsSheet();
   await refreshMessages();
+}
+
+async function deleteThread(thread) {
+  if (runState.abortController) {
+    elements.threadsSummary.textContent = "Stop the active run before deleting a thread.";
+    return;
+  }
+  const title = thread.title || "this thread";
+  if (!window.confirm(`Delete “${title}”? This cannot be undone.`)) {
+    return;
+  }
+  elements.threadsSummary.textContent = "Deleting thread…";
+  try {
+    await requestJson(`/threads/${encodeURIComponent(thread.thread_id)}`, { method: "DELETE" });
+    if (thread.thread_id === state.threadId) {
+      state.threadId = "";
+      saveState();
+      renderMessages([]);
+      clearActivity();
+      clearContext();
+      updateThreadControls();
+      setStatus("Ready");
+    }
+    await loadThreadList();
+  } catch (error) {
+    elements.threadsSummary.textContent = `Could not delete thread: ${error.message}`;
+  }
 }
 
 function updateThreadControls() {
