@@ -20,6 +20,7 @@ const runState = {
 
 const elements = {
   status: document.querySelector("#status"),
+  threadsButton: document.querySelector("#threads-button"),
   contextButton: document.querySelector("#context-button"),
   settingsButton: document.querySelector("#settings-button"),
   newThreadButton: document.querySelector("#new-thread-button"),
@@ -53,6 +54,12 @@ const elements = {
   contextSummary: document.querySelector("#context-summary"),
   contextRendered: document.querySelector("#context-rendered"),
   compactContextButton: document.querySelector("#compact-context-button"),
+  threadsBackdrop: document.querySelector("#threads-backdrop"),
+  threadsSheet: document.querySelector("#threads-sheet"),
+  threadsClose: document.querySelector("#threads-close"),
+  threadsSummary: document.querySelector("#threads-summary"),
+  threadsList: document.querySelector("#threads-list"),
+  threadsNewButton: document.querySelector("#threads-new-button"),
   composer: document.querySelector("#composer"),
   messageInput: document.querySelector("#message-input"),
   sendButton: document.querySelector("#send-button"),
@@ -73,20 +80,15 @@ elements.settingsButton.addEventListener("click", () => {
   elements.settingsPanel.classList.toggle("open");
 });
 
-elements.newThreadButton.addEventListener("click", () => {
-  if (runState.abortController) {
-    return;
-  }
-  state.threadId = "";
-  saveFormState();
-  renderMessages([]);
-  clearActivity();
-  clearContext();
-  updateThreadControls();
-  setStatus("Ready");
-  elements.messageInput.focus();
-});
+elements.newThreadButton.addEventListener("click", startNewThread);
 
+elements.threadsButton.addEventListener("click", openThreadsSheet);
+elements.threadsClose.addEventListener("click", closeThreadsSheet);
+elements.threadsBackdrop.addEventListener("click", closeThreadsSheet);
+elements.threadsNewButton.addEventListener("click", () => {
+  startNewThread();
+  closeThreadsSheet();
+});
 elements.activityButton.addEventListener("click", openActivitySheet);
 elements.activityClose.addEventListener("click", closeActivitySheet);
 elements.activityBackdrop.addEventListener("click", closeActivitySheet);
@@ -100,6 +102,7 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeActivitySheet();
     closeContextSheet();
+    closeThreadsSheet();
   }
 });
 
@@ -166,6 +169,9 @@ elements.composer.addEventListener("submit", async (event) => {
     setStatus("Running");
     await streamRun(threadId);
     updateThreadControls();
+    if (!elements.threadsSheet.hidden) {
+      await loadThreadList();
+    }
     setStatus(`Thread ${threadId}`);
   } catch (error) {
     if (runState.cancelRequested || error.name === "AbortError") {
@@ -194,6 +200,20 @@ elements.composer.addEventListener("submit", async (event) => {
     elements.messageInput.focus();
   }
 });
+
+function startNewThread() {
+  if (runState.abortController) {
+    return;
+  }
+  state.threadId = "";
+  saveFormState();
+  renderMessages([]);
+  clearActivity();
+  clearContext();
+  updateThreadControls();
+  setStatus("Ready");
+  elements.messageInput.focus();
+}
 
 async function refreshMessages() {
   saveFormState();
@@ -323,6 +343,9 @@ async function ensureThread() {
   state.threadId = response.thread_id;
   saveState();
   updateThreadControls();
+  if (!elements.threadsSheet.hidden) {
+    await loadThreadList();
+  }
   return state.threadId;
 }
 
@@ -619,6 +642,125 @@ function appendNotice(content) {
 
 function appendProgress(content) {
   return appendInlineMessage("progress", content);
+}
+
+async function openThreadsSheet() {
+  elements.threadsBackdrop.hidden = false;
+  elements.threadsSheet.hidden = false;
+  requestAnimationFrame(() => {
+    elements.threadsBackdrop.classList.add("open");
+    elements.threadsSheet.classList.add("open");
+  });
+  await loadThreadList();
+}
+
+function closeThreadsSheet() {
+  elements.threadsBackdrop.classList.remove("open");
+  elements.threadsSheet.classList.remove("open");
+  window.setTimeout(() => {
+    if (!elements.threadsSheet.classList.contains("open")) {
+      elements.threadsBackdrop.hidden = true;
+      elements.threadsSheet.hidden = true;
+    }
+  }, 180);
+}
+
+async function loadThreadList() {
+  saveFormState();
+  elements.threadsSummary.textContent = "Loading recent conversations…";
+  elements.threadsList.replaceChildren();
+  try {
+    const response = await requestJson("/threads?limit=50");
+    renderThreadList(response.threads || []);
+    elements.threadsSummary.textContent = `${formatNumber(response.total || 0)} conversation${
+      response.total === 1 ? "" : "s"
+    }`;
+  } catch (error) {
+    elements.threadsSummary.textContent = `Could not load threads: ${error.message}`;
+  }
+}
+
+function renderThreadList(threads) {
+  elements.threadsList.replaceChildren();
+  if (threads.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "thread-empty";
+    empty.textContent = "No threads yet.";
+    elements.threadsList.append(empty);
+    return;
+  }
+  for (const thread of threads) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = thread.thread_id === state.threadId ? "thread-item current" : "thread-item";
+    button.addEventListener("click", () => selectThread(thread.thread_id));
+
+    const title = document.createElement("span");
+    title.className = "thread-title";
+    title.textContent = thread.title || "New thread";
+
+    const meta = document.createElement("span");
+    meta.className = "thread-meta";
+    meta.textContent = formatThreadMeta(thread);
+
+    button.append(title, meta);
+    item.append(button);
+    elements.threadsList.append(item);
+  }
+}
+
+function formatThreadMeta(thread) {
+  const parts = [];
+  if (thread.message_count !== undefined) {
+    parts.push(`${thread.message_count} message${thread.message_count === 1 ? "" : "s"}`);
+  }
+  if (thread.capability_profile) {
+    parts.push(thread.capability_profile);
+  }
+  if (thread.updated_at) {
+    parts.push(formatRelativeTime(thread.updated_at));
+  }
+  return parts.join(" · ");
+}
+
+function formatRelativeTime(value) {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return "";
+  }
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 60) {
+    return "just now";
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+  const days = Math.floor(hours / 24);
+  if (days < 7) {
+    return `${days}d ago`;
+  }
+  return new Date(timestamp).toLocaleDateString();
+}
+
+async function selectThread(threadId) {
+  if (!threadId || threadId === state.threadId || runState.abortController) {
+    closeThreadsSheet();
+    return;
+  }
+  state.threadId = threadId;
+  saveState();
+  clearActivity();
+  clearContext();
+  updateThreadControls();
+  renderMessages([]);
+  closeThreadsSheet();
+  await refreshMessages();
 }
 
 function updateThreadControls() {

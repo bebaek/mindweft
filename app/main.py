@@ -57,6 +57,9 @@ from app.models import (
     RunThreadResponse,
     TenantContext,
     TextPart,
+    Thread,
+    ThreadListItem,
+    ThreadListResponse,
     ThreadStatus,
 )
 from app.oauth import GenericOAuthProvider, OAuthFlowStore
@@ -106,6 +109,38 @@ def build_thread_store(settings: ThreadStoreSettings) -> ThreadStore:
 
 def build_thread_store_from_env() -> ThreadStore:
     return build_thread_store(load_settings().thread_store)
+
+
+def _thread_list_item(store: ThreadStore, tenant_id: str, thread: Thread) -> ThreadListItem:
+    messages = store.list_messages(tenant_id, thread.thread_id)
+    return ThreadListItem(
+        thread_id=thread.thread_id,
+        title=_thread_title(messages),
+        status=thread.status,
+        skill_name=thread.skill_name,
+        skill_names=thread.skill_names,
+        capability_profile=thread.capability_profile,
+        message_count=len(messages),
+        created_at=thread.created_at,
+        updated_at=thread.updated_at,
+    )
+
+
+def _thread_title(messages: list[Message]) -> str:
+    for message in messages:
+        if message.role == MessageRole.USER and message.content.strip():
+            return _truncate_thread_title(message.content)
+    for message in messages:
+        if message.content.strip():
+            return _truncate_thread_title(message.content)
+    return "New thread"
+
+
+def _truncate_thread_title(content: str, limit: int = 64) -> str:
+    title = " ".join(content.split())
+    if len(title) <= limit:
+        return title
+    return f"{title[: limit - 1].rstrip()}…"
 
 
 def _validate_and_normalize_message_request(
@@ -538,6 +573,26 @@ def create_app(
             artifact_name,
         )
         return Response(content=artifact.content, media_type=artifact.media_type)
+
+    @app.get("/threads", response_model=ThreadListResponse)
+    async def list_threads(
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+        limit: int = 50,
+        offset: int = 0,
+    ) -> ThreadListResponse:
+        if limit < 1 or limit > 100:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+        if offset < 0:
+            raise HTTPException(status_code=400, detail="offset must be greater than or equal to 0")
+        store = request.app.state.store
+        threads = store.list_threads(principal.tenant_id, limit=limit, offset=offset)
+        return ThreadListResponse(
+            threads=[_thread_list_item(store, principal.tenant_id, thread) for thread in threads],
+            total=store.count_threads(principal.tenant_id),
+            limit=limit,
+            offset=offset,
+        )
 
     @app.post("/threads", response_model=CreateThreadResponse)
     async def create_thread(

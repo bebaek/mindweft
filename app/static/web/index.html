@@ -14,6 +14,7 @@
           <p id="status">Ready</p>
         </div>
         <div class="actions">
+          <button id="threads-button" type="button">Threads</button>
           <button id="context-button" type="button" hidden>Context</button>
           <button id="settings-button" type="button" aria-controls="settings-panel">
             Settings
@@ -144,6 +145,28 @@
           <pre id="context-rendered" class="context-rendered">Load context to preview.</pre>
         </section>
         <button id="compact-context-button" type="button">Compact thread</button>
+      </div>
+    </aside>
+
+    <div id="threads-backdrop" class="threads-backdrop" hidden></div>
+    <aside
+      id="threads-sheet"
+      class="threads-sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="threads-title"
+      hidden
+    >
+      <header class="threads-header">
+        <div>
+          <h2 id="threads-title">Threads</h2>
+          <p id="threads-summary">Recent conversations</p>
+        </div>
+        <button id="threads-close" type="button" aria-label="Close threads">Close</button>
+      </header>
+      <div class="threads-body">
+        <button id="threads-new-button" type="button">New thread</button>
+        <ol id="threads-list" class="threads-list"></ol>
       </div>
     </aside>
 

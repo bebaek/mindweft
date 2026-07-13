@@ -465,6 +465,70 @@ def test_web_client_static_files_are_served() -> None:
     assert "./app.js" in response.text
 
 
+def test_list_threads_returns_recent_thread_summaries() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    first_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{first_thread_id}/messages",
+        json={
+            "content": "First thread title that is intentionally long enough to be truncated in the list response."
+        },
+        headers=AUTH_HEADERS,
+    )
+    second_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{second_thread_id}/messages",
+        json={"content": "Second thread"},
+        headers=AUTH_HEADERS,
+    )
+
+    response = client.get("/threads?limit=1", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert body["limit"] == 1
+    assert body["offset"] == 0
+    assert len(body["threads"]) == 1
+    [thread] = body["threads"]
+    assert thread["thread_id"] == second_thread_id
+    assert thread["title"] == "Second thread"
+    assert thread["message_count"] == 1
+    assert thread["status"] == "idle"
+    assert thread["created_at"]
+    assert thread["updated_at"]
+
+    all_threads = client.get("/threads", headers=AUTH_HEADERS).json()["threads"]
+    first = next(thread for thread in all_threads if thread["thread_id"] == first_thread_id)
+    assert first["title"].endswith("…")
+    assert len(first["title"]) == 64
+
+
+def test_list_threads_is_tenant_scoped() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    client.post("/threads", headers=AUTH_HEADERS)
+    other_thread_id = client.post("/threads", headers=OTHER_TENANT_HEADERS).json()["thread_id"]
+
+    response = client.get("/threads", headers=OTHER_TENANT_HEADERS)
+
+    assert response.status_code == 200
+    assert [thread["thread_id"] for thread in response.json()["threads"]] == [other_thread_id]
+
+
+def test_list_threads_validates_pagination() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    assert client.get("/threads?limit=0", headers=AUTH_HEADERS).status_code == 400
+    assert client.get("/threads?limit=101", headers=AUTH_HEADERS).status_code == 400
+    assert client.get("/threads?offset=-1", headers=AUTH_HEADERS).status_code == 400
+
+
 def test_thread_manual_compact_endpoint_summarizes_older_messages() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())

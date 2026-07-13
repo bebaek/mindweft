@@ -368,7 +368,8 @@ textarea {
 }
 
 .activity-backdrop,
-.context-backdrop {
+.context-backdrop,
+.threads-backdrop {
   position: fixed;
   inset: 0;
   z-index: 20;
@@ -378,12 +379,14 @@ textarea {
 }
 
 .activity-backdrop.open,
-.context-backdrop.open {
+.context-backdrop.open,
+.threads-backdrop.open {
   opacity: 1;
 }
 
 .activity-sheet,
-.context-sheet {
+.context-sheet,
+.threads-sheet {
   position: fixed;
   right: 0;
   bottom: 0;
@@ -404,17 +407,21 @@ textarea {
 .activity-sheet[hidden],
 .activity-backdrop[hidden],
 .context-sheet[hidden],
-.context-backdrop[hidden] {
+.context-backdrop[hidden],
+.threads-sheet[hidden],
+.threads-backdrop[hidden] {
   display: none;
 }
 
 .activity-sheet.open,
-.context-sheet.open {
+.context-sheet.open,
+.threads-sheet.open {
   transform: translateY(0);
 }
 
 .activity-header,
-.context-header {
+.context-header,
+.threads-header {
   flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
@@ -425,13 +432,15 @@ textarea {
 }
 
 .activity-header h2,
-.context-header h2 {
+.context-header h2,
+.threads-header h2 {
   margin: 0;
   font-size: 1rem;
 }
 
 .activity-header p,
-.context-header p {
+.context-header p,
+.threads-header p {
   margin: 3px 0 0;
   color: var(--muted);
   font-size: 0.85rem;
@@ -470,6 +479,58 @@ textarea {
   min-height: 0;
   padding: 14px 16px max(16px, env(safe-area-inset-bottom));
   overflow-y: auto;
+}
+
+.threads-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px 16px max(16px, env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+
+#threads-new-button {
+  width: 100%;
+  margin-bottom: 12px;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.threads-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  height: auto;
+  min-height: 58px;
+  padding: 10px 11px;
+  text-align: left;
+}
+
+.thread-item.current {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+
+.thread-title {
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-meta,
+.thread-empty {
+  color: var(--muted);
+  font-size: 0.8rem;
 }
 
 .context-body h3 {
@@ -530,7 +591,8 @@ textarea {
 
 @media (min-width: 900px) {
   .activity-sheet,
-  .context-sheet {
+  .context-sheet,
+  .threads-sheet {
     top: 24px;
     right: max(24px, calc((100vw - 860px) / 2));
     bottom: 24px;
@@ -544,7 +606,8 @@ textarea {
   }
 
   .activity-sheet.open,
-  .context-sheet.open {
+  .context-sheet.open,
+  .threads-sheet.open {
     transform: translateX(0);
   }
 }

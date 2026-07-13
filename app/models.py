@@ -185,6 +185,25 @@ class CreateThreadResponse(BaseModel):
     thread_id: str
 
 
+class ThreadListItem(BaseModel):
+    thread_id: str
+    title: str
+    status: ThreadStatus
+    skill_name: str | None = None
+    skill_names: list[str] | None = None
+    capability_profile: str | None = None
+    message_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class ThreadListResponse(BaseModel):
+    threads: list[ThreadListItem]
+    total: int
+    limit: int
+    offset: int
+
+
 class CreateThreadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     skill_name: str | None = None

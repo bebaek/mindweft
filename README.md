@@ -52,6 +52,9 @@ support, and optional codebase-memory/code-navigation MCP setup.
 ## Basic API flow
 
 ```bash
+curl -X GET 'http://127.0.0.1:8000/threads?limit=20' \
+  -H 'Authorization: Bearer dev-token'
+
 curl -X POST http://127.0.0.1:8000/threads \
   -H 'Authorization: Bearer dev-token'
 
@@ -137,8 +140,8 @@ MCP server configs can override the tool-result redaction policy with `result_re
 The API serves a dependency-free browser client at `/web/`. It uses the streaming run
 endpoint to show live LLM, tool, and peer-agent progress, with mobile-friendly run
 controls, a stop action, basic assistant markdown rendering, execution option selectors,
-a thread context sheet with compaction controls, and a collapsible activity sheet for run
-details.
+a thread context sheet with compaction controls, a thread drawer backed by `GET /threads`,
+and a collapsible activity sheet for run details.
 
 #### Mobile UI demo
 
