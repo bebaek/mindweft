@@ -32,6 +32,7 @@ const elements = {
   messages: document.querySelector("#messages"),
   activityButton: document.querySelector("#activity-button"),
   runStatusLabel: document.querySelector("#run-status-label"),
+  runStatusHint: document.querySelector("#run-status-hint"),
   activityBackdrop: document.querySelector("#activity-backdrop"),
   activitySheet: document.querySelector("#activity-sheet"),
   activityClose: document.querySelector("#activity-close"),
@@ -144,11 +145,20 @@ elements.composer.addEventListener("submit", async (event) => {
   } catch (error) {
     if (runState.cancelRequested || error.name === "AbortError") {
       appendNotice("Run cancelled.");
-      setRunStatus("Cancelled", true);
+      setRunStatus("Activity", {
+        completed: true,
+        forceVisible: true,
+        hint: "Cancelled",
+      });
       setStatus(`Thread ${threadId}`);
     } else {
       appendNotice(`Run failed: ${error.message}`);
-      setRunStatus("Run failed", true);
+      setRunStatus("Activity", {
+        completed: true,
+        error: true,
+        forceVisible: true,
+        hint: "Run failed",
+      });
       setStatus(error.message, true);
     }
   } finally {
@@ -250,7 +260,7 @@ async function streamRun(threadId) {
     onEvent(event) {
       if (event.type === "assistant.message") {
         assistantMessage = appendMessage({ role: "assistant", content: event.content || "" });
-        setRunStatus("Response ready");
+        setRunStatus("Activity", { completed: true, hint: "Response ready" });
         addActivityEvent("Assistant response received", event);
         return;
       }
@@ -394,11 +404,129 @@ function appendMessage(message) {
   role.className = "role";
   role.textContent = message.role || "assistant";
   const content = document.createElement("div");
-  content.textContent = message.content || "";
+  content.className = "content";
+  renderMessageContent(content, message.content || "", message.role || "assistant");
   item.append(role, content);
   elements.messages.append(item);
   scrollMessagesToBottom();
   return item;
+}
+
+function renderMessageContent(target, text, role) {
+  target.replaceChildren();
+  if (role !== "assistant") {
+    target.textContent = text;
+    return;
+  }
+
+  for (const node of renderMarkdownBlocks(text)) {
+    target.append(node);
+  }
+}
+
+function renderMarkdownBlocks(text) {
+  const nodes = [];
+  const fencePattern = /```([^\n`]*)\n?([\s\S]*?)```/g;
+  let cursor = 0;
+  let match;
+  while ((match = fencePattern.exec(text)) !== null) {
+    appendTextBlock(nodes, text.slice(cursor, match.index));
+    const pre = document.createElement("pre");
+    const code = document.createElement("code");
+    const language = match[1].trim();
+    if (language) {
+      code.dataset.language = language;
+    }
+    code.textContent = match[2].replace(/\n$/, "");
+    pre.append(code);
+    nodes.push(pre);
+    cursor = match.index + match[0].length;
+  }
+  appendTextBlock(nodes, text.slice(cursor));
+  return nodes.length ? nodes : [document.createTextNode("")];
+}
+
+function appendTextBlock(nodes, text) {
+  if (!text) {
+    return;
+  }
+  const lines = text.split("\n");
+  lines.forEach((line, index) => {
+    if (index > 0) {
+      nodes.push(document.createElement("br"));
+    }
+    nodes.push(...renderInlineMarkdown(line));
+  });
+}
+
+function renderInlineMarkdown(text) {
+  const nodes = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const next = findNextInlineToken(text, cursor);
+    if (!next) {
+      nodes.push(document.createTextNode(text.slice(cursor)));
+      break;
+    }
+    if (next.index > cursor) {
+      nodes.push(document.createTextNode(text.slice(cursor, next.index)));
+    }
+    nodes.push(next.node);
+    cursor = next.end;
+  }
+  return nodes;
+}
+
+function findNextInlineToken(text, start) {
+  const candidates = [
+    findInlineCode(text, start),
+    findBold(text, start),
+    findLink(text, start),
+  ].filter(Boolean);
+  candidates.sort((left, right) => left.index - right.index);
+  return candidates[0] || null;
+}
+
+function findInlineCode(text, start) {
+  const index = text.indexOf("`", start);
+  if (index === -1) {
+    return null;
+  }
+  const endMarker = text.indexOf("`", index + 1);
+  if (endMarker === -1) {
+    return null;
+  }
+  const code = document.createElement("code");
+  code.textContent = text.slice(index + 1, endMarker);
+  return { index, end: endMarker + 1, node: code };
+}
+
+function findBold(text, start) {
+  const index = text.indexOf("**", start);
+  if (index === -1) {
+    return null;
+  }
+  const endMarker = text.indexOf("**", index + 2);
+  if (endMarker === -1) {
+    return null;
+  }
+  const strong = document.createElement("strong");
+  strong.textContent = text.slice(index + 2, endMarker);
+  return { index, end: endMarker + 2, node: strong };
+}
+
+function findLink(text, start) {
+  const match = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/.exec(text.slice(start));
+  if (!match) {
+    return null;
+  }
+  const index = start + match.index;
+  const link = document.createElement("a");
+  link.textContent = match[1];
+  link.href = match[2];
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  return { index, end: index + match[0].length, node: link };
 }
 
 function appendNotice(content) {
@@ -414,6 +542,8 @@ function clearActivity() {
   elements.activityList.replaceChildren();
   elements.activitySummary.textContent = "No activity yet";
   elements.runStatusLabel.textContent = "Ready";
+  elements.runStatusHint.textContent = "Activity";
+  elements.activityButton.classList.remove("complete", "error");
   elements.activityButton.hidden = true;
 }
 
@@ -443,9 +573,14 @@ function addActivityEvent(label, event = null, isError = false) {
   elements.activityList.append(item);
 }
 
-function setRunStatus(label, forceVisible = false) {
+function setRunStatus(label, options = {}) {
+  const normalizedOptions = typeof options === "boolean" ? { forceVisible: options } : options;
   elements.runStatusLabel.textContent = label;
-  elements.activityButton.hidden = !forceVisible && runState.activityEvents.length === 0;
+  elements.runStatusHint.textContent = normalizedOptions.hint || "Activity";
+  elements.activityButton.classList.toggle("complete", Boolean(normalizedOptions.completed));
+  elements.activityButton.classList.toggle("error", Boolean(normalizedOptions.error));
+  elements.activityButton.hidden =
+    !normalizedOptions.forceVisible && runState.activityEvents.length === 0;
 }
 
 function openActivitySheet() {
@@ -474,7 +609,7 @@ async function cancelActiveRun() {
   }
   runState.cancelRequested = true;
   elements.stopButton.disabled = true;
-  setRunStatus("Cancelling…", true);
+  setRunStatus("Cancelling…", { forceVisible: true });
   addActivityEvent("Cancellation requested");
   try {
     await requestJson(`/threads/${encodeURIComponent(runState.currentThreadId)}/run/cancel`, {
