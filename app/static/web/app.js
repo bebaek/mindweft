@@ -22,7 +22,15 @@ const elements = {
   status: document.querySelector("#status"),
   threadsButton: document.querySelector("#threads-button"),
   contextButton: document.querySelector("#context-button"),
+  moreButton: document.querySelector("#more-button"),
+  moreBackdrop: document.querySelector("#more-backdrop"),
+  moreSheet: document.querySelector("#more-sheet"),
+  moreClose: document.querySelector("#more-close"),
+  moreContextButton: document.querySelector("#more-context-button"),
+  moreSettingsButton: document.querySelector("#more-settings-button"),
   settingsButton: document.querySelector("#settings-button"),
+  settingsClose: document.querySelector("#settings-close"),
+  settingsBackdrop: document.querySelector("#settings-backdrop"),
   newThreadButton: document.querySelector("#new-thread-button"),
   settingsPanel: document.querySelector("#settings-panel"),
   baseUrl: document.querySelector("#base-url"),
@@ -77,8 +85,19 @@ if (state.threadId) {
   refreshMessages();
 }
 
-elements.settingsButton.addEventListener("click", () => {
-  elements.settingsPanel.classList.toggle("open");
+elements.settingsButton.addEventListener("click", openSettingsPanel);
+elements.settingsClose.addEventListener("click", closeSettingsPanel);
+elements.settingsBackdrop.addEventListener("click", closeSettingsPanel);
+elements.moreButton.addEventListener("click", openMoreSheet);
+elements.moreClose.addEventListener("click", closeMoreSheet);
+elements.moreBackdrop.addEventListener("click", closeMoreSheet);
+elements.moreSettingsButton.addEventListener("click", () => {
+  closeMoreSheet();
+  openSettingsPanel();
+});
+elements.moreContextButton.addEventListener("click", () => {
+  closeMoreSheet();
+  openContextSheet();
 });
 
 elements.newThreadButton.addEventListener("click", startNewThread);
@@ -105,6 +124,8 @@ window.addEventListener("keydown", (event) => {
     closeActivitySheet();
     closeContextSheet();
     closeThreadsSheet();
+    closeMoreSheet();
+    closeSettingsPanel();
   }
 });
 
@@ -202,6 +223,54 @@ elements.composer.addEventListener("submit", async (event) => {
     elements.messageInput.focus();
   }
 });
+
+function openSettingsPanel() {
+  elements.settingsPanel.classList.add("open");
+  if (window.matchMedia("(max-width: 640px)").matches) {
+    elements.settingsBackdrop.hidden = false;
+    requestAnimationFrame(() => {
+      elements.settingsBackdrop.classList.add("open");
+    });
+  }
+}
+
+function closeSettingsPanel() {
+  elements.settingsPanel.classList.remove("open");
+  elements.settingsBackdrop.classList.remove("open");
+  window.setTimeout(() => {
+    if (!elements.settingsPanel.classList.contains("open")) {
+      elements.settingsBackdrop.hidden = true;
+    }
+  }, 180);
+}
+
+function toggleSettingsPanel() {
+  if (elements.settingsPanel.classList.contains("open")) {
+    closeSettingsPanel();
+  } else {
+    openSettingsPanel();
+  }
+}
+
+function openMoreSheet() {
+  elements.moreBackdrop.hidden = false;
+  elements.moreSheet.hidden = false;
+  requestAnimationFrame(() => {
+    elements.moreBackdrop.classList.add("open");
+    elements.moreSheet.classList.add("open");
+  });
+}
+
+function closeMoreSheet() {
+  elements.moreBackdrop.classList.remove("open");
+  elements.moreSheet.classList.remove("open");
+  window.setTimeout(() => {
+    if (!elements.moreSheet.classList.contains("open")) {
+      elements.moreBackdrop.hidden = true;
+      elements.moreSheet.hidden = true;
+    }
+  }, 180);
+}
 
 function startNewThread() {
   if (runState.abortController) {
@@ -807,6 +876,7 @@ async function deleteThread(thread) {
 
 function updateThreadControls() {
   elements.contextButton.hidden = !state.threadId;
+  elements.moreContextButton.hidden = !state.threadId;
 }
 
 function clearContext() {
@@ -1116,6 +1186,8 @@ function setBusy(isBusy) {
   elements.stopButton.disabled = !isBusy;
   elements.newThreadButton.disabled = isBusy;
   elements.contextButton.disabled = isBusy || !state.threadId;
+  elements.moreContextButton.disabled = isBusy || !state.threadId;
+  elements.threadsButton.disabled = isBusy;
 }
 
 function setStatus(message, isError = false) {

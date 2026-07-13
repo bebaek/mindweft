@@ -103,7 +103,13 @@ h1 {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
+}
+
+.mobile-action {
+  display: none;
 }
 
 .settings {
@@ -114,6 +120,24 @@ h1 {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel);
+}
+
+.settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.settings-header p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 .settings.open {
@@ -301,6 +325,28 @@ textarea {
     padding: 0 10px;
   }
 
+  .desktop-action {
+    display: none;
+  }
+
+  .mobile-action {
+    display: inline-block;
+  }
+
+  .settings.open {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 21;
+    display: grid;
+    max-height: min(78svh, 620px);
+    overflow-y: auto;
+    border-bottom: 0;
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -18px 48px rgb(0 0 0 / 0.22);
+  }
+
   .message {
     max-width: 100%;
   }
@@ -369,7 +415,9 @@ textarea {
 
 .activity-backdrop,
 .context-backdrop,
-.threads-backdrop {
+.threads-backdrop,
+.more-backdrop,
+.settings-backdrop {
   position: fixed;
   inset: 0;
   z-index: 20;
@@ -380,13 +428,16 @@ textarea {
 
 .activity-backdrop.open,
 .context-backdrop.open,
-.threads-backdrop.open {
+.threads-backdrop.open,
+.more-backdrop.open,
+.settings-backdrop.open {
   opacity: 1;
 }
 
 .activity-sheet,
 .context-sheet,
-.threads-sheet {
+.threads-sheet,
+.more-sheet {
   position: fixed;
   right: 0;
   bottom: 0;
@@ -409,19 +460,24 @@ textarea {
 .context-sheet[hidden],
 .context-backdrop[hidden],
 .threads-sheet[hidden],
-.threads-backdrop[hidden] {
+.threads-backdrop[hidden],
+.more-sheet[hidden],
+.more-backdrop[hidden],
+.settings-backdrop[hidden] {
   display: none;
 }
 
 .activity-sheet.open,
 .context-sheet.open,
-.threads-sheet.open {
+.threads-sheet.open,
+.more-sheet.open {
   transform: translateY(0);
 }
 
 .activity-header,
 .context-header,
-.threads-header {
+.threads-header,
+.more-header {
   flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
@@ -433,14 +489,16 @@ textarea {
 
 .activity-header h2,
 .context-header h2,
-.threads-header h2 {
+.threads-header h2,
+.more-header h2 {
   margin: 0;
   font-size: 1rem;
 }
 
 .activity-header p,
 .context-header p,
-.threads-header p {
+.threads-header p,
+.more-header p {
   margin: 3px 0 0;
   color: var(--muted);
   font-size: 0.85rem;
@@ -486,6 +544,16 @@ textarea {
   min-height: 0;
   padding: 14px 16px max(16px, env(safe-area-inset-bottom));
   overflow-y: auto;
+}
+
+.more-body {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px max(16px, env(safe-area-inset-bottom));
+}
+
+.more-body button {
+  width: 100%;
 }
 
 .threads-actions {
@@ -614,7 +682,8 @@ textarea {
 @media (min-width: 900px) {
   .activity-sheet,
   .context-sheet,
-  .threads-sheet {
+  .threads-sheet,
+  .more-sheet {
     top: 24px;
     right: max(24px, calc((100vw - 860px) / 2));
     bottom: 24px;
@@ -629,7 +698,8 @@ textarea {
 
   .activity-sheet.open,
   .context-sheet.open,
-  .threads-sheet.open {
+  .threads-sheet.open,
+  .more-sheet.open {
     transform: translateX(0);
   }
 }

@@ -15,15 +15,28 @@
         </div>
         <div class="actions">
           <button id="threads-button" type="button">Threads</button>
-          <button id="context-button" type="button" hidden>Context</button>
-          <button id="settings-button" type="button" aria-controls="settings-panel">
+          <button id="context-button" class="desktop-action" type="button" hidden>Context</button>
+          <button
+            id="settings-button"
+            class="desktop-action"
+            type="button"
+            aria-controls="settings-panel"
+          >
             Settings
           </button>
+          <button id="more-button" class="mobile-action" type="button">More</button>
           <button id="new-thread-button" type="button">New</button>
         </div>
       </header>
 
       <section id="settings-panel" class="settings" aria-label="Connection settings">
+        <header class="settings-header">
+          <div>
+            <h2>Settings</h2>
+            <p>Connection and execution defaults</p>
+          </div>
+          <button id="settings-close" type="button" aria-label="Close settings">Close</button>
+        </header>
         <label>
           Base URL
           <input id="base-url" type="url" autocomplete="url" />
@@ -81,6 +94,8 @@
         </div>
       </form>
     </main>
+
+    <div id="settings-backdrop" class="settings-backdrop" hidden></div>
 
     <div id="activity-backdrop" class="activity-backdrop" hidden></div>
     <aside
@@ -170,6 +185,28 @@
           <button id="threads-refresh-button" type="button">Refresh</button>
         </div>
         <ol id="threads-list" class="threads-list"></ol>
+      </div>
+    </aside>
+
+    <div id="more-backdrop" class="more-backdrop" hidden></div>
+    <aside
+      id="more-sheet"
+      class="more-sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="more-title"
+      hidden
+    >
+      <header class="more-header">
+        <div>
+          <h2 id="more-title">More</h2>
+          <p>Navigation and settings</p>
+        </div>
+        <button id="more-close" type="button" aria-label="Close more menu">Close</button>
+      </header>
+      <div class="more-body">
+        <button id="more-context-button" type="button" hidden>Context</button>
+        <button id="more-settings-button" type="button">Settings</button>
       </div>
     </aside>
 
