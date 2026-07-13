@@ -20,6 +20,7 @@ const runState = {
 
 const elements = {
   status: document.querySelector("#status"),
+  contextButton: document.querySelector("#context-button"),
   settingsButton: document.querySelector("#settings-button"),
   newThreadButton: document.querySelector("#new-thread-button"),
   settingsPanel: document.querySelector("#settings-panel"),
@@ -41,6 +42,17 @@ const elements = {
   activityClose: document.querySelector("#activity-close"),
   activitySummary: document.querySelector("#activity-summary"),
   activityList: document.querySelector("#activity-list"),
+  contextBackdrop: document.querySelector("#context-backdrop"),
+  contextSheet: document.querySelector("#context-sheet"),
+  contextClose: document.querySelector("#context-close"),
+  contextSummaryLine: document.querySelector("#context-summary-line"),
+  contextTotalTokens: document.querySelector("#context-total-tokens"),
+  contextMessageCount: document.querySelector("#context-message-count"),
+  contextSummarizedCount: document.querySelector("#context-summarized-count"),
+  contextUnsummarizedCount: document.querySelector("#context-unsummarized-count"),
+  contextSummary: document.querySelector("#context-summary"),
+  contextRendered: document.querySelector("#context-rendered"),
+  compactContextButton: document.querySelector("#compact-context-button"),
   composer: document.querySelector("#composer"),
   messageInput: document.querySelector("#message-input"),
   sendButton: document.querySelector("#send-button"),
@@ -52,6 +64,7 @@ hydrateForm();
 loadExecutionOptions();
 renderMessages([]);
 setStatus(state.threadId ? `Thread ${state.threadId}` : "Ready");
+updateThreadControls();
 if (state.threadId) {
   refreshMessages();
 }
@@ -68,6 +81,8 @@ elements.newThreadButton.addEventListener("click", () => {
   saveFormState();
   renderMessages([]);
   clearActivity();
+  clearContext();
+  updateThreadControls();
   setStatus("Ready");
   elements.messageInput.focus();
 });
@@ -75,11 +90,16 @@ elements.newThreadButton.addEventListener("click", () => {
 elements.activityButton.addEventListener("click", openActivitySheet);
 elements.activityClose.addEventListener("click", closeActivitySheet);
 elements.activityBackdrop.addEventListener("click", closeActivitySheet);
+elements.contextButton.addEventListener("click", openContextSheet);
+elements.contextClose.addEventListener("click", closeContextSheet);
+elements.contextBackdrop.addEventListener("click", closeContextSheet);
+elements.compactContextButton.addEventListener("click", compactThreadContext);
 elements.stopButton.addEventListener("click", cancelActiveRun);
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeActivitySheet();
+    closeContextSheet();
   }
 });
 
@@ -145,6 +165,7 @@ elements.composer.addEventListener("submit", async (event) => {
 
     setStatus("Running");
     await streamRun(threadId);
+    updateThreadControls();
     setStatus(`Thread ${threadId}`);
   } catch (error) {
     if (runState.cancelRequested || error.name === "AbortError") {
@@ -186,6 +207,8 @@ async function refreshMessages() {
       state.threadId = "";
       saveState();
       renderMessages([]);
+      clearContext();
+      updateThreadControls();
       appendNotice("Previous thread was no longer available. Started a fresh session.");
       setStatus("Ready");
       return;
@@ -299,6 +322,7 @@ async function ensureThread() {
   const response = await requestJson("/threads", { method: "POST", body });
   state.threadId = response.thread_id;
   saveState();
+  updateThreadControls();
   return state.threadId;
 }
 
@@ -597,6 +621,107 @@ function appendProgress(content) {
   return appendInlineMessage("progress", content);
 }
 
+function updateThreadControls() {
+  elements.contextButton.hidden = !state.threadId;
+}
+
+function clearContext() {
+  elements.contextSummaryLine.textContent = "No context loaded";
+  elements.contextTotalTokens.textContent = "—";
+  elements.contextMessageCount.textContent = "—";
+  elements.contextSummarizedCount.textContent = "—";
+  elements.contextUnsummarizedCount.textContent = "—";
+  elements.contextSummary.textContent = "No summary yet.";
+  elements.contextRendered.textContent = "Load context to preview.";
+  elements.compactContextButton.disabled = !state.threadId;
+}
+
+async function openContextSheet() {
+  if (!state.threadId) {
+    return;
+  }
+  elements.contextBackdrop.hidden = false;
+  elements.contextSheet.hidden = false;
+  requestAnimationFrame(() => {
+    elements.contextBackdrop.classList.add("open");
+    elements.contextSheet.classList.add("open");
+  });
+  await loadThreadContext();
+}
+
+function closeContextSheet() {
+  elements.contextBackdrop.classList.remove("open");
+  elements.contextSheet.classList.remove("open");
+  window.setTimeout(() => {
+    if (!elements.contextSheet.classList.contains("open")) {
+      elements.contextBackdrop.hidden = true;
+      elements.contextSheet.hidden = true;
+    }
+  }, 180);
+}
+
+async function loadThreadContext() {
+  if (!state.threadId) {
+    clearContext();
+    return;
+  }
+  elements.contextSummaryLine.textContent = "Loading context…";
+  elements.compactContextButton.disabled = true;
+  try {
+    const context = await requestJson(
+      `/threads/${encodeURIComponent(state.threadId)}/context/raw`
+    );
+    renderThreadContext(context);
+  } catch (error) {
+    elements.contextSummaryLine.textContent = `Could not load context: ${error.message}`;
+  } finally {
+    elements.compactContextButton.disabled = !state.threadId;
+  }
+}
+
+function renderThreadContext(context) {
+  const usage = context.usage || {};
+  elements.contextSummaryLine.textContent = `Thread ${context.thread_id || state.threadId}`;
+  elements.contextTotalTokens.textContent = formatNumber(usage.total_tokens);
+  elements.contextMessageCount.textContent = formatNumber(
+    usage.message_count ?? context.messages?.length
+  );
+  elements.contextSummarizedCount.textContent = formatNumber(
+    usage.summarized_message_count ?? context.summarized_message_count
+  );
+  elements.contextUnsummarizedCount.textContent = formatNumber(
+    usage.unsummarized_message_count
+  );
+  elements.contextSummary.textContent = context.summary || "No summary yet.";
+  elements.contextRendered.textContent = context.rendered || "No rendered context available.";
+}
+
+async function compactThreadContext() {
+  if (!state.threadId) {
+    return;
+  }
+  elements.compactContextButton.disabled = true;
+  elements.contextSummaryLine.textContent = "Compacting context…";
+  try {
+    const result = await requestJson(`/threads/${encodeURIComponent(state.threadId)}/compact`, {
+      method: "POST",
+    });
+    elements.contextSummaryLine.textContent = `Compacted ${formatNumber(
+      result.compacted_message_count
+    )} message${result.compacted_message_count === 1 ? "" : "s"}.`;
+    await refreshMessages();
+    await loadThreadContext();
+  } catch (error) {
+    elements.contextSummaryLine.textContent = `Could not compact context: ${error.message}`;
+  } finally {
+    elements.compactContextButton.disabled = !state.threadId;
+  }
+}
+
+function formatNumber(value) {
+  return typeof value === "number" ? value.toLocaleString() : "—";
+}
+
 function clearActivity() {
   runState.activityEvents = [];
   elements.activityList.replaceChildren();
@@ -806,6 +931,7 @@ function setBusy(isBusy) {
   elements.stopButton.hidden = !isBusy;
   elements.stopButton.disabled = !isBusy;
   elements.newThreadButton.disabled = isBusy;
+  elements.contextButton.disabled = isBusy || !state.threadId;
 }
 
 function setStatus(message, isError = false) {

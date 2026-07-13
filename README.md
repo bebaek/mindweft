@@ -137,7 +137,8 @@ MCP server configs can override the tool-result redaction policy with `result_re
 The API serves a dependency-free browser client at `/web/`. It uses the streaming run
 endpoint to show live LLM, tool, and peer-agent progress, with mobile-friendly run
 controls, a stop action, basic assistant markdown rendering, execution option selectors,
-and a collapsible activity sheet for run details.
+a thread context sheet with compaction controls, and a collapsible activity sheet for run
+details.
 
 #### Mobile UI demo
 

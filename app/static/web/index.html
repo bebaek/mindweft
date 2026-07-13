@@ -14,6 +14,7 @@
           <p id="status">Ready</p>
         </div>
         <div class="actions">
+          <button id="context-button" type="button" hidden>Context</button>
           <button id="settings-button" type="button" aria-controls="settings-panel">
             Settings
           </button>
@@ -97,6 +98,53 @@
         <button id="activity-close" type="button" aria-label="Close activity">Close</button>
       </header>
       <ol id="activity-list" class="activity-list"></ol>
+    </aside>
+
+    <div id="context-backdrop" class="context-backdrop" hidden></div>
+    <aside
+      id="context-sheet"
+      class="context-sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="context-title"
+      hidden
+    >
+      <header class="context-header">
+        <div>
+          <h2 id="context-title">Thread context</h2>
+          <p id="context-summary-line">No context loaded</p>
+        </div>
+        <button id="context-close" type="button" aria-label="Close context">Close</button>
+      </header>
+      <div class="context-body">
+        <dl class="context-stats">
+          <div>
+            <dt>Total tokens</dt>
+            <dd id="context-total-tokens">—</dd>
+          </div>
+          <div>
+            <dt>Messages</dt>
+            <dd id="context-message-count">—</dd>
+          </div>
+          <div>
+            <dt>Summarized</dt>
+            <dd id="context-summarized-count">—</dd>
+          </div>
+          <div>
+            <dt>Unsummarized</dt>
+            <dd id="context-unsummarized-count">—</dd>
+          </div>
+        </dl>
+        <section>
+          <h3>Summary</h3>
+          <p id="context-summary" class="context-summary">No summary yet.</p>
+        </section>
+        <section>
+          <h3>Raw rendered context</h3>
+          <pre id="context-rendered" class="context-rendered">Load context to preview.</pre>
+        </section>
+        <button id="compact-context-button" type="button">Compact thread</button>
+      </div>
     </aside>
 
     <script src="./app.js"></script>
