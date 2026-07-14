@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.config import load_environment
+from app.execution import build_execution_resolver_from_env
 from app.settings import load_settings
 from app.unified_config import (
     apply_unified_config_to_env,
@@ -268,6 +269,95 @@ prompt_cache_enabled = false
     assert env["ANTHROPIC_THINKING_ENABLED"] == "true"
     assert env["ANTHROPIC_THINKING_BUDGET_TOKENS"] == "1024"
     assert env["ANTHROPIC_PROMPT_CACHE_ENABLED"] == "false"
+
+
+def test_unified_config_projects_top_level_llm_into_tenant_configs(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[llm]
+provider = "openrouter"
+model = "anthropic/claude-sonnet-4.5"
+api_key_env = "MY_OPENROUTER_KEY"
+base_url = "https://example.com/openrouter/v1"
+extra_headers = { "X-Test" = "yes" }
+
+[tenant_execution_configs.demo-tenant.tools]
+allowed_local_tools = ["calculator"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    env = load_unified_config_env(config_path, source_env={"MY_OPENROUTER_KEY": "secret"})
+    tenant_configs = json.loads(env["MINIGENT_TENANT_EXECUTION_CONFIGS"])
+
+    assert env["OPENROUTER_API_KEY"] == "secret"
+    assert tenant_configs["demo-tenant"]["llm"] == {
+        "provider": "openrouter",
+        "model": "anthropic/claude-sonnet-4.5",
+        "base_url": "https://example.com/openrouter/v1",
+        "extra_headers": {"X-Test": "yes"},
+        "api_key": "${OPENROUTER_API_KEY}",
+    }
+
+
+def test_unified_config_preserves_explicit_tenant_llm_override(tmp_path: Path) -> None:
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[llm]
+provider = "openrouter"
+model = "remote-model"
+api_key_env = "OPENROUTER_API_KEY"
+
+[tenant_execution_configs.demo-tenant.llm]
+provider = "mock"
+
+[tenant_execution_configs.demo-tenant.tools]
+allowed_local_tools = ["calculator"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    env = load_unified_config_env(config_path, source_env={"OPENROUTER_API_KEY": "secret"})
+    tenant_configs = json.loads(env["MINIGENT_TENANT_EXECUTION_CONFIGS"])
+
+    assert tenant_configs["demo-tenant"]["llm"] == {"provider": "mock"}
+
+
+def test_unified_config_projected_tenant_llm_beats_stale_process_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[llm]
+provider = "openrouter"
+model = "anthropic/claude-sonnet-4.5"
+api_key_env = "OPENROUTER_API_KEY"
+
+[tenant_execution_configs.demo-tenant.tools]
+allowed_local_tools = ["calculator"]
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MINIGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "secret")
+
+    env = load_unified_config_env(config_path, source_env=dict(os.environ))
+    runtime_env = {"MINIGENT_LLM_PROVIDER": "mock", "OPENROUTER_API_KEY": "secret"}
+    for key, value in env.items():
+        runtime_env.setdefault(key, value)
+
+    context = build_execution_resolver_from_env(env=runtime_env).resolve("demo-tenant")
+
+    assert context.config.llm.provider == "openrouter"
+    assert context.config.llm.model == "anthropic/claude-sonnet-4.5"
+    assert context.config.llm.api_key == "secret"
+    assert context.llm_adapter.describe()["provider"] == "openrouter"
 
 
 def test_unified_config_projects_coding_mcp_specs_into_tenant_config(

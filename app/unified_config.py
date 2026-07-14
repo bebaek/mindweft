@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import tomllib
@@ -274,6 +275,7 @@ def load_unified_config_env(
     _collect_tenant_execution_configs(
         data.get("tenant_execution_configs"),
         env,
+        llm_section=data.get("llm"),
         coding_section=data.get("coding"),
         agent_skills_section=data.get("agent_skills"),
         base_dir=path.parent,
@@ -406,14 +408,58 @@ def _collect_tenant_execution_configs(
     section: object,
     env: dict[str, str],
     *,
+    llm_section: object = None,
     coding_section: object = None,
     agent_skills_section: object = None,
     base_dir: Path | None = None,
 ) -> None:
     if section is not None:
-        projected = _with_coding_mcp_server_projections(section, coding_section)
+        projected = _with_default_llm_projection(section, llm_section)
+        projected = _with_coding_mcp_server_projections(projected, coding_section)
         projected = _with_agent_skill_imports(projected, agent_skills_section, base_dir=base_dir)
         env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = _format_json_env_value(projected)
+
+
+def _with_default_llm_projection(section: object, llm_section: object) -> object:
+    """Use top-level unified [llm] as the default for tenant execution configs.
+
+    Unified config is meant to keep common local config simple: a single top-level
+    ``[llm]`` should define the LLM used by tenants unless a tenant explicitly overrides
+    it.  Project that default into the internal tenant JSON so exported unified configs
+    remain restartable even when stale process env vars such as ``MINIGENT_LLM_PROVIDER``
+    are already set.
+    """
+
+    if not isinstance(section, dict) or not isinstance(llm_section, dict):
+        return section
+    tenant_llm = _tenant_llm_from_unified_llm(llm_section)
+    if not tenant_llm:
+        return section
+    projected = copy.deepcopy(section)
+    for tenant_config in projected.values():
+        if isinstance(tenant_config, dict) and "llm" not in tenant_config:
+            tenant_config["llm"] = dict(tenant_llm)
+    return projected
+
+
+def _tenant_llm_from_unified_llm(section: dict[str, Any]) -> dict[str, object]:
+    provider = str(section.get("provider", "")).strip().lower()
+    tenant_llm: dict[str, object] = {}
+    if provider:
+        tenant_llm["provider"] = provider
+    for key in ("model", "extra_headers", "timeout"):
+        if key in section:
+            tenant_llm[key] = copy.deepcopy(section[key])
+    base_url = section.get("base_url", section.get("url"))
+    if base_url is not None:
+        tenant_llm["base_url"] = base_url
+    api_key_env = str(section.get("api_key_env", "")).strip()
+    provider_api_key_env = _provider_api_key_env(provider)
+    if api_key_env and provider_api_key_env:
+        tenant_llm["api_key"] = f"${{{provider_api_key_env}}}"
+    elif "api_key" in section:
+        tenant_llm["api_key"] = section["api_key"]
+    return tenant_llm
 
 
 def _with_agent_skill_imports(

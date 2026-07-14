@@ -315,6 +315,11 @@ Use the tables below as the supported key reference.
 | `api_key_env` | provider API key env | Copies the named env value into the provider-specific key env when present. |
 | `api_key` | provider API key env | Convenience only; prefer `api_key_env`. |
 
+When `tenant_execution_configs` is present, this top-level `[llm]` is also projected
+internally as the default tenant LLM for any tenant that does not define its own
+`tenant_execution_configs.<tenant>.llm` block. This keeps exported unified configs
+restartable while preserving explicit tenant-level LLM overrides.
+
 Provider key targets:
 
 | Provider | Target env |
@@ -322,6 +327,7 @@ Provider key targets:
 | `openai` | `OPENAI_API_KEY` |
 | `openrouter` | `OPENROUTER_API_KEY` |
 | `google`, `gemini`, `google-generative-ai` | `GEMINI_API_KEY` |
+| `anthropic` | `ANTHROPIC_API_KEY` |
 
 ### `[image_input]`
 
