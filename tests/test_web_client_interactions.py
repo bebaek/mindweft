@@ -130,6 +130,62 @@ WEB_CLIENT_ASYNC_HELPERS = r"""
 """
 
 
+WEB_CLIENT_BROWSER_HARNESS = (
+    r"""
+            function createWebClientHarness({ storageValue, isMobile = false, fetchImpl, abortController = AbortController }) {
+              const ids = """
+    + WEB_CLIENT_ELEMENT_IDS_JS
+    + r""";
+              const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
+              for (const id of """
+    + WEB_CLIENT_HIDDEN_ELEMENT_IDS_JS
+    + r""") {
+                elements.get(id).hidden = true;
+              }
+              const localStorageStore = new Map([
+                ["minigent.webClient.v1", storageValue],
+              ]);
+              const document = {
+                activeElement: null,
+                documentElement: new Element("html", "documentElement"),
+                querySelector(selector) {
+                  if (!selector.startsWith("#")) return null;
+                  return elements.get(selector.slice(1)) || null;
+                },
+                createElement(tagName) { return new Element(tagName); },
+                createTextNode(text) { return new TextNode(text); },
+              };
+              const window = {
+                location: { origin: "http://ui.test" },
+                localStorage: {
+                  getItem(key) { return localStorageStore.get(key) || null; },
+                  setItem(key, value) { localStorageStore.set(key, value); },
+                },
+                visualViewport: { height: 700, addEventListener() {} },
+                innerHeight: 700,
+                matchMedia(query) { return { matches: isMobile && (query.includes("max-width") || query.includes("pointer")) }; },
+                addEventListener() {},
+                setTimeout(callback) { callback(); },
+                confirm() { return true; },
+              };
+              const fetchCalls = [];
+              async function fetch(url, options = {}) {
+                fetchCalls.push({ url, method: options.method || "GET", body: options.body || "" });
+                const path = new URL(url).pathname + new URL(url).search;
+                return fetchImpl(url, options, path);
+              }
+              const context = {
+                AbortController: abortController, Date, Error, JSON, Map, Number, Promise, Set, TextDecoder, TextEncoder,
+                Uint8Array, URL, console, document, fetch, requestAnimationFrame: (callback) => callback(), window,
+              };
+              context.globalThis = context;
+              vm.createContext(context);
+              return { elements, localStorageStore, document, window, fetchCalls, context };
+            }
+"""
+)
+
+
 def _run_node_script(tmp_path: Path, repo_root: Path, name: str, source: str) -> None:
     runner = tmp_path / name
     runner.write_text(textwrap.dedent(source), encoding="utf-8")
@@ -352,60 +408,23 @@ def test_web_client_thread_picker_selects_thread(tmp_path: Path) -> None:
             import vm from "node:vm";
 
             {WEB_CLIENT_DOM_CLASSES}
+            {WEB_CLIENT_BROWSER_HARNESS}
 
-            const ids = {WEB_CLIENT_ELEMENT_IDS_JS};
-            const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
-            for (const id of {WEB_CLIENT_HIDDEN_ELEMENT_IDS_JS}) {{
-              elements.get(id).hidden = true;
-            }}
-
-            const localStorageStore = new Map([
-              ["minigent.webClient.v1", JSON.stringify({{ baseUrl: "http://ui.test", threadId: "t1" }})],
-            ]);
-            const document = {{
-              activeElement: null,
-              documentElement: new Element("html", "documentElement"),
-              querySelector(selector) {{
-                if (!selector.startsWith("#")) return null;
-                return elements.get(selector.slice(1)) || null;
+            const payloads = {{
+              "/execution-options": {{ skills: {{ default: "default", items: [] }}, capability_profiles: {{ default: "default", items: [] }} }},
+              "/threads/t1/messages": [{{ role: "user", content: "t1 prompt" }}],
+              "/threads/t2/messages": [{{ role: "assistant", content: "t2 answer" }}],
+              "/threads?limit=50": {{ total: 2, threads: [
+                {{ thread_id: "t1", title: "Current thread", message_count: 1 }},
+                {{ thread_id: "t2", title: "Other thread", message_count: 1 }},
+              ] }},
+            }};
+            const {{ elements, localStorageStore, fetchCalls, context }} = createWebClientHarness({{
+              storageValue: JSON.stringify({{ baseUrl: "http://ui.test", threadId: "t1" }}),
+              fetchImpl: async (_url, _options, path) => {{
+                return {{ ok: true, status: 200, json: async () => payloads[path] ?? {{}}, text: async () => "" }};
               }},
-              createElement(tagName) {{ return new Element(tagName); }},
-              createTextNode(text) {{ return new TextNode(text); }},
-            }};
-            const window = {{
-              location: {{ origin: "http://ui.test" }},
-              localStorage: {{
-                getItem(key) {{ return localStorageStore.get(key) || null; }},
-                setItem(key, value) {{ localStorageStore.set(key, value); }},
-              }},
-              visualViewport: {{ height: 700, addEventListener() {{}} }},
-              innerHeight: 700,
-              matchMedia() {{ return {{ matches: false }}; }},
-              addEventListener() {{}},
-              setTimeout(callback) {{ callback(); }},
-              confirm() {{ return true; }},
-            }};
-            const fetchCalls = [];
-            async function fetch(url, options = {{}}) {{
-              fetchCalls.push({{ url, method: options.method || "GET", body: options.body || "" }});
-              const path = new URL(url).pathname + new URL(url).search;
-              const payloads = {{
-                "/execution-options": {{ skills: {{ default: "default", items: [] }}, capability_profiles: {{ default: "default", items: [] }} }},
-                "/threads/t1/messages": [{{ role: "user", content: "t1 prompt" }}],
-                "/threads/t2/messages": [{{ role: "assistant", content: "t2 answer" }}],
-                "/threads?limit=50": {{ total: 2, threads: [
-                  {{ thread_id: "t1", title: "Current thread", message_count: 1 }},
-                  {{ thread_id: "t2", title: "Other thread", message_count: 1 }},
-                ] }},
-              }};
-              return {{ ok: true, status: 200, json: async () => payloads[path] ?? {{}}, text: async () => "" }};
-            }}
-            const context = {{
-              AbortController, Date, Error, JSON, Map, Number, Promise, Set, TextDecoder, TextEncoder,
-              Uint8Array, URL, console, document, fetch, requestAnimationFrame: (callback) => callback(), window,
-            }};
-            context.globalThis = context;
-            vm.createContext(context);
+            }});
             {WEB_CLIENT_ASYNC_HELPERS}
             vm.runInContext(fs.readFileSync({str(app_path)!r}, "utf8"), context, {{ filename: "app.js" }});
             await flushAsyncWork();
