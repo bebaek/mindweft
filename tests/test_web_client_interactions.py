@@ -158,11 +158,12 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
               confirm() {{ return true; }},
             }};
             const fetchCalls = [];
-            let completeRunStream;
-            const runStreamCanFinish = new Promise((resolve) => {{
-              completeRunStream = resolve;
-            }});
+            let completeRunStream = () => {{}};
+            let nextRunEvents = [{{ type: "assistant.message", content: "Assistant reply" }}];
             function ndjsonResponse(events) {{
+              const runStreamCanFinish = new Promise((resolve) => {{
+                completeRunStream = resolve;
+              }});
               const chunks = [new TextEncoder().encode(events.map((event) => JSON.stringify(event)).join("\\n") + "\\n")];
               return {{
                 ok: true,
@@ -185,7 +186,7 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
               fetchCalls.push({{ url, method: options.method || "GET", body: options.body || "" }});
               const path = new URL(url).pathname + new URL(url).search;
               if (path === "/threads/t1/run/stream") {{
-                return ndjsonResponse([{{ type: "assistant.message", content: "Assistant reply" }}]);
+                return ndjsonResponse(nextRunEvents);
               }}
               const payloads = {{
                 "/execution-options": {{ skills: {{ default: "default", items: [] }}, capability_profiles: {{ default: "default", items: [] }} }},
@@ -270,6 +271,37 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
               JSON.stringify({{ content: "New prompt" }})
             );
 
+            nextRunEvents = [{{ type: "run.error", status_code: 503, detail: "Backend unavailable" }}];
+            elements.get("message-input").value = "Failure prompt";
+            const previousStreamCallCount = fetchCalls.filter(
+              (call) => call.url === "http://ui.test/threads/t1/run/stream"
+            ).length;
+            const failedSubmitPromise = elements.get("composer").requestSubmit();
+            await waitUntil(
+              () => fetchCalls.filter((call) => call.url === "http://ui.test/threads/t1/run/stream").length > previousStreamCallCount
+            );
+            assert.equal(elements.get("send-button").hidden, true);
+            assert.equal(elements.get("stop-button").hidden, false);
+            completeRunStream();
+            await failedSubmitPromise;
+            await flushAsyncWork();
+            assert.equal(elements.get("send-button").hidden, false);
+            assert.equal(elements.get("send-button").disabled, false);
+            assert.equal(elements.get("stop-button").hidden, true);
+            assert.equal(elements.get("stop-button").disabled, true);
+            assert.equal(elements.get("message-input").value, "");
+            assert.equal(elements.get("messages").textContent.includes("Failure prompt"), true);
+            assert.equal(elements.get("messages").textContent.includes("Run failed: 503 Backend unavailable"), true);
+            assert.equal(elements.get("status").textContent, "503 Backend unavailable");
+            assert.equal(elements.get("status").classList.contains("error"), true);
+            const postedBodies = fetchCalls
+              .filter((call) => call.url === "http://ui.test/threads/t1/messages" && call.method === "POST")
+              .map((call) => call.body);
+            assert.deepEqual(postedBodies, [
+              JSON.stringify({{ content: "New prompt" }}),
+              JSON.stringify({{ content: "Failure prompt" }}),
+            ]);
+
             assert.deepEqual(fetchCalls.map((call) => `${{call.method}} ${{call.url}}`), [
               "GET http://ui.test/execution-options",
               "GET http://ui.test/threads/t1/messages",
@@ -278,6 +310,8 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
               "POST http://ui.test/threads/t1/messages",
               "POST http://ui.test/threads/t1/run/stream",
               "GET http://ui.test/threads?limit=50",
+              "POST http://ui.test/threads/t1/messages",
+              "POST http://ui.test/threads/t1/run/stream",
             ]);
             """
         ),
