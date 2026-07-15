@@ -328,6 +328,153 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
     )
 
 
+def test_web_client_new_thread_send_flow(tmp_path: Path) -> None:
+    """Smoke-test first-message send when the browser has no active thread."""
+
+    repo_root = Path(__file__).parents[1]
+    app_path = repo_root / "app" / "static" / "web" / "app.js"
+    _run_node_script(
+        tmp_path,
+        repo_root,
+        "web_client_new_thread.mjs",
+        f"""
+            import assert from "node:assert/strict";
+            import fs from "node:fs";
+            import vm from "node:vm";
+
+            {WEB_CLIENT_DOM_CLASSES}
+
+            const ids = [
+              "status", "threads-button", "context-button", "more-button", "more-backdrop",
+              "more-sheet", "more-close", "more-context-button", "more-settings-button",
+              "settings-button", "settings-close", "settings-backdrop", "new-thread-button",
+              "settings-panel", "base-url", "api-token", "user-id", "tenant-id", "skill",
+              "skill-options", "capability-profile", "capability-profile-options",
+              "execution-options-status", "messages", "activity-button", "run-status-label",
+              "run-status-hint", "activity-backdrop", "activity-sheet", "activity-close",
+              "activity-summary", "activity-list", "context-backdrop", "context-sheet",
+              "context-close", "context-summary-line", "context-total-tokens",
+              "context-message-count", "context-summarized-count", "context-unsummarized-count",
+              "context-summary", "context-rendered", "compact-context-button", "threads-backdrop",
+              "threads-sheet", "threads-close", "threads-summary", "threads-list",
+              "threads-new-button", "threads-refresh-button", "composer", "message-input",
+              "send-button", "stop-button",
+            ];
+            const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
+            for (const id of ["more-backdrop", "more-sheet", "settings-backdrop", "activity-backdrop",
+              "activity-sheet", "context-backdrop", "context-sheet", "threads-backdrop", "threads-sheet",
+              "activity-button", "stop-button"]) {{
+              elements.get(id).hidden = true;
+            }}
+
+            const localStorageStore = new Map([
+              ["minigent.webClient.v1", JSON.stringify({{ baseUrl: "http://ui.test" }})],
+            ]);
+            const document = {{
+              activeElement: null,
+              documentElement: new Element("html", "documentElement"),
+              querySelector(selector) {{
+                if (!selector.startsWith("#")) return null;
+                return elements.get(selector.slice(1)) || null;
+              }},
+              createElement(tagName) {{ return new Element(tagName); }},
+              createTextNode(text) {{ return new TextNode(text); }},
+            }};
+            const window = {{
+              location: {{ origin: "http://ui.test" }},
+              localStorage: {{
+                getItem(key) {{ return localStorageStore.get(key) || null; }},
+                setItem(key, value) {{ localStorageStore.set(key, value); }},
+              }},
+              visualViewport: {{ height: 700, addEventListener() {{}} }},
+              innerHeight: 700,
+              matchMedia() {{ return {{ matches: false }}; }},
+              addEventListener() {{}},
+              setTimeout(callback) {{ callback(); }},
+              confirm() {{ return true; }},
+            }};
+            const fetchCalls = [];
+            let completeRunStream = () => {{}};
+            function ndjsonResponse(events) {{
+              const runStreamCanFinish = new Promise((resolve) => {{
+                completeRunStream = resolve;
+              }});
+              const chunks = [new TextEncoder().encode(events.map((event) => JSON.stringify(event)).join("\\n") + "\\n")];
+              return {{
+                ok: true,
+                status: 200,
+                body: {{
+                  getReader() {{
+                    return {{
+                      async read() {{
+                        await runStreamCanFinish;
+                        const value = chunks.shift();
+                        return value ? {{ value, done: false }} : {{ value: undefined, done: true }};
+                      }},
+                    }};
+                  }},
+                }},
+                text: async () => "",
+              }};
+            }}
+            async function fetch(url, options = {{}}) {{
+              fetchCalls.push({{ url, method: options.method || "GET", body: options.body || "" }});
+              const path = new URL(url).pathname + new URL(url).search;
+              if (path === "/threads") return {{ ok: true, status: 200, json: async () => ({{ thread_id: "t-new" }}), text: async () => "" }};
+              if (path === "/threads/t-new/run/stream") return ndjsonResponse([{{ type: "assistant.message", content: "New assistant reply" }}]);
+              const payloads = {{
+                "/execution-options": {{ skills: {{ default: "default", items: [] }}, capability_profiles: {{ default: "default", items: [] }} }},
+                "/threads/t-new/messages": [],
+              }};
+              return {{ ok: true, status: 200, json: async () => payloads[path] ?? {{}}, text: async () => "" }};
+            }}
+            const context = {{
+              AbortController, Date, Error, JSON, Map, Number, Promise, Set, TextDecoder, TextEncoder,
+              Uint8Array, URL, console, document, fetch, requestAnimationFrame: (callback) => callback(), window,
+            }};
+            context.globalThis = context;
+            vm.createContext(context);
+            async function flushAsyncWork() {{
+              for (let index = 0; index < 8; index += 1) await Promise.resolve();
+            }}
+            async function waitUntil(predicate) {{
+              for (let index = 0; index < 20; index += 1) {{
+                await Promise.resolve();
+                if (predicate()) return;
+              }}
+              assert.fail("Condition was not met before timeout");
+            }}
+            vm.runInContext(fs.readFileSync({str(app_path)!r}, "utf8"), context, {{ filename: "app.js" }});
+            await flushAsyncWork();
+            assert.equal(elements.get("context-button").hidden, true);
+
+            elements.get("message-input").value = "Start thread";
+            const submitPromise = elements.get("composer").requestSubmit();
+            await waitUntil(() => fetchCalls.some((call) => call.url === "http://ui.test/threads/t-new/run/stream"));
+            assert.equal(elements.get("send-button").hidden, true);
+            assert.equal(elements.get("stop-button").hidden, false);
+            assert.equal(elements.get("context-button").hidden, false);
+            assert.equal(JSON.parse(localStorageStore.get("minigent.webClient.v1")).threadId, "t-new");
+            completeRunStream();
+            await submitPromise;
+            await flushAsyncWork();
+
+            assert.equal(elements.get("send-button").hidden, false);
+            assert.equal(elements.get("stop-button").hidden, true);
+            assert.equal(elements.get("message-input").value, "");
+            assert.equal(elements.get("messages").textContent.includes("Start thread"), true);
+            assert.equal(elements.get("messages").textContent.includes("New assistant reply"), true);
+            assert.deepEqual(fetchCalls.map((call) => `${{call.method}} ${{call.url}}`), [
+              "GET http://ui.test/execution-options",
+              "POST http://ui.test/threads",
+              "POST http://ui.test/threads/t-new/messages",
+              "POST http://ui.test/threads/t-new/run/stream",
+            ]);
+            assert.equal(fetchCalls.find((call) => call.url === "http://ui.test/threads/t-new/messages").body, JSON.stringify({{ content: "Start thread" }}));
+            """,
+    )
+
+
 def test_web_client_markdown_renderer_stays_safe(tmp_path: Path) -> None:
     """Exercise assistant markdown rendering without a browser dependency."""
 
