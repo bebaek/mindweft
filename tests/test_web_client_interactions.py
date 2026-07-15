@@ -73,7 +73,9 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
                 event.target ??= this;
                 event.preventDefault ??= () => {{ event.defaultPrevented = true; }};
                 event.stopPropagation ??= () => {{ event.propagationStopped = true; }};
-                for (const listener of this.eventListeners.get(event.type) || []) listener(event);
+                const results = [];
+                for (const listener of this.eventListeners.get(event.type) || []) results.push(listener(event));
+                return Promise.all(results);
               }}
               click() {{
                 this.dispatchEvent({{ type: "click" }});
@@ -94,7 +96,7 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
                 return this.children.find((node) => node instanceof Element) || null;
               }}
               requestSubmit() {{
-                this.dispatchEvent({{ type: "submit" }});
+                return this.dispatchEvent({{ type: "submit" }});
               }}
             }}
 
@@ -156,25 +158,61 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
               confirm() {{ return true; }},
             }};
             const fetchCalls = [];
+            let completeRunStream;
+            const runStreamCanFinish = new Promise((resolve) => {{
+              completeRunStream = resolve;
+            }});
+            function ndjsonResponse(events) {{
+              const chunks = [new TextEncoder().encode(events.map((event) => JSON.stringify(event)).join("\\n") + "\\n")];
+              return {{
+                ok: true,
+                status: 200,
+                body: {{
+                  getReader() {{
+                    return {{
+                      async read() {{
+                        await runStreamCanFinish;
+                        const value = chunks.shift();
+                        return value ? {{ value, done: false }} : {{ value: undefined, done: true }};
+                      }},
+                    }};
+                  }},
+                }},
+                text: async () => "",
+              }};
+            }}
             async function fetch(url, options = {{}}) {{
-              fetchCalls.push({{ url, method: options.method || "GET" }});
+              fetchCalls.push({{ url, method: options.method || "GET", body: options.body || "" }});
               const path = new URL(url).pathname + new URL(url).search;
+              if (path === "/threads/t1/run/stream") {{
+                return ndjsonResponse([{{ type: "assistant.message", content: "Assistant reply" }}]);
+              }}
               const payloads = {{
                 "/execution-options": {{ skills: {{ default: "default", items: [] }}, capability_profiles: {{ default: "default", items: [] }} }},
-                "/threads/t1/messages": [{{ role: "user", content: "hello" }}, {{ role: "assistant", content: "hi" }}],
+                "/threads/t1/messages": [
+                  {{ role: "user", content: "hello" }},
+                  {{ role: "assistant", content: "hi" }},
+                ],
                 "/threads/t1/context/raw": {{ thread_id: "t1", usage: {{ total_tokens: 12, message_count: 2, summarized_message_count: 0, unsummarized_message_count: 2 }}, summary: "Summary text", rendered: "Rendered context" }},
                 "/threads?limit=50": {{ total: 1, threads: [{{ thread_id: "t1", title: "Existing", message_count: 2 }}] }},
               }};
               return {{ ok: true, status: 200, json: async () => payloads[path] ?? {{}}, text: async () => "" }};
             }}
             const context = {{
-              AbortController, Date, Error, JSON, Map, Number, Promise, Set, TextDecoder, Uint8Array,
-              URL, console, document, fetch, requestAnimationFrame: (callback) => callback(), window,
+              AbortController, Date, Error, JSON, Map, Number, Promise, Set, TextDecoder, TextEncoder,
+              Uint8Array, URL, console, document, fetch, requestAnimationFrame: (callback) => callback(), window,
             }};
             context.globalThis = context;
             vm.createContext(context);
             async function flushAsyncWork() {{
               for (let index = 0; index < 8; index += 1) await Promise.resolve();
+            }}
+            async function waitUntil(predicate) {{
+              for (let index = 0; index < 20; index += 1) {{
+                await Promise.resolve();
+                if (predicate()) return;
+              }}
+              assert.fail("Condition was not met before timeout");
             }}
             vm.runInContext(fs.readFileSync({str(app_path)!r}, "utf8"), context, {{ filename: "app.js" }});
             await flushAsyncWork();
@@ -210,11 +248,36 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
             assert.equal(elements.get("threads-list").children.length, 1);
             assert.equal(elements.get("threads-summary").textContent, "1 conversation");
 
-            assert.deepEqual(fetchCalls.map((call) => call.url), [
-              "http://ui.test/execution-options",
-              "http://ui.test/threads/t1/messages",
-              "http://ui.test/threads/t1/context/raw",
-              "http://ui.test/threads?limit=50",
+            elements.get("message-input").value = "New prompt";
+            const submitPromise = elements.get("composer").requestSubmit();
+            await waitUntil(() => fetchCalls.some((call) => call.url === "http://ui.test/threads/t1/run/stream"));
+            assert.equal(elements.get("send-button").hidden, true);
+            assert.equal(elements.get("send-button").disabled, true);
+            assert.equal(elements.get("stop-button").hidden, false);
+            assert.equal(elements.get("stop-button").disabled, false);
+            completeRunStream();
+            await submitPromise;
+            await flushAsyncWork();
+            assert.equal(elements.get("send-button").hidden, false);
+            assert.equal(elements.get("send-button").disabled, false);
+            assert.equal(elements.get("stop-button").hidden, true);
+            assert.equal(elements.get("stop-button").disabled, true);
+            assert.equal(elements.get("message-input").value, "");
+            assert.equal(elements.get("messages").textContent.includes("New prompt"), true);
+            assert.equal(elements.get("messages").textContent.includes("Assistant reply"), true);
+            assert.equal(
+              fetchCalls.find((call) => call.url === "http://ui.test/threads/t1/messages" && call.method === "POST").body,
+              JSON.stringify({{ content: "New prompt" }})
+            );
+
+            assert.deepEqual(fetchCalls.map((call) => `${{call.method}} ${{call.url}}`), [
+              "GET http://ui.test/execution-options",
+              "GET http://ui.test/threads/t1/messages",
+              "GET http://ui.test/threads/t1/context/raw",
+              "GET http://ui.test/threads?limit=50",
+              "POST http://ui.test/threads/t1/messages",
+              "POST http://ui.test/threads/t1/run/stream",
+              "GET http://ui.test/threads?limit=50",
             ]);
             """
         ),
