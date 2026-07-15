@@ -5,15 +5,22 @@ import textwrap
 from pathlib import Path
 
 
+def _run_node_script(tmp_path: Path, repo_root: Path, name: str, source: str) -> None:
+    runner = tmp_path / name
+    runner.write_text(textwrap.dedent(source), encoding="utf-8")
+    subprocess.run(["node", str(runner)], cwd=repo_root, check=True)
+
+
 def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
     """Smoke-test browser UI wiring with a tiny dependency-free DOM harness."""
 
     repo_root = Path(__file__).parents[1]
-    runner = tmp_path / "web_client_interactions.mjs"
     app_path = repo_root / "app" / "static" / "web" / "app.js"
-    runner.write_text(
-        textwrap.dedent(
-            f"""
+    _run_node_script(
+        tmp_path,
+        repo_root,
+        "web_client_interactions.mjs",
+        f"""
             import assert from "node:assert/strict";
             import fs from "node:fs";
             import vm from "node:vm";
@@ -313,23 +320,20 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
               "POST http://ui.test/threads/t1/messages",
               "POST http://ui.test/threads/t1/run/stream",
             ]);
-            """
-        ),
-        encoding="utf-8",
+            """,
     )
-
-    subprocess.run(["node", str(runner)], cwd=repo_root, check=True)
 
 
 def test_web_client_markdown_renderer_stays_safe(tmp_path: Path) -> None:
     """Exercise assistant markdown rendering without a browser dependency."""
 
     repo_root = Path(__file__).parents[1]
-    runner = tmp_path / "web_client_markdown.mjs"
     app_path = repo_root / "app" / "static" / "web" / "app.js"
-    runner.write_text(
-        textwrap.dedent(
-            f"""
+    _run_node_script(
+        tmp_path,
+        repo_root,
+        "web_client_markdown.mjs",
+        f"""
             import assert from "node:assert/strict";
             import fs from "node:fs";
             import vm from "node:vm";
@@ -386,9 +390,5 @@ def test_web_client_markdown_renderer_stays_safe(tmp_path: Path) -> None:
             assert.equal(block.children[0].dataset.language, "js");
             assert.equal(block.children[0].textContent, "console.log(1)");
             assert.equal(nodes.some((node) => node.tagName === "SCRIPT"), false);
-            """
-        ),
-        encoding="utf-8",
+            """,
     )
-
-    subprocess.run(["node", str(runner)], cwd=repo_root, check=True)
