@@ -95,6 +95,41 @@ WEB_CLIENT_DOM_CLASSES = r"""
 """
 
 
+WEB_CLIENT_ELEMENT_IDS_JS = r"""[
+              "status", "threads-button", "context-button", "more-button", "more-backdrop",
+              "more-sheet", "more-close", "more-context-button", "more-settings-button",
+              "settings-button", "settings-close", "settings-backdrop", "new-thread-button",
+              "settings-panel", "base-url", "api-token", "user-id", "tenant-id", "skill",
+              "skill-options", "capability-profile", "capability-profile-options",
+              "execution-options-status", "messages", "activity-button", "run-status-label",
+              "run-status-hint", "activity-backdrop", "activity-sheet", "activity-close",
+              "activity-summary", "activity-list", "context-backdrop", "context-sheet",
+              "context-close", "context-summary-line", "context-total-tokens",
+              "context-message-count", "context-summarized-count", "context-unsummarized-count",
+              "context-summary", "context-rendered", "compact-context-button", "threads-backdrop",
+              "threads-sheet", "threads-close", "threads-summary", "threads-list",
+              "threads-new-button", "threads-refresh-button", "composer", "message-input",
+              "send-button", "stop-button",
+            ]"""
+
+WEB_CLIENT_HIDDEN_ELEMENT_IDS_JS = r"""["more-backdrop", "more-sheet", "settings-backdrop", "activity-backdrop",
+              "activity-sheet", "context-backdrop", "context-sheet", "threads-backdrop", "threads-sheet",
+              "activity-button", "stop-button"]"""
+
+WEB_CLIENT_ASYNC_HELPERS = r"""
+            async function flushAsyncWork() {
+              for (let index = 0; index < 8; index += 1) await Promise.resolve();
+            }
+            async function waitUntil(predicate) {
+              for (let index = 0; index < 20; index += 1) {
+                await Promise.resolve();
+                if (predicate()) return;
+              }
+              assert.fail("Condition was not met before timeout");
+            }
+"""
+
+
 def _run_node_script(tmp_path: Path, repo_root: Path, name: str, source: str) -> None:
     runner = tmp_path / name
     runner.write_text(textwrap.dedent(source), encoding="utf-8")
@@ -117,28 +152,11 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
 
             {WEB_CLIENT_DOM_CLASSES}
 
-            const ids = [
-              "status", "threads-button", "context-button", "more-button", "more-backdrop",
-              "more-sheet", "more-close", "more-context-button", "more-settings-button",
-              "settings-button", "settings-close", "settings-backdrop", "new-thread-button",
-              "settings-panel", "base-url", "api-token", "user-id", "tenant-id", "skill",
-              "skill-options", "capability-profile", "capability-profile-options",
-              "execution-options-status", "messages", "activity-button", "run-status-label",
-              "run-status-hint", "activity-backdrop", "activity-sheet", "activity-close",
-              "activity-summary", "activity-list", "context-backdrop", "context-sheet",
-              "context-close", "context-summary-line", "context-total-tokens",
-              "context-message-count", "context-summarized-count", "context-unsummarized-count",
-              "context-summary", "context-rendered", "compact-context-button", "threads-backdrop",
-              "threads-sheet", "threads-close", "threads-summary", "threads-list",
-              "threads-new-button", "threads-refresh-button", "composer", "message-input",
-              "send-button", "stop-button",
-            ];
+            const ids = {WEB_CLIENT_ELEMENT_IDS_JS};
             const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
             elements.get("context-button").hidden = true;
             elements.get("more-context-button").hidden = true;
-            for (const id of ["more-backdrop", "more-sheet", "settings-backdrop", "activity-backdrop",
-              "activity-sheet", "context-backdrop", "context-sheet", "threads-backdrop", "threads-sheet",
-              "activity-button", "stop-button"]) {{
+            for (const id of {WEB_CLIENT_HIDDEN_ELEMENT_IDS_JS}) {{
               elements.get(id).hidden = true;
             }}
 
@@ -216,16 +234,7 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
             }};
             context.globalThis = context;
             vm.createContext(context);
-            async function flushAsyncWork() {{
-              for (let index = 0; index < 8; index += 1) await Promise.resolve();
-            }}
-            async function waitUntil(predicate) {{
-              for (let index = 0; index < 20; index += 1) {{
-                await Promise.resolve();
-                if (predicate()) return;
-              }}
-              assert.fail("Condition was not met before timeout");
-            }}
+            {WEB_CLIENT_ASYNC_HELPERS}
             vm.runInContext(fs.readFileSync({str(app_path)!r}, "utf8"), context, {{ filename: "app.js" }});
             await flushAsyncWork();
 
@@ -328,6 +337,104 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
     )
 
 
+def test_web_client_thread_picker_selects_thread(tmp_path: Path) -> None:
+    """Smoke-test selecting a different conversation from the thread picker."""
+
+    repo_root = Path(__file__).parents[1]
+    app_path = repo_root / "app" / "static" / "web" / "app.js"
+    _run_node_script(
+        tmp_path,
+        repo_root,
+        "web_client_thread_picker.mjs",
+        f"""
+            import assert from "node:assert/strict";
+            import fs from "node:fs";
+            import vm from "node:vm";
+
+            {WEB_CLIENT_DOM_CLASSES}
+
+            const ids = {WEB_CLIENT_ELEMENT_IDS_JS};
+            const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
+            for (const id of {WEB_CLIENT_HIDDEN_ELEMENT_IDS_JS}) {{
+              elements.get(id).hidden = true;
+            }}
+
+            const localStorageStore = new Map([
+              ["minigent.webClient.v1", JSON.stringify({{ baseUrl: "http://ui.test", threadId: "t1" }})],
+            ]);
+            const document = {{
+              activeElement: null,
+              documentElement: new Element("html", "documentElement"),
+              querySelector(selector) {{
+                if (!selector.startsWith("#")) return null;
+                return elements.get(selector.slice(1)) || null;
+              }},
+              createElement(tagName) {{ return new Element(tagName); }},
+              createTextNode(text) {{ return new TextNode(text); }},
+            }};
+            const window = {{
+              location: {{ origin: "http://ui.test" }},
+              localStorage: {{
+                getItem(key) {{ return localStorageStore.get(key) || null; }},
+                setItem(key, value) {{ localStorageStore.set(key, value); }},
+              }},
+              visualViewport: {{ height: 700, addEventListener() {{}} }},
+              innerHeight: 700,
+              matchMedia() {{ return {{ matches: false }}; }},
+              addEventListener() {{}},
+              setTimeout(callback) {{ callback(); }},
+              confirm() {{ return true; }},
+            }};
+            const fetchCalls = [];
+            async function fetch(url, options = {{}}) {{
+              fetchCalls.push({{ url, method: options.method || "GET", body: options.body || "" }});
+              const path = new URL(url).pathname + new URL(url).search;
+              const payloads = {{
+                "/execution-options": {{ skills: {{ default: "default", items: [] }}, capability_profiles: {{ default: "default", items: [] }} }},
+                "/threads/t1/messages": [{{ role: "user", content: "t1 prompt" }}],
+                "/threads/t2/messages": [{{ role: "assistant", content: "t2 answer" }}],
+                "/threads?limit=50": {{ total: 2, threads: [
+                  {{ thread_id: "t1", title: "Current thread", message_count: 1 }},
+                  {{ thread_id: "t2", title: "Other thread", message_count: 1 }},
+                ] }},
+              }};
+              return {{ ok: true, status: 200, json: async () => payloads[path] ?? {{}}, text: async () => "" }};
+            }}
+            const context = {{
+              AbortController, Date, Error, JSON, Map, Number, Promise, Set, TextDecoder, TextEncoder,
+              Uint8Array, URL, console, document, fetch, requestAnimationFrame: (callback) => callback(), window,
+            }};
+            context.globalThis = context;
+            vm.createContext(context);
+            {WEB_CLIENT_ASYNC_HELPERS}
+            vm.runInContext(fs.readFileSync({str(app_path)!r}, "utf8"), context, {{ filename: "app.js" }});
+            await flushAsyncWork();
+            assert.equal(elements.get("messages").textContent.includes("t1 prompt"), true);
+
+            elements.get("threads-button").click();
+            await flushAsyncWork();
+            assert.equal(elements.get("threads-sheet").hidden, false);
+            assert.equal(elements.get("threads-list").children.length, 2);
+            assert.equal(elements.get("threads-summary").textContent, "2 conversations");
+            assert.equal(elements.get("threads-list").children[0].children[0].className, "thread-item current");
+
+            elements.get("threads-list").children[1].children[0].click();
+            await flushAsyncWork();
+            assert.equal(elements.get("threads-sheet").hidden, true);
+            assert.equal(JSON.parse(localStorageStore.get("minigent.webClient.v1")).threadId, "t2");
+            assert.equal(elements.get("status").textContent, "Thread t2");
+            assert.equal(elements.get("messages").textContent.includes("t1 prompt"), false);
+            assert.equal(elements.get("messages").textContent.includes("t2 answer"), true);
+            assert.deepEqual(fetchCalls.map((call) => `${{call.method}} ${{call.url}}`), [
+              "GET http://ui.test/execution-options",
+              "GET http://ui.test/threads/t1/messages",
+              "GET http://ui.test/threads?limit=50",
+              "GET http://ui.test/threads/t2/messages",
+            ]);
+            """,
+    )
+
+
 def test_web_client_new_thread_send_flow(tmp_path: Path) -> None:
     """Smoke-test first-message send when the browser has no active thread."""
 
@@ -344,26 +451,9 @@ def test_web_client_new_thread_send_flow(tmp_path: Path) -> None:
 
             {WEB_CLIENT_DOM_CLASSES}
 
-            const ids = [
-              "status", "threads-button", "context-button", "more-button", "more-backdrop",
-              "more-sheet", "more-close", "more-context-button", "more-settings-button",
-              "settings-button", "settings-close", "settings-backdrop", "new-thread-button",
-              "settings-panel", "base-url", "api-token", "user-id", "tenant-id", "skill",
-              "skill-options", "capability-profile", "capability-profile-options",
-              "execution-options-status", "messages", "activity-button", "run-status-label",
-              "run-status-hint", "activity-backdrop", "activity-sheet", "activity-close",
-              "activity-summary", "activity-list", "context-backdrop", "context-sheet",
-              "context-close", "context-summary-line", "context-total-tokens",
-              "context-message-count", "context-summarized-count", "context-unsummarized-count",
-              "context-summary", "context-rendered", "compact-context-button", "threads-backdrop",
-              "threads-sheet", "threads-close", "threads-summary", "threads-list",
-              "threads-new-button", "threads-refresh-button", "composer", "message-input",
-              "send-button", "stop-button",
-            ];
+            const ids = {WEB_CLIENT_ELEMENT_IDS_JS};
             const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
-            for (const id of ["more-backdrop", "more-sheet", "settings-backdrop", "activity-backdrop",
-              "activity-sheet", "context-backdrop", "context-sheet", "threads-backdrop", "threads-sheet",
-              "activity-button", "stop-button"]) {{
+            for (const id of {WEB_CLIENT_HIDDEN_ELEMENT_IDS_JS}) {{
               elements.get(id).hidden = true;
             }}
 
@@ -434,16 +524,7 @@ def test_web_client_new_thread_send_flow(tmp_path: Path) -> None:
             }};
             context.globalThis = context;
             vm.createContext(context);
-            async function flushAsyncWork() {{
-              for (let index = 0; index < 8; index += 1) await Promise.resolve();
-            }}
-            async function waitUntil(predicate) {{
-              for (let index = 0; index < 20; index += 1) {{
-                await Promise.resolve();
-                if (predicate()) return;
-              }}
-              assert.fail("Condition was not met before timeout");
-            }}
+            {WEB_CLIENT_ASYNC_HELPERS}
             vm.runInContext(fs.readFileSync({str(app_path)!r}, "utf8"), context, {{ filename: "app.js" }});
             await flushAsyncWork();
             assert.equal(elements.get("context-button").hidden, true);
