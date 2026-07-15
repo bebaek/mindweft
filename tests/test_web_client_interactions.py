@@ -694,6 +694,165 @@ def test_web_client_new_thread_button_clears_state_then_sends(tmp_path: Path) ->
     )
 
 
+def test_web_client_stop_button_aborts_active_run(tmp_path: Path) -> None:
+    """Smoke-test cancelling an active streaming run from the Stop button."""
+
+    repo_root = Path(__file__).parents[1]
+    app_path = repo_root / "app" / "static" / "web" / "app.js"
+    _run_node_script(
+        tmp_path,
+        repo_root,
+        "web_client_stop_button.mjs",
+        f"""
+            import assert from "node:assert/strict";
+            import fs from "node:fs";
+            import vm from "node:vm";
+
+            {WEB_CLIENT_DOM_CLASSES}
+
+            const ids = {WEB_CLIENT_ELEMENT_IDS_JS};
+            const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
+            for (const id of {WEB_CLIENT_HIDDEN_ELEMENT_IDS_JS}) {{
+              elements.get(id).hidden = true;
+            }}
+
+            const localStorageStore = new Map([
+              ["minigent.webClient.v1", JSON.stringify({{ baseUrl: "http://ui.test", threadId: "t1" }})],
+            ]);
+            const document = {{
+              activeElement: null,
+              documentElement: new Element("html", "documentElement"),
+              querySelector(selector) {{
+                if (!selector.startsWith("#")) return null;
+                return elements.get(selector.slice(1)) || null;
+              }},
+              createElement(tagName) {{ return new Element(tagName); }},
+              createTextNode(text) {{ return new TextNode(text); }},
+            }};
+            const window = {{
+              location: {{ origin: "http://ui.test" }},
+              localStorage: {{
+                getItem(key) {{ return localStorageStore.get(key) || null; }},
+                setItem(key, value) {{ localStorageStore.set(key, value); }},
+              }},
+              visualViewport: {{ height: 700, addEventListener() {{}} }},
+              innerHeight: 700,
+              matchMedia() {{ return {{ matches: false }}; }},
+              addEventListener() {{}},
+              setTimeout(callback) {{ callback(); }},
+              confirm() {{ return true; }},
+            }};
+            let abortCalls = 0;
+            class AbortController {{
+              constructor() {{
+                const listeners = [];
+                this.signal = {{
+                  aborted: false,
+                  addEventListener(type, listener) {{
+                    if (type === "abort") listeners.push(listener);
+                  }},
+                }};
+                this.listeners = listeners;
+              }}
+              abort() {{
+                abortCalls += 1;
+                this.signal.aborted = true;
+                for (const listener of this.listeners) listener();
+              }}
+            }}
+            function abortError() {{
+              const error = new Error("The operation was aborted.");
+              error.name = "AbortError";
+              return error;
+            }}
+            const fetchCalls = [];
+            let runStreamSignal = null;
+            let finishCancelRequest = () => {{}};
+            async function fetch(url, options = {{}}) {{
+              fetchCalls.push({{ url, method: options.method || "GET", body: options.body || "" }});
+              const path = new URL(url).pathname + new URL(url).search;
+              if (path === "/threads/t1/run/stream") {{
+                runStreamSignal = options.signal;
+                return {{
+                  ok: true,
+                  status: 200,
+                  body: {{
+                    getReader() {{
+                      return {{
+                        async read() {{
+                          if (runStreamSignal.aborted) throw abortError();
+                          await new Promise((resolve) => runStreamSignal.addEventListener("abort", resolve));
+                          throw abortError();
+                        }},
+                      }};
+                    }},
+                  }},
+                  text: async () => "",
+                }};
+              }}
+              if (path === "/threads/t1/run/cancel") {{
+                await new Promise((resolve) => {{
+                  finishCancelRequest = resolve;
+                }});
+                return {{ ok: true, status: 200, json: async () => ({{}}), text: async () => "" }};
+              }}
+              const payloads = {{
+                "/execution-options": {{ skills: {{ default: "default", items: [] }}, capability_profiles: {{ default: "default", items: [] }} }},
+                "/threads/t1/messages": [{{ role: "assistant", content: "Existing reply" }}],
+              }};
+              return {{ ok: true, status: 200, json: async () => payloads[path] ?? {{}}, text: async () => "" }};
+            }}
+            const context = {{
+              AbortController, Date, Error, JSON, Map, Number, Promise, Set, TextDecoder, TextEncoder,
+              Uint8Array, URL, console, document, fetch, requestAnimationFrame: (callback) => callback(), window,
+            }};
+            context.globalThis = context;
+            vm.createContext(context);
+            {WEB_CLIENT_ASYNC_HELPERS}
+            vm.runInContext(fs.readFileSync({str(app_path)!r}, "utf8"), context, {{ filename: "app.js" }});
+            await flushAsyncWork();
+
+            elements.get("message-input").value = "Stop me";
+            const submitPromise = elements.get("composer").requestSubmit();
+            await waitUntil(() => fetchCalls.some((call) => call.url === "http://ui.test/threads/t1/run/stream"));
+            assert.equal(elements.get("send-button").hidden, true);
+            assert.equal(elements.get("send-button").disabled, true);
+            assert.equal(elements.get("stop-button").hidden, false);
+            assert.equal(elements.get("stop-button").disabled, false);
+            assert.equal(elements.get("activity-button").hidden, false);
+            assert.equal(elements.get("run-status-label").textContent, "Thinking…");
+
+            elements.get("stop-button").click();
+            await waitUntil(() => fetchCalls.some((call) => call.url === "http://ui.test/threads/t1/run/cancel"));
+            assert.equal(elements.get("stop-button").disabled, true);
+            assert.equal(elements.get("run-status-label").textContent, "Cancelling…");
+            assert.equal(elements.get("run-status-hint").textContent, "Activity");
+            assert.equal(elements.get("activity-list").textContent.includes("Cancellation requested"), true);
+            finishCancelRequest();
+            await waitUntil(() => abortCalls === 1);
+            await submitPromise;
+            await flushAsyncWork();
+
+            assert.equal(elements.get("send-button").hidden, false);
+            assert.equal(elements.get("send-button").disabled, false);
+            assert.equal(elements.get("stop-button").hidden, true);
+            assert.equal(elements.get("stop-button").disabled, true);
+            assert.equal(elements.get("status").textContent, "Thread t1");
+            assert.equal(elements.get("run-status-label").textContent, "Activity");
+            assert.equal(elements.get("run-status-hint").textContent, "Cancelled");
+            assert.equal(elements.get("messages").textContent.includes("Stop me"), true);
+            assert.equal(elements.get("messages").textContent.includes("Run cancelled."), true);
+            assert.deepEqual(fetchCalls.map((call) => `${{call.method}} ${{call.url}}`), [
+              "GET http://ui.test/execution-options",
+              "GET http://ui.test/threads/t1/messages",
+              "POST http://ui.test/threads/t1/messages",
+              "POST http://ui.test/threads/t1/run/stream",
+              "POST http://ui.test/threads/t1/run/cancel",
+            ]);
+            """,
+    )
+
+
 def test_web_client_markdown_renderer_stays_safe(tmp_path: Path) -> None:
     """Exercise assistant markdown rendering without a browser dependency."""
 

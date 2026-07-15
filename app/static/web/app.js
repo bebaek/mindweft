@@ -178,8 +178,9 @@ elements.composer.addEventListener("submit", async (event) => {
   setBusy(true);
   setStatus("Sending");
 
+  let threadId = state.threadId;
   try {
-    const threadId = await ensureThread();
+    threadId = await ensureThread();
     appendMessage({ role: "user", content });
     elements.messageInput.value = "";
     elements.messageInput.style.height = "auto";
