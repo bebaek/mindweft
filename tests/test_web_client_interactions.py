@@ -556,6 +556,144 @@ def test_web_client_new_thread_send_flow(tmp_path: Path) -> None:
     )
 
 
+def test_web_client_new_thread_button_clears_state_then_sends(tmp_path: Path) -> None:
+    """Smoke-test clearing the active thread before sending a fresh first prompt."""
+
+    repo_root = Path(__file__).parents[1]
+    app_path = repo_root / "app" / "static" / "web" / "app.js"
+    _run_node_script(
+        tmp_path,
+        repo_root,
+        "web_client_new_thread_button.mjs",
+        f"""
+            import assert from "node:assert/strict";
+            import fs from "node:fs";
+            import vm from "node:vm";
+
+            {WEB_CLIENT_DOM_CLASSES}
+
+            const ids = {WEB_CLIENT_ELEMENT_IDS_JS};
+            const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
+            for (const id of {WEB_CLIENT_HIDDEN_ELEMENT_IDS_JS}) {{
+              elements.get(id).hidden = true;
+            }}
+
+            const localStorageStore = new Map([
+              ["minigent.webClient.v1", JSON.stringify({{ baseUrl: "http://ui.test", threadId: "t1" }})],
+            ]);
+            const document = {{
+              activeElement: null,
+              documentElement: new Element("html", "documentElement"),
+              querySelector(selector) {{
+                if (!selector.startsWith("#")) return null;
+                return elements.get(selector.slice(1)) || null;
+              }},
+              createElement(tagName) {{ return new Element(tagName); }},
+              createTextNode(text) {{ return new TextNode(text); }},
+            }};
+            const window = {{
+              location: {{ origin: "http://ui.test" }},
+              localStorage: {{
+                getItem(key) {{ return localStorageStore.get(key) || null; }},
+                setItem(key, value) {{ localStorageStore.set(key, value); }},
+              }},
+              visualViewport: {{ height: 700, addEventListener() {{}} }},
+              innerHeight: 700,
+              matchMedia() {{ return {{ matches: false }}; }},
+              addEventListener() {{}},
+              setTimeout(callback) {{ callback(); }},
+              confirm() {{ return true; }},
+            }};
+            const fetchCalls = [];
+            let completeRunStream = () => {{}};
+            function ndjsonResponse(events) {{
+              const runStreamCanFinish = new Promise((resolve) => {{
+                completeRunStream = resolve;
+              }});
+              const chunks = [new TextEncoder().encode(events.map((event) => JSON.stringify(event)).join("\\n") + "\\n")];
+              return {{
+                ok: true,
+                status: 200,
+                body: {{
+                  getReader() {{
+                    return {{
+                      async read() {{
+                        await runStreamCanFinish;
+                        const value = chunks.shift();
+                        return value ? {{ value, done: false }} : {{ value: undefined, done: true }};
+                      }},
+                    }};
+                  }},
+                }},
+                text: async () => "",
+              }};
+            }}
+            async function fetch(url, options = {{}}) {{
+              fetchCalls.push({{ url, method: options.method || "GET", body: options.body || "" }});
+              const path = new URL(url).pathname + new URL(url).search;
+              if (path === "/threads") return {{ ok: true, status: 200, json: async () => ({{ thread_id: "t-fresh" }}), text: async () => "" }};
+              if (path === "/threads/t-fresh/run/stream") return ndjsonResponse([{{ type: "assistant.message", content: "Fresh reply" }}]);
+              const payloads = {{
+                "/execution-options": {{ skills: {{ default: "default", items: [] }}, capability_profiles: {{ default: "default", items: [] }} }},
+                "/threads/t1/messages": [{{ role: "user", content: "old prompt" }}],
+              }};
+              return {{ ok: true, status: 200, json: async () => payloads[path] ?? {{}}, text: async () => "" }};
+            }}
+            const context = {{
+              AbortController, Date, Error, JSON, Map, Number, Promise, Set, TextDecoder, TextEncoder,
+              Uint8Array, URL, console, document, fetch, requestAnimationFrame: (callback) => callback(), window,
+            }};
+            context.globalThis = context;
+            vm.createContext(context);
+            {WEB_CLIENT_ASYNC_HELPERS}
+            vm.runInContext(fs.readFileSync({str(app_path)!r}, "utf8"), context, {{ filename: "app.js" }});
+            await flushAsyncWork();
+            assert.equal(elements.get("messages").textContent.includes("old prompt"), true);
+            assert.equal(elements.get("context-button").hidden, false);
+
+            elements.get("new-thread-button").click();
+            assert.equal(JSON.parse(localStorageStore.get("minigent.webClient.v1")).threadId, "");
+            assert.equal(elements.get("messages").children.length, 1);
+            assert.equal(elements.get("messages").textContent, "Start a thread from this browser.");
+            assert.equal(elements.get("status").textContent, "Ready");
+            assert.equal(elements.get("context-button").hidden, true);
+            assert.equal(elements.get("more-context-button").hidden, true);
+            assert.equal(elements.get("context-summary-line").textContent, "No context loaded");
+            assert.equal(elements.get("activity-button").hidden, true);
+            assert.equal(document.activeElement, elements.get("message-input"));
+
+            elements.get("message-input").value = "Fresh prompt";
+            const submitPromise = elements.get("composer").requestSubmit();
+            await waitUntil(() => fetchCalls.some((call) => call.url === "http://ui.test/threads/t-fresh/run/stream"));
+            assert.equal(elements.get("send-button").hidden, true);
+            assert.equal(elements.get("stop-button").hidden, false);
+            assert.equal(elements.get("context-button").hidden, false);
+            assert.equal(JSON.parse(localStorageStore.get("minigent.webClient.v1")).threadId, "t-fresh");
+            completeRunStream();
+            await submitPromise;
+            await flushAsyncWork();
+
+            assert.equal(elements.get("send-button").hidden, false);
+            assert.equal(elements.get("stop-button").hidden, true);
+            assert.equal(elements.get("message-input").value, "");
+            assert.equal(elements.get("messages").textContent.includes("old prompt"), false);
+            assert.equal(elements.get("messages").textContent.includes("Fresh prompt"), true);
+            assert.equal(elements.get("messages").textContent.includes("Fresh reply"), true);
+            assert.deepEqual(fetchCalls.map((call) => `${{call.method}} ${{call.url}}`), [
+              "GET http://ui.test/execution-options",
+              "GET http://ui.test/threads/t1/messages",
+              "POST http://ui.test/threads",
+              "POST http://ui.test/threads/t-fresh/messages",
+              "POST http://ui.test/threads/t-fresh/run/stream",
+            ]);
+            assert.equal(
+              fetchCalls.find((call) => call.url === "http://ui.test/threads/t-fresh/messages").body,
+              JSON.stringify({{ content: "Fresh prompt" }})
+            );
+            """,
+    )
+
+
 def test_web_client_markdown_renderer_stays_safe(tmp_path: Path) -> None:
     """Exercise assistant markdown rendering without a browser dependency."""
 
