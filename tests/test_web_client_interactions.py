@@ -4,6 +4,96 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+WEB_CLIENT_DOM_CLASSES = r"""
+            class ClassList {
+              constructor(element) {
+                this.element = element;
+                this.values = new Set((element.className || "").split(/\\s+/).filter(Boolean));
+              }
+              add(...names) {
+                for (const name of names) this.values.add(name);
+                this.sync();
+              }
+              remove(...names) {
+                for (const name of names) this.values.delete(name);
+                this.sync();
+              }
+              contains(name) {
+                return this.values.has(name);
+              }
+              toggle(name, force) {
+                const enabled = force === undefined ? !this.values.has(name) : Boolean(force);
+                if (enabled) this.values.add(name);
+                else this.values.delete(name);
+                this.sync();
+                return enabled;
+              }
+              sync() {
+                this.element.className = [...this.values].join(" ");
+              }
+            }
+
+            class Element {
+              constructor(tagName = "div", id = "") {
+                this.tagName = tagName.toUpperCase();
+                this.id = id;
+                this.className = "";
+                this.classList = new ClassList(this);
+                this.children = [];
+                this.dataset = {};
+                this.eventListeners = new Map();
+                this.hidden = false;
+                this.disabled = false;
+                this.value = "";
+                this.placeholder = "";
+                this.scrollHeight = 0;
+                this.scrollTop = 0;
+                this.style = { setProperty(name, value) { this[name] = value; } };
+                this.type = "";
+              }
+              addEventListener(type, listener) {
+                const listeners = this.eventListeners.get(type) || [];
+                listeners.push(listener);
+                this.eventListeners.set(type, listeners);
+              }
+              dispatchEvent(event) {
+                event.target ??= this;
+                event.preventDefault ??= () => { event.defaultPrevented = true; };
+                event.stopPropagation ??= () => { event.propagationStopped = true; };
+                const results = [];
+                for (const listener of this.eventListeners.get(event.type) || []) results.push(listener(event));
+                return Promise.all(results);
+              }
+              click() {
+                this.dispatchEvent({ type: "click" });
+              }
+              focus() {
+                document.activeElement = this;
+                this.dispatchEvent({ type: "focus" });
+              }
+              append(...nodes) {
+                this.children.push(...nodes);
+                this.textContent = this.children.map((node) => node.textContent || "").join("");
+              }
+              replaceChildren(...nodes) {
+                this.children = [...nodes];
+                this.textContent = this.children.map((node) => node.textContent || "").join("");
+              }
+              get firstElementChild() {
+                return this.children.find((node) => node instanceof Element) || null;
+              }
+              requestSubmit() {
+                return this.dispatchEvent({ type: "submit" });
+              }
+            }
+
+            class TextNode {
+              constructor(text) {
+                this.textContent = text;
+              }
+            }
+"""
+
 
 def _run_node_script(tmp_path: Path, repo_root: Path, name: str, source: str) -> None:
     runner = tmp_path / name
@@ -25,93 +115,7 @@ def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
             import fs from "node:fs";
             import vm from "node:vm";
 
-            class ClassList {{
-              constructor(element) {{
-                this.element = element;
-                this.values = new Set((element.className || "").split(/\\s+/).filter(Boolean));
-              }}
-              add(...names) {{
-                for (const name of names) this.values.add(name);
-                this.sync();
-              }}
-              remove(...names) {{
-                for (const name of names) this.values.delete(name);
-                this.sync();
-              }}
-              contains(name) {{
-                return this.values.has(name);
-              }}
-              toggle(name, force) {{
-                const enabled = force === undefined ? !this.values.has(name) : Boolean(force);
-                if (enabled) this.values.add(name);
-                else this.values.delete(name);
-                this.sync();
-                return enabled;
-              }}
-              sync() {{
-                this.element.className = [...this.values].join(" ");
-              }}
-            }}
-
-            class Element {{
-              constructor(tagName = "div", id = "") {{
-                this.tagName = tagName.toUpperCase();
-                this.id = id;
-                this.className = "";
-                this.classList = new ClassList(this);
-                this.children = [];
-                this.dataset = {{}};
-                this.eventListeners = new Map();
-                this.hidden = false;
-                this.disabled = false;
-                this.value = "";
-                this.placeholder = "";
-                this.scrollHeight = 0;
-                this.scrollTop = 0;
-                this.style = {{ setProperty(name, value) {{ this[name] = value; }} }};
-                this.type = "";
-              }}
-              addEventListener(type, listener) {{
-                const listeners = this.eventListeners.get(type) || [];
-                listeners.push(listener);
-                this.eventListeners.set(type, listeners);
-              }}
-              dispatchEvent(event) {{
-                event.target ??= this;
-                event.preventDefault ??= () => {{ event.defaultPrevented = true; }};
-                event.stopPropagation ??= () => {{ event.propagationStopped = true; }};
-                const results = [];
-                for (const listener of this.eventListeners.get(event.type) || []) results.push(listener(event));
-                return Promise.all(results);
-              }}
-              click() {{
-                this.dispatchEvent({{ type: "click" }});
-              }}
-              focus() {{
-                document.activeElement = this;
-                this.dispatchEvent({{ type: "focus" }});
-              }}
-              append(...nodes) {{
-                this.children.push(...nodes);
-                this.textContent = this.children.map((node) => node.textContent || "").join("");
-              }}
-              replaceChildren(...nodes) {{
-                this.children = [...nodes];
-                this.textContent = this.children.map((node) => node.textContent || "").join("");
-              }}
-              get firstElementChild() {{
-                return this.children.find((node) => node instanceof Element) || null;
-              }}
-              requestSubmit() {{
-                return this.dispatchEvent({{ type: "submit" }});
-              }}
-            }}
-
-            class TextNode {{
-              constructor(text) {{
-                this.textContent = text;
-              }}
-            }}
+            {WEB_CLIENT_DOM_CLASSES}
 
             const ids = [
               "status", "threads-button", "context-button", "more-button", "more-backdrop",
