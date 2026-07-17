@@ -654,39 +654,8 @@ def test_web_client_stop_button_aborts_active_run(tmp_path: Path) -> None:
             import vm from "node:vm";
 
             {WEB_CLIENT_DOM_CLASSES}
+            {WEB_CLIENT_BROWSER_HARNESS}
 
-            const ids = {WEB_CLIENT_ELEMENT_IDS_JS};
-            const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
-            for (const id of {WEB_CLIENT_HIDDEN_ELEMENT_IDS_JS}) {{
-              elements.get(id).hidden = true;
-            }}
-
-            const localStorageStore = new Map([
-              ["minigent.webClient.v1", JSON.stringify({{ baseUrl: "http://ui.test", threadId: "t1" }})],
-            ]);
-            const document = {{
-              activeElement: null,
-              documentElement: new Element("html", "documentElement"),
-              querySelector(selector) {{
-                if (!selector.startsWith("#")) return null;
-                return elements.get(selector.slice(1)) || null;
-              }},
-              createElement(tagName) {{ return new Element(tagName); }},
-              createTextNode(text) {{ return new TextNode(text); }},
-            }};
-            const window = {{
-              location: {{ origin: "http://ui.test" }},
-              localStorage: {{
-                getItem(key) {{ return localStorageStore.get(key) || null; }},
-                setItem(key, value) {{ localStorageStore.set(key, value); }},
-              }},
-              visualViewport: {{ height: 700, addEventListener() {{}} }},
-              innerHeight: 700,
-              matchMedia() {{ return {{ matches: false }}; }},
-              addEventListener() {{}},
-              setTimeout(callback) {{ callback(); }},
-              confirm() {{ return true; }},
-            }};
             let abortCalls = 0;
             class AbortController {{
               constructor() {{
@@ -710,49 +679,44 @@ def test_web_client_stop_button_aborts_active_run(tmp_path: Path) -> None:
               error.name = "AbortError";
               return error;
             }}
-            const fetchCalls = [];
             let runStreamSignal = null;
             let finishCancelRequest = () => {{}};
-            async function fetch(url, options = {{}}) {{
-              fetchCalls.push({{ url, method: options.method || "GET", body: options.body || "" }});
-              const path = new URL(url).pathname + new URL(url).search;
-              if (path === "/threads/t1/run/stream") {{
-                runStreamSignal = options.signal;
-                return {{
-                  ok: true,
-                  status: 200,
-                  body: {{
-                    getReader() {{
-                      return {{
-                        async read() {{
-                          if (runStreamSignal.aborted) throw abortError();
-                          await new Promise((resolve) => runStreamSignal.addEventListener("abort", resolve));
-                          throw abortError();
-                        }},
-                      }};
-                    }},
-                  }},
-                  text: async () => "",
-                }};
-              }}
-              if (path === "/threads/t1/run/cancel") {{
-                await new Promise((resolve) => {{
-                  finishCancelRequest = resolve;
-                }});
-                return {{ ok: true, status: 200, json: async () => ({{}}), text: async () => "" }};
-              }}
-              const payloads = {{
-                "/execution-options": {{ skills: {{ default: "default", items: [] }}, capability_profiles: {{ default: "default", items: [] }} }},
-                "/threads/t1/messages": [{{ role: "assistant", content: "Existing reply" }}],
-              }};
-              return {{ ok: true, status: 200, json: async () => payloads[path] ?? {{}}, text: async () => "" }};
-            }}
-            const context = {{
-              AbortController, Date, Error, JSON, Map, Number, Promise, Set, TextDecoder, TextEncoder,
-              Uint8Array, URL, console, document, fetch, requestAnimationFrame: (callback) => callback(), window,
+            const payloads = {{
+              "/execution-options": {{ skills: {{ default: "default", items: [] }}, capability_profiles: {{ default: "default", items: [] }} }},
+              "/threads/t1/messages": [{{ role: "assistant", content: "Existing reply" }}],
             }};
-            context.globalThis = context;
-            vm.createContext(context);
+            const {{ elements, fetchCalls, context, document }} = createWebClientHarness({{
+              storageValue: JSON.stringify({{ baseUrl: "http://ui.test", threadId: "t1" }}),
+              abortController: AbortController,
+              fetchImpl: async (_url, options, path) => {{
+                if (path === "/threads/t1/run/stream") {{
+                  runStreamSignal = options.signal;
+                  return {{
+                    ok: true,
+                    status: 200,
+                    body: {{
+                      getReader() {{
+                        return {{
+                          async read() {{
+                            if (runStreamSignal.aborted) throw abortError();
+                            await new Promise((resolve) => runStreamSignal.addEventListener("abort", resolve));
+                            throw abortError();
+                          }},
+                        }};
+                      }},
+                    }},
+                    text: async () => "",
+                  }};
+                }}
+                if (path === "/threads/t1/run/cancel") {{
+                  await new Promise((resolve) => {{
+                    finishCancelRequest = resolve;
+                  }});
+                  return {{ ok: true, status: 200, json: async () => ({{}}), text: async () => "" }};
+                }}
+                return {{ ok: true, status: 200, json: async () => payloads[path] ?? {{}}, text: async () => "" }};
+              }},
+            }});
             {WEB_CLIENT_ASYNC_HELPERS}
             vm.runInContext(fs.readFileSync({str(app_path)!r}, "utf8"), context, {{ filename: "app.js" }});
             await flushAsyncWork();
