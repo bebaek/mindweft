@@ -2467,6 +2467,7 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
                 {"name": "math", "description": None},
             ],
         },
+        "llm_profiles": {"default": None, "items": []},
         "agents": {
             "items": [
                 {
@@ -2488,6 +2489,94 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
     }
     assert "system_prompt" not in response.text
     assert "allowed_local_tools" not in response.text
+
+
+def test_threads_bind_named_llm_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "default_llm_profile": "primary",
+                    "llm_profiles": {
+                        "primary": {"provider": "mock"},
+                        "backup": {"provider": "mock"},
+                    },
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+
+    options = client.get("/execution-options", headers=AUTH_HEADERS)
+    assert options.status_code == 200
+    assert options.json()["llm_profiles"] == {
+        "default": "primary",
+        "items": [
+            {"name": "primary", "description": None},
+            {"name": "backup", "description": None},
+        ],
+    }
+
+    default_thread = client.post("/threads", headers=AUTH_HEADERS)
+    backup_thread = client.post("/threads", headers=AUTH_HEADERS, json={"llm_profile": "backup"})
+    unknown = client.post("/threads", headers=AUTH_HEADERS, json={"llm_profile": "missing"})
+
+    assert default_thread.status_code == 200
+    assert backup_thread.status_code == 200
+    assert unknown.status_code == 400
+    threads = client.get("/threads", headers=AUTH_HEADERS).json()["threads"]
+    profiles = {thread["thread_id"]: thread["llm_profile"] for thread in threads}
+    assert profiles[default_thread.json()["thread_id"]] == "primary"
+    assert profiles[backup_thread.json()["thread_id"]] == "backup"
+
+
+def test_runtime_uses_thread_llm_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ProfileAdapter(LLMAdapter):
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            del messages, tools
+            return LLMResponse(content=f"reply from {self.name}")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "profile", "model": self.name}
+
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "default_llm_profile": "primary",
+                    "llm_profiles": {
+                        "primary": {"provider": "mock", "model": "primary"},
+                        "backup": {"provider": "mock", "model": "backup"},
+                    },
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "_build_llm_adapter",
+        lambda config: ProfileAdapter(config.model or "legacy"),
+    )
+    client = TestClient(create_app())
+    created = client.post("/threads", headers=AUTH_HEADERS, json={"llm_profile": "backup"})
+    thread_id = created.json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        headers=AUTH_HEADERS,
+        json={"content": "hello"},
+    )
+
+    response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["reply"] == "reply from backup"
 
 
 def test_imported_agent_skill_is_listed_and_loaded_through_api_runtime(

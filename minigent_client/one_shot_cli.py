@@ -134,6 +134,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Capability profile to apply when creating a new thread.",
     )
     chat_parser.add_argument(
+        "--llm",
+        dest="llm_profile",
+        default=None,
+        help="Named LLM profile to bind to a new thread.",
+    )
+    chat_parser.add_argument(
         "--print-thread-id",
         action="store_true",
         help="Print the thread ID before the reply in text mode.",
@@ -204,6 +210,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--capability-profile",
         default=None,
         help="Capability profile to apply when creating a thread.",
+    )
+    run_parser.add_argument(
+        "--llm",
+        dest="llm_profile",
+        default=None,
+        help="Named LLM profile to bind to the thread.",
     )
     run_parser.add_argument(
         "--plain",
@@ -311,6 +323,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--capability-profile",
         default=None,
         help="Capability profile to apply when creating the thread.",
+    )
+    threads_create_parser.add_argument(
+        "--llm",
+        dest="llm_profile",
+        default=None,
+        help="Named LLM profile to bind to the thread.",
     )
 
     threads_show_parser = threads_subparsers.add_parser("show", help="Show thread messages.")
@@ -1003,6 +1021,7 @@ def ensure_thread(
         skill_name=args.skill,
         skills=args.skills,
         capability_profile=args.capability_profile,
+        llm_profile=args.llm_profile,
     )
     thread_id = response["thread_id"]
     if not isinstance(thread_id, str):
@@ -1288,6 +1307,7 @@ def run_threads_create(
         skill_name=args.skill,
         skills=args.skills,
         capability_profile=args.capability_profile,
+        llm_profile=args.llm_profile,
     )
     thread_id = response["thread_id"]
     if not isinstance(thread_id, str):

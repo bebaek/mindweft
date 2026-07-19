@@ -2072,9 +2072,9 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         },
         "capability_profiles": {"default": None, "items": []},
     }
-    assert client.create_thread(skills=["coding", "review"], capability_profile="dev") == {
-        "thread_id": "thread-1"
-    }
+    assert client.create_thread(
+        skills=["coding", "review"], capability_profile="dev", llm_profile="claude"
+    ) == {"thread_id": "thread-1"}
     assert client.add_message("thread-1", "hello") == {"id": "message-1"}
     assert client.get_thread("thread-1") == {
         "thread_id": "thread-1",
@@ -2098,6 +2098,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
     assert requests[3]["payload"] == {
         "skill_names": ["coding", "review"],
         "capability_profile": "dev",
+        "llm_profile": "claude",
     }
 
 
@@ -4796,14 +4797,69 @@ def test_run_chat_loop_handles_local_chat_commands(
 
     assert exit_code == 0
     assert output_stream.getvalue() == (
-        "[user] [idle] chat commands: /help, /new, /agent [current|preset], /options, "
-        "/skills, /profiles, /threads, /switch <id>, /rename <title>, /copy-id, /cancel, "
+        "[user] [idle] chat commands: /help, /new, /agent [current|preset], "
+        "/llm [current|profile], /options, /skills, /profiles, /threads, /switch <id>, "
+        "/rename <title>, /copy-id, /cancel, "
         "/compact, /export [markdown|json], /tokens, /debug, /editor, "
         "/image <path...>|paste|list|clear, /commands, /command set|show|delete, "
         "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
         "[user] [idle] shutting down\n"
     )
+
+
+def test_run_chat_loop_handles_llm_profile_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("/llm\n/llm backup\n/llm current\n/exit\n")
+    create_calls: list[str | None] = []
+
+    class FakeChatClient:
+        thread_id: str | None = None
+
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def execution_options(self) -> dict[str, object]:
+            return {
+                "llm_profiles": {
+                    "default": "primary",
+                    "items": [{"name": "primary"}, {"name": "backup"}],
+                }
+            }
+
+        def create_thread(
+            self,
+            *,
+            skill_name=None,
+            skills=None,
+            capability_profile=None,
+            llm_profile=None,
+        ) -> dict[str, str]:
+            del skill_name, skills, capability_profile
+            create_calls.append(llm_profile)
+            self.thread_id = "thread-backup"
+            return {"thread_id": "thread-backup"}
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            raise AssertionError(f"local chat command should not be sent: {content}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    assert (
+        run_chat_loop(ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"))
+        == 0
+    )
+    assert create_calls == ["backup"]
+    output = output_stream.getvalue()
+    assert "available LLM profiles: primary, backup" in output
+    assert "switched to LLM profile backup; created thread thread-backup" in output
+    assert "current LLM profile: backup" in output
 
 
 def test_run_chat_loop_handles_agent_command(

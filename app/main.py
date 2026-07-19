@@ -120,6 +120,7 @@ def _thread_list_item(store: ThreadStore, tenant_id: str, thread: Thread) -> Thr
         skill_name=thread.skill_name,
         skill_names=thread.skill_names,
         capability_profile=thread.capability_profile,
+        llm_profile=thread.llm_profile,
         message_count=len(messages),
         created_at=thread.created_at,
         updated_at=thread.updated_at,
@@ -441,6 +442,10 @@ def create_app(
                     for profile in config.capability_profiles.items
                 ],
             ),
+            llm_profiles=ExecutionOptionSection(
+                default=config.default_llm_profile,
+                items=[ExecutionOptionItem(name=name) for name in config.llm_profiles],
+            ),
             agents=ExecutionAgentOptionSection(
                 items=[
                     ExecutionAgentOptionItem(
@@ -603,6 +608,7 @@ def create_app(
         skill_name = body.skill_name if body is not None else None
         skill_names = body.skill_names if body is not None else None
         capability_profile = body.capability_profile if body is not None else None
+        llm_profile = body.llm_profile if body is not None else None
         execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
         enforce_thread_creation_limit(
             context=tenant_context_from_request_state(request.state),
@@ -633,11 +639,19 @@ def create_app(
             skill_name = execution.config.skills.default_skill
         if capability_profile is not None:
             get_capability_profile(execution.config, capability_profile)
+        if llm_profile is None:
+            llm_profile = execution.config.default_llm_profile
+        if llm_profile is not None and llm_profile not in execution.config.llm_profiles:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown LLM profile '{llm_profile}' for tenant '{principal.tenant_id}'",
+            )
         thread = request.app.state.store.create_thread(
             principal.tenant_id,
             skill_name=skill_name,
             skill_names=skill_names,
             capability_profile=capability_profile,
+            llm_profile=llm_profile,
         )
         return CreateThreadResponse(thread_id=thread.thread_id)
 

@@ -82,7 +82,10 @@ runner separately defaults its dotenv file to `./.env.coding` unless `--no-env-f
 See [`docs/minigent-toml.md`](docs/minigent-toml.md) for the schema, examples, precedence,
 and troubleshooting commands. Set `MINIGENT_CONFIG_FILE` to point at a different TOML file.
 Existing `.env` files and real environment variables still work; set `MINIGENT_DOTENV_FILE`
-to load a dotenv file other than `.env`. Tests or subprocesses that need to ignore cwd-local
+to load a dotenv file other than `.env`. A single TOML file can hold multiple named LLM
+profiles under `[llm.providers.<name>]`; choose the default with `llm.default` and bind a new
+thread with `minigent chat --llm <name>`, `minigent run --llm <name>`, or the browser settings.
+Tests or subprocesses that need to ignore cwd-local
 default files can set `MINIGENT_CONFIG_DISCOVERY=disabled` while still honoring explicit
 config paths. Precedence is `environment > selected .env > minigent.toml > defaults`, so
 deployment and secret-management workflows can keep using env overrides. Use

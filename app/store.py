@@ -41,6 +41,7 @@ class ThreadStore(Protocol):
         skill_name: str | None = None,
         skill_names: list[str] | None = None,
         capability_profile: str | None = None,
+        llm_profile: str | None = None,
     ) -> Thread: ...
 
     def delete_thread(self, tenant_id: str, thread_id: str) -> None: ...
@@ -154,6 +155,7 @@ class InMemoryThreadStore:
         skill_name: str | None = None,
         skill_names: list[str] | None = None,
         capability_profile: str | None = None,
+        llm_profile: str | None = None,
     ) -> Thread:
         with self._lock:
             normalized_skill_names = list(skill_names) if skill_names is not None else None
@@ -162,6 +164,7 @@ class InMemoryThreadStore:
                 skill_name=skill_name,
                 skill_names=normalized_skill_names,
                 capability_profile=capability_profile,
+                llm_profile=llm_profile,
             )
             self._threads[thread.thread_id] = thread
             self._contexts[thread.thread_id] = ThreadContext(thread_id=thread.thread_id)
@@ -449,6 +452,7 @@ class SQLiteThreadStore:
         skill_name: str | None = None,
         skill_names: list[str] | None = None,
         capability_profile: str | None = None,
+        llm_profile: str | None = None,
     ) -> Thread:
         with self._lock, self._connection() as conn:
             normalized_skill_names = list(skill_names) if skill_names is not None else None
@@ -457,6 +461,7 @@ class SQLiteThreadStore:
                 skill_name=skill_name,
                 skill_names=normalized_skill_names,
                 capability_profile=capability_profile,
+                llm_profile=llm_profile,
             )
             context = ThreadContext(thread_id=thread.thread_id)
             conn.execute(

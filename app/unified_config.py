@@ -22,6 +22,8 @@ DEFAULT_CODING_DOTENV_FILE = ".env.coding"
 DEFAULT_THREAD_DB_PATH = ".data/minigent-threads.db"
 DEFAULT_CODING_THREAD_DB_PATH = ".data/minigent-coding-threads.db"
 DEFAULT_VOICE_THREAD_DB_PATH = ".data/minigent-voice-threads.db"
+LLM_PROFILES_ENV = "MINIGENT_LLM_PROFILES"
+LLM_DEFAULT_PROFILE_ENV = "MINIGENT_LLM_DEFAULT_PROFILE"
 
 
 @dataclass(frozen=True)
@@ -307,6 +309,22 @@ def _collect_llm_config(
 ) -> None:
     if not isinstance(section, dict):
         return
+    providers = section.get("providers")
+    if isinstance(providers, dict) and providers:
+        default_profile = str(section.get("default", "")).strip() or next(iter(providers))
+        selected = providers.get(default_profile)
+        if not isinstance(selected, dict):
+            return
+        env[LLM_DEFAULT_PROFILE_ENV] = default_profile
+        env[LLM_PROFILES_ENV] = _format_json_env_value(
+            {
+                name: _tenant_llm_from_unified_llm(profile, preserve_api_key_env=True)
+                for name, profile in providers.items()
+                if isinstance(name, str) and isinstance(profile, dict)
+            }
+        )
+        _collect_llm_config(selected, env, source_env=source_env)
+        return
     provider = str(section.get("provider", "")).strip().lower()
     if provider:
         env["MINIGENT_LLM_PROVIDER"] = provider
@@ -432,17 +450,37 @@ def _with_default_llm_projection(section: object, llm_section: object) -> object
 
     if not isinstance(section, dict) or not isinstance(llm_section, dict):
         return section
-    tenant_llm = _tenant_llm_from_unified_llm(llm_section)
+    providers = llm_section.get("providers")
+    default_profile: str | None = None
+    selected_llm = llm_section
+    tenant_profiles: dict[str, dict[str, object]] = {}
+    if isinstance(providers, dict) and providers:
+        default_profile = str(llm_section.get("default", "")).strip() or next(iter(providers))
+        selected = providers.get(default_profile)
+        if not isinstance(selected, dict):
+            return section
+        selected_llm = selected
+        tenant_profiles = {
+            name: _tenant_llm_from_unified_llm(profile, preserve_api_key_env=True)
+            for name, profile in providers.items()
+            if isinstance(name, str) and isinstance(profile, dict)
+        }
+    tenant_llm = _tenant_llm_from_unified_llm(selected_llm)
     if not tenant_llm:
         return section
     projected = copy.deepcopy(section)
     for tenant_config in projected.values():
         if isinstance(tenant_config, dict) and "llm" not in tenant_config:
             tenant_config["llm"] = dict(tenant_llm)
+        if isinstance(tenant_config, dict) and tenant_profiles:
+            tenant_config.setdefault("llm_profiles", copy.deepcopy(tenant_profiles))
+            tenant_config.setdefault("default_llm_profile", default_profile)
     return projected
 
 
-def _tenant_llm_from_unified_llm(section: dict[str, Any]) -> dict[str, object]:
+def _tenant_llm_from_unified_llm(
+    section: dict[str, Any], *, preserve_api_key_env: bool = False
+) -> dict[str, object]:
     provider = str(section.get("provider", "")).strip().lower()
     tenant_llm: dict[str, object] = {}
     if provider:
@@ -454,9 +492,10 @@ def _tenant_llm_from_unified_llm(section: dict[str, Any]) -> dict[str, object]:
     if base_url is not None:
         tenant_llm["base_url"] = base_url
     api_key_env = str(section.get("api_key_env", "")).strip()
-    provider_api_key_env = _provider_api_key_env(provider)
-    if api_key_env and provider_api_key_env:
-        tenant_llm["api_key"] = f"${{{provider_api_key_env}}}"
+    if api_key_env:
+        target_env = api_key_env if preserve_api_key_env else _provider_api_key_env(provider)
+        if target_env:
+            tenant_llm["api_key"] = f"${{{target_env}}}"
     elif "api_key" in section:
         tenant_llm["api_key"] = section["api_key"]
     return tenant_llm

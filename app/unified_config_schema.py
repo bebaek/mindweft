@@ -45,6 +45,8 @@ class OAuthConfig:
 
 @dataclass(frozen=True)
 class LLMConfig:
+    default: object = None
+    providers: object = None
     provider: object = None
     model: object = None
     url: object = None
@@ -58,6 +60,7 @@ class LLMConfig:
     thinking_enabled: object = None
     thinking_budget_tokens: object = None
     prompt_cache_enabled: object = None
+    timeout: object = None
 
 
 @dataclass(frozen=True)
@@ -221,6 +224,7 @@ _STRING_KEYS = {
     "oauth.redirect_uri",
     "oauth.scope",
     "oauth.account_id_jwt_claim",
+    "llm.default",
     "llm.provider",
     "llm.model",
     "llm.url",
@@ -269,6 +273,7 @@ _INT_KEYS = {
 
 _NUMBER_KEYS = {
     "app.tool_timeout_seconds",
+    "llm.timeout",
     "quality.timeout",
 }
 
@@ -299,6 +304,7 @@ _DICT_KEYS = {
     "auth.tokens",
     "oauth.auth_params",
     "llm.extra_headers",
+    "llm.providers",
     "coding.workspace_scopes",
 }
 
@@ -355,10 +361,63 @@ def validate_unified_config_data(data: object) -> list[str]:
             if dotted == "coding.workspace_scopes":
                 errors.extend(_validate_workspace_scopes(value))
                 continue
+            if dotted == "llm.providers":
+                errors.extend(_validate_llm_providers(value))
+                continue
             errors.extend(_validate_value_type(dotted, value))
     for key in ("profile", "peer_agents", "tenant_execution_configs", "runtime"):
         if key in data:
             errors.extend(_validate_value_type(key, data[key]))
+    errors.extend(_validate_llm_section_shape(data.get("llm")))
+    return errors
+
+
+def _validate_llm_section_shape(value: object) -> list[str]:
+    if not isinstance(value, dict) or "providers" not in value:
+        return []
+    legacy_keys = set(value) - {"default", "providers"}
+    if legacy_keys:
+        return [
+            "llm.providers cannot be combined with legacy llm keys: "
+            + ", ".join(sorted(legacy_keys))
+        ]
+    providers = value.get("providers")
+    default = value.get("default")
+    if isinstance(providers, dict) and len(providers) > 1 and not default:
+        return ["llm.default is required when llm.providers contains multiple profiles"]
+    if isinstance(default, str) and isinstance(providers, dict) and default not in providers:
+        return [f"llm.default references unknown provider profile: {default}"]
+    return []
+
+
+def _validate_llm_providers(value: object) -> list[str]:
+    if not isinstance(value, dict) or not value:
+        return ["llm.providers must be a non-empty table"]
+    errors: list[str] = []
+    allowed = {
+        "provider",
+        "model",
+        "url",
+        "base_url",
+        "extra_headers",
+        "api_key_env",
+        "api_key",
+        "timeout",
+    }
+    for name, provider in value.items():
+        if not isinstance(name, str) or not name.strip():
+            errors.append("llm.providers profile names must be non-empty strings")
+            continue
+        if not isinstance(provider, dict):
+            errors.append(f"llm.providers.{name} must be a table")
+            continue
+        for key, item in provider.items():
+            if key not in allowed:
+                errors.append(f"unknown key: llm.providers.{name}.{key}")
+                continue
+            errors.extend(_validate_value_type(f"llm.{key}", item))
+        if not str(provider.get("provider", "")).strip():
+            errors.append(f"llm.providers.{name}.provider is required")
     return errors
 
 

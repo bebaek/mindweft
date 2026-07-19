@@ -450,6 +450,7 @@ class RememberingMinigentAPIClient:
         self._remembering_config = config
         self.active_agent_preset: str | None = None
         self.active_agent_preset_config: AgentPreset | None = None
+        self.active_llm_profile: str | None = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._client, name)
@@ -465,14 +466,19 @@ class RememberingMinigentAPIClient:
         skill_name: str | None = None,
         skills: list[str] | None = None,
         capability_profile: str | None = None,
+        llm_profile: str | None = None,
     ) -> dict[str, Any]:
-        response = self._client.create_thread(  # type: ignore[attr-defined]
-            skill_name=skill_name,
-            skills=skills,
-            capability_profile=capability_profile,
-        )
+        create_kwargs: dict[str, object] = {
+            "skill_name": skill_name,
+            "skills": skills,
+            "capability_profile": capability_profile,
+        }
+        if llm_profile is not None:
+            create_kwargs["llm_profile"] = llm_profile
+        response = self._client.create_thread(**create_kwargs)  # type: ignore[attr-defined]
         self.active_agent_preset = None
         self.active_agent_preset_config = None
+        self.active_llm_profile = llm_profile
         return response if isinstance(response, dict) else {}
 
     def execution_options(self) -> dict[str, Any]:
@@ -913,6 +919,9 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         if utterance == "/agent" or utterance.startswith("/agent "):
             _handle_chat_agent(utterance, client, config, output_stream)
             continue
+        if utterance == "/llm" or utterance.startswith("/llm "):
+            _handle_chat_llm(utterance, client, config, output_stream)
+            continue
         if utterance in {"/options", "/skills", "/profiles", "/capabilities"}:
             _handle_chat_execution_options(utterance, client, output_stream)
             continue
@@ -1014,13 +1023,77 @@ def _chat_abort_message(config: ClientConfig) -> str:
 
 def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
-        "[idle] chat commands: /help, /new, /agent [current|preset], /options, /skills, "
-        "/profiles, /threads, /switch <id>, /rename <title>, /copy-id, /cancel, "
+        "[idle] chat commands: /help, /new, /agent [current|preset], /llm [current|profile], "
+        "/options, /skills, /profiles, /threads, /switch <id>, /rename <title>, /copy-id, /cancel, "
         "/compact, /export [markdown|json], /tokens, /debug, /editor, "
         "/image <path...>|paste|list|clear, /commands, /command set|show|delete, "
         "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
     )
+    output_stream.flush()
+
+
+def _handle_chat_llm(
+    utterance: str,
+    client: RememberingMinigentAPIClient,
+    config: ClientConfig,
+    output_stream: ChatOutputStream,
+) -> None:
+    selection = utterance.removeprefix("/llm").strip()
+    try:
+        response = client.execution_options()
+    except RuntimeError as exc:
+        output_stream.write(f"[idle] LLM profile request failed: {exc}\n")
+        output_stream.flush()
+        return
+    section = response.get("llm_profiles")
+    items = section.get("items", []) if isinstance(section, dict) else []
+    names = [item.get("name") for item in items if isinstance(item, dict)]
+    names = [name for name in names if isinstance(name, str)]
+    default = section.get("default") if isinstance(section, dict) else None
+    if not selection:
+        if not names:
+            output_stream.write("[idle] no named LLM profiles configured\n")
+        else:
+            output_stream.write(f"[idle] available LLM profiles: {', '.join(names)}\n")
+            if isinstance(default, str):
+                output_stream.write(f"[idle] default LLM profile: {default}\n")
+        output_stream.flush()
+        return
+    if selection == "current":
+        current = client.active_llm_profile or default or "legacy/default"
+        output_stream.write(f"[idle] current LLM profile: {current}\n")
+        output_stream.flush()
+        return
+    if selection not in names:
+        output_stream.write(f"[idle] unknown LLM profile '{selection}'\n")
+        output_stream.flush()
+        return
+    preset = client.active_agent_preset_config
+    try:
+        created = client.create_thread(
+            skill_name=preset.skill_name if preset is not None else None,
+            skills=list(preset.skills)
+            if preset is not None and preset.skills is not None
+            else None,
+            capability_profile=preset.capability_profile if preset is not None else None,
+            llm_profile=selection,
+        )
+    except RuntimeError as exc:
+        output_stream.write(f"[idle] LLM switch failed: {exc}\n")
+        output_stream.flush()
+        return
+    thread_id = created.get("thread_id") if isinstance(created, dict) else None
+    if not isinstance(thread_id, str) or not thread_id:
+        output_stream.write("[idle] LLM switch failed: missing thread_id\n")
+        output_stream.flush()
+        return
+    if preset is not None:
+        client.active_agent_preset = preset.name
+        client.active_agent_preset_config = preset
+    client.active_llm_profile = selection
+    remember_client_thread(config, thread_id, title=f"LLM: {selection}")
+    output_stream.write(f"[idle] switched to LLM profile {selection}; created thread {thread_id}\n")
     output_stream.flush()
 
 

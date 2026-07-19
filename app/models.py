@@ -148,6 +148,7 @@ class Thread(BaseModel):
     skill_name: str | None = None
     skill_names: list[str] | None = None
     capability_profile: str | None = None
+    llm_profile: str | None = None
     status: ThreadStatus = ThreadStatus.IDLE
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -192,6 +193,7 @@ class ThreadListItem(BaseModel):
     skill_name: str | None = None
     skill_names: list[str] | None = None
     capability_profile: str | None = None
+    llm_profile: str | None = None
     message_count: int = 0
     created_at: datetime
     updated_at: datetime
@@ -209,6 +211,7 @@ class CreateThreadRequest(BaseModel):
     skill_name: str | None = None
     skill_names: list[str] | None = None
     capability_profile: str | None = None
+    llm_profile: str | None = None
 
 
 class ExecutionOptionItem(BaseModel):
@@ -237,6 +240,7 @@ class ExecutionOptionsResponse(BaseModel):
     tenant_id: str
     skills: ExecutionOptionSection
     capability_profiles: ExecutionOptionSection
+    llm_profiles: ExecutionOptionSection = Field(default_factory=ExecutionOptionSection)
     agents: ExecutionAgentOptionSection = Field(default_factory=ExecutionAgentOptionSection)
 
 

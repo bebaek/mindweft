@@ -7,6 +7,7 @@ const defaults = {
   tenantId: "demo-tenant",
   skill: "",
   capabilityProfile: "",
+  llmProfile: "",
   threadId: "",
 };
 
@@ -41,6 +42,8 @@ const elements = {
   skillOptions: document.querySelector("#skill-options"),
   capabilityProfile: document.querySelector("#capability-profile"),
   capabilityProfileOptions: document.querySelector("#capability-profile-options"),
+  llmProfile: document.querySelector("#llm-profile"),
+  llmProfileOptions: document.querySelector("#llm-profile-options"),
   executionOptionsStatus: document.querySelector("#execution-options-status"),
   messages: document.querySelector("#messages"),
   activityButton: document.querySelector("#activity-button"),
@@ -129,7 +132,7 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
-for (const input of [elements.skill, elements.capabilityProfile]) {
+for (const input of [elements.skill, elements.capabilityProfile, elements.llmProfile]) {
   input.addEventListener("change", saveFormState);
 }
 
@@ -320,12 +323,17 @@ async function loadExecutionOptions() {
       elements.capabilityProfileOptions,
       options.capability_profiles?.items || []
     );
+    hydrateOptionList(
+      elements.llmProfileOptions,
+      options.llm_profiles?.items || []
+    );
     const skillSummary = summarizeOptionSection("skill", options.skills);
     const capabilitySummary = summarizeOptionSection(
       "capability profile",
       options.capability_profiles
     );
-    elements.executionOptionsStatus.textContent = `${skillSummary}; ${capabilitySummary}. You can still type a custom value.`;
+    const llmSummary = summarizeOptionSection("LLM profile", options.llm_profiles);
+    elements.executionOptionsStatus.textContent = `${skillSummary}; ${capabilitySummary}; ${llmSummary}. You can still type a custom value.`;
     if (!elements.skill.placeholder || elements.skill.placeholder === "default") {
       elements.skill.placeholder = options.skills?.default || "default";
     }
@@ -334,6 +342,9 @@ async function loadExecutionOptions() {
       elements.capabilityProfile.placeholder === "default"
     ) {
       elements.capabilityProfile.placeholder = options.capability_profiles?.default || "default";
+    }
+    if (!elements.llmProfile.placeholder || elements.llmProfile.placeholder === "default") {
+      elements.llmProfile.placeholder = options.llm_profiles?.default || "default";
     }
   } catch (error) {
     elements.executionOptionsStatus.textContent =
@@ -373,6 +384,7 @@ function hydrateForm() {
   elements.tenantId.value = state.tenantId;
   elements.skill.value = state.skill;
   elements.capabilityProfile.value = state.capabilityProfile;
+  elements.llmProfile.value = state.llmProfile;
 }
 
 function saveFormState() {
@@ -382,6 +394,7 @@ function saveFormState() {
   state.tenantId = elements.tenantId.value.trim() || defaults.tenantId;
   state.skill = elements.skill.value.trim();
   state.capabilityProfile = elements.capabilityProfile.value.trim();
+  state.llmProfile = elements.llmProfile.value.trim();
   saveState();
 }
 
@@ -409,6 +422,9 @@ async function ensureThread() {
   }
   if (state.capabilityProfile) {
     body.capability_profile = state.capabilityProfile;
+  }
+  if (state.llmProfile) {
+    body.llm_profile = state.llmProfile;
   }
 
   const response = await requestJson("/threads", { method: "POST", body });
@@ -802,6 +818,9 @@ function formatThreadMeta(thread) {
   }
   if (thread.capability_profile) {
     parts.push(thread.capability_profile);
+  }
+  if (thread.llm_profile) {
+    parts.push(thread.llm_profile);
   }
   if (thread.updated_at) {
     parts.push(formatRelativeTime(thread.updated_at));

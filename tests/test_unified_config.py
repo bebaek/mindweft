@@ -701,3 +701,65 @@ workspaces = ["/tmp", 123]
     assert "image_input.max_bytes must be an integer" in message
     assert "image_input.allowed_mime_types must be a string or list of strings" in message
     assert "coding.workspaces must be a string or list of strings" in message
+
+
+def test_unified_config_supports_named_llm_profiles(tmp_path: Path) -> None:
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[llm]
+default = "primary"
+
+[llm.providers.primary]
+provider = "openai"
+model = "gpt-test"
+api_key_env = "PRIMARY_KEY"
+
+[llm.providers.backup]
+provider = "openai-compatible"
+model = "local-test"
+base_url = "http://localhost:11434/v1"
+api_key_env = "BACKUP_KEY"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    env = load_unified_config_env(
+        config_path,
+        source_env={"PRIMARY_KEY": "primary-secret", "BACKUP_KEY": "backup-secret"},
+    )
+
+    assert env["MINIGENT_LLM_DEFAULT_PROFILE"] == "primary"
+    assert env["MINIGENT_LLM_PROVIDER"] == "openai"
+    assert env["OPENAI_API_KEY"] == "primary-secret"
+    profiles = json.loads(env["MINIGENT_LLM_PROFILES"])
+    assert profiles == {
+        "primary": {
+            "provider": "openai",
+            "model": "gpt-test",
+            "api_key": "${PRIMARY_KEY}",
+        },
+        "backup": {
+            "provider": "openai-compatible",
+            "model": "local-test",
+            "base_url": "http://localhost:11434/v1",
+            "api_key": "${BACKUP_KEY}",
+        },
+    }
+
+
+def test_unified_config_requires_default_for_multiple_llm_profiles(tmp_path: Path) -> None:
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[llm.providers.one]
+provider = "mock"
+
+[llm.providers.two]
+provider = "mock"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="llm.default is required"):
+        load_unified_config_env(config_path)

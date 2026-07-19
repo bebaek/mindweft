@@ -1256,7 +1256,13 @@ servers = [{ name = "dup", url = "http://one.example/mcp" }, { name = "dup" }]
     assert "duplicate names: dup" in output
 
 
-def test_config_doctor_reports_local_and_server_checks(monkeypatch: Any, capsys: Any) -> None:
+def test_config_doctor_reports_local_and_server_checks(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    # Isolate from any developer-local minigent.toml/.env in the repo cwd.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     calls: list[tuple[str, str]] = []
     config_response = {
         "llm": {"provider": "mock", "model": "mock-model"},

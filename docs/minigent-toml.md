@@ -120,6 +120,42 @@ export OPENROUTER_API_KEY=...
 Raw `api_key` entries are supported for convenience for provider-backed LLMs, but avoid
 committing them.
 
+### Named LLM profiles
+
+Keep multiple provider/model settings in one config by giving each one a profile name:
+
+```toml
+[llm]
+default = "claude"
+
+[llm.providers.claude]
+provider = "anthropic"
+model = "claude-sonnet-4-5"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[llm.providers.gpt]
+provider = "openai"
+model = "gpt-5"
+api_key_env = "OPENAI_API_KEY"
+
+[llm.providers.local]
+provider = "openai-compatible"
+model = "qwen3"
+base_url = "http://localhost:11434/v1"
+api_key_env = "LOCAL_LLM_API_KEY"
+```
+
+The default profile is used when a client does not select one. Select a profile for a new
+thread with `minigent chat --llm gpt`, `minigent run --llm local`, `minigent threads create
+--llm claude`, the interactive `/llm <name>` command, or the browser settings panel. The
+selected profile is stored on the thread; existing threads do not change when the config
+default changes. With multiple profiles, `llm.default` is required. The legacy single-provider
+`[llm]` form remains supported, but it cannot be combined with `llm.providers`.
+
+Each profile supports `provider`, `model`, `url`, `base_url`, `extra_headers`, `timeout`,
+`api_key_env`, and `api_key`. Keep secrets out of TOML by using `api_key_env`; this also
+allows two profiles for the same provider to use different keys.
+
 ## Init profiles
 
 `minigent config init` can generate a few focused starter configs:
@@ -306,6 +342,8 @@ Use the tables below as the supported key reference.
 
 | Key | Maps to | Notes |
 | --- | --- | --- |
+| `default` | `MINIGENT_LLM_DEFAULT_PROFILE` | Default named profile when using `llm.providers`. |
+| `providers` | `MINIGENT_LLM_PROFILES` | Named provider tables; selection is bound to each thread. |
 | `provider` | `MINIGENT_LLM_PROVIDER` | Examples: `mock`, `openai`, `openrouter`, `google`, `gemini`, `generic-oauth`. |
 | `model` | `MINIGENT_LLM_MODEL` plus provider model env | Also maps to `OPENAI_MODEL`, `OPENROUTER_MODEL`, or Gemini/Google model env when applicable. |
 | `url` | `MINIGENT_LLM_URL` | Useful for `generic-oauth` / compatible endpoints. |

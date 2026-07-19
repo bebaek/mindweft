@@ -115,6 +115,7 @@ reply prints to stdout with no extra noise. Useful flags:
 | `--skill <name>` | Skill to apply when creating a thread. |
 | `--skills <name>...` | Ordered list of prompt-overlay skills. |
 | `--capability-profile <name>` | Capability profile to apply. |
+| `--llm <name>` | Named LLM profile to bind to a new thread. |
 | `--image <path>` | Attach an image file; can be repeated. Requires server-side `[image_input].enabled = true` (or `MINIGENT_IMAGE_INPUT_ENABLED=true`) and a vision-capable model/provider. |
 | `--image-detail auto\|low\|high` | Vision detail hint for attached images. |
 
@@ -158,7 +159,7 @@ In interactive chat, use the matching slash commands:
 Use the reported names when creating threads:
 
 ```bash
-minigent threads create --skills coding-workspace concise --capability-profile inspect
+minigent threads create --skills coding-workspace concise --capability-profile inspect --llm claude
 ```
 
 ### Threads

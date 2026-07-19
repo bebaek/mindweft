@@ -321,11 +321,13 @@ class MinigentAPIClient:
         skill_name: str | None = None,
         skills: list[str] | None = None,
         capability_profile: str | None = None,
+        llm_profile: str | None = None,
     ) -> dict[str, Any]:
         payload = _build_thread_create_payload(
             skill_name=skill_name,
             skills=skills,
             capability_profile=capability_profile,
+            llm_profile=llm_profile,
         )
         response = self.request_json(
             "POST",
@@ -855,6 +857,7 @@ def _build_thread_create_payload(
     skill_name: str | None,
     skills: list[str] | None,
     capability_profile: str | None,
+    llm_profile: str | None,
 ) -> dict[str, Any] | None:
     if skill_name is not None and skills is not None:
         raise ValueError("Provide either skill_name or skills, not both.")
@@ -865,4 +868,6 @@ def _build_thread_create_payload(
         payload["skill_names"] = skills
     if capability_profile is not None:
         payload["capability_profile"] = capability_profile
+    if llm_profile is not None:
+        payload["llm_profile"] = llm_profile
     return payload or None

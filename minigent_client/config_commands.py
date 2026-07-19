@@ -871,6 +871,11 @@ def _env_snapshot_with_dotenv(cwd: Path) -> dict[str, str]:
 
 
 def _llm_config_checks(data: dict[str, Any], resolved_env: dict[str, str]) -> list[DiagnosticCheck]:
+    llm_section_raw = data.get("llm") if isinstance(data, dict) else None
+    llm_section: dict[str, Any] = llm_section_raw if isinstance(llm_section_raw, dict) else {}
+    providers = llm_section.get("providers")
+    if isinstance(providers, dict) and providers:
+        return _named_llm_profile_checks(llm_section, providers, resolved_env)
     provider = resolved_env.get("MINIGENT_LLM_PROVIDER", "mock").strip().lower() or "mock"
     checks = [DiagnosticCheck("ok", "LLM provider", provider)]
     if provider == "mock":
@@ -909,10 +914,49 @@ def _llm_config_checks(data: dict[str, Any], resolved_env: dict[str, str]) -> li
             )
         )
         return checks
-    llm_section = data.get("llm") if isinstance(data, dict) else None
-    if isinstance(llm_section, dict) and provider:
+    llm_section_raw2 = data.get("llm") if isinstance(data, dict) else None
+    if isinstance(llm_section_raw2, dict) and provider:
         checks.append(
             DiagnosticCheck("warning", "LLM provider supported", "not recognized locally")
+        )
+    return checks
+
+
+def _named_llm_profile_checks(
+    llm_section: dict[str, Any],
+    providers: dict[str, Any],
+    resolved_env: dict[str, str],
+) -> list[DiagnosticCheck]:
+    default = str(llm_section.get("default", "")).strip() or next(iter(providers))
+    checks = [
+        DiagnosticCheck(
+            "ok",
+            "Named LLM profiles",
+            f"{len(providers)} configured; default={default}",
+        )
+    ]
+    for name, raw_profile in providers.items():
+        if not isinstance(raw_profile, dict):
+            continue
+        provider = str(raw_profile.get("provider", "mock")).strip().lower() or "mock"
+        missing: list[str] = []
+        if provider != "mock" and not str(raw_profile.get("model", "")).strip():
+            missing.append("model")
+        api_key_env = str(raw_profile.get("api_key_env", "")).strip()
+        if provider not in {"mock", "generic-oauth"} and not raw_profile.get("api_key"):
+            if not api_key_env or not resolved_env.get(api_key_env):
+                missing.append(api_key_env or "api_key_env")
+        if provider == "generic-oauth" and not (
+            raw_profile.get("url") or raw_profile.get("base_url")
+        ):
+            missing.append("url/base_url")
+        checks.append(
+            DiagnosticCheck(
+                "ok" if not missing else "error",
+                f"LLM profile {name}",
+                provider if not missing else f"{provider}; missing: {', '.join(missing)}",
+                blocking=bool(missing),
+            )
         )
     return checks
 
@@ -1202,7 +1246,15 @@ def mask_secrets(value: object) -> object:
         masked: dict[str, object] = {}
         for key, item in value.items():
             key_text = str(key)
-            if any(part in key_text.casefold() for part in _SECRET_KEY_PARTS):
+            if key_text in {
+                "MINIGENT_LLM_PROFILES",
+                "MINIGENT_TENANT_EXECUTION_CONFIGS",
+            } and isinstance(item, str):
+                try:
+                    masked[key_text] = json.dumps(mask_secrets(json.loads(item)), sort_keys=True)
+                except json.JSONDecodeError:
+                    masked[key_text] = "<set>"
+            elif any(part in key_text.casefold() for part in _SECRET_KEY_PARTS):
                 masked[key_text] = mask_value(item)
             else:
                 masked[key_text] = mask_secrets(item)

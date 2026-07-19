@@ -59,6 +59,8 @@ QUALITY_BASE_URL_ENV = "MINIGENT_REMOTE_QUALITY_BASE_URL"
 QUALITY_API_KEY_ENV = "MINIGENT_REMOTE_QUALITY_API_KEY"
 QUALITY_TIMEOUT_ENV = "MINIGENT_REMOTE_QUALITY_TIMEOUT"
 QUALITY_MAX_PAYLOAD_CHARS_ENV = "MINIGENT_REMOTE_QUALITY_MAX_PAYLOAD_CHARS"
+LLM_PROFILES_ENV = "MINIGENT_LLM_PROFILES"
+LLM_DEFAULT_PROFILE_ENV = "MINIGENT_LLM_DEFAULT_PROFILE"
 
 
 @dataclass(frozen=True)
@@ -150,6 +152,8 @@ class TenantQualityConfig:
 class TenantExecutionConfig:
     tenant_id: str
     llm: TenantLLMConfig = field(default_factory=TenantLLMConfig)
+    llm_profiles: dict[str, TenantLLMConfig] = field(default_factory=dict)
+    default_llm_profile: str | None = None
     tools: TenantToolConfig = field(default_factory=TenantToolConfig)
     agent_backend: TenantAgentBackendConfig = field(default_factory=TenantAgentBackendConfig)
     quality: TenantQualityConfig = field(default_factory=TenantQualityConfig)
@@ -266,6 +270,8 @@ class TenantExecutionSettings:
     config_source: str = TENANT_CONFIG_SOURCE_ENV_ONLY
     tenant_configs: dict[str, Any] | None = None
     default_llm: TenantLLMConfig = field(default_factory=TenantLLMConfig)
+    llm_profiles: dict[str, TenantLLMConfig] = field(default_factory=dict)
+    default_llm_profile: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> TenantExecutionSettings:
@@ -276,6 +282,8 @@ class TenantExecutionSettings:
             ),
             tenant_configs=_load_tenant_execution_configs_env(lookup),
             default_llm=_tenant_llm_config_from_env(lookup),
+            llm_profiles=_load_llm_profiles_env(lookup),
+            default_llm_profile=_optional_str(lookup.get(LLM_DEFAULT_PROFILE_ENV)),
         )
 
 
@@ -284,6 +292,7 @@ class TenantExecutionContext:
     llm_adapter: LLMAdapter
     tool_registry: ToolRegistry
     config: TenantExecutionConfig
+    llm_adapters: dict[str, LLMAdapter] = field(default_factory=dict)
     mcp_generation: int = 0
     mcp_manager: MCPServerManager | None = None
 
@@ -329,12 +338,14 @@ class FixedTenantExecutionResolver(TenantExecutionResolver):
         config: TenantExecutionConfig | None = None,
         mcp_manager: MCPServerManager | None = None,
         mcp_generation: int = 0,
+        llm_adapters: dict[str, LLMAdapter] | None = None,
     ) -> None:
         self._mcp_manager = mcp_manager
         self._context = TenantExecutionContext(
             llm_adapter=llm_adapter,
             tool_registry=tool_registry,
             config=config or TenantExecutionConfig(tenant_id=DEFAULT_TENANT_KEY),
+            llm_adapters=dict(llm_adapters or {}),
             mcp_generation=mcp_generation,
             mcp_manager=mcp_manager,
         )
@@ -371,6 +382,7 @@ class FixedTenantExecutionResolver(TenantExecutionResolver):
             llm_adapter=self._context.llm_adapter,
             tool_registry=registry,
             config=self._context.config,
+            llm_adapters=self._context.llm_adapters,
             mcp_generation=generation,
             mcp_manager=self._mcp_manager,
         )
@@ -417,6 +429,7 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
                 llm_adapter=_build_llm_adapter(config.llm),
                 tool_registry=registry,
                 config=config,
+                llm_adapters=_build_llm_adapters(config.llm_profiles),
                 mcp_generation=generation,
                 mcp_manager=self._mcp_manager,
             )
@@ -461,6 +474,7 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
             llm_adapter=context.llm_adapter,
             tool_registry=registry,
             config=context.config,
+            llm_adapters=context.llm_adapters,
             mcp_generation=generation,
             mcp_manager=self._mcp_manager,
         )
@@ -513,6 +527,7 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
                 llm_adapter=_build_llm_adapter(config.llm),
                 tool_registry=registry,
                 config=config,
+                llm_adapters=_build_llm_adapters(config.llm_profiles),
                 mcp_generation=generation,
                 mcp_manager=self._mcp_manager,
             )
@@ -549,6 +564,7 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
             llm_adapter=context.llm_adapter,
             tool_registry=registry,
             config=context.config,
+            llm_adapters=context.llm_adapters,
             mcp_generation=generation,
             mcp_manager=self._mcp_manager,
         )
@@ -583,10 +599,26 @@ def _unified_config_export_public_dict(
 ) -> dict[str, object]:
     config = context.config
     export: dict[str, object] = {}
-    llm = _llm_export_public_dict(config.llm, llm_description)
-    if llm:
+    if config.llm_profiles:
+        profiles = {
+            name: _llm_export_public_dict(
+                profile,
+                context.llm_adapters[name].describe() if name in context.llm_adapters else {},
+            )
+            for name, profile in config.llm_profiles.items()
+        }
+        llm: dict[str, object] = {
+            "default": config.default_llm_profile,
+            "providers": profiles,
+        }
         export["llm"] = llm
-    oauth = _generic_oauth_public_dict(llm)
+        default_llm = profiles.get(config.default_llm_profile or "", {})
+        oauth = _generic_oauth_public_dict(default_llm)
+    else:
+        llm = _llm_export_public_dict(config.llm, llm_description)
+        if llm:
+            export["llm"] = llm
+        oauth = _generic_oauth_public_dict(llm)
     if oauth:
         export["oauth"] = oauth
     if config.agent_backend.mcp_broker_enabled:
@@ -900,10 +932,20 @@ def build_execution_resolver_from_env(
     env: Mapping[str, str] | None = None,
 ) -> TenantExecutionResolver:
     settings = TenantExecutionSettings.from_env(env)
+    if (
+        settings.default_llm_profile is not None
+        and settings.default_llm_profile not in settings.llm_profiles
+    ):
+        raise RuntimeError(
+            f"{LLM_DEFAULT_PROFILE_ENV} references unknown profile '{settings.default_llm_profile}'"
+        )
     if settings.tenant_configs is None:
         mcp_server_configs = load_mcp_server_configs_from_env(env)
         config = TenantExecutionConfig(
             tenant_id=DEFAULT_TENANT_KEY,
+            llm=settings.default_llm,
+            llm_profiles=settings.llm_profiles,
+            default_llm_profile=settings.default_llm_profile,
             tools=TenantToolConfig(mcp_servers=mcp_server_configs),
             agent_backend=_agent_backend_config_from_env(env),
             quality=_quality_config_from_env(env),
@@ -915,6 +957,7 @@ def build_execution_resolver_from_env(
             config=config,
             mcp_manager=mcp_manager,
             mcp_generation=generation,
+            llm_adapters=_build_llm_adapters(settings.llm_profiles),
         )
 
     tenant_configs: dict[str, TenantExecutionConfig] = {}
@@ -931,6 +974,8 @@ def build_execution_resolver_from_env(
             tenant_id,
             value,
             default_llm=settings.default_llm,
+            default_llm_profiles=settings.llm_profiles,
+            default_llm_profile=settings.default_llm_profile,
         )
     return InMemoryTenantExecutionResolver(tenant_configs, mcp_manager=mcp_manager)
 
@@ -949,6 +994,28 @@ def _load_tenant_execution_configs_env(
     if not isinstance(parsed, dict):
         raise RuntimeError(f"{TENANT_EXECUTION_CONFIGS_ENV} must be a JSON object")
     return interpolate_tenant_execution_env_placeholders(parsed, lookup)
+
+
+def _load_llm_profiles_env(
+    env: Mapping[str, str] | None = None,
+) -> dict[str, TenantLLMConfig]:
+    lookup = os.environ if env is None else env
+    raw = lookup.get(LLM_PROFILES_ENV, "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{LLM_PROFILES_ENV} must be valid JSON") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"{LLM_PROFILES_ENV} must be a JSON object")
+    interpolated = interpolate_tenant_execution_env_placeholders(parsed, lookup)
+    profiles: dict[str, TenantLLMConfig] = {}
+    for name, payload in interpolated.items():
+        if not isinstance(name, str) or not name or not isinstance(payload, dict):
+            raise RuntimeError(f"{LLM_PROFILES_ENV} must map non-empty names to objects")
+        profiles[name] = _parse_tenant_llm_config(f"profile/{name}", payload)
+    return profiles
 
 
 def resolve_tenant_config_source(
@@ -981,8 +1048,15 @@ def parse_tenant_execution_config(
     payload: dict[str, Any],
     *,
     default_llm: TenantLLMConfig | None = None,
+    default_llm_profiles: dict[str, TenantLLMConfig] | None = None,
+    default_llm_profile: str | None = None,
 ) -> TenantExecutionConfig:
     llm_payload = payload.get("llm") or {}
+    has_llm_profiles = "llm_profiles" in payload or "llmProfiles" in payload
+    llm_profiles_payload = payload.get("llm_profiles") or payload.get("llmProfiles") or {}
+    configured_default_llm_profile = _optional_str(
+        payload.get("default_llm_profile") or payload.get("defaultLlmProfile")
+    )
     tools_payload = payload.get("tools") or {}
     backend_payload = payload.get("agent_backend") or payload.get("agentBackend") or {}
     quality_payload = payload.get("quality") or {}
@@ -995,6 +1069,28 @@ def parse_tenant_execution_config(
     )
     if not isinstance(llm_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' llm config must be an object")
+    if not isinstance(llm_profiles_payload, dict):
+        raise RuntimeError(f"Tenant '{tenant_id}' llm_profiles config must be an object")
+    llm_profiles = {
+        name: _parse_tenant_llm_config(f"{tenant_id}/{name}", profile)
+        for name, profile in llm_profiles_payload.items()
+        if isinstance(name, str) and name and isinstance(profile, dict)
+    }
+    if len(llm_profiles) != len(llm_profiles_payload):
+        raise RuntimeError(f"Tenant '{tenant_id}' llm_profiles must map non-empty names to objects")
+    if not has_llm_profiles and default_llm_profiles:
+        llm_profiles = dict(default_llm_profiles)
+    resolved_default_llm_profile = configured_default_llm_profile or (
+        default_llm_profile if not has_llm_profiles else None
+    )
+    if (
+        resolved_default_llm_profile is not None
+        and resolved_default_llm_profile not in llm_profiles
+    ):
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' default_llm_profile references unknown profile "
+            f"'{resolved_default_llm_profile}'"
+        )
     if not isinstance(tools_payload, dict):
         raise RuntimeError(f"Tenant '{tenant_id}' tools config must be an object")
     if not isinstance(backend_payload, dict):
@@ -1021,6 +1117,8 @@ def parse_tenant_execution_config(
             if "llm" not in payload and default_llm is not None
             else _parse_tenant_llm_config(tenant_id, llm_payload)
         ),
+        llm_profiles=llm_profiles,
+        default_llm_profile=resolved_default_llm_profile,
         tools=tool_config,
         agent_backend=_parse_tenant_agent_backend_config(tenant_id, backend_payload),
         quality=_parse_tenant_quality_config(tenant_id, quality_payload),
@@ -1572,6 +1670,26 @@ def _parse_mcp_path_policy(
         f"mcp server '{server_name}' path_policy.allow_globs",
     )
     return MCPPathPolicy(deny_globs=deny_globs or [], allow_globs=allow_globs or [])
+
+
+def _build_llm_adapters(configs: Mapping[str, TenantLLMConfig]) -> dict[str, LLMAdapter]:
+    return {name: _build_llm_adapter(config) for name, config in configs.items()}
+
+
+def get_llm_adapter(
+    context: TenantExecutionContext,
+    profile_name: str | None,
+) -> LLMAdapter:
+    resolved = profile_name or context.config.default_llm_profile
+    if resolved is None:
+        return context.llm_adapter
+    adapter = context.llm_adapters.get(resolved)
+    if adapter is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown LLM profile '{resolved}' for tenant '{context.config.tenant_id}'",
+        )
+    return adapter
 
 
 def _build_llm_adapter(config: TenantLLMConfig) -> LLMAdapter:

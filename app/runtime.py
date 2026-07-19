@@ -21,6 +21,7 @@ from app.execution import (
     build_tool_registry_for_capability_profile,
     build_tool_registry_for_skill,
     get_capability_profile,
+    get_llm_adapter,
     get_skill_configs,
 )
 from app.llm import (
@@ -179,10 +180,11 @@ class AgentRuntime:
         *,
         event_sink: RunEventSink | None = None,
     ) -> tuple[str, dict[str, Any] | None]:
-        self._store.start_run(principal.tenant_id, thread_id)
         failed_tool_calls: set[str] = set()
         execution = self._execution_resolver.resolve(principal.tenant_id)
         thread = self._store.get_thread(principal.tenant_id, thread_id)
+        llm_adapter = get_llm_adapter(execution, thread.llm_profile)
+        self._store.start_run(principal.tenant_id, thread_id)
         skill_names = thread.skill_names
         if skill_names is None and thread.skill_name is not None:
             skill_names = [thread.skill_name]
@@ -214,7 +216,7 @@ class AgentRuntime:
                 )
                 tool_specs = tool_registry.specs()
                 response = None
-                if not isinstance(execution.llm_adapter, MockLLMAdapter):
+                if not isinstance(llm_adapter, MockLLMAdapter):
                     response = _direct_tool_command_response(messages, tool_specs)
                 if response is None:
                     await _emit_run_event(
@@ -241,7 +243,7 @@ class AgentRuntime:
                             )
 
                     with llm_progress_sink(_on_progress):
-                        response = await execution.llm_adapter.generate(messages, tool_specs)
+                        response = await llm_adapter.generate(messages, tool_specs)
                     if response.usage is not None:
                         await _emit_run_event(
                             event_sink,
@@ -281,6 +283,7 @@ class AgentRuntime:
                     thread_id,
                     response.content,
                     execution=execution,
+                    llm_adapter=llm_adapter,
                     base_messages=messages,
                     event_sink=event_sink,
                 )
@@ -331,6 +334,7 @@ class AgentRuntime:
         local_draft: str,
         *,
         execution: Any,
+        llm_adapter: LLMAdapter,
         base_messages: list[Message],
         event_sink: RunEventSink | None,
     ) -> str:
@@ -375,7 +379,7 @@ class AgentRuntime:
         ]
         await _emit_run_event(event_sink, {"type": "quality.synthesis_request"})
         try:
-            revised = await execution.llm_adapter.generate(synthesis_messages, [])
+            revised = await llm_adapter.generate(synthesis_messages, [])
         except Exception as exc:  # pragma: no cover - advisory fallback boundary
             await _emit_run_event(event_sink, {"type": "quality.error", "detail": str(exc)})
             return local_draft

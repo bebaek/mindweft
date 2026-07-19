@@ -15,18 +15,24 @@ thread_db_path = ".data/minigent-coding-threads.db"
 mode = "development"
 
 [llm]
+default = "mock"
+
+[llm.providers.mock]
 provider = "mock"
+
+# Add named profiles here, then select one with `minigent chat --llm openrouter`,
+# `minigent run --llm openrouter`, or the browser settings panel.
+# [llm.providers.openrouter]
 # provider = "openrouter"
 # model = "anthropic/claude-sonnet-4.5"
 # api_key_env = "OPENROUTER_API_KEY"
 # base_url = "https://openrouter.ai/api/v1"
+#
+# [llm.providers.anthropic]
 # provider = "anthropic"
 # model = "claude-haiku-4-5"
 # api_key_env = "ANTHROPIC_API_KEY"
 # base_url = "https://api.anthropic.com/v1"
-# prompt_cache_enabled = true
-# thinking_enabled = true
-# thinking_budget_tokens = 1024
 
 [image_input]
 # Enable attaching images with --image or /image when using a vision-capable model/provider.
