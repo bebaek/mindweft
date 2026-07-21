@@ -71,6 +71,11 @@ class TenantLLMConfig:
     api_key: str | None = None
     extra_headers: dict[str, str] = field(default_factory=dict)
     timeout: float = 30.0
+    max_tokens: int = 4096
+    anthropic_version: str = "2023-06-01"
+    thinking_budget_tokens: int | None = None
+    thinking_effort: str = "high"
+    prompt_cache_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -1248,6 +1253,52 @@ def _parse_tenant_llm_config(tenant_id: str, payload: dict[str, Any]) -> TenantL
         timeout = float(timeout_value)
     except (TypeError, ValueError) as exc:
         raise RuntimeError(f"Tenant '{tenant_id}' LLM timeout must be numeric") from exc
+    max_tokens = 4096
+    anthropic_version = "2023-06-01"
+    thinking_budget_tokens: int | None = None
+    thinking_effort = "high"
+    prompt_cache_enabled = True
+    if provider == "anthropic":
+        max_tokens_value = payload.get("max_tokens", payload.get("maxTokens", 4096))
+        try:
+            max_tokens = int(max_tokens_value)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Tenant '{tenant_id}' Anthropic max_tokens must be an integer"
+            ) from exc
+        if max_tokens <= 0:
+            raise RuntimeError(f"Tenant '{tenant_id}' Anthropic max_tokens must be positive")
+
+        budget_value = payload.get("thinking_budget_tokens", payload.get("thinkingBudgetTokens"))
+        thinking_enabled_value = payload.get("thinking_enabled", payload.get("thinkingEnabled"))
+        thinking_enabled = budget_value is not None
+        if thinking_enabled_value is not None:
+            thinking_enabled = _bool_config(
+                tenant_id, thinking_enabled_value, "Anthropic thinking_enabled"
+            )
+        if thinking_enabled:
+            try:
+                thinking_budget_tokens = 1024 if budget_value is None else int(budget_value)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"Tenant '{tenant_id}' Anthropic thinking_budget_tokens must be an integer"
+                ) from exc
+            if thinking_budget_tokens <= 0:
+                raise RuntimeError(
+                    f"Tenant '{tenant_id}' Anthropic thinking_budget_tokens must be positive"
+                )
+
+        anthropic_version = (
+            _optional_str(payload.get("anthropic_version") or payload.get("anthropicVersion"))
+            or "2023-06-01"
+        )
+        thinking_effort = (
+            _optional_str(payload.get("thinking_effort") or payload.get("thinkingEffort")) or "high"
+        )
+        cache_value = payload.get("prompt_cache_enabled", payload.get("promptCacheEnabled", True))
+        prompt_cache_enabled = _bool_config(
+            tenant_id, cache_value, "Anthropic prompt_cache_enabled"
+        )
     return TenantLLMConfig(
         provider=provider,
         model=_optional_str(payload.get("model")),
@@ -1255,6 +1306,11 @@ def _parse_tenant_llm_config(tenant_id: str, payload: dict[str, Any]) -> TenantL
         api_key=_optional_str(payload.get("api_key") or payload.get("apiKey")),
         extra_headers=extra_headers,
         timeout=timeout,
+        max_tokens=max_tokens,
+        anthropic_version=anthropic_version,
+        thinking_budget_tokens=thinking_budget_tokens,
+        thinking_effort=thinking_effort,
+        prompt_cache_enabled=prompt_cache_enabled,
     )
 
 
@@ -1729,6 +1785,11 @@ def _build_llm_adapter(config: TenantLLMConfig) -> LLMAdapter:
             model=config.model,
             extra_headers=config.extra_headers,
             timeout=config.timeout,
+            max_tokens=config.max_tokens,
+            anthropic_version=config.anthropic_version,
+            thinking_budget_tokens=config.thinking_budget_tokens,
+            thinking_effort=config.thinking_effort,
+            prompt_cache_enabled=config.prompt_cache_enabled,
         )
     if config.provider in {"openai", "openrouter", "openai-compatible"}:
         if not config.api_key:

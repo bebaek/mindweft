@@ -215,6 +215,8 @@ prompt_cache_enabled = true
 # Optional extended thinking / reasoning for supported Claude models.
 thinking_enabled = true
 thinking_budget_tokens = 1024
+# Claude Opus/Sonnet 4.6+ use adaptive thinking; this controls its depth.
+thinking_effort = "high"
 ```
 
 `prompt_cache_enabled` maps to `ANTHROPIC_PROMPT_CACHE_ENABLED`. Prompt caching defaults to
@@ -222,9 +224,13 @@ true for Anthropic and sends top-level `cache_control = { type = "ephemeral" }`;
 false to omit `cache_control`.
 
 `thinking_budget_tokens` maps to `ANTHROPIC_THINKING_BUDGET_TOKENS`; setting it enables
-Anthropic's `thinking: { type = "enabled", budget_tokens = ... }` request field. You can
-also set `thinking_enabled = true` without a budget to use Minigent's default budget of
-1024 tokens.
+Anthropic thinking. You can also set `thinking_enabled = true` without a budget to use
+Minigent's compatibility default of 1024 tokens. For older Claude models, Minigent sends
+`thinking: { type = "enabled", budget_tokens = ... }`. Claude Opus/Sonnet 4.6 and newer
+instead receive `thinking: { type = "adaptive", display = "summarized" }` plus
+`output_config: { effort = ... }`; `thinking_effort` maps to
+`ANTHROPIC_THINKING_EFFORT` and defaults to `high`. This model-aware translation preserves
+existing configs while avoiding the deprecated manual-thinking shape on Claude Opus 4.8.
 
 ### Local coding workspace
 

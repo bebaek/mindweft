@@ -183,8 +183,9 @@ def test_live_anthropic_messages_adapter_returns_reasoning_metadata() -> None:
                     thread_id="anthropic-integration-reasoning",
                     role=MessageRole.USER,
                     content=(
-                        "Think through the arithmetic briefly, then answer with only the final "
-                        "sentence: The answer is 42."
+                        "Solve this carefully and explain your reasoning briefly: find the least "
+                        "positive integer n that leaves remainder 1 modulo 2, remainder 2 modulo "
+                        "3, remainder 3 modulo 5, and remainder 4 modulo 7."
                     ),
                 )
             ],

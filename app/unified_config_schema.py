@@ -59,6 +59,7 @@ class LLMConfig:
     anthropic_version: object = None
     thinking_enabled: object = None
     thinking_budget_tokens: object = None
+    thinking_effort: object = None
     prompt_cache_enabled: object = None
     timeout: object = None
 
@@ -233,6 +234,7 @@ _STRING_KEYS = {
     "llm.api_key_env",
     "llm.api_key",
     "llm.anthropic_version",
+    "llm.thinking_effort",
     "coding.tenant_id",
     "coding.workspace",
     "coding.default_workspace_scope",
@@ -402,6 +404,12 @@ def _validate_llm_providers(value: object) -> list[str]:
         "extra_headers",
         "api_key_env",
         "api_key",
+        "max_tokens",
+        "anthropic_version",
+        "thinking_enabled",
+        "thinking_budget_tokens",
+        "thinking_effort",
+        "prompt_cache_enabled",
         "timeout",
     }
     for name, provider in value.items():

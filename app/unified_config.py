@@ -367,6 +367,8 @@ def _collect_llm_config(
             env["ANTHROPIC_THINKING_BUDGET_TOKENS"] = _format_env_value(
                 section["thinking_budget_tokens"]
             )
+        if "thinking_effort" in section:
+            env["ANTHROPIC_THINKING_EFFORT"] = _format_env_value(section["thinking_effort"])
         if "prompt_cache_enabled" in section:
             env["ANTHROPIC_PROMPT_CACHE_ENABLED"] = _format_env_value(
                 section["prompt_cache_enabled"]
@@ -485,7 +487,17 @@ def _tenant_llm_from_unified_llm(
     tenant_llm: dict[str, object] = {}
     if provider:
         tenant_llm["provider"] = provider
-    for key in ("model", "extra_headers", "timeout"):
+    for key in (
+        "model",
+        "extra_headers",
+        "timeout",
+        "max_tokens",
+        "anthropic_version",
+        "thinking_enabled",
+        "thinking_budget_tokens",
+        "thinking_effort",
+        "prompt_cache_enabled",
+    ):
         if key in section:
             tenant_llm[key] = copy.deepcopy(section[key])
     base_url = section.get("base_url", section.get("url"))

@@ -33,6 +33,7 @@ ANTHROPIC_MAX_TOKENS_ENV = "ANTHROPIC_MAX_TOKENS"
 ANTHROPIC_VERSION_ENV = "ANTHROPIC_VERSION"
 ANTHROPIC_THINKING_ENABLED_ENV = "ANTHROPIC_THINKING_ENABLED"
 ANTHROPIC_THINKING_BUDGET_TOKENS_ENV = "ANTHROPIC_THINKING_BUDGET_TOKENS"
+ANTHROPIC_THINKING_EFFORT_ENV = "ANTHROPIC_THINKING_EFFORT"
 ANTHROPIC_PROMPT_CACHE_ENABLED_ENV = "ANTHROPIC_PROMPT_CACHE_ENABLED"
 RESPONSES_OUTPUT_ITEMS_METADATA_KEY = "generic_oauth_responses_output_items"
 ANTHROPIC_THINKING_BLOCKS_METADATA_KEY = "anthropic_thinking_blocks"
@@ -401,6 +402,7 @@ class AnthropicMessagesAdapter(LLMAdapter):
         max_tokens: int = DEFAULT_ANTHROPIC_MAX_TOKENS,
         anthropic_version: str = DEFAULT_ANTHROPIC_VERSION,
         thinking_budget_tokens: int | None = None,
+        thinking_effort: str = "high",
         prompt_cache_enabled: bool = True,
     ) -> None:
         self._api_key = api_key
@@ -412,6 +414,7 @@ class AnthropicMessagesAdapter(LLMAdapter):
         self._max_tokens = max_tokens
         self._anthropic_version = anthropic_version
         self._thinking_budget_tokens = thinking_budget_tokens
+        self._thinking_effort = thinking_effort
         self._prompt_cache_enabled = prompt_cache_enabled
 
     async def generate(
@@ -435,11 +438,12 @@ class AnthropicMessagesAdapter(LLMAdapter):
         }
         if system:
             payload["system"] = system
-        if self._thinking_budget_tokens is not None:
-            payload["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": self._thinking_budget_tokens,
-            }
+        thinking_config = _anthropic_thinking_request_config(
+            self._model,
+            budget_tokens=self._thinking_budget_tokens,
+            effort=self._thinking_effort,
+        )
+        payload.update(thinking_config)
         if self._prompt_cache_enabled:
             payload["cache_control"] = {"type": "ephemeral"}
         if tools:
@@ -484,6 +488,15 @@ class AnthropicMessagesAdapter(LLMAdapter):
             "adapter": "AnthropicMessagesAdapter",
             "max_tokens": self._max_tokens,
             "thinking_budget_tokens": self._thinking_budget_tokens,
+            "thinking_effort": self._thinking_effort,
+            "thinking_mode": (
+                "adaptive"
+                if self._thinking_budget_tokens is not None
+                and _anthropic_supports_adaptive_thinking(self._model)
+                else "enabled"
+                if self._thinking_budget_tokens is not None
+                else None
+            ),
             "prompt_cache_enabled": self._prompt_cache_enabled,
         }
 
@@ -1036,6 +1049,7 @@ class AnthropicLLMSettings:
     max_tokens: int
     anthropic_version: str
     thinking_budget_tokens: int | None
+    thinking_effort: str
     prompt_cache_enabled: bool
 
 
@@ -1088,6 +1102,7 @@ class LLMSettings:
                 max_tokens=_env_int(ANTHROPIC_MAX_TOKENS_ENV, DEFAULT_ANTHROPIC_MAX_TOKENS, lookup),
                 anthropic_version=lookup.get(ANTHROPIC_VERSION_ENV, DEFAULT_ANTHROPIC_VERSION),
                 thinking_budget_tokens=_anthropic_thinking_budget_tokens_from_env(lookup),
+                thinking_effort=(_optional_env(ANTHROPIC_THINKING_EFFORT_ENV, lookup) or "high"),
                 prompt_cache_enabled=_anthropic_prompt_cache_enabled_from_env(lookup),
             ),
             openai=_openai_provider_config_from_env(lookup),
@@ -1154,6 +1169,7 @@ def build_llm_adapter(settings: LLMSettings) -> LLMAdapter:
             max_tokens=settings.anthropic.max_tokens,
             anthropic_version=settings.anthropic.anthropic_version,
             thinking_budget_tokens=settings.anthropic.thinking_budget_tokens,
+            thinking_effort=settings.anthropic.thinking_effort,
             prompt_cache_enabled=settings.anthropic.prompt_cache_enabled,
         )
 
@@ -1349,6 +1365,33 @@ def _env_int(name: str, default: int, env: Mapping[str, str] | None = None) -> i
     except ValueError:
         logger.warning("Ignoring invalid integer value for %s", name)
         return default
+
+
+def _anthropic_supports_adaptive_thinking(model: str) -> bool:
+    """Return whether a native Anthropic model uses adaptive rather than budget thinking."""
+    match = re.search(r"(?:^|/)claude-(?:opus|sonnet)-4[-.](\d+)(?:-|$)", model.lower())
+    return bool(match and int(match.group(1)) >= 6)
+
+
+def _anthropic_thinking_request_config(
+    model: str,
+    *,
+    budget_tokens: int | None,
+    effort: str,
+) -> dict[str, Any]:
+    if budget_tokens is None:
+        return {}
+    if _anthropic_supports_adaptive_thinking(model):
+        return {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": effort},
+        }
+    return {
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": budget_tokens,
+        }
+    }
 
 
 def _anthropic_thinking_budget_tokens_from_env(

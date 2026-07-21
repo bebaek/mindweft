@@ -186,6 +186,43 @@ def test_anthropic_adapter_sends_thinking_config_and_extracts_reasoning() -> Non
     ]
 
 
+def test_anthropic_opus_4_8_uses_adaptive_thinking_and_effort() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        assert payload["thinking"] == {
+            "type": "adaptive",
+            "display": "summarized",
+        }
+        assert payload["output_config"] == {"effort": "medium"}
+        assert "budget_tokens" not in payload["thinking"]
+        return httpx.Response(
+            200,
+            json={
+                "content": [
+                    {"type": "thinking", "thinking": "A short summary.", "signature": "sig"},
+                    {"type": "text", "text": "answer"},
+                ]
+            },
+        )
+
+    adapter = AnthropicMessagesAdapter(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        model="claude-opus-4-8",
+        thinking_budget_tokens=1024,
+        thinking_effort="medium",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        adapter.generate([Message(thread_id="thread", role=MessageRole.USER, content="hello")], [])
+    )
+
+    assert response.content == "answer"
+    assert response.metadata["reasoning_content"] == "A short summary."
+    assert adapter.describe()["thinking_mode"] == "adaptive"
+
+
 def test_anthropic_adapter_replays_thinking_blocks_before_tool_use() -> None:
     seen_payloads: list[dict[str, object]] = []
 
@@ -1403,6 +1440,7 @@ def test_build_llm_adapter_from_env_supports_anthropic(monkeypatch: pytest.Monke
     monkeypatch.setenv("ANTHROPIC_MODEL", "claude-test")
     monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "99")
     monkeypatch.setenv("ANTHROPIC_THINKING_BUDGET_TOKENS", "1024")
+    monkeypatch.setenv("ANTHROPIC_THINKING_EFFORT", "medium")
     monkeypatch.setenv("ANTHROPIC_PROMPT_CACHE_ENABLED", "false")
 
     adapter = build_llm_adapter_from_env()
@@ -1411,6 +1449,7 @@ def test_build_llm_adapter_from_env_supports_anthropic(monkeypatch: pytest.Monke
     assert adapter.describe()["model"] == "claude-test"
     assert adapter.describe()["max_tokens"] == 99
     assert adapter.describe()["thinking_budget_tokens"] == 1024
+    assert adapter.describe()["thinking_effort"] == "medium"
     assert adapter.describe()["prompt_cache_enabled"] is False
 
 

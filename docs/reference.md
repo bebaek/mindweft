@@ -269,9 +269,11 @@ ANTHROPIC_MAX_TOKENS=4096
 ANTHROPIC_VERSION=2023-06-01
 # Optional Anthropic prompt caching. Enabled by default; set false to omit cache_control.
 ANTHROPIC_PROMPT_CACHE_ENABLED=true
-# Optional extended thinking / reasoning summaries for supported Claude models.
+# Optional extended thinking / reasoning for supported Claude models.
 ANTHROPIC_THINKING_ENABLED=true
 ANTHROPIC_THINKING_BUDGET_TOKENS=1024
+# Adaptive-thinking depth for Claude Opus/Sonnet 4.6+.
+ANTHROPIC_THINKING_EFFORT=high
 ```
 
 For tenant execution config, use `llm.provider: "anthropic"` and put the Anthropic API key
@@ -282,11 +284,29 @@ is enabled by default with top-level `cache_control: {"type":"ephemeral"}` so st
 prompt prefixes can be cached and Anthropic usage fields such as
 `cache_read_input_tokens`/`cache_creation_input_tokens` are normalized to Minigent's
 `cache_read_tokens`/`cache_write_tokens`; set `ANTHROPIC_PROMPT_CACHE_ENABLED=false` to
-omit `cache_control`. When Anthropic thinking is enabled, Minigent sends
-`thinking: {"type":"enabled","budget_tokens":...}`, exposes returned `thinking` blocks
-through the existing reasoning metadata/stream events, and
-preserves Anthropic thinking blocks on tool-use turns so they can be replayed with the tool
-result.
+omit `cache_control`. When Anthropic thinking is enabled, older Claude models receive
+`thinking: {"type":"enabled","budget_tokens":...}`. Claude Opus/Sonnet 4.6 and newer,
+including Claude Opus 4.8, instead receive the supported adaptive shape
+`thinking: {"type":"adaptive","display":"summarized"}` with
+`output_config: {"effort":"high"}` by default; set `ANTHROPIC_THINKING_EFFORT` to tune the
+effort. Explicit `display: "summarized"` is required for visible thinking on Opus 4.8,
+whose API default is `omitted`. Minigent exposes returned `thinking` blocks through the
+existing reasoning metadata/stream events and preserves Anthropic thinking blocks on
+tool-use turns so they can be replayed with the tool result.
+
+To inspect exactly which structural request and response paths the native API accepts,
+without logging values by default, use:
+
+```bash
+# No key or network request required.
+uv run python scripts/inspect_anthropic_shapes.py --dry-run --mode all
+
+# Live adaptive-thinking request; reads ANTHROPIC_API_KEY from the process environment.
+uv run python scripts/inspect_anthropic_shapes.py --model claude-opus-4-8 --mode adaptive
+```
+
+Add `--include-values` only when it is safe to display prompt, response, and thinking
+content in the terminal.
 
 ## Generic OAuth LLM Provider
 

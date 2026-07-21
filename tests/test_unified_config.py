@@ -252,6 +252,7 @@ max_tokens = 8192
 anthropic_version = "2023-06-01"
 thinking_enabled = true
 thinking_budget_tokens = 1024
+thinking_effort = "medium"
 prompt_cache_enabled = false
 """.strip(),
         encoding="utf-8",
@@ -268,7 +269,57 @@ prompt_cache_enabled = false
     assert env["ANTHROPIC_VERSION"] == "2023-06-01"
     assert env["ANTHROPIC_THINKING_ENABLED"] == "true"
     assert env["ANTHROPIC_THINKING_BUDGET_TOKENS"] == "1024"
+    assert env["ANTHROPIC_THINKING_EFFORT"] == "medium"
     assert env["ANTHROPIC_PROMPT_CACHE_ENABLED"] == "false"
+
+
+def test_unified_anthropic_profile_preserves_adaptive_thinking_options(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "minigent.toml"
+    config_path.write_text(
+        """
+[llm]
+default = "opus"
+
+[llm.providers.opus]
+provider = "anthropic"
+model = "claude-opus-4-8"
+api_key_env = "TEST_ANTHROPIC_KEY"
+max_tokens = 8192
+thinking_enabled = true
+thinking_budget_tokens = 2048
+thinking_effort = "medium"
+prompt_cache_enabled = false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    env = load_unified_config_env(
+        config_path,
+        source_env={"TEST_ANTHROPIC_KEY": "secret"},
+    )
+    profiles = json.loads(env["MINIGENT_LLM_PROFILES"])
+    assert profiles["opus"] == {
+        "provider": "anthropic",
+        "model": "claude-opus-4-8",
+        "max_tokens": 8192,
+        "thinking_enabled": True,
+        "thinking_budget_tokens": 2048,
+        "thinking_effort": "medium",
+        "prompt_cache_enabled": False,
+        "api_key": "${TEST_ANTHROPIC_KEY}",
+    }
+
+    context = build_execution_resolver_from_env(
+        env={**env, "TEST_ANTHROPIC_KEY": "secret"}
+    ).resolve("demo-tenant")
+    adapter_description = context.llm_adapters["opus"].describe()
+    assert adapter_description["model"] == "claude-opus-4-8"
+    assert adapter_description["max_tokens"] == 8192
+    assert adapter_description["thinking_mode"] == "adaptive"
+    assert adapter_description["thinking_effort"] == "medium"
+    assert adapter_description["prompt_cache_enabled"] is False
 
 
 def test_unified_config_projects_top_level_llm_into_tenant_configs(
