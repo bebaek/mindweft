@@ -44,7 +44,9 @@ The template sets `MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db` so 
 survive restarts. `MINIGENT_CODING_WORKSPACES` can be one path or a comma-separated list of
 workspace roots (`MINIGENT_CODING_WORKSPACE` is still accepted for compatibility). Pass
 `--no-env-file` to `minigent-coding-workspace` to skip reading `.env.coding` and use only the
-process environment plus unified config. See
+process environment plus unified config. Minigent discovers a cwd-local `./minigent.toml`
+first, then `$XDG_CONFIG_HOME/minigent/minigent.toml` or
+`~/.config/minigent/minigent.toml`. See
 [Coding workspace setup](docs/coding-workspace.md) for the MCP-based
 workspace tool model, bridge path glob controls, optional trusted-local shell command
 support, and optional codebase-memory/code-navigation MCP setup.
@@ -77,8 +79,10 @@ For desktop/local use, start from [`minigent.toml.template`](minigent.toml.templ
 write a focused starter config with `uv run minigent config init --profile local-coding`
 (`basic-chat`, `openrouter`, and `voice` profiles are also available). This file is a
 friendly facade for the common app, auth, LLM, coding workspace, MCP, voice, and quality
-settings. The unified TOML config default is always `./minigent.toml`; the coding-workspace
-runner separately defaults its dotenv file to `./.env.coding` unless `--no-env-file` is set.
+settings. Unified TOML discovery first checks `./minigent.toml`, then the user-level
+`$XDG_CONFIG_HOME/minigent/minigent.toml` or `~/.config/minigent/minigent.toml`; the
+coding-workspace runner separately defaults its dotenv file to `./.env.coding` unless
+`--no-env-file` is set.
 See [`docs/minigent-toml.md`](docs/minigent-toml.md) for the schema, examples, precedence,
 and troubleshooting commands. Set `MINIGENT_CONFIG_FILE` to point at a different TOML file.
 Existing `.env` files and real environment variables still work; set `MINIGENT_DOTENV_FILE`

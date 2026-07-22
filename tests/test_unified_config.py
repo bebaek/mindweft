@@ -622,6 +622,64 @@ model = "from-toml"
     assert "MINIGENT_THREAD_DB_PATH" not in os.environ
 
 
+def test_resolve_unified_config_uses_xdg_user_config_when_cwd_config_is_absent(
+    tmp_path: Path,
+) -> None:
+    base_dir = tmp_path / "workspace"
+    base_dir.mkdir()
+    xdg_home = tmp_path / "xdg"
+    user_config = xdg_home / "minigent" / "minigent.toml"
+    user_config.parent.mkdir(parents=True)
+    user_config.write_text('[llm]\nprovider = "mock"\n', encoding="utf-8")
+
+    resolved = resolve_unified_config(
+        base_dir=base_dir,
+        env={"XDG_CONFIG_HOME": str(xdg_home)},
+    )
+
+    assert resolved.config_path == user_config
+    assert resolved.env["MINIGENT_LLM_PROVIDER"] == "mock"
+
+
+def test_resolve_unified_config_uses_home_config_without_xdg_override(
+    tmp_path: Path,
+) -> None:
+    base_dir = tmp_path / "workspace"
+    base_dir.mkdir()
+    home = tmp_path / "home"
+    user_config = home / ".config" / "minigent" / "minigent.toml"
+    user_config.parent.mkdir(parents=True)
+    user_config.write_text('[llm]\nprovider = "mock"\n', encoding="utf-8")
+
+    resolved = resolve_unified_config(base_dir=base_dir, env={"HOME": str(home)})
+
+    assert resolved.config_path == user_config
+    assert resolved.env["MINIGENT_LLM_PROVIDER"] == "mock"
+
+
+def test_resolve_unified_config_prefers_cwd_config_over_user_config(tmp_path: Path) -> None:
+    base_dir = tmp_path / "workspace"
+    base_dir.mkdir()
+    local_config = base_dir / "minigent.toml"
+    local_config.write_text('[llm]\nprovider = "mock"\n', encoding="utf-8")
+    xdg_home = tmp_path / "xdg"
+    user_config = xdg_home / "minigent" / "minigent.toml"
+    user_config.parent.mkdir(parents=True)
+    user_config.write_text(
+        '[llm]\nprovider = "openrouter"\nmodel = "user-model"\n',
+        encoding="utf-8",
+    )
+
+    resolved = resolve_unified_config(
+        base_dir=base_dir,
+        env={"XDG_CONFIG_HOME": str(xdg_home)},
+    )
+
+    assert resolved.config_path == local_config
+    assert resolved.env["MINIGENT_LLM_PROVIDER"] == "mock"
+    assert "MINIGENT_LLM_MODEL" not in resolved.env
+
+
 def test_resolve_unified_config_honors_explicit_files_when_default_discovery_disabled(
     tmp_path: Path,
 ) -> None:
@@ -645,9 +703,14 @@ provider = "mock"
     explicit_dotenv = tmp_path / "explicit.env"
     explicit_dotenv.write_text("MINIGENT_THREAD_DB_PATH=explicit.db\n", encoding="utf-8")
 
+    user_config = tmp_path / "home" / ".config" / "minigent" / "minigent.toml"
+    user_config.parent.mkdir(parents=True)
+    user_config.write_text('[llm]\nprovider = "openrouter"\nmodel = "user"\n', encoding="utf-8")
+
     resolved = resolve_unified_config(
         base_dir=tmp_path,
         env={
+            "HOME": str(tmp_path / "home"),
             "MINIGENT_CONFIG_FILE": str(explicit_config),
             "MINIGENT_DOTENV_FILE": str(explicit_dotenv),
         },

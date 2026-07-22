@@ -4,6 +4,7 @@ import copy
 import json
 import os
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,9 @@ from app.unified_config_schema import parse_unified_config
 CONFIG_FILE_ENV = "MINIGENT_CONFIG_FILE"
 DOTENV_FILE_ENV = "MINIGENT_DOTENV_FILE"
 CONFIG_DISCOVERY_ENV = "MINIGENT_CONFIG_DISCOVERY"
+XDG_CONFIG_HOME_ENV = "XDG_CONFIG_HOME"
 DEFAULT_CONFIG_FILE = "minigent.toml"
+DEFAULT_USER_CONFIG_DIR = "minigent"
 DEFAULT_DOTENV_FILE = ".env"
 DEFAULT_CODING_DOTENV_FILE = ".env.coding"
 DEFAULT_THREAD_DB_PATH = ".data/minigent-threads.db"
@@ -130,10 +133,11 @@ def apply_startup_config(
 
     Precedence is: existing process environment > selected .env > minigent.toml > built-in defaults.
     That keeps deployment overrides compatible while allowing a single friendly config file
-    to replace most local .env entries. Set MINIGENT_DOTENV_FILE to use a dotenv file other
-    than .env. Set ``discover_default_files`` to ``False`` for isolated subprocesses/tests
-    that must ignore cwd-local ``minigent.toml`` and ``.env`` files unless explicit paths
-    are configured.
+    to replace most local .env entries. Cwd-local ``minigent.toml`` wins over the user-level
+    ``$XDG_CONFIG_HOME/minigent/minigent.toml`` (or ``~/.config/minigent/minigent.toml``).
+    Set MINIGENT_DOTENV_FILE to use a dotenv file other than .env. Set
+    ``discover_default_files`` to ``False`` for isolated subprocesses/tests that must ignore
+    cwd-local and user-level config files unless explicit paths are configured.
     """
 
     base_dir = Path.cwd() if cwd is None else cwd
@@ -163,9 +167,10 @@ def resolve_unified_config(
     """Resolve unified TOML and dotenv configuration into an env mapping.
 
     Explicit ``MINIGENT_CONFIG_FILE``/``MINIGENT_DOTENV_FILE`` paths are honored even when
-    default discovery is disabled. When ``discover_default_files`` is ``None``, discovery
-    defaults to enabled unless ``MINIGENT_CONFIG_DISCOVERY`` is set to an off-like value
-    (``0``, ``false``, ``no``, ``off``, ``disabled``, or ``explicit``).
+    default discovery is disabled. With discovery enabled, a cwd-local ``minigent.toml``
+    takes precedence over the user-level XDG config. When ``discover_default_files`` is
+    ``None``, discovery defaults to enabled unless ``MINIGENT_CONFIG_DISCOVERY`` is set to
+    an off-like value (``0``, ``false``, ``no``, ``off``, ``disabled``, or ``explicit``).
     """
 
     lookup_env = dict(os.environ if env is None else env)
@@ -241,6 +246,19 @@ def resolve_dotenv_path(
     return default_path if default_path.exists() else None
 
 
+def default_user_config_path(env: Mapping[str, str] | None = None) -> Path:
+    lookup_env = os.environ if env is None else env
+    configured_home = lookup_env.get(XDG_CONFIG_HOME_ENV, "").strip()
+    if configured_home:
+        config_home = Path(configured_home).expanduser()
+        if config_home.is_absolute():
+            return config_home / DEFAULT_USER_CONFIG_DIR / DEFAULT_CONFIG_FILE
+
+    configured_user_home = lookup_env.get("HOME", "").strip()
+    user_home = Path(configured_user_home).expanduser() if configured_user_home else Path.home()
+    return user_home / ".config" / DEFAULT_USER_CONFIG_DIR / DEFAULT_CONFIG_FILE
+
+
 def resolve_config_path(
     *,
     base_dir: Path,
@@ -254,8 +272,11 @@ def resolve_config_path(
         return path if path.is_absolute() else base_dir / path
     if not discover_default_file:
         return None
-    default_path = base_dir / DEFAULT_CONFIG_FILE
-    return default_path if default_path.exists() else None
+    local_path = base_dir / DEFAULT_CONFIG_FILE
+    if local_path.exists():
+        return local_path
+    user_path = default_user_config_path(lookup_env)
+    return user_path if user_path.exists() else None
 
 
 def load_unified_config_env(

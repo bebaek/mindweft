@@ -69,11 +69,17 @@ MCP URLs without a `coding` launch section, the command adds a TOML comment poin
 
 ## Loading and precedence
 
-By default Minigent looks for `minigent.toml` and `.env` in the current working directory.
-The unified TOML config default is always `./minigent.toml`; coding-workspace commands only
-use `./.env.coding` as their runner dotenv default. Set
-`MINIGENT_CONFIG_FILE` to choose a different TOML file, and `MINIGENT_DOTENV_FILE` to choose a
-different dotenv file:
+By default Minigent looks for `.env` in the current working directory and discovers TOML
+configuration in this order:
+
+1. `MINIGENT_CONFIG_FILE`, when explicitly set;
+2. `./minigent.toml` in the current working directory;
+3. `$XDG_CONFIG_HOME/minigent/minigent.toml`, when `XDG_CONFIG_HOME` is an absolute path;
+4. `~/.config/minigent/minigent.toml`.
+
+This lets a project-local config override the user-level default. Coding-workspace commands
+only use `./.env.coding` as their runner dotenv default. Set `MINIGENT_DOTENV_FILE` to choose
+a different dotenv file:
 
 ```bash
 MINIGENT_CONFIG_FILE=~/.config/minigent/config.toml \
@@ -87,9 +93,9 @@ The `minigent` CLI also accepts `--env-file` for client-side commands:
 uv run minigent --env-file ~/.config/minigent/client.env config doctor
 ```
 
-For isolated tests or subprocesses that must ignore cwd-local default files while still
-honoring explicit config paths, set `MINIGENT_CONFIG_DISCOVERY=disabled` or call the config
-loader with default discovery disabled.
+For isolated tests or subprocesses that must ignore cwd-local and user-level default files
+while still honoring explicit config paths, set `MINIGENT_CONFIG_DISCOVERY=disabled` or call
+the config loader with default discovery disabled.
 
 Precedence is:
 
