@@ -21,7 +21,7 @@ _STYLES = {
     "markdown_code": "\033[36m",
     "markdown_comment": "\033[38;5;248m",
     "markdown_fence": "\033[38;5;248m",
-    "markdown_heading": "\033[1m",
+    "markdown_heading": "\033[1;94m",
     "markdown_bold": "\033[1m",
     "progress": "\033[38;5;248m",
     "peer": "\033[35m",

@@ -535,7 +535,7 @@ def test_cli_styles_assistant_markdown_without_rendering(monkeypatch: pytest.Mon
     markdown = "## Summary\nUse `minigent-client chat`.\n```python\nprint('raw')\n```\n> quoted"
 
     assert style_assistant_markdown(markdown, stream=output_stream) == (
-        "\033[1m## Summary\033[0m\n"
+        "\033[1;94m## Summary\033[0m\n"
         "Use \033[36m`minigent-client chat`\033[0m.\n"
         "\033[38;5;248m```python\033[0m\n"
         "\033[36mprint('raw')\033[0m\n"
