@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 
 DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
-DEFAULT_MODEL = "claude-opus-4-8"
+DEFAULT_MODEL = "claude-opus-5"
 DEFAULT_PROMPT = "What is 19 + 23? Answer in one short sentence."
 
 

@@ -212,7 +212,7 @@ api_key_env = "OPENROUTER_API_KEY"
 ```toml
 [llm]
 provider = "anthropic"
-model = "claude-haiku-4-5"
+model = "claude-opus-5"
 api_key_env = "ANTHROPIC_API_KEY"
 # Optional override; defaults to https://api.anthropic.com/v1.
 base_url = "https://api.anthropic.com/v1"
@@ -221,7 +221,7 @@ prompt_cache_enabled = true
 # Optional extended thinking / reasoning for supported Claude models.
 thinking_enabled = true
 thinking_budget_tokens = 1024
-# Claude Opus/Sonnet 4.6+ use adaptive thinking; this controls its depth.
+# Claude Opus/Sonnet 4.6 and later use adaptive thinking; this controls its depth.
 thinking_effort = "high"
 ```
 
@@ -232,11 +232,14 @@ false to omit `cache_control`.
 `thinking_budget_tokens` maps to `ANTHROPIC_THINKING_BUDGET_TOKENS`; setting it enables
 Anthropic thinking. You can also set `thinking_enabled = true` without a budget to use
 Minigent's compatibility default of 1024 tokens. For older Claude models, Minigent sends
-`thinking: { type = "enabled", budget_tokens = ... }`. Claude Opus/Sonnet 4.6 and newer
-instead receive `thinking: { type = "adaptive", display = "summarized" }` plus
+`thinking: { type = "enabled", budget_tokens = ... }`. Claude Opus/Sonnet 4.6 and later,
+including Claude 5 models, instead receive
+`thinking: { type = "adaptive", display = "summarized" }` plus
 `output_config: { effort = ... }`; `thinking_effort` maps to
 `ANTHROPIC_THINKING_EFFORT` and defaults to `high`. This model-aware translation preserves
-existing configs while avoiding the deprecated manual-thinking shape on Claude Opus 4.8.
+existing configs while avoiding the unsupported manual-thinking shape on Claude Opus 4.8
+and Claude 5 models. Claude Opus 5 enables adaptive thinking by default; enabling it here
+also sends the configured effort explicitly.
 
 ### Local coding workspace
 

@@ -186,7 +186,16 @@ def test_anthropic_adapter_sends_thinking_config_and_extracts_reasoning() -> Non
     ]
 
 
-def test_anthropic_opus_4_8_uses_adaptive_thinking_and_effort() -> None:
+@pytest.mark.parametrize(
+    "model",
+    (
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "anthropic/claude-opus-5",
+    ),
+)
+def test_anthropic_modern_models_use_adaptive_thinking_and_effort(model: str) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read().decode())
         assert payload["thinking"] == {
@@ -208,7 +217,7 @@ def test_anthropic_opus_4_8_uses_adaptive_thinking_and_effort() -> None:
     adapter = AnthropicMessagesAdapter(
         base_url="https://example.com/v1",
         api_key="test-key",
-        model="claude-opus-4-8",
+        model=model,
         thinking_budget_tokens=1024,
         thinking_effort="medium",
         transport=httpx.MockTransport(handler),

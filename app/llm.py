@@ -1369,8 +1369,15 @@ def _env_int(name: str, default: int, env: Mapping[str, str] | None = None) -> i
 
 def _anthropic_supports_adaptive_thinking(model: str) -> bool:
     """Return whether a native Anthropic model uses adaptive rather than budget thinking."""
-    match = re.search(r"(?:^|/)claude-(?:opus|sonnet)-4[-.](\d+)(?:-|$)", model.lower())
-    return bool(match and int(match.group(1)) >= 6)
+    match = re.search(
+        r"(?:^|/)claude-(?:opus|sonnet)-(\d+)(?:[-.](\d+))?(?:-|$)",
+        model.lower(),
+    )
+    if not match:
+        return False
+    major = int(match.group(1))
+    minor = int(match.group(2) or 0)
+    return major > 4 or (major == 4 and minor >= 6)
 
 
 def _anthropic_thinking_request_config(
