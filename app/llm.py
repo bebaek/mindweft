@@ -2485,7 +2485,11 @@ def _parse_responses_payload(
 ) -> LLMResponse:
     failure_detail = _responses_failure_detail(payload)
     if failure_detail is not None:
-        logger.error("Responses payload failed: %s", _truncate_json(payload))
+        logger.error(
+            "Responses payload failed: detail=%s payload=%s",
+            failure_detail,
+            _truncate_json(payload),
+        )
         raise HTTPException(status_code=502, detail=failure_detail)
 
     output = payload.get("output") or []

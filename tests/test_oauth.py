@@ -1135,17 +1135,28 @@ def test_generic_oauth_adapter_parses_sse_usage(tmp_path: Path) -> None:
     }
 
 
-def test_generic_oauth_adapter_surfaces_json_response_failure(tmp_path: Path) -> None:
+def test_generic_oauth_adapter_surfaces_json_response_failure(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
-                "id": "resp_failed",
+                "id": "resp_05b5f92658817c20016a64d98c8fa88197bf9718aa5d401b7d",
+                "object": "response",
+                "created_at": 1784994188,
                 "status": "failed",
-                "error": {"code": "context_length_exceeded", "message": "too many tokens"},
+                "background": False,
+                "completed_at": None,
+                "error": {
+                    "code": "server_is_overloaded",
+                    "message": "Our servers are currently overloaded. Please try again later.",
+                },
             },
         )
 
+    caplog.set_level(logging.ERROR, logger="app.llm")
     store = FileOAuthCredentialStore(tmp_path / "oauth.json")
     store.set(
         "test-oauth",
@@ -1178,8 +1189,11 @@ def test_generic_oauth_adapter_surfaces_json_response_failure(tmp_path: Path) ->
 
     assert exc_info.value.status_code == 502
     assert exc_info.value.detail == (
-        "Generic OAuth LLM response failed: context_length_exceeded: too many tokens"
+        "Generic OAuth LLM response failed: server_is_overloaded: "
+        "Our servers are currently overloaded. Please try again later."
     )
+    assert "detail=Generic OAuth LLM response failed: server_is_overloaded" in caplog.text
+    assert "Our servers are currently overloaded. Please try again later." in caplog.text
 
 
 def test_generic_oauth_adapter_surfaces_sse_response_failure(tmp_path: Path) -> None:
