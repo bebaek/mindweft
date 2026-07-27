@@ -32,7 +32,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Install dependencies
-        run: uv sync --locked --dev
+        run: uv sync --locked --dev --extra voice
       - name: Check lockfile
         run: uv lock --check
       - name: Run Ruff lint
