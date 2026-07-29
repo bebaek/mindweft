@@ -149,7 +149,7 @@ the authenticated user. This is a proof of concept rather than a standard MCP co
 channel: other MCP clients may log or expose `_meta`, values do not survive a restart, and
 reloaded thread history retains placeholders.
 
-Run the fake private-contacts MCP server for an end-to-end local experiment:
+Run the private-contacts MCP server with fake contacts for an end-to-end local experiment:
 
 ```bash
 uv run python scripts/demo_private_contacts_mcp.py
@@ -157,9 +157,28 @@ uv run python scripts/demo_private_contacts_mcp.py
 
 It binds to `127.0.0.1:8766` and exposes `http://127.0.0.1:8766/mcp`. Configure that
 endpoint as an MCP server named `private-contacts`, allow `contacts_list`, and ask Minigent
-to list contacts and email addresses. The demo data is intentionally fake; use it only to
-verify that the model and stored thread see placeholders while the immediate user reply is
-rehydrated.
+to list contacts and email addresses. With no CardDAV environment variables, the server
+uses intentionally fake data to verify that the model and stored thread see placeholders
+while the immediate user reply is rehydrated.
+
+For a read-only Baïkal or other CardDAV address book, export the collection URL and
+credentials before starting the same server. Enter the password interactively rather than
+putting it in shell history:
+
+```bash
+export MINIGENT_CARDDAV_URL='https://baikal.example/dav.php/addressbooks/user/default/'
+export MINIGENT_CARDDAV_USERNAME='user'
+read -r -s MINIGENT_CARDDAV_PASSWORD
+export MINIGENT_CARDDAV_PASSWORD
+uv run python scripts/demo_private_contacts_mcp.py
+unset MINIGENT_CARDDAV_PASSWORD
+```
+
+`MINIGENT_CARDDAV_URL` may identify an address-book collection or its immediate parent. The
+server performs a read-only `PROPFIND` to locate the collection, then an `addressbook-query`
+`REPORT`; it parses `FN`, `EMAIL`, and `TEL` and returns at most 10 contacts by default (the
+tool accepts `limit` up to 50). TLS verification is enabled;
+`--insecure-skip-tls-verify` exists only for trusted local development.
 
 ## Clients
 

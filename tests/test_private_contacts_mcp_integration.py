@@ -17,8 +17,10 @@ PRINCIPAL = Principal(user_id="private-contact-user", tenant_id="private-contact
 RAW_PRIVATE_VALUES = (
     "Alice Smith",
     "alice@example.com",
+    "+1 555 0100",
     "Bob Jones",
     "bob@example.com",
+    "+1 555 0101",
 )
 
 
@@ -61,7 +63,10 @@ def test_private_contacts_mcp_keeps_pii_out_of_llm_history_and_events() -> None:
                     )
                 tool_result = json.loads(messages[-1].content)
                 contacts = tool_result["contacts"]
-                lines = [f"{contact['name']} — {contact['email']}" for contact in contacts]
+                lines = [
+                    f"{contact['name']} — {contact['emails'][0]} — {contact['phones'][0]}"
+                    for contact in contacts
+                ]
                 return LLMResponse(content="\n".join(lines))
 
             def describe(self) -> dict[str, object]:
@@ -93,7 +98,10 @@ def test_private_contacts_mcp_keeps_pii_out_of_llm_history_and_events() -> None:
             event_sink=event_sink,
         )
 
-        assert reply == ("Alice Smith — alice@example.com\nBob Jones — bob@example.com")
+        assert reply == (
+            "Alice Smith — alice@example.com — +1 555 0100\n"
+            "Bob Jones — bob@example.com — +1 555 0101"
+        )
         serialized_llm_requests = json.dumps(
             [
                 [message.model_dump(mode="json") for message in messages]
@@ -113,9 +121,12 @@ def test_private_contacts_mcp_keeps_pii_out_of_llm_history_and_events() -> None:
             assert private_value not in serialized_events
         assert "{{pii:name:" in serialized_llm_requests
         assert "{{pii:email:" in serialized_llm_requests
+        assert "{{pii:phone:" in serialized_llm_requests
         assert "{{pii:name:" in stored_messages
         assert "{{pii:email:" in stored_messages
+        assert "{{pii:phone:" in stored_messages
         assert "{{pii:name:" in serialized_events
         assert "{{pii:email:" in serialized_events
+        assert "{{pii:phone:" in serialized_events
 
     asyncio.run(run())
