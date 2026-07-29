@@ -56,7 +56,11 @@ def main(argv: list[str] | None = None) -> int:
                         "name": "private-contacts",
                         "url": contacts_url,
                         "headers": {},
-                        "allowed_tools": ["contacts_list", "contacts_get"],
+                        "allowed_tools": [
+                            "contacts_list",
+                            "contacts_get",
+                            "contacts_protect_text",
+                        ],
                     }
                 ],
             },
@@ -65,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
     env = {
         **os.environ,
         "MINIGENT_AUTH_MODE": "dev-headers",
+        "MINIGENT_CONFIG_DISCOVERY": "disabled",
+        "MINIGENT_LLM_PROVIDER": "mock",
         "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(tenant_config, separators=(",", ":")),
     }
     contact_env = dict(env)
@@ -186,6 +192,16 @@ def _run_smoke(base_url: str, headers: dict[str, str], *, reveal_failure: bool =
     visible_list = _tool_reply_payload(list_reply, reveal_failure=reveal_failure)
     visible_name = visible_list["contacts"][0]["name"]
 
+    protected_message = httpx.post(
+        f"{base_url}/threads/{thread_id}/messages",
+        headers=headers,
+        json={"content": f"What is {visible_name}'s email?"},
+        timeout=30,
+    )
+    protected_message.raise_for_status()
+    if visible_name not in protected_message.json()["content"]:
+        raise RuntimeError("Authenticated message response did not rehydrate the contact name")
+
     raw_context = _raw_context(base_url, headers, thread_id)
     raw_tool_results = [
         json.loads(message["content"])
@@ -209,6 +225,8 @@ def _run_smoke(base_url: str, headers: dict[str, str], *, reveal_failure: bool =
     ]
 
     raw_text = json.dumps(_raw_context(base_url, headers, thread_id), ensure_ascii=True)
+    if visible_name in raw_text or "{{pii:contact:" not in raw_text:
+        raise RuntimeError("Known contact name was not masked in stored/model input")
     leaked = [value for value in visible_private_values if value and value in raw_text]
     if leaked:
         raise RuntimeError("Raw contact PII appeared in stored/model context")
@@ -229,6 +247,7 @@ def _run_smoke(base_url: str, headers: dict[str, str], *, reveal_failure: bool =
     print(f"stored_model_context_raw_pii_count={len(leaked)}")
     print(f"authorized_history_missing_private_values={len(missing)}")
     print("contact_ref_round_trip=ok")
+    print("known_contact_input_masking=ok")
 
 
 def _run_tool(

@@ -252,6 +252,43 @@ def test_runtime_keeps_private_mcp_values_out_of_model_history_and_events() -> N
     assert "alice@example.com" not in serialized_events
 
 
+def test_runtime_protects_user_content_before_model_use() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        name="private-contacts.contacts_protect_text",
+        description="Protect contact names.",
+        input_schema={"type": "object"},
+        handler=lambda arguments, context=None: MCPPrivateToolResult(
+            model_content={
+                "text": arguments["text"].replace("Alice Smith", "{{pii:contact:contact-ref}}"),
+                "protected_contact_count": 1,
+            },
+            private_values={"contact-ref": "Alice Smith"},
+        ),
+    )
+    runtime = AgentRuntime(
+        store=InMemoryThreadStore(),
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=registry,
+    )
+
+    protected = asyncio.run(
+        runtime.protect_user_content(
+            PRINCIPAL,
+            "thread-1",
+            "What is Alice Smith's email?",
+        )
+    )
+
+    assert protected == "What is {{pii:contact:contact-ref}}'s email?"
+    rendered = runtime.render_messages_for_user(
+        PRINCIPAL,
+        "thread-1",
+        [Message(thread_id="thread-1", role=MessageRole.USER, content=protected)],
+    )
+    assert rendered[0].content == "What is Alice Smith's email?"
+
+
 def test_runtime_runs_multiple_tool_calls_concurrently() -> None:
     started: list[str] = []
     release = asyncio.Event()

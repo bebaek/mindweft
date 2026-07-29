@@ -276,6 +276,58 @@ def test_private_contacts_server_lists_refs_then_gets_selected_private_fields() 
     assert "+1 555 0100" not in str(fetched_result["structuredContent"])
 
 
+def test_private_contacts_server_protects_unique_contact_names_for_model_input() -> None:
+    server = PrivateContactsMCPServer(
+        contacts=[Contact(name="Alice Smith", emails=("alice@example.com",))],
+        contact_reference_factory=lambda: "contact-ref",
+    )
+
+    response = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "contacts_protect_text",
+                "arguments": {"text": "What is Alice Smith's email?"},
+            },
+        }
+    )
+
+    assert response is not None
+    result = response["result"]
+    assert result["structuredContent"] == {
+        "text": "What is {{pii:contact:contact-ref}}'s email?",
+        "protected_contact_count": 1,
+    }
+    assert result["_meta"][PRIVATE_VALUES_META_KEY] == {"contact-ref": "Alice Smith"}
+    assert "Alice Smith" not in str(result["structuredContent"])
+
+
+def test_private_contacts_server_does_not_guess_ambiguous_contact_names() -> None:
+    server = PrivateContactsMCPServer(contacts=[Contact(name="Alex Doe"), Contact(name="Alex Doe")])
+
+    response = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "contacts_protect_text",
+                "arguments": {"text": "Call Alex Doe"},
+            },
+        }
+    )
+
+    assert response is not None
+    result = response["result"]
+    assert result["structuredContent"] == {
+        "text": "Call Alex Doe",
+        "protected_contact_count": 0,
+    }
+    assert result["_meta"][PRIVATE_VALUES_META_KEY] == {}
+
+
 def test_private_contacts_server_expires_contact_references() -> None:
     now = [100.0]
     server = PrivateContactsMCPServer(

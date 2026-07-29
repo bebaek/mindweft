@@ -31,7 +31,11 @@ def test_private_contacts_mcp_keeps_pii_out_of_llm_history_and_events() -> None:
                 name="private-contacts",
                 url="http://private-contacts.test/mcp",
                 headers={},
-                allowed_tools=["contacts_list", "contacts_get"],
+                allowed_tools=[
+                    "contacts_list",
+                    "contacts_get",
+                    "contacts_protect_text",
+                ],
             ),
             transport=httpx.ASGITransport(app=create_app()),
         )
@@ -103,12 +107,17 @@ def test_private_contacts_mcp_keeps_pii_out_of_llm_history_and_events() -> None:
             tool_registry=registry,
         )
         thread = store.create_thread(PRINCIPAL.tenant_id)
+        protected_prompt = await runtime.protect_user_content(
+            PRINCIPAL,
+            thread.thread_id,
+            "List email addresses and phone numbers for Alice Smith.",
+        )
         store.append_message(
             PRINCIPAL.tenant_id,
             Message(
                 thread_id=thread.thread_id,
                 role=MessageRole.USER,
-                content="List my contacts and email addresses.",
+                content=protected_prompt,
             ),
         )
         events: list[dict[str, object]] = []

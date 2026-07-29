@@ -670,17 +670,45 @@ def create_app(
         request = _validate_and_normalize_message_request(
             request, app_request.app.state.image_input_settings
         )
-        return app_request.app.state.store.append_message(
+        protected_content = await app_request.app.state.runtime.protect_user_content(
+            principal,
+            thread_id,
+            request.content,
+        )
+        protected_parts = None
+        if request.parts is not None:
+            protected_parts = []
+            for part in request.parts:
+                if isinstance(part, TextPart):
+                    protected_parts.append(
+                        part.model_copy(
+                            update={
+                                "text": await app_request.app.state.runtime.protect_user_content(
+                                    principal,
+                                    thread_id,
+                                    part.text,
+                                )
+                            }
+                        )
+                    )
+                else:
+                    protected_parts.append(part)
+        stored_message = app_request.app.state.store.append_message(
             principal.tenant_id,
             Message(
                 thread_id=thread_id,
                 role=MessageRole.USER,
-                content=request.content,
-                parts=request.parts,
+                content=protected_content,
+                parts=protected_parts,
                 created_by=principal.user_id,
                 metadata=request.metadata,
             ),
         )
+        return app_request.app.state.runtime.render_messages_for_user(
+            principal,
+            thread_id,
+            [stored_message],
+        )[0]
 
     @app.get("/threads/{thread_id}/messages", response_model=list[Message])
     async def get_messages(

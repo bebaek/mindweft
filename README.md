@@ -160,12 +160,17 @@ uv run python scripts/demo_private_contacts_mcp.py
 ```
 
 It binds to `127.0.0.1:8766` and exposes `http://127.0.0.1:8766/mcp`. Configure that
-endpoint as an MCP server named `private-contacts`, allow `contacts_list` and `contacts_get`,
-and ask Minigent to list contacts and selected email or phone fields. `contacts_list` returns
+endpoint as an MCP server named `private-contacts`, allow `contacts_list`, `contacts_get`, and
+`contacts_protect_text`, and ask Minigent to list contacts and selected email or phone fields.
+`contacts_list` returns
 protected names, available field names, and short-lived opaque `contact_ref` values;
-`contacts_get` retrieves only requested fields. With no CardDAV environment variables, the
-server uses intentionally fake data to verify that the model and stored thread see
-placeholders while the immediate user reply is rehydrated.
+`contacts_get` retrieves only requested fields. On message creation, Minigent invokes
+`contacts_protect_text` as a trusted preprocessor and masks exact, uniquely matching
+address-book contact names before storing or sending the message to a model. Ambiguous names,
+nicknames, names absent from the address book, and other arbitrary PII are not detected by
+this initial matcher. With no CardDAV environment variables, the server uses intentionally
+fake data to verify that the model and stored thread see placeholders while the immediate
+user reply is rehydrated.
 
 For a read-only Baïkal or other CardDAV address book, export the collection URL and
 credentials before starting the same server. Enter the password interactively rather than

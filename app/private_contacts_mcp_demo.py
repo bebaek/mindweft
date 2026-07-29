@@ -124,6 +124,30 @@ CONTACTS_GET_TOOL = {
 }
 
 
+CONTACTS_PROTECT_TEXT_TOOL = {
+    "name": "contacts_protect_text",
+    "description": (
+        "Protect uniquely matching address-book contact names in text before model use. "
+        "This tool is intended for trusted runtime preprocessing."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"],
+        "additionalProperties": False,
+    },
+    "outputSchema": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string"},
+            "protected_contact_count": {"type": "integer"},
+        },
+        "required": ["text", "protected_contact_count"],
+        "additionalProperties": False,
+    },
+}
+
+
 @dataclass(frozen=True)
 class Contact:
     name: str
@@ -311,7 +335,16 @@ class PrivateContactsMCPServer:
                 },
             )
         if method == "tools/list":
-            return self._result(request_id, {"tools": [CONTACTS_LIST_TOOL, CONTACTS_GET_TOOL]})
+            return self._result(
+                request_id,
+                {
+                    "tools": [
+                        CONTACTS_LIST_TOOL,
+                        CONTACTS_GET_TOOL,
+                        CONTACTS_PROTECT_TEXT_TOOL,
+                    ]
+                },
+            )
         if method == "tools/call":
             try:
                 return self._handle_tool_call(request_id, payload.get("params"))
@@ -330,6 +363,8 @@ class PrivateContactsMCPServer:
             return self._handle_contacts_list(request_id, arguments)
         if tool_name == "contacts_get":
             return self._handle_contacts_get(request_id, arguments)
+        if tool_name == "contacts_protect_text":
+            return self._handle_contacts_protect_text(request_id, arguments)
         return self._error(request_id, -32602, "Unknown tool")
 
     def _handle_contacts_list(self, request_id: Any, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -415,6 +450,53 @@ class PrivateContactsMCPServer:
             structured_content,
             private_values,
             message="Retrieved the selected protected contact fields.",
+        )
+
+    def _handle_contacts_protect_text(
+        self, request_id: Any, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        if set(arguments) != {"text"} or not isinstance(arguments.get("text"), str):
+            return self._error(
+                request_id,
+                -32602,
+                "contacts_protect_text requires a text string",
+            )
+        text = arguments["text"]
+        contacts, _truncated = self._contact_source.list_contacts(limit=MAX_CONTACT_REFERENCES)
+        name_counts: dict[str, int] = {}
+        for contact in contacts:
+            normalized_name = contact.name.strip().casefold()
+            if normalized_name:
+                name_counts[normalized_name] = name_counts.get(normalized_name, 0) + 1
+
+        private_values: dict[str, str] = {}
+        protected_count = 0
+        protected_text = text
+        unique_contacts = [
+            contact for contact in contacts if name_counts.get(contact.name.strip().casefold()) == 1
+        ]
+        for contact in sorted(unique_contacts, key=lambda item: len(item.name), reverse=True):
+            name = contact.name.strip()
+            if not name:
+                continue
+            pattern = re.compile(rf"(?<!\w){re.escape(name)}(?!\w)", re.IGNORECASE)
+            if pattern.search(protected_text) is None:
+                continue
+            contact_reference = self._cache_contact(contact)
+            private_values[contact_reference] = contact.name
+            protected_text, replacements = pattern.subn(
+                f"{{{{pii:contact:{contact_reference}}}}}",
+                protected_text,
+            )
+            protected_count += replacements
+        return self._private_tool_result(
+            request_id,
+            {
+                "text": protected_text,
+                "protected_contact_count": protected_count,
+            },
+            private_values,
+            message=f"Protected {protected_count} contact name occurrence(s).",
         )
 
     def _cache_contact(self, contact: Contact) -> str:

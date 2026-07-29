@@ -37,6 +37,7 @@ from app.models import (
     Message,
     MessageRole,
     Principal,
+    TextPart,
     ThreadContext,
     ThreadStatus,
     ToolCall,
@@ -180,24 +181,91 @@ class AgentRuntime:
         self._context_compaction_enabled = context_compaction_enabled
         self._private_value_store = private_value_store or InMemoryPrivateValueStore.from_env()
 
+    async def protect_user_content(
+        self,
+        principal: Principal,
+        thread_id: str,
+        content: str,
+    ) -> str:
+        execution = self._execution_resolver.resolve(principal.tenant_id)
+        protectors = [
+            spec.name
+            for spec in execution.tool_registry.specs()
+            if spec.name.endswith(".contacts_protect_text")
+        ]
+        if not protectors:
+            return content
+        if len(protectors) != 1:
+            raise HTTPException(
+                status_code=500,
+                detail="Exactly one contacts privacy preprocessor must be configured",
+            )
+        result = await asyncio.wait_for(
+            execution.tool_registry.execute(
+                protectors[0],
+                {"text": content},
+                context=ToolExecutionContext(
+                    tenant_id=principal.tenant_id,
+                    thread_id=thread_id,
+                ),
+            ),
+            timeout=self._tool_timeout_seconds,
+        )
+        if not isinstance(result, MCPPrivateToolResult):
+            raise HTTPException(
+                status_code=502,
+                detail="Contacts privacy preprocessor returned no private metadata envelope",
+            )
+        model_content = result.model_content
+        if not isinstance(model_content, dict) or not isinstance(model_content.get("text"), str):
+            raise HTTPException(
+                status_code=502,
+                detail="Contacts privacy preprocessor returned invalid model content",
+            )
+        self._private_value_store.add(
+            principal.tenant_id,
+            thread_id,
+            result.private_values,
+        )
+        return model_content["text"]
+
     def render_messages_for_user(
         self,
         principal: Principal,
         thread_id: str,
         messages: list[Message],
     ) -> list[Message]:
-        return [
-            message.model_copy(
-                update={
-                    "content": self._private_value_store.render_for_user(
-                        principal.tenant_id,
-                        thread_id,
-                        message.content,
+        rendered: list[Message] = []
+        for message in messages:
+            parts = None
+            if message.parts is not None:
+                parts = [
+                    part.model_copy(
+                        update={
+                            "text": self._private_value_store.render_for_user(
+                                principal.tenant_id,
+                                thread_id,
+                                part.text,
+                            )
+                        }
                     )
-                }
+                    if isinstance(part, TextPart)
+                    else part
+                    for part in message.parts
+                ]
+            rendered.append(
+                message.model_copy(
+                    update={
+                        "content": self._private_value_store.render_for_user(
+                            principal.tenant_id,
+                            thread_id,
+                            message.content,
+                        ),
+                        "parts": parts,
+                    }
+                )
             )
-            for message in messages
-        ]
+        return rendered
 
     def clear_private_values(self, principal: Principal, thread_id: str) -> None:
         self._private_value_store.clear_thread(principal.tenant_id, thread_id)
