@@ -8,7 +8,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from app.mcp import MCPServerConfig, MCPServerInfo
+from app.mcp import MCPPrivateValuePolicy, MCPServerConfig, MCPServerInfo
 from app.mcp_manager import MCPServerManager
 from app.models import ToolSpec
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
@@ -25,6 +25,140 @@ from app.tools import (
     build_tool_registry,
     build_tool_registry_from_env,
 )
+
+
+def test_tool_registry_denies_private_placeholders_by_default() -> None:
+    called = False
+
+    def handler(arguments, context=None):
+        nonlocal called
+        called = True
+        return arguments
+
+    registry = ToolRegistry()
+    registry.register("send", "Send", {"type": "object"}, handler)
+
+    with pytest.raises(HTTPException, match="disclosure is denied") as exc_info:
+        asyncio.run(
+            registry.execute(
+                "send",
+                {"recipient": "{{pii:email:email-ref}}"},
+                context=ToolExecutionContext(
+                    private_value_resolver=lambda text: text.replace(
+                        "{{pii:email:email-ref}}", "private@example.com"
+                    )
+                ),
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert called is False
+
+
+def test_tool_registry_resolves_only_selected_private_argument_paths(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    received: list[dict[str, object]] = []
+    received_contexts: list[ToolExecutionContext | None] = []
+
+    def send_handler(arguments, context=None):
+        received.append(arguments)
+        received_contexts.append(context)
+        return {"sent": True}
+
+    registry = ToolRegistry()
+    registry.register(
+        "send",
+        "Send",
+        {"type": "object"},
+        send_handler,
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email", "cc[*].email"),
+        ),
+    )
+    arguments = {
+        "recipient": {"email": "{{pii:email:to-ref}}"},
+        "cc": [{"email": "{{pii:email:cc-ref}}"}],
+        "subject": "Hello",
+    }
+    values = {
+        "{{pii:email:to-ref}}": "to@example.com",
+        "{{pii:email:cc-ref}}": "cc@example.com",
+    }
+
+    with caplog.at_level(logging.INFO):
+        result = asyncio.run(
+            registry.execute(
+                "send",
+                arguments,
+                context=ToolExecutionContext(private_value_resolver=lambda text: values[text]),
+            )
+        )
+
+    assert result == {"sent": True}
+    assert received == [
+        {
+            "recipient": {"email": "to@example.com"},
+            "cc": [{"email": "cc@example.com"}],
+            "subject": "Hello",
+        }
+    ]
+    assert arguments["recipient"] == {"email": "{{pii:email:to-ref}}"}
+    assert received_contexts[0] is not None
+    assert received_contexts[0].private_value_resolver is None
+    assert "to@example.com" not in caplog.text
+    assert "cc@example.com" not in caplog.text
+
+
+def test_tool_registry_rejects_private_placeholder_on_unapproved_path() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "send",
+        "Send",
+        {"type": "object"},
+        lambda arguments, context=None: arguments,
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email",),
+        ),
+    )
+
+    with pytest.raises(HTTPException, match="argument path 'subject'") as exc_info:
+        asyncio.run(
+            registry.execute(
+                "send",
+                {"subject": "Leak {{pii:email:email-ref}}"},
+                context=ToolExecutionContext(private_value_resolver=lambda text: text),
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_tool_registry_rejects_private_placeholder_in_argument_key() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "send",
+        "Send",
+        {"type": "object"},
+        lambda arguments, context=None: arguments,
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email",),
+        ),
+    )
+
+    with pytest.raises(HTTPException, match="argument keys") as exc_info:
+        asyncio.run(
+            registry.execute(
+                "send",
+                {"{{pii:email:email-ref}}": "value"},
+                context=ToolExecutionContext(private_value_resolver=lambda text: text),
+            )
+        )
+
+    assert exc_info.value.status_code == 403
 
 
 def test_local_registry_exposes_expected_tools() -> None:
@@ -1010,6 +1144,11 @@ def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(
                 "enabled": True,
                 "mode": "best_effort",
                 "sensitive_tools": [],
+            },
+            "private_value_policy": {
+                "mode": "deny",
+                "argument_paths": [],
+                "tool_overrides": {},
             },
             "status": "connected",
             "last_error": None,

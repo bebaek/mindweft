@@ -59,8 +59,10 @@ shell_enabled = false
 # dirs = ["./skills", "~/.claude/skills"]
 
 [mcp]
+# Private placeholders are denied at tool boundaries by default. For an explicitly trusted
+# server/tool, allow only the argument paths that may be resolved after model generation:
 # servers = [
-#   { name = "filesystem", url = "http://127.0.0.1:8765/mcp", headers = {} },
+#   { name = "trusted-mail", url = "http://127.0.0.1:8765/mcp", headers = {}, allowed_tools = ["send"], private_value_policy = "deny", private_value_tool_policies = { send = { mode = "resolve_selected", argument_paths = ["recipient.email", "cc[*].email"] } } },
 # ]
 
 [voice]

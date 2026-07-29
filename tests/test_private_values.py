@@ -35,6 +35,26 @@ def test_private_value_store_enforces_reference_and_size_limits() -> None:
         store.add("tenant", "other-thread", {"large": "too long"})
 
 
+def test_private_value_store_resolves_for_trusted_tool_strictly() -> None:
+    store = InMemoryPrivateValueStore()
+    store.add("tenant", "thread", {"email-ref": "private@example.com"})
+
+    assert (
+        store.resolve_for_tool(
+            "tenant",
+            "thread",
+            "Send to {{pii:email:email-ref}}",
+        )
+        == "Send to private@example.com"
+    )
+    with pytest.raises(HTTPException, match="missing or expired"):
+        store.resolve_for_tool(
+            "tenant",
+            "thread",
+            "Send to {{pii:email:missing-ref}}",
+        )
+
+
 def test_private_value_store_clear_thread_removes_values() -> None:
     store = InMemoryPrivateValueStore()
     store.add("tenant", "thread", {"ref": "private value"})

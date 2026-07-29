@@ -19,7 +19,14 @@ from app.llm import (
     OpenAICompatibleAdapter,
     build_llm_adapter_from_env,
 )
-from app.mcp import MCPHTTPClient, MCPPathPolicy, MCPServerConfig, load_mcp_server_configs_from_env
+from app.mcp import (
+    MCPHTTPClient,
+    MCPPathPolicy,
+    MCPServerConfig,
+    load_mcp_server_configs_from_env,
+    parse_mcp_private_value_policy,
+    parse_mcp_private_value_tool_policies,
+)
 from app.mcp_manager import MCPServerManager
 from app.oauth import (
     GENERIC_OAUTH_PROVIDER,
@@ -1679,6 +1686,14 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         entry.get("result_redaction", entry.get("resultRedaction")),
         context=f"Tenant '{tenant_id}' mcp server '{name}'",
     )
+    private_value_policy = parse_mcp_private_value_policy(
+        entry.get("private_value_policy", entry.get("privateValuePolicy")),
+        context=f"Tenant '{tenant_id}' mcp server '{name}'",
+    )
+    private_value_tool_policies = parse_mcp_private_value_tool_policies(
+        entry.get("private_value_tool_policies", entry.get("privateValueToolPolicies")),
+        context=f"Tenant '{tenant_id}' mcp server '{name}'",
+    )
     timeout_seconds = _positive_float_config(
         tenant_id,
         entry.get("timeout_seconds", entry.get("timeoutSeconds", 30.0)),
@@ -1700,6 +1715,8 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         allowed_tools=allowed_tools,
         path_policy=path_policy,
         result_redaction_policy=result_redaction_policy,
+        private_value_policy=private_value_policy,
+        private_value_tool_policies=private_value_tool_policies,
         timeout_seconds=timeout_seconds,
     )
 

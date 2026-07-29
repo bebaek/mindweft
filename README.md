@@ -161,6 +161,34 @@ complete PII classifier: it can miss unfamiliar formats, single names without a 
 cue, non-US-style addresses, and other identifiers, and it can produce false positives.
 Set `MINIGENT_INPUT_PII_PROTECTION_ENABLED=false` to disable it explicitly.
 
+Private placeholders are denied at every tool boundary by default. An explicitly trusted MCP
+tool can receive selected values only when its server configuration opts into
+`resolve_selected` and allowlists the exact JSON argument paths. Resolution happens after the
+model creates the tool call and after placeholder-only argument logging, immediately before
+the trusted handler runs; the handler receives resolved arguments but never receives the
+private-value resolver capability itself. Unapproved paths fail with HTTP 403, and missing or
+expired values fail closed. Array paths use `[*]`, for example:
+
+```json
+{
+  "name": "trusted-mail",
+  "url": "http://127.0.0.1:9000/mcp",
+  "allowed_tools": ["send"],
+  "private_value_policy": "deny",
+  "private_value_tool_policies": {
+    "send": {
+      "mode": "resolve_selected",
+      "argument_paths": ["recipient.email", "cc[*].email"]
+    }
+  }
+}
+```
+
+`pass_through` is also available for tools designed to consume opaque placeholders directly;
+it never resolves their values. Tool results are run back through local PII protection before
+storage, run events, or another model turn. This milestone treats administrator configuration
+as the disclosure grant; interactive or persistent end-user consent is not implemented yet.
+
 Run the private-contacts MCP server with fake contacts for an end-to-end local experiment:
 
 ```bash

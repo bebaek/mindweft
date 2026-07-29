@@ -224,6 +224,22 @@ class InMemoryPrivateValueStore:
 
         return PII_PLACEHOLDER_PATTERN.sub(replace, text)
 
+    def resolve_for_tool(self, tenant_id: str, thread_id: str, text: str) -> str:
+        key = (tenant_id, thread_id)
+        self._prune_thread(key)
+        thread_values = self._values.get(key, {})
+
+        def replace(match: re.Match[str]) -> str:
+            entry = thread_values.get(match.group("reference"))
+            if entry is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Private value is missing or expired",
+                )
+            return entry.value
+
+        return PII_PLACEHOLDER_PATTERN.sub(replace, text)
+
     def clear_thread(self, tenant_id: str, thread_id: str) -> None:
         self._values.pop((tenant_id, thread_id), None)
 

@@ -4,6 +4,7 @@ import fnmatch
 import json
 import logging
 import os
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -24,6 +25,10 @@ DEFAULT_MCP_PROTOCOL_VERSION = "2025-11-25"
 DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS = 30.0
 MCP_SERVERS_ENV = "MINIGENT_MCP_SERVERS"
 PRIVATE_VALUES_META_KEY = "io.minigent/carddav-private-values"
+PRIVATE_VALUE_DISCLOSURE_MODES = frozenset({"deny", "pass_through", "resolve_selected"})
+_PRIVATE_VALUE_ARGUMENT_PATH_PATTERN = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_-]*(?:(?:\.[A-Za-z_][A-Za-z0-9_-]*)|(?:\[\*\]))*$"
+)
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,12 @@ class MCPPathPolicy:
 
 
 @dataclass(frozen=True)
+class MCPPrivateValuePolicy:
+    mode: str = "deny"
+    argument_paths: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class MCPServerConfig:
     name: str
     url: str
@@ -59,6 +70,8 @@ class MCPServerConfig:
     result_redaction_policy: ToolResultRedactionPolicy = field(
         default_factory=ToolResultRedactionPolicy
     )
+    private_value_policy: MCPPrivateValuePolicy = field(default_factory=MCPPrivateValuePolicy)
+    private_value_tool_policies: dict[str, MCPPrivateValuePolicy] = field(default_factory=dict)
     timeout_seconds: float = DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS
 
 
@@ -464,6 +477,14 @@ def _parse_mcp_server_configs(raw_value: str) -> list[MCPServerConfig]:
             entry.get("result_redaction", entry.get("resultRedaction")),
             context=f"MCP server '{name}'",
         )
+        private_value_policy = parse_mcp_private_value_policy(
+            entry.get("private_value_policy", entry.get("privateValuePolicy")),
+            context=f"MCP server '{name}'",
+        )
+        private_value_tool_policies = parse_mcp_private_value_tool_policies(
+            entry.get("private_value_tool_policies", entry.get("privateValueToolPolicies")),
+            context=f"MCP server '{name}'",
+        )
         timeout_seconds = _parse_positive_float_config(
             entry.get(
                 "timeout_seconds",
@@ -493,10 +514,68 @@ def _parse_mcp_server_configs(raw_value: str) -> list[MCPServerConfig]:
                 allowed_tools=list(allowed_tools) if allowed_tools is not None else None,
                 path_policy=path_policy,
                 result_redaction_policy=result_redaction_policy,
+                private_value_policy=private_value_policy,
+                private_value_tool_policies=private_value_tool_policies,
                 timeout_seconds=timeout_seconds,
             )
         )
     return configs
+
+
+def parse_mcp_private_value_policy(
+    raw: object,
+    *,
+    context: str,
+) -> MCPPrivateValuePolicy:
+    if raw is None:
+        return MCPPrivateValuePolicy()
+    if isinstance(raw, str):
+        mode = raw
+        argument_paths: object = []
+    elif isinstance(raw, dict):
+        mode = raw.get("mode", "deny")
+        argument_paths = raw.get("argument_paths", raw.get("argumentPaths", []))
+    else:
+        raise RuntimeError(f"{context} has invalid private_value_policy")
+    if not isinstance(mode, str) or mode not in PRIVATE_VALUE_DISCLOSURE_MODES:
+        choices = ", ".join(sorted(PRIVATE_VALUE_DISCLOSURE_MODES))
+        raise RuntimeError(f"{context} private_value_policy mode must be one of: {choices}")
+    if not isinstance(argument_paths, list) or not all(
+        isinstance(path, str) and _PRIVATE_VALUE_ARGUMENT_PATH_PATTERN.fullmatch(path)
+        for path in argument_paths
+    ):
+        raise RuntimeError(
+            f"{context} private_value_policy argument_paths must be valid JSON paths"
+        )
+    if mode == "resolve_selected" and not argument_paths:
+        raise RuntimeError(
+            f"{context} resolve_selected private_value_policy requires argument_paths"
+        )
+    if mode != "resolve_selected" and argument_paths:
+        raise RuntimeError(
+            f"{context} private_value_policy argument_paths require resolve_selected mode"
+        )
+    return MCPPrivateValuePolicy(mode=mode, argument_paths=tuple(argument_paths))
+
+
+def parse_mcp_private_value_tool_policies(
+    raw: object,
+    *,
+    context: str,
+) -> dict[str, MCPPrivateValuePolicy]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or not all(
+        isinstance(tool_name, str) and tool_name for tool_name in raw
+    ):
+        raise RuntimeError(f"{context} has invalid private_value_tool_policies")
+    return {
+        tool_name: parse_mcp_private_value_policy(
+            policy,
+            context=f"{context} tool '{tool_name}'",
+        )
+        for tool_name, policy in raw.items()
+    }
 
 
 def _parse_positive_float_config(value: object, label: str) -> float:

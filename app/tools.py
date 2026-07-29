@@ -19,10 +19,16 @@ from typing import Any
 import httpx
 from fastapi import HTTPException
 
-from app.mcp import MCPHTTPClient, MCPServerConfig, load_mcp_server_configs_from_env
+from app.mcp import (
+    MCPHTTPClient,
+    MCPPrivateValuePolicy,
+    MCPServerConfig,
+    load_mcp_server_configs_from_env,
+)
 from app.mcp_manager import MCPRegistrySnapshot
 from app.models import ToolSpec
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_env
+from app.private_values import PII_PLACEHOLDER_PATTERN
 from app.redaction import (
     ToolResultRedactionPolicy,
     sanitize_tool_result,
@@ -82,6 +88,7 @@ _PEER_AGENT_PREVIEW_CHARS = 500
 class ToolExecutionContext:
     tenant_id: str | None = None
     thread_id: str | None = None
+    private_value_resolver: Callable[[str], str] | None = None
 
 
 class ToolRegistry:
@@ -99,6 +106,7 @@ class ToolRegistry:
                 ToolResultRedactionPolicy | None,
             ],
         ] = {}
+        self._private_value_policies: dict[str, MCPPrivateValuePolicy] = {}
         self._mcp_servers: list[dict[str, Any]] = []
 
     def register(
@@ -109,12 +117,14 @@ class ToolRegistry:
         handler: Callable[[dict[str, Any], ToolExecutionContext | None], Any],
         *,
         result_redaction_policy: ToolResultRedactionPolicy | None = None,
+        private_value_policy: MCPPrivateValuePolicy | None = None,
     ) -> None:
         self._tools[name] = (
             ToolSpec(name=name, description=description, input_schema=input_schema),
             handler,
             result_redaction_policy,
         )
+        self._private_value_policies[name] = private_value_policy or MCPPrivateValuePolicy()
 
     def specs(self) -> list[ToolSpec]:
         return [tool[0] for tool in self._tools.values()]
@@ -134,10 +144,23 @@ class ToolRegistry:
         logger.info("tool.start name=%s arguments=%s", name, sanitized_arguments)
         try:
             handler = tool[1]
+            handler_arguments = _prepare_private_tool_arguments(
+                arguments,
+                policy=self._private_value_policies[name],
+                resolver=context.private_value_resolver if context is not None else None,
+            )
+            handler_context = (
+                ToolExecutionContext(
+                    tenant_id=context.tenant_id,
+                    thread_id=context.thread_id,
+                )
+                if context is not None
+                else None
+            )
             if inspect.iscoroutinefunction(handler):
-                result = handler(arguments, context)
+                result = handler(handler_arguments, handler_context)
             else:
-                result = await asyncio.to_thread(handler, arguments, context)
+                result = await asyncio.to_thread(handler, handler_arguments, handler_context)
             if inspect.isawaitable(result):
                 result = await result
         except asyncio.CancelledError:
@@ -491,6 +514,10 @@ def build_tool_registry(
                             c.call_tool(tool_name, arguments)
                         ),
                         result_redaction_policy=state.config.result_redaction_policy,
+                        private_value_policy=state.config.private_value_tool_policies.get(
+                            raw_tool_name,
+                            state.config.private_value_policy,
+                        ),
                     )
             mcp_servers.append(state.public_dict())
         registry.set_mcp_servers(mcp_servers)
@@ -510,6 +537,10 @@ def build_tool_registry(
                         c.call_tool(tool_name, arguments)
                     ),
                     result_redaction_policy=config.result_redaction_policy,
+                    private_value_policy=config.private_value_tool_policies.get(
+                        raw_tool_name,
+                        config.private_value_policy,
+                    ),
                 )
             server_info = client.server_info()
             mcp_servers.append(
@@ -530,6 +561,17 @@ def build_tool_registry(
                         "enabled": config.result_redaction_policy.enabled,
                         "mode": config.result_redaction_policy.mode,
                         "sensitive_tools": sorted(config.result_redaction_policy.sensitive_tools),
+                    },
+                    "private_value_policy": {
+                        "mode": config.private_value_policy.mode,
+                        "argument_paths": list(config.private_value_policy.argument_paths),
+                        "tool_overrides": {
+                            tool_name: {
+                                "mode": policy.mode,
+                                "argument_paths": list(policy.argument_paths),
+                            }
+                            for tool_name, policy in config.private_value_tool_policies.items()
+                        },
                     },
                     "status": "connected",
                     "last_error": None,
@@ -989,6 +1031,61 @@ def _execute_retrieve_knowledge(
         ),
     )
     return retrieve_knowledge(rag, query=query, tenant_id=context.tenant_id, top_k=top_k)
+
+
+def _prepare_private_tool_arguments(
+    arguments: dict[str, Any],
+    *,
+    policy: MCPPrivateValuePolicy,
+    resolver: Callable[[str], str] | None,
+) -> dict[str, Any]:
+    if policy.mode == "pass_through":
+        return arguments
+    allowed_paths = set(policy.argument_paths)
+
+    def visit(value: Any, path: str) -> Any:
+        if isinstance(value, str):
+            if PII_PLACEHOLDER_PATTERN.search(value) is None:
+                return value
+            if policy.mode == "deny":
+                raise HTTPException(
+                    status_code=403,
+                    detail="Tool private-value disclosure is denied by policy",
+                )
+            if path not in allowed_paths:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"Tool private-value disclosure is not allowed for argument path '{path}'"
+                    ),
+                )
+            if resolver is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Private-value resolution is unavailable for this tool execution",
+                )
+            return resolver(value)
+        if isinstance(value, dict):
+            protected: dict[str, Any] = {}
+            for key, item in value.items():
+                key_text = str(key)
+                if PII_PLACEHOLDER_PATTERN.search(key_text) is not None:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Tool private-value disclosure is not allowed in argument keys",
+                    )
+                item_path = f"{path}.{key_text}" if path else key_text
+                protected[key_text] = visit(item, item_path)
+            return protected
+        if isinstance(value, list):
+            item_path = f"{path}[*]"
+            return [visit(item, item_path) for item in value]
+        return value
+
+    prepared = visit(arguments, "")
+    if not isinstance(prepared, dict):
+        raise HTTPException(status_code=500, detail="Tool arguments must remain an object")
+    return prepared
 
 
 def _sanitize_tool_arguments(arguments: dict[str, Any]) -> dict[str, Any]:

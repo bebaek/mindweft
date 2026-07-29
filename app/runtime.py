@@ -553,6 +553,13 @@ class AgentRuntime:
                             context=ToolExecutionContext(
                                 tenant_id=principal.tenant_id,
                                 thread_id=thread_id,
+                                private_value_resolver=lambda text: (
+                                    self._private_value_store.resolve_for_tool(
+                                        principal.tenant_id,
+                                        thread_id,
+                                        text,
+                                    )
+                                ),
                             ),
                         ),
                         timeout=self._tool_timeout_seconds,
@@ -580,8 +587,8 @@ class AgentRuntime:
             normalized_error = _normalize_tool_error_result(tool_call.name, result)
             if normalized_error is not None:
                 failed_tool_calls.add(tool_call_signature)
-                return normalized_error
-            return result
+                result = normalized_error
+            return self._protect_tool_result(principal, thread_id, result)
 
         # Minimal POC: execute all calls from one model response concurrently. The next
         # LLM turn still receives deterministic message ordering matching the provider's
@@ -626,6 +633,35 @@ class AgentRuntime:
                     "result": result,
                 },
             )
+
+    def _protect_tool_result(
+        self,
+        principal: Principal,
+        thread_id: str,
+        result: object,
+    ) -> object:
+        private_values: dict[str, str] = {}
+
+        def protect(value: object) -> object:
+            if isinstance(value, str):
+                protected = self._input_pii_protector.protect(value)
+                private_values.update(protected.private_values)
+                return protected.text
+            if isinstance(value, dict):
+                return {str(protect(str(key))): protect(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [protect(item) for item in value]
+            if isinstance(value, tuple):
+                return tuple(protect(item) for item in value)
+            return value
+
+        protected_result = protect(result)
+        self._private_value_store.add(
+            principal.tenant_id,
+            thread_id,
+            private_values,
+        )
+        return protected_result
 
     async def _handle_tool_call(
         self,

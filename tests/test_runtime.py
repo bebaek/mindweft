@@ -16,7 +16,7 @@ from app.execution import (
     parse_tenant_execution_config,
 )
 from app.llm import LLMAdapter, MockLLMAdapter
-from app.mcp import MCPPrivateToolResult, MCPServerConfig, MCPServerInfo
+from app.mcp import MCPPrivateToolResult, MCPPrivateValuePolicy, MCPServerConfig, MCPServerInfo
 from app.models import (
     LLMResponse,
     Message,
@@ -287,6 +287,77 @@ def test_runtime_protects_user_content_before_model_use() -> None:
         [Message(thread_id="thread-1", role=MessageRole.USER, content=protected)],
     )
     assert rendered[0].content == "What is Alice Smith's email?"
+
+
+def test_runtime_resolves_selected_private_values_only_at_trusted_tool_boundary() -> None:
+    received: list[dict[str, object]] = []
+    model_inputs: list[list[Message]] = []
+
+    class SendThenReplyLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            model_inputs.append(messages)
+            if messages[-1].role == MessageRole.TOOL:
+                assert "private@example.com" not in json.dumps(
+                    [message.model_dump(mode="json") for message in messages]
+                )
+                return LLMResponse(content="sent")
+            placeholder = next(
+                part for part in messages[-1].content.split() if part.startswith("{{pii:email:")
+            )
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="send-1",
+                        name="trusted.send",
+                        arguments={"recipient": {"email": placeholder}},
+                    )
+                ]
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    registry = ToolRegistry()
+    registry.register(
+        "trusted.send",
+        "Send a message.",
+        {"type": "object"},
+        lambda arguments, context=None: (
+            received.append(arguments) or {"recipient": arguments["recipient"]}
+        ),
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email",),
+        ),
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(store=store, llm_adapter=SendThenReplyLLM(), tool_registry=registry)
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    protected = asyncio.run(
+        runtime.protect_user_content(
+            PRINCIPAL,
+            thread.thread_id,
+            "Email private@example.com",
+        )
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content=protected),
+    )
+
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert reply == "sent"
+    assert received == [{"recipient": {"email": "private@example.com"}}]
+    stored = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    assert "private@example.com" not in json.dumps(
+        [message.model_dump(mode="json") for message in stored]
+    )
+    rendered = runtime.render_messages_for_user(PRINCIPAL, thread.thread_id, stored)
+    assert "private@example.com" in json.dumps(
+        [message.model_dump(mode="json") for message in rendered]
+    )
+    assert len(model_inputs) == 2
 
 
 def test_runtime_runs_multiple_tool_calls_concurrently() -> None:

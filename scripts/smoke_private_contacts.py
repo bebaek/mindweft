@@ -61,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
                             "contacts_get",
                             "contacts_protect_text",
                         ],
+                        "private_value_policy": "deny",
+                        "private_value_tool_policies": {"contacts_protect_text": "pass_through"},
                     }
                 ],
             },
