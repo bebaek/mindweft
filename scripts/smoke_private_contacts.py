@@ -202,6 +202,26 @@ def _run_smoke(base_url: str, headers: dict[str, str], *, reveal_failure: bool =
     if visible_name not in protected_message.json()["content"]:
         raise RuntimeError("Authenticated message response did not rehydrate the contact name")
 
+    local_private_values = [
+        "Zyqvax Qornel",
+        "synthetic-private@example.invalid",
+        "+1 202-555-0188",
+        "99 Privacy Road",
+    ]
+    local_private_message = (
+        "Email Zyqvax Qornel at synthetic-private@example.invalid, call +1 202-555-0188, "
+        "or visit 99 Privacy Road."
+    )
+    local_protected_message = httpx.post(
+        f"{base_url}/threads/{thread_id}/messages",
+        headers=headers,
+        json={"content": local_private_message},
+        timeout=30,
+    )
+    local_protected_message.raise_for_status()
+    if local_protected_message.json()["content"] != local_private_message:
+        raise RuntimeError("Authenticated response did not rehydrate locally protected PII")
+
     raw_context = _raw_context(base_url, headers, thread_id)
     raw_tool_results = [
         json.loads(message["content"])
@@ -227,6 +247,12 @@ def _run_smoke(base_url: str, headers: dict[str, str], *, reveal_failure: bool =
     raw_text = json.dumps(_raw_context(base_url, headers, thread_id), ensure_ascii=True)
     if visible_name in raw_text or "{{pii:contact:" not in raw_text:
         raise RuntimeError("Known contact name was not masked in stored/model input")
+    local_leaked = [value for value in local_private_values if value in raw_text]
+    if local_leaked:
+        raise RuntimeError("Locally detected PII appeared in stored/model context")
+    for kind in ("person", "email", "phone", "address"):
+        if f"{{{{pii:{kind}:" not in raw_text:
+            raise RuntimeError(f"Expected local {kind} placeholder was not stored")
     leaked = [value for value in visible_private_values if value and value in raw_text]
     if leaked:
         raise RuntimeError("Raw contact PII appeared in stored/model context")
@@ -248,6 +274,7 @@ def _run_smoke(base_url: str, headers: dict[str, str], *, reveal_failure: bool =
     print(f"authorized_history_missing_private_values={len(missing)}")
     print("contact_ref_round_trip=ok")
     print("known_contact_input_masking=ok")
+    print("local_input_pii_masking=ok")
 
 
 def _run_tool(

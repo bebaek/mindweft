@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from app.private_values import InMemoryPrivateValueStore
+from app.private_values import InMemoryPrivateValueStore, LocalPIIProtector
 
 
 def test_private_value_store_is_scoped_by_tenant_and_thread() -> None:
@@ -56,3 +56,51 @@ def test_private_value_store_reads_limits_from_environment_mapping() -> None:
 
     with pytest.raises(HTTPException, match="reference limit"):
         store.add("tenant", "thread", {"other": "value"})
+
+
+def test_local_pii_protector_masks_common_input_pii() -> None:
+    references = iter(["email-ref", "address-ref", "phone-ref", "person-ref"])
+    protector = LocalPIIProtector(reference_factory=lambda: next(references))
+
+    result = protector.protect(
+        "Email Jane Doe at jane@example.com, call +1 (415) 555-0123, "
+        "or visit 123 Main Street, Apt 4, Springfield, IL 62704."
+    )
+
+    assert "Jane Doe" not in result.text
+    assert "jane@example.com" not in result.text
+    assert "+1 (415) 555-0123" not in result.text
+    assert "123 Main Street, Apt 4, Springfield, IL 62704" not in result.text
+    assert set(result.private_values.values()) == {
+        "Jane Doe",
+        "jane@example.com",
+        "+1 (415) 555-0123",
+        "123 Main Street, Apt 4, Springfield, IL 62704",
+    }
+    assert "{{pii:person:" in result.text
+    assert "{{pii:email:" in result.text
+    assert "{{pii:phone:" in result.text
+    assert "{{pii:address:" in result.text
+
+
+def test_local_pii_protector_preserves_existing_placeholders() -> None:
+    protector = LocalPIIProtector(reference_factory=lambda: "new-ref")
+
+    result = protector.protect("Email {{pii:contact:known-ref}} at private@example.com")
+
+    assert "{{pii:contact:known-ref}}" in result.text
+    assert result.private_values == {"new-ref": "private@example.com"}
+
+
+def test_local_pii_protector_can_be_disabled() -> None:
+    protector = LocalPIIProtector.from_env({"MINIGENT_INPUT_PII_PROTECTION_ENABLED": "false"})
+
+    result = protector.protect("Email jane@example.com")
+
+    assert result.text == "Email jane@example.com"
+    assert result.private_values == {}
+
+
+def test_local_pii_protector_rejects_invalid_boolean_setting() -> None:
+    with pytest.raises(RuntimeError, match="must be true or false"):
+        LocalPIIProtector.from_env({"MINIGENT_INPUT_PII_PROTECTION_ENABLED": "sometimes"})

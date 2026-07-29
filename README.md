@@ -153,6 +153,14 @@ thread and 10,000 characters per value; override those limits with
 `MINIGENT_PRIVATE_VALUE_TTL_SECONDS`, `MINIGENT_PRIVATE_VALUE_MAX_REFS_PER_THREAD`, and
 `MINIGENT_PRIVATE_VALUE_MAX_CHARS`.
 
+User-authored message text is locally preprocessed before storage or model use. The default
+conservative detector masks email addresses, phone-number-like values, street addresses, and
+person names in explicit contexts such as `Email Jane Doe`, `Dr. Jane Doe`, or
+`Jane Doe's`. Existing private placeholders are preserved. This regex-based detector is not a
+complete PII classifier: it can miss unfamiliar formats, single names without a contextual
+cue, non-US-style addresses, and other identifiers, and it can produce false positives.
+Set `MINIGENT_INPUT_PII_PROTECTION_ENABLED=false` to disable it explicitly.
+
 Run the private-contacts MCP server with fake contacts for an end-to-end local experiment:
 
 ```bash
@@ -166,11 +174,11 @@ endpoint as an MCP server named `private-contacts`, allow `contacts_list`, `cont
 protected names, available field names, and short-lived opaque `contact_ref` values;
 `contacts_get` retrieves only requested fields. On message creation, Minigent invokes
 `contacts_protect_text` as a trusted preprocessor and masks exact, uniquely matching
-address-book contact names before storing or sending the message to a model. Ambiguous names,
-nicknames, names absent from the address book, and other arbitrary PII are not detected by
-this initial matcher. With no CardDAV environment variables, the server uses intentionally
-fake data to verify that the model and stored thread see placeholders while the immediate
-user reply is rehydrated.
+address-book contact names before the local detector runs, preserving a usable contact
+reference for selective retrieval. Ambiguous address-book names are left to the conservative
+local detector rather than being linked to an arbitrary contact. With no CardDAV environment
+variables, the server uses intentionally fake data to verify that the model and stored thread
+see placeholders while the immediate user reply is rehydrated.
 
 For a read-only Baïkal or other CardDAV address book, export the collection URL and
 credentials before starting the same server. Enter the password interactively rather than

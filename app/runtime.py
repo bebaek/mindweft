@@ -42,7 +42,7 @@ from app.models import (
     ThreadStatus,
     ToolCall,
 )
-from app.private_values import InMemoryPrivateValueStore
+from app.private_values import InMemoryPrivateValueStore, LocalPIIProtector
 from app.quality import QualityEnhancer
 from app.store import ThreadStore
 from app.tools import ToolExecutionContext, ToolRegistry
@@ -157,6 +157,7 @@ class AgentRuntime:
         quality_enhancer: QualityEnhancer | None = None,
         context_compaction_enabled: bool = True,
         private_value_store: InMemoryPrivateValueStore | None = None,
+        input_pii_protector: LocalPIIProtector | None = None,
     ) -> None:
         self._store = store
         if execution_resolver is not None:
@@ -180,6 +181,7 @@ class AgentRuntime:
         self._quality_enhancer = quality_enhancer
         self._context_compaction_enabled = context_compaction_enabled
         self._private_value_store = private_value_store or InMemoryPrivateValueStore.from_env()
+        self._input_pii_protector = input_pii_protector or LocalPIIProtector.from_env()
 
     async def protect_user_content(
         self,
@@ -188,46 +190,56 @@ class AgentRuntime:
         content: str,
     ) -> str:
         execution = self._execution_resolver.resolve(principal.tenant_id)
+        protected_content = content
         protectors = [
             spec.name
             for spec in execution.tool_registry.specs()
             if spec.name.endswith(".contacts_protect_text")
         ]
-        if not protectors:
-            return content
-        if len(protectors) != 1:
-            raise HTTPException(
-                status_code=500,
-                detail="Exactly one contacts privacy preprocessor must be configured",
-            )
-        result = await asyncio.wait_for(
-            execution.tool_registry.execute(
-                protectors[0],
-                {"text": content},
-                context=ToolExecutionContext(
-                    tenant_id=principal.tenant_id,
-                    thread_id=thread_id,
+        if protectors:
+            if len(protectors) != 1:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Exactly one contacts privacy preprocessor must be configured",
+                )
+            result = await asyncio.wait_for(
+                execution.tool_registry.execute(
+                    protectors[0],
+                    {"text": protected_content},
+                    context=ToolExecutionContext(
+                        tenant_id=principal.tenant_id,
+                        thread_id=thread_id,
+                    ),
                 ),
-            ),
-            timeout=self._tool_timeout_seconds,
-        )
-        if not isinstance(result, MCPPrivateToolResult):
-            raise HTTPException(
-                status_code=502,
-                detail="Contacts privacy preprocessor returned no private metadata envelope",
+                timeout=self._tool_timeout_seconds,
             )
-        model_content = result.model_content
-        if not isinstance(model_content, dict) or not isinstance(model_content.get("text"), str):
-            raise HTTPException(
-                status_code=502,
-                detail="Contacts privacy preprocessor returned invalid model content",
+            if not isinstance(result, MCPPrivateToolResult):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Contacts privacy preprocessor returned no private metadata envelope",
+                )
+            model_content = result.model_content
+            if not isinstance(model_content, dict) or not isinstance(
+                model_content.get("text"), str
+            ):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Contacts privacy preprocessor returned invalid model content",
+                )
+            self._private_value_store.add(
+                principal.tenant_id,
+                thread_id,
+                result.private_values,
             )
+            protected_content = model_content["text"]
+
+        locally_protected = self._input_pii_protector.protect(protected_content)
         self._private_value_store.add(
             principal.tenant_id,
             thread_id,
-            result.private_values,
+            locally_protected.private_values,
         )
-        return model_content["text"]
+        return locally_protected.text
 
     def render_messages_for_user(
         self,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -17,6 +18,119 @@ DEFAULT_PRIVATE_VALUE_MAX_CHARS = 10_000
 PRIVATE_VALUE_TTL_SECONDS_ENV = "MINIGENT_PRIVATE_VALUE_TTL_SECONDS"
 PRIVATE_VALUE_MAX_REFS_ENV = "MINIGENT_PRIVATE_VALUE_MAX_REFS_PER_THREAD"
 PRIVATE_VALUE_MAX_CHARS_ENV = "MINIGENT_PRIVATE_VALUE_MAX_CHARS"
+INPUT_PII_PROTECTION_ENABLED_ENV = "MINIGENT_INPUT_PII_PROTECTION_ENABLED"
+
+_EMAIL_PATTERN = re.compile(
+    r"(?<![\w@])(?P<value>[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?"
+    r"(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+)(?![\w@])",
+    re.IGNORECASE,
+)
+_PHONE_PATTERN = re.compile(
+    r"(?<!\w)(?P<value>(?:\+?\d{1,3}[ .-]?)?"
+    r"(?:\(?\d{2,4}\)?[ .-]?)?\d{3}[ .-]?\d{4})(?!\w)"
+)
+_ADDRESS_PATTERN = re.compile(
+    r"(?<!\w)(?P<value>\d{1,6}\s+"
+    r"(?:[A-Z][A-Z0-9.'-]*\s+){1,6}"
+    r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|"
+    r"Court|Ct|Way|Parkway|Pkwy|Place|Pl)\.?"
+    r"(?:,?\s+(?:Apt|Apartment|Unit|Suite|Ste|#)\s*[A-Z0-9-]+)?"
+    r"(?:,\s*[A-Z][A-Z.'-]*(?:\s+[A-Z][A-Z.'-]*){0,3},?\s+"
+    r"[A-Z]{2}\s+\d{5}(?:-\d{4})?)?)",
+    re.IGNORECASE,
+)
+_NAME_TOKEN = r"[A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?"
+_TITLED_PERSON_PATTERN = re.compile(
+    rf"(?<!\w)(?P<value>(?:Mr|Mrs|Ms|Miss|Mx|Dr|Prof)\.?\s+"
+    rf"{_NAME_TOKEN}(?:\s+{_NAME_TOKEN}){{0,3}})(?!\w)"
+)
+_POSSESSIVE_PERSON_PATTERN = re.compile(
+    rf"(?<!\w)(?P<value>{_NAME_TOKEN}(?:\s+{_NAME_TOKEN}){{1,3}})(?=['’]s\b)"
+)
+_CONTEXT_PERSON_PATTERN = re.compile(
+    rf"(?i:\b(?:call|email|contact|ask|tell|message|meet|with|for|about)\s+)"
+    rf"(?P<value>{_NAME_TOKEN}(?:\s+{_NAME_TOKEN}){{0,3}})(?!\w)"
+)
+
+
+@dataclass(frozen=True)
+class ProtectedText:
+    text: str
+    private_values: dict[str, str]
+
+
+class LocalPIIProtector:
+    """Conservative local regex protection for common PII in user-authored text."""
+
+    def __init__(
+        self,
+        *,
+        enabled: bool = True,
+        reference_factory: Callable[[], str] | None = None,
+    ) -> None:
+        self._enabled = enabled
+        self._reference_factory = reference_factory or (
+            lambda: f"local-{secrets.token_urlsafe(12)}"
+        )
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> LocalPIIProtector:
+        lookup = os.environ if env is None else env
+        raw = lookup.get(INPUT_PII_PROTECTION_ENABLED_ENV, "true").strip().lower()
+        if raw not in {"true", "false"}:
+            raise RuntimeError(f"{INPUT_PII_PROTECTION_ENABLED_ENV} must be true or false")
+        return cls(enabled=raw == "true")
+
+    def protect(self, text: str) -> ProtectedText:
+        if not self._enabled or not text:
+            return ProtectedText(text=text, private_values={})
+
+        matches: list[tuple[int, int, str, str]] = []
+        protected_ranges = [match.span() for match in PII_PLACEHOLDER_PATTERN.finditer(text)]
+        detectors = (
+            ("email", _EMAIL_PATTERN, 0),
+            ("address", _ADDRESS_PATTERN, 1),
+            ("phone", _PHONE_PATTERN, 2),
+            ("person", _TITLED_PERSON_PATTERN, 3),
+            ("person", _POSSESSIVE_PERSON_PATTERN, 4),
+            ("person", _CONTEXT_PERSON_PATTERN, 5),
+        )
+        candidates: list[tuple[int, int, int, str, str]] = []
+        for kind, pattern, priority in detectors:
+            for match in pattern.finditer(text):
+                start, end = match.span("value")
+                value = match.group("value")
+                if kind == "phone" and sum(character.isdigit() for character in value) < 7:
+                    continue
+                if any(
+                    start < range_end and end > range_start
+                    for range_start, range_end in protected_ranges
+                ):
+                    continue
+                candidates.append((priority, -(end - start), start, kind, value))
+
+        occupied: list[tuple[int, int]] = []
+        for _priority, _negative_length, start, kind, value in sorted(candidates):
+            end = start + len(value)
+            if any(start < used_end and end > used_start for used_start, used_end in occupied):
+                continue
+            occupied.append((start, end))
+            matches.append((start, end, kind, value))
+
+        private_values: dict[str, str] = {}
+        replacements: dict[tuple[str, str], str] = {}
+        protected_text = text
+        for start, end, kind, value in sorted(matches, reverse=True):
+            key = (kind, value)
+            reference = replacements.get(key)
+            if reference is None:
+                reference = self._reference_factory()
+                replacements[key] = reference
+                private_values[reference] = value
+            placeholder = f"{{{{pii:{kind}:{reference}}}}}"
+            protected_text = protected_text[:start] + placeholder + protected_text[end:]
+        return ProtectedText(text=protected_text, private_values=private_values)
 
 
 @dataclass(frozen=True)
