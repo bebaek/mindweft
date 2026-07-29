@@ -26,6 +26,8 @@ MAX_CARDDAV_RESPONSE_BYTES = 5_000_000
 CARDDAV_URL_ENV = "MINIGENT_CARDDAV_URL"
 CARDDAV_USERNAME_ENV = "MINIGENT_CARDDAV_USERNAME"
 CARDDAV_PASSWORD_ENV = "MINIGENT_CARDDAV_PASSWORD"
+CARDDAV_AUTH_MODE_ENV = "MINIGENT_CARDDAV_AUTH_MODE"
+CARDDAV_AUTH_MODES = {"auto", "basic", "digest"}
 CARDDAV_NAMESPACE = "urn:ietf:params:xml:ns:carddav"
 DAV_NAMESPACE = "DAV:"
 CARDDAV_REPORT_BODY = b"""<?xml version="1.0" encoding="utf-8" ?>
@@ -116,6 +118,7 @@ class CardDAVContactSource:
         addressbook_url: str,
         username: str,
         password: str,
+        auth_mode: str = "auto",
         verify_tls: bool = True,
         timeout_seconds: float = 30.0,
         transport: httpx.BaseTransport | None = None,
@@ -134,9 +137,13 @@ class CardDAVContactSource:
             raise ValueError("CardDAV username is required")
         if not password:
             raise ValueError("CardDAV password is required")
+        normalized_auth_mode = auth_mode.strip().lower()
+        if normalized_auth_mode not in CARDDAV_AUTH_MODES:
+            raise ValueError("CardDAV auth mode must be auto, basic, or digest")
         self._addressbook_url = addressbook_url
         self._username = username
         self._password = password
+        self._auth_mode = normalized_auth_mode
         self._verify_tls = verify_tls
         self._timeout_seconds = timeout_seconds
         self._transport = transport
@@ -144,21 +151,34 @@ class CardDAVContactSource:
     def list_contacts(self, *, limit: int) -> tuple[list[Contact], bool]:
         try:
             with httpx.Client(
-                auth=httpx.BasicAuth(self._username, self._password),
                 verify=self._verify_tls,
                 timeout=self._timeout_seconds,
                 transport=self._transport,
             ) as client:
+                request_headers = {
+                    "Depth": "1",
+                    "Content-Type": "application/xml; charset=utf-8",
+                    "Accept": "application/xml",
+                }
+                auth = self._configured_auth()
                 discovery_response = client.request(
                     "PROPFIND",
                     self._addressbook_url,
-                    headers={
-                        "Depth": "1",
-                        "Content-Type": "application/xml; charset=utf-8",
-                        "Accept": "application/xml",
-                    },
+                    headers=request_headers,
                     content=CARDDAV_PROPFIND_BODY,
+                    auth=auth,
                 )
+                if self._auth_mode == "auto" and discovery_response.status_code == 401:
+                    auth = self._auth_from_challenge(
+                        discovery_response.headers.get("www-authenticate", "")
+                    )
+                    discovery_response = client.request(
+                        "PROPFIND",
+                        self._addressbook_url,
+                        headers=request_headers,
+                        content=CARDDAV_PROPFIND_BODY,
+                        auth=auth,
+                    )
                 discovery_response.raise_for_status()
                 if len(discovery_response.content) > MAX_CARDDAV_RESPONSE_BYTES:
                     raise RuntimeError("CardDAV response exceeded the private contacts size limit")
@@ -169,12 +189,9 @@ class CardDAVContactSource:
                 response = client.request(
                     "REPORT",
                     addressbook_url,
-                    headers={
-                        "Depth": "1",
-                        "Content-Type": "application/xml; charset=utf-8",
-                        "Accept": "application/xml",
-                    },
+                    headers=request_headers,
                     content=CARDDAV_REPORT_BODY,
+                    auth=auth,
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -188,6 +205,21 @@ class CardDAVContactSource:
             raise RuntimeError("CardDAV response exceeded the private contacts size limit")
         contacts = parse_carddav_multistatus(response.content)
         return contacts[:limit], len(contacts) > limit
+
+    def _configured_auth(self) -> httpx.Auth | None:
+        if self._auth_mode == "basic":
+            return httpx.BasicAuth(self._username, self._password)
+        if self._auth_mode == "digest":
+            return httpx.DigestAuth(self._username, self._password)
+        return None
+
+    def _auth_from_challenge(self, challenge: str) -> httpx.Auth:
+        scheme = challenge.partition(" ")[0].strip().lower()
+        if scheme == "digest":
+            return httpx.DigestAuth(self._username, self._password)
+        if scheme == "basic":
+            return httpx.BasicAuth(self._username, self._password)
+        raise RuntimeError("CardDAV server returned an unsupported authentication challenge")
 
 
 class PrivateContactsMCPServer:
@@ -458,6 +490,7 @@ def main(argv: list[str] | None = None) -> None:
             addressbook_url=addressbook_url,
             username=os.environ.get(CARDDAV_USERNAME_ENV, ""),
             password=os.environ.get(CARDDAV_PASSWORD_ENV, ""),
+            auth_mode=os.environ.get(CARDDAV_AUTH_MODE_ENV, "auto"),
             verify_tls=not args.insecure_skip_tls_verify,
         )
         server = PrivateContactsMCPServer(contact_source=contact_source)

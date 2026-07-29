@@ -141,6 +141,7 @@ END:VCARD
         addressbook_url="https://baikal.example/dav.php/addressbooks/user/",
         username="user",
         password="password",
+        auth_mode="basic",
         transport=httpx.MockTransport(handler),
     )
 
@@ -159,6 +160,53 @@ END:VCARD
     assert discovery_request.headers["authorization"] == f"Basic {expected_auth}"
     assert report_request.headers["authorization"] == f"Basic {expected_auth}"
     assert b"addressbook-query" in report_request.content
+
+
+def test_carddav_source_auto_negotiates_digest_auth() -> None:
+    authorization_headers: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        authorization = request.headers.get("authorization", "")
+        authorization_headers.append(authorization)
+        if not authorization:
+            return httpx.Response(
+                401,
+                headers={
+                    "www-authenticate": (
+                        'Digest realm="BaikalDAV",qop="auth",nonce="test-nonce",'
+                        'opaque="test-opaque",algorithm=MD5'
+                    )
+                },
+            )
+        assert authorization.startswith("Digest ")
+        if request.method == "PROPFIND":
+            return httpx.Response(
+                207,
+                content=b"""<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
+  <d:response><d:href>/contacts/</d:href><d:propstat><d:prop>
+    <d:resourcetype><card:addressbook /></d:resourcetype>
+  </d:prop></d:propstat></d:response>
+</d:multistatus>""",
+            )
+        return httpx.Response(
+            207,
+            content=b"""<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav" />""",
+        )
+
+    source = CardDAVContactSource(
+        addressbook_url="https://baikal.example/contacts/",
+        username="user",
+        password="password",
+        transport=httpx.MockTransport(handler),
+    )
+
+    contacts, truncated = source.list_contacts(limit=1)
+
+    assert contacts == []
+    assert truncated is False
+    assert any(header.startswith("Digest ") for header in authorization_headers)
 
 
 def test_private_contacts_server_places_raw_values_only_in_private_metadata() -> None:

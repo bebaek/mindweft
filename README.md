@@ -177,8 +177,10 @@ unset MINIGENT_CARDDAV_PASSWORD
 `MINIGENT_CARDDAV_URL` may identify an address-book collection or its immediate parent. The
 server performs a read-only `PROPFIND` to locate the collection, then an `addressbook-query`
 `REPORT`; it parses `FN`, `EMAIL`, and `TEL` and returns at most 10 contacts by default (the
-tool accepts `limit` up to 50). TLS verification is enabled;
-`--insecure-skip-tls-verify` exists only for trusted local development.
+tool accepts `limit` up to 50). Basic and Digest authentication are negotiated automatically;
+set `MINIGENT_CARDDAV_AUTH_MODE` to `basic` or `digest` only when explicit selection is
+needed. TLS verification is enabled; `--insecure-skip-tls-verify` exists only for trusted
+local development.
 
 ## Clients
 
