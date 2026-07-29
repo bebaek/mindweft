@@ -6,6 +6,7 @@ import secrets
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Protocol
 
 from fastapi import HTTPException
 
@@ -18,6 +19,9 @@ DEFAULT_PRIVATE_VALUE_MAX_CHARS = 10_000
 PRIVATE_VALUE_TTL_SECONDS_ENV = "MINIGENT_PRIVATE_VALUE_TTL_SECONDS"
 PRIVATE_VALUE_MAX_REFS_ENV = "MINIGENT_PRIVATE_VALUE_MAX_REFS_PER_THREAD"
 PRIVATE_VALUE_MAX_CHARS_ENV = "MINIGENT_PRIVATE_VALUE_MAX_CHARS"
+PRIVATE_VALUE_DB_PATH_ENV = "MINIGENT_PRIVATE_VALUE_DB_PATH"
+PRIVATE_VALUE_ENCRYPTION_KEY_ENV = "MINIGENT_PRIVATE_VALUE_ENCRYPTION_KEY"
+PRIVATE_VALUE_KEY_VERSION_ENV = "MINIGENT_PRIVATE_VALUE_KEY_VERSION"
 INPUT_PII_PROTECTION_ENABLED_ENV = "MINIGENT_INPUT_PII_PROTECTION_ENABLED"
 
 _EMAIL_PATTERN = re.compile(
@@ -54,10 +58,28 @@ _CONTEXT_PERSON_PATTERN = re.compile(
 )
 
 
+class PrivateValueStore(Protocol):
+    def add(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        values: Mapping[str, str],
+        *,
+        kinds: Mapping[str, str] | None = None,
+    ) -> None: ...
+
+    def render_for_user(self, tenant_id: str, thread_id: str, text: str) -> str: ...
+
+    def resolve_for_tool(self, tenant_id: str, thread_id: str, text: str) -> str: ...
+
+    def clear_thread(self, tenant_id: str, thread_id: str) -> None: ...
+
+
 @dataclass(frozen=True)
 class ProtectedText:
     text: str
     private_values: dict[str, str]
+    private_value_kinds: dict[str, str]
 
 
 class LocalPIIProtector:
@@ -84,7 +106,7 @@ class LocalPIIProtector:
 
     def protect(self, text: str) -> ProtectedText:
         if not self._enabled or not text:
-            return ProtectedText(text=text, private_values={})
+            return ProtectedText(text=text, private_values={}, private_value_kinds={})
 
         matches: list[tuple[int, int, str, str]] = []
         protected_ranges = [match.span() for match in PII_PLACEHOLDER_PATTERN.finditer(text)]
@@ -119,6 +141,7 @@ class LocalPIIProtector:
             matches.append((start, end, kind, value))
 
         private_values: dict[str, str] = {}
+        private_value_kinds: dict[str, str] = {}
         replacements: dict[tuple[str, str], str] = {}
         protected_text = text
         for start, end, kind, value in sorted(matches, reverse=True):
@@ -128,9 +151,14 @@ class LocalPIIProtector:
                 reference = self._reference_factory()
                 replacements[key] = reference
                 private_values[reference] = value
+                private_value_kinds[reference] = kind
             placeholder = f"{{{{pii:{kind}:{reference}}}}}"
             protected_text = protected_text[:start] + placeholder + protected_text[end:]
-        return ProtectedText(text=protected_text, private_values=private_values)
+        return ProtectedText(
+            text=protected_text,
+            private_values=private_values,
+            private_value_kinds=private_value_kinds,
+        )
 
 
 @dataclass(frozen=True)
@@ -188,7 +216,10 @@ class InMemoryPrivateValueStore:
         tenant_id: str,
         thread_id: str,
         values: Mapping[str, str],
+        *,
+        kinds: Mapping[str, str] | None = None,
     ) -> None:
+        _ = kinds
         key = (tenant_id, thread_id)
         self._prune_thread(key)
         thread_values = self._values.setdefault(key, {})
@@ -255,6 +286,18 @@ class InMemoryPrivateValueStore:
             thread_values.pop(reference, None)
         if not thread_values:
             self._values.pop(key, None)
+
+
+def build_private_value_store_from_env(
+    env: Mapping[str, str] | None = None,
+) -> PrivateValueStore:
+    lookup = os.environ if env is None else env
+    db_path = lookup.get(PRIVATE_VALUE_DB_PATH_ENV, "").strip()
+    if not db_path:
+        return InMemoryPrivateValueStore.from_env(lookup)
+    from app.private_value_sqlite import SQLiteEncryptedPrivateValueStore
+
+    return SQLiteEncryptedPrivateValueStore.from_env(lookup)
 
 
 def _positive_float_setting(env: Mapping[str, str], name: str, default: float) -> float:

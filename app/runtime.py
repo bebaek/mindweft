@@ -48,7 +48,12 @@ from app.private_consents import (
     InMemoryPrivateValueConsentStore,
     PrivateValueDisclosure,
 )
-from app.private_values import InMemoryPrivateValueStore, LocalPIIProtector
+from app.private_values import (
+    PII_PLACEHOLDER_PATTERN,
+    LocalPIIProtector,
+    PrivateValueStore,
+    build_private_value_store_from_env,
+)
 from app.quality import QualityEnhancer
 from app.store import ThreadStore
 from app.tools import ToolExecutionContext, ToolRegistry
@@ -170,7 +175,7 @@ class AgentRuntime:
         target_prompt_tokens: int = 3000,
         quality_enhancer: QualityEnhancer | None = None,
         context_compaction_enabled: bool = True,
-        private_value_store: InMemoryPrivateValueStore | None = None,
+        private_value_store: PrivateValueStore | None = None,
         input_pii_protector: LocalPIIProtector | None = None,
         private_value_consent_store: InMemoryPrivateValueConsentStore | None = None,
     ) -> None:
@@ -195,7 +200,7 @@ class AgentRuntime:
         self._target_prompt_tokens = max(256, target_prompt_tokens)
         self._quality_enhancer = quality_enhancer
         self._context_compaction_enabled = context_compaction_enabled
-        self._private_value_store = private_value_store or InMemoryPrivateValueStore.from_env()
+        self._private_value_store = private_value_store or build_private_value_store_from_env()
         self._input_pii_protector = input_pii_protector or LocalPIIProtector.from_env()
         self._private_value_consent_store = (
             private_value_consent_store or InMemoryPrivateValueConsentStore()
@@ -249,6 +254,7 @@ class AgentRuntime:
                 principal.tenant_id,
                 thread_id,
                 result.private_values,
+                kinds=_private_value_kinds(result.model_content),
             )
             protected_content = model_content["text"]
 
@@ -257,6 +263,7 @@ class AgentRuntime:
             principal.tenant_id,
             thread_id,
             locally_protected.private_values,
+            kinds=locally_protected.private_value_kinds,
         )
         return locally_protected.text
 
@@ -439,6 +446,7 @@ class AgentRuntime:
                 principal.tenant_id,
                 thread_id,
                 result.private_values,
+                kinds=_private_value_kinds(result.model_content),
             )
             result = result.model_content
         normalized_error = _normalize_tool_error_result(action.tool_call.name, result)
@@ -766,6 +774,7 @@ class AgentRuntime:
                     principal.tenant_id,
                     thread_id,
                     result.private_values,
+                    kinds=_private_value_kinds(result.model_content),
                 )
                 result = result.model_content
             normalized_error = _normalize_tool_error_result(tool_call.name, result)
@@ -842,11 +851,13 @@ class AgentRuntime:
         result: object,
     ) -> object:
         private_values: dict[str, str] = {}
+        private_value_kinds: dict[str, str] = {}
 
         def protect(value: object) -> object:
             if isinstance(value, str):
                 protected = self._input_pii_protector.protect(value)
                 private_values.update(protected.private_values)
+                private_value_kinds.update(protected.private_value_kinds)
                 return protected.text
             if isinstance(value, dict):
                 return {str(protect(str(key))): protect(item) for key, item in value.items()}
@@ -861,6 +872,7 @@ class AgentRuntime:
             principal.tenant_id,
             thread_id,
             private_values,
+            kinds=private_value_kinds,
         )
         return protected_result
 
@@ -1326,6 +1338,17 @@ def estimate_thread_context_usage(
         "summarized_message_count": summarized_message_count,
         "unsummarized_message_count": len(unsummarized_messages),
     }
+
+
+def _private_value_kinds(content: object) -> dict[str, str]:
+    serialized = json.dumps(content, ensure_ascii=True, default=str)
+    kinds: dict[str, str] = {}
+    for match in PII_PLACEHOLDER_PATTERN.finditer(serialized):
+        reference = match.group("reference")
+        kind = match.group("kind")
+        existing = kinds.get(reference)
+        kinds[reference] = kind if existing in {None, kind} else "unknown"
+    return kinds
 
 
 def _estimate_prompt_tokens(messages: list[Message], *, summary: str = "") -> int:

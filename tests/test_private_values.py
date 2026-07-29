@@ -97,6 +97,12 @@ def test_local_pii_protector_masks_common_input_pii() -> None:
         "+1 (415) 555-0123",
         "123 Main Street, Apt 4, Springfield, IL 62704",
     }
+    assert set(result.private_value_kinds.values()) == {
+        "person",
+        "email",
+        "phone",
+        "address",
+    }
     assert "{{pii:person:" in result.text
     assert "{{pii:email:" in result.text
     assert "{{pii:phone:" in result.text

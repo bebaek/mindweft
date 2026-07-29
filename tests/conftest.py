@@ -29,6 +29,7 @@ def pytest_configure(config: pytest.Config) -> None:
     if _ORIGINAL_DOTENV_FILE is None:
         os.environ["MINIGENT_DOTENV_FILE"] = _TEST_DOTENV_FILE
     os.environ.pop("MINIGENT_THREAD_DB_PATH", None)
+    os.environ.pop("MINIGENT_PRIVATE_VALUE_DB_PATH", None)
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +45,7 @@ def isolate_thread_db_env(monkeypatch: pytest.MonkeyPatch) -> None:
     if _ORIGINAL_DOTENV_FILE is None:
         monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_THREAD_DB_PATH", raising=False)
+    monkeypatch.delenv("MINIGENT_PRIVATE_VALUE_DB_PATH", raising=False)
     monkeypatch.setattr(
         "app.main.build_thread_store_from_env",
         lambda: InMemoryThreadStore(),

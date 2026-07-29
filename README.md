@@ -143,15 +143,33 @@ MCP server configs can override the tool-result redaction policy with `result_re
 As an experimental local privacy convention, an MCP tool can return model-safe
 `{{pii:kind:reference}}` placeholders in `structuredContent` and place the corresponding
 string values under `_meta["io.minigent/carddav-private-values"]`. Minigent removes that
-metadata before model context, thread history, and run events, keeps it in a thread-scoped
-in-memory store, and resolves placeholders in replies sent to the authenticated user. This
-is a proof of concept rather than a standard MCP confidential channel: other MCP clients may
-log or expose `_meta`, and values do not survive a restart. Stored messages retain
+metadata before model context, thread history, and run events, and resolves placeholders in
+replies sent to the authenticated user. This is a proof of concept rather than a standard MCP
+confidential channel: other MCP clients may log or expose `_meta`. Stored messages retain
 placeholders, while authenticated message reads rehydrate values that have not expired.
 Private values expire after 30 minutes by default and are bounded to 1,000 references per
 thread and 10,000 characters per value; override those limits with
 `MINIGENT_PRIVATE_VALUE_TTL_SECONDS`, `MINIGENT_PRIVATE_VALUE_MAX_REFS_PER_THREAD`, and
 `MINIGENT_PRIVATE_VALUE_MAX_CHARS`.
+
+Private values remain in memory by default. To make them restart-safe, configure a separate
+SQLite database and a base64-encoded 32-byte AES key:
+
+```bash
+export MINIGENT_PRIVATE_VALUE_DB_PATH="$PWD/.data/private-values.db"
+export MINIGENT_PRIVATE_VALUE_ENCRYPTION_KEY="$(python -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')"
+# Optional, reserved for explicit key rotation workflows:
+export MINIGENT_PRIVATE_VALUE_KEY_VERSION=1
+```
+
+The SQLite store encrypts each value independently with AES-256-GCM and a fresh 96-bit nonce.
+Tenant ID, thread ID, reference, PII kind, and key version are authenticated as associated
+data. The database contains ciphertext, nonces, metadata, and expiry timestamps but not the
+key or plaintext values. The key must come from the process environment or an external secret
+manager; do not commit it or place it beside the database. Startup fails closed when a database
+path is configured without a valid key. Back up the key separately: losing it makes existing
+private values unrecoverable. The current implementation reads one key version at a time; key
+rotation and durable consent/action storage remain future work.
 
 User-authored message text is locally preprocessed before storage or model use. The default
 conservative detector masks email addresses, phone-number-like values, street addresses, and
