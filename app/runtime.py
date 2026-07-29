@@ -42,6 +42,10 @@ from app.models import (
     ThreadStatus,
     ToolCall,
 )
+from app.private_consents import (
+    InMemoryPrivateValueConsentStore,
+    PrivateValueDisclosure,
+)
 from app.private_values import InMemoryPrivateValueStore, LocalPIIProtector
 from app.quality import QualityEnhancer
 from app.store import ThreadStore
@@ -158,6 +162,7 @@ class AgentRuntime:
         context_compaction_enabled: bool = True,
         private_value_store: InMemoryPrivateValueStore | None = None,
         input_pii_protector: LocalPIIProtector | None = None,
+        private_value_consent_store: InMemoryPrivateValueConsentStore | None = None,
     ) -> None:
         self._store = store
         if execution_resolver is not None:
@@ -182,6 +187,9 @@ class AgentRuntime:
         self._context_compaction_enabled = context_compaction_enabled
         self._private_value_store = private_value_store or InMemoryPrivateValueStore.from_env()
         self._input_pii_protector = input_pii_protector or LocalPIIProtector.from_env()
+        self._private_value_consent_store = (
+            private_value_consent_store or InMemoryPrivateValueConsentStore()
+        )
 
     async def protect_user_content(
         self,
@@ -281,6 +289,43 @@ class AgentRuntime:
 
     def clear_private_values(self, principal: Principal, thread_id: str) -> None:
         self._private_value_store.clear_thread(principal.tenant_id, thread_id)
+        self._private_value_consent_store.clear_thread(principal.tenant_id, thread_id)
+
+    def pending_private_value_consents(
+        self, principal: Principal, thread_id: str
+    ) -> list[dict[str, object]]:
+        return self._private_value_consent_store.pending(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+        )
+
+    def decide_private_value_consent(
+        self,
+        principal: Principal,
+        thread_id: str,
+        consent_id: str,
+        *,
+        approve: bool,
+        one_shot: bool,
+    ) -> dict[str, object]:
+        return self._private_value_consent_store.decide(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+            consent_id=consent_id,
+            approve=approve,
+            one_shot=one_shot,
+        )
+
+    def private_value_disclosure_audit(
+        self, principal: Principal, thread_id: str
+    ) -> list[dict[str, object]]:
+        return self._private_value_consent_store.audit_records(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+        )
 
     async def run_thread(
         self,
@@ -560,6 +605,15 @@ class AgentRuntime:
                                         text,
                                     )
                                 ),
+                                private_value_authorizer=lambda name, fingerprint, disclosures: (
+                                    self._authorize_private_value_disclosure(
+                                        principal,
+                                        thread_id,
+                                        name,
+                                        fingerprint,
+                                        disclosures,
+                                    )
+                                ),
                             ),
                         ),
                         timeout=self._tool_timeout_seconds,
@@ -576,6 +630,16 @@ class AgentRuntime:
                 )
             except HTTPException as exc:
                 failed_tool_calls.add(tool_call_signature)
+                if exc.status_code == 428:
+                    await _emit_run_event(
+                        event_sink,
+                        {
+                            "type": "private_value.consent_required",
+                            "tool_call_id": tool_call.id,
+                            "name": tool_call.name,
+                            "request": exc.detail,
+                        },
+                    )
                 return _serialize_tool_error(tool_call.name, exc)
             if isinstance(result, MCPPrivateToolResult):
                 self._private_value_store.add(
@@ -633,6 +697,23 @@ class AgentRuntime:
                     "result": result,
                 },
             )
+
+    def _authorize_private_value_disclosure(
+        self,
+        principal: Principal,
+        thread_id: str,
+        tool_name: str,
+        argument_fingerprint: str,
+        disclosures: tuple[PrivateValueDisclosure, ...],
+    ) -> None:
+        self._private_value_consent_store.authorize_or_request(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+            tool_name=tool_name,
+            argument_fingerprint=argument_fingerprint,
+            disclosures=disclosures,
+        )
 
     def _protect_tool_result(
         self,

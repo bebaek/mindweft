@@ -12,6 +12,7 @@ from app.mcp import MCPPrivateValuePolicy, MCPServerConfig, MCPServerInfo
 from app.mcp_manager import MCPServerManager
 from app.models import ToolSpec
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
+from app.private_consents import PrivateValueDisclosure
 from app.redaction import ToolResultRedactionPolicy
 from app.tools import (
     MINIGENT_MINIRAG_BACKEND_ENV,
@@ -60,6 +61,7 @@ def test_tool_registry_resolves_only_selected_private_argument_paths(
 ) -> None:
     received: list[dict[str, object]] = []
     received_contexts: list[ToolExecutionContext | None] = []
+    authorized: list[tuple[str, str, tuple[PrivateValueDisclosure, ...]]] = []
 
     def send_handler(arguments, context=None):
         received.append(arguments)
@@ -92,7 +94,12 @@ def test_tool_registry_resolves_only_selected_private_argument_paths(
             registry.execute(
                 "send",
                 arguments,
-                context=ToolExecutionContext(private_value_resolver=lambda text: values[text]),
+                context=ToolExecutionContext(
+                    private_value_resolver=lambda text: values[text],
+                    private_value_authorizer=lambda name, fingerprint, disclosures: (
+                        authorized.append((name, fingerprint, disclosures))
+                    ),
+                ),
             )
         )
 
@@ -107,6 +114,13 @@ def test_tool_registry_resolves_only_selected_private_argument_paths(
     assert arguments["recipient"] == {"email": "{{pii:email:to-ref}}"}
     assert received_contexts[0] is not None
     assert received_contexts[0].private_value_resolver is None
+    assert received_contexts[0].private_value_authorizer is None
+    assert authorized[0][0] == "send"
+    assert len(authorized[0][1]) == 64
+    assert {(item.path, item.kind) for item in authorized[0][2]} == {
+        ("recipient.email", "email"),
+        ("cc[*].email", "email"),
+    }
     assert "to@example.com" not in caplog.text
     assert "cc@example.com" not in caplog.text
 

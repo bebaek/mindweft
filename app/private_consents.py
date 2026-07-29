@@ -1,0 +1,267 @@
+from __future__ import annotations
+
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from threading import RLock
+from uuid import uuid4
+
+from fastapi import HTTPException
+
+DEFAULT_CONSENT_REQUEST_TTL_SECONDS = 600.0
+DEFAULT_CONSENT_GRANT_TTL_SECONDS = 300.0
+
+
+@dataclass(frozen=True, order=True)
+class PrivateValueDisclosure:
+    path: str
+    kind: str
+    reference: str
+
+
+@dataclass
+class PrivateValueConsentRequest:
+    consent_id: str
+    tenant_id: str
+    user_id: str
+    thread_id: str
+    tool_name: str
+    argument_fingerprint: str
+    disclosures: tuple[PrivateValueDisclosure, ...]
+    status: str
+    created_at: float
+    expires_at: float
+    one_shot: bool = True
+
+    def public_dict(self) -> dict[str, object]:
+        grouped: dict[tuple[str, str], int] = {}
+        for disclosure in self.disclosures:
+            key = (disclosure.path, disclosure.kind)
+            grouped[key] = grouped.get(key, 0) + 1
+        return {
+            "consent_id": self.consent_id,
+            "thread_id": self.thread_id,
+            "tool_name": self.tool_name,
+            "argument_fingerprint": self.argument_fingerprint,
+            "status": self.status,
+            "one_shot": self.one_shot,
+            "expires_at": self.expires_at,
+            "disclosures": [
+                {"path": path, "kind": kind, "count": count}
+                for (path, kind), count in sorted(grouped.items())
+            ],
+        }
+
+
+@dataclass(frozen=True)
+class PrivateValueDisclosureAuditRecord:
+    event: str
+    tenant_id: str
+    user_id: str
+    thread_id: str
+    consent_id: str
+    tool_name: str
+    argument_fingerprint: str
+    disclosures: tuple[PrivateValueDisclosure, ...]
+    occurred_at: float
+
+    def public_dict(self) -> dict[str, object]:
+        return {
+            "event": self.event,
+            "consent_id": self.consent_id,
+            "thread_id": self.thread_id,
+            "tool_name": self.tool_name,
+            "argument_fingerprint": self.argument_fingerprint,
+            "occurred_at": self.occurred_at,
+            "disclosures": [
+                {
+                    "path": item.path,
+                    "kind": item.kind,
+                    "reference": item.reference,
+                }
+                for item in self.disclosures
+            ],
+        }
+
+
+class InMemoryPrivateValueConsentStore:
+    """Thread-scoped pending requests, one-shot grants, and redacted disclosure audit data."""
+
+    def __init__(
+        self,
+        *,
+        request_ttl_seconds: float = DEFAULT_CONSENT_REQUEST_TTL_SECONDS,
+        grant_ttl_seconds: float = DEFAULT_CONSENT_GRANT_TTL_SECONDS,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self._request_ttl_seconds = request_ttl_seconds
+        self._grant_ttl_seconds = grant_ttl_seconds
+        self._clock = clock
+        self._requests: dict[str, PrivateValueConsentRequest] = {}
+        self._audit: list[PrivateValueDisclosureAuditRecord] = []
+        self._lock = RLock()
+
+    def authorize_or_request(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        tool_name: str,
+        argument_fingerprint: str,
+        disclosures: tuple[PrivateValueDisclosure, ...],
+    ) -> None:
+        normalized = tuple(sorted(set(disclosures)))
+        now = self._clock()
+        with self._lock:
+            self._expire(now)
+            matching = [
+                request
+                for request in self._requests.values()
+                if request.tenant_id == tenant_id
+                and request.user_id == user_id
+                and request.thread_id == thread_id
+                and request.tool_name == tool_name
+                and request.argument_fingerprint == argument_fingerprint
+                and request.disclosures == normalized
+            ]
+            approved = next(
+                (request for request in matching if request.status == "approved"),
+                None,
+            )
+            denied = next(
+                (request for request in matching if request.status == "denied"),
+                None,
+            )
+            if denied is not None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Private-value disclosure was denied by the user",
+                )
+            if approved is not None:
+                if approved.one_shot:
+                    approved.status = "consumed"
+                self._record("disclosed", approved, now)
+                return
+            pending = next(
+                (request for request in matching if request.status == "pending"),
+                None,
+            )
+            if pending is None:
+                pending = PrivateValueConsentRequest(
+                    consent_id=str(uuid4()),
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    thread_id=thread_id,
+                    tool_name=tool_name,
+                    argument_fingerprint=argument_fingerprint,
+                    disclosures=normalized,
+                    status="pending",
+                    created_at=now,
+                    expires_at=now + self._request_ttl_seconds,
+                )
+                self._requests[pending.consent_id] = pending
+                self._record("requested", pending, now)
+            raise HTTPException(
+                status_code=428,
+                detail={
+                    "message": "Private-value disclosure requires user approval",
+                    **pending.public_dict(),
+                },
+            )
+
+    def decide(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        consent_id: str,
+        approve: bool,
+        one_shot: bool = True,
+    ) -> dict[str, object]:
+        now = self._clock()
+        with self._lock:
+            self._expire(now)
+            request = self._owned_request(tenant_id, user_id, thread_id, consent_id)
+            if request.status != "pending":
+                raise HTTPException(status_code=409, detail="Consent request is not pending")
+            request.status = "approved" if approve else "denied"
+            request.one_shot = one_shot
+            request.expires_at = now + self._grant_ttl_seconds
+            self._record(request.status, request, now)
+            return request.public_dict()
+
+    def pending(self, *, tenant_id: str, user_id: str, thread_id: str) -> list[dict[str, object]]:
+        now = self._clock()
+        with self._lock:
+            self._expire(now)
+            return [
+                request.public_dict()
+                for request in self._requests.values()
+                if request.tenant_id == tenant_id
+                and request.user_id == user_id
+                and request.thread_id == thread_id
+                and request.status == "pending"
+            ]
+
+    def audit_records(
+        self, *, tenant_id: str, user_id: str, thread_id: str
+    ) -> list[dict[str, object]]:
+        with self._lock:
+            return [
+                record.public_dict()
+                for record in self._audit
+                if record.tenant_id == tenant_id
+                and record.user_id == user_id
+                and record.thread_id == thread_id
+            ]
+
+    def clear_thread(self, tenant_id: str, thread_id: str) -> None:
+        with self._lock:
+            consent_ids = [
+                consent_id
+                for consent_id, request in self._requests.items()
+                if request.tenant_id == tenant_id and request.thread_id == thread_id
+            ]
+            for consent_id in consent_ids:
+                self._requests.pop(consent_id, None)
+            self._audit = [
+                record
+                for record in self._audit
+                if not (record.tenant_id == tenant_id and record.thread_id == thread_id)
+            ]
+
+    def _owned_request(
+        self, tenant_id: str, user_id: str, thread_id: str, consent_id: str
+    ) -> PrivateValueConsentRequest:
+        request = self._requests.get(consent_id)
+        if (
+            request is None
+            or request.tenant_id != tenant_id
+            or request.user_id != user_id
+            or request.thread_id != thread_id
+        ):
+            raise HTTPException(status_code=404, detail="Consent request not found")
+        return request
+
+    def _expire(self, now: float) -> None:
+        for request in self._requests.values():
+            if request.status in {"pending", "approved", "denied"} and request.expires_at <= now:
+                request.status = "expired"
+                self._record("expired", request, now)
+
+    def _record(self, event: str, request: PrivateValueConsentRequest, occurred_at: float) -> None:
+        self._audit.append(
+            PrivateValueDisclosureAuditRecord(
+                event=event,
+                tenant_id=request.tenant_id,
+                user_id=request.user_id,
+                thread_id=request.thread_id,
+                consent_id=request.consent_id,
+                tool_name=request.tool_name,
+                argument_fingerprint=request.argument_fingerprint,
+                disclosures=request.disclosures,
+                occurred_at=occurred_at,
+            )
+        )

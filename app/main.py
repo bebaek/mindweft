@@ -54,6 +54,7 @@ from app.models import (
     Message,
     MessageRole,
     Principal,
+    PrivateValueConsentDecisionRequest,
     RunThreadResponse,
     TenantContext,
     TextPart,
@@ -827,6 +828,47 @@ def create_app(
                 ThreadStatus.IDLE,
             )
         return {"cancelled": cancelled, "thread_id": thread_id}
+
+    @app.get("/threads/{thread_id}/private-value-consents/pending")
+    async def pending_private_value_consents(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> list[dict[str, object]]:
+        request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        return request.app.state.runtime.pending_private_value_consents(
+            principal,
+            thread_id,
+        )
+
+    @app.post("/threads/{thread_id}/private-value-consents/{consent_id}")
+    async def decide_private_value_consent(
+        thread_id: str,
+        consent_id: str,
+        decision: PrivateValueConsentDecisionRequest,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> dict[str, object]:
+        request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        return request.app.state.runtime.decide_private_value_consent(
+            principal,
+            thread_id,
+            consent_id,
+            approve=decision.approve,
+            one_shot=decision.one_shot,
+        )
+
+    @app.get("/threads/{thread_id}/private-value-disclosures/audit")
+    async def private_value_disclosure_audit(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> list[dict[str, object]]:
+        request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        return request.app.state.runtime.private_value_disclosure_audit(
+            principal,
+            thread_id,
+        )
 
     @app.delete("/threads/{thread_id}", status_code=204)
     async def delete_thread(

@@ -186,8 +186,29 @@ expired values fail closed. Array paths use `[*]`, for example:
 
 `pass_through` is also available for tools designed to consume opaque placeholders directly;
 it never resolves their values. Tool results are run back through local PII protection before
-storage, run events, or another model turn. This milestone treats administrator configuration
-as the disclosure grant; interactive or persistent end-user consent is not implemented yet.
+storage, run events, or another model turn.
+
+A selected disclosure now requires a user-scoped consent grant in addition to administrator
+policy. The first attempt creates a redacted pending request, emits a
+`private_value.consent_required` run event, and fails the tool call with HTTP 428. The request
+contains only the tool name, an argument fingerprint, and PII kinds, counts, and argument paths.
+Clients can inspect and decide it through:
+
+```text
+GET  /threads/{thread_id}/private-value-consents/pending
+POST /threads/{thread_id}/private-value-consents/{consent_id}
+GET  /threads/{thread_id}/private-value-disclosures/audit
+```
+
+The decision body is `{"approve": true, "one_shot": true}` or `{"approve": false}`. After
+approval, retrying the exact action consumes the one-shot grant immediately before resolution.
+Grants are bound to a SHA-256 fingerprint of the complete placeholder-bearing argument object,
+so changing the body or any other argument requires new consent. Non-one-shot grants remain
+usable for five minutes; pending requests expire after ten minutes.
+Denials block the identical disclosure until they expire. Consent state is in memory and is
+scoped by tenant, user, and thread. Audit records contain opaque references, paths, and kinds,
+but never raw values. Interactive browser controls and durable consent persistence remain
+future work.
 
 Run the private-contacts MCP server with fake contacts for an end-to-end local experiment:
 

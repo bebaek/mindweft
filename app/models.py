@@ -250,6 +250,11 @@ class AddMessageRequest(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class PrivateValueConsentDecisionRequest(BaseModel):
+    approve: bool
+    one_shot: bool = True
+
+
 class RunThreadResponse(BaseModel):
     reply: str
 

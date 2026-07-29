@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,8 @@ from app.models import (
     ToolSpec,
 )
 from app.peer_agents import PeerAgentConfig, PeerAgentRegistry
+from app.private_consents import InMemoryPrivateValueConsentStore, PrivateValueDisclosure
+from app.private_values import PII_PLACEHOLDER_PATTERN
 from app.quality import QualityEnhancer
 from app.runtime import (
     DEFAULT_MAX_ITERATIONS,
@@ -331,7 +334,13 @@ def test_runtime_resolves_selected_private_values_only_at_trusted_tool_boundary(
         ),
     )
     store = InMemoryThreadStore()
-    runtime = AgentRuntime(store=store, llm_adapter=SendThenReplyLLM(), tool_registry=registry)
+    consent_store = InMemoryPrivateValueConsentStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=SendThenReplyLLM(),
+        tool_registry=registry,
+        private_value_consent_store=consent_store,
+    )
     thread = store.create_thread(PRINCIPAL.tenant_id)
     protected = asyncio.run(
         runtime.protect_user_content(
@@ -343,6 +352,44 @@ def test_runtime_resolves_selected_private_values_only_at_trusted_tool_boundary(
     store.append_message(
         PRINCIPAL.tenant_id,
         Message(thread_id=thread.thread_id, role=MessageRole.USER, content=protected),
+    )
+    placeholder_match = PII_PLACEHOLDER_PATTERN.search(protected)
+    assert placeholder_match is not None
+    disclosure = PrivateValueDisclosure(
+        path="recipient.email",
+        kind=placeholder_match.group("kind"),
+        reference=placeholder_match.group("reference"),
+    )
+    tool_arguments = {
+        "recipient": {"email": placeholder_match.group(0)},
+    }
+    argument_fingerprint = hashlib.sha256(
+        json.dumps(
+            tool_arguments,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    try:
+        consent_store.authorize_or_request(
+            tenant_id=PRINCIPAL.tenant_id,
+            user_id=PRINCIPAL.user_id,
+            thread_id=thread.thread_id,
+            tool_name="trusted.send",
+            argument_fingerprint=argument_fingerprint,
+            disclosures=(disclosure,),
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 428
+    pending = runtime.pending_private_value_consents(PRINCIPAL, thread.thread_id)
+    assert len(pending) == 1
+    runtime.decide_private_value_consent(
+        PRINCIPAL,
+        thread.thread_id,
+        str(pending[0]["consent_id"]),
+        approve=True,
+        one_shot=True,
     )
 
     reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
@@ -358,6 +405,13 @@ def test_runtime_resolves_selected_private_values_only_at_trusted_tool_boundary(
         [message.model_dump(mode="json") for message in rendered]
     )
     assert len(model_inputs) == 2
+    audit = runtime.private_value_disclosure_audit(PRINCIPAL, thread.thread_id)
+    assert [record["event"] for record in audit] == [
+        "requested",
+        "approved",
+        "disclosed",
+    ]
+    assert "private@example.com" not in json.dumps(audit)
 
 
 def test_runtime_runs_multiple_tool_calls_concurrently() -> None:

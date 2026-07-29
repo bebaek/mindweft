@@ -3,9 +3,11 @@ from __future__ import annotations
 import ast
 import asyncio
 import concurrent.futures
+import hashlib
 import importlib
 import inspect
 import ipaddress
+import json
 import logging
 import operator
 import os
@@ -28,6 +30,7 @@ from app.mcp import (
 from app.mcp_manager import MCPRegistrySnapshot
 from app.models import ToolSpec
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_env
+from app.private_consents import PrivateValueDisclosure
 from app.private_values import PII_PLACEHOLDER_PATTERN
 from app.redaction import (
     ToolResultRedactionPolicy,
@@ -89,6 +92,9 @@ class ToolExecutionContext:
     tenant_id: str | None = None
     thread_id: str | None = None
     private_value_resolver: Callable[[str], str] | None = None
+    private_value_authorizer: (
+        Callable[[str, str, tuple[PrivateValueDisclosure, ...]], None] | None
+    ) = None
 
 
 class ToolRegistry:
@@ -148,6 +154,8 @@ class ToolRegistry:
                 arguments,
                 policy=self._private_value_policies[name],
                 resolver=context.private_value_resolver if context is not None else None,
+                authorizer=context.private_value_authorizer if context is not None else None,
+                tool_name=name,
             )
             handler_context = (
                 ToolExecutionContext(
@@ -1038,35 +1046,26 @@ def _prepare_private_tool_arguments(
     *,
     policy: MCPPrivateValuePolicy,
     resolver: Callable[[str], str] | None,
+    authorizer: (Callable[[str, str, tuple[PrivateValueDisclosure, ...]], None] | None),
+    tool_name: str,
 ) -> dict[str, Any]:
     if policy.mode == "pass_through":
         return arguments
-    allowed_paths = set(policy.argument_paths)
 
-    def visit(value: Any, path: str) -> Any:
+    disclosures: list[PrivateValueDisclosure] = []
+
+    def discover(value: Any, path: str) -> None:
         if isinstance(value, str):
-            if PII_PLACEHOLDER_PATTERN.search(value) is None:
-                return value
-            if policy.mode == "deny":
-                raise HTTPException(
-                    status_code=403,
-                    detail="Tool private-value disclosure is denied by policy",
+            disclosures.extend(
+                PrivateValueDisclosure(
+                    path=path,
+                    kind=match.group("kind"),
+                    reference=match.group("reference"),
                 )
-            if path not in allowed_paths:
-                raise HTTPException(
-                    status_code=403,
-                    detail=(
-                        f"Tool private-value disclosure is not allowed for argument path '{path}'"
-                    ),
-                )
-            if resolver is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Private-value resolution is unavailable for this tool execution",
-                )
-            return resolver(value)
+                for match in PII_PLACEHOLDER_PATTERN.finditer(value)
+            )
+            return
         if isinstance(value, dict):
-            protected: dict[str, Any] = {}
             for key, item in value.items():
                 key_text = str(key)
                 if PII_PLACEHOLDER_PATTERN.search(key_text) is not None:
@@ -1074,15 +1073,68 @@ def _prepare_private_tool_arguments(
                         status_code=403,
                         detail="Tool private-value disclosure is not allowed in argument keys",
                     )
-                item_path = f"{path}.{key_text}" if path else key_text
-                protected[key_text] = visit(item, item_path)
-            return protected
+                discover(item, f"{path}.{key_text}" if path else key_text)
+            return
         if isinstance(value, list):
-            item_path = f"{path}[*]"
-            return [visit(item, item_path) for item in value]
+            for item in value:
+                discover(item, f"{path}[*]")
+
+    discover(arguments, "")
+    if not disclosures:
+        return arguments
+    if policy.mode == "deny":
+        raise HTTPException(
+            status_code=403,
+            detail="Tool private-value disclosure is denied by policy",
+        )
+    allowed_paths = set(policy.argument_paths)
+    disallowed_path = next(
+        (item.path for item in disclosures if item.path not in allowed_paths),
+        None,
+    )
+    if disallowed_path is not None:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Tool private-value disclosure is not allowed for argument path "
+                f"'{disallowed_path}'"
+            ),
+        )
+    if resolver is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Private-value resolution is unavailable for this tool execution",
+        )
+    if authorizer is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Private-value consent is unavailable for this tool execution",
+        )
+    argument_fingerprint = hashlib.sha256(
+        json.dumps(
+            arguments,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
+    authorizer(
+        tool_name,
+        argument_fingerprint,
+        tuple(sorted(set(disclosures))),
+    )
+
+    def resolve(value: Any) -> Any:
+        if isinstance(value, str):
+            return resolver(value) if PII_PLACEHOLDER_PATTERN.search(value) is not None else value
+        if isinstance(value, dict):
+            return {str(key): resolve(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [resolve(item) for item in value]
         return value
 
-    prepared = visit(arguments, "")
+    prepared = resolve(arguments)
     if not isinstance(prepared, dict):
         raise HTTPException(status_code=500, detail="Tool arguments must remain an object")
     return prepared
