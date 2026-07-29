@@ -31,6 +31,7 @@ from app.llm import (
     llm_progress_sink,
     serialize_tool_result,
 )
+from app.mcp import MCPPrivateToolResult
 from app.models import (
     LLMResponse,
     Message,
@@ -40,6 +41,7 @@ from app.models import (
     ThreadStatus,
     ToolCall,
 )
+from app.private_values import InMemoryPrivateValueStore
 from app.quality import QualityEnhancer
 from app.store import ThreadStore
 from app.tools import ToolExecutionContext, ToolRegistry
@@ -48,7 +50,10 @@ RUNTIME_SYSTEM_PROMPT = (
     "Use tools when they are relevant and ground claims in tool results. "
     "Distinguish clearly between direct verification and inference. "
     "Do not claim a live status, current availability, or real-time confirmation unless a tool result directly confirms it. "
-    "If tool results fail, are indirect, or are insufficient, say that you could not directly verify the answer and explain what you were able to infer."
+    "If tool results fail, are indirect, or are insufficient, say that you could not "
+    "directly verify the answer and explain what you were able to infer. "
+    "If tool results contain placeholders in the form {{pii:kind:reference}}, preserve "
+    "those placeholders exactly in the final response."
 )
 DEFAULT_MAX_ITERATIONS = 16
 DEFAULT_TOOL_TIMEOUT_SECONDS = 60.0
@@ -150,6 +155,7 @@ class AgentRuntime:
         target_prompt_tokens: int = 3000,
         quality_enhancer: QualityEnhancer | None = None,
         context_compaction_enabled: bool = True,
+        private_value_store: InMemoryPrivateValueStore | None = None,
     ) -> None:
         self._store = store
         if execution_resolver is not None:
@@ -172,6 +178,7 @@ class AgentRuntime:
         self._target_prompt_tokens = max(256, target_prompt_tokens)
         self._quality_enhancer = quality_enhancer
         self._context_compaction_enabled = context_compaction_enabled
+        self._private_value_store = private_value_store or InMemoryPrivateValueStore()
 
     async def run_thread(
         self,
@@ -296,17 +303,23 @@ class AgentRuntime:
                             "content": reasoning_content,
                         },
                     )
+                stored_content = final_content
                 self._store.append_message(
                     principal.tenant_id,
                     Message(
                         thread_id=thread_id,
                         role=MessageRole.ASSISTANT,
-                        content=final_content,
+                        content=stored_content,
                         metadata=response.metadata,
                     ),
                 )
                 self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
-                return final_content, response.metadata
+                user_content = self._private_value_store.render_for_user(
+                    principal.tenant_id,
+                    thread_id,
+                    stored_content,
+                )
+                return user_content, response.metadata
         except asyncio.CancelledError:
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
             raise
@@ -455,6 +468,13 @@ class AgentRuntime:
             except HTTPException as exc:
                 failed_tool_calls.add(tool_call_signature)
                 return _serialize_tool_error(tool_call.name, exc)
+            if isinstance(result, MCPPrivateToolResult):
+                self._private_value_store.add(
+                    principal.tenant_id,
+                    thread_id,
+                    result.private_values,
+                )
+                result = result.model_content
             normalized_error = _normalize_tool_error_result(tool_call.name, result)
             if normalized_error is not None:
                 failed_tool_calls.add(tool_call_signature)

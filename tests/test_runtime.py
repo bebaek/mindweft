@@ -16,7 +16,7 @@ from app.execution import (
     parse_tenant_execution_config,
 )
 from app.llm import LLMAdapter, MockLLMAdapter
-from app.mcp import MCPServerConfig, MCPServerInfo
+from app.mcp import MCPPrivateToolResult, MCPServerConfig, MCPServerInfo
 from app.models import (
     LLMResponse,
     Message,
@@ -184,6 +184,66 @@ def test_runtime_uses_redacted_tool_results_for_stream_store_and_llm_context() -
             "result": expected_result,
         }
     ]
+
+
+def test_runtime_keeps_private_mcp_values_out_of_model_history_and_events() -> None:
+    placeholder = "{{pii:email:email-ref}}"
+    seen_tool_content: str | None = None
+
+    class PrivateContactThenReplyLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            nonlocal seen_tool_content
+            if messages[-1].role == MessageRole.TOOL:
+                seen_tool_content = messages[-1].content
+                return LLMResponse(content=f"The contact email is {placeholder}.")
+            return LLMResponse(
+                tool_call=ToolCall(id="call-contact", name="contacts.list", arguments={})
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    registry = ToolRegistry()
+    registry.register(
+        name="contacts.list",
+        description="List contacts with private values represented by placeholders.",
+        input_schema={"type": "object", "properties": {}},
+        handler=lambda arguments, context=None: MCPPrivateToolResult(
+            model_content={"email": placeholder},
+            private_values={"email-ref": "alice@example.com"},
+        ),
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=PrivateContactThenReplyLLM(),
+        tool_registry=registry,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="list contacts"),
+    )
+    events: list[dict[str, object]] = []
+
+    async def event_sink(event: dict[str, object]) -> None:
+        events.append(event)
+
+    reply, _metadata = asyncio.run(
+        runtime.run_thread(PRINCIPAL, thread.thread_id, event_sink=event_sink)
+    )
+
+    assert reply == "The contact email is alice@example.com."
+    assert seen_tool_content is not None
+    assert placeholder in seen_tool_content
+    assert "alice@example.com" not in seen_tool_content
+    messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    stored_messages = json.dumps([message.content for message in messages])
+    assert placeholder in stored_messages
+    assert "alice@example.com" not in stored_messages
+    serialized_events = json.dumps(events)
+    assert placeholder in serialized_events
+    assert "alice@example.com" not in serialized_events
 
 
 def test_runtime_runs_multiple_tool_calls_concurrently() -> None:

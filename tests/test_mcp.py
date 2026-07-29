@@ -7,12 +7,15 @@ import pytest
 from fastapi import HTTPException
 
 from app.mcp import (
+    PRIVATE_VALUES_META_KEY,
     MCPHTTPClient,
     MCPPathPolicy,
+    MCPPrivateToolResult,
     MCPServerConfig,
     MCPSettings,
     load_mcp_server_configs_from_env,
     mcp_settings_from_env,
+    parse_mcp_tool_result,
 )
 from app.redaction import RedactingLogFilter, install_log_redaction, redact_urls_in_text
 
@@ -146,6 +149,46 @@ def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
     assert requests[2]["headers"]["mcp-session-id"] == "session-123"
     assert requests[2]["headers"]["mcp-protocol-version"] == "2025-11-25"
     assert requests[3]["body"]["method"] == "tools/call"
+
+
+def test_parse_mcp_tool_result_separates_private_metadata() -> None:
+    result = parse_mcp_tool_result(
+        {
+            "structuredContent": {
+                "name": "{{pii:name:name-ref}}",
+                "email": "{{pii:email:email-ref}}",
+            },
+            "_meta": {
+                PRIVATE_VALUES_META_KEY: {
+                    "name-ref": "Alice Smith",
+                    "email-ref": "alice@example.com",
+                }
+            },
+        },
+        tool_name="contacts.list",
+    )
+
+    assert result == MCPPrivateToolResult(
+        model_content={
+            "name": "{{pii:name:name-ref}}",
+            "email": "{{pii:email:email-ref}}",
+        },
+        private_values={
+            "name-ref": "Alice Smith",
+            "email-ref": "alice@example.com",
+        },
+    )
+
+
+def test_parse_mcp_tool_result_rejects_invalid_private_metadata() -> None:
+    with pytest.raises(HTTPException, match="invalid private-value metadata"):
+        parse_mcp_tool_result(
+            {
+                "structuredContent": {"name": "{{pii:name:name-ref}}"},
+                "_meta": {PRIVATE_VALUES_META_KEY: {"name-ref": 123}},
+            },
+            tool_name="contacts.list",
+        )
 
 
 def test_mcp_http_client_rejects_mismatched_jsonrpc_response_id() -> None:

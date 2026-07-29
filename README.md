@@ -140,6 +140,15 @@ basis; it is not a substitute for avoiding unnecessary access to credentials. Te
 MCP server configs can override the tool-result redaction policy with `result_redaction`
 / `resultRedaction` (`mode`: `best_effort`, `full`, or `none`).
 
+As an experimental local privacy convention, an MCP tool can return model-safe
+`{{pii:kind:reference}}` placeholders in `structuredContent` and place the corresponding
+string values under `_meta["io.minigent/carddav-private-values"]`. Minigent removes that
+metadata before model context, thread history, and run events, keeps it in a thread-scoped
+in-memory store, and resolves placeholders only in the immediate assistant reply sent to
+the authenticated user. This is a proof of concept rather than a standard MCP confidential
+channel: other MCP clients may log or expose `_meta`, values do not survive a restart, and
+reloaded thread history retains placeholders.
+
 ## Clients
 
 ### Browser

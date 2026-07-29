@@ -4,7 +4,7 @@ import fnmatch
 import json
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_MCP_PROTOCOL_VERSION = "2025-11-25"
 DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS = 30.0
 MCP_SERVERS_ENV = "MINIGENT_MCP_SERVERS"
+PRIVATE_VALUES_META_KEY = "io.minigent/carddav-private-values"
+
+
+@dataclass(frozen=True)
+class MCPPrivateToolResult:
+    model_content: Any
+    private_values: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -131,15 +138,19 @@ class MCPHTTPClient:
             {"name": tool_name, "arguments": arguments},
         )
         if result.get("isError"):
+            error_result = {key: value for key, value in result.items() if key != "_meta"}
             raise HTTPException(
                 status_code=502,
-                detail=f"MCP tool '{self._config.name}.{tool_name}' returned an error: {json.dumps(result, ensure_ascii=True)}",
+                detail=(
+                    f"MCP tool '{self._config.name}.{tool_name}' returned an error: "
+                    f"{json.dumps(error_result, ensure_ascii=True)}"
+                ),
             )
-        if "structuredContent" in result:
-            return result["structuredContent"]
-        if "content" in result:
-            return {"content": self._filter_content(tool_name, result["content"])}
-        return result
+        return parse_mcp_tool_result(
+            result,
+            tool_name=tool_name,
+            content_filter=self._filter_content,
+        )
 
     def _is_tool_allowed(self, tool_name: str) -> bool:
         return self._config.allowed_tools is None or tool_name in self._config.allowed_tools
@@ -387,6 +398,45 @@ def load_mcp_server_configs_from_env(env: Mapping[str, str] | None = None) -> li
 
 def mcp_settings_from_env() -> MCPSettings:
     return MCPSettings.from_env()
+
+
+def parse_mcp_tool_result(
+    result: dict[str, Any],
+    *,
+    tool_name: str,
+    content_filter: Callable[[str, Any], Any] | None = None,
+) -> Any:
+    if "structuredContent" in result:
+        model_content: Any = result["structuredContent"]
+    elif "content" in result:
+        content = result["content"]
+        if content_filter is not None:
+            content = content_filter(tool_name, content)
+        model_content = {"content": content}
+    else:
+        model_content = {
+            key: value for key, value in result.items() if key not in {"_meta", "isError"}
+        }
+
+    metadata = result.get("_meta")
+    if not isinstance(metadata, dict) or PRIVATE_VALUES_META_KEY not in metadata:
+        return model_content
+    raw_private_values = metadata[PRIVATE_VALUES_META_KEY]
+    if not isinstance(raw_private_values, dict) or not all(
+        isinstance(reference, str) and bool(reference) and isinstance(value, str)
+        for reference, value in raw_private_values.items()
+    ):
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"MCP tool '{tool_name}' returned invalid private-value metadata; "
+                "expected a string-to-string object"
+            ),
+        )
+    return MCPPrivateToolResult(
+        model_content=model_content,
+        private_values=dict(raw_private_values),
+    )
 
 
 def _parse_mcp_server_configs(raw_value: str) -> list[MCPServerConfig]:
