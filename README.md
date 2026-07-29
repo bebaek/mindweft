@@ -197,18 +197,23 @@ Clients can inspect and decide it through:
 ```text
 GET  /threads/{thread_id}/private-value-consents/pending
 POST /threads/{thread_id}/private-value-consents/{consent_id}
+POST /threads/{thread_id}/private-value-consents/{consent_id}/resume
 GET  /threads/{thread_id}/private-value-disclosures/audit
 ```
 
-The decision body is `{"approve": true, "one_shot": true}` or `{"approve": false}`. After
-approval, retrying the exact action consumes the one-shot grant immediately before resolution.
-Grants are bound to a SHA-256 fingerprint of the complete placeholder-bearing argument object,
-so changing the body or any other argument requires new consent. Non-one-shot grants remain
-usable for five minutes; pending requests expire after ten minutes.
+The decision body is `{"approve": true, "one_shot": true}` or `{"approve": false}`. The
+`resume` endpoint executes the exact placeholder-bearing tool call that originally requested
+consent and then continues the agent loop from its protected result; the model does not need to
+reconstruct the call. Grants are bound to a SHA-256 fingerprint of the complete
+placeholder-bearing argument object, so changing the body or any other argument requires new
+consent. Non-one-shot grants remain usable for five minutes; pending requests expire after ten
+minutes.
 Denials block the identical disclosure until they expire. Consent state is in memory and is
 scoped by tenant, user, and thread. Audit records contain opaque references, paths, and kinds,
-but never raw values. Interactive browser controls and durable consent persistence remain
-future work.
+but never raw values. The browser displays a confirmation dialog and automatically resumes an
+approved action. Interactive `minigent chat` sessions show the same redacted summary and prompt
+for a one-shot approval. Consent and pending actions are currently in memory; durable consent
+persistence remains future work.
 
 Run the private-contacts MCP server with fake contacts for an end-to-end local experiment:
 

@@ -539,6 +539,51 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent reply must be a string")
         return reply, None
 
+    def list_pending_private_value_consents(
+        self, thread_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        resolved_thread_id = thread_id or self.ensure_thread()
+        response = self.request_json(
+            "GET",
+            f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-consents/pending",
+        )
+        if not isinstance(response, list) or not all(isinstance(item, dict) for item in response):
+            raise RuntimeError("Minigent pending-consent response must be an array of objects")
+        return cast(list[dict[str, Any]], response)
+
+    def decide_private_value_consent(
+        self,
+        consent_id: str,
+        *,
+        approve: bool,
+        one_shot: bool = True,
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_thread_id = thread_id or self.ensure_thread()
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-consents/{consent_id}",
+            payload={"approve": approve, "one_shot": one_shot},
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent consent-decision response must be an object")
+        return cast(dict[str, Any], response)
+
+    def resume_private_value_consent(
+        self,
+        consent_id: str,
+        *,
+        thread_id: str | None = None,
+    ) -> tuple[str, dict[str, Any] | None]:
+        resolved_thread_id = thread_id or self.ensure_thread()
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-consents/{consent_id}/resume",
+        )
+        if not isinstance(response, dict) or not isinstance(response.get("reply"), str):
+            raise RuntimeError("Minigent consent-resume response must include a reply")
+        return response["reply"], None
+
     def compact_thread(self, thread_id: str) -> dict[str, Any]:
         response = self.request_json(
             "POST",

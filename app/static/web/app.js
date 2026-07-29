@@ -441,6 +441,7 @@ async function streamRun(threadId) {
   let assistantMessage = null;
   let runFailed = false;
   let runErrorMessage = "Run failed";
+  let pendingConsent = null;
   const peerTaskStatuses = new Map();
   const seenProgressLabels = new Set();
   runState.abortController = new AbortController();
@@ -466,6 +467,12 @@ async function streamRun(threadId) {
         setStatus(event.detail || "Run failed", true);
         return;
       }
+      if (event.type === "private_value.consent_required") {
+        pendingConsent = event.request || null;
+        addActivityEvent("Private-value consent required", event);
+        setRunStatus("Consent required", { forceVisible: true });
+        return;
+      }
       const label = formatRunEvent(event, peerTaskStatuses);
       if (label && !seenProgressLabels.has(label)) {
         seenProgressLabels.add(label);
@@ -483,9 +490,47 @@ async function streamRun(threadId) {
   if (runFailed) {
     throw new Error(runErrorMessage);
   }
+  if (pendingConsent) {
+    await handlePrivateValueConsent(threadId, pendingConsent);
+    return;
+  }
   if (!assistantMessage && !runState.cancelRequested) {
     throw new Error("Run stream ended without an assistant message.");
   }
+}
+
+async function handlePrivateValueConsent(threadId, consent) {
+  const disclosures = Array.isArray(consent.disclosures) ? consent.disclosures : [];
+  const summary = disclosures
+    .map((item) => `${item.count || 1} ${item.kind || "private value"} at ${item.path || "unknown path"}`)
+    .join("\n");
+  const approved = window.confirm(
+    `Allow ${consent.tool_name || "this tool"} to receive:\n\n${summary || "Private values"}\n\nThis approval applies only to this exact tool call.`
+  );
+  const consentId = consent.consent_id;
+  if (!consentId) {
+    throw new Error("Consent request did not include an ID.");
+  }
+  await requestJson(
+    `/threads/${encodeURIComponent(threadId)}/private-value-consents/${encodeURIComponent(consentId)}`,
+    {
+      method: "POST",
+      body: { approve: approved, one_shot: true },
+    },
+  );
+  if (!approved) {
+    appendNotice("Private-value disclosure denied.");
+    setRunStatus("Consent denied", { completed: true, forceVisible: true });
+    return;
+  }
+  setRunStatus("Resuming approved action…");
+  addActivityEvent("Private-value disclosure approved; resuming exact tool call");
+  await requestJson(
+    `/threads/${encodeURIComponent(threadId)}/private-value-consents/${encodeURIComponent(consentId)}/resume`,
+    { method: "POST" },
+  );
+  await refreshMessages();
+  setRunStatus("Activity", { completed: true, hint: "Approved action completed" });
 }
 
 async function requestJson(path, options = {}) {

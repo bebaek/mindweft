@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from app.agent_skills import load_agent_skill_body
 from app.execution import (
     FixedTenantExecutionResolver,
+    TenantExecutionContext,
     TenantExecutionResolver,
     TenantSkillConfig,
     build_tool_registry_for_capability_profile,
@@ -38,6 +39,7 @@ from app.models import (
     MessageRole,
     Principal,
     TextPart,
+    Thread,
     ThreadContext,
     ThreadStatus,
     ToolCall,
@@ -66,6 +68,14 @@ MAX_ITERATIONS_ENV = "MINIGENT_MAX_ITERATIONS"
 TOOL_TIMEOUT_SECONDS_ENV = "MINIGENT_TOOL_TIMEOUT_SECONDS"
 CONTEXT_COMPACTION_ENABLED_ENV = "MINIGENT_CONTEXT_COMPACTION_ENABLED"
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class PendingPrivateToolAction:
+    tenant_id: str
+    user_id: str
+    thread_id: str
+    tool_call: ToolCall
 
 
 @dataclass(frozen=True)
@@ -190,6 +200,7 @@ class AgentRuntime:
         self._private_value_consent_store = (
             private_value_consent_store or InMemoryPrivateValueConsentStore()
         )
+        self._pending_private_tool_actions: dict[str, PendingPrivateToolAction] = {}
 
     async def protect_user_content(
         self,
@@ -290,6 +301,13 @@ class AgentRuntime:
     def clear_private_values(self, principal: Principal, thread_id: str) -> None:
         self._private_value_store.clear_thread(principal.tenant_id, thread_id)
         self._private_value_consent_store.clear_thread(principal.tenant_id, thread_id)
+        pending_ids = [
+            consent_id
+            for consent_id, action in self._pending_private_tool_actions.items()
+            if action.tenant_id == principal.tenant_id and action.thread_id == thread_id
+        ]
+        for consent_id in pending_ids:
+            self._pending_private_tool_actions.pop(consent_id, None)
 
     def pending_private_value_consents(
         self, principal: Principal, thread_id: str
@@ -309,7 +327,7 @@ class AgentRuntime:
         approve: bool,
         one_shot: bool,
     ) -> dict[str, object]:
-        return self._private_value_consent_store.decide(
+        result = self._private_value_consent_store.decide(
             tenant_id=principal.tenant_id,
             user_id=principal.user_id,
             thread_id=thread_id,
@@ -317,6 +335,9 @@ class AgentRuntime:
             approve=approve,
             one_shot=one_shot,
         )
+        if not approve:
+            self._pending_private_tool_actions.pop(consent_id, None)
+        return result
 
     def private_value_disclosure_audit(
         self, principal: Principal, thread_id: str
@@ -326,6 +347,128 @@ class AgentRuntime:
             user_id=principal.user_id,
             thread_id=thread_id,
         )
+
+    def _tool_registry_for_thread(
+        self,
+        execution: TenantExecutionContext,
+        thread: Thread,
+    ) -> ToolRegistry:
+        skill_names = thread.skill_names
+        if skill_names is None and thread.skill_name is not None:
+            skill_names = [thread.skill_name]
+        skills = get_skill_configs(execution.config, skill_names)
+        capability_profile = get_capability_profile(execution.config, thread.capability_profile)
+        if capability_profile is not None:
+            return build_tool_registry_for_capability_profile(
+                execution.config,
+                thread.capability_profile,
+                mcp_manager=execution.mcp_manager,
+            )
+        if len(skills) == 1 and (
+            skills[0].allowed_local_tools is not None or skills[0].mcp_server_names is not None
+        ):
+            return build_tool_registry_for_skill(
+                execution.config,
+                skills[0].name,
+                mcp_manager=execution.mcp_manager,
+            )
+        return execution.tool_registry
+
+    def _private_tool_execution_context(
+        self,
+        principal: Principal,
+        thread_id: str,
+    ) -> ToolExecutionContext:
+        return ToolExecutionContext(
+            tenant_id=principal.tenant_id,
+            thread_id=thread_id,
+            private_value_resolver=lambda text: self._private_value_store.resolve_for_tool(
+                principal.tenant_id,
+                thread_id,
+                text,
+            ),
+            private_value_authorizer=lambda name, fingerprint, disclosures: (
+                self._authorize_private_value_disclosure(
+                    principal,
+                    thread_id,
+                    name,
+                    fingerprint,
+                    disclosures,
+                )
+            ),
+        )
+
+    async def resume_private_value_consent(
+        self,
+        principal: Principal,
+        thread_id: str,
+        consent_id: str,
+    ) -> tuple[str, dict[str, Any] | None]:
+        action = self._pending_private_tool_actions.get(consent_id)
+        if (
+            action is None
+            or action.tenant_id != principal.tenant_id
+            or action.user_id != principal.user_id
+            or action.thread_id != thread_id
+        ):
+            raise HTTPException(status_code=404, detail="Pending private tool action not found")
+        thread = self._store.get_thread(principal.tenant_id, thread_id)
+        if thread.status == ThreadStatus.RUNNING:
+            raise HTTPException(status_code=409, detail="Thread is already running")
+        execution = self._execution_resolver.resolve(principal.tenant_id)
+        tool_registry = self._tool_registry_for_thread(execution, thread)
+        try:
+            result = await asyncio.wait_for(
+                tool_registry.execute(
+                    action.tool_call.name,
+                    action.tool_call.arguments,
+                    context=self._private_tool_execution_context(principal, thread_id),
+                ),
+                timeout=self._tool_timeout_seconds,
+            )
+        except HTTPException as exc:
+            if exc.status_code == 428 and isinstance(exc.detail, dict):
+                replacement_consent_id = exc.detail.get("consent_id")
+                if isinstance(replacement_consent_id, str):
+                    self._pending_private_tool_actions[replacement_consent_id] = action
+                    if replacement_consent_id != consent_id:
+                        self._pending_private_tool_actions.pop(consent_id, None)
+            raise
+        if isinstance(result, MCPPrivateToolResult):
+            self._private_value_store.add(
+                principal.tenant_id,
+                thread_id,
+                result.private_values,
+            )
+            result = result.model_content
+        normalized_error = _normalize_tool_error_result(action.tool_call.name, result)
+        if normalized_error is not None:
+            result = normalized_error
+        result = self._protect_tool_result(principal, thread_id, result)
+        resumed_call_id = f"resume-{consent_id}"
+        self._store.append_message(
+            principal.tenant_id,
+            Message(
+                thread_id=thread_id,
+                role=MessageRole.ASSISTANT,
+                content="",
+                tool_name=action.tool_call.name,
+                tool_call_id=resumed_call_id,
+                tool_arguments=action.tool_call.arguments,
+            ),
+        )
+        self._store.append_message(
+            principal.tenant_id,
+            Message(
+                thread_id=thread_id,
+                role=MessageRole.TOOL,
+                content=serialize_tool_result(result),
+                tool_name=action.tool_call.name,
+                tool_call_id=resumed_call_id,
+            ),
+        )
+        self._pending_private_tool_actions.pop(consent_id, None)
+        return await self.run_thread(principal, thread_id)
 
     async def run_thread(
         self,
@@ -343,23 +486,7 @@ class AgentRuntime:
         if skill_names is None and thread.skill_name is not None:
             skill_names = [thread.skill_name]
         skills = get_skill_configs(execution.config, skill_names)
-        capability_profile = get_capability_profile(execution.config, thread.capability_profile)
-        if capability_profile is not None:
-            tool_registry = build_tool_registry_for_capability_profile(
-                execution.config,
-                thread.capability_profile,
-                mcp_manager=execution.mcp_manager,
-            )
-        elif len(skills) == 1 and (
-            skills[0].allowed_local_tools is not None or skills[0].mcp_server_names is not None
-        ):
-            tool_registry = build_tool_registry_for_skill(
-                execution.config,
-                skills[0].name,
-                mcp_manager=execution.mcp_manager,
-            )
-        else:
-            tool_registry = execution.tool_registry
+        tool_registry = self._tool_registry_for_thread(execution, thread)
         try:
             for iteration in range(1, self._max_iterations + 1):
                 messages = self._messages_for_llm(
@@ -595,25 +722,9 @@ class AgentRuntime:
                         tool_registry.execute(
                             tool_call.name,
                             tool_call.arguments,
-                            context=ToolExecutionContext(
-                                tenant_id=principal.tenant_id,
-                                thread_id=thread_id,
-                                private_value_resolver=lambda text: (
-                                    self._private_value_store.resolve_for_tool(
-                                        principal.tenant_id,
-                                        thread_id,
-                                        text,
-                                    )
-                                ),
-                                private_value_authorizer=lambda name, fingerprint, disclosures: (
-                                    self._authorize_private_value_disclosure(
-                                        principal,
-                                        thread_id,
-                                        name,
-                                        fingerprint,
-                                        disclosures,
-                                    )
-                                ),
+                            context=self._private_tool_execution_context(
+                                principal,
+                                thread_id,
                             ),
                         ),
                         timeout=self._tool_timeout_seconds,
@@ -631,6 +742,15 @@ class AgentRuntime:
             except HTTPException as exc:
                 failed_tool_calls.add(tool_call_signature)
                 if exc.status_code == 428:
+                    detail = exc.detail if isinstance(exc.detail, dict) else {}
+                    consent_id = detail.get("consent_id")
+                    if isinstance(consent_id, str):
+                        self._pending_private_tool_actions[consent_id] = PendingPrivateToolAction(
+                            tenant_id=principal.tenant_id,
+                            user_id=principal.user_id,
+                            thread_id=thread_id,
+                            tool_call=tool_call.model_copy(deep=True),
+                        )
                     await _emit_run_event(
                         event_sink,
                         {

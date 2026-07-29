@@ -92,15 +92,13 @@ def test_private_value_consent_api_approves_one_shot_disclosure(
         json={"approve": True, "one_shot": True},
     )
     approve_response.raise_for_status()
-    client.post(
-        f"/threads/{thread_id}/messages",
+    resume_response = client.post(
+        f"/threads/{thread_id}/private-value-consents/{pending[0]['consent_id']}/resume",
         headers=AUTH_HEADERS,
-        json={"content": "Retry the approved action."},
-    ).raise_for_status()
-    second_run = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    )
 
-    assert second_run.status_code == 200
-    assert second_run.json() == {"reply": "Sent."}
+    assert resume_response.status_code == 200
+    assert resume_response.json() == {"reply": "Sent."}
     assert received == [{"recipient": {"email": "private@example.com"}}]
     audit_response = client.get(
         f"/threads/{thread_id}/private-value-disclosures/audit",

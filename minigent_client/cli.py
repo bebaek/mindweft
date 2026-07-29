@@ -975,6 +975,13 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
                 client.send_user_message(utterance, parts=message_parts)
                 pending_image_parts.clear()
             reply, metadata = client.run_thread()
+            reply, metadata = _maybe_resume_private_value_consent(
+                client,
+                reply,
+                metadata,
+                input_stream=input_stream,
+                output_stream=output_stream,
+            )
         except KeyboardInterrupt:
             _cancel_current_run_after_interrupt(client)
             output_stream.write(f"\n{_chat_abort_message(config)}\n")
@@ -1000,6 +1007,51 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         turns_completed += 1
         if once and turns_completed >= 1:
             return 0
+
+
+def _maybe_resume_private_value_consent(
+    client: Any,
+    reply: str,
+    metadata: dict[str, Any] | None,
+    *,
+    input_stream: TextIO,
+    output_stream: TextIO,
+) -> tuple[str, dict[str, Any] | None]:
+    if not input_stream.isatty():
+        return reply, metadata
+    pending = client.list_pending_private_value_consents()
+    if not pending:
+        return reply, metadata
+    consent = pending[0]
+    consent_id = consent.get("consent_id")
+    if not isinstance(consent_id, str):
+        return reply, metadata
+    tool_name = str(consent.get("tool_name") or "tool")
+    disclosures = consent.get("disclosures")
+    output_stream.write(f"\n[consent] {tool_name} requests private values:\n")
+    if isinstance(disclosures, list):
+        for item in disclosures:
+            if not isinstance(item, dict):
+                continue
+            output_stream.write(
+                f"  - {item.get('count', 1)} {item.get('kind', 'private value')} "
+                f"at {item.get('path', 'unknown path')}\n"
+            )
+    output_stream.write("Approve this exact tool call once? [y/N] ")
+    output_stream.flush()
+    approved = input_stream.readline().strip().lower() in {"y", "yes"}
+    client.decide_private_value_consent(
+        consent_id,
+        approve=approved,
+        one_shot=True,
+    )
+    if not approved:
+        output_stream.write("[consent] denied\n")
+        output_stream.flush()
+        return reply, metadata
+    output_stream.write("[consent] approved; resuming exact tool call\n")
+    output_stream.flush()
+    return client.resume_private_value_consent(consent_id)
 
 
 def _cancel_current_run_after_interrupt(client: Any) -> None:

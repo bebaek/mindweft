@@ -858,6 +858,24 @@ def create_app(
             one_shot=decision.one_shot,
         )
 
+    @app.post(
+        "/threads/{thread_id}/private-value-consents/{consent_id}/resume",
+        response_model=RunThreadResponse,
+    )
+    async def resume_private_value_consent(
+        thread_id: str,
+        consent_id: str,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> RunThreadResponse:
+        request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        reply, _metadata = await request.app.state.runtime.resume_private_value_consent(
+            principal,
+            thread_id,
+            consent_id,
+        )
+        return RunThreadResponse(reply=reply)
+
     @app.get("/threads/{thread_id}/private-value-disclosures/audit")
     async def private_value_disclosure_audit(
         thread_id: str,
