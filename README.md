@@ -149,6 +149,18 @@ the authenticated user. This is a proof of concept rather than a standard MCP co
 channel: other MCP clients may log or expose `_meta`, values do not survive a restart, and
 reloaded thread history retains placeholders.
 
+Run the fake private-contacts MCP server for an end-to-end local experiment:
+
+```bash
+uv run python scripts/demo_private_contacts_mcp.py
+```
+
+It binds to `127.0.0.1:8766` and exposes `http://127.0.0.1:8766/mcp`. Configure that
+endpoint as an MCP server named `private-contacts`, allow `contacts_list`, and ask Minigent
+to list contacts and email addresses. The demo data is intentionally fake; use it only to
+verify that the model and stored thread see placeholders while the immediate user reply is
+rehydrated.
+
 ## Clients
 
 ### Browser
