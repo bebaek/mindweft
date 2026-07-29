@@ -688,7 +688,12 @@ def create_app(
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> list[Message]:
-        return request.app.state.store.list_messages(principal.tenant_id, thread_id)
+        messages = request.app.state.store.list_messages(principal.tenant_id, thread_id)
+        return request.app.state.runtime.render_messages_for_user(
+            principal,
+            thread_id,
+            messages,
+        )
 
     @app.get("/threads/{thread_id}/context/raw")
     async def get_raw_thread_context(
@@ -802,6 +807,7 @@ def create_app(
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> None:
         request.app.state.store.delete_thread(principal.tenant_id, thread_id)
+        request.app.state.runtime.clear_private_values(principal, thread_id)
 
     return app
 

@@ -178,7 +178,29 @@ class AgentRuntime:
         self._target_prompt_tokens = max(256, target_prompt_tokens)
         self._quality_enhancer = quality_enhancer
         self._context_compaction_enabled = context_compaction_enabled
-        self._private_value_store = private_value_store or InMemoryPrivateValueStore()
+        self._private_value_store = private_value_store or InMemoryPrivateValueStore.from_env()
+
+    def render_messages_for_user(
+        self,
+        principal: Principal,
+        thread_id: str,
+        messages: list[Message],
+    ) -> list[Message]:
+        return [
+            message.model_copy(
+                update={
+                    "content": self._private_value_store.render_for_user(
+                        principal.tenant_id,
+                        thread_id,
+                        message.content,
+                    )
+                }
+            )
+            for message in messages
+        ]
+
+    def clear_private_values(self, principal: Principal, thread_id: str) -> None:
+        self._private_value_store.clear_thread(principal.tenant_id, thread_id)
 
     async def run_thread(
         self,

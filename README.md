@@ -144,10 +144,14 @@ As an experimental local privacy convention, an MCP tool can return model-safe
 `{{pii:kind:reference}}` placeholders in `structuredContent` and place the corresponding
 string values under `_meta["io.minigent/carddav-private-values"]`. Minigent removes that
 metadata before model context, thread history, and run events, keeps it in a thread-scoped
-in-memory store, and resolves placeholders only in the immediate assistant reply sent to
-the authenticated user. This is a proof of concept rather than a standard MCP confidential
-channel: other MCP clients may log or expose `_meta`, values do not survive a restart, and
-reloaded thread history retains placeholders.
+in-memory store, and resolves placeholders in replies sent to the authenticated user. This
+is a proof of concept rather than a standard MCP confidential channel: other MCP clients may
+log or expose `_meta`, and values do not survive a restart. Stored messages retain
+placeholders, while authenticated message reads rehydrate values that have not expired.
+Private values expire after 30 minutes by default and are bounded to 1,000 references per
+thread and 10,000 characters per value; override those limits with
+`MINIGENT_PRIVATE_VALUE_TTL_SECONDS`, `MINIGENT_PRIVATE_VALUE_MAX_REFS_PER_THREAD`, and
+`MINIGENT_PRIVATE_VALUE_MAX_CHARS`.
 
 Run the private-contacts MCP server with fake contacts for an end-to-end local experiment:
 
@@ -156,10 +160,12 @@ uv run python scripts/demo_private_contacts_mcp.py
 ```
 
 It binds to `127.0.0.1:8766` and exposes `http://127.0.0.1:8766/mcp`. Configure that
-endpoint as an MCP server named `private-contacts`, allow `contacts_list`, and ask Minigent
-to list contacts and email addresses. With no CardDAV environment variables, the server
-uses intentionally fake data to verify that the model and stored thread see placeholders
-while the immediate user reply is rehydrated.
+endpoint as an MCP server named `private-contacts`, allow `contacts_list` and `contacts_get`,
+and ask Minigent to list contacts and selected email or phone fields. `contacts_list` returns
+protected names, available field names, and short-lived opaque `contact_ref` values;
+`contacts_get` retrieves only requested fields. With no CardDAV environment variables, the
+server uses intentionally fake data to verify that the model and stored thread see
+placeholders while the immediate user reply is rehydrated.
 
 For a read-only Baïkal or other CardDAV address book, export the collection URL and
 credentials before starting the same server. Enter the password interactively rather than
@@ -181,6 +187,17 @@ tool accepts `limit` up to 50). Basic and Digest authentication are negotiated a
 set `MINIGENT_CARDDAV_AUTH_MODE` to `basic` or `digest` only when explicit selection is
 needed. TLS verification is enabled; `--insecure-skip-tls-verify` exists only for trusted
 local development.
+
+With the CardDAV variables exported, run the sanitized full-path smoke test:
+
+```bash
+uv run python scripts/smoke_private_contacts.py
+```
+
+It starts the contacts MCP server and a mock-LLM Minigent API, exercises `contacts_list` and
+`contacts_get`, verifies that stored/model context contains no raw contact values, verifies
+that authenticated history rehydrates those values, and prints counts only. Pass `--fake`
+to run the same check against built-in contacts without accessing CardDAV.
 
 ## Clients
 

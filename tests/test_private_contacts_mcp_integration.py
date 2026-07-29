@@ -31,7 +31,7 @@ def test_private_contacts_mcp_keeps_pii_out_of_llm_history_and_events() -> None:
                 name="private-contacts",
                 url="http://private-contacts.test/mcp",
                 headers={},
-                allowed_tools=["contacts_list"],
+                allowed_tools=["contacts_list", "contacts_get"],
             ),
             transport=httpx.ASGITransport(app=create_app()),
         )
@@ -53,19 +53,43 @@ def test_private_contacts_mcp_keeps_pii_out_of_llm_history_and_events() -> None:
         class ContactsThenReplyLLM(LLMAdapter):
             async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
                 seen_llm_messages.append(messages)
-                if messages[-1].role != MessageRole.TOOL:
+                tool_payloads = [
+                    json.loads(message.content)
+                    for message in messages
+                    if message.role == MessageRole.TOOL
+                ]
+                if not tool_payloads:
                     return LLMResponse(
                         tool_call=ToolCall(
-                            id="contacts-call",
+                            id="contacts-list-call",
                             name="private-contacts.contacts_list",
                             arguments={},
                         )
                     )
-                tool_result = json.loads(messages[-1].content)
-                contacts = tool_result["contacts"]
+                listed_contacts = tool_payloads[0].get("contacts")
+                if listed_contacts is not None and len(tool_payloads) == 1:
+                    return LLMResponse(
+                        tool_calls=[
+                            ToolCall(
+                                id=f"contacts-get-{index}",
+                                name="private-contacts.contacts_get",
+                                arguments={
+                                    "contact_ref": contact["contact_ref"],
+                                    "fields": ["emails", "phones"],
+                                },
+                            )
+                            for index, contact in enumerate(listed_contacts)
+                        ]
+                    )
+                names = {
+                    contact["contact_ref"]: contact["name"] for contact in listed_contacts or []
+                }
                 lines = [
-                    f"{contact['name']} — {contact['emails'][0]} — {contact['phones'][0]}"
-                    for contact in contacts
+                    (
+                        f"{names[result['contact_ref']]} — {result['emails'][0]} — "
+                        f"{result['phones'][0]}"
+                    )
+                    for result in tool_payloads[1:]
                 ]
                 return LLMResponse(content="\n".join(lines))
 

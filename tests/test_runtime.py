@@ -241,6 +241,12 @@ def test_runtime_keeps_private_mcp_values_out_of_model_history_and_events() -> N
     stored_messages = json.dumps([message.content for message in messages])
     assert placeholder in stored_messages
     assert "alice@example.com" not in stored_messages
+    rendered_messages = runtime.render_messages_for_user(
+        PRINCIPAL,
+        thread.thread_id,
+        messages,
+    )
+    assert "alice@example.com" in json.dumps([message.content for message in rendered_messages])
     serialized_events = json.dumps(events)
     assert placeholder in serialized_events
     assert "alice@example.com" not in serialized_events

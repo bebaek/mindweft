@@ -209,8 +209,8 @@ def test_carddav_source_auto_negotiates_digest_auth() -> None:
     assert any(header.startswith("Digest ") for header in authorization_headers)
 
 
-def test_private_contacts_server_places_raw_values_only_in_private_metadata() -> None:
-    references = iter(("name-ref", "email-ref", "phone-ref"))
+def test_private_contacts_server_lists_refs_then_gets_selected_private_fields() -> None:
+    value_references = iter(("name-ref", "email-ref", "phone-ref"))
     server = PrivateContactsMCPServer(
         contacts=[
             Contact(
@@ -219,10 +219,11 @@ def test_private_contacts_server_places_raw_values_only_in_private_metadata() ->
                 phones=("+1 555 0100",),
             )
         ],
-        reference_factory=lambda: next(references),
+        reference_factory=lambda: next(value_references),
+        contact_reference_factory=lambda: "contact-ref",
     )
 
-    response = server.handle(
+    listed = server.handle(
         {
             "jsonrpc": "2.0",
             "id": 1,
@@ -231,23 +232,80 @@ def test_private_contacts_server_places_raw_values_only_in_private_metadata() ->
         }
     )
 
-    assert response is not None
-    result = response["result"]
-    assert result["structuredContent"] == {
+    assert listed is not None
+    listed_result = listed["result"]
+    assert listed_result["structuredContent"] == {
         "contacts": [
             {
+                "contact_ref": "contact-ref",
                 "name": "{{pii:name:name-ref}}",
-                "emails": ["{{pii:email:email-ref}}"],
-                "phones": ["{{pii:phone:phone-ref}}"],
+                "available_fields": ["emails", "phones"],
             }
         ],
         "truncated": False,
     }
-    assert result["_meta"][PRIVATE_VALUES_META_KEY] == {
-        "name-ref": "Alice Smith",
+    assert listed_result["_meta"][PRIVATE_VALUES_META_KEY] == {"name-ref": "Alice Smith"}
+
+    fetched = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "contacts_get",
+                "arguments": {
+                    "contact_ref": "contact-ref",
+                    "fields": ["emails", "phones"],
+                },
+            },
+        }
+    )
+
+    assert fetched is not None
+    fetched_result = fetched["result"]
+    assert fetched_result["structuredContent"] == {
+        "contact_ref": "contact-ref",
+        "emails": ["{{pii:email:email-ref}}"],
+        "phones": ["{{pii:phone:phone-ref}}"],
+    }
+    assert fetched_result["_meta"][PRIVATE_VALUES_META_KEY] == {
         "email-ref": "alice@example.com",
         "phone-ref": "+1 555 0100",
     }
-    assert "Alice Smith" not in str(result["structuredContent"])
-    assert "alice@example.com" not in str(result["structuredContent"])
-    assert "+1 555 0100" not in str(result["structuredContent"])
+    assert "alice@example.com" not in str(fetched_result["structuredContent"])
+    assert "+1 555 0100" not in str(fetched_result["structuredContent"])
+
+
+def test_private_contacts_server_expires_contact_references() -> None:
+    now = [100.0]
+    server = PrivateContactsMCPServer(
+        contacts=[Contact(name="Alice Smith", emails=("alice@example.com",))],
+        contact_reference_factory=lambda: "contact-ref",
+        contact_reference_ttl_seconds=5,
+        clock=lambda: now[0],
+    )
+    server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "contacts_list", "arguments": {}},
+        }
+    )
+    now[0] = 106.0
+
+    response = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "contacts_get",
+                "arguments": {"contact_ref": "contact-ref", "fields": ["emails"]},
+            },
+        }
+    )
+
+    assert response is not None
+    assert response["error"]["code"] == -32001
+    assert response["error"]["message"] == "Unknown or expired contact_ref"

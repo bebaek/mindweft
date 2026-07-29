@@ -6,6 +6,7 @@ import json
 import os
 import re
 import secrets
+import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -22,6 +23,8 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
 DEFAULT_CONTACT_LIMIT = 10
 MAX_CONTACT_LIMIT = 50
+DEFAULT_CONTACT_REFERENCE_TTL_SECONDS = 1800.0
+MAX_CONTACT_REFERENCES = 1000
 MAX_CARDDAV_RESPONSE_BYTES = 5_000_000
 CARDDAV_URL_ENV = "MINIGENT_CARDDAV_URL"
 CARDDAV_USERNAME_ENV = "MINIGENT_CARDDAV_USERNAME"
@@ -47,8 +50,8 @@ CARDDAV_PROPFIND_BODY = b"""<?xml version="1.0" encoding="utf-8" ?>
 CONTACTS_LIST_TOOL = {
     "name": "contacts_list",
     "description": (
-        "List contacts. Contact fields are opaque {{pii:kind:reference}} placeholders; "
-        "preserve each placeholder exactly when answering the user."
+        "List contacts with opaque contact_ref values and protected names. Use contacts_get "
+        "to retrieve only the email or phone fields needed for the user's request."
     ),
     "inputSchema": {
         "type": "object",
@@ -70,11 +73,14 @@ CONTACTS_LIST_TOOL = {
                 "items": {
                     "type": "object",
                     "properties": {
+                        "contact_ref": {"type": "string"},
                         "name": {"type": "string"},
-                        "emails": {"type": "array", "items": {"type": "string"}},
-                        "phones": {"type": "array", "items": {"type": "string"}},
+                        "available_fields": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": ["emails", "phones"]},
+                        },
                     },
-                    "required": ["name", "emails", "phones"],
+                    "required": ["contact_ref", "name", "available_fields"],
                     "additionalProperties": False,
                 },
             },
@@ -85,12 +91,50 @@ CONTACTS_LIST_TOOL = {
     },
 }
 
+CONTACTS_GET_TOOL = {
+    "name": "contacts_get",
+    "description": (
+        "Retrieve selected fields for an opaque contact_ref returned by contacts_list. "
+        "Returned values are protected placeholders; preserve them exactly."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "contact_ref": {"type": "string"},
+            "fields": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["emails", "phones"]},
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+        },
+        "required": ["contact_ref", "fields"],
+        "additionalProperties": False,
+    },
+    "outputSchema": {
+        "type": "object",
+        "properties": {
+            "contact_ref": {"type": "string"},
+            "emails": {"type": "array", "items": {"type": "string"}},
+            "phones": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["contact_ref"],
+        "additionalProperties": False,
+    },
+}
+
 
 @dataclass(frozen=True)
 class Contact:
     name: str
     emails: tuple[str, ...] = ()
     phones: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CachedContact:
+    contact: Contact
+    expires_at: float
 
 
 DEMO_CONTACTS = (
@@ -229,12 +273,23 @@ class PrivateContactsMCPServer:
         *,
         contact_source: ContactSource | None = None,
         reference_factory: Callable[[], str] | None = None,
+        contact_reference_factory: Callable[[], str] | None = None,
+        contact_reference_ttl_seconds: float = DEFAULT_CONTACT_REFERENCE_TTL_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if contacts is not None and contact_source is not None:
             raise ValueError("Provide contacts or contact_source, not both")
+        if contact_reference_ttl_seconds <= 0:
+            raise ValueError("contact reference TTL must be positive")
         static_contacts = DEMO_CONTACTS if contacts is None else contacts
         self._contact_source = contact_source or StaticContactSource(static_contacts)
         self._reference_factory = reference_factory or (lambda: secrets.token_urlsafe(16))
+        self._contact_reference_factory = contact_reference_factory or (
+            lambda: secrets.token_urlsafe(18)
+        )
+        self._contact_reference_ttl_seconds = contact_reference_ttl_seconds
+        self._clock = clock
+        self._contact_references: dict[str, CachedContact] = {}
 
     def handle(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         request_id = payload.get("id")
@@ -256,7 +311,7 @@ class PrivateContactsMCPServer:
                 },
             )
         if method == "tools/list":
-            return self._result(request_id, {"tools": [CONTACTS_LIST_TOOL]})
+            return self._result(request_id, {"tools": [CONTACTS_LIST_TOOL, CONTACTS_GET_TOOL]})
         if method == "tools/call":
             try:
                 return self._handle_tool_call(request_id, payload.get("params"))
@@ -267,11 +322,17 @@ class PrivateContactsMCPServer:
     def _handle_tool_call(self, request_id: Any, params: Any) -> dict[str, Any]:
         if not isinstance(params, dict):
             return self._error(request_id, -32602, "tools/call params must be an object")
-        if params.get("name") != "contacts_list":
-            return self._error(request_id, -32602, "Unknown tool")
         arguments = params.get("arguments") or {}
         if not isinstance(arguments, dict):
             return self._error(request_id, -32602, "tool arguments must be an object")
+        tool_name = params.get("name")
+        if tool_name == "contacts_list":
+            return self._handle_contacts_list(request_id, arguments)
+        if tool_name == "contacts_get":
+            return self._handle_contacts_get(request_id, arguments)
+        return self._error(request_id, -32602, "Unknown tool")
+
+    def _handle_contacts_list(self, request_id: Any, arguments: dict[str, Any]) -> dict[str, Any]:
         unknown_arguments = set(arguments) - {"limit"}
         if unknown_arguments:
             return self._error(request_id, -32602, "contacts_list received unknown arguments")
@@ -287,34 +348,111 @@ class PrivateContactsMCPServer:
                 f"limit must be an integer from 1 to {MAX_CONTACT_LIMIT}",
             )
 
+        self._prune_contact_references()
         contacts, truncated = self._contact_source.list_contacts(limit=limit)
         structured_content: dict[str, Any] = {"contacts": [], "truncated": truncated}
         private_values: dict[str, str] = {}
         for contact in contacts:
+            contact_reference = self._cache_contact(contact)
+            available_fields = []
+            if contact.emails:
+                available_fields.append("emails")
+            if contact.phones:
+                available_fields.append("phones")
             structured_content["contacts"].append(
                 {
+                    "contact_ref": contact_reference,
                     "name": self._protect("name", contact.name, private_values),
-                    "emails": [
-                        self._protect("email", email, private_values) for email in contact.emails
-                    ],
-                    "phones": [
-                        self._protect("phone", phone, private_values) for phone in contact.phones
-                    ],
+                    "available_fields": available_fields,
                 }
             )
+        return self._private_tool_result(
+            request_id,
+            structured_content,
+            private_values,
+            message=f"Found {len(contacts)} contacts.",
+        )
 
+    def _handle_contacts_get(self, request_id: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+        if set(arguments) != {"contact_ref", "fields"}:
+            return self._error(
+                request_id,
+                -32602,
+                "contacts_get requires only contact_ref and fields",
+            )
+        contact_reference = arguments.get("contact_ref")
+        fields = arguments.get("fields")
+        if not isinstance(contact_reference, str) or not contact_reference:
+            return self._error(request_id, -32602, "contact_ref must be a non-empty string")
+        if (
+            not isinstance(fields, list)
+            or not fields
+            or not all(field in {"emails", "phones"} for field in fields)
+            or len(set(fields)) != len(fields)
+        ):
+            return self._error(
+                request_id,
+                -32602,
+                "fields must contain unique emails or phones values",
+            )
+        self._prune_contact_references()
+        cached = self._contact_references.get(contact_reference)
+        if cached is None:
+            return self._error(request_id, -32001, "Unknown or expired contact_ref")
+
+        private_values: dict[str, str] = {}
+        structured_content: dict[str, Any] = {"contact_ref": contact_reference}
+        if "emails" in fields:
+            structured_content["emails"] = [
+                self._protect("email", email, private_values) for email in cached.contact.emails
+            ]
+        if "phones" in fields:
+            structured_content["phones"] = [
+                self._protect("phone", phone, private_values) for phone in cached.contact.phones
+            ]
+        return self._private_tool_result(
+            request_id,
+            structured_content,
+            private_values,
+            message="Retrieved the selected protected contact fields.",
+        )
+
+    def _cache_contact(self, contact: Contact) -> str:
+        if len(self._contact_references) >= MAX_CONTACT_REFERENCES:
+            oldest_reference = min(
+                self._contact_references,
+                key=lambda reference: self._contact_references[reference].expires_at,
+            )
+            self._contact_references.pop(oldest_reference, None)
+        reference = self._contact_reference_factory()
+        self._contact_references[reference] = CachedContact(
+            contact=contact,
+            expires_at=self._clock() + self._contact_reference_ttl_seconds,
+        )
+        return reference
+
+    def _prune_contact_references(self) -> None:
+        now = self._clock()
+        expired = [
+            reference
+            for reference, cached in self._contact_references.items()
+            if cached.expires_at <= now
+        ]
+        for reference in expired:
+            self._contact_references.pop(reference, None)
+
+    def _private_tool_result(
+        self,
+        request_id: Any,
+        structured_content: dict[str, Any],
+        private_values: dict[str, str],
+        *,
+        message: str,
+    ) -> dict[str, Any]:
         return self._result(
             request_id,
             {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Found {len(contacts)} contacts. Preserve the placeholders from "
-                            "structuredContent exactly in the final answer."
-                        ),
-                    }
-                ],
+                "content": [{"type": "text", "text": message}],
                 "structuredContent": structured_content,
                 "_meta": {PRIVATE_VALUES_META_KEY: private_values},
             },
