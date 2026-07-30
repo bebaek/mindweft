@@ -32,6 +32,43 @@ def test_encrypted_private_value_store_requires_key_when_configured(tmp_path: Pa
         )
 
 
+def test_encrypted_private_value_store_drops_unowned_legacy_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "private.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE private_values (
+                tenant_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                reference TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                nonce BLOB NOT NULL,
+                ciphertext BLOB NOT NULL,
+                key_version INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                PRIMARY KEY (tenant_id, thread_id, reference)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO private_values VALUES (
+                'tenant', 'thread', 'legacy-ref', 'email', X'00', X'00', 1, 0, 9999999999
+            )
+            """
+        )
+        connection.commit()
+
+    SQLiteEncryptedPrivateValueStore(db_path, KEY)
+
+    with sqlite3.connect(db_path) as connection:
+        columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(private_values)")}
+        count = connection.execute("SELECT COUNT(*) FROM private_values").fetchone()[0]
+    assert "user_id" in columns
+    assert count == 0
+
+
 def test_encrypted_private_values_survive_restart_without_plaintext_on_disk(
     tmp_path: Path,
 ) -> None:
@@ -42,6 +79,7 @@ def test_encrypted_private_values_survive_restart_without_plaintext_on_disk(
         "tenant-1",
         "thread-1",
         {"email-ref": "private@example.com"},
+        user_id="user-1",
         kinds={"email-ref": "email"},
     )
 
@@ -55,10 +93,23 @@ def test_encrypted_private_values_survive_restart_without_plaintext_on_disk(
         ).fetchone()
     assert (kind, key_version) == ("email", 1)
     second = SQLiteEncryptedPrivateValueStore(db_path, KEY)
-    assert second.render_for_user("tenant-1", "thread-1", placeholder) == "private@example.com"
-    assert second.resolve_for_tool("tenant-1", "thread-1", placeholder) == "private@example.com"
-    assert second.render_for_user("tenant-2", "thread-1", placeholder) == placeholder
-    assert second.render_for_user("tenant-1", "thread-2", placeholder) == placeholder
+    assert (
+        second.render_for_user("tenant-1", "thread-1", placeholder, user_id="user-1")
+        == "private@example.com"
+    )
+    assert (
+        second.resolve_for_tool("tenant-1", "thread-1", placeholder, user_id="user-1")
+        == "private@example.com"
+    )
+    assert (
+        second.render_for_user("tenant-1", "thread-1", placeholder, user_id="user-2") == placeholder
+    )
+    assert (
+        second.render_for_user("tenant-2", "thread-1", placeholder, user_id="user-1") == placeholder
+    )
+    assert (
+        second.render_for_user("tenant-1", "thread-2", placeholder, user_id="user-1") == placeholder
+    )
 
 
 def test_encrypted_private_value_factory_reads_environment_mapping(tmp_path: Path) -> None:

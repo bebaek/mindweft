@@ -148,7 +148,7 @@ replies sent to the authenticated user. This is a proof of concept rather than a
 confidential channel: other MCP clients may log or expose `_meta`. Stored messages retain
 placeholders, while authenticated message reads rehydrate values that have not expired.
 Private values expire after 30 minutes by default and are bounded to 1,000 references per
-thread and 10,000 characters per value; override those limits with
+user/thread scope and 10,000 characters per value; override those limits with
 `MINIGENT_PRIVATE_VALUE_TTL_SECONDS`, `MINIGENT_PRIVATE_VALUE_MAX_REFS_PER_THREAD`, and
 `MINIGENT_PRIVATE_VALUE_MAX_CHARS`.
 
@@ -169,9 +169,11 @@ export MINIGENT_PRIVATE_CONSENT_KEY_VERSION=1
 ```
 
 The SQLite stores encrypt each private value and each consent/action payload independently with
-AES-256-GCM and a fresh 96-bit nonce. Private-value tenant/thread/reference metadata and
-consent/action tenant/user/thread/consent metadata are authenticated as associated data. The
-database contains ciphertext, nonces, scoped metadata, statuses, and expiry timestamps but not
+AES-256-GCM and a fresh 96-bit nonce. Private-value tenant/user/thread/reference metadata and
+consent/action tenant/user/thread/consent metadata are authenticated as associated data. Private
+values are resolvable only by the user who created or received them, even when another user in
+the same tenant can access the thread's placeholder-bearing messages. The database contains
+ciphertext, nonces, scoped metadata, statuses, and expiry timestamps but not
 keys or plaintext values/tool arguments. Keys must come from the process environment or an
 external secret manager; do not commit them or place them beside the database. Startup fails
 closed when a database path is configured without a valid corresponding key. Back up keys
@@ -184,6 +186,11 @@ memory and SQLite. Configure those bounds with
 `MINIGENT_PRIVATE_CONSENT_AUDIT_TTL_SECONDS` and
 `MINIGENT_PRIVATE_CONSENT_MAX_AUDIT_RECORDS_PER_SCOPE`. Expired and over-limit records are
 pruned during consent activity, audit reads, and encrypted-store startup.
+
+Upgrading a private-value database created before user scoping intentionally drops its
+short-lived `private_values` rows on first startup. Those legacy rows cannot be attributed to a
+specific user safely; thread messages retain unresolved placeholders until new values are
+captured. Consent requests, action records, disclosure audits, and thread history are not removed.
 
 For key rotation, both encrypted stores accept a JSON keyring whose keys are positive version
 numbers and whose values are base64-encoded 32-byte keys. New writes use the version selected by

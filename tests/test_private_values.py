@@ -6,14 +6,29 @@ from fastapi import HTTPException
 from app.private_values import InMemoryPrivateValueStore, LocalPIIProtector
 
 
-def test_private_value_store_is_scoped_by_tenant_and_thread() -> None:
+def test_private_value_store_is_scoped_by_tenant_user_and_thread() -> None:
     store = InMemoryPrivateValueStore()
-    store.add("tenant-a", "thread-a", {"ref": "private value"})
+    store.add(
+        "tenant-a",
+        "thread-a",
+        {"ref": "private value"},
+        user_id="user-a",
+    )
     placeholder = "{{pii:name:ref}}"
 
-    assert store.render_for_user("tenant-a", "thread-a", placeholder) == "private value"
-    assert store.render_for_user("tenant-b", "thread-a", placeholder) == placeholder
-    assert store.render_for_user("tenant-a", "thread-b", placeholder) == placeholder
+    assert (
+        store.render_for_user("tenant-a", "thread-a", placeholder, user_id="user-a")
+        == "private value"
+    )
+    assert (
+        store.render_for_user("tenant-a", "thread-a", placeholder, user_id="user-b") == placeholder
+    )
+    assert (
+        store.render_for_user("tenant-b", "thread-a", placeholder, user_id="user-a") == placeholder
+    )
+    assert (
+        store.render_for_user("tenant-a", "thread-b", placeholder, user_id="user-a") == placeholder
+    )
 
 
 def test_private_value_store_expires_values() -> None:

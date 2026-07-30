@@ -127,6 +127,7 @@ class SQLiteEncryptedPrivateValueStore:
         thread_id: str,
         values: Mapping[str, str],
         *,
+        user_id: str = "",
         kinds: Mapping[str, str] | None = None,
     ) -> None:
         if not values:
@@ -138,15 +139,21 @@ class SQLiteEncryptedPrivateValueStore:
             self._delete_expired(connection, now)
             existing_count = int(
                 connection.execute(
-                    "SELECT COUNT(*) FROM private_values WHERE tenant_id = ? AND thread_id = ?",
-                    (tenant_id, thread_id),
+                    """
+                    SELECT COUNT(*) FROM private_values
+                    WHERE tenant_id = ? AND user_id = ? AND thread_id = ?
+                    """,
+                    (tenant_id, user_id, thread_id),
                 ).fetchone()[0]
             )
             existing_refs = {
                 str(row[0])
                 for row in connection.execute(
-                    "SELECT reference FROM private_values WHERE tenant_id = ? AND thread_id = ?",
-                    (tenant_id, thread_id),
+                    """
+                    SELECT reference FROM private_values
+                    WHERE tenant_id = ? AND user_id = ? AND thread_id = ?
+                    """,
+                    (tenant_id, user_id, thread_id),
                 )
             }
             if existing_count + len(set(values) - existing_refs) > self._max_refs_per_thread:
@@ -166,13 +173,14 @@ class SQLiteEncryptedPrivateValueStore:
                     """
                     SELECT kind, nonce, ciphertext, key_version
                     FROM private_values
-                    WHERE tenant_id = ? AND thread_id = ? AND reference = ?
+                    WHERE tenant_id = ? AND user_id = ? AND thread_id = ? AND reference = ?
                     """,
-                    (tenant_id, thread_id, reference),
+                    (tenant_id, user_id, thread_id, reference),
                 ).fetchone()
                 if existing is not None:
                     existing_value = self._decrypt(
                         tenant_id,
+                        user_id,
                         thread_id,
                         reference,
                         str(existing[0]),
@@ -191,6 +199,7 @@ class SQLiteEncryptedPrivateValueStore:
                     value.encode("utf-8"),
                     _associated_data(
                         tenant_id,
+                        user_id,
                         thread_id,
                         reference,
                         kind,
@@ -200,10 +209,10 @@ class SQLiteEncryptedPrivateValueStore:
                 connection.execute(
                     """
                     INSERT INTO private_values (
-                        tenant_id, thread_id, reference, kind, nonce, ciphertext,
+                        tenant_id, user_id, thread_id, reference, kind, nonce, ciphertext,
                         key_version, created_at, expires_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(tenant_id, thread_id, reference) DO UPDATE SET
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(tenant_id, user_id, thread_id, reference) DO UPDATE SET
                         kind = excluded.kind,
                         nonce = excluded.nonce,
                         ciphertext = excluded.ciphertext,
@@ -213,6 +222,7 @@ class SQLiteEncryptedPrivateValueStore:
                     """,
                     (
                         tenant_id,
+                        user_id,
                         thread_id,
                         reference,
                         kind,
@@ -225,11 +235,15 @@ class SQLiteEncryptedPrivateValueStore:
                 )
             connection.commit()
 
-    def render_for_user(self, tenant_id: str, thread_id: str, text: str) -> str:
-        return self._replace(tenant_id, thread_id, text, strict=False)
+    def render_for_user(
+        self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
+    ) -> str:
+        return self._replace(tenant_id, user_id, thread_id, text, strict=False)
 
-    def resolve_for_tool(self, tenant_id: str, thread_id: str, text: str) -> str:
-        return self._replace(tenant_id, thread_id, text, strict=True)
+    def resolve_for_tool(
+        self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
+    ) -> str:
+        return self._replace(tenant_id, user_id, thread_id, text, strict=True)
 
     def clear_thread(self, tenant_id: str, thread_id: str) -> None:
         with self._lock, closing(self._connect()) as connection:
@@ -239,7 +253,15 @@ class SQLiteEncryptedPrivateValueStore:
             )
             connection.commit()
 
-    def _replace(self, tenant_id: str, thread_id: str, text: str, *, strict: bool) -> str:
+    def _replace(
+        self,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        text: str,
+        *,
+        strict: bool,
+    ) -> str:
         now = self._clock()
         with self._lock, closing(self._connect()) as connection:
             self._delete_expired(connection, now)
@@ -251,9 +273,9 @@ class SQLiteEncryptedPrivateValueStore:
                     """
                     SELECT kind, nonce, ciphertext, key_version
                     FROM private_values
-                    WHERE tenant_id = ? AND thread_id = ? AND reference = ?
+                    WHERE tenant_id = ? AND user_id = ? AND thread_id = ? AND reference = ?
                     """,
-                    (tenant_id, thread_id, reference),
+                    (tenant_id, user_id, thread_id, reference),
                 ).fetchone()
                 if row is None:
                     if strict:
@@ -264,6 +286,7 @@ class SQLiteEncryptedPrivateValueStore:
                     return match.group(0)
                 return self._decrypt(
                     tenant_id,
+                    user_id,
                     thread_id,
                     reference,
                     str(row[0]),
@@ -277,6 +300,7 @@ class SQLiteEncryptedPrivateValueStore:
     def _decrypt(
         self,
         tenant_id: str,
+        user_id: str,
         thread_id: str,
         reference: str,
         kind: str,
@@ -294,7 +318,7 @@ class SQLiteEncryptedPrivateValueStore:
             plaintext = aesgcm.decrypt(
                 nonce,
                 ciphertext,
-                _associated_data(tenant_id, thread_id, reference, kind, key_version),
+                _associated_data(tenant_id, user_id, thread_id, reference, kind, key_version),
             )
         except InvalidTag as exc:
             raise HTTPException(
@@ -312,22 +336,24 @@ class SQLiteEncryptedPrivateValueStore:
             self._delete_expired(connection, now)
             rows = connection.execute(
                 """
-                SELECT tenant_id, thread_id, reference, kind, nonce, ciphertext, key_version
+                SELECT tenant_id, user_id, thread_id, reference, kind,
+                       nonce, ciphertext, key_version
                 FROM private_values
                 WHERE key_version != ?
                 """,
                 (self._key_version,),
             ).fetchall()
             for row in rows:
-                tenant_id, thread_id, reference, kind = map(str, row[:4])
+                tenant_id, user_id, thread_id, reference, kind = map(str, row[:5])
                 value = self._decrypt(
                     tenant_id,
+                    user_id,
                     thread_id,
                     reference,
                     kind,
-                    bytes(row[4]),
                     bytes(row[5]),
-                    int(row[6]),
+                    bytes(row[6]),
+                    int(row[7]),
                 )
                 nonce = os.urandom(_NONCE_BYTES)
                 ciphertext = self._aesgcms[self._key_version].encrypt(
@@ -335,6 +361,7 @@ class SQLiteEncryptedPrivateValueStore:
                     value.encode("utf-8"),
                     _associated_data(
                         tenant_id,
+                        user_id,
                         thread_id,
                         reference,
                         kind,
@@ -345,13 +372,14 @@ class SQLiteEncryptedPrivateValueStore:
                     """
                     UPDATE private_values
                     SET nonce = ?, ciphertext = ?, key_version = ?
-                    WHERE tenant_id = ? AND thread_id = ? AND reference = ?
+                    WHERE tenant_id = ? AND user_id = ? AND thread_id = ? AND reference = ?
                     """,
                     (
                         nonce,
                         ciphertext,
                         self._key_version,
                         tenant_id,
+                        user_id,
                         thread_id,
                         reference,
                     ),
@@ -367,6 +395,7 @@ class SQLiteEncryptedPrivateValueStore:
                 """
                 CREATE TABLE IF NOT EXISTS private_values (
                     tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
                     thread_id TEXT NOT NULL,
                     reference TEXT NOT NULL,
                     kind TEXT NOT NULL,
@@ -375,10 +404,35 @@ class SQLiteEncryptedPrivateValueStore:
                     key_version INTEGER NOT NULL,
                     created_at REAL NOT NULL,
                     expires_at REAL NOT NULL,
-                    PRIMARY KEY (tenant_id, thread_id, reference)
+                    PRIMARY KEY (tenant_id, user_id, thread_id, reference)
                 )
                 """
             )
+            columns = {
+                str(column_row[1])
+                for column_row in connection.execute("PRAGMA table_info(private_values)")
+            }
+            if "user_id" not in columns:
+                # Legacy rows cannot be attributed safely to a user. Drop only this short-lived
+                # table so an upgrade cannot expose one user's values to another tenant member.
+                connection.execute("DROP TABLE private_values")
+                connection.execute(
+                    """
+                    CREATE TABLE private_values (
+                        tenant_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        thread_id TEXT NOT NULL,
+                        reference TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        nonce BLOB NOT NULL,
+                        ciphertext BLOB NOT NULL,
+                        key_version INTEGER NOT NULL,
+                        created_at REAL NOT NULL,
+                        expires_at REAL NOT NULL,
+                        PRIMARY KEY (tenant_id, user_id, thread_id, reference)
+                    )
+                    """
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_private_values_expiry ON private_values(expires_at)"
             )
@@ -398,7 +452,8 @@ class SQLiteEncryptedPrivateValueStore:
                 )
             row = connection.execute(
                 """
-                SELECT tenant_id, thread_id, reference, kind, nonce, ciphertext, key_version
+                SELECT tenant_id, user_id, thread_id, reference, kind,
+                       nonce, ciphertext, key_version
                 FROM private_values
                 ORDER BY created_at DESC
                 LIMIT 1
@@ -411,9 +466,10 @@ class SQLiteEncryptedPrivateValueStore:
                         str(row[1]),
                         str(row[2]),
                         str(row[3]),
-                        bytes(row[4]),
+                        str(row[4]),
                         bytes(row[5]),
-                        int(row[6]),
+                        bytes(row[6]),
+                        int(row[7]),
                     )
                 except HTTPException as exc:
                     raise RuntimeError(
@@ -437,6 +493,7 @@ class SQLiteEncryptedPrivateValueStore:
 
 def _associated_data(
     tenant_id: str,
+    user_id: str,
     thread_id: str,
     reference: str,
     kind: str,
@@ -445,6 +502,7 @@ def _associated_data(
     return json.dumps(
         {
             "tenant_id": tenant_id,
+            "user_id": user_id,
             "thread_id": thread_id,
             "reference": reference,
             "kind": kind,

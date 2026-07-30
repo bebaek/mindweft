@@ -250,6 +250,16 @@ def test_runtime_keeps_private_mcp_values_out_of_model_history_and_events() -> N
         messages,
     )
     assert "alice@example.com" in json.dumps([message.content for message in rendered_messages])
+    same_tenant_other_user = Principal(user_id="user-2", tenant_id=PRINCIPAL.tenant_id)
+    other_user_messages = runtime.render_messages_for_user(
+        same_tenant_other_user,
+        thread.thread_id,
+        messages,
+    )
+    assert "alice@example.com" not in json.dumps(
+        [message.content for message in other_user_messages]
+    )
+    assert placeholder in json.dumps([message.content for message in other_user_messages])
     serialized_events = json.dumps(events)
     assert placeholder in serialized_events
     assert "alice@example.com" not in serialized_events

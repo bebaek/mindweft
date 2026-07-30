@@ -69,6 +69,14 @@ def test_private_value_consent_api_approves_one_shot_disclosure(
         headers=AUTH_HEADERS,
         json={"content": "Email private@example.com"},
     ).raise_for_status()
+    other_user_headers = {**AUTH_HEADERS, "X-Minigent-User-Id": "user-2"}
+    other_user_messages = client.get(
+        f"/threads/{thread_id}/messages",
+        headers=other_user_headers,
+    )
+    other_user_messages.raise_for_status()
+    assert "private@example.com" not in other_user_messages.text
+    assert "{{pii:email:" in other_user_messages.text
 
     first_run = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
 

@@ -247,6 +247,7 @@ class AgentRuntime:
                 principal.tenant_id,
                 thread_id,
                 result.private_values,
+                user_id=principal.user_id,
                 kinds=_private_value_kinds(result.model_content),
             )
             protected_content = model_content["text"]
@@ -256,6 +257,7 @@ class AgentRuntime:
             principal.tenant_id,
             thread_id,
             locally_protected.private_values,
+            user_id=principal.user_id,
             kinds=locally_protected.private_value_kinds,
         )
         return locally_protected.text
@@ -277,6 +279,7 @@ class AgentRuntime:
                                 principal.tenant_id,
                                 thread_id,
                                 part.text,
+                                user_id=principal.user_id,
                             )
                         }
                     )
@@ -291,6 +294,7 @@ class AgentRuntime:
                             principal.tenant_id,
                             thread_id,
                             message.content,
+                            user_id=principal.user_id,
                         ),
                         "parts": parts,
                     }
@@ -396,6 +400,7 @@ class AgentRuntime:
                 principal.tenant_id,
                 thread_id,
                 text,
+                user_id=principal.user_id,
             ),
             private_value_authorizer=lambda name, fingerprint, disclosures: (
                 self._authorize_private_value_disclosure(
@@ -451,6 +456,7 @@ class AgentRuntime:
                 principal.tenant_id,
                 thread_id,
                 result.private_values,
+                user_id=principal.user_id,
                 kinds=_private_value_kinds(result.model_content),
             )
             result = result.model_content
@@ -605,6 +611,7 @@ class AgentRuntime:
                     principal.tenant_id,
                     thread_id,
                     stored_content,
+                    user_id=principal.user_id,
                 )
                 return user_content, response.metadata
         except asyncio.CancelledError:
@@ -782,6 +789,7 @@ class AgentRuntime:
                     principal.tenant_id,
                     thread_id,
                     result.private_values,
+                    user_id=principal.user_id,
                     kinds=_private_value_kinds(result.model_content),
                 )
                 result = result.model_content
@@ -880,6 +888,7 @@ class AgentRuntime:
             principal.tenant_id,
             thread_id,
             private_values,
+            user_id=principal.user_id,
             kinds=private_value_kinds,
         )
         return protected_result

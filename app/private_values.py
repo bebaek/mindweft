@@ -67,12 +67,17 @@ class PrivateValueStore(Protocol):
         thread_id: str,
         values: Mapping[str, str],
         *,
+        user_id: str = "",
         kinds: Mapping[str, str] | None = None,
     ) -> None: ...
 
-    def render_for_user(self, tenant_id: str, thread_id: str, text: str) -> str: ...
+    def render_for_user(
+        self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
+    ) -> str: ...
 
-    def resolve_for_tool(self, tenant_id: str, thread_id: str, text: str) -> str: ...
+    def resolve_for_tool(
+        self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
+    ) -> str: ...
 
     def clear_thread(self, tenant_id: str, thread_id: str) -> None: ...
 
@@ -190,7 +195,7 @@ class InMemoryPrivateValueStore:
         self._max_refs_per_thread = max_refs_per_thread
         self._max_value_chars = max_value_chars
         self._clock = clock
-        self._values: dict[tuple[str, str], dict[str, PrivateValueEntry]] = {}
+        self._values: dict[tuple[str, str, str], dict[str, PrivateValueEntry]] = {}
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> InMemoryPrivateValueStore:
@@ -219,10 +224,11 @@ class InMemoryPrivateValueStore:
         thread_id: str,
         values: Mapping[str, str],
         *,
+        user_id: str = "",
         kinds: Mapping[str, str] | None = None,
     ) -> None:
         _ = kinds
-        key = (tenant_id, thread_id)
+        key = (tenant_id, user_id, thread_id)
         self._prune_thread(key)
         thread_values = self._values.setdefault(key, {})
         new_references = set(values) - set(thread_values)
@@ -246,8 +252,10 @@ class InMemoryPrivateValueStore:
                 )
             thread_values[reference] = PrivateValueEntry(value=value, expires_at=expires_at)
 
-    def render_for_user(self, tenant_id: str, thread_id: str, text: str) -> str:
-        key = (tenant_id, thread_id)
+    def render_for_user(
+        self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
+    ) -> str:
+        key = (tenant_id, user_id, thread_id)
         self._prune_thread(key)
         thread_values = self._values.get(key, {})
 
@@ -257,8 +265,10 @@ class InMemoryPrivateValueStore:
 
         return PII_PLACEHOLDER_PATTERN.sub(replace, text)
 
-    def resolve_for_tool(self, tenant_id: str, thread_id: str, text: str) -> str:
-        key = (tenant_id, thread_id)
+    def resolve_for_tool(
+        self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
+    ) -> str:
+        key = (tenant_id, user_id, thread_id)
         self._prune_thread(key)
         thread_values = self._values.get(key, {})
 
@@ -274,9 +284,11 @@ class InMemoryPrivateValueStore:
         return PII_PLACEHOLDER_PATTERN.sub(replace, text)
 
     def clear_thread(self, tenant_id: str, thread_id: str) -> None:
-        self._values.pop((tenant_id, thread_id), None)
+        keys = [key for key in self._values if key[0] == tenant_id and key[2] == thread_id]
+        for key in keys:
+            self._values.pop(key, None)
 
-    def _prune_thread(self, key: tuple[str, str]) -> None:
+    def _prune_thread(self, key: tuple[str, str, str]) -> None:
         thread_values = self._values.get(key)
         if not thread_values:
             return
