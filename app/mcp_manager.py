@@ -47,6 +47,9 @@ class MCPServerRuntimeState:
             "server_version": info.server_version if info is not None else None,
             "tool_count": len(self.tools),
             "allowed_tools": self.config.allowed_tools,
+            "trusted_input_preprocessor_tools": sorted(
+                self.config.trusted_input_preprocessor_tools
+            ),
             "path_policy": {
                 "deny_globs": list(self.config.path_policy.deny_globs),
                 "allow_globs": list(self.config.path_policy.allow_globs),

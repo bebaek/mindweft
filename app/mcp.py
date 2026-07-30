@@ -24,7 +24,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_MCP_PROTOCOL_VERSION = "2025-11-25"
 DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS = 30.0
 MCP_SERVERS_ENV = "MINIGENT_MCP_SERVERS"
-PRIVATE_VALUES_META_KEY = "io.minigent/carddav-private-values"
+PRIVATE_VALUES_META_KEY = "io.minigent/private-values"
+LEGACY_PRIVATE_VALUES_META_KEY = "io.minigent/carddav-private-values"
+PRIVATE_VALUES_META_KEYS = (PRIVATE_VALUES_META_KEY, LEGACY_PRIVATE_VALUES_META_KEY)
 PRIVATE_VALUE_DISCLOSURE_MODES = frozenset({"deny", "pass_through", "resolve_selected"})
 _PRIVATE_VALUE_ARGUMENT_PATH_PATTERN = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_-]*(?:(?:\.[A-Za-z_][A-Za-z0-9_-]*)|(?:\[\*\]))*$"
@@ -73,6 +75,7 @@ class MCPServerConfig:
     )
     private_value_policy: MCPPrivateValuePolicy = field(default_factory=MCPPrivateValuePolicy)
     private_value_tool_policies: dict[str, MCPPrivateValuePolicy] = field(default_factory=dict)
+    trusted_input_preprocessor_tools: frozenset[str] = frozenset()
     timeout_seconds: float = DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS
 
 
@@ -433,9 +436,14 @@ def parse_mcp_tool_result(
         }
 
     metadata = result.get("_meta")
-    if not isinstance(metadata, dict) or PRIVATE_VALUES_META_KEY not in metadata:
+    if not isinstance(metadata, dict):
         return model_content
-    raw_private_values = metadata[PRIVATE_VALUES_META_KEY]
+    raw_private_values = next(
+        (metadata[key] for key in PRIVATE_VALUES_META_KEYS if key in metadata),
+        None,
+    )
+    if raw_private_values is None:
+        return model_content
     if not isinstance(raw_private_values, dict) or not all(
         isinstance(reference, str) and bool(reference) and isinstance(value, str)
         for reference, value in raw_private_values.items()
@@ -486,6 +494,10 @@ def _parse_mcp_server_configs(raw_value: str) -> list[MCPServerConfig]:
             entry.get("private_value_tool_policies", entry.get("privateValueToolPolicies")),
             context=f"MCP server '{name}'",
         )
+        trusted_input_preprocessor_tools = entry.get(
+            "trusted_input_preprocessor_tools",
+            entry.get("trustedInputPreprocessorTools", []),
+        )
         timeout_seconds = _parse_positive_float_config(
             entry.get(
                 "timeout_seconds",
@@ -506,6 +518,20 @@ def _parse_mcp_server_configs(raw_value: str) -> list[MCPServerConfig]:
             or not all(isinstance(item, str) and item for item in allowed_tools)
         ):
             raise RuntimeError(f"MCP server '{name}' has invalid allowed_tools")
+        if not isinstance(trusted_input_preprocessor_tools, list) or not all(
+            isinstance(item, str) and item for item in trusted_input_preprocessor_tools
+        ):
+            raise RuntimeError(f"MCP server '{name}' has invalid trusted_input_preprocessor_tools")
+        if len(set(trusted_input_preprocessor_tools)) != len(trusted_input_preprocessor_tools):
+            raise RuntimeError(
+                f"MCP server '{name}' has duplicate trusted_input_preprocessor_tools"
+            )
+        if allowed_tools is not None and not set(trusted_input_preprocessor_tools) <= set(
+            allowed_tools
+        ):
+            raise RuntimeError(
+                f"MCP server '{name}' trusted_input_preprocessor_tools must be allowed"
+            )
         configs.append(
             MCPServerConfig(
                 name=name,
@@ -517,6 +543,7 @@ def _parse_mcp_server_configs(raw_value: str) -> list[MCPServerConfig]:
                 result_redaction_policy=result_redaction_policy,
                 private_value_policy=private_value_policy,
                 private_value_tool_policies=private_value_tool_policies,
+                trusted_input_preprocessor_tools=frozenset(trusted_input_preprocessor_tools),
                 timeout_seconds=timeout_seconds,
             )
         )

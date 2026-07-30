@@ -9,7 +9,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import HTTPException
 
@@ -75,7 +75,6 @@ MAX_ITERATIONS_ENV = "MINIGENT_MAX_ITERATIONS"
 TOOL_TIMEOUT_SECONDS_ENV = "MINIGENT_TOOL_TIMEOUT_SECONDS"
 CONTEXT_COMPACTION_ENABLED_ENV = "MINIGENT_CONTEXT_COMPACTION_ENABLED"
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
-_PRIVATE_CONTACTS_PREPROCESSOR_SUFFIX = ".contacts_protect_text"
 
 
 @dataclass(frozen=True)
@@ -209,20 +208,15 @@ class AgentRuntime:
     ) -> str:
         execution = self._execution_resolver.resolve(principal.tenant_id)
         protected_content = content
-        protectors = [
-            spec.name
-            for spec in execution.tool_registry.specs()
-            if spec.name.endswith(_PRIVATE_CONTACTS_PREPROCESSOR_SUFFIX)
-        ]
-        if protectors:
-            if len(protectors) != 1:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Exactly one contacts privacy preprocessor must be configured",
-                )
+        registry = execution.tool_registry
+        preprocessor_names = getattr(registry, "trusted_input_preprocessor_names", None)
+        protectors = (
+            cast(tuple[str, ...], preprocessor_names()) if callable(preprocessor_names) else ()
+        )
+        for protector in protectors:
             result = await asyncio.wait_for(
                 execution.tool_registry.execute(
-                    protectors[0],
+                    protector,
                     {"text": protected_content},
                     context=ToolExecutionContext(
                         tenant_id=principal.tenant_id,
@@ -234,7 +228,7 @@ class AgentRuntime:
             if not isinstance(result, MCPPrivateToolResult):
                 raise HTTPException(
                     status_code=502,
-                    detail="Contacts privacy preprocessor returned no private metadata envelope",
+                    detail="Trusted input preprocessor returned no private metadata envelope",
                 )
             model_content = result.model_content
             if not isinstance(model_content, dict) or not isinstance(
@@ -242,7 +236,7 @@ class AgentRuntime:
             ):
                 raise HTTPException(
                     status_code=502,
-                    detail="Contacts privacy preprocessor returned invalid model content",
+                    detail="Trusted input preprocessor returned invalid model content",
                 )
             self._private_value_store.add(
                 principal.tenant_id,
@@ -557,10 +551,15 @@ class AgentRuntime:
                     skill_prompts=[_load_active_skill_instructions(skill) for skill in skills],
                     skill_names=[skill.name for skill in skills],
                 )
+                is_preprocessor = getattr(
+                    tool_registry,
+                    "is_trusted_input_preprocessor",
+                    None,
+                )
                 tool_specs = [
                     spec
                     for spec in tool_registry.specs()
-                    if not spec.name.endswith(_PRIVATE_CONTACTS_PREPROCESSOR_SUFFIX)
+                    if not (callable(is_preprocessor) and is_preprocessor(spec.name))
                 ]
                 response = None
                 if not isinstance(llm_adapter, MockLLMAdapter):

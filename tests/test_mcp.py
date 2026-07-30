@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.mcp import (
+    LEGACY_PRIVATE_VALUES_META_KEY,
     PRIVATE_VALUES_META_KEY,
     MCPHTTPClient,
     MCPPathPolicy,
@@ -43,6 +44,7 @@ def test_load_mcp_server_configs_from_env(monkeypatch) -> None:
                     "url": "https://example.com/mcp",
                     "headers": {"Authorization": "Bearer token"},
                     "allowed_tools": ["list_directory", "read_file"],
+                    "trusted_input_preprocessor_tools": ["read_file"],
                     "timeout_seconds": 45,
                     "path_policy": {
                         "deny_globs": ["**/.env*", "**/.git/**"],
@@ -60,6 +62,7 @@ def test_load_mcp_server_configs_from_env(monkeypatch) -> None:
     assert configs[0].url == "https://example.com/mcp"
     assert configs[0].headers == {"Authorization": "Bearer token"}
     assert configs[0].allowed_tools == ["list_directory", "read_file"]
+    assert configs[0].trusted_input_preprocessor_tools == frozenset({"read_file"})
     assert configs[0].timeout_seconds == 45
     assert configs[0].path_policy.deny_globs == ["**/.env*", "**/.git/**"]
     assert configs[0].path_policy.allow_globs == ["**/.env*.template"]
@@ -189,6 +192,21 @@ def test_parse_mcp_tool_result_rejects_invalid_private_metadata() -> None:
             },
             tool_name="contacts.list",
         )
+
+
+def test_parse_mcp_tool_result_accepts_legacy_private_value_metadata() -> None:
+    result = parse_mcp_tool_result(
+        {
+            "structuredContent": {"name": "{{pii:name:name-ref}}"},
+            "_meta": {LEGACY_PRIVATE_VALUES_META_KEY: {"name-ref": "Alice Smith"}},
+        },
+        tool_name="contacts.list",
+    )
+
+    assert result == MCPPrivateToolResult(
+        model_content={"name": "{{pii:name:name-ref}}"},
+        private_values={"name-ref": "Alice Smith"},
+    )
 
 
 def test_mcp_http_client_rejects_mismatched_jsonrpc_response_id() -> None:

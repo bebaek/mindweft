@@ -279,6 +279,7 @@ def test_runtime_protects_user_content_before_model_use() -> None:
             },
             private_values={"contact-ref": "Alice Smith"},
         ),
+        trusted_input_preprocessor=True,
     )
     runtime = AgentRuntime(
         store=InMemoryThreadStore(),
@@ -323,6 +324,7 @@ def test_runtime_hides_private_contact_preprocessor_from_model_tools() -> None:
             model_content={"text": arguments["text"], "protected_contact_count": 0},
             private_values={},
         ),
+        trusted_input_preprocessor=True,
     )
     registry.register(
         name="private-contacts.contacts_list",

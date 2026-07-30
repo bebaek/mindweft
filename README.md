@@ -142,8 +142,8 @@ MCP server configs can override the tool-result redaction policy with `result_re
 
 As an experimental local privacy convention, an MCP tool can return model-safe
 `{{pii:kind:reference}}` placeholders in `structuredContent` and place the corresponding
-string values under `_meta["io.minigent/carddav-private-values"]`. Minigent removes that
-metadata before model context, thread history, and run events, and resolves placeholders in
+string values under `_meta["io.minigent/private-values"]`. Minigent removes that metadata
+before model context, thread history, and run events, and resolves placeholders in
 replies sent to the authenticated user. This is a proof of concept rather than a standard MCP
 confidential channel: other MCP clients may log or expose `_meta`. Stored messages retain
 placeholders, while authenticated message reads rehydrate values that have not expired.
@@ -151,6 +151,12 @@ Private values expire after 30 minutes by default and are bounded to 1,000 refer
 user/thread scope and 10,000 characters per value; override those limits with
 `MINIGENT_PRIVATE_VALUE_TTL_SECONDS`, `MINIGENT_PRIVATE_VALUE_MAX_REFS_PER_THREAD`, and
 `MINIGENT_PRIVATE_VALUE_MAX_CHARS`.
+
+The legacy `_meta["io.minigent/carddav-private-values"]` key remains accepted during the DAV
+sidecar migration, but new MCP servers should emit the protocol-neutral key. Tools that inspect
+raw user text before model use must be explicitly trusted and hidden with the MCP server's
+`trusted_input_preprocessor_tools` list; Minigent does not trust server-provided descriptions for
+this boundary.
 
 Private values remain in memory by default. To make private values, consent grants, audit
 records, and resumable pending tool actions restart-safe, configure encrypted SQLite storage.

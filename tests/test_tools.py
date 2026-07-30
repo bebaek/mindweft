@@ -686,6 +686,7 @@ def test_tool_execution_redacts_private_contact_preprocessor_input(
         "Protect contact names.",
         {"type": "object"},
         lambda arguments, context=None: arguments,
+        trusted_input_preprocessor=True,
     )
 
     with caplog.at_level(logging.INFO, logger="app.tools"):
@@ -1236,6 +1237,7 @@ def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(
             "server_version": "1.0.0",
             "tool_count": 1,
             "allowed_tools": None,
+            "trusted_input_preprocessor_tools": [],
             "path_policy": {"deny_globs": [], "allow_globs": []},
             "result_redaction": {
                 "enabled": True,

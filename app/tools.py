@@ -114,6 +114,7 @@ class ToolRegistry:
             ],
         ] = {}
         self._private_value_policies: dict[str, MCPPrivateValuePolicy] = {}
+        self._trusted_input_preprocessors: set[str] = set()
         self._mcp_servers: list[dict[str, Any]] = []
 
     def register(
@@ -125,6 +126,7 @@ class ToolRegistry:
         *,
         result_redaction_policy: ToolResultRedactionPolicy | None = None,
         private_value_policy: MCPPrivateValuePolicy | None = None,
+        trusted_input_preprocessor: bool = False,
     ) -> None:
         self._tools[name] = (
             ToolSpec(name=name, description=description, input_schema=input_schema),
@@ -132,9 +134,21 @@ class ToolRegistry:
             result_redaction_policy,
         )
         self._private_value_policies[name] = private_value_policy or MCPPrivateValuePolicy()
+        if trusted_input_preprocessor:
+            self._trusted_input_preprocessors.add(name)
+        else:
+            self._trusted_input_preprocessors.discard(name)
 
     def specs(self) -> list[ToolSpec]:
         return [tool[0] for tool in self._tools.values()]
+
+    def trusted_input_preprocessor_names(self) -> tuple[str, ...]:
+        return tuple(
+            spec.name for spec in self.specs() if spec.name in self._trusted_input_preprocessors
+        )
+
+    def is_trusted_input_preprocessor(self, name: str) -> bool:
+        return name in self._trusted_input_preprocessors
 
     async def execute(
         self,
@@ -146,7 +160,11 @@ class ToolRegistry:
         tool = self._tools.get(name)
         if tool is None:
             raise HTTPException(status_code=400, detail=f"Unknown tool '{name}'")
-        sanitized_arguments = _sanitize_tool_arguments(name, arguments)
+        sanitized_arguments = _sanitize_tool_arguments(
+            name,
+            arguments,
+            redact_text=self.is_trusted_input_preprocessor(name),
+        )
         started_at = time.perf_counter()
         logger.info("tool.start name=%s arguments=%s", name, sanitized_arguments)
         try:
@@ -528,6 +546,9 @@ def build_tool_registry(
                             raw_tool_name,
                             state.config.private_value_policy,
                         ),
+                        trusted_input_preprocessor=(
+                            raw_tool_name in state.config.trusted_input_preprocessor_tools
+                        ),
                     )
             mcp_servers.append(state.public_dict())
         registry.set_mcp_servers(mcp_servers)
@@ -551,6 +572,9 @@ def build_tool_registry(
                         raw_tool_name,
                         config.private_value_policy,
                     ),
+                    trusted_input_preprocessor=(
+                        raw_tool_name in config.trusted_input_preprocessor_tools
+                    ),
                 )
             server_info = client.server_info()
             mcp_servers.append(
@@ -563,6 +587,9 @@ def build_tool_registry(
                     "server_version": server_info.server_version,
                     "tool_count": len(specs),
                     "allowed_tools": config.allowed_tools,
+                    "trusted_input_preprocessor_tools": sorted(
+                        config.trusted_input_preprocessor_tools
+                    ),
                     "path_policy": {
                         "deny_globs": list(config.path_policy.deny_globs),
                         "allow_globs": list(config.path_policy.allow_globs),
@@ -603,6 +630,9 @@ def build_tool_registry(
                     "server_version": None,
                     "tool_count": 0,
                     "allowed_tools": config.allowed_tools,
+                    "trusted_input_preprocessor_tools": sorted(
+                        config.trusted_input_preprocessor_tools
+                    ),
                     "path_policy": {
                         "deny_globs": list(config.path_policy.deny_globs),
                         "allow_globs": list(config.path_policy.allow_globs),
@@ -1184,8 +1214,13 @@ def _prepare_private_tool_arguments(
     return prepared
 
 
-def _sanitize_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    if tool_name.endswith(".contacts_protect_text"):
+def _sanitize_tool_arguments(
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    redact_text: bool = False,
+) -> dict[str, Any]:
+    if redact_text:
         return {
             key: "<redacted>" if key == "text" else sanitize_value_for_logging(key, value)
             for key, value in arguments.items()
