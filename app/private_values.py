@@ -75,6 +75,10 @@ class PrivateValueStore(Protocol):
         self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
     ) -> str: ...
 
+    def validate_for_tool(
+        self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
+    ) -> None: ...
+
     def resolve_for_tool(
         self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
     ) -> str: ...
@@ -228,7 +232,6 @@ class InMemoryPrivateValueStore:
         user_id: str = "",
         kinds: Mapping[str, str] | None = None,
     ) -> None:
-        _ = kinds
         key = (tenant_id, user_id, thread_id)
         self._prune_thread(key)
         thread_values = self._values.setdefault(key, {})
@@ -282,14 +285,13 @@ class InMemoryPrivateValueStore:
 
         return PII_PLACEHOLDER_PATTERN.sub(replace, text)
 
-    def resolve_for_tool(
+    def validate_for_tool(
         self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
-    ) -> str:
+    ) -> None:
         key = (tenant_id, user_id, thread_id)
         self._prune_thread(key)
         thread_values = self._values.get(key, {})
-
-        def replace(match: re.Match[str]) -> str:
+        for match in PII_PLACEHOLDER_PATTERN.finditer(text):
             entry = thread_values.get(match.group("reference"))
             if entry is None:
                 raise HTTPException(
@@ -301,7 +303,15 @@ class InMemoryPrivateValueStore:
                     status_code=409,
                     detail="Private value kind does not match placeholder",
                 )
-            return entry.value
+
+    def resolve_for_tool(
+        self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
+    ) -> str:
+        self.validate_for_tool(tenant_id, thread_id, text, user_id=user_id)
+        thread_values = self._values.get((tenant_id, user_id, thread_id), {})
+
+        def replace(match: re.Match[str]) -> str:
+            return thread_values[match.group("reference")].value
 
         return PII_PLACEHOLDER_PATTERN.sub(replace, text)
 

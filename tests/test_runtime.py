@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 from fastapi import HTTPException
 
 from app.execution import (
@@ -29,7 +30,7 @@ from app.models import (
 )
 from app.peer_agents import PeerAgentConfig, PeerAgentRegistry
 from app.private_consents import InMemoryPrivateValueConsentStore, PrivateValueDisclosure
-from app.private_values import PII_PLACEHOLDER_PATTERN
+from app.private_values import PII_PLACEHOLDER_PATTERN, InMemoryPrivateValueStore
 from app.quality import QualityEnhancer
 from app.runtime import (
     DEFAULT_MAX_ITERATIONS,
@@ -422,6 +423,156 @@ def test_runtime_resolves_selected_private_values_only_at_trusted_tool_boundary(
         "disclosed",
     ]
     assert "private@example.com" not in json.dumps(audit)
+
+
+def test_runtime_rejects_relabelled_private_placeholder_before_consent() -> None:
+    received: list[dict[str, object]] = []
+
+    class RelabelThenReplyLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            if messages[-1].role == MessageRole.TOOL:
+                assert "kind does not match placeholder" in messages[-1].content
+                return LLMResponse(content="blocked")
+            placeholder = next(
+                part for part in messages[-1].content.split() if part.startswith("{{pii:email:")
+            )
+            relabelled = placeholder.replace("{{pii:email:", "{{pii:phone:", 1)
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="send-invalid-kind",
+                        name="trusted.send",
+                        arguments={"recipient": {"email": relabelled}},
+                    )
+                ]
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    registry = ToolRegistry()
+    registry.register(
+        "trusted.send",
+        "Send a message.",
+        {"type": "object"},
+        lambda arguments, context=None: received.append(arguments),
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email",),
+        ),
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=RelabelThenReplyLLM(),
+        tool_registry=registry,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    protected = asyncio.run(
+        runtime.protect_user_content(
+            PRINCIPAL,
+            thread.thread_id,
+            "Email private@example.com",
+        )
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content=protected),
+    )
+
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert reply == "blocked"
+    assert received == []
+    assert runtime.pending_private_value_consents(PRINCIPAL, thread.thread_id) == []
+    assert runtime.private_value_action_statuses(PRINCIPAL, thread.thread_id) == []
+    assert runtime.private_value_disclosure_audit(PRINCIPAL, thread.thread_id) == []
+
+
+def test_runtime_validates_expired_private_values_before_claiming_resumed_action() -> None:
+    received: list[dict[str, object]] = []
+    now = [100.0]
+
+    class SendThenWaitLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            if messages[-1].role == MessageRole.TOOL:
+                return LLMResponse(content="approval required")
+            placeholder = next(
+                part for part in messages[-1].content.split() if part.startswith("{{pii:email:")
+            )
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="send-expiring",
+                        name="trusted.send",
+                        arguments={"recipient": {"email": placeholder}},
+                    )
+                ]
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    registry = ToolRegistry()
+    registry.register(
+        "trusted.send",
+        "Send a message.",
+        {"type": "object"},
+        lambda arguments, context=None: received.append(arguments),
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email",),
+        ),
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=SendThenWaitLLM(),
+        tool_registry=registry,
+        private_value_store=InMemoryPrivateValueStore(
+            ttl_seconds=5,
+            clock=lambda: now[0],
+        ),
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    protected = asyncio.run(
+        runtime.protect_user_content(
+            PRINCIPAL,
+            thread.thread_id,
+            "Email private@example.com",
+        )
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content=protected),
+    )
+    asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    pending = runtime.pending_private_value_consents(PRINCIPAL, thread.thread_id)
+    assert len(pending) == 1
+    consent_id = str(pending[0]["consent_id"])
+    runtime.decide_private_value_consent(
+        PRINCIPAL,
+        thread.thread_id,
+        consent_id,
+        approve=True,
+        one_shot=True,
+    )
+    now[0] = 106.0
+
+    with pytest.raises(HTTPException, match="missing or expired") as exc_info:
+        asyncio.run(runtime.resume_private_value_consent(PRINCIPAL, thread.thread_id, consent_id))
+
+    assert exc_info.value.status_code == 409
+    assert received == []
+    statuses = runtime.private_value_action_statuses(PRINCIPAL, thread.thread_id)
+    assert len(statuses) == 1
+    assert statuses[0]["consent_id"] == consent_id
+    assert statuses[0]["tool_name"] == "trusted.send"
+    assert statuses[0]["state"] == "pending"
+    assert [
+        record["event"]
+        for record in runtime.private_value_disclosure_audit(PRINCIPAL, thread.thread_id)
+    ] == ["requested", "approved"]
 
 
 def test_runtime_runs_multiple_tool_calls_concurrently() -> None:

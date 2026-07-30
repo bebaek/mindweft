@@ -125,6 +125,8 @@ def test_encrypted_private_value_store_binds_references_to_declared_kinds(
 
     assert store.render_for_user("tenant", "thread", "{{pii:phone:ref}}") == "{{pii:phone:ref}}"
     with pytest.raises(HTTPException, match="kind does not match"):
+        store.validate_for_tool("tenant", "thread", "{{pii:phone:ref}}")
+    with pytest.raises(HTTPException, match="kind does not match"):
         store.resolve_for_tool("tenant", "thread", "{{pii:phone:ref}}")
     with pytest.raises(HTTPException, match="kind collision"):
         store.add(
@@ -234,6 +236,8 @@ def test_encrypted_private_value_store_expires_and_clears_values(tmp_path: Path)
     now[0] = 106.0
 
     assert store.render_for_user("tenant", "thread", placeholder) == placeholder
+    with pytest.raises(HTTPException, match="missing or expired"):
+        store.validate_for_tool("tenant", "thread", placeholder)
     with pytest.raises(HTTPException, match="missing or expired"):
         store.resolve_for_tool("tenant", "thread", placeholder)
     store.add("tenant", "thread", {"ref": "private value"})

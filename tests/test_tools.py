@@ -114,6 +114,7 @@ def test_tool_registry_resolves_only_selected_private_argument_paths(
     assert arguments["recipient"] == {"email": "{{pii:email:to-ref}}"}
     assert received_contexts[0] is not None
     assert received_contexts[0].private_value_resolver is None
+    assert received_contexts[0].private_value_validator is None
     assert received_contexts[0].private_value_authorizer is None
     assert authorized[0][0] == "send"
     assert len(authorized[0][1]) == 64
@@ -123,6 +124,43 @@ def test_tool_registry_resolves_only_selected_private_argument_paths(
     }
     assert "to@example.com" not in caplog.text
     assert "cc@example.com" not in caplog.text
+
+
+def test_tool_registry_validates_private_placeholders_before_consent() -> None:
+    calls: list[str] = []
+    registry = ToolRegistry()
+    registry.register(
+        "send",
+        "Send",
+        {"type": "object"},
+        lambda arguments, context=None: calls.append("handler"),
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email",),
+        ),
+    )
+
+    def reject_invalid_placeholder(text: str) -> None:
+        calls.append(f"validate:{text}")
+        raise HTTPException(status_code=409, detail="Private value kind does not match placeholder")
+
+    with pytest.raises(HTTPException, match="kind does not match") as exc_info:
+        asyncio.run(
+            registry.execute(
+                "send",
+                {"recipient": {"email": "{{pii:phone:email-ref}}"}},
+                context=ToolExecutionContext(
+                    private_value_resolver=lambda text: calls.append("resolve") or text,
+                    private_value_validator=reject_invalid_placeholder,
+                    private_value_authorizer=lambda name, fingerprint, disclosures: calls.append(
+                        "authorize"
+                    ),
+                ),
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert calls == ["validate:{{pii:phone:email-ref}}"]
 
 
 def test_tool_registry_rejects_private_placeholder_on_unapproved_path() -> None:

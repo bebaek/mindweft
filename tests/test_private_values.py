@@ -42,6 +42,8 @@ def test_private_value_store_binds_references_to_declared_kinds() -> None:
 
     assert store.render_for_user("tenant", "thread", "{{pii:phone:ref}}") == "{{pii:phone:ref}}"
     with pytest.raises(HTTPException, match="kind does not match"):
+        store.validate_for_tool("tenant", "thread", "{{pii:phone:ref}}")
+    with pytest.raises(HTTPException, match="kind does not match"):
         store.resolve_for_tool("tenant", "thread", "{{pii:phone:ref}}")
     with pytest.raises(HTTPException, match="kind collision"):
         store.add(
@@ -88,6 +90,12 @@ def test_private_value_store_resolves_for_trusted_tool_strictly() -> None:
         )
         == "Send to private@example.com"
     )
+    with pytest.raises(HTTPException, match="missing or expired"):
+        store.validate_for_tool(
+            "tenant",
+            "thread",
+            "Send to {{pii:email:missing-ref}}",
+        )
     with pytest.raises(HTTPException, match="missing or expired"):
         store.resolve_for_tool(
             "tenant",

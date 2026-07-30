@@ -402,6 +402,12 @@ class AgentRuntime:
                 text,
                 user_id=principal.user_id,
             ),
+            private_value_validator=lambda text: self._private_value_store.validate_for_tool(
+                principal.tenant_id,
+                thread_id,
+                text,
+                user_id=principal.user_id,
+            ),
             private_value_authorizer=lambda name, fingerprint, disclosures: (
                 self._authorize_private_value_disclosure(
                     principal,
@@ -412,6 +418,29 @@ class AgentRuntime:
                 )
             ),
         )
+
+    def _validate_private_tool_arguments(
+        self,
+        principal: Principal,
+        thread_id: str,
+        arguments: object,
+    ) -> None:
+        if isinstance(arguments, str):
+            if PII_PLACEHOLDER_PATTERN.search(arguments) is not None:
+                self._private_value_store.validate_for_tool(
+                    principal.tenant_id,
+                    thread_id,
+                    arguments,
+                    user_id=principal.user_id,
+                )
+            return
+        if isinstance(arguments, dict):
+            for value in arguments.values():
+                self._validate_private_tool_arguments(principal, thread_id, value)
+            return
+        if isinstance(arguments, list):
+            for value in arguments:
+                self._validate_private_tool_arguments(principal, thread_id, value)
 
     async def resume_private_value_consent(
         self,
@@ -424,6 +453,19 @@ class AgentRuntime:
             raise HTTPException(status_code=409, detail="Thread is already running")
         execution = self._execution_resolver.resolve(principal.tenant_id)
         tool_registry = self._tool_registry_for_thread(execution, thread)
+        pending_action = self._private_value_consent_store.get_pending_action(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+            consent_id=consent_id,
+        )
+        if pending_action is None:
+            raise HTTPException(status_code=404, detail="Pending private tool action not found")
+        self._validate_private_tool_arguments(
+            principal,
+            thread_id,
+            pending_action.tool_call.arguments,
+        )
         action = self._private_value_consent_store.claim_pending_action(
             tenant_id=principal.tenant_id,
             user_id=principal.user_id,

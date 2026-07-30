@@ -246,12 +246,38 @@ class SQLiteEncryptedPrivateValueStore:
     def render_for_user(
         self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
     ) -> str:
-        return self._replace(tenant_id, user_id, thread_id, text, strict=False)
+        return self._replace(
+            tenant_id,
+            user_id,
+            thread_id,
+            text,
+            strict=False,
+            substitute=True,
+        )
+
+    def validate_for_tool(
+        self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
+    ) -> None:
+        self._replace(
+            tenant_id,
+            user_id,
+            thread_id,
+            text,
+            strict=True,
+            substitute=False,
+        )
 
     def resolve_for_tool(
         self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
     ) -> str:
-        return self._replace(tenant_id, user_id, thread_id, text, strict=True)
+        return self._replace(
+            tenant_id,
+            user_id,
+            thread_id,
+            text,
+            strict=True,
+            substitute=True,
+        )
 
     def clear_thread(self, tenant_id: str, thread_id: str) -> None:
         with self._lock, closing(self._connect()) as connection:
@@ -269,6 +295,7 @@ class SQLiteEncryptedPrivateValueStore:
         text: str,
         *,
         strict: bool,
+        substitute: bool,
     ) -> str:
         now = self._clock()
         with self._lock, closing(self._connect()) as connection:
@@ -310,7 +337,7 @@ class SQLiteEncryptedPrivateValueStore:
                             detail="Private value kind does not match placeholder",
                         )
                     return match.group(0)
-                return value
+                return value if substitute else match.group(0)
 
             return PII_PLACEHOLDER_PATTERN.sub(replace, text)
 

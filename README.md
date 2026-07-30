@@ -259,10 +259,13 @@ it never resolves their values. Tool results are run back through local PII prot
 storage, run events, or another model turn.
 
 A selected disclosure now requires a user-scoped consent grant in addition to administrator
-policy. The first attempt creates a redacted pending request, emits a
-`private_value.consent_required` run event, and fails the tool call with HTTP 428. The request
-contains only the tool name, an argument fingerprint, and PII kinds, counts, and argument paths.
-Clients can inspect and decide it through:
+policy. Before requesting consent, Minigent validates every selected placeholder against its
+user/thread scope, expiry, reference, and declared PII kind without exposing the plaintext to the
+tool layer. Missing, expired, or relabeled placeholders fail with HTTP 409 and create no consent
+request, pending action, or disclosure audit record. The first valid attempt creates a redacted
+pending request, emits a `private_value.consent_required` run event, and fails the tool call with
+HTTP 428. The request contains only the tool name, an argument fingerprint, and PII kinds, counts,
+and argument paths. Clients can inspect and decide it through:
 
 ```text
 GET  /threads/{thread_id}/private-value-consents/pending
@@ -274,18 +277,20 @@ GET    /threads/{thread_id}/private-value-disclosures/audit
 ```
 
 The decision body is `{"approve": true, "one_shot": true}` or `{"approve": false}`. The
-`resume` endpoint claims and executes the exact placeholder-bearing tool call that originally
-requested consent, then continues the agent loop from its protected result; the model does not
-need to reconstruct the call. Claiming is atomic and durable: concurrent or post-restart attempts
-to claim the same action fail with HTTP 409 instead of invoking a potentially side-effecting tool
-twice. If the process crashes, times out, or loses its connection after the claim, the action
-remains in an `executing` state and is not automatically replayed because the external outcome
-may be unknown. The claimed record is retained only until its consent grant expires (five
-minutes from the decision by default), then removed during consent activity or encrypted-store
-startup. `GET /private-value-actions` returns only consent ID, tool name, state, and expiry—never
-tool arguments or private values. After reconciling an uncertain external outcome, clients can
-`DELETE` the action record; discarding also revokes an unconsumed approval and appends a redacted
-`discarded` audit event. Interactive `minigent chat` sessions expose the same workflow through
+`resume` endpoint validates that the private values are still available before atomically claiming
+and executing the exact placeholder-bearing tool call that originally requested consent, then
+continues the agent loop from its protected result; the model does not need to reconstruct the
+call. An expired value therefore leaves the action pending rather than incorrectly marking its
+external outcome as uncertain. Claiming is atomic and durable: concurrent or post-restart
+attempts to claim the same action fail with HTTP 409 instead of invoking a potentially
+side-effecting tool twice. If the process crashes, times out, or loses its connection after the
+claim, the action remains in an `executing` state and is not automatically replayed because the
+external outcome may be unknown. The claimed record is retained only until its consent grant
+expires (five minutes from the decision by default), then removed during consent activity or
+encrypted-store startup. `GET /private-value-actions` returns only consent ID, tool name, state,
+and expiry—never tool arguments or private values. After reconciling an uncertain external
+outcome, clients can `DELETE` the action record; discarding also revokes an unconsumed approval
+and appends a redacted `discarded` audit event. Interactive `minigent chat` sessions expose the
 `/actions` and `/discard-action <consent-id>`. Reconcile the tool's external state before creating
 a replacement action; tools should still support idempotency keys where possible. Grants are
 fingerprint of the complete placeholder-bearing argument object, so changing the body or any

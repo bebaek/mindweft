@@ -92,6 +92,7 @@ class ToolExecutionContext:
     tenant_id: str | None = None
     thread_id: str | None = None
     private_value_resolver: Callable[[str], str] | None = None
+    private_value_validator: Callable[[str], None] | None = None
     private_value_authorizer: (
         Callable[[str, str, tuple[PrivateValueDisclosure, ...]], None] | None
     ) = None
@@ -154,6 +155,7 @@ class ToolRegistry:
                 arguments,
                 policy=self._private_value_policies[name],
                 resolver=context.private_value_resolver if context is not None else None,
+                validator=context.private_value_validator if context is not None else None,
                 authorizer=context.private_value_authorizer if context is not None else None,
                 tool_name=name,
             )
@@ -1046,6 +1048,7 @@ def _prepare_private_tool_arguments(
     *,
     policy: MCPPrivateValuePolicy,
     resolver: Callable[[str], str] | None,
+    validator: Callable[[str], None] | None,
     authorizer: (Callable[[str, str, tuple[PrivateValueDisclosure, ...]], None] | None),
     tool_name: str,
 ) -> dict[str, Any]:
@@ -1110,6 +1113,26 @@ def _prepare_private_tool_arguments(
             status_code=500,
             detail="Private-value consent is unavailable for this tool execution",
         )
+
+    def preflight(value: Any) -> None:
+        if isinstance(value, str):
+            if PII_PLACEHOLDER_PATTERN.search(value) is not None:
+                if validator is not None:
+                    validator(value)
+                else:
+                    # Backward-compatible fallback for custom execution contexts. Runtime
+                    # contexts provide a non-disclosing validator.
+                    resolver(value)
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                preflight(item)
+            return
+        if isinstance(value, list):
+            for item in value:
+                preflight(item)
+
+    preflight(arguments)
     argument_fingerprint = hashlib.sha256(
         json.dumps(
             arguments,
