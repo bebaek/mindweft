@@ -392,6 +392,71 @@ It starts the contacts MCP server and a mock-LLM Minigent API, exercises `contac
 that authenticated history rehydrates those values, and prints counts only. Pass `--fake`
 to run the same check against built-in contacts without accessing CardDAV.
 
+### Private CalDAV calendar MCP
+
+Run the calendar sidecar with built-in fake data:
+
+```bash
+uv run minigent-private-calendar-mcp
+```
+
+It binds to `127.0.0.1:8768` and exposes `/mcp`. Configure it as an MCP server named
+`private-calendar`. The tools are `calendars_list`, `events_list`, `events_get`,
+`events_create`, `events_update`, and `events_delete`. Calendar names, event summaries,
+descriptions, locations, and attendee addresses are returned as protected private-value
+placeholders; `calendar_ref` and `event_ref` are short-lived internal identifiers that must not
+be displayed. Event queries require explicit RFC 3339 `start` and `end` bounds, reject ranges
+longer than 366 days, and return at most 25 events by default (up to 100).
+
+For Baïkal or another CalDAV server, configure the calendar-home URL and credentials only on
+the sidecar process:
+
+```bash
+export MINIGENT_CALDAV_URL='https://baikal.example/dav.php/calendars/user/'
+export MINIGENT_CALDAV_USERNAME='user'
+read -r -s MINIGENT_CALDAV_PASSWORD
+export MINIGENT_CALDAV_PASSWORD
+uv run minigent-private-calendar-mcp
+unset MINIGENT_CALDAV_PASSWORD
+```
+
+The server discovers calendar collections with `PROPFIND` and runs bounded
+`calendar-query` reports. Create uses `If-None-Match: *`; update and delete use the listed
+resource ETag with `If-Match`. Updates preserve unknown iCalendar properties. V1 reads recurring
+masters but deliberately rejects recurring-event updates and does not support individual
+recurrence overrides, scheduling/invitations, or `VTODO`. It accepts all-day `YYYY-MM-DD`
+values and timed RFC 3339 values with offsets for writes, and reads UTC, floating, and
+TZID-qualified server events.
+
+Calendar mutations must be configured for encrypted exact-call approval and selective private
+value resolution. A writable MCP server policy should include:
+
+```json
+{
+  "allowed_tools": [
+    "calendars_list", "events_list", "events_get", "events_create",
+    "events_update", "events_delete"
+  ],
+  "private_value_tool_policies": {
+    "events_create": {
+      "mode": "resolve_selected",
+      "argument_paths": ["summary", "description", "location", "attendees[*]"],
+      "requires_approval": true
+    },
+    "events_update": {
+      "mode": "resolve_selected",
+      "argument_paths": ["summary", "description", "location", "attendees[*]"],
+      "requires_approval": true
+    },
+    "events_delete": {"mode": "deny", "requires_approval": true}
+  }
+}
+```
+
+TLS verification is enabled. `MINIGENT_CALDAV_AUTH_MODE` defaults to `auto`, which negotiates
+Basic or Digest authentication; explicit `basic` and `digest` modes are also supported.
+`--insecure-skip-tls-verify` is intended only for trusted local development.
+
 ## Clients
 
 ### Browser

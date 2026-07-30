@@ -24,6 +24,7 @@ minigent-mcp-stdio-bridge = "app.mcp_stdio_bridge:main"
 minigent-mcp-stdio-gateway = "app.mcp_stdio_gateway:main"
 minigent-shell-mcp = "app.shell_mcp_server:main"
 minigent-text-mcp = "app.text_mcp_server:main"
+minigent-private-calendar-mcp = "app.private_calendar_mcp:main"
 minigent-client = "minigent_client.cli:main"
 
 [project.optional-dependencies]
