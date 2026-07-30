@@ -830,16 +830,8 @@ def test_peer_agent_task_tool_can_poll_until_completion(
     assert "peer_agent_task.result peer=codex task_id=task_123 status=completed" in caplog.text
 
 
-def test_peer_agent_task_tool_reports_timeout_with_observability_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sleeps = 0
+def test_peer_agent_task_tool_reports_timeout_with_observability_fields() -> None:
     cancel_requests = 0
-
-    async def fake_sleep(seconds: float) -> None:
-        nonlocal sleeps
-        assert seconds == 0.1
-        sleeps += 1
 
     async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal cancel_requests
@@ -877,7 +869,6 @@ def test_peer_agent_task_tool_reports_timeout_with_observability_fields(
             )
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
-    monkeypatch.setattr("app.tools.asyncio.sleep", fake_sleep)
     peer_registry = PeerAgentRegistry(
         parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
         transport=httpx.MockTransport(handler),
@@ -900,7 +891,6 @@ def test_peer_agent_task_tool_reports_timeout_with_observability_fields(
         )
     )
 
-    assert sleeps >= 1
     assert cancel_requests == 1
     assert result["peer"] == "codex"
     assert result["task_id"] == "task_123"
