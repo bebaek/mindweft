@@ -31,6 +31,32 @@ def test_private_value_store_is_scoped_by_tenant_user_and_thread() -> None:
     )
 
 
+def test_private_value_store_binds_references_to_declared_kinds() -> None:
+    store = InMemoryPrivateValueStore()
+    store.add(
+        "tenant",
+        "thread",
+        {"ref": "private@example.com"},
+        kinds={"ref": "email"},
+    )
+
+    assert store.render_for_user("tenant", "thread", "{{pii:phone:ref}}") == "{{pii:phone:ref}}"
+    with pytest.raises(HTTPException, match="kind does not match"):
+        store.resolve_for_tool("tenant", "thread", "{{pii:phone:ref}}")
+    with pytest.raises(HTTPException, match="kind collision"):
+        store.add(
+            "tenant",
+            "thread",
+            {"ref": "private@example.com"},
+            kinds={"ref": "phone"},
+        )
+
+    # An update without kind metadata must not downgrade an existing binding.
+    store.add("tenant", "thread", {"ref": "private@example.com"})
+    with pytest.raises(HTTPException, match="kind does not match"):
+        store.resolve_for_tool("tenant", "thread", "{{pii:phone:ref}}")
+
+
 def test_private_value_store_expires_values() -> None:
     now = [100.0]
     store = InMemoryPrivateValueStore(ttl_seconds=5, clock=lambda: now[0])

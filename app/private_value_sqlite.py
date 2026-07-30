@@ -178,12 +178,13 @@ class SQLiteEncryptedPrivateValueStore:
                     (tenant_id, user_id, thread_id, reference),
                 ).fetchone()
                 if existing is not None:
+                    existing_kind = str(existing[0])
                     existing_value = self._decrypt(
                         tenant_id,
                         user_id,
                         thread_id,
                         reference,
-                        str(existing[0]),
+                        existing_kind,
                         bytes(existing[1]),
                         bytes(existing[2]),
                         int(existing[3]),
@@ -193,6 +194,13 @@ class SQLiteEncryptedPrivateValueStore:
                             status_code=502,
                             detail=f"Private value reference collision for '{reference}'",
                         )
+                    if existing_kind != "unknown" and kind != "unknown" and existing_kind != kind:
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"Private value kind collision for '{reference}'",
+                        )
+                    if kind == "unknown":
+                        kind = existing_kind
                 nonce = os.urandom(_NONCE_BYTES)
                 ciphertext = self._aesgcms[self._key_version].encrypt(
                     nonce,
@@ -284,16 +292,25 @@ class SQLiteEncryptedPrivateValueStore:
                             detail="Private value is missing or expired",
                         )
                     return match.group(0)
-                return self._decrypt(
+                stored_kind = str(row[0])
+                value = self._decrypt(
                     tenant_id,
                     user_id,
                     thread_id,
                     reference,
-                    str(row[0]),
+                    stored_kind,
                     bytes(row[1]),
                     bytes(row[2]),
                     int(row[3]),
                 )
+                if stored_kind != "unknown" and stored_kind != match.group("kind"):
+                    if strict:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Private value kind does not match placeholder",
+                        )
+                    return match.group(0)
+                return value
 
             return PII_PLACEHOLDER_PATTERN.sub(replace, text)
 

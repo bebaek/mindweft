@@ -171,6 +171,7 @@ class LocalPIIProtector:
 @dataclass(frozen=True)
 class PrivateValueEntry:
     value: str
+    kind: str
     expires_at: float
 
 
@@ -244,13 +245,27 @@ class InMemoryPrivateValueStore:
                     status_code=502,
                     detail="Private value exceeded the configured character limit",
                 )
+            requested_kind = (kinds or {}).get(reference, "unknown")
+            kind = requested_kind if re.fullmatch(r"[a-z][a-z0-9_]*", requested_kind) else "unknown"
             existing = thread_values.get(reference)
-            if existing is not None and existing.value != value:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Private value reference collision for '{reference}'",
-                )
-            thread_values[reference] = PrivateValueEntry(value=value, expires_at=expires_at)
+            if existing is not None:
+                if existing.value != value:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Private value reference collision for '{reference}'",
+                    )
+                if existing.kind != "unknown" and kind != "unknown" and existing.kind != kind:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Private value kind collision for '{reference}'",
+                    )
+                if kind == "unknown":
+                    kind = existing.kind
+            thread_values[reference] = PrivateValueEntry(
+                value=value,
+                kind=kind,
+                expires_at=expires_at,
+            )
 
     def render_for_user(
         self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
@@ -261,7 +276,9 @@ class InMemoryPrivateValueStore:
 
         def replace(match: re.Match[str]) -> str:
             entry = thread_values.get(match.group("reference"))
-            return entry.value if entry is not None else match.group(0)
+            if entry is None or (entry.kind != "unknown" and entry.kind != match.group("kind")):
+                return match.group(0)
+            return entry.value
 
         return PII_PLACEHOLDER_PATTERN.sub(replace, text)
 
@@ -278,6 +295,11 @@ class InMemoryPrivateValueStore:
                 raise HTTPException(
                     status_code=409,
                     detail="Private value is missing or expired",
+                )
+            if entry.kind != "unknown" and entry.kind != match.group("kind"):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Private value kind does not match placeholder",
                 )
             return entry.value
 

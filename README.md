@@ -170,12 +170,14 @@ export MINIGENT_PRIVATE_CONSENT_KEY_VERSION=1
 
 The SQLite stores encrypt each private value and each consent/action payload independently with
 AES-256-GCM and a fresh 96-bit nonce. Private-value tenant/user/thread/reference metadata and
-consent/action tenant/user/thread/consent metadata are authenticated as associated data. Private
-values are resolvable only by the user who created or received them, even when another user in
-the same tenant can access the thread's placeholder-bearing messages. The database contains
-ciphertext, nonces, scoped metadata, statuses, and expiry timestamps but not
-keys or plaintext values/tool arguments. Keys must come from the process environment or an
-external secret manager; do not commit them or place them beside the database. Startup fails
+the declared PII kind, plus consent/action tenant/user/thread/consent metadata, are authenticated
+as associated data. A known reference resolves only when its placeholder retains that declared
+kind; relabeled placeholders remain unresolved for display and fail closed for tool disclosure.
+Private values are resolvable only by the user who created or received them, even when another
+user in the same tenant can access the thread's placeholder-bearing messages. The database
+contains ciphertext, nonces, scoped metadata, statuses, and expiry timestamps but not keys or
+plaintext values/tool arguments. Keys must come from the process environment or an external
+secret manager; do not commit them or place them beside the database. Startup fails
 closed when a database path is configured without a valid corresponding key. Back up keys
 separately: losing all copies of a required version makes its existing records unrecoverable.
 Consent requests default to a ten-minute TTL and grants to five minutes; override them with

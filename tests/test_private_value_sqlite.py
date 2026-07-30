@@ -112,6 +112,34 @@ def test_encrypted_private_values_survive_restart_without_plaintext_on_disk(
     )
 
 
+def test_encrypted_private_value_store_binds_references_to_declared_kinds(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteEncryptedPrivateValueStore(tmp_path / "private.db", KEY)
+    store.add(
+        "tenant",
+        "thread",
+        {"ref": "private@example.com"},
+        kinds={"ref": "email"},
+    )
+
+    assert store.render_for_user("tenant", "thread", "{{pii:phone:ref}}") == "{{pii:phone:ref}}"
+    with pytest.raises(HTTPException, match="kind does not match"):
+        store.resolve_for_tool("tenant", "thread", "{{pii:phone:ref}}")
+    with pytest.raises(HTTPException, match="kind collision"):
+        store.add(
+            "tenant",
+            "thread",
+            {"ref": "private@example.com"},
+            kinds={"ref": "phone"},
+        )
+
+    # An update without kind metadata must not downgrade an existing binding.
+    store.add("tenant", "thread", {"ref": "private@example.com"})
+    with pytest.raises(HTTPException, match="kind does not match"):
+        store.resolve_for_tool("tenant", "thread", "{{pii:phone:ref}}")
+
+
 def test_encrypted_private_value_factory_reads_environment_mapping(tmp_path: Path) -> None:
     store = build_private_value_store_from_env(
         {
