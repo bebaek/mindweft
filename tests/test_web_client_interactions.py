@@ -193,6 +193,67 @@ def _run_node_script(tmp_path: Path, repo_root: Path, name: str, source: str) ->
     subprocess.run(["node", str(runner)], cwd=repo_root, check=True)
 
 
+def test_web_client_reconciles_uncertain_private_action(tmp_path: Path) -> None:
+    repo_root = Path(__file__).parents[1]
+    app_path = repo_root / "app" / "static" / "web" / "app.js"
+    _run_node_script(
+        tmp_path,
+        repo_root,
+        "web_private_action_reconciliation.mjs",
+        f"""
+            import assert from "node:assert/strict";
+            import fs from "node:fs";
+            import vm from "node:vm";
+
+            {WEB_CLIENT_DOM_CLASSES}
+            {WEB_CLIENT_BROWSER_HARNESS}
+            {WEB_CLIENT_ASYNC_HELPERS}
+
+            function jsonResponse(payload, status = 200) {{
+              return {{
+                ok: status >= 200 && status < 300,
+                status,
+                statusText: status === 200 ? "OK" : "Error",
+                json: async () => payload,
+                text: async () => JSON.stringify(payload),
+              }};
+            }}
+
+            const harness = createWebClientHarness({{
+              storageValue: JSON.stringify({{ baseUrl: "http://ui.test", threadId: "t1" }}),
+              async fetchImpl(url, options, path) {{
+                if (path === "/execution-options") {{
+                  return jsonResponse({{ skills: {{ items: [] }}, capability_profiles: {{ items: [] }} }});
+                }}
+                if (path === "/threads/t1/messages") return jsonResponse([]);
+                if (path === "/threads/t1/private-value-actions") {{
+                  return jsonResponse([
+                    {{ consent_id: "consent-1", thread_id: "t1", tool_name: "trusted.send", state: "executing", expires_at: 700 }},
+                  ]);
+                }}
+                if (path === "/threads/t1/private-value-actions/consent-1" && options.method === "DELETE") {{
+                  return jsonResponse({{ consent_id: "consent-1", state: "executing", discarded: true }});
+                }}
+                return jsonResponse({{}});
+              }},
+            }});
+            vm.runInContext(fs.readFileSync({str(app_path)!r}, "utf8"), harness.context, {{ filename: "app.js" }});
+            await flushAsyncWork();
+
+            const discarded = await harness.context.offerPrivateValueActionReconciliation("t1", "consent-1");
+
+            assert.equal(discarded, true);
+            assert.equal(
+              harness.fetchCalls.some((call) => call.url.endsWith("/threads/t1/private-value-actions/consent-1") && call.method === "DELETE"),
+              true,
+            );
+            assert.equal(harness.elements.get("messages").textContent.includes("may have completed"), true);
+            assert.equal(harness.elements.get("messages").textContent.includes("No automatic retry"), true);
+            assert.equal(harness.elements.get("run-status-label").textContent, "Action record discarded");
+        """,
+    )
+
+
 def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
     """Smoke-test browser UI wiring with a tiny dependency-free DOM harness."""
 

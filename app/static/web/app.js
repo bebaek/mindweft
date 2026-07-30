@@ -525,12 +525,59 @@ async function handlePrivateValueConsent(threadId, consent) {
   }
   setRunStatus("Resuming approved action…");
   addActivityEvent("Private-value disclosure approved; resuming exact tool call");
-  await requestJson(
-    `/threads/${encodeURIComponent(threadId)}/private-value-consents/${encodeURIComponent(consentId)}/resume`,
-    { method: "POST" },
-  );
+  try {
+    await requestJson(
+      `/threads/${encodeURIComponent(threadId)}/private-value-consents/${encodeURIComponent(consentId)}/resume`,
+      { method: "POST" },
+    );
+  } catch (error) {
+    const discarded = await offerPrivateValueActionReconciliation(threadId, consentId);
+    if (discarded) {
+      return;
+    }
+    throw error;
+  }
   await refreshMessages();
   setRunStatus("Activity", { completed: true, hint: "Approved action completed" });
+}
+
+async function offerPrivateValueActionReconciliation(threadId, consentId) {
+  let actions;
+  try {
+    actions = await requestJson(`/threads/${encodeURIComponent(threadId)}/private-value-actions`);
+  } catch (error) {
+    addActivityEvent(`Could not inspect private action state: ${error.message}`, null, true);
+    return false;
+  }
+  const action = Array.isArray(actions)
+    ? actions.find((item) => item && item.consent_id === consentId)
+    : null;
+  if (!action || action.state !== "executing") {
+    return false;
+  }
+  const toolName = action.tool_name || "tool";
+  appendNotice(
+    `${toolName} may have completed, but Minigent could not confirm the outcome. ` +
+      "Check the external system before retrying.",
+  );
+  setRunStatus("Action outcome unknown", { completed: true, forceVisible: true });
+  addActivityEvent("Private action outcome unknown; automatic replay blocked", action, true);
+  const discard = window.confirm(
+    `${toolName} was already claimed and may have completed.\n\n` +
+      "First check the external system. Discard the local action record now?\n\n" +
+      "Discarding does not undo an external side effect.",
+  );
+  if (!discard) {
+    return false;
+  }
+  await requestJson(
+    `/threads/${encodeURIComponent(threadId)}/private-value-actions/${encodeURIComponent(consentId)}`,
+    { method: "DELETE" },
+  );
+  appendNotice("Discarded the reconciled private action record. No automatic retry was attempted.");
+  setRunStatus("Action record discarded", { completed: true, forceVisible: true });
+  addActivityEvent("Discarded reconciled private action record");
+  return true;
 }
 
 async function requestJson(path, options = {}) {

@@ -285,9 +285,12 @@ requests expire after ten minutes.
 Denials block the identical disclosure until they expire. Consent state is scoped by tenant,
 user, and thread. Audit records contain opaque references, paths, and kinds, but never raw
 values. The browser displays a confirmation dialog and automatically resumes an approved
-action. Interactive `minigent chat` sessions show the same redacted summary and prompt for a
-one-shot approval. Consent grants, audit records, and exact placeholder-bearing pending actions
-survive restarts when encrypted consent storage is configured; otherwise they remain in memory.
+action. If that resume has an uncertain outcome, it detects the durable `executing` state,
+blocks automatic replay, warns the user to check the external system, and offers to discard the
+reconciled action record. Interactive `minigent chat` sessions show the same redacted consent
+summary and prompt for a one-shot approval. Consent grants, audit records, and exact
+placeholder-bearing pending actions survive restarts when encrypted consent storage is
+configured; otherwise they remain in memory.
 
 Run the private-contacts MCP server with fake contacts for an end-to-end local experiment:
 
