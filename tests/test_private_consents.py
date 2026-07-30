@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from app.private_consents import InMemoryPrivateValueConsentStore, PrivateValueDisclosure
+from app.models import ToolCall
+from app.private_consents import (
+    InMemoryPrivateValueConsentStore,
+    PendingPrivateToolAction,
+    PrivateValueDisclosure,
+)
 
 DISCLOSURES = (PrivateValueDisclosure(path="recipient.email", kind="email", reference="email-ref"),)
 
@@ -149,6 +154,35 @@ def test_consent_store_expires_pending_requests() -> None:
     assert store.pending(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1") == []
     audit = store.audit_records(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")
     assert [record["event"] for record in audit] == ["requested", "expired"]
+
+
+def test_consent_store_claims_pending_action_only_once() -> None:
+    store = InMemoryPrivateValueConsentStore(clock=lambda: 100.0)
+    action = PendingPrivateToolAction(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        thread_id="thread-1",
+        tool_call=ToolCall(name="trusted.send", arguments={"body": "protected"}),
+    )
+    store.save_pending_action("consent-1", action)
+
+    assert (
+        store.claim_pending_action(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            consent_id="consent-1",
+        )
+        == action
+    )
+    with pytest.raises(HTTPException, match="already claimed") as exc_info:
+        store.claim_pending_action(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            consent_id="consent-1",
+        )
+    assert exc_info.value.status_code == 409
 
 
 def test_consent_store_bounds_and_expires_audit_records() -> None:

@@ -267,7 +267,10 @@ class SQLiteEncryptedPrivateValueConsentStore:
         return [self._audit_from_row(row).public_dict() for row in rows]
 
     def save_pending_action(self, consent_id: str, action: PendingPrivateToolAction) -> None:
-        payload = action.tool_call.model_dump(mode="json")
+        payload = {
+            "state": "pending",
+            "tool_call": action.tool_call.model_dump(mode="json"),
+        }
         nonce, ciphertext = self._encrypt(
             "action", action.tenant_id, action.user_id, action.thread_id, consent_id, payload
         )
@@ -275,12 +278,14 @@ class SQLiteEncryptedPrivateValueConsentStore:
             connection.execute(
                 """
                 INSERT INTO pending_private_tool_actions (
-                    consent_id, tenant_id, user_id, thread_id, nonce, ciphertext, key_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    consent_id, tenant_id, user_id, thread_id, state,
+                    nonce, ciphertext, key_version
+                ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
                 ON CONFLICT(consent_id) DO UPDATE SET
                     tenant_id = excluded.tenant_id,
                     user_id = excluded.user_id,
                     thread_id = excluded.thread_id,
+                    state = excluded.state,
                     nonce = excluded.nonce,
                     ciphertext = excluded.ciphertext,
                     key_version = excluded.key_version
@@ -303,7 +308,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
         with self._lock, self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT nonce, ciphertext, key_version
+                SELECT state, nonce, ciphertext, key_version
                 FROM pending_private_tool_actions
                 WHERE consent_id = ? AND tenant_id = ? AND user_id = ? AND thread_id = ?
                 """,
@@ -311,22 +316,118 @@ class SQLiteEncryptedPrivateValueConsentStore:
             ).fetchone()
         if row is None:
             return None
+        tool_call, _state = self._decrypt_action(
+            tenant_id,
+            user_id,
+            thread_id,
+            consent_id,
+            str(row[0]),
+            bytes(row[1]),
+            bytes(row[2]),
+            int(row[3]),
+        )
+        return PendingPrivateToolAction(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            thread_id=thread_id,
+            tool_call=tool_call,
+        )
+
+    def claim_pending_action(
+        self, *, tenant_id: str, user_id: str, thread_id: str, consent_id: str
+    ) -> PendingPrivateToolAction | None:
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT state, nonce, ciphertext, key_version
+                FROM pending_private_tool_actions
+                WHERE consent_id = ? AND tenant_id = ? AND user_id = ? AND thread_id = ?
+                """,
+                (consent_id, tenant_id, user_id, thread_id),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            tool_call, state = self._decrypt_action(
+                tenant_id,
+                user_id,
+                thread_id,
+                consent_id,
+                str(row[0]),
+                bytes(row[1]),
+                bytes(row[2]),
+                int(row[3]),
+            )
+            if state != "pending":
+                connection.commit()
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Pending private tool action was already claimed; its outcome may be unknown"
+                    ),
+                )
+            nonce, ciphertext = self._encrypt(
+                "action",
+                tenant_id,
+                user_id,
+                thread_id,
+                consent_id,
+                {"state": "executing", "tool_call": tool_call.model_dump(mode="json")},
+            )
+            connection.execute(
+                """
+                UPDATE pending_private_tool_actions
+                SET state = 'executing', nonce = ?, ciphertext = ?, key_version = ?
+                WHERE consent_id = ?
+                """,
+                (nonce, ciphertext, self._key_version, consent_id),
+            )
+            connection.commit()
+        return PendingPrivateToolAction(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            thread_id=thread_id,
+            tool_call=tool_call,
+        )
+
+    def _decrypt_action(
+        self,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        consent_id: str,
+        stored_state: str,
+        nonce: bytes,
+        ciphertext: bytes,
+        key_version: int,
+    ) -> tuple[ToolCall, str]:
         payload = self._decrypt(
             "action",
             tenant_id,
             user_id,
             thread_id,
             consent_id,
-            bytes(row[0]),
-            bytes(row[1]),
-            int(row[2]),
+            nonce,
+            ciphertext,
+            key_version,
         )
-        return PendingPrivateToolAction(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            thread_id=thread_id,
-            tool_call=ToolCall.model_validate(payload),
-        )
+        wrapped_tool_call = payload.get("tool_call")
+        wrapped_state = payload.get("state")
+        if wrapped_tool_call is None and wrapped_state is None:
+            # Rows written before action claiming stored the ToolCall as the whole payload.
+            if stored_state != "pending":
+                raise HTTPException(
+                    status_code=500,
+                    detail="Pending private tool action authentication failed",
+                )
+            return ToolCall.model_validate(payload), "pending"
+        if wrapped_state not in {"pending", "executing"} or wrapped_state != stored_state:
+            raise HTTPException(
+                status_code=500,
+                detail="Pending private tool action authentication failed",
+            )
+        return ToolCall.model_validate(wrapped_tool_call), stored_state
 
     def delete_pending_action(self, consent_id: str) -> None:
         with self._lock, self._connect() as connection:
@@ -732,23 +833,25 @@ class SQLiteEncryptedPrivateValueConsentStore:
 
             action_rows = connection.execute(
                 """
-                SELECT consent_id, tenant_id, user_id, thread_id, nonce, ciphertext, key_version
+                SELECT consent_id, tenant_id, user_id, thread_id, state,
+                       nonce, ciphertext, key_version
                 FROM pending_private_tool_actions WHERE key_version != ?
                 """,
                 (self._key_version,),
             ).fetchall()
             for row in action_rows:
                 consent_id, tenant_id, user_id, thread_id = map(str, row[:4])
-                payload = self._decrypt(
-                    "action",
+                tool_call, state = self._decrypt_action(
                     tenant_id,
                     user_id,
                     thread_id,
                     consent_id,
-                    bytes(row[4]),
+                    str(row[4]),
                     bytes(row[5]),
-                    int(row[6]),
+                    bytes(row[6]),
+                    int(row[7]),
                 )
+                payload = {"state": state, "tool_call": tool_call.model_dump(mode="json")}
                 nonce, ciphertext = self._encrypt(
                     "action", tenant_id, user_id, thread_id, consent_id, payload
                 )
@@ -839,12 +942,26 @@ class SQLiteEncryptedPrivateValueConsentStore:
                     tenant_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     thread_id TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'pending',
                     nonce BLOB NOT NULL,
                     ciphertext BLOB NOT NULL,
                     key_version INTEGER NOT NULL
                 );
                 """
             )
+            action_columns = {
+                str(column_row[1])
+                for column_row in connection.execute(
+                    "PRAGMA table_info(pending_private_tool_actions)"
+                )
+            }
+            if "state" not in action_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE pending_private_tool_actions
+                    ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'
+                    """
+                )
             connection.commit()
             versions = {
                 int(version_row[0])

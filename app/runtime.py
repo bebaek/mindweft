@@ -395,7 +395,12 @@ class AgentRuntime:
         thread_id: str,
         consent_id: str,
     ) -> tuple[str, dict[str, Any] | None]:
-        action = self._private_value_consent_store.get_pending_action(
+        thread = self._store.get_thread(principal.tenant_id, thread_id)
+        if thread.status == ThreadStatus.RUNNING:
+            raise HTTPException(status_code=409, detail="Thread is already running")
+        execution = self._execution_resolver.resolve(principal.tenant_id)
+        tool_registry = self._tool_registry_for_thread(execution, thread)
+        action = self._private_value_consent_store.claim_pending_action(
             tenant_id=principal.tenant_id,
             user_id=principal.user_id,
             thread_id=thread_id,
@@ -403,11 +408,6 @@ class AgentRuntime:
         )
         if action is None:
             raise HTTPException(status_code=404, detail="Pending private tool action not found")
-        thread = self._store.get_thread(principal.tenant_id, thread_id)
-        if thread.status == ThreadStatus.RUNNING:
-            raise HTTPException(status_code=409, detail="Thread is already running")
-        execution = self._execution_resolver.resolve(principal.tenant_id)
-        tool_registry = self._tool_registry_for_thread(execution, thread)
         try:
             result = await asyncio.wait_for(
                 tool_registry.execute(

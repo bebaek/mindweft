@@ -144,6 +144,10 @@ class PrivateValueConsentStore(Protocol):
         self, *, tenant_id: str, user_id: str, thread_id: str, consent_id: str
     ) -> PendingPrivateToolAction | None: ...
 
+    def claim_pending_action(
+        self, *, tenant_id: str, user_id: str, thread_id: str, consent_id: str
+    ) -> PendingPrivateToolAction | None: ...
+
     def delete_pending_action(self, consent_id: str) -> None: ...
 
     def clear_thread(self, tenant_id: str, thread_id: str) -> None: ...
@@ -173,6 +177,7 @@ class InMemoryPrivateValueConsentStore:
         self._requests: dict[str, PrivateValueConsentRequest] = {}
         self._audit: list[PrivateValueDisclosureAuditRecord] = []
         self._pending_actions: dict[str, PendingPrivateToolAction] = {}
+        self._pending_action_states: dict[str, str] = {}
         self._lock = RLock()
 
     def authorize_or_request(
@@ -266,6 +271,7 @@ class InMemoryPrivateValueConsentStore:
             self._record(request.status, request, now)
             if not approve:
                 self._pending_actions.pop(consent_id, None)
+                self._pending_action_states.pop(consent_id, None)
             return request.public_dict()
 
     def pending(self, *, tenant_id: str, user_id: str, thread_id: str) -> list[dict[str, object]]:
@@ -297,6 +303,7 @@ class InMemoryPrivateValueConsentStore:
     def save_pending_action(self, consent_id: str, action: PendingPrivateToolAction) -> None:
         with self._lock:
             self._pending_actions[consent_id] = action
+            self._pending_action_states[consent_id] = "pending"
 
     def get_pending_action(
         self, *, tenant_id: str, user_id: str, thread_id: str, consent_id: str
@@ -312,9 +319,32 @@ class InMemoryPrivateValueConsentStore:
                 return None
             return action
 
+    def claim_pending_action(
+        self, *, tenant_id: str, user_id: str, thread_id: str, consent_id: str
+    ) -> PendingPrivateToolAction | None:
+        with self._lock:
+            action = self.get_pending_action(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                thread_id=thread_id,
+                consent_id=consent_id,
+            )
+            if action is None:
+                return None
+            if self._pending_action_states.get(consent_id) != "pending":
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Pending private tool action was already claimed; its outcome may be unknown"
+                    ),
+                )
+            self._pending_action_states[consent_id] = "executing"
+            return action
+
     def delete_pending_action(self, consent_id: str) -> None:
         with self._lock:
             self._pending_actions.pop(consent_id, None)
+            self._pending_action_states.pop(consent_id, None)
 
     def clear_thread(self, tenant_id: str, thread_id: str) -> None:
         with self._lock:
@@ -326,6 +356,7 @@ class InMemoryPrivateValueConsentStore:
             for consent_id in consent_ids:
                 self._requests.pop(consent_id, None)
                 self._pending_actions.pop(consent_id, None)
+                self._pending_action_states.pop(consent_id, None)
             self._audit = [
                 record
                 for record in self._audit
@@ -350,6 +381,7 @@ class InMemoryPrivateValueConsentStore:
             if request.status in {"pending", "approved", "denied"} and request.expires_at <= now:
                 request.status = "expired"
                 self._pending_actions.pop(request.consent_id, None)
+                self._pending_action_states.pop(request.consent_id, None)
                 self._record("expired", request, now)
 
     def _record(self, event: str, request: PrivateValueConsentRequest, occurred_at: float) -> None:

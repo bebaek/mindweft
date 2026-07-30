@@ -263,12 +263,17 @@ GET  /threads/{thread_id}/private-value-disclosures/audit
 ```
 
 The decision body is `{"approve": true, "one_shot": true}` or `{"approve": false}`. The
-`resume` endpoint executes the exact placeholder-bearing tool call that originally requested
-consent and then continues the agent loop from its protected result; the model does not need to
-reconstruct the call. Grants are bound to a SHA-256 fingerprint of the complete
-placeholder-bearing argument object, so changing the body or any other argument requires new
-consent. Non-one-shot grants remain usable for five minutes; pending requests expire after ten
-minutes.
+`resume` endpoint claims and executes the exact placeholder-bearing tool call that originally
+requested consent, then continues the agent loop from its protected result; the model does not
+need to reconstruct the call. Claiming is atomic and durable: concurrent or post-restart attempts
+to claim the same action fail with HTTP 409 instead of invoking a potentially side-effecting tool
+twice. If the process crashes, times out, or loses its connection after the claim, the action
+remains in an `executing` state and is not automatically replayed because the external outcome
+may be unknown. Reconcile the tool's external state before creating a replacement action; tools
+should still support idempotency keys where possible. Grants are bound to a SHA-256 fingerprint
+of the complete placeholder-bearing argument object, so changing the body or any other argument
+requires new consent. Non-one-shot grants remain usable for five minutes; pending requests
+expire after ten minutes.
 Denials block the identical disclosure until they expire. Consent state is scoped by tenant,
 user, and thread. Audit records contain opaque references, paths, and kinds, but never raw
 values. The browser displays a confirmation dialog and automatically resumes an approved

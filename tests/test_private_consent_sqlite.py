@@ -84,6 +84,65 @@ def test_encrypted_consent_and_pending_action_survive_restart(tmp_path) -> None:
     ] == ["requested", "approved", "disclosed"]
 
 
+def test_encrypted_consent_store_persists_action_claim(tmp_path) -> None:
+    db_path = tmp_path / "private-consents.db"
+    first = SQLiteEncryptedPrivateValueConsentStore(db_path, KEY, clock=lambda: 100.0)
+    action = PendingPrivateToolAction(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        thread_id="thread-1",
+        tool_call=ToolCall(name="trusted.send", arguments={"body": "protected"}),
+    )
+    first.save_pending_action("consent-1", action)
+    assert (
+        first.claim_pending_action(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            consent_id="consent-1",
+        )
+        == action
+    )
+
+    restarted = SQLiteEncryptedPrivateValueConsentStore(db_path, KEY, clock=lambda: 101.0)
+    with pytest.raises(HTTPException, match="already claimed") as exc_info:
+        restarted.claim_pending_action(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            consent_id="consent-1",
+        )
+    assert exc_info.value.status_code == 409
+
+
+def test_encrypted_consent_store_authenticates_action_claim_state(tmp_path) -> None:
+    db_path = tmp_path / "private-consents.db"
+    store = SQLiteEncryptedPrivateValueConsentStore(db_path, KEY, clock=lambda: 100.0)
+    store.save_pending_action(
+        "consent-1",
+        PendingPrivateToolAction(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            tool_call=ToolCall(name="trusted.send"),
+        ),
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE pending_private_tool_actions SET state = 'executing' WHERE consent_id = ?",
+            ("consent-1",),
+        )
+        connection.commit()
+
+    with pytest.raises(HTTPException, match="authentication failed"):
+        store.claim_pending_action(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            consent_id="consent-1",
+        )
+
+
 def test_encrypted_consent_database_contains_no_sensitive_payload_text(tmp_path) -> None:
     db_path = tmp_path / "private-consents.db"
     store = SQLiteEncryptedPrivateValueConsentStore(db_path, KEY, clock=lambda: 100.0)
