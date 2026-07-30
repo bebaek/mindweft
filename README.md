@@ -318,12 +318,16 @@ endpoint as an MCP server named `private-contacts`, allow `contacts_list`, `cont
 `contacts_list` returns
 protected names, available field names, and short-lived opaque `contact_ref` values;
 `contacts_get` retrieves only requested fields. On message creation, Minigent invokes
-`contacts_protect_text` as a trusted preprocessor and masks exact, uniquely matching
-address-book contact names before the local detector runs, preserving a usable contact
-reference for selective retrieval. Ambiguous address-book names are left to the conservative
-local detector rather than being linked to an arbitrary contact. With no CardDAV environment
-variables, the server uses intentionally fake data to verify that the model and stored thread
-see placeholders while the immediate user reply is rehydrated.
+`contacts_protect_text` as a trusted preprocessor and masks exact, uniquely matching address-book
+contact names plus unambiguous first and last names in contact-related or possessive contexts
+before the local detector runs, preserving a usable contact reference for selective retrieval.
+The preprocessor is hidden from model tool specifications and its raw text argument is redacted
+from tool logs. A contact placeholder's reference can be passed directly to `contacts_get`.
+Opaque `contact_ref` values are internal and should never be displayed to the user. Ambiguous
+full or partial address-book names are left to the conservative local detector rather than being
+linked to an arbitrary contact. With no CardDAV environment variables, the server uses
+intentionally fake data to verify that model and stored thread context see placeholders while the
+immediate user reply is rehydrated.
 
 For a read-only Baïkal or other CardDAV address book, export the collection URL and
 credentials before starting the same server. Enter the password interactively rather than

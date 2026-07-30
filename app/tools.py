@@ -146,7 +146,7 @@ class ToolRegistry:
         tool = self._tools.get(name)
         if tool is None:
             raise HTTPException(status_code=400, detail=f"Unknown tool '{name}'")
-        sanitized_arguments = _sanitize_tool_arguments(arguments)
+        sanitized_arguments = _sanitize_tool_arguments(name, arguments)
         started_at = time.perf_counter()
         logger.info("tool.start name=%s arguments=%s", name, sanitized_arguments)
         try:
@@ -1163,7 +1163,12 @@ def _prepare_private_tool_arguments(
     return prepared
 
 
-def _sanitize_tool_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+def _sanitize_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if tool_name.endswith(".contacts_protect_text"):
+        return {
+            key: "<redacted>" if key == "text" else sanitize_value_for_logging(key, value)
+            for key, value in arguments.items()
+        }
     return {key: sanitize_value_for_logging(key, value) for key, value in arguments.items()}
 
 

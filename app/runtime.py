@@ -75,6 +75,7 @@ MAX_ITERATIONS_ENV = "MINIGENT_MAX_ITERATIONS"
 TOOL_TIMEOUT_SECONDS_ENV = "MINIGENT_TOOL_TIMEOUT_SECONDS"
 CONTEXT_COMPACTION_ENABLED_ENV = "MINIGENT_CONTEXT_COMPACTION_ENABLED"
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
+_PRIVATE_CONTACTS_PREPROCESSOR_SUFFIX = ".contacts_protect_text"
 
 
 @dataclass(frozen=True)
@@ -211,7 +212,7 @@ class AgentRuntime:
         protectors = [
             spec.name
             for spec in execution.tool_registry.specs()
-            if spec.name.endswith(".contacts_protect_text")
+            if spec.name.endswith(_PRIVATE_CONTACTS_PREPROCESSOR_SUFFIX)
         ]
         if protectors:
             if len(protectors) != 1:
@@ -556,7 +557,11 @@ class AgentRuntime:
                     skill_prompts=[_load_active_skill_instructions(skill) for skill in skills],
                     skill_names=[skill.name for skill in skills],
                 )
-                tool_specs = tool_registry.specs()
+                tool_specs = [
+                    spec
+                    for spec in tool_registry.specs()
+                    if not spec.name.endswith(_PRIVATE_CONTACTS_PREPROCESSOR_SUFFIX)
+                ]
                 response = None
                 if not isinstance(llm_adapter, MockLLMAdapter):
                     response = _direct_tool_command_response(messages, tool_specs)

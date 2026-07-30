@@ -304,6 +304,85 @@ def test_private_contacts_server_protects_unique_contact_names_for_model_input()
     assert "Alice Smith" not in str(result["structuredContent"])
 
 
+def test_private_contacts_server_protects_unambiguous_first_and_last_names() -> None:
+    server = PrivateContactsMCPServer(
+        contacts=[Contact(name="Gabe Zurita", emails=("gabe@example.com",))],
+        contact_reference_factory=lambda: "contact-ref",
+    )
+
+    response = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "contacts_protect_text",
+                "arguments": {"text": "Show me Gabe's email, then call Zurita."},
+            },
+        }
+    )
+
+    assert response is not None
+    result = response["result"]
+    assert result["structuredContent"] == {
+        "text": (
+            "Show me {{pii:contact:contact-ref}}'s email, then call {{pii:contact:contact-ref}}."
+        ),
+        "protected_contact_count": 2,
+    }
+    assert result["_meta"][PRIVATE_VALUES_META_KEY] == {"contact-ref": "Gabe Zurita"}
+
+
+def test_private_contacts_server_does_not_protect_partial_name_without_contact_context() -> None:
+    server = PrivateContactsMCPServer(contacts=[Contact(name="Will Smith")])
+
+    response = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "contacts_protect_text",
+                "arguments": {"text": "Will this work in May?"},
+            },
+        }
+    )
+
+    assert response is not None
+    result = response["result"]
+    assert result["structuredContent"] == {
+        "text": "Will this work in May?",
+        "protected_contact_count": 0,
+    }
+    assert result["_meta"][PRIVATE_VALUES_META_KEY] == {}
+
+
+def test_private_contacts_server_does_not_guess_ambiguous_partial_names() -> None:
+    server = PrivateContactsMCPServer(
+        contacts=[Contact(name="Alex Doe"), Contact(name="Alex Smith")]
+    )
+
+    response = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "contacts_protect_text",
+                "arguments": {"text": "Call Alex"},
+            },
+        }
+    )
+
+    assert response is not None
+    result = response["result"]
+    assert result["structuredContent"] == {
+        "text": "Call Alex",
+        "protected_contact_count": 0,
+    }
+    assert result["_meta"][PRIVATE_VALUES_META_KEY] == {}
+
+
 def test_private_contacts_server_does_not_guess_ambiguous_contact_names() -> None:
     server = PrivateContactsMCPServer(contacts=[Contact(name="Alex Doe"), Contact(name="Alex Doe")])
 

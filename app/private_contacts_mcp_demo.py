@@ -33,6 +33,11 @@ CARDDAV_AUTH_MODE_ENV = "MINIGENT_CARDDAV_AUTH_MODE"
 CARDDAV_AUTH_MODES = {"auto", "basic", "digest"}
 CARDDAV_NAMESPACE = "urn:ietf:params:xml:ns:carddav"
 DAV_NAMESPACE = "DAV:"
+_PARTIAL_CONTACT_ALIAS_PREFIX_PATTERN = re.compile(
+    r"(?:\b(?:call|email|contact|message|find|lookup|ask|tell)\s+|\bshow\s+me\s+)$",
+    re.IGNORECASE,
+)
+_PARTIAL_CONTACT_ALIAS_POSSESSIVE_PATTERN = re.compile(r"^['’]s\b", re.IGNORECASE)
 CARDDAV_REPORT_BODY = b"""<?xml version="1.0" encoding="utf-8" ?>
 <card:addressbook-query xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
   <d:prop>
@@ -51,7 +56,8 @@ CONTACTS_LIST_TOOL = {
     "name": "contacts_list",
     "description": (
         "List contacts with opaque contact_ref values and protected names. Use contacts_get "
-        "to retrieve only the email or phone fields needed for the user's request."
+        "to retrieve only the email or phone fields needed for the user's request. Treat "
+        "contact_ref values as internal identifiers and never display them to the user."
     ),
     "inputSchema": {
         "type": "object",
@@ -73,7 +79,13 @@ CONTACTS_LIST_TOOL = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "contact_ref": {"type": "string"},
+                        "contact_ref": {
+                            "type": "string",
+                            "description": (
+                                "Internal opaque reference for contacts_get. Never display it "
+                                "to the user."
+                            ),
+                        },
                         "name": {"type": "string"},
                         "available_fields": {
                             "type": "array",
@@ -100,7 +112,13 @@ CONTACTS_GET_TOOL = {
     "inputSchema": {
         "type": "object",
         "properties": {
-            "contact_ref": {"type": "string"},
+            "contact_ref": {
+                "type": "string",
+                "description": (
+                    "Opaque reference returned by contacts_list, or the REFERENCE from a "
+                    "{{pii:contact:REFERENCE}} placeholder. Never display it to the user."
+                ),
+            },
             "fields": {
                 "type": "array",
                 "items": {"type": "string", "enum": ["emails", "phones"]},
@@ -127,8 +145,9 @@ CONTACTS_GET_TOOL = {
 CONTACTS_PROTECT_TEXT_TOOL = {
     "name": "contacts_protect_text",
     "description": (
-        "Protect uniquely matching address-book contact names in text before model use. "
-        "This tool is intended for trusted runtime preprocessing."
+        "Trusted runtime-only preprocessing that protects uniquely matching address-book "
+        "contact names and unambiguous first or last names in contact-related contexts before "
+        "model use."
     ),
     "inputSchema": {
         "type": "object",
@@ -463,32 +482,59 @@ class PrivateContactsMCPServer:
             )
         text = arguments["text"]
         contacts, _truncated = self._contact_source.list_contacts(limit=MAX_CONTACT_REFERENCES)
-        name_counts: dict[str, int] = {}
+        aliases: dict[str, list[tuple[str, Contact, bool]]] = {}
         for contact in contacts:
-            normalized_name = contact.name.strip().casefold()
-            if normalized_name:
-                name_counts[normalized_name] = name_counts.get(normalized_name, 0) + 1
+            full_name = contact.name.strip()
+            if not full_name:
+                continue
+            contact_aliases = {full_name: True}
+            name_parts = full_name.split()
+            if len(name_parts) > 1:
+                contact_aliases.update(
+                    {part: False for part in (name_parts[0], name_parts[-1]) if len(part) >= 2}
+                )
+            for alias, is_full_name in contact_aliases.items():
+                aliases.setdefault(alias.casefold(), []).append((alias, contact, is_full_name))
+
+        alias_matches: list[tuple[int, int, Contact]] = []
+        for entries in aliases.values():
+            if len(entries) != 1:
+                continue
+            alias, contact, is_full_name = entries[0]
+            pattern = re.compile(rf"(?<!\w){re.escape(alias)}(?!\w)", re.IGNORECASE)
+            alias_matches.extend(
+                (match.start(), match.end(), contact)
+                for match in pattern.finditer(text)
+                if is_full_name
+                or _partial_contact_alias_has_context(text, match.start(), match.end())
+            )
+
+        selected: list[tuple[int, int, Contact]] = []
+        occupied: list[tuple[int, int]] = []
+        for start, end, contact in sorted(
+            alias_matches,
+            key=lambda item: (-(item[1] - item[0]), item[0]),
+        ):
+            if any(start < used_end and end > used_start for used_start, used_end in occupied):
+                continue
+            occupied.append((start, end))
+            selected.append((start, end, contact))
 
         private_values: dict[str, str] = {}
-        protected_count = 0
+        contact_references: dict[Contact, str] = {}
         protected_text = text
-        unique_contacts = [
-            contact for contact in contacts if name_counts.get(contact.name.strip().casefold()) == 1
-        ]
-        for contact in sorted(unique_contacts, key=lambda item: len(item.name), reverse=True):
-            name = contact.name.strip()
-            if not name:
-                continue
-            pattern = re.compile(rf"(?<!\w){re.escape(name)}(?!\w)", re.IGNORECASE)
-            if pattern.search(protected_text) is None:
-                continue
-            contact_reference = self._cache_contact(contact)
-            private_values[contact_reference] = contact.name
-            protected_text, replacements = pattern.subn(
-                f"{{{{pii:contact:{contact_reference}}}}}",
-                protected_text,
+        for start, end, contact in sorted(selected, key=lambda item: item[0], reverse=True):
+            contact_reference = contact_references.get(contact)
+            if contact_reference is None:
+                contact_reference = self._cache_contact(contact)
+                contact_references[contact] = contact_reference
+                private_values[contact_reference] = contact.name
+            protected_text = (
+                protected_text[:start]
+                + f"{{{{pii:contact:{contact_reference}}}}}"
+                + protected_text[end:]
             )
-            protected_count += replacements
+        protected_count = len(selected)
         return self._private_tool_result(
             request_id,
             {
@@ -556,6 +602,13 @@ class PrivateContactsMCPServer:
             "id": request_id,
             "error": {"code": code, "message": message},
         }
+
+
+def _partial_contact_alias_has_context(text: str, start: int, end: int) -> bool:
+    return bool(
+        _PARTIAL_CONTACT_ALIAS_PREFIX_PATTERN.search(text[:start])
+        or _PARTIAL_CONTACT_ALIAS_POSSESSIVE_PATTERN.match(text[end:])
+    )
 
 
 def discover_carddav_addressbook_url(payload: bytes, *, base_url: str) -> str:

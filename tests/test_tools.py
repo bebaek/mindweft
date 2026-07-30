@@ -646,6 +646,30 @@ def test_tool_execution_logs_start_and_success(caplog: pytest.LogCaptureFixture)
     assert "tool.ok name=calculator duration_ms=" in caplog.text
 
 
+def test_tool_execution_redacts_private_contact_preprocessor_input(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "private-contacts.contacts_protect_text",
+        "Protect contact names.",
+        {"type": "object"},
+        lambda arguments, context=None: arguments,
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.tools"):
+        result = asyncio.run(
+            registry.execute(
+                "private-contacts.contacts_protect_text",
+                {"text": "Show me Gabe Zurita's email"},
+            )
+        )
+
+    assert result == {"text": "Show me Gabe Zurita's email"}
+    assert "Gabe Zurita" not in caplog.text
+    assert "arguments={'text': '<redacted>'}" in caplog.text
+
+
 def test_tool_execution_logs_error_with_redacted_arguments(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

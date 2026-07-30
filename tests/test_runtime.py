@@ -303,6 +303,53 @@ def test_runtime_protects_user_content_before_model_use() -> None:
     assert rendered[0].content == "What is Alice Smith's email?"
 
 
+def test_runtime_hides_private_contact_preprocessor_from_model_tools() -> None:
+    seen_tool_names: list[str] = []
+
+    class InspectToolsLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            seen_tool_names.extend(tool.name for tool in tools)
+            return LLMResponse(content="ok")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    registry = ToolRegistry()
+    registry.register(
+        name="private-contacts.contacts_protect_text",
+        description="Protect contact names.",
+        input_schema={"type": "object"},
+        handler=lambda arguments, context=None: MCPPrivateToolResult(
+            model_content={"text": arguments["text"], "protected_contact_count": 0},
+            private_values={},
+        ),
+    )
+    registry.register(
+        name="private-contacts.contacts_list",
+        description="List contacts.",
+        input_schema={"type": "object"},
+        handler=lambda arguments, context=None: {"contacts": []},
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=InspectToolsLLM(),
+        tool_registry=registry,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    protected = asyncio.run(
+        runtime.protect_user_content(PRINCIPAL, thread.thread_id, "list contacts")
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content=protected),
+    )
+
+    asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert seen_tool_names == ["private-contacts.contacts_list"]
+
+
 def test_runtime_resolves_selected_private_values_only_at_trusted_tool_boundary() -> None:
     received: list[dict[str, object]] = []
     model_inputs: list[list[Message]] = []
