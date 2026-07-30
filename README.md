@@ -152,24 +152,34 @@ thread and 10,000 characters per value; override those limits with
 `MINIGENT_PRIVATE_VALUE_TTL_SECONDS`, `MINIGENT_PRIVATE_VALUE_MAX_REFS_PER_THREAD`, and
 `MINIGENT_PRIVATE_VALUE_MAX_CHARS`.
 
-Private values remain in memory by default. To make them restart-safe, configure a separate
-SQLite database and a base64-encoded 32-byte AES key:
+Private values remain in memory by default. To make private values, consent grants, audit
+records, and resumable pending tool actions restart-safe, configure encrypted SQLite storage.
+The consent tables may share the private-value database file and key; they remain separate
+from the thread database:
 
 ```bash
-export MINIGENT_PRIVATE_VALUE_DB_PATH="$PWD/.data/private-values.db"
-export MINIGENT_PRIVATE_VALUE_ENCRYPTION_KEY="$(python -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')"
+PRIVATE_DATA_KEY="$(python -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')"
+export MINIGENT_PRIVATE_VALUE_DB_PATH="$PWD/.data/private-data.db"
+export MINIGENT_PRIVATE_VALUE_ENCRYPTION_KEY="$PRIVATE_DATA_KEY"
+export MINIGENT_PRIVATE_CONSENT_DB_PATH="$PWD/.data/private-data.db"
+export MINIGENT_PRIVATE_CONSENT_ENCRYPTION_KEY="$PRIVATE_DATA_KEY"
 # Optional, reserved for explicit key rotation workflows:
 export MINIGENT_PRIVATE_VALUE_KEY_VERSION=1
+export MINIGENT_PRIVATE_CONSENT_KEY_VERSION=1
 ```
 
-The SQLite store encrypts each value independently with AES-256-GCM and a fresh 96-bit nonce.
-Tenant ID, thread ID, reference, PII kind, and key version are authenticated as associated
-data. The database contains ciphertext, nonces, metadata, and expiry timestamps but not the
-key or plaintext values. The key must come from the process environment or an external secret
-manager; do not commit it or place it beside the database. Startup fails closed when a database
-path is configured without a valid key. Back up the key separately: losing it makes existing
-private values unrecoverable. The current implementation reads one key version at a time; key
-rotation and durable consent/action storage remain future work.
+The SQLite stores encrypt each private value and each consent/action payload independently with
+AES-256-GCM and a fresh 96-bit nonce. Private-value tenant/thread/reference metadata and
+consent/action tenant/user/thread/consent metadata are authenticated as associated data. The
+database contains ciphertext, nonces, scoped metadata, statuses, and expiry timestamps but not
+keys or plaintext values/tool arguments. Keys must come from the process environment or an
+external secret manager; do not commit them or place them beside the database. Startup fails
+closed when a database path is configured without a valid corresponding key. Back up keys
+separately: losing one makes its existing records unrecoverable. Current implementations read
+one key version at a time; key rotation remains future work. Consent requests default to a
+ten-minute TTL and grants to five minutes; override them with
+`MINIGENT_PRIVATE_CONSENT_REQUEST_TTL_SECONDS` and
+`MINIGENT_PRIVATE_CONSENT_GRANT_TTL_SECONDS`.
 
 User-authored message text is locally preprocessed before storage or model use. The default
 conservative detector masks email addresses, phone-number-like values, street addresses, and
@@ -226,12 +236,12 @@ reconstruct the call. Grants are bound to a SHA-256 fingerprint of the complete
 placeholder-bearing argument object, so changing the body or any other argument requires new
 consent. Non-one-shot grants remain usable for five minutes; pending requests expire after ten
 minutes.
-Denials block the identical disclosure until they expire. Consent state is in memory and is
-scoped by tenant, user, and thread. Audit records contain opaque references, paths, and kinds,
-but never raw values. The browser displays a confirmation dialog and automatically resumes an
-approved action. Interactive `minigent chat` sessions show the same redacted summary and prompt
-for a one-shot approval. Consent and pending actions are currently in memory; durable consent
-persistence remains future work.
+Denials block the identical disclosure until they expire. Consent state is scoped by tenant,
+user, and thread. Audit records contain opaque references, paths, and kinds, but never raw
+values. The browser displays a confirmation dialog and automatically resumes an approved
+action. Interactive `minigent chat` sessions show the same redacted summary and prompt for a
+one-shot approval. Consent grants, audit records, and exact placeholder-bearing pending actions
+survive restarts when encrypted consent storage is configured; otherwise they remain in memory.
 
 Run the private-contacts MCP server with fake contacts for an end-to-end local experiment:
 

@@ -45,8 +45,10 @@ from app.models import (
     ToolCall,
 )
 from app.private_consents import (
-    InMemoryPrivateValueConsentStore,
+    PendingPrivateToolAction,
+    PrivateValueConsentStore,
     PrivateValueDisclosure,
+    build_private_value_consent_store_from_env,
 )
 from app.private_values import (
     PII_PLACEHOLDER_PATTERN,
@@ -73,14 +75,6 @@ MAX_ITERATIONS_ENV = "MINIGENT_MAX_ITERATIONS"
 TOOL_TIMEOUT_SECONDS_ENV = "MINIGENT_TOOL_TIMEOUT_SECONDS"
 CONTEXT_COMPACTION_ENABLED_ENV = "MINIGENT_CONTEXT_COMPACTION_ENABLED"
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
-
-
-@dataclass(frozen=True)
-class PendingPrivateToolAction:
-    tenant_id: str
-    user_id: str
-    thread_id: str
-    tool_call: ToolCall
 
 
 @dataclass(frozen=True)
@@ -177,7 +171,7 @@ class AgentRuntime:
         context_compaction_enabled: bool = True,
         private_value_store: PrivateValueStore | None = None,
         input_pii_protector: LocalPIIProtector | None = None,
-        private_value_consent_store: InMemoryPrivateValueConsentStore | None = None,
+        private_value_consent_store: PrivateValueConsentStore | None = None,
     ) -> None:
         self._store = store
         if execution_resolver is not None:
@@ -203,9 +197,8 @@ class AgentRuntime:
         self._private_value_store = private_value_store or build_private_value_store_from_env()
         self._input_pii_protector = input_pii_protector or LocalPIIProtector.from_env()
         self._private_value_consent_store = (
-            private_value_consent_store or InMemoryPrivateValueConsentStore()
+            private_value_consent_store or build_private_value_consent_store_from_env()
         )
-        self._pending_private_tool_actions: dict[str, PendingPrivateToolAction] = {}
 
     async def protect_user_content(
         self,
@@ -308,13 +301,6 @@ class AgentRuntime:
     def clear_private_values(self, principal: Principal, thread_id: str) -> None:
         self._private_value_store.clear_thread(principal.tenant_id, thread_id)
         self._private_value_consent_store.clear_thread(principal.tenant_id, thread_id)
-        pending_ids = [
-            consent_id
-            for consent_id, action in self._pending_private_tool_actions.items()
-            if action.tenant_id == principal.tenant_id and action.thread_id == thread_id
-        ]
-        for consent_id in pending_ids:
-            self._pending_private_tool_actions.pop(consent_id, None)
 
     def pending_private_value_consents(
         self, principal: Principal, thread_id: str
@@ -342,8 +328,6 @@ class AgentRuntime:
             approve=approve,
             one_shot=one_shot,
         )
-        if not approve:
-            self._pending_private_tool_actions.pop(consent_id, None)
         return result
 
     def private_value_disclosure_audit(
@@ -411,13 +395,13 @@ class AgentRuntime:
         thread_id: str,
         consent_id: str,
     ) -> tuple[str, dict[str, Any] | None]:
-        action = self._pending_private_tool_actions.get(consent_id)
-        if (
-            action is None
-            or action.tenant_id != principal.tenant_id
-            or action.user_id != principal.user_id
-            or action.thread_id != thread_id
-        ):
+        action = self._private_value_consent_store.get_pending_action(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+            consent_id=consent_id,
+        )
+        if action is None:
             raise HTTPException(status_code=404, detail="Pending private tool action not found")
         thread = self._store.get_thread(principal.tenant_id, thread_id)
         if thread.status == ThreadStatus.RUNNING:
@@ -437,9 +421,11 @@ class AgentRuntime:
             if exc.status_code == 428 and isinstance(exc.detail, dict):
                 replacement_consent_id = exc.detail.get("consent_id")
                 if isinstance(replacement_consent_id, str):
-                    self._pending_private_tool_actions[replacement_consent_id] = action
+                    self._private_value_consent_store.save_pending_action(
+                        replacement_consent_id, action
+                    )
                     if replacement_consent_id != consent_id:
-                        self._pending_private_tool_actions.pop(consent_id, None)
+                        self._private_value_consent_store.delete_pending_action(consent_id)
             raise
         if isinstance(result, MCPPrivateToolResult):
             self._private_value_store.add(
@@ -475,7 +461,7 @@ class AgentRuntime:
                 tool_call_id=resumed_call_id,
             ),
         )
-        self._pending_private_tool_actions.pop(consent_id, None)
+        self._private_value_consent_store.delete_pending_action(consent_id)
         return await self.run_thread(principal, thread_id)
 
     async def run_thread(
@@ -753,11 +739,14 @@ class AgentRuntime:
                     detail = exc.detail if isinstance(exc.detail, dict) else {}
                     consent_id = detail.get("consent_id")
                     if isinstance(consent_id, str):
-                        self._pending_private_tool_actions[consent_id] = PendingPrivateToolAction(
-                            tenant_id=principal.tenant_id,
-                            user_id=principal.user_id,
-                            thread_id=thread_id,
-                            tool_call=tool_call.model_copy(deep=True),
+                        self._private_value_consent_store.save_pending_action(
+                            consent_id,
+                            PendingPrivateToolAction(
+                                tenant_id=principal.tenant_id,
+                                user_id=principal.user_id,
+                                thread_id=thread_id,
+                                tool_call=tool_call.model_copy(deep=True),
+                            ),
                         )
                     await _emit_run_event(
                         event_sink,

@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from threading import RLock
+from typing import Protocol
 from uuid import uuid4
 
 from fastapi import HTTPException
 
+from app.models import ToolCall
+
 DEFAULT_CONSENT_REQUEST_TTL_SECONDS = 600.0
 DEFAULT_CONSENT_GRANT_TTL_SECONDS = 300.0
+PRIVATE_CONSENT_DB_PATH_ENV = "MINIGENT_PRIVATE_CONSENT_DB_PATH"
+PRIVATE_CONSENT_ENCRYPTION_KEY_ENV = "MINIGENT_PRIVATE_CONSENT_ENCRYPTION_KEY"
+PRIVATE_CONSENT_KEY_VERSION_ENV = "MINIGENT_PRIVATE_CONSENT_KEY_VERSION"
+PRIVATE_CONSENT_REQUEST_TTL_ENV = "MINIGENT_PRIVATE_CONSENT_REQUEST_TTL_SECONDS"
+PRIVATE_CONSENT_GRANT_TTL_ENV = "MINIGENT_PRIVATE_CONSENT_GRANT_TTL_SECONDS"
 
 
 @dataclass(frozen=True, order=True)
@@ -84,6 +93,56 @@ class PrivateValueDisclosureAuditRecord:
         }
 
 
+@dataclass(frozen=True)
+class PendingPrivateToolAction:
+    tenant_id: str
+    user_id: str
+    thread_id: str
+    tool_call: ToolCall
+
+
+class PrivateValueConsentStore(Protocol):
+    def authorize_or_request(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        tool_name: str,
+        argument_fingerprint: str,
+        disclosures: tuple[PrivateValueDisclosure, ...],
+    ) -> None: ...
+
+    def decide(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        consent_id: str,
+        approve: bool,
+        one_shot: bool = True,
+    ) -> dict[str, object]: ...
+
+    def pending(
+        self, *, tenant_id: str, user_id: str, thread_id: str
+    ) -> list[dict[str, object]]: ...
+
+    def audit_records(
+        self, *, tenant_id: str, user_id: str, thread_id: str
+    ) -> list[dict[str, object]]: ...
+
+    def save_pending_action(self, consent_id: str, action: PendingPrivateToolAction) -> None: ...
+
+    def get_pending_action(
+        self, *, tenant_id: str, user_id: str, thread_id: str, consent_id: str
+    ) -> PendingPrivateToolAction | None: ...
+
+    def delete_pending_action(self, consent_id: str) -> None: ...
+
+    def clear_thread(self, tenant_id: str, thread_id: str) -> None: ...
+
+
 class InMemoryPrivateValueConsentStore:
     """Thread-scoped pending requests, one-shot grants, and redacted disclosure audit data."""
 
@@ -99,6 +158,7 @@ class InMemoryPrivateValueConsentStore:
         self._clock = clock
         self._requests: dict[str, PrivateValueConsentRequest] = {}
         self._audit: list[PrivateValueDisclosureAuditRecord] = []
+        self._pending_actions: dict[str, PendingPrivateToolAction] = {}
         self._lock = RLock()
 
     def authorize_or_request(
@@ -190,6 +250,8 @@ class InMemoryPrivateValueConsentStore:
             request.one_shot = one_shot
             request.expires_at = now + self._grant_ttl_seconds
             self._record(request.status, request, now)
+            if not approve:
+                self._pending_actions.pop(consent_id, None)
             return request.public_dict()
 
     def pending(self, *, tenant_id: str, user_id: str, thread_id: str) -> list[dict[str, object]]:
@@ -217,6 +279,28 @@ class InMemoryPrivateValueConsentStore:
                 and record.thread_id == thread_id
             ]
 
+    def save_pending_action(self, consent_id: str, action: PendingPrivateToolAction) -> None:
+        with self._lock:
+            self._pending_actions[consent_id] = action
+
+    def get_pending_action(
+        self, *, tenant_id: str, user_id: str, thread_id: str, consent_id: str
+    ) -> PendingPrivateToolAction | None:
+        with self._lock:
+            action = self._pending_actions.get(consent_id)
+            if (
+                action is None
+                or action.tenant_id != tenant_id
+                or action.user_id != user_id
+                or action.thread_id != thread_id
+            ):
+                return None
+            return action
+
+    def delete_pending_action(self, consent_id: str) -> None:
+        with self._lock:
+            self._pending_actions.pop(consent_id, None)
+
     def clear_thread(self, tenant_id: str, thread_id: str) -> None:
         with self._lock:
             consent_ids = [
@@ -226,6 +310,7 @@ class InMemoryPrivateValueConsentStore:
             ]
             for consent_id in consent_ids:
                 self._requests.pop(consent_id, None)
+                self._pending_actions.pop(consent_id, None)
             self._audit = [
                 record
                 for record in self._audit
@@ -249,6 +334,7 @@ class InMemoryPrivateValueConsentStore:
         for request in self._requests.values():
             if request.status in {"pending", "approved", "denied"} and request.expires_at <= now:
                 request.status = "expired"
+                self._pending_actions.pop(request.consent_id, None)
                 self._record("expired", request, now)
 
     def _record(self, event: str, request: PrivateValueConsentRequest, occurred_at: float) -> None:
@@ -265,3 +351,14 @@ class InMemoryPrivateValueConsentStore:
                 occurred_at=occurred_at,
             )
         )
+
+
+def build_private_value_consent_store_from_env(
+    env: Mapping[str, str] | None = None,
+) -> PrivateValueConsentStore:
+    lookup = os.environ if env is None else env
+    if not lookup.get(PRIVATE_CONSENT_DB_PATH_ENV, "").strip():
+        return InMemoryPrivateValueConsentStore()
+    from app.private_consent_sqlite import SQLiteEncryptedPrivateValueConsentStore
+
+    return SQLiteEncryptedPrivateValueConsentStore.from_env(lookup)
