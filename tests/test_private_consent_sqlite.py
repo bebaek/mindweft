@@ -15,6 +15,7 @@ from app.private_consents import (
 )
 
 KEY = b"c" * 32
+ROTATED_KEY = b"d" * 32
 DISCLOSURES = (
     PrivateValueDisclosure(path="recipient.email", kind="email", reference="private-email-ref"),
 )
@@ -170,6 +171,70 @@ def test_encrypted_consent_store_expires_action_and_clear_thread(tmp_path) -> No
     )
     store.clear_thread("tenant-1", "thread-1")
     assert store.audit_records(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1") == []
+
+
+def test_encrypted_consent_store_rotates_all_record_types(tmp_path) -> None:
+    db_path = tmp_path / "private-consents.db"
+    first = SQLiteEncryptedPrivateValueConsentStore(db_path, KEY, clock=lambda: 100.0)
+    with pytest.raises(HTTPException):
+        _request(first)
+    consent_id = str(
+        first.pending(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")[0]["consent_id"]
+    )
+    first.save_pending_action(
+        consent_id,
+        PendingPrivateToolAction(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            tool_call=ToolCall(name="trusted.send", arguments={"body": "protected"}),
+        ),
+    )
+    first.decide(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        thread_id="thread-1",
+        consent_id=consent_id,
+        approve=True,
+    )
+
+    rotating = SQLiteEncryptedPrivateValueConsentStore(
+        db_path,
+        ROTATED_KEY,
+        key_version=2,
+        decryption_keys={1: KEY},
+        clock=lambda: 101.0,
+    )
+    assert rotating.rotate_to_active_key() == 4
+    with sqlite3.connect(db_path) as connection:
+        versions = {
+            str(table): connection.execute(
+                f"SELECT DISTINCT key_version FROM {table}"  # noqa: S608 - fixed test table names
+            ).fetchall()
+            for table in (
+                "private_consent_requests",
+                "pending_private_tool_actions",
+                "private_consent_audit",
+            )
+        }
+    assert all(rows == [(2,)] for rows in versions.values())
+
+    restarted = SQLiteEncryptedPrivateValueConsentStore(
+        db_path, ROTATED_KEY, key_version=2, clock=lambda: 101.0
+    )
+    assert (
+        restarted.get_pending_action(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            consent_id=consent_id,
+        )
+        is not None
+    )
+    assert (
+        len(restarted.audit_records(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1"))
+        == 2
+    )
 
 
 def test_factory_builds_encrypted_store(tmp_path) -> None:

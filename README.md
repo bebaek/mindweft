@@ -163,7 +163,7 @@ export MINIGENT_PRIVATE_VALUE_DB_PATH="$PWD/.data/private-data.db"
 export MINIGENT_PRIVATE_VALUE_ENCRYPTION_KEY="$PRIVATE_DATA_KEY"
 export MINIGENT_PRIVATE_CONSENT_DB_PATH="$PWD/.data/private-data.db"
 export MINIGENT_PRIVATE_CONSENT_ENCRYPTION_KEY="$PRIVATE_DATA_KEY"
-# Optional, reserved for explicit key rotation workflows:
+# Active key versions; see the rotation workflow below before changing them:
 export MINIGENT_PRIVATE_VALUE_KEY_VERSION=1
 export MINIGENT_PRIVATE_CONSENT_KEY_VERSION=1
 ```
@@ -175,11 +175,39 @@ database contains ciphertext, nonces, scoped metadata, statuses, and expiry time
 keys or plaintext values/tool arguments. Keys must come from the process environment or an
 external secret manager; do not commit them or place them beside the database. Startup fails
 closed when a database path is configured without a valid corresponding key. Back up keys
-separately: losing one makes its existing records unrecoverable. Current implementations read
-one key version at a time; key rotation remains future work. Consent requests default to a
-ten-minute TTL and grants to five minutes; override them with
+separately: losing all copies of a required version makes its existing records unrecoverable.
+Consent requests default to a ten-minute TTL and grants to five minutes; override them with
 `MINIGENT_PRIVATE_CONSENT_REQUEST_TTL_SECONDS` and
 `MINIGENT_PRIVATE_CONSENT_GRANT_TTL_SECONDS`.
+
+For key rotation, both encrypted stores accept a JSON keyring whose keys are positive version
+numbers and whose values are base64-encoded 32-byte keys. New writes use the version selected by
+`*_KEY_VERSION`; older versions are decryption-only. To rotate a shared private-data key from
+version 1 to version 2:
+
+```bash
+OLD_PRIVATE_DATA_KEY='...version-1 key from the secret manager...'
+NEW_PRIVATE_DATA_KEY="$(python -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')"
+PRIVATE_DATA_KEYS="{\"1\":\"$OLD_PRIVATE_DATA_KEY\",\"2\":\"$NEW_PRIVATE_DATA_KEY\"}"
+
+unset MINIGENT_PRIVATE_VALUE_ENCRYPTION_KEY MINIGENT_PRIVATE_CONSENT_ENCRYPTION_KEY
+export MINIGENT_PRIVATE_VALUE_ENCRYPTION_KEYS="$PRIVATE_DATA_KEYS"
+export MINIGENT_PRIVATE_CONSENT_ENCRYPTION_KEYS="$PRIVATE_DATA_KEYS"
+export MINIGENT_PRIVATE_VALUE_KEY_VERSION=2
+export MINIGENT_PRIVATE_CONSENT_KEY_VERSION=2
+export MINIGENT_PRIVATE_VALUE_REENCRYPT_ON_STARTUP=true
+export MINIGENT_PRIVATE_CONSENT_REENCRYPT_ON_STARTUP=true
+```
+
+Start Minigent once with both keys available. On startup, each store transactionally
+re-encrypts its surviving rows: private values in one transaction, then consent requests,
+pending actions, and disclosure audit records in another. Then stop it, remove version 1 from
+both keyrings, disable both `*_REENCRYPT_ON_STARTUP` flags, and restart. A successful restart
+with only version 2 verifies that no stored row still requires the retired key. Keep a protected
+backup until that verification succeeds. Rotation fails closed and rolls back if any required
+old key is missing or any ciphertext fails authentication. The legacy singular
+`*_ENCRYPTION_KEY` settings remain supported and represent the active `*_KEY_VERSION`; they can
+also be combined with a keyring when their key agrees with its active version.
 
 User-authored message text is locally preprocessed before storage or model use. The default
 conservative detector masks email addresses, phone-number-like values, street addresses, and

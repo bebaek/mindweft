@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 import os
 import sqlite3
@@ -22,14 +20,17 @@ from app.private_consents import (
     DEFAULT_CONSENT_REQUEST_TTL_SECONDS,
     PRIVATE_CONSENT_DB_PATH_ENV,
     PRIVATE_CONSENT_ENCRYPTION_KEY_ENV,
+    PRIVATE_CONSENT_ENCRYPTION_KEYS_ENV,
     PRIVATE_CONSENT_GRANT_TTL_ENV,
     PRIVATE_CONSENT_KEY_VERSION_ENV,
+    PRIVATE_CONSENT_REENCRYPT_ON_STARTUP_ENV,
     PRIVATE_CONSENT_REQUEST_TTL_ENV,
     PendingPrivateToolAction,
     PrivateValueConsentRequest,
     PrivateValueDisclosure,
     PrivateValueDisclosureAuditRecord,
 )
+from app.private_keyring import load_encryption_keyring, parse_boolean
 
 _NONCE_BYTES = 12
 
@@ -43,6 +44,8 @@ class SQLiteEncryptedPrivateValueConsentStore:
         encryption_key: bytes,
         *,
         key_version: int = 1,
+        decryption_keys: Mapping[int, bytes] | None = None,
+        reencrypt_on_startup: bool = False,
         request_ttl_seconds: float = DEFAULT_CONSENT_REQUEST_TTL_SECONDS,
         grant_ttl_seconds: float = DEFAULT_CONSENT_GRANT_TTL_SECONDS,
         clock: Callable[[], float] = time.time,
@@ -57,12 +60,22 @@ class SQLiteEncryptedPrivateValueConsentStore:
             raise ValueError("encrypted private consent DB must use a filesystem path")
         self._db_path = Path(db_path).expanduser()
         self._key_version = key_version
-        self._aesgcm = AESGCM(encryption_key)
+        keys = dict(decryption_keys or {})
+        existing_active_key = keys.get(key_version)
+        if existing_active_key is not None and existing_active_key != encryption_key:
+            raise ValueError("active private consent key conflicts with decryption keyring")
+        keys[key_version] = encryption_key
+        for version, key in keys.items():
+            if version < 1 or len(key) != 32:
+                raise ValueError("private consent decryption keys must be versioned 32-byte keys")
+        self._aesgcms = {version: AESGCM(key) for version, key in keys.items()}
         self._request_ttl_seconds = request_ttl_seconds
         self._grant_ttl_seconds = grant_ttl_seconds
         self._clock = clock
         self._lock = RLock()
         self._initialize()
+        if reencrypt_on_startup:
+            self.rotate_to_active_key()
 
     @classmethod
     def from_env(
@@ -72,13 +85,21 @@ class SQLiteEncryptedPrivateValueConsentStore:
         db_path = lookup.get(PRIVATE_CONSENT_DB_PATH_ENV, "").strip()
         if not db_path:
             raise RuntimeError(f"{PRIVATE_CONSENT_DB_PATH_ENV} is required")
+        active_key, keyring, key_version = load_encryption_keyring(
+            lookup,
+            single_key_env=PRIVATE_CONSENT_ENCRYPTION_KEY_ENV,
+            keyring_env=PRIVATE_CONSENT_ENCRYPTION_KEYS_ENV,
+            key_version_env=PRIVATE_CONSENT_KEY_VERSION_ENV,
+            database_env=PRIVATE_CONSENT_DB_PATH_ENV,
+        )
         return cls(
             db_path,
-            _decode_key(lookup.get(PRIVATE_CONSENT_ENCRYPTION_KEY_ENV, "")),
-            key_version=_positive_int(
-                lookup.get(PRIVATE_CONSENT_KEY_VERSION_ENV, ""),
-                PRIVATE_CONSENT_KEY_VERSION_ENV,
-                1,
+            active_key,
+            key_version=key_version,
+            decryption_keys=keyring,
+            reencrypt_on_startup=parse_boolean(
+                lookup.get(PRIVATE_CONSENT_REENCRYPT_ON_STARTUP_ENV, ""),
+                PRIVATE_CONSENT_REENCRYPT_ON_STARTUP_ENV,
             ),
             request_ttl_seconds=_positive_float(
                 lookup.get(PRIVATE_CONSENT_REQUEST_TTL_ENV, ""),
@@ -580,7 +601,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
         occurred_at: float | None = None,
     ) -> tuple[bytes, bytes]:
         nonce = os.urandom(_NONCE_BYTES)
-        ciphertext = self._aesgcm.encrypt(
+        ciphertext = self._aesgcms[self._key_version].encrypt(
             nonce,
             json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode(),
             _associated_data(
@@ -610,13 +631,14 @@ class SQLiteEncryptedPrivateValueConsentStore:
         event: str | None = None,
         occurred_at: float | None = None,
     ) -> dict[str, object]:
-        if key_version != self._key_version:
+        aesgcm = self._aesgcms.get(key_version)
+        if aesgcm is None:
             raise HTTPException(
                 status_code=500,
                 detail="Private consent encryption key version is unavailable",
             )
         try:
-            plaintext = self._aesgcm.decrypt(
+            plaintext = aesgcm.decrypt(
                 nonce,
                 ciphertext,
                 _associated_data(
@@ -639,6 +661,92 @@ class SQLiteEncryptedPrivateValueConsentStore:
         if not isinstance(payload, dict):
             raise HTTPException(status_code=500, detail="Private consent payload is invalid")
         return payload
+
+    def rotate_to_active_key(self) -> int:
+        """Re-encrypt consent requests, actions, and audit records with the active key."""
+        rotated = 0
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._expire(connection, self._clock())
+            request_rows = connection.execute(
+                """
+                SELECT consent_id, tenant_id, user_id, thread_id, status, created_at,
+                       expires_at, one_shot, nonce, ciphertext, key_version
+                FROM private_consent_requests WHERE key_version != ?
+                """,
+                (self._key_version,),
+            ).fetchall()
+            for row in request_rows:
+                self._update_request(connection, self._request_from_row(row))
+                rotated += 1
+
+            action_rows = connection.execute(
+                """
+                SELECT consent_id, tenant_id, user_id, thread_id, nonce, ciphertext, key_version
+                FROM pending_private_tool_actions WHERE key_version != ?
+                """,
+                (self._key_version,),
+            ).fetchall()
+            for row in action_rows:
+                consent_id, tenant_id, user_id, thread_id = map(str, row[:4])
+                payload = self._decrypt(
+                    "action",
+                    tenant_id,
+                    user_id,
+                    thread_id,
+                    consent_id,
+                    bytes(row[4]),
+                    bytes(row[5]),
+                    int(row[6]),
+                )
+                nonce, ciphertext = self._encrypt(
+                    "action", tenant_id, user_id, thread_id, consent_id, payload
+                )
+                connection.execute(
+                    """
+                    UPDATE pending_private_tool_actions
+                    SET nonce = ?, ciphertext = ?, key_version = ? WHERE consent_id = ?
+                    """,
+                    (nonce, ciphertext, self._key_version, consent_id),
+                )
+                rotated += 1
+
+            audit_rows = connection.execute(
+                """
+                SELECT audit_id, event, tenant_id, user_id, thread_id, consent_id, occurred_at,
+                       nonce, ciphertext, key_version
+                FROM private_consent_audit WHERE key_version != ?
+                """,
+                (self._key_version,),
+            ).fetchall()
+            for row in audit_rows:
+                audit_id = int(row[0])
+                record = self._audit_from_row(row[1:])
+                payload = {
+                    "tool_name": record.tool_name,
+                    "argument_fingerprint": record.argument_fingerprint,
+                    "disclosures": [item.__dict__ for item in record.disclosures],
+                }
+                nonce, ciphertext = self._encrypt(
+                    "audit",
+                    record.tenant_id,
+                    record.user_id,
+                    record.thread_id,
+                    record.consent_id,
+                    payload,
+                    event=record.event,
+                    occurred_at=record.occurred_at,
+                )
+                connection.execute(
+                    """
+                    UPDATE private_consent_audit
+                    SET nonce = ?, ciphertext = ?, key_version = ? WHERE audit_id = ?
+                    """,
+                    (nonce, ciphertext, self._key_version, audit_id),
+                )
+                rotated += 1
+            connection.commit()
+        return rotated
 
     def _initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -688,6 +796,22 @@ class SQLiteEncryptedPrivateValueConsentStore:
                 """
             )
             connection.commit()
+            versions = {
+                int(version_row[0])
+                for version_row in connection.execute(
+                    """
+                    SELECT key_version FROM private_consent_requests
+                    UNION SELECT key_version FROM private_consent_audit
+                    UNION SELECT key_version FROM pending_private_tool_actions
+                    """
+                )
+            }
+            missing_versions = versions - self._aesgcms.keys()
+            if missing_versions:
+                missing = ", ".join(str(version) for version in sorted(missing_versions))
+                raise RuntimeError(
+                    f"Encrypted private consent database requires unavailable key version(s): {missing}"
+                )
             row = connection.execute(
                 """
                 SELECT consent_id, tenant_id, user_id, thread_id, status, created_at,
@@ -742,26 +866,6 @@ def _associated_data(
     ).encode()
 
 
-def _decode_key(raw: str) -> bytes:
-    value = raw.strip()
-    if not value:
-        raise RuntimeError(
-            f"{PRIVATE_CONSENT_ENCRYPTION_KEY_ENV} is required when "
-            f"{PRIVATE_CONSENT_DB_PATH_ENV} is set"
-        )
-    try:
-        decoded = base64.urlsafe_b64decode((value + "=" * (-len(value) % 4)).encode("ascii"))
-    except (binascii.Error, ValueError, UnicodeEncodeError) as exc:
-        raise RuntimeError(
-            f"{PRIVATE_CONSENT_ENCRYPTION_KEY_ENV} must be a base64-encoded 32-byte key"
-        ) from exc
-    if len(decoded) != 32:
-        raise RuntimeError(
-            f"{PRIVATE_CONSENT_ENCRYPTION_KEY_ENV} must be a base64-encoded 32-byte key"
-        )
-    return decoded
-
-
 def _positive_float(raw: str, name: str, default: float) -> float:
     if not raw.strip():
         return default
@@ -771,16 +875,4 @@ def _positive_float(raw: str, name: str, default: float) -> float:
         raise RuntimeError(f"{name} must be a positive number") from exc
     if value <= 0:
         raise RuntimeError(f"{name} must be a positive number")
-    return value
-
-
-def _positive_int(raw: str, name: str, default: int) -> int:
-    if not raw.strip():
-        return default
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} must be a positive integer") from exc
-    if value < 1:
-        raise RuntimeError(f"{name} must be a positive integer")
     return value

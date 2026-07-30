@@ -15,6 +15,8 @@ from app.private_values import (
 
 KEY = bytes(range(32))
 KEY_B64 = base64.urlsafe_b64encode(KEY).decode()
+ROTATED_KEY = bytes(reversed(range(32)))
+ROTATED_KEY_B64 = base64.urlsafe_b64encode(ROTATED_KEY).decode()
 
 
 def test_private_value_store_factory_defaults_to_memory() -> None:
@@ -74,8 +76,49 @@ def test_encrypted_private_value_factory_reads_environment_mapping(tmp_path: Pat
     assert store.render_for_user("tenant", "thread", "{{pii:name:ref}}") == "value"
 
 
-def test_encrypted_private_value_store_fails_closed_with_wrong_key(tmp_path: Path) -> None:
+def test_encrypted_private_value_store_rotates_key_versions(tmp_path: Path) -> None:
     db_path = tmp_path / "private.db"
+    placeholder = "{{pii:email:ref}}"
+    first = SQLiteEncryptedPrivateValueStore(db_path, KEY)
+    first.add("tenant", "thread", {"ref": "private@example.com"}, kinds={"ref": "email"})
+
+    rotating = SQLiteEncryptedPrivateValueStore(
+        db_path,
+        ROTATED_KEY,
+        key_version=2,
+        decryption_keys={1: KEY},
+    )
+    assert rotating.render_for_user("tenant", "thread", placeholder) == "private@example.com"
+    assert rotating.rotate_to_active_key() == 1
+
+    with sqlite3.connect(db_path) as connection:
+        versions = connection.execute("SELECT DISTINCT key_version FROM private_values").fetchall()
+    assert versions == [(2,)]
+    restarted = SQLiteEncryptedPrivateValueStore(db_path, ROTATED_KEY, key_version=2)
+    assert restarted.render_for_user("tenant", "thread", placeholder) == "private@example.com"
+
+
+def test_encrypted_private_value_factory_reencrypts_with_keyring(tmp_path: Path) -> None:
+    db_path = tmp_path / "private.db"
+    first = SQLiteEncryptedPrivateValueStore(db_path, KEY)
+    first.add("tenant", "thread", {"ref": "private value"})
+    keyring = f'{{"1":"{KEY_B64}","2":"{ROTATED_KEY_B64}"}}'
+
+    rotated = build_private_value_store_from_env(
+        {
+            "MINIGENT_PRIVATE_VALUE_DB_PATH": str(db_path),
+            "MINIGENT_PRIVATE_VALUE_ENCRYPTION_KEYS": keyring,
+            "MINIGENT_PRIVATE_VALUE_KEY_VERSION": "2",
+            "MINIGENT_PRIVATE_VALUE_REENCRYPT_ON_STARTUP": "true",
+        }
+    )
+
+    assert rotated.render_for_user("tenant", "thread", "{{pii:name:ref}}") == "private value"
+    SQLiteEncryptedPrivateValueStore(db_path, ROTATED_KEY, key_version=2)
+
+
+def test_encrypted_private_value_store_fails_closed_with_wrong_key(tmp_path: Path) -> None:
+    db_path = tmp_path / "wrong-key.db"
     first = SQLiteEncryptedPrivateValueStore(db_path, KEY)
     first.add("tenant", "thread", {"ref": "private value"})
     with pytest.raises(RuntimeError, match="could not be opened"):

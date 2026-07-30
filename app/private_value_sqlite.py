@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 import os
 import re
@@ -15,6 +13,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import HTTPException
 
+from app.private_keyring import load_encryption_keyring, parse_boolean
 from app.private_values import (
     DEFAULT_PRIVATE_VALUE_MAX_CHARS,
     DEFAULT_PRIVATE_VALUE_MAX_REFS_PER_THREAD,
@@ -22,9 +21,11 @@ from app.private_values import (
     PII_PLACEHOLDER_PATTERN,
     PRIVATE_VALUE_DB_PATH_ENV,
     PRIVATE_VALUE_ENCRYPTION_KEY_ENV,
+    PRIVATE_VALUE_ENCRYPTION_KEYS_ENV,
     PRIVATE_VALUE_KEY_VERSION_ENV,
     PRIVATE_VALUE_MAX_CHARS_ENV,
     PRIVATE_VALUE_MAX_REFS_ENV,
+    PRIVATE_VALUE_REENCRYPT_ON_STARTUP_ENV,
     PRIVATE_VALUE_TTL_SECONDS_ENV,
 )
 
@@ -41,6 +42,8 @@ class SQLiteEncryptedPrivateValueStore:
         encryption_key: bytes,
         *,
         key_version: int = 1,
+        decryption_keys: Mapping[int, bytes] | None = None,
+        reencrypt_on_startup: bool = False,
         ttl_seconds: float = DEFAULT_PRIVATE_VALUE_TTL_SECONDS,
         max_refs_per_thread: int = DEFAULT_PRIVATE_VALUE_MAX_REFS_PER_THREAD,
         max_value_chars: int = DEFAULT_PRIVATE_VALUE_MAX_CHARS,
@@ -59,15 +62,24 @@ class SQLiteEncryptedPrivateValueStore:
         self._db_path = Path(db_path).expanduser()
         if str(db_path) == ":memory:":
             raise ValueError("encrypted private value DB must use a filesystem path")
-        self._key = encryption_key
         self._key_version = key_version
-        self._aesgcm = AESGCM(encryption_key)
+        keys = dict(decryption_keys or {})
+        existing_active_key = keys.get(key_version)
+        if existing_active_key is not None and existing_active_key != encryption_key:
+            raise ValueError("active private value key conflicts with decryption keyring")
+        keys[key_version] = encryption_key
+        for version, key in keys.items():
+            if version < 1 or len(key) != 32:
+                raise ValueError("private value decryption keys must be versioned 32-byte keys")
+        self._aesgcms = {version: AESGCM(key) for version, key in keys.items()}
         self._ttl_seconds = ttl_seconds
         self._max_refs_per_thread = max_refs_per_thread
         self._max_value_chars = max_value_chars
         self._clock = clock
         self._lock = RLock()
         self._initialize()
+        if reencrypt_on_startup:
+            self.rotate_to_active_key()
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> SQLiteEncryptedPrivateValueStore:
@@ -75,14 +87,21 @@ class SQLiteEncryptedPrivateValueStore:
         db_path = lookup.get(PRIVATE_VALUE_DB_PATH_ENV, "").strip()
         if not db_path:
             raise RuntimeError(f"{PRIVATE_VALUE_DB_PATH_ENV} is required")
-        key = _decode_encryption_key(lookup.get(PRIVATE_VALUE_ENCRYPTION_KEY_ENV, ""))
+        active_key, keyring, key_version = load_encryption_keyring(
+            lookup,
+            single_key_env=PRIVATE_VALUE_ENCRYPTION_KEY_ENV,
+            keyring_env=PRIVATE_VALUE_ENCRYPTION_KEYS_ENV,
+            key_version_env=PRIVATE_VALUE_KEY_VERSION_ENV,
+            database_env=PRIVATE_VALUE_DB_PATH_ENV,
+        )
         return cls(
             db_path,
-            key,
-            key_version=_positive_int(
-                lookup.get(PRIVATE_VALUE_KEY_VERSION_ENV, ""),
-                PRIVATE_VALUE_KEY_VERSION_ENV,
-                1,
+            active_key,
+            key_version=key_version,
+            decryption_keys=keyring,
+            reencrypt_on_startup=parse_boolean(
+                lookup.get(PRIVATE_VALUE_REENCRYPT_ON_STARTUP_ENV, ""),
+                PRIVATE_VALUE_REENCRYPT_ON_STARTUP_ENV,
             ),
             ttl_seconds=_positive_float(
                 lookup.get(PRIVATE_VALUE_TTL_SECONDS_ENV, ""),
@@ -166,7 +185,7 @@ class SQLiteEncryptedPrivateValueStore:
                             detail=f"Private value reference collision for '{reference}'",
                         )
                 nonce = os.urandom(_NONCE_BYTES)
-                ciphertext = self._aesgcm.encrypt(
+                ciphertext = self._aesgcms[self._key_version].encrypt(
                     nonce,
                     value.encode("utf-8"),
                     _associated_data(
@@ -264,13 +283,14 @@ class SQLiteEncryptedPrivateValueStore:
         ciphertext: bytes,
         key_version: int,
     ) -> str:
-        if key_version != self._key_version:
+        aesgcm = self._aesgcms.get(key_version)
+        if aesgcm is None:
             raise HTTPException(
                 status_code=500,
                 detail="Private value encryption key version is unavailable",
             )
         try:
-            plaintext = self._aesgcm.decrypt(
+            plaintext = aesgcm.decrypt(
                 nonce,
                 ciphertext,
                 _associated_data(tenant_id, thread_id, reference, kind, key_version),
@@ -281,6 +301,63 @@ class SQLiteEncryptedPrivateValueStore:
                 detail="Private value authentication failed",
             ) from exc
         return plaintext.decode("utf-8")
+
+    def rotate_to_active_key(self) -> int:
+        """Re-encrypt all surviving records with the configured active key version."""
+        now = self._clock()
+        rotated = 0
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._delete_expired(connection, now)
+            rows = connection.execute(
+                """
+                SELECT tenant_id, thread_id, reference, kind, nonce, ciphertext, key_version
+                FROM private_values
+                WHERE key_version != ?
+                """,
+                (self._key_version,),
+            ).fetchall()
+            for row in rows:
+                tenant_id, thread_id, reference, kind = map(str, row[:4])
+                value = self._decrypt(
+                    tenant_id,
+                    thread_id,
+                    reference,
+                    kind,
+                    bytes(row[4]),
+                    bytes(row[5]),
+                    int(row[6]),
+                )
+                nonce = os.urandom(_NONCE_BYTES)
+                ciphertext = self._aesgcms[self._key_version].encrypt(
+                    nonce,
+                    value.encode("utf-8"),
+                    _associated_data(
+                        tenant_id,
+                        thread_id,
+                        reference,
+                        kind,
+                        self._key_version,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE private_values
+                    SET nonce = ?, ciphertext = ?, key_version = ?
+                    WHERE tenant_id = ? AND thread_id = ? AND reference = ?
+                    """,
+                    (
+                        nonce,
+                        ciphertext,
+                        self._key_version,
+                        tenant_id,
+                        thread_id,
+                        reference,
+                    ),
+                )
+                rotated += 1
+            connection.commit()
+        return rotated
 
     def _initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -306,6 +383,18 @@ class SQLiteEncryptedPrivateValueStore:
             )
             self._delete_expired(connection, self._clock())
             connection.commit()
+            versions = {
+                int(version_row[0])
+                for version_row in connection.execute(
+                    "SELECT DISTINCT key_version FROM private_values"
+                )
+            }
+            missing_versions = versions - self._aesgcms.keys()
+            if missing_versions:
+                missing = ", ".join(str(version) for version in sorted(missing_versions))
+                raise RuntimeError(
+                    f"Encrypted private value database requires unavailable key version(s): {missing}"
+                )
             row = connection.execute(
                 """
                 SELECT tenant_id, thread_id, reference, kind, nonce, ciphertext, key_version
@@ -364,26 +453,6 @@ def _associated_data(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-
-
-def _decode_encryption_key(raw: str) -> bytes:
-    value = raw.strip()
-    if not value:
-        raise RuntimeError(
-            f"{PRIVATE_VALUE_ENCRYPTION_KEY_ENV} is required when {PRIVATE_VALUE_DB_PATH_ENV} is set"
-        )
-    try:
-        padded = value + "=" * (-len(value) % 4)
-        decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
-    except (binascii.Error, ValueError, UnicodeEncodeError) as exc:
-        raise RuntimeError(
-            f"{PRIVATE_VALUE_ENCRYPTION_KEY_ENV} must be a base64-encoded 32-byte key"
-        ) from exc
-    if len(decoded) != 32:
-        raise RuntimeError(
-            f"{PRIVATE_VALUE_ENCRYPTION_KEY_ENV} must be a base64-encoded 32-byte key"
-        )
-    return decoded
 
 
 def _positive_float(raw: str, name: str, default: float) -> float:
