@@ -3796,6 +3796,48 @@ def test_run_chat_loop_expands_custom_slash_command(
     ]
 
 
+def test_run_chat_loop_reconciles_private_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("/actions\n/discard-action consent-1\n")
+    discarded: list[tuple[str, str | None]] = []
+
+    class FakeChatClient:
+        thread_id = "thread-1"
+
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def list_private_value_actions(self, thread_id: str) -> list[dict[str, object]]:
+            assert thread_id == "thread-1"
+            return [
+                {
+                    "consent_id": "consent-1",
+                    "state": "executing",
+                    "tool_name": "trusted.send",
+                    "expires_at": 700.0,
+                }
+            ]
+
+        def discard_private_value_action(
+            self, consent_id: str, *, thread_id: str | None = None
+        ) -> dict[str, object]:
+            discarded.append((consent_id, thread_id))
+            return {"consent_id": consent_id, "state": "executing", "discarded": True}
+
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    assert (
+        run_chat_loop(ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"))
+        == 0
+    )
+    assert discarded == [("consent-1", "thread-1")]
+    output = output_stream.getvalue()
+    assert "consent-1  executing  trusted.send  expires=700.0" in output
+    assert "discarded executing private action consent-1" in output
+
+
 def test_run_chat_loop_handles_multiple_turns_and_blank_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4800,8 +4842,9 @@ def test_run_chat_loop_handles_local_chat_commands(
         "[user] [idle] chat commands: /help, /new, /agent [current|preset], "
         "/llm [current|profile], /options, /skills, /profiles, /threads, /switch <id>, "
         "/rename <title>, /copy-id, /cancel, "
-        "/compact, /export [markdown|json], /tokens, /debug, /editor, "
-        "/image <path...>|paste|list|clear, /commands, /command set|show|delete, "
+        "/compact, /actions, /discard-action <consent-id>, /export [markdown|json], /tokens, "
+        "/debug, /editor, /image <path...>|paste|list|clear, /commands, "
+        "/command set|show|delete, "
         "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
         "[user] [idle] shutting down\n"

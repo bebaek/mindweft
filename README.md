@@ -276,8 +276,9 @@ minutes from the decision by default), then removed during consent activity or e
 startup. `GET /private-value-actions` returns only consent ID, tool name, state, and expiry—never
 tool arguments or private values. After reconciling an uncertain external outcome, clients can
 `DELETE` the action record; discarding also revokes an unconsumed approval and appends a redacted
-`discarded` audit event. Reconcile the tool's external state before creating a replacement action;
-tools should still support idempotency keys where possible. Grants are bound to a SHA-256
+`discarded` audit event. Interactive `minigent chat` sessions expose the same workflow through
+`/actions` and `/discard-action <consent-id>`. Reconcile the tool's external state before creating
+a replacement action; tools should still support idempotency keys where possible. Grants are
 fingerprint of the complete placeholder-bearing argument object, so changing the body or any
 other argument requires new consent. Non-one-shot grants remain usable for five minutes; pending
 requests expire after ten minutes.

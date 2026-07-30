@@ -946,6 +946,12 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         if utterance == "/compact":
             _handle_chat_compact(client, output_stream)
             continue
+        if utterance == "/actions":
+            _handle_chat_private_actions(client, output_stream)
+            continue
+        if utterance == "/discard-action" or utterance.startswith("/discard-action "):
+            _handle_chat_discard_private_action(utterance, client, output_stream)
+            continue
         if utterance == "/tokens":
             _handle_chat_tokens(client, output_stream)
             continue
@@ -1077,8 +1083,9 @@ def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
         "[idle] chat commands: /help, /new, /agent [current|preset], /llm [current|profile], "
         "/options, /skills, /profiles, /threads, /switch <id>, /rename <title>, /copy-id, /cancel, "
-        "/compact, /export [markdown|json], /tokens, /debug, /editor, "
-        "/image <path...>|paste|list|clear, /commands, /command set|show|delete, "
+        "/compact, /actions, /discard-action <consent-id>, /export [markdown|json], /tokens, "
+        "/debug, /editor, /image <path...>|paste|list|clear, /commands, "
+        "/command set|show|delete, "
         "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
     )
@@ -1710,6 +1717,64 @@ def _handle_chat_cancel(
         output_stream.write(f"[idle] cancelled active run for {thread_id}\n")
     else:
         output_stream.write(f"[idle] cleared run state for {thread_id}\n")
+    output_stream.flush()
+
+
+def _handle_chat_private_actions(
+    client: RememberingMinigentAPIClient,
+    output_stream: ChatOutputStream,
+) -> None:
+    thread_id = client.thread_id
+    if not thread_id:
+        output_stream.write("[idle] no current thread\n")
+        output_stream.flush()
+        return
+    try:
+        actions = client.list_private_value_actions(thread_id)
+    except Exception as exc:
+        output_stream.write(f"[idle] private action request failed: {exc}\n")
+        output_stream.flush()
+        return
+    if not actions:
+        output_stream.write("[idle] no pending or executing private actions\n")
+        output_stream.flush()
+        return
+    output_stream.write("[idle] private actions:\n")
+    for action in actions:
+        output_stream.write(
+            f"  {action.get('consent_id', 'unknown')}  "
+            f"{action.get('state', 'unknown')}  "
+            f"{action.get('tool_name', 'tool')}  "
+            f"expires={action.get('expires_at', 'unknown')}\n"
+        )
+    output_stream.flush()
+
+
+def _handle_chat_discard_private_action(
+    utterance: str,
+    client: RememberingMinigentAPIClient,
+    output_stream: ChatOutputStream,
+) -> None:
+    consent_id = utterance.removeprefix("/discard-action").strip()
+    if not consent_id:
+        output_stream.write("[idle] usage: /discard-action <consent-id>\n")
+        output_stream.flush()
+        return
+    thread_id = client.thread_id
+    if not thread_id:
+        output_stream.write("[idle] no current thread\n")
+        output_stream.flush()
+        return
+    try:
+        result = client.discard_private_value_action(consent_id, thread_id=thread_id)
+    except Exception as exc:
+        output_stream.write(f"[idle] private action discard failed: {exc}\n")
+        output_stream.flush()
+        return
+    output_stream.write(
+        f"[idle] discarded {result.get('state', 'unknown')} private action "
+        f"{result.get('consent_id', consent_id)}\n"
+    )
     output_stream.flush()
 
 
