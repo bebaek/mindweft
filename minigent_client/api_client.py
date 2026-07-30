@@ -584,6 +584,31 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent consent-resume response must include a reply")
         return response["reply"], None
 
+    def list_private_value_actions(self, thread_id: str | None = None) -> list[dict[str, Any]]:
+        resolved_thread_id = thread_id or self.ensure_thread()
+        response = self.request_json(
+            "GET",
+            f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-actions",
+        )
+        if not isinstance(response, list) or not all(isinstance(item, dict) for item in response):
+            raise RuntimeError("Minigent private-value action response must be an array of objects")
+        return cast(list[dict[str, Any]], response)
+
+    def discard_private_value_action(
+        self,
+        consent_id: str,
+        *,
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_thread_id = thread_id or self.ensure_thread()
+        response = self.request_json(
+            "DELETE",
+            f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-actions/{consent_id}",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent discarded-action response must be an object")
+        return cast(dict[str, Any], response)
+
     def compact_thread(self, thread_id: str) -> dict[str, Any]:
         response = self.request_json(
             "POST",

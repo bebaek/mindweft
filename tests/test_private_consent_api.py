@@ -85,6 +85,21 @@ def test_private_value_consent_api_approves_one_shot_disclosure(
     assert pending[0]["tool_name"] == "trusted.send"
     assert pending[0]["disclosures"] == [{"path": "recipient.email", "kind": "email", "count": 1}]
     assert "private@example.com" not in pending_response.text
+    actions_response = client.get(
+        f"/threads/{thread_id}/private-value-actions",
+        headers=AUTH_HEADERS,
+    )
+    actions_response.raise_for_status()
+    assert actions_response.json() == [
+        {
+            "consent_id": pending[0]["consent_id"],
+            "thread_id": thread_id,
+            "tool_name": "trusted.send",
+            "state": "pending",
+            "expires_at": pending[0]["expires_at"],
+        }
+    ]
+    assert "private@example.com" not in actions_response.text
 
     approve_response = client.post(
         f"/threads/{thread_id}/private-value-consents/{pending[0]['consent_id']}",
@@ -100,6 +115,13 @@ def test_private_value_consent_api_approves_one_shot_disclosure(
     assert resume_response.status_code == 200
     assert resume_response.json() == {"reply": "Sent."}
     assert received == [{"recipient": {"email": "private@example.com"}}]
+    assert (
+        client.get(
+            f"/threads/{thread_id}/private-value-actions",
+            headers=AUTH_HEADERS,
+        ).json()
+        == []
+    )
     audit_response = client.get(
         f"/threads/{thread_id}/private-value-disclosures/audit",
         headers=AUTH_HEADERS,
@@ -112,3 +134,35 @@ def test_private_value_consent_api_approves_one_shot_disclosure(
         "disclosed",
     ]
     assert "private@example.com" not in audit_response.text
+
+    discarded_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{discarded_thread_id}/messages",
+        headers=AUTH_HEADERS,
+        json={"content": "Email discard@example.com"},
+    ).raise_for_status()
+    client.post(f"/threads/{discarded_thread_id}/run", headers=AUTH_HEADERS).raise_for_status()
+    discarded_pending = client.get(
+        f"/threads/{discarded_thread_id}/private-value-consents/pending",
+        headers=AUTH_HEADERS,
+    ).json()
+    discard_response = client.delete(
+        f"/threads/{discarded_thread_id}/private-value-actions/"
+        f"{discarded_pending[0]['consent_id']}",
+        headers=AUTH_HEADERS,
+    )
+    discard_response.raise_for_status()
+    assert discard_response.json()["discarded"] is True
+    assert (
+        client.get(
+            f"/threads/{discarded_thread_id}/private-value-actions",
+            headers=AUTH_HEADERS,
+        ).json()
+        == []
+    )
+    discarded_audit = client.get(
+        f"/threads/{discarded_thread_id}/private-value-disclosures/audit",
+        headers=AUTH_HEADERS,
+    ).json()
+    assert [record["event"] for record in discarded_audit] == ["requested", "discarded"]
+    assert "discard@example.com" not in json.dumps(discarded_audit)

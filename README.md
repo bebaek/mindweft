@@ -258,8 +258,10 @@ Clients can inspect and decide it through:
 ```text
 GET  /threads/{thread_id}/private-value-consents/pending
 POST /threads/{thread_id}/private-value-consents/{consent_id}
-POST /threads/{thread_id}/private-value-consents/{consent_id}/resume
-GET  /threads/{thread_id}/private-value-disclosures/audit
+POST   /threads/{thread_id}/private-value-consents/{consent_id}/resume
+GET    /threads/{thread_id}/private-value-actions
+DELETE /threads/{thread_id}/private-value-actions/{consent_id}
+GET    /threads/{thread_id}/private-value-disclosures/audit
 ```
 
 The decision body is `{"approve": true, "one_shot": true}` or `{"approve": false}`. The
@@ -271,11 +273,14 @@ twice. If the process crashes, times out, or loses its connection after the clai
 remains in an `executing` state and is not automatically replayed because the external outcome
 may be unknown. The claimed record is retained only until its consent grant expires (five
 minutes from the decision by default), then removed during consent activity or encrypted-store
-startup. Reconcile the tool's external state before creating a replacement action; tools should
-still support idempotency keys where possible. Grants are bound to a SHA-256 fingerprint
-of the complete placeholder-bearing argument object, so changing the body or any other argument
-requires new consent. Non-one-shot grants remain usable for five minutes; pending requests
-expire after ten minutes.
+startup. `GET /private-value-actions` returns only consent ID, tool name, state, and expiry—never
+tool arguments or private values. After reconciling an uncertain external outcome, clients can
+`DELETE` the action record; discarding also revokes an unconsumed approval and appends a redacted
+`discarded` audit event. Reconcile the tool's external state before creating a replacement action;
+tools should still support idempotency keys where possible. Grants are bound to a SHA-256
+fingerprint of the complete placeholder-bearing argument object, so changing the body or any
+other argument requires new consent. Non-one-shot grants remain usable for five minutes; pending
+requests expire after ten minutes.
 Denials block the identical disclosure until they expire. Consent state is scoped by tenant,
 user, and thread. Audit records contain opaque references, paths, and kinds, but never raw
 values. The browser displays a confirmation dialog and automatically resumes an approved

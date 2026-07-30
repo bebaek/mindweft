@@ -115,6 +115,45 @@ def test_encrypted_consent_store_persists_action_claim(tmp_path) -> None:
     assert exc_info.value.status_code == 409
 
 
+def test_encrypted_consent_store_lists_and_discards_redacted_actions(tmp_path) -> None:
+    db_path = tmp_path / "private-consents.db"
+    store = SQLiteEncryptedPrivateValueConsentStore(db_path, KEY, clock=lambda: 100.0)
+    with pytest.raises(HTTPException):
+        _request(store)
+    consent_id = str(
+        store.pending(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")[0]["consent_id"]
+    )
+    store.save_pending_action(
+        consent_id,
+        PendingPrivateToolAction(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            tool_call=ToolCall(name="trusted.send", arguments={"body": "secret body"}),
+        ),
+    )
+
+    statuses = store.action_statuses(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")
+    assert statuses[0]["state"] == "pending"
+    assert statuses[0]["tool_name"] == "trusted.send"
+    assert "secret body" not in str(statuses)
+    assert (
+        store.discard_action(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            consent_id=consent_id,
+        )["discarded"]
+        is True
+    )
+    assert store.action_statuses(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1") == []
+    with sqlite3.connect(db_path) as connection:
+        assert (
+            connection.execute("SELECT COUNT(*) FROM pending_private_tool_actions").fetchone()[0]
+            == 0
+        )
+
+
 def test_encrypted_consent_store_expires_claimed_action_with_consumed_grant(tmp_path) -> None:
     now = [100.0]
     db_path = tmp_path / "private-consents.db"

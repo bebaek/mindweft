@@ -430,6 +430,97 @@ class SQLiteEncryptedPrivateValueConsentStore:
             )
         return ToolCall.model_validate(wrapped_tool_call), stored_state
 
+    def action_statuses(
+        self, *, tenant_id: str, user_id: str, thread_id: str
+    ) -> list[dict[str, object]]:
+        now = self._clock()
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._expire(connection, now)
+            rows = connection.execute(
+                """
+                SELECT action.consent_id, action.state, action.nonce, action.ciphertext,
+                       action.key_version, request.expires_at
+                FROM pending_private_tool_actions AS action
+                LEFT JOIN private_consent_requests AS request
+                    ON request.consent_id = action.consent_id
+                WHERE action.tenant_id = ? AND action.user_id = ? AND action.thread_id = ?
+                ORDER BY action.consent_id
+                """,
+                (tenant_id, user_id, thread_id),
+            ).fetchall()
+            connection.commit()
+        statuses: list[dict[str, object]] = []
+        for row in rows:
+            consent_id = str(row[0])
+            tool_call, state = self._decrypt_action(
+                tenant_id,
+                user_id,
+                thread_id,
+                consent_id,
+                str(row[1]),
+                bytes(row[2]),
+                bytes(row[3]),
+                int(row[4]),
+            )
+            statuses.append(
+                {
+                    "consent_id": consent_id,
+                    "thread_id": thread_id,
+                    "tool_name": tool_call.name,
+                    "state": state,
+                    "expires_at": float(row[5]) if row[5] is not None else None,
+                }
+            )
+        return statuses
+
+    def discard_action(
+        self, *, tenant_id: str, user_id: str, thread_id: str, consent_id: str
+    ) -> dict[str, object]:
+        now = self._clock()
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._expire(connection, now)
+            row = connection.execute(
+                """
+                SELECT state, nonce, ciphertext, key_version
+                FROM pending_private_tool_actions
+                WHERE consent_id = ? AND tenant_id = ? AND user_id = ? AND thread_id = ?
+                """,
+                (consent_id, tenant_id, user_id, thread_id),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                raise HTTPException(status_code=404, detail="Pending private tool action not found")
+            tool_call, state = self._decrypt_action(
+                tenant_id,
+                user_id,
+                thread_id,
+                consent_id,
+                str(row[0]),
+                bytes(row[1]),
+                bytes(row[2]),
+                int(row[3]),
+            )
+            request = self._owned_request(connection, tenant_id, user_id, thread_id, consent_id)
+            if request.status in {"pending", "approved"}:
+                request.status = "denied"
+                request.expires_at = now + self._grant_ttl_seconds
+                self._update_request(connection, request)
+            self._record(connection, "discarded", request, now)
+            connection.execute(
+                "DELETE FROM pending_private_tool_actions WHERE consent_id = ?",
+                (consent_id,),
+            )
+            connection.commit()
+        return {
+            "consent_id": consent_id,
+            "thread_id": thread_id,
+            "tool_name": tool_call.name,
+            "state": state,
+            "discarded": True,
+        }
+
     def delete_pending_action(self, consent_id: str) -> None:
         with self._lock, closing(self._connect()) as connection:
             connection.execute(

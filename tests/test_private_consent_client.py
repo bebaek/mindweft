@@ -66,6 +66,32 @@ def test_api_client_supports_consent_decision_and_resume() -> None:
     ]
 
 
+def test_api_client_supports_private_action_reconciliation() -> None:
+    client = FakeAPIClient(
+        [
+            [{"consent_id": "consent-1", "state": "executing"}],
+            {"consent_id": "consent-1", "state": "executing", "discarded": True},
+        ]
+    )
+
+    assert client.list_private_value_actions("thread-1")[0]["state"] == "executing"
+    assert (
+        client.discard_private_value_action("consent-1", thread_id="thread-1")["discarded"] is True
+    )
+    assert client.calls == [
+        (
+            "GET",
+            "http://minigent.test/threads/thread-1/private-value-actions",
+            None,
+        ),
+        (
+            "DELETE",
+            "http://minigent.test/threads/thread-1/private-value-actions/consent-1",
+            None,
+        ),
+    ]
+
+
 class TTYInput(StringIO):
     def isatty(self) -> bool:
         return True

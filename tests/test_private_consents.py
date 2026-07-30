@@ -185,6 +185,48 @@ def test_consent_store_claims_pending_action_only_once() -> None:
     assert exc_info.value.status_code == 409
 
 
+def test_consent_store_lists_and_discards_redacted_actions() -> None:
+    store = InMemoryPrivateValueConsentStore(clock=lambda: 100.0)
+    with pytest.raises(HTTPException):
+        _request(store)
+    consent_id = str(
+        store.pending(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")[0]["consent_id"]
+    )
+    store.save_pending_action(
+        consent_id,
+        PendingPrivateToolAction(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            tool_call=ToolCall(name="trusted.send", arguments={"body": "secret body"}),
+        ),
+    )
+
+    statuses = store.action_statuses(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")
+    assert statuses == [
+        {
+            "consent_id": consent_id,
+            "thread_id": "thread-1",
+            "tool_name": "trusted.send",
+            "state": "pending",
+            "expires_at": 700.0,
+        }
+    ]
+    assert "secret body" not in str(statuses)
+    discarded = store.discard_action(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        thread_id="thread-1",
+        consent_id=consent_id,
+    )
+    assert discarded["discarded"] is True
+    assert store.action_statuses(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1") == []
+    with pytest.raises(HTTPException, match="denied by the user"):
+        _request(store)
+    audit = store.audit_records(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")
+    assert [record["event"] for record in audit] == ["requested", "discarded"]
+
+
 def test_consent_store_expires_claimed_action_with_consumed_grant() -> None:
     now = [100.0]
     store = InMemoryPrivateValueConsentStore(

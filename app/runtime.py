@@ -339,6 +339,25 @@ class AgentRuntime:
             thread_id=thread_id,
         )
 
+    def private_value_action_statuses(
+        self, principal: Principal, thread_id: str
+    ) -> list[dict[str, object]]:
+        return self._private_value_consent_store.action_statuses(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+        )
+
+    def discard_private_value_action(
+        self, principal: Principal, thread_id: str, consent_id: str
+    ) -> dict[str, object]:
+        return self._private_value_consent_store.discard_action(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+            consent_id=consent_id,
+        )
+
     def _tool_registry_for_thread(
         self,
         execution: TenantExecutionContext,

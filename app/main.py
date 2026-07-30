@@ -876,6 +876,29 @@ def create_app(
         )
         return RunThreadResponse(reply=reply)
 
+    @app.get("/threads/{thread_id}/private-value-actions")
+    async def private_value_action_statuses(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> list[dict[str, object]]:
+        request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        return request.app.state.runtime.private_value_action_statuses(principal, thread_id)
+
+    @app.delete("/threads/{thread_id}/private-value-actions/{consent_id}")
+    async def discard_private_value_action(
+        thread_id: str,
+        consent_id: str,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> dict[str, object]:
+        request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        return request.app.state.runtime.discard_private_value_action(
+            principal,
+            thread_id,
+            consent_id,
+        )
+
     @app.get("/threads/{thread_id}/private-value-disclosures/audit")
     async def private_value_disclosure_audit(
         thread_id: str,

@@ -148,6 +148,14 @@ class PrivateValueConsentStore(Protocol):
         self, *, tenant_id: str, user_id: str, thread_id: str, consent_id: str
     ) -> PendingPrivateToolAction | None: ...
 
+    def action_statuses(
+        self, *, tenant_id: str, user_id: str, thread_id: str
+    ) -> list[dict[str, object]]: ...
+
+    def discard_action(
+        self, *, tenant_id: str, user_id: str, thread_id: str, consent_id: str
+    ) -> dict[str, object]: ...
+
     def delete_pending_action(self, consent_id: str) -> None: ...
 
     def clear_thread(self, tenant_id: str, thread_id: str) -> None: ...
@@ -340,6 +348,61 @@ class InMemoryPrivateValueConsentStore:
                 )
             self._pending_action_states[consent_id] = "executing"
             return action
+
+    def action_statuses(
+        self, *, tenant_id: str, user_id: str, thread_id: str
+    ) -> list[dict[str, object]]:
+        with self._lock:
+            self._expire(self._clock())
+            statuses: list[dict[str, object]] = []
+            for consent_id, action in self._pending_actions.items():
+                if (
+                    action.tenant_id != tenant_id
+                    or action.user_id != user_id
+                    or action.thread_id != thread_id
+                ):
+                    continue
+                request = self._requests.get(consent_id)
+                statuses.append(
+                    {
+                        "consent_id": consent_id,
+                        "thread_id": thread_id,
+                        "tool_name": action.tool_call.name,
+                        "state": self._pending_action_states.get(consent_id, "pending"),
+                        "expires_at": request.expires_at if request is not None else None,
+                    }
+                )
+            return statuses
+
+    def discard_action(
+        self, *, tenant_id: str, user_id: str, thread_id: str, consent_id: str
+    ) -> dict[str, object]:
+        now = self._clock()
+        with self._lock:
+            self._expire(now)
+            action = self.get_pending_action(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                thread_id=thread_id,
+                consent_id=consent_id,
+            )
+            if action is None:
+                raise HTTPException(status_code=404, detail="Pending private tool action not found")
+            state = self._pending_action_states.get(consent_id, "pending")
+            request = self._owned_request(tenant_id, user_id, thread_id, consent_id)
+            if request.status in {"pending", "approved"}:
+                request.status = "denied"
+                request.expires_at = now + self._grant_ttl_seconds
+            self._record("discarded", request, now)
+            self._pending_actions.pop(consent_id, None)
+            self._pending_action_states.pop(consent_id, None)
+            return {
+                "consent_id": consent_id,
+                "thread_id": thread_id,
+                "tool_name": action.tool_call.name,
+                "state": state,
+                "discarded": True,
+            }
 
     def delete_pending_action(self, consent_id: str) -> None:
         with self._lock:
