@@ -59,10 +59,12 @@ class MCPServerRuntimeState:
             "private_value_policy": {
                 "mode": self.config.private_value_policy.mode,
                 "argument_paths": list(self.config.private_value_policy.argument_paths),
+                "requires_approval": self.config.private_value_policy.requires_approval,
                 "tool_overrides": {
                     tool_name: {
                         "mode": policy.mode,
                         "argument_paths": list(policy.argument_paths),
+                        "requires_approval": policy.requires_approval,
                     }
                     for tool_name, policy in self.config.private_value_tool_policies.items()
                 },

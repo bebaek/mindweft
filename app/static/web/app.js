@@ -504,9 +504,10 @@ async function handlePrivateValueConsent(threadId, consent) {
   const summary = disclosures
     .map((item) => `${item.count || 1} ${item.kind || "private value"} at ${item.path || "unknown path"}`)
     .join("\n");
-  const approved = window.confirm(
-    `Allow ${consent.tool_name || "this tool"} to receive:\n\n${summary || "Private values"}\n\nThis approval applies only to this exact tool call.`
-  );
+  const prompt = disclosures.length
+    ? `Allow ${consent.tool_name || "this tool"} to receive:\n\n${summary}\n\nThis approval applies only to this exact tool call.`
+    : `Approve the exact ${consent.tool_name || "tool"} action?\n\nNo private values will be disclosed. This approval applies only to this exact tool call.`;
+  const approved = window.confirm(prompt);
   const consentId = consent.consent_id;
   if (!consentId) {
     throw new Error("Consent request did not include an ID.");

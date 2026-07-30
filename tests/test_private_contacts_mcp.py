@@ -9,9 +9,12 @@ from app.mcp import PRIVATE_VALUES_META_KEY
 from app.private_contacts_mcp_demo import (
     CardDAVContactSource,
     Contact,
+    ContactPatch,
+    ContactResource,
     PrivateContactsMCPServer,
     discover_carddav_addressbook_url,
     parse_carddav_multistatus,
+    parse_carddav_multistatus_resources,
     parse_vcard,
 )
 
@@ -440,3 +443,204 @@ def test_private_contacts_server_expires_contact_references() -> None:
     assert response is not None
     assert response["error"]["code"] == -32001
     assert response["error"]["message"] == "Unknown or expired contact_ref"
+
+
+def test_parse_carddav_resources_keeps_href_etag_uid_and_raw_vcard() -> None:
+    resources = parse_carddav_multistatus_resources(
+        b"""<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
+  <d:response><d:href>/addressbooks/user/default/alice.vcf</d:href><d:propstat><d:prop>
+    <d:getetag>"version-1"</d:getetag><card:address-data><![CDATA[
+BEGIN:VCARD
+VERSION:3.0
+UID:alice-id
+FN:Alice Smith
+NOTE:preserve me
+END:VCARD
+]]></card:address-data></d:prop></d:propstat></d:response>
+</d:multistatus>""",
+        addressbook_url="https://baikal.example/addressbooks/user/default/",
+    )
+
+    assert len(resources) == 1
+    resource = resources[0]
+    assert resource.contact == Contact(name="Alice Smith")
+    assert resource.href == "https://baikal.example/addressbooks/user/default/alice.vcf"
+    assert resource.etag == '"version-1"'
+    assert resource.uid == "alice-id"
+    assert resource.raw_vcard is not None and "NOTE:preserve me" in resource.raw_vcard
+
+
+def test_carddav_create_uses_if_none_match_and_serializes_vcard() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "PROPFIND":
+            return _addressbook_discovery_response()
+        assert request.method == "PUT"
+        return httpx.Response(201, headers={"etag": '"created"'})
+
+    source = _carddav_source(handler)
+    created = source.create_contact(
+        Contact(name="Jane Doe", emails=("jane@example.com",), phones=("+1 555 0102",))
+    )
+
+    put = requests[-1]
+    assert put.headers["if-none-match"] == "*"
+    assert put.url.path.startswith("/addressbooks/user/default/")
+    assert put.url.path.endswith(".vcf")
+    assert b"FN:Jane Doe\r\n" in put.content
+    assert b"EMAIL:jane@example.com\r\n" in put.content
+    assert created.etag == '"created"'
+
+
+def test_carddav_update_uses_etag_and_preserves_unknown_vcard_fields() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "PROPFIND":
+            return _addressbook_discovery_response()
+        assert request.method == "PUT"
+        return httpx.Response(204, headers={"etag": '"version-2"'})
+
+    source = _carddav_source(handler)
+    resource = ContactResource(
+        contact=Contact(name="Jane Doe", emails=("old@example.com",)),
+        href="https://baikal.example/addressbooks/user/default/jane.vcf",
+        etag='"version-1"',
+        uid="jane-id",
+        raw_vcard=(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:jane-id\r\nFN:Jane Doe\r\n"
+            "N:Doe;Jane;;;\r\nEMAIL;TYPE=HOME:old@example.com\r\n"
+            "TEL;TYPE=CELL:+1 555 0102\r\nNOTE:preserve me\r\nEND:VCARD\r\n"
+        ),
+    )
+
+    updated = source.update_contact(resource, ContactPatch(emails=("new@example.com",)))
+
+    put = requests[-1]
+    assert put.headers["if-match"] == '"version-1"'
+    assert b"EMAIL:new@example.com\r\n" in put.content
+    assert b"old@example.com" not in put.content
+    assert b"FN:Jane Doe\r\n" in put.content
+    assert b"TEL;TYPE=CELL:+1 555 0102\r\n" in put.content
+    assert b"NOTE:preserve me\r\n" in put.content
+    assert updated.etag == '"version-2"'
+
+
+def test_carddav_delete_uses_etag_and_rejects_stale_contact() -> None:
+    delete_status = [204]
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "PROPFIND":
+            return _addressbook_discovery_response()
+        assert request.method == "DELETE"
+        return httpx.Response(delete_status[0])
+
+    source = _carddav_source(handler)
+    resource = ContactResource(
+        contact=Contact(name="Jane Doe"),
+        href="https://baikal.example/addressbooks/user/default/jane.vcf",
+        etag='"version-1"',
+    )
+
+    source.delete_contact(resource)
+    assert requests[-1].headers["if-match"] == '"version-1"'
+
+    delete_status[0] = 412
+    with pytest.raises(RuntimeError, match="changed"):
+        source.delete_contact(resource)
+
+
+def test_private_contacts_server_supports_create_update_delete() -> None:
+    references = iter(("created-ref", "listed-ref"))
+    server = PrivateContactsMCPServer(
+        contacts=[],
+        contact_reference_factory=lambda: next(references),
+    )
+
+    created = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "contacts_create",
+                "arguments": {
+                    "name": "Jane Doe",
+                    "emails": ["jane@example.com"],
+                    "phones": ["+1 555 0102"],
+                },
+            },
+        }
+    )
+    assert created is not None
+    assert created["result"]["structuredContent"] == {
+        "status": "created",
+        "contact_ref": "created-ref",
+    }
+
+    updated = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "contacts_update",
+                "arguments": {"contact_ref": "created-ref", "emails": []},
+            },
+        }
+    )
+    assert updated is not None
+    assert updated["result"]["structuredContent"]["status"] == "updated"
+
+    listed = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "contacts_list", "arguments": {}},
+        }
+    )
+    assert listed is not None
+    assert listed["result"]["structuredContent"]["contacts"][0]["available_fields"] == ["phones"]
+
+    deleted = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "contacts_delete",
+                "arguments": {"contact_ref": "created-ref"},
+            },
+        }
+    )
+    assert deleted is not None
+    assert deleted["result"]["structuredContent"] == {"status": "deleted"}
+
+
+def _addressbook_discovery_response() -> httpx.Response:
+    return httpx.Response(
+        207,
+        content=b"""<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
+  <d:response><d:href>/addressbooks/user/default/</d:href><d:propstat><d:prop>
+    <d:resourcetype><d:collection /><card:addressbook /></d:resourcetype>
+  </d:prop></d:propstat></d:response>
+</d:multistatus>""",
+    )
+
+
+def _carddav_source(handler: object) -> CardDAVContactSource:
+    return CardDAVContactSource(
+        addressbook_url="https://baikal.example/addressbooks/user/",
+        username="user",
+        password="password",
+        auth_mode="basic",
+        transport=httpx.MockTransport(handler),  # type: ignore[arg-type]
+    )

@@ -248,15 +248,18 @@ expired values fail closed. Array paths use `[*]`, for example:
   "private_value_tool_policies": {
     "send": {
       "mode": "resolve_selected",
-      "argument_paths": ["recipient.email", "cc[*].email"]
+      "argument_paths": ["recipient.email", "cc[*].email"],
+      "requires_approval": true
     }
   }
 }
 ```
 
 `pass_through` is also available for tools designed to consume opaque placeholders directly;
-it never resolves their values. Tool results are run back through local PII protection before
-storage, run events, or another model turn.
+it never resolves their values. Set `requires_approval` on a per-tool policy to require the same
+one-shot approval flow even when a call has no private placeholders, such as a destructive delete.
+Tool results are run back through local PII protection before storage, run events, or another
+model turn.
 
 A selected disclosure now requires a user-scoped consent grant in addition to administrator
 policy. Before requesting consent, Minigent validates every selected placeholder against its
@@ -313,11 +316,36 @@ uv run python scripts/demo_private_contacts_mcp.py
 ```
 
 It binds to `127.0.0.1:8766` and exposes `http://127.0.0.1:8766/mcp`. Configure that
-endpoint as an MCP server named `private-contacts`, allow `contacts_list`, `contacts_get`, and
-`contacts_protect_text`, and ask Minigent to list contacts and selected email or phone fields.
-`contacts_list` returns
+endpoint as an MCP server named `private-contacts`. The read tools are `contacts_list` and
+`contacts_get`; the write tools are `contacts_create`, `contacts_update`, and `contacts_delete`;
+`contacts_protect_text` is runtime-only. `contacts_list` returns
 protected names, available field names, and short-lived opaque `contact_ref` values;
-`contacts_get` retrieves only requested fields. On message creation, Minigent invokes
+`contacts_get` retrieves only requested fields. Do not allow mutation tools without enforcing
+approval and selected private-value resolution. A writable server configuration should include:
+
+```json
+{
+  "allowed_tools": [
+    "contacts_list", "contacts_get", "contacts_create", "contacts_update",
+    "contacts_delete", "contacts_protect_text"
+  ],
+  "private_value_tool_policies": {
+    "contacts_create": {
+      "mode": "resolve_selected",
+      "argument_paths": ["name", "emails[*]", "phones[*]"],
+      "requires_approval": true
+    },
+    "contacts_update": {
+      "mode": "resolve_selected",
+      "argument_paths": ["name", "emails[*]", "phones[*]"],
+      "requires_approval": true
+    },
+    "contacts_delete": {"mode": "deny", "requires_approval": true}
+  }
+}
+```
+
+On message creation, Minigent invokes
 `contacts_protect_text` as a trusted preprocessor and masks exact, uniquely matching address-book
 contact names plus unambiguous first and last names in contact-related or possessive contexts
 before the local detector runs, preserving a usable contact reference for selective retrieval.
@@ -329,7 +357,7 @@ linked to an arbitrary contact. With no CardDAV environment variables, the serve
 intentionally fake data to verify that model and stored thread context see placeholders while the
 immediate user reply is rehydrated.
 
-For a read-only Baïkal or other CardDAV address book, export the collection URL and
+For a Baïkal or other writable CardDAV address book, export the collection URL and
 credentials before starting the same server. Enter the password interactively rather than
 putting it in shell history:
 
@@ -343,9 +371,12 @@ unset MINIGENT_CARDDAV_PASSWORD
 ```
 
 `MINIGENT_CARDDAV_URL` may identify an address-book collection or its immediate parent. The
-server performs a read-only `PROPFIND` to locate the collection, then an `addressbook-query`
+server performs a `PROPFIND` to locate the collection, then an `addressbook-query`
 `REPORT`; it parses `FN`, `EMAIL`, and `TEL` and returns at most 10 contacts by default (the
-tool accepts `limit` up to 50). Basic and Digest authentication are negotiated automatically;
+tool accepts `limit` up to 50). Create uses conditional `PUT` with `If-None-Match: *`; update and
+delete use the resource ETag with `If-Match` so stale writes fail instead of overwriting a newer
+change. Updates preserve unsupported vCard properties while replacing only the requested name,
+email, or phone projection. Basic and Digest authentication are negotiated automatically;
 set `MINIGENT_CARDDAV_AUTH_MODE` to `basic` or `digest` only when explicit selection is
 needed. TLS verification is enabled; `--insecure-skip-tls-verify` exists only for trusted
 local development.

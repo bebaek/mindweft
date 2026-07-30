@@ -158,6 +158,24 @@ def test_local_pii_protector_masks_common_input_pii() -> None:
     assert "{{pii:address:" in result.text
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Create a contact named Jane Doe",
+        "Save Jane Doe as a new contact",
+        "Add Jane Doe as contact",
+    ],
+)
+def test_local_pii_protector_masks_new_contact_names(text: str) -> None:
+    protector = LocalPIIProtector(reference_factory=lambda: "person-ref")
+
+    result = protector.protect(text)
+
+    assert "Jane Doe" not in result.text
+    assert result.private_values == {"person-ref": "Jane Doe"}
+    assert result.private_value_kinds == {"person-ref": "person"}
+
+
 def test_local_pii_protector_preserves_existing_placeholders() -> None:
     protector = LocalPIIProtector(reference_factory=lambda: "new-ref")
 

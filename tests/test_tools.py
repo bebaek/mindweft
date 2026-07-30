@@ -126,6 +126,37 @@ def test_tool_registry_resolves_only_selected_private_argument_paths(
     assert "cc@example.com" not in caplog.text
 
 
+def test_tool_registry_requires_approval_without_private_disclosures() -> None:
+    calls: list[dict[str, object]] = []
+    approvals: list[tuple[str, str, tuple[PrivateValueDisclosure, ...]]] = []
+    registry = ToolRegistry()
+    registry.register(
+        "contacts.delete",
+        "Delete contact",
+        {"type": "object"},
+        lambda arguments, context=None: calls.append(arguments) or {"deleted": True},
+        private_value_policy=MCPPrivateValuePolicy(requires_approval=True),
+    )
+
+    result = asyncio.run(
+        registry.execute(
+            "contacts.delete",
+            {"contact_ref": "opaque-ref"},
+            context=ToolExecutionContext(
+                private_value_authorizer=lambda name, fingerprint, disclosures: approvals.append(
+                    (name, fingerprint, disclosures)
+                )
+            ),
+        )
+    )
+
+    assert result == {"deleted": True}
+    assert calls == [{"contact_ref": "opaque-ref"}]
+    assert approvals[0][0] == "contacts.delete"
+    assert len(approvals[0][1]) == 64
+    assert approvals[0][2] == ()
+
+
 def test_tool_registry_validates_private_placeholders_before_consent() -> None:
     calls: list[str] = []
     registry = ToolRegistry()
@@ -1214,6 +1245,7 @@ def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(
             "private_value_policy": {
                 "mode": "deny",
                 "argument_paths": [],
+                "requires_approval": False,
                 "tool_overrides": {},
             },
             "status": "connected",

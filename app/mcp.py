@@ -57,6 +57,7 @@ class MCPPathPolicy:
 class MCPPrivateValuePolicy:
     mode: str = "deny"
     argument_paths: tuple[str, ...] = ()
+    requires_approval: bool = False
 
 
 @dataclass(frozen=True)
@@ -532,9 +533,11 @@ def parse_mcp_private_value_policy(
     if isinstance(raw, str):
         mode = raw
         argument_paths: object = []
+        requires_approval: object = False
     elif isinstance(raw, dict):
         mode = raw.get("mode", "deny")
         argument_paths = raw.get("argument_paths", raw.get("argumentPaths", []))
+        requires_approval = raw.get("requires_approval", raw.get("requiresApproval", False))
     else:
         raise RuntimeError(f"{context} has invalid private_value_policy")
     if not isinstance(mode, str) or mode not in PRIVATE_VALUE_DISCLOSURE_MODES:
@@ -555,7 +558,13 @@ def parse_mcp_private_value_policy(
         raise RuntimeError(
             f"{context} private_value_policy argument_paths require resolve_selected mode"
         )
-    return MCPPrivateValuePolicy(mode=mode, argument_paths=tuple(argument_paths))
+    if not isinstance(requires_approval, bool):
+        raise RuntimeError(f"{context} private_value_policy requires_approval must be boolean")
+    return MCPPrivateValuePolicy(
+        mode=mode,
+        argument_paths=tuple(argument_paths),
+        requires_approval=requires_approval,
+    )
 
 
 def parse_mcp_private_value_tool_policies(

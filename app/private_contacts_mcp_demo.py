@@ -11,7 +11,8 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
+from uuid import uuid4
 
 import httpx
 import uvicorn
@@ -26,6 +27,9 @@ MAX_CONTACT_LIMIT = 50
 DEFAULT_CONTACT_REFERENCE_TTL_SECONDS = 1800.0
 MAX_CONTACT_REFERENCES = 1000
 MAX_CARDDAV_RESPONSE_BYTES = 5_000_000
+MAX_CONTACT_NAME_CHARS = 512
+MAX_CONTACT_VALUES = 20
+MAX_CONTACT_VALUE_CHARS = 2_048
 CARDDAV_URL_ENV = "MINIGENT_CARDDAV_URL"
 CARDDAV_USERNAME_ENV = "MINIGENT_CARDDAV_USERNAME"
 CARDDAV_PASSWORD_ENV = "MINIGENT_CARDDAV_PASSWORD"
@@ -142,6 +146,68 @@ CONTACTS_GET_TOOL = {
 }
 
 
+def _contact_value_array_schema(kind: str) -> dict[str, Any]:
+    return {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1, "maxLength": MAX_CONTACT_VALUE_CHARS},
+        "maxItems": MAX_CONTACT_VALUES,
+        "uniqueItems": True,
+        "description": f"Complete set of contact {kind}; an empty array clears the field.",
+    }
+
+
+CONTACTS_CREATE_TOOL = {
+    "name": "contacts_create",
+    "description": (
+        "Create a contact after explicit user approval. Pass protected name, email, and phone "
+        "placeholders exactly as provided; never invent contact details."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "minLength": 1, "maxLength": MAX_CONTACT_NAME_CHARS},
+            "emails": _contact_value_array_schema("emails"),
+            "phones": _contact_value_array_schema("phones"),
+        },
+        "required": ["name"],
+        "additionalProperties": False,
+    },
+}
+
+CONTACTS_UPDATE_TOOL = {
+    "name": "contacts_update",
+    "description": (
+        "Update selected fields of a contact returned by contacts_list. Omitted fields remain "
+        "unchanged; an empty emails or phones array clears that field. Requires user approval."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "contact_ref": {"type": "string", "minLength": 1},
+            "name": {"type": "string", "minLength": 1, "maxLength": MAX_CONTACT_NAME_CHARS},
+            "emails": _contact_value_array_schema("emails"),
+            "phones": _contact_value_array_schema("phones"),
+        },
+        "required": ["contact_ref"],
+        "additionalProperties": False,
+    },
+}
+
+CONTACTS_DELETE_TOOL = {
+    "name": "contacts_delete",
+    "description": (
+        "Permanently delete a contact returned by contacts_list. This destructive action always "
+        "requires explicit user approval."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {"contact_ref": {"type": "string", "minLength": 1}},
+        "required": ["contact_ref"],
+        "additionalProperties": False,
+    },
+}
+
+
 CONTACTS_PROTECT_TEXT_TOOL = {
     "name": "contacts_protect_text",
     "description": (
@@ -175,8 +241,24 @@ class Contact:
 
 
 @dataclass(frozen=True)
-class CachedContact:
+class ContactPatch:
+    name: str | None = None
+    emails: tuple[str, ...] | None = None
+    phones: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class ContactResource:
     contact: Contact
+    href: str | None = None
+    etag: str | None = None
+    uid: str | None = None
+    raw_vcard: str | None = None
+
+
+@dataclass(frozen=True)
+class CachedContact:
+    resource: ContactResource
     expires_at: float
 
 
@@ -187,15 +269,68 @@ DEMO_CONTACTS = (
 
 
 class ContactSource(Protocol):
-    def list_contacts(self, *, limit: int) -> tuple[list[Contact], bool]: ...
+    def list_contact_resources(self, *, limit: int) -> tuple[list[ContactResource], bool]: ...
+
+    def create_contact(self, contact: Contact) -> ContactResource: ...
+
+    def update_contact(self, resource: ContactResource, patch: ContactPatch) -> ContactResource: ...
+
+    def delete_contact(self, resource: ContactResource) -> None: ...
 
 
 class StaticContactSource:
     def __init__(self, contacts: Sequence[Contact] = DEMO_CONTACTS) -> None:
-        self._contacts = tuple(contacts)
+        self._resources = [
+            ContactResource(contact=contact, href=f"static://contact/{index}", etag='"1"')
+            for index, contact in enumerate(contacts)
+        ]
+        self._next_id = len(self._resources)
+
+    def list_contact_resources(self, *, limit: int) -> tuple[list[ContactResource], bool]:
+        return list(self._resources[:limit]), len(self._resources) > limit
 
     def list_contacts(self, *, limit: int) -> tuple[list[Contact], bool]:
-        return list(self._contacts[:limit]), len(self._contacts) > limit
+        resources, truncated = self.list_contact_resources(limit=limit)
+        return [resource.contact for resource in resources], truncated
+
+    def create_contact(self, contact: Contact) -> ContactResource:
+        resource = ContactResource(
+            contact=contact,
+            href=f"static://contact/{self._next_id}",
+            etag='"1"',
+            uid=str(uuid4()),
+            raw_vcard=serialize_vcard(contact),
+        )
+        self._next_id += 1
+        self._resources.append(resource)
+        return resource
+
+    def update_contact(self, resource: ContactResource, patch: ContactPatch) -> ContactResource:
+        index = self._resource_index(resource)
+        updated_contact = apply_contact_patch(resource.contact, patch)
+        version = int((resource.etag or '"0"').strip('"')) + 1
+        updated = ContactResource(
+            contact=updated_contact,
+            href=resource.href,
+            etag=f'"{version}"',
+            uid=resource.uid,
+            raw_vcard=patch_vcard(
+                resource.raw_vcard or serialize_vcard(resource.contact),
+                updated_contact,
+                patch=patch,
+            ),
+        )
+        self._resources[index] = updated
+        return updated
+
+    def delete_contact(self, resource: ContactResource) -> None:
+        self._resources.pop(self._resource_index(resource))
+
+    def _resource_index(self, resource: ContactResource) -> int:
+        for index, current in enumerate(self._resources):
+            if current.href == resource.href:
+                return index
+        raise RuntimeError("Contact changed or no longer exists")
 
 
 class CardDAVContactSource:
@@ -235,63 +370,183 @@ class CardDAVContactSource:
         self._timeout_seconds = timeout_seconds
         self._transport = transport
 
+    def list_contact_resources(self, *, limit: int) -> tuple[list[ContactResource], bool]:
+        with self._client() as client:
+            addressbook_url, auth = self._discover_addressbook(client)
+            response = self._request(
+                client,
+                "REPORT",
+                addressbook_url,
+                auth=auth,
+                headers=self._xml_headers(),
+                content=CARDDAV_REPORT_BODY,
+            )
+        self._check_response_size(response.content)
+        resources = parse_carddav_multistatus_resources(
+            response.content,
+            addressbook_url=addressbook_url,
+        )
+        return resources[:limit], len(resources) > limit
+
     def list_contacts(self, *, limit: int) -> tuple[list[Contact], bool]:
+        resources, truncated = self.list_contact_resources(limit=limit)
+        return [resource.contact for resource in resources], truncated
+
+    def create_contact(self, contact: Contact) -> ContactResource:
+        uid = str(uuid4())
+        payload = serialize_vcard(contact, uid=uid)
+        with self._client() as client:
+            addressbook_url, auth = self._discover_addressbook(client)
+            href = f"{addressbook_url.rstrip('/')}/{quote(uid, safe='')}.vcf"
+            _validate_resource_url(href, addressbook_url=addressbook_url)
+            response = self._request(
+                client,
+                "PUT",
+                href,
+                auth=auth,
+                headers={
+                    "Content-Type": "text/vcard; charset=utf-8",
+                    "If-None-Match": "*",
+                },
+                content=payload.encode("utf-8"),
+            )
+        return ContactResource(
+            contact=contact,
+            href=href,
+            etag=response.headers.get("etag"),
+            uid=uid,
+            raw_vcard=payload,
+        )
+
+    def update_contact(self, resource: ContactResource, patch: ContactPatch) -> ContactResource:
+        href = self._writable_href(resource)
+        contact = apply_contact_patch(resource.contact, patch)
+        payload = patch_vcard(
+            resource.raw_vcard or serialize_vcard(resource.contact, uid=resource.uid),
+            contact,
+            patch=patch,
+        )
+        if not resource.etag:
+            raise RuntimeError("Contact has no ETag; list it again before updating")
+        headers = {
+            "Content-Type": "text/vcard; charset=utf-8",
+            "If-Match": resource.etag,
+        }
+        with self._client() as client:
+            addressbook_url, auth = self._discover_addressbook(client)
+            _validate_resource_url(href, addressbook_url=addressbook_url)
+            response = self._request(
+                client,
+                "PUT",
+                href,
+                auth=auth,
+                headers=headers,
+                content=payload.encode("utf-8"),
+            )
+        return ContactResource(
+            contact=contact,
+            href=href,
+            etag=response.headers.get("etag"),
+            uid=resource.uid,
+            raw_vcard=payload,
+        )
+
+    def delete_contact(self, resource: ContactResource) -> None:
+        href = self._writable_href(resource)
+        if not resource.etag:
+            raise RuntimeError("Contact has no ETag; list it again before deleting")
+        headers = {"If-Match": resource.etag}
+        with self._client() as client:
+            addressbook_url, auth = self._discover_addressbook(client)
+            _validate_resource_url(href, addressbook_url=addressbook_url)
+            self._request(client, "DELETE", href, auth=auth, headers=headers)
+
+    def _client(self) -> httpx.Client:
+        return httpx.Client(
+            verify=self._verify_tls,
+            timeout=self._timeout_seconds,
+            transport=self._transport,
+        )
+
+    def _discover_addressbook(self, client: httpx.Client) -> tuple[str, httpx.Auth | None]:
+        auth = self._configured_auth()
+        response = client.request(
+            "PROPFIND",
+            self._addressbook_url,
+            headers=self._xml_headers(),
+            content=CARDDAV_PROPFIND_BODY,
+            auth=auth,
+        )
+        if self._auth_mode == "auto" and response.status_code == 401:
+            auth = self._auth_from_challenge(response.headers.get("www-authenticate", ""))
+            response = client.request(
+                "PROPFIND",
+                self._addressbook_url,
+                headers=self._xml_headers(),
+                content=CARDDAV_PROPFIND_BODY,
+                auth=auth,
+            )
+        self._raise_for_status(response, operation="address-book discovery")
+        self._check_response_size(response.content)
+        return (
+            discover_carddav_addressbook_url(response.content, base_url=self._addressbook_url),
+            auth,
+        )
+
+    def _request(
+        self,
+        client: httpx.Client,
+        method: str,
+        url: str,
+        *,
+        auth: httpx.Auth | None,
+        headers: dict[str, str],
+        content: bytes | None = None,
+    ) -> httpx.Response:
         try:
-            with httpx.Client(
-                verify=self._verify_tls,
-                timeout=self._timeout_seconds,
-                transport=self._transport,
-            ) as client:
-                request_headers = {
-                    "Depth": "1",
-                    "Content-Type": "application/xml; charset=utf-8",
-                    "Accept": "application/xml",
-                }
-                auth = self._configured_auth()
-                discovery_response = client.request(
-                    "PROPFIND",
-                    self._addressbook_url,
-                    headers=request_headers,
-                    content=CARDDAV_PROPFIND_BODY,
-                    auth=auth,
-                )
-                if self._auth_mode == "auto" and discovery_response.status_code == 401:
-                    auth = self._auth_from_challenge(
-                        discovery_response.headers.get("www-authenticate", "")
-                    )
-                    discovery_response = client.request(
-                        "PROPFIND",
-                        self._addressbook_url,
-                        headers=request_headers,
-                        content=CARDDAV_PROPFIND_BODY,
-                        auth=auth,
-                    )
-                discovery_response.raise_for_status()
-                if len(discovery_response.content) > MAX_CARDDAV_RESPONSE_BYTES:
-                    raise RuntimeError("CardDAV response exceeded the private contacts size limit")
-                addressbook_url = discover_carddav_addressbook_url(
-                    discovery_response.content,
-                    base_url=self._addressbook_url,
-                )
-                response = client.request(
-                    "REPORT",
-                    addressbook_url,
-                    headers=request_headers,
-                    content=CARDDAV_REPORT_BODY,
-                    auth=auth,
-                )
-                response.raise_for_status()
+            response = client.request(
+                method,
+                url,
+                auth=auth,
+                headers=headers,
+                content=content,
+            )
+        except httpx.HTTPError as exc:
+            raise RuntimeError("CardDAV request failed") from exc
+        self._raise_for_status(response, operation=method.lower())
+        return response
+
+    @staticmethod
+    def _raise_for_status(response: httpx.Response, *, operation: str) -> None:
+        if response.status_code == 412:
+            raise RuntimeError("CardDAV contact changed; list it again before retrying")
+        if response.status_code == 404:
+            raise RuntimeError("CardDAV contact no longer exists")
+        try:
+            response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(
-                f"CardDAV address-book query failed with HTTP {exc.response.status_code}"
+                f"CardDAV {operation} failed with HTTP {response.status_code}"
             ) from exc
-        except httpx.HTTPError as exc:
-            raise RuntimeError("CardDAV address-book query failed") from exc
 
-        if len(response.content) > MAX_CARDDAV_RESPONSE_BYTES:
+    @staticmethod
+    def _xml_headers() -> dict[str, str]:
+        return {
+            "Depth": "1",
+            "Content-Type": "application/xml; charset=utf-8",
+            "Accept": "application/xml",
+        }
+
+    @staticmethod
+    def _check_response_size(content: bytes) -> None:
+        if len(content) > MAX_CARDDAV_RESPONSE_BYTES:
             raise RuntimeError("CardDAV response exceeded the private contacts size limit")
-        contacts = parse_carddav_multistatus(response.content)
-        return contacts[:limit], len(contacts) > limit
+
+    @staticmethod
+    def _writable_href(resource: ContactResource) -> str:
+        if not resource.href:
+            raise RuntimeError("Contact has no writable CardDAV resource")
+        return resource.href
 
     def _configured_auth(self) -> httpx.Auth | None:
         if self._auth_mode == "basic":
@@ -360,6 +615,9 @@ class PrivateContactsMCPServer:
                     "tools": [
                         CONTACTS_LIST_TOOL,
                         CONTACTS_GET_TOOL,
+                        CONTACTS_CREATE_TOOL,
+                        CONTACTS_UPDATE_TOOL,
+                        CONTACTS_DELETE_TOOL,
                         CONTACTS_PROTECT_TEXT_TOOL,
                     ]
                 },
@@ -382,6 +640,12 @@ class PrivateContactsMCPServer:
             return self._handle_contacts_list(request_id, arguments)
         if tool_name == "contacts_get":
             return self._handle_contacts_get(request_id, arguments)
+        if tool_name == "contacts_create":
+            return self._handle_contacts_create(request_id, arguments)
+        if tool_name == "contacts_update":
+            return self._handle_contacts_update(request_id, arguments)
+        if tool_name == "contacts_delete":
+            return self._handle_contacts_delete(request_id, arguments)
         if tool_name == "contacts_protect_text":
             return self._handle_contacts_protect_text(request_id, arguments)
         return self._error(request_id, -32602, "Unknown tool")
@@ -403,11 +667,12 @@ class PrivateContactsMCPServer:
             )
 
         self._prune_contact_references()
-        contacts, truncated = self._contact_source.list_contacts(limit=limit)
+        resources, truncated = self._contact_source.list_contact_resources(limit=limit)
         structured_content: dict[str, Any] = {"contacts": [], "truncated": truncated}
         private_values: dict[str, str] = {}
-        for contact in contacts:
-            contact_reference = self._cache_contact(contact)
+        for resource in resources:
+            contact = resource.contact
+            contact_reference = self._cache_contact(resource)
             available_fields = []
             if contact.emails:
                 available_fields.append("emails")
@@ -424,7 +689,7 @@ class PrivateContactsMCPServer:
             request_id,
             structured_content,
             private_values,
-            message=f"Found {len(contacts)} contacts.",
+            message=f"Found {len(resources)} contacts.",
         )
 
     def _handle_contacts_get(self, request_id: Any, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -458,17 +723,95 @@ class PrivateContactsMCPServer:
         structured_content: dict[str, Any] = {"contact_ref": contact_reference}
         if "emails" in fields:
             structured_content["emails"] = [
-                self._protect("email", email, private_values) for email in cached.contact.emails
+                self._protect("email", email, private_values)
+                for email in cached.resource.contact.emails
             ]
         if "phones" in fields:
             structured_content["phones"] = [
-                self._protect("phone", phone, private_values) for phone in cached.contact.phones
+                self._protect("phone", phone, private_values)
+                for phone in cached.resource.contact.phones
             ]
         return self._private_tool_result(
             request_id,
             structured_content,
             private_values,
             message="Retrieved the selected protected contact fields.",
+        )
+
+    def _handle_contacts_create(self, request_id: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+        if not set(arguments) <= {"name", "emails", "phones"} or "name" not in arguments:
+            return self._error(
+                request_id,
+                -32602,
+                "contacts_create requires name and accepts only emails and phones",
+            )
+        try:
+            contact = _contact_from_arguments(arguments)
+        except ValueError as exc:
+            return self._error(request_id, -32602, str(exc))
+        resource = self._contact_source.create_contact(contact)
+        contact_reference = self._cache_contact(resource)
+        return self._private_tool_result(
+            request_id,
+            {"status": "created", "contact_ref": contact_reference},
+            {},
+            message="Created the contact.",
+        )
+
+    def _handle_contacts_update(self, request_id: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+        if not set(arguments) <= {"contact_ref", "name", "emails", "phones"} or set(arguments) == {
+            "contact_ref"
+        }:
+            return self._error(
+                request_id,
+                -32602,
+                "contacts_update requires contact_ref and at least one field to update",
+            )
+        contact_reference = arguments.get("contact_ref")
+        if not isinstance(contact_reference, str) or not contact_reference:
+            return self._error(request_id, -32602, "contact_ref must be a non-empty string")
+        self._prune_contact_references()
+        cached = self._contact_references.get(contact_reference)
+        if cached is None:
+            return self._error(request_id, -32001, "Unknown or expired contact_ref")
+        try:
+            patch = _contact_patch_from_arguments(arguments)
+        except ValueError as exc:
+            return self._error(request_id, -32602, str(exc))
+        updated = self._contact_source.update_contact(cached.resource, patch)
+        self._invalidate_resource_references(cached.resource)
+        self._contact_references[contact_reference] = CachedContact(
+            resource=updated,
+            expires_at=self._clock() + self._contact_reference_ttl_seconds,
+        )
+        return self._private_tool_result(
+            request_id,
+            {"status": "updated", "contact_ref": contact_reference},
+            {},
+            message="Updated the contact.",
+        )
+
+    def _handle_contacts_delete(self, request_id: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+        if set(arguments) != {"contact_ref"}:
+            return self._error(
+                request_id,
+                -32602,
+                "contacts_delete requires only contact_ref",
+            )
+        contact_reference = arguments.get("contact_ref")
+        if not isinstance(contact_reference, str) or not contact_reference:
+            return self._error(request_id, -32602, "contact_ref must be a non-empty string")
+        self._prune_contact_references()
+        cached = self._contact_references.get(contact_reference)
+        if cached is None:
+            return self._error(request_id, -32001, "Unknown or expired contact_ref")
+        self._contact_source.delete_contact(cached.resource)
+        self._invalidate_resource_references(cached.resource)
+        return self._private_tool_result(
+            request_id,
+            {"status": "deleted"},
+            {},
+            message="Deleted the contact.",
         )
 
     def _handle_contacts_protect_text(
@@ -481,7 +824,10 @@ class PrivateContactsMCPServer:
                 "contacts_protect_text requires a text string",
             )
         text = arguments["text"]
-        contacts, _truncated = self._contact_source.list_contacts(limit=MAX_CONTACT_REFERENCES)
+        resources, _truncated = self._contact_source.list_contact_resources(
+            limit=MAX_CONTACT_REFERENCES
+        )
+        contacts = [resource.contact for resource in resources]
         aliases: dict[str, list[tuple[str, Contact, bool]]] = {}
         for contact in contacts:
             full_name = contact.name.strip()
@@ -526,7 +872,9 @@ class PrivateContactsMCPServer:
         for start, end, contact in sorted(selected, key=lambda item: item[0], reverse=True):
             contact_reference = contact_references.get(contact)
             if contact_reference is None:
-                contact_reference = self._cache_contact(contact)
+                contact_reference = self._cache_contact(
+                    next(resource for resource in resources if resource.contact == contact)
+                )
                 contact_references[contact] = contact_reference
                 private_values[contact_reference] = contact.name
             protected_text = (
@@ -545,7 +893,7 @@ class PrivateContactsMCPServer:
             message=f"Protected {protected_count} contact name occurrence(s).",
         )
 
-    def _cache_contact(self, contact: Contact) -> str:
+    def _cache_contact(self, resource: ContactResource) -> str:
         if len(self._contact_references) >= MAX_CONTACT_REFERENCES:
             oldest_reference = min(
                 self._contact_references,
@@ -554,7 +902,7 @@ class PrivateContactsMCPServer:
             self._contact_references.pop(oldest_reference, None)
         reference = self._contact_reference_factory()
         self._contact_references[reference] = CachedContact(
-            contact=contact,
+            resource=resource,
             expires_at=self._clock() + self._contact_reference_ttl_seconds,
         )
         return reference
@@ -567,6 +915,15 @@ class PrivateContactsMCPServer:
             if cached.expires_at <= now
         ]
         for reference in expired:
+            self._contact_references.pop(reference, None)
+
+    def _invalidate_resource_references(self, resource: ContactResource) -> None:
+        matching = [
+            reference
+            for reference, cached in self._contact_references.items()
+            if _same_contact_resource(cached.resource, resource)
+        ]
+        for reference in matching:
             self._contact_references.pop(reference, None)
 
     def _private_tool_result(
@@ -602,6 +959,178 @@ class PrivateContactsMCPServer:
             "id": request_id,
             "error": {"code": code, "message": message},
         }
+
+
+def _contact_from_arguments(arguments: dict[str, Any]) -> Contact:
+    name = _validate_contact_string(
+        arguments.get("name"), field="name", max_chars=MAX_CONTACT_NAME_CHARS
+    )
+    return Contact(
+        name=name,
+        emails=_validate_contact_values(arguments.get("emails", []), field="emails"),
+        phones=_validate_contact_values(arguments.get("phones", []), field="phones"),
+    )
+
+
+def _contact_patch_from_arguments(arguments: dict[str, Any]) -> ContactPatch:
+    return ContactPatch(
+        name=(
+            _validate_contact_string(
+                arguments["name"], field="name", max_chars=MAX_CONTACT_NAME_CHARS
+            )
+            if "name" in arguments
+            else None
+        ),
+        emails=(
+            _validate_contact_values(arguments["emails"], field="emails")
+            if "emails" in arguments
+            else None
+        ),
+        phones=(
+            _validate_contact_values(arguments["phones"], field="phones")
+            if "phones" in arguments
+            else None
+        ),
+    )
+
+
+def _validate_contact_values(value: Any, *, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or len(value) > MAX_CONTACT_VALUES:
+        raise ValueError(f"{field} must be an array with at most {MAX_CONTACT_VALUES} values")
+    values = tuple(
+        _validate_contact_string(item, field=field, max_chars=MAX_CONTACT_VALUE_CHARS)
+        for item in value
+    )
+    if len(set(values)) != len(values):
+        raise ValueError(f"{field} values must be unique")
+    return values
+
+
+def _validate_contact_string(value: Any, *, field: str, max_chars: int) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
+    normalized = value.strip()
+    if not normalized or len(normalized) > max_chars:
+        raise ValueError(f"{field} must contain from 1 to {max_chars} characters")
+    if any(character in normalized for character in ("\r", "\n", "\x00")):
+        raise ValueError(f"{field} must not contain control line breaks")
+    return normalized
+
+
+def apply_contact_patch(contact: Contact, patch: ContactPatch) -> Contact:
+    return Contact(
+        name=contact.name if patch.name is None else patch.name,
+        emails=contact.emails if patch.emails is None else patch.emails,
+        phones=contact.phones if patch.phones is None else patch.phones,
+    )
+
+
+def serialize_vcard(contact: Contact, *, uid: str | None = None) -> str:
+    identifier = uid or str(uuid4())
+    lines = [
+        "BEGIN:VCARD",
+        "VERSION:3.0",
+        f"UID:{_escape_vcard_value(identifier)}",
+        *_contact_vcard_lines(contact),
+        "END:VCARD",
+    ]
+    return _serialize_vcard_lines(lines)
+
+
+def patch_vcard(
+    payload: str,
+    contact: Contact,
+    *,
+    patch: ContactPatch | None = None,
+) -> str:
+    replaced_properties = {
+        property_name
+        for property_name, selected in (
+            ("FN", patch is None or patch.name is not None),
+            ("N", patch is None or patch.name is not None),
+            ("EMAIL", patch is None or patch.emails is not None),
+            ("TEL", patch is None or patch.phones is not None),
+        )
+        if selected
+    }
+    retained: list[str] = []
+    inserted = False
+    for line in _unfold_vcard_lines(payload):
+        if not line:
+            continue
+        property_name = _vcard_property_name(line)
+        if property_name in replaced_properties:
+            continue
+        if property_name == "END" and not inserted:
+            retained.extend(_contact_vcard_lines(contact, properties=replaced_properties))
+            inserted = True
+        retained.append(line)
+    if not inserted or not any(_vcard_property_name(line) == "BEGIN" for line in retained):
+        raise RuntimeError("CardDAV contact returned an invalid vCard")
+    return _serialize_vcard_lines(retained)
+
+
+def _contact_vcard_lines(
+    contact: Contact,
+    *,
+    properties: set[str] | None = None,
+) -> list[str]:
+    selected = {"FN", "N", "EMAIL", "TEL"} if properties is None else properties
+    name_parts = contact.name.split()
+    family = name_parts[-1] if len(name_parts) > 1 else ""
+    given = " ".join(name_parts[:-1]) if len(name_parts) > 1 else contact.name
+    lines: list[str] = []
+    if "FN" in selected:
+        lines.append(f"FN:{_escape_vcard_value(contact.name)}")
+    if "N" in selected:
+        lines.append(f"N:{_escape_vcard_value(family)};{_escape_vcard_value(given)};;;")
+    if "EMAIL" in selected:
+        lines.extend(f"EMAIL:{_escape_vcard_value(value)}" for value in contact.emails)
+    if "TEL" in selected:
+        lines.extend(f"TEL:{_escape_vcard_value(value)}" for value in contact.phones)
+    return lines
+
+
+def _serialize_vcard_lines(lines: Sequence[str]) -> str:
+    folded = [part for line in lines for part in _fold_vcard_line(line)]
+    return "\r\n".join(folded) + "\r\n"
+
+
+def _fold_vcard_line(line: str) -> list[str]:
+    chunks: list[str] = []
+    remaining = line
+    limit = 75
+    while len(remaining.encode("utf-8")) > limit:
+        split_at = 0
+        size = 0
+        for index, character in enumerate(remaining):
+            encoded_size = len(character.encode("utf-8"))
+            if size + encoded_size > limit:
+                break
+            size += encoded_size
+            split_at = index + 1
+        if split_at == 0:
+            split_at = 1
+        chunks.append((" " if chunks else "") + remaining[:split_at])
+        remaining = remaining[split_at:]
+        limit = 74
+    chunks.append((" " if chunks else "") + remaining)
+    return chunks
+
+
+def _escape_vcard_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("\n", "\\n").replace(";", "\\;").replace(",", "\\,")
+
+
+def _vcard_property_name(line: str) -> str:
+    left = line.partition(":")[0]
+    return left.split(";", 1)[0].rsplit(".", 1)[-1].upper()
+
+
+def _same_contact_resource(left: ContactResource, right: ContactResource) -> bool:
+    if left.href is not None and right.href is not None:
+        return left.href == right.href
+    return left is right
 
 
 def _partial_contact_alias_has_context(text: str, start: int, end: int) -> bool:
@@ -640,18 +1169,67 @@ def _url_origin(value: str) -> tuple[str, str | None, int | None]:
 
 
 def parse_carddav_multistatus(payload: bytes) -> list[Contact]:
+    return [
+        resource.contact
+        for resource in parse_carddav_multistatus_resources(payload, addressbook_url=None)
+    ]
+
+
+def parse_carddav_multistatus_resources(
+    payload: bytes,
+    *,
+    addressbook_url: str | None,
+) -> list[ContactResource]:
     try:
         root = ET.fromstring(payload)
     except ET.ParseError as exc:
         raise RuntimeError("CardDAV server returned invalid XML") from exc
-    contacts: list[Contact] = []
+    resources: list[ContactResource] = []
+    response_tag = f"{{{DAV_NAMESPACE}}}response"
+    href_tag = f"{{{DAV_NAMESPACE}}}href"
+    etag_tag = f"{{{DAV_NAMESPACE}}}getetag"
     address_data_tag = f"{{{CARDDAV_NAMESPACE}}}address-data"
-    for address_data in root.iter(address_data_tag):
-        if address_data.text:
-            contact = parse_vcard(address_data.text)
-            if contact is not None:
-                contacts.append(contact)
-    return contacts
+    for response in root.iter(response_tag):
+        address_data = next(response.iter(address_data_tag), None)
+        if address_data is None or not address_data.text:
+            continue
+        contact = parse_vcard(address_data.text)
+        if contact is None:
+            continue
+        href_element = response.find(href_tag)
+        href = None
+        if href_element is not None and href_element.text and addressbook_url is not None:
+            href = urljoin(addressbook_url, href_element.text.strip())
+            _validate_resource_url(href, addressbook_url=addressbook_url)
+        etag_element = next(response.iter(etag_tag), None)
+        etag = etag_element.text.strip() if etag_element is not None and etag_element.text else None
+        resources.append(
+            ContactResource(
+                contact=contact,
+                href=href,
+                etag=etag,
+                uid=_vcard_uid(address_data.text),
+                raw_vcard=address_data.text,
+            )
+        )
+    return resources
+
+
+def _validate_resource_url(resource_url: str, *, addressbook_url: str) -> None:
+    if _url_origin(resource_url) != _url_origin(addressbook_url):
+        raise RuntimeError("CardDAV returned a cross-origin contact resource")
+    resource_path = urlsplit(resource_url).path
+    addressbook_path = urlsplit(addressbook_url).path.rstrip("/") + "/"
+    if not resource_path.startswith(addressbook_path):
+        raise RuntimeError("CardDAV contact resource escaped the address book")
+
+
+def _vcard_uid(payload: str) -> str | None:
+    for line in _unfold_vcard_lines(payload):
+        if _vcard_property_name(line) == "UID":
+            value = line.partition(":")[2].strip()
+            return _unescape_vcard_value(value) or None
+    return None
 
 
 def parse_vcard(payload: str) -> Contact | None:

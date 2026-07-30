@@ -165,14 +165,19 @@ class SQLiteEncryptedPrivateValueConsentStore:
                 connection.commit()
                 raise HTTPException(
                     status_code=403,
-                    detail="Private-value disclosure was denied by the user",
+                    detail="Tool action was denied by the user",
                 )
             approved = next((item for item in matching if item.status == "approved"), None)
             if approved is not None:
                 if approved.one_shot:
                     approved.status = "consumed"
                     self._update_request(connection, approved)
-                self._record(connection, "disclosed", approved, now)
+                self._record(
+                    connection,
+                    "disclosed" if approved.disclosures else "authorized",
+                    approved,
+                    now,
+                )
                 connection.commit()
                 return
             pending = next((item for item in matching if item.status == "pending"), None)
@@ -195,7 +200,11 @@ class SQLiteEncryptedPrivateValueConsentStore:
         raise HTTPException(
             status_code=428,
             detail={
-                "message": "Private-value disclosure requires user approval",
+                "message": (
+                    "Private-value disclosure requires user approval"
+                    if normalized
+                    else "Tool action requires user approval"
+                ),
                 **pending.public_dict(),
             },
         )

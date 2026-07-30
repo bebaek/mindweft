@@ -58,6 +58,15 @@ _CONTEXT_PERSON_PATTERN = re.compile(
     rf"(?i:\b(?:call|email|contact|ask|tell|message|meet|with|for|about)\s+)"
     rf"(?P<value>{_NAME_TOKEN}(?:\s+{_NAME_TOKEN}){{0,3}})(?!\w)"
 )
+_CONTACT_NAMED_PERSON_PATTERN = re.compile(
+    rf"(?i:\bcontact\s+(?:named|called)\s+)"
+    rf"(?P<value>{_NAME_TOKEN}(?:\s+{_NAME_TOKEN}){{0,3}})(?!\w)"
+)
+_CONTACT_CREATE_PERSON_PATTERN = re.compile(
+    rf"(?i:\b(?:add|create|save)\s+)"
+    rf"(?P<value>{_NAME_TOKEN}(?:\s+{_NAME_TOKEN}){{0,3}})"
+    rf"(?i:\s+(?:as\s+)?(?:a\s+)?(?:new\s+)?contact\b)"
+)
 
 
 class PrivateValueStore(Protocol):
@@ -128,6 +137,8 @@ class LocalPIIProtector:
             ("person", _TITLED_PERSON_PATTERN, 3),
             ("person", _POSSESSIVE_PERSON_PATTERN, 4),
             ("person", _CONTEXT_PERSON_PATTERN, 5),
+            ("person", _CONTACT_NAMED_PERSON_PATTERN, 6),
+            ("person", _CONTACT_CREATE_PERSON_PATTERN, 7),
         )
         candidates: list[tuple[int, int, int, str, str]] = []
         for kind, pattern, priority in detectors:

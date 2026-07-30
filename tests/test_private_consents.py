@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from fastapi import HTTPException
 
@@ -36,6 +38,37 @@ def test_consent_store_creates_redacted_pending_request() -> None:
     assert pending[0]["tool_name"] == "trusted.send"
     assert pending[0]["disclosures"] == [{"path": "recipient.email", "kind": "email", "count": 1}]
     assert "email-ref" not in str(pending)
+
+
+def test_consent_store_approves_mutation_without_private_disclosures() -> None:
+    store = InMemoryPrivateValueConsentStore(clock=lambda: 100.0)
+    arguments = {
+        "tenant_id": "tenant-1",
+        "user_id": "user-1",
+        "thread_id": "thread-1",
+        "tool_name": "private-contacts.contacts_delete",
+        "argument_fingerprint": "delete-fingerprint",
+        "disclosures": (),
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        store.authorize_or_request(**arguments)
+    assert exc_info.value.status_code == 428
+    detail = cast(dict[str, object], exc_info.value.detail)
+    assert detail["message"] == "Tool action requires user approval"
+    pending = store.pending(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")
+    assert pending[0]["disclosures"] == []
+
+    store.decide(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        thread_id="thread-1",
+        consent_id=str(pending[0]["consent_id"]),
+        approve=True,
+    )
+    store.authorize_or_request(**arguments)
+    audit = store.audit_records(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")
+    assert [record["event"] for record in audit] == ["requested", "approved", "authorized"]
 
 
 def test_consent_store_approves_and_consumes_one_shot_grant() -> None:

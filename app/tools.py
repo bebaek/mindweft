@@ -575,10 +575,12 @@ def build_tool_registry(
                     "private_value_policy": {
                         "mode": config.private_value_policy.mode,
                         "argument_paths": list(config.private_value_policy.argument_paths),
+                        "requires_approval": config.private_value_policy.requires_approval,
                         "tool_overrides": {
                             tool_name: {
                                 "mode": policy.mode,
                                 "argument_paths": list(policy.argument_paths),
+                                "requires_approval": policy.requires_approval,
                             }
                             for tool_name, policy in config.private_value_tool_policies.items()
                         },
@@ -1052,7 +1054,7 @@ def _prepare_private_tool_arguments(
     authorizer: (Callable[[str, str, tuple[PrivateValueDisclosure, ...]], None] | None),
     tool_name: str,
 ) -> dict[str, Any]:
-    if policy.mode == "pass_through":
+    if policy.mode == "pass_through" and not policy.requires_approval:
         return arguments
 
     disclosures: list[PrivateValueDisclosure] = []
@@ -1083,17 +1085,21 @@ def _prepare_private_tool_arguments(
                 discover(item, f"{path}[*]")
 
     discover(arguments, "")
-    if not disclosures:
+    if not disclosures and not policy.requires_approval:
         return arguments
-    if policy.mode == "deny":
+    if disclosures and policy.mode == "deny":
         raise HTTPException(
             status_code=403,
             detail="Tool private-value disclosure is denied by policy",
         )
     allowed_paths = set(policy.argument_paths)
-    disallowed_path = next(
-        (item.path for item in disclosures if item.path not in allowed_paths),
-        None,
+    disallowed_path = (
+        next(
+            (item.path for item in disclosures if item.path not in allowed_paths),
+            None,
+        )
+        if policy.mode == "resolve_selected"
+        else None
     )
     if disallowed_path is not None:
         raise HTTPException(
@@ -1103,7 +1109,7 @@ def _prepare_private_tool_arguments(
                 f"'{disallowed_path}'"
             ),
         )
-    if resolver is None:
+    if disclosures and resolver is None:
         raise HTTPException(
             status_code=500,
             detail="Private-value resolution is unavailable for this tool execution",
@@ -1122,6 +1128,11 @@ def _prepare_private_tool_arguments(
                 else:
                     # Backward-compatible fallback for custom execution contexts. Runtime
                     # contexts provide a non-disclosing validator.
+                    if resolver is None:
+                        raise HTTPException(
+                            status_code=500,
+                            detail="Private-value resolution is unavailable for this tool execution",
+                        )
                     resolver(value)
             return
         if isinstance(value, dict):
@@ -1132,7 +1143,8 @@ def _prepare_private_tool_arguments(
             for item in value:
                 preflight(item)
 
-    preflight(arguments)
+    if policy.mode == "resolve_selected":
+        preflight(arguments)
     argument_fingerprint = hashlib.sha256(
         json.dumps(
             arguments,
@@ -1149,8 +1161,17 @@ def _prepare_private_tool_arguments(
     )
 
     def resolve(value: Any) -> Any:
+        if policy.mode != "resolve_selected":
+            return value
         if isinstance(value, str):
-            return resolver(value) if PII_PLACEHOLDER_PATTERN.search(value) is not None else value
+            if PII_PLACEHOLDER_PATTERN.search(value) is None:
+                return value
+            if resolver is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Private-value resolution is unavailable for this tool execution",
+                )
+            return resolver(value)
         if isinstance(value, dict):
             return {str(key): resolve(item) for key, item in value.items()}
         if isinstance(value, list):

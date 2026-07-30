@@ -223,12 +223,12 @@ class InMemoryPrivateValueConsentStore:
             if denied is not None:
                 raise HTTPException(
                     status_code=403,
-                    detail="Private-value disclosure was denied by the user",
+                    detail="Tool action was denied by the user",
                 )
             if approved is not None:
                 if approved.one_shot:
                     approved.status = "consumed"
-                self._record("disclosed", approved, now)
+                self._record("disclosed" if approved.disclosures else "authorized", approved, now)
                 return
             pending = next(
                 (request for request in matching if request.status == "pending"),
@@ -252,7 +252,11 @@ class InMemoryPrivateValueConsentStore:
             raise HTTPException(
                 status_code=428,
                 detail={
-                    "message": "Private-value disclosure requires user approval",
+                    "message": (
+                        "Private-value disclosure requires user approval"
+                        if normalized
+                        else "Tool action requires user approval"
+                    ),
                     **pending.public_dict(),
                 },
             )

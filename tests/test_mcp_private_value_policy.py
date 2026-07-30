@@ -21,6 +21,7 @@ def test_mcp_private_value_policy_defaults_to_deny() -> None:
 
     assert config.private_value_policy.mode == "deny"
     assert config.private_value_policy.argument_paths == ()
+    assert config.private_value_policy.requires_approval is False
     assert config.private_value_tool_policies == {}
 
 
@@ -32,6 +33,7 @@ def test_mcp_private_value_policy_parses_per_tool_selected_paths() -> None:
                 "send": {
                     "mode": "resolve_selected",
                     "argument_paths": ["recipient.email", "cc[*].email"],
+                    "requires_approval": True,
                 },
                 "inspect": "pass_through",
             },
@@ -44,6 +46,7 @@ def test_mcp_private_value_policy_parses_per_tool_selected_paths() -> None:
         "recipient.email",
         "cc[*].email",
     )
+    assert config.private_value_tool_policies["send"].requires_approval is True
     assert config.private_value_tool_policies["inspect"].mode == "pass_through"
 
 

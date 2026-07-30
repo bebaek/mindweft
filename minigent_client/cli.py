@@ -1034,8 +1034,8 @@ def _maybe_resume_private_value_consent(
         return reply, metadata
     tool_name = str(consent.get("tool_name") or "tool")
     disclosures = consent.get("disclosures")
-    output_stream.write(f"\n[consent] {tool_name} requests private values:\n")
-    if isinstance(disclosures, list):
+    if isinstance(disclosures, list) and disclosures:
+        output_stream.write(f"\n[consent] {tool_name} requests private values:\n")
         for item in disclosures:
             if not isinstance(item, dict):
                 continue
@@ -1043,6 +1043,8 @@ def _maybe_resume_private_value_consent(
                 f"  - {item.get('count', 1)} {item.get('kind', 'private value')} "
                 f"at {item.get('path', 'unknown path')}\n"
             )
+    else:
+        output_stream.write(f"\n[consent] {tool_name} requests action approval.\n")
     output_stream.write("Approve this exact tool call once? [y/N] ")
     output_stream.flush()
     approved = input_stream.readline().strip().lower() in {"y", "yes"}
