@@ -50,6 +50,14 @@ CALENDAR_PROPFIND_BODY = b"""<?xml version="1.0" encoding="utf-8" ?>
   </d:prop>
 </d:propfind>
 """
+CALDAV_HOME_PROPFIND_BODY = b"""<?xml version="1.0" encoding="utf-8" ?>
+<d:propfind xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">
+  <d:prop>
+    <d:current-user-principal />
+    <cal:calendar-home-set />
+  </d:prop>
+</d:propfind>
+"""
 
 
 def _calendar_query_body(start: datetime, end: datetime) -> bytes:
@@ -363,15 +371,15 @@ class CalDAVCalendarSource:
 
     def list_calendars(self) -> list[Calendar]:
         with self._client() as client:
-            response, _auth = self._discover(client)
-        return parse_caldav_calendars(response.content, base_url=self._calendar_url)
+            response, _auth, home_url = self._discover(client)
+        return parse_caldav_calendars(response.content, base_url=home_url)
 
     def list_event_resources(
         self, calendar: Calendar, *, start: datetime, end: datetime, limit: int
     ) -> tuple[list[EventResource], bool]:
         with self._client() as client:
-            _response, auth = self._discover(client)
-            _validate_collection_url(calendar.href, base_url=self._calendar_url)
+            _response, auth, home_url = self._discover(client)
+            _validate_collection_url(calendar.href, base_url=home_url)
             response = self._request(
                 client,
                 "REPORT",
@@ -389,7 +397,8 @@ class CalDAVCalendarSource:
         payload = serialize_icalendar(event, uid=uid)
         href = f"{calendar.href.rstrip('/')}/{quote(uid, safe='')}.ics"
         with self._client() as client:
-            _response, auth = self._discover(client)
+            _response, auth, home_url = self._discover(client)
+            _validate_collection_url(calendar.href, base_url=home_url)
             _validate_resource_url(href, calendar_url=calendar.href)
             response = self._request(
                 client,
@@ -411,7 +420,8 @@ class CalDAVCalendarSource:
             patch=patch,
         )
         with self._client() as client:
-            _response, auth = self._discover(client)
+            _response, auth, home_url = self._discover(client)
+            _validate_collection_url(resource.calendar_href, base_url=home_url)
             _validate_resource_url(resource.href, calendar_url=resource.calendar_href)
             response = self._request(
                 client,
@@ -437,7 +447,8 @@ class CalDAVCalendarSource:
         if not resource.href or not resource.etag:
             raise RuntimeError("Event has no writable resource or ETag; list it again")
         with self._client() as client:
-            _response, auth = self._discover(client)
+            _response, auth, home_url = self._discover(client)
+            _validate_collection_url(resource.calendar_href, base_url=home_url)
             _validate_resource_url(resource.href, calendar_url=resource.calendar_href)
             self._request(
                 client,
@@ -454,14 +465,14 @@ class CalDAVCalendarSource:
             transport=self._transport,
         )
 
-    def _discover(self, client: httpx.Client) -> tuple[httpx.Response, httpx.Auth | None]:
+    def _discover(self, client: httpx.Client) -> tuple[httpx.Response, httpx.Auth | None, str]:
         auth = self._configured_auth()
         response = client.request(
             "PROPFIND",
             self._calendar_url,
             auth=auth,
-            headers=self._xml_headers(),
-            content=CALENDAR_PROPFIND_BODY,
+            headers=self._xml_headers(depth="0"),
+            content=CALDAV_HOME_PROPFIND_BODY,
         )
         if self._auth_mode == "auto" and response.status_code == 401:
             auth = self._auth_from_challenge(response.headers.get("www-authenticate", ""))
@@ -469,12 +480,40 @@ class CalDAVCalendarSource:
                 "PROPFIND",
                 self._calendar_url,
                 auth=auth,
-                headers=self._xml_headers(),
-                content=CALENDAR_PROPFIND_BODY,
+                headers=self._xml_headers(depth="0"),
+                content=CALDAV_HOME_PROPFIND_BODY,
             )
-        self._raise_for_status(response, operation="calendar discovery")
+        self._raise_for_status(response, operation="calendar-home discovery")
         self._check_response_size(response.content)
-        return response, auth
+        home_url, principal_url = discover_caldav_home_urls(
+            response.content, base_url=self._calendar_url
+        )
+        if home_url is None and principal_url is not None:
+            principal_response = self._request(
+                client,
+                "PROPFIND",
+                principal_url,
+                auth=auth,
+                headers=self._xml_headers(depth="0"),
+                content=CALDAV_HOME_PROPFIND_BODY,
+            )
+            self._check_response_size(principal_response.content)
+            home_url, _unused_principal = discover_caldav_home_urls(
+                principal_response.content, base_url=self._calendar_url
+            )
+        if home_url is None:
+            home_url = self._calendar_url
+        _validate_same_origin_url(home_url, base_url=self._calendar_url, label="calendar home")
+        calendar_response = self._request(
+            client,
+            "PROPFIND",
+            home_url,
+            auth=auth,
+            headers=self._xml_headers(depth="1"),
+            content=CALENDAR_PROPFIND_BODY,
+        )
+        self._check_response_size(calendar_response.content)
+        return calendar_response, auth, home_url
 
     def _request(
         self,
@@ -507,9 +546,9 @@ class CalDAVCalendarSource:
             ) from exc
 
     @staticmethod
-    def _xml_headers() -> dict[str, str]:
+    def _xml_headers(*, depth: str = "1") -> dict[str, str]:
         return {
-            "Depth": "1",
+            "Depth": depth,
             "Content-Type": "application/xml; charset=utf-8",
             "Accept": "application/xml",
         }
@@ -864,6 +903,11 @@ def _url_origin(value: str) -> tuple[str, str | None, int]:
     )
 
 
+def _validate_same_origin_url(value: str, *, base_url: str, label: str) -> None:
+    if _url_origin(value) != _url_origin(base_url):
+        raise RuntimeError(f"CalDAV discovery returned a cross-origin {label}")
+
+
 def _validate_collection_url(value: str, *, base_url: str) -> None:
     if _url_origin(value) != _url_origin(base_url):
         raise RuntimeError("CalDAV discovery returned a cross-origin calendar")
@@ -878,6 +922,29 @@ def _validate_resource_url(value: str, *, calendar_url: str) -> None:
     calendar_path = urlsplit(calendar_url).path.rstrip("/") + "/"
     if not urlsplit(value).path.startswith(calendar_path):
         raise RuntimeError("CalDAV event resource escaped the calendar")
+
+
+def discover_caldav_home_urls(payload: bytes, *, base_url: str) -> tuple[str | None, str | None]:
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError as exc:
+        raise RuntimeError("CalDAV server returned invalid XML") from exc
+
+    def property_href(namespace: str, name: str) -> str | None:
+        property_element = next(root.iter(f"{{{namespace}}}{name}"), None)
+        if property_element is None:
+            return None
+        href_element = next(property_element.iter(f"{{{DAV_NAMESPACE}}}href"), None)
+        if href_element is None or not href_element.text:
+            return None
+        value = urljoin(base_url, href_element.text.strip())
+        _validate_same_origin_url(value, base_url=base_url, label=name)
+        return value
+
+    return (
+        property_href(CALDAV_NAMESPACE, "calendar-home-set"),
+        property_href(DAV_NAMESPACE, "current-user-principal"),
+    )
 
 
 def parse_caldav_calendars(payload: bytes, *, base_url: str) -> list[Calendar]:

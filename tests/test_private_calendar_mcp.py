@@ -12,6 +12,7 @@ from app.private_calendar_mcp import (
     Event,
     EventPatch,
     PrivateCalendarMCPServer,
+    discover_caldav_home_urls,
     parse_caldav_calendars,
     parse_caldav_event_resources,
     parse_icalendar,
@@ -48,6 +49,56 @@ def test_parse_caldav_calendars_protects_origin_and_reads_metadata() -> None:
 <d:resourcetype><cal:calendar/></d:resourcetype></d:prop></d:propstat></d:response>
 </d:multistatus>""",
             base_url="https://baikal.example/dav.php/calendars/user/",
+        )
+
+
+def test_caldav_source_discovers_principal_then_calendar_home() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/dav.php":
+            return httpx.Response(
+                207,
+                content=b"""<d:multistatus xmlns:d="DAV:"><d:response><d:propstat><d:prop>
+<d:current-user-principal><d:href>/dav.php/principals/user/</d:href></d:current-user-principal>
+</d:prop></d:propstat></d:response></d:multistatus>""",
+            )
+        if request.url.path == "/dav.php/principals/user/":
+            return httpx.Response(
+                207,
+                content=b"""<d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">
+<d:response><d:propstat><d:prop><cal:calendar-home-set>
+<d:href>/dav.php/calendars/user/</d:href></cal:calendar-home-set>
+</d:prop></d:propstat></d:response></d:multistatus>""",
+            )
+        assert request.url.path == "/dav.php/calendars/user/"
+        return _calendar_discovery_response()
+
+    source = CalDAVCalendarSource(
+        calendar_url="https://baikal.example/dav.php",
+        username="user",
+        password="password",
+        auth_mode="basic",
+        transport=httpx.MockTransport(handler),
+    )
+
+    calendars = source.list_calendars()
+
+    assert calendars[0].name == "Personal"
+    assert [request.headers["depth"] for request in requests] == ["0", "0", "1"]
+    assert b"current-user-principal" in requests[0].content
+    assert b"calendar-home-set" in requests[1].content
+
+
+def test_discover_caldav_home_urls_rejects_cross_origin() -> None:
+    with pytest.raises(RuntimeError, match="cross-origin"):
+        discover_caldav_home_urls(
+            b"""<d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">
+<d:response><d:propstat><d:prop><cal:calendar-home-set>
+<d:href>https://attacker.example/calendars/</d:href></cal:calendar-home-set>
+</d:prop></d:propstat></d:response></d:multistatus>""",
+            base_url="https://baikal.example/dav.php",
         )
 
 
