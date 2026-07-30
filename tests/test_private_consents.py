@@ -185,6 +185,55 @@ def test_consent_store_claims_pending_action_only_once() -> None:
     assert exc_info.value.status_code == 409
 
 
+def test_consent_store_expires_claimed_action_with_consumed_grant() -> None:
+    now = [100.0]
+    store = InMemoryPrivateValueConsentStore(
+        grant_ttl_seconds=5,
+        clock=lambda: now[0],
+    )
+    with pytest.raises(HTTPException):
+        _request(store)
+    consent_id = str(
+        store.pending(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")[0]["consent_id"]
+    )
+    action = PendingPrivateToolAction(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        thread_id="thread-1",
+        tool_call=ToolCall(name="trusted.send"),
+    )
+    store.save_pending_action(consent_id, action)
+    store.decide(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        thread_id="thread-1",
+        consent_id=consent_id,
+        approve=True,
+    )
+    assert (
+        store.claim_pending_action(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            consent_id=consent_id,
+        )
+        == action
+    )
+    _request(store)
+    now[0] = 106.0
+
+    assert store.pending(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1") == []
+    assert (
+        store.get_pending_action(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            consent_id=consent_id,
+        )
+        is None
+    )
+
+
 def test_consent_store_bounds_and_expires_audit_records() -> None:
     now = [100.0]
     store = InMemoryPrivateValueConsentStore(

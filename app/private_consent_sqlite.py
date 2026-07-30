@@ -5,6 +5,7 @@ import os
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
+from contextlib import closing
 from pathlib import Path
 from threading import RLock
 from typing import Any, cast
@@ -147,7 +148,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
     ) -> None:
         normalized = tuple(sorted(set(disclosures)))
         now = self._clock()
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._expire(connection, now)
             matching = self._matching_requests(
@@ -210,7 +211,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
         one_shot: bool = True,
     ) -> dict[str, object]:
         now = self._clock()
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._expire(connection, now)
             request = self._owned_request(connection, tenant_id, user_id, thread_id, consent_id)
@@ -231,7 +232,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
 
     def pending(self, *, tenant_id: str, user_id: str, thread_id: str) -> list[dict[str, object]]:
         now = self._clock()
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._expire(connection, now)
             rows = connection.execute(
@@ -250,7 +251,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
     def audit_records(
         self, *, tenant_id: str, user_id: str, thread_id: str
     ) -> list[dict[str, object]]:
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._prune_audit(connection, self._clock())
             rows = connection.execute(
@@ -274,7 +275,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
         nonce, ciphertext = self._encrypt(
             "action", action.tenant_id, action.user_id, action.thread_id, consent_id, payload
         )
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             connection.execute(
                 """
                 INSERT INTO pending_private_tool_actions (
@@ -305,7 +306,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
     def get_pending_action(
         self, *, tenant_id: str, user_id: str, thread_id: str, consent_id: str
     ) -> PendingPrivateToolAction | None:
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             row = connection.execute(
                 """
                 SELECT state, nonce, ciphertext, key_version
@@ -336,7 +337,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
     def claim_pending_action(
         self, *, tenant_id: str, user_id: str, thread_id: str, consent_id: str
     ) -> PendingPrivateToolAction | None:
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
@@ -430,14 +431,14 @@ class SQLiteEncryptedPrivateValueConsentStore:
         return ToolCall.model_validate(wrapped_tool_call), stored_state
 
     def delete_pending_action(self, consent_id: str) -> None:
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             connection.execute(
                 "DELETE FROM pending_private_tool_actions WHERE consent_id = ?", (consent_id,)
             )
             connection.commit()
 
     def clear_thread(self, tenant_id: str, thread_id: str) -> None:
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 "DELETE FROM pending_private_tool_actions WHERE tenant_id = ? AND thread_id = ?",
@@ -725,7 +726,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
             SELECT consent_id, tenant_id, user_id, thread_id, status, created_at,
                    expires_at, one_shot, nonce, ciphertext, key_version
             FROM private_consent_requests
-            WHERE status IN ('pending', 'approved', 'denied') AND expires_at <= ?
+            WHERE status IN ('pending', 'approved', 'denied', 'consumed') AND expires_at <= ?
             """,
             (now,),
         ).fetchall()
@@ -816,7 +817,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
     def rotate_to_active_key(self) -> int:
         """Re-encrypt consent requests, actions, and audit records with the active key."""
         rotated = 0
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._expire(connection, self._clock())
             request_rows = connection.execute(
@@ -903,7 +904,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
 
     def _initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS private_consent_requests (
@@ -993,6 +994,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
                     raise RuntimeError(
                         "Encrypted private consent database could not be opened with the configured key"
                     ) from exc
+            self._expire(connection, self._clock())
             self._prune_audit(connection, self._clock())
             connection.commit()
         try:

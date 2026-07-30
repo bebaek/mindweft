@@ -269,8 +269,10 @@ need to reconstruct the call. Claiming is atomic and durable: concurrent or post
 to claim the same action fail with HTTP 409 instead of invoking a potentially side-effecting tool
 twice. If the process crashes, times out, or loses its connection after the claim, the action
 remains in an `executing` state and is not automatically replayed because the external outcome
-may be unknown. Reconcile the tool's external state before creating a replacement action; tools
-should still support idempotency keys where possible. Grants are bound to a SHA-256 fingerprint
+may be unknown. The claimed record is retained only until its consent grant expires (five
+minutes from the decision by default), then removed during consent activity or encrypted-store
+startup. Reconcile the tool's external state before creating a replacement action; tools should
+still support idempotency keys where possible. Grants are bound to a SHA-256 fingerprint
 of the complete placeholder-bearing argument object, so changing the body or any other argument
 requires new consent. Non-one-shot grants remain usable for five minutes; pending requests
 expire after ten minutes.

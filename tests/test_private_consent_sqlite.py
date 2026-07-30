@@ -115,6 +115,63 @@ def test_encrypted_consent_store_persists_action_claim(tmp_path) -> None:
     assert exc_info.value.status_code == 409
 
 
+def test_encrypted_consent_store_expires_claimed_action_with_consumed_grant(tmp_path) -> None:
+    now = [100.0]
+    db_path = tmp_path / "private-consents.db"
+    store = SQLiteEncryptedPrivateValueConsentStore(
+        db_path,
+        KEY,
+        grant_ttl_seconds=5,
+        clock=lambda: now[0],
+    )
+    with pytest.raises(HTTPException):
+        _request(store)
+    consent_id = str(
+        store.pending(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")[0]["consent_id"]
+    )
+    action = PendingPrivateToolAction(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        thread_id="thread-1",
+        tool_call=ToolCall(name="trusted.send"),
+    )
+    store.save_pending_action(consent_id, action)
+    store.decide(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        thread_id="thread-1",
+        consent_id=consent_id,
+        approve=True,
+    )
+    assert (
+        store.claim_pending_action(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            consent_id=consent_id,
+        )
+        == action
+    )
+    _request(store)
+    now[0] = 106.0
+
+    assert store.pending(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1") == []
+    assert (
+        store.get_pending_action(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            consent_id=consent_id,
+        )
+        is None
+    )
+    with sqlite3.connect(db_path) as connection:
+        assert (
+            connection.execute("SELECT COUNT(*) FROM pending_private_tool_actions").fetchone()[0]
+            == 0
+        )
+
+
 def test_encrypted_consent_store_authenticates_action_claim_state(tmp_path) -> None:
     db_path = tmp_path / "private-consents.db"
     store = SQLiteEncryptedPrivateValueConsentStore(db_path, KEY, clock=lambda: 100.0)

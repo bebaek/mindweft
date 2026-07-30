@@ -6,6 +6,7 @@ import re
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
+from contextlib import closing
 from pathlib import Path
 from threading import RLock
 
@@ -132,7 +133,7 @@ class SQLiteEncryptedPrivateValueStore:
             return
         now = self._clock()
         expires_at = now + self._ttl_seconds
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._delete_expired(connection, now)
             existing_count = int(
@@ -231,7 +232,7 @@ class SQLiteEncryptedPrivateValueStore:
         return self._replace(tenant_id, thread_id, text, strict=True)
 
     def clear_thread(self, tenant_id: str, thread_id: str) -> None:
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             connection.execute(
                 "DELETE FROM private_values WHERE tenant_id = ? AND thread_id = ?",
                 (tenant_id, thread_id),
@@ -240,7 +241,7 @@ class SQLiteEncryptedPrivateValueStore:
 
     def _replace(self, tenant_id: str, thread_id: str, text: str, *, strict: bool) -> str:
         now = self._clock()
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             self._delete_expired(connection, now)
             connection.commit()
 
@@ -306,7 +307,7 @@ class SQLiteEncryptedPrivateValueStore:
         """Re-encrypt all surviving records with the configured active key version."""
         now = self._clock()
         rotated = 0
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._delete_expired(connection, now)
             rows = connection.execute(
@@ -361,7 +362,7 @@ class SQLiteEncryptedPrivateValueStore:
 
     def _initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS private_values (

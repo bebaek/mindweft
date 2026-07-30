@@ -378,7 +378,9 @@ class InMemoryPrivateValueConsentStore:
 
     def _expire(self, now: float) -> None:
         for request in self._requests.values():
-            if request.status in {"pending", "approved", "denied"} and request.expires_at <= now:
+            if request.status in {"pending", "approved", "denied", "consumed"} and (
+                request.expires_at <= now
+            ):
                 request.status = "expired"
                 self._pending_actions.pop(request.consent_id, None)
                 self._pending_action_states.pop(request.consent_id, None)
