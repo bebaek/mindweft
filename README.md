@@ -178,7 +178,12 @@ closed when a database path is configured without a valid corresponding key. Bac
 separately: losing all copies of a required version makes its existing records unrecoverable.
 Consent requests default to a ten-minute TTL and grants to five minutes; override them with
 `MINIGENT_PRIVATE_CONSENT_REQUEST_TTL_SECONDS` and
-`MINIGENT_PRIVATE_CONSENT_GRANT_TTL_SECONDS`.
+`MINIGENT_PRIVATE_CONSENT_GRANT_TTL_SECONDS`. Redacted disclosure audit records are retained for
+30 days by default and bounded to the newest 1,000 records per tenant/user/thread scope in both
+memory and SQLite. Configure those bounds with
+`MINIGENT_PRIVATE_CONSENT_AUDIT_TTL_SECONDS` and
+`MINIGENT_PRIVATE_CONSENT_MAX_AUDIT_RECORDS_PER_SCOPE`. Expired and over-limit records are
+pruned during consent activity, audit reads, and encrypted-store startup.
 
 For key rotation, both encrypted stores accept a JSON keyring whose keys are positive version
 numbers and whose values are base64-encoded 32-byte keys. New writes use the version selected by

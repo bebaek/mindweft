@@ -173,6 +173,42 @@ def test_encrypted_consent_store_expires_action_and_clear_thread(tmp_path) -> No
     assert store.audit_records(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1") == []
 
 
+def test_encrypted_consent_store_bounds_and_expires_audit_records(tmp_path) -> None:
+    now = [100.0]
+    db_path = tmp_path / "private-consents.db"
+    store = SQLiteEncryptedPrivateValueConsentStore(
+        db_path,
+        KEY,
+        audit_ttl_seconds=5,
+        max_audit_records_per_scope=2,
+        clock=lambda: now[0],
+    )
+    with pytest.raises(HTTPException):
+        _request(store)
+    consent_id = str(
+        store.pending(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")[0]["consent_id"]
+    )
+    store.decide(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        thread_id="thread-1",
+        consent_id=consent_id,
+        approve=True,
+    )
+    _request(store)
+
+    assert [
+        record["event"]
+        for record in store.audit_records(
+            tenant_id="tenant-1", user_id="user-1", thread_id="thread-1"
+        )
+    ] == ["approved", "disclosed"]
+    now[0] = 106.0
+    assert store.audit_records(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1") == []
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM private_consent_audit").fetchone()[0] == 0
+
+
 def test_encrypted_consent_store_rotates_all_record_types(tmp_path) -> None:
     db_path = tmp_path / "private-consents.db"
     first = SQLiteEncryptedPrivateValueConsentStore(db_path, KEY, clock=lambda: 100.0)

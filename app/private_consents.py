@@ -14,6 +14,8 @@ from app.models import ToolCall
 
 DEFAULT_CONSENT_REQUEST_TTL_SECONDS = 600.0
 DEFAULT_CONSENT_GRANT_TTL_SECONDS = 300.0
+DEFAULT_CONSENT_AUDIT_TTL_SECONDS = 2_592_000.0
+DEFAULT_CONSENT_MAX_AUDIT_RECORDS_PER_SCOPE = 1_000
 PRIVATE_CONSENT_DB_PATH_ENV = "MINIGENT_PRIVATE_CONSENT_DB_PATH"
 PRIVATE_CONSENT_ENCRYPTION_KEY_ENV = "MINIGENT_PRIVATE_CONSENT_ENCRYPTION_KEY"
 PRIVATE_CONSENT_ENCRYPTION_KEYS_ENV = "MINIGENT_PRIVATE_CONSENT_ENCRYPTION_KEYS"
@@ -21,6 +23,8 @@ PRIVATE_CONSENT_KEY_VERSION_ENV = "MINIGENT_PRIVATE_CONSENT_KEY_VERSION"
 PRIVATE_CONSENT_REENCRYPT_ON_STARTUP_ENV = "MINIGENT_PRIVATE_CONSENT_REENCRYPT_ON_STARTUP"
 PRIVATE_CONSENT_REQUEST_TTL_ENV = "MINIGENT_PRIVATE_CONSENT_REQUEST_TTL_SECONDS"
 PRIVATE_CONSENT_GRANT_TTL_ENV = "MINIGENT_PRIVATE_CONSENT_GRANT_TTL_SECONDS"
+PRIVATE_CONSENT_AUDIT_TTL_ENV = "MINIGENT_PRIVATE_CONSENT_AUDIT_TTL_SECONDS"
+PRIVATE_CONSENT_MAX_AUDIT_RECORDS_ENV = "MINIGENT_PRIVATE_CONSENT_MAX_AUDIT_RECORDS_PER_SCOPE"
 
 
 @dataclass(frozen=True, order=True)
@@ -153,10 +157,18 @@ class InMemoryPrivateValueConsentStore:
         *,
         request_ttl_seconds: float = DEFAULT_CONSENT_REQUEST_TTL_SECONDS,
         grant_ttl_seconds: float = DEFAULT_CONSENT_GRANT_TTL_SECONDS,
+        audit_ttl_seconds: float = DEFAULT_CONSENT_AUDIT_TTL_SECONDS,
+        max_audit_records_per_scope: int = DEFAULT_CONSENT_MAX_AUDIT_RECORDS_PER_SCOPE,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._request_ttl_seconds = request_ttl_seconds
         self._grant_ttl_seconds = grant_ttl_seconds
+        if audit_ttl_seconds <= 0:
+            raise ValueError("private consent audit TTL must be positive")
+        if max_audit_records_per_scope < 1:
+            raise ValueError("private consent audit record limit must be positive")
+        self._audit_ttl_seconds = audit_ttl_seconds
+        self._max_audit_records_per_scope = max_audit_records_per_scope
         self._clock = clock
         self._requests: dict[str, PrivateValueConsentRequest] = {}
         self._audit: list[PrivateValueDisclosureAuditRecord] = []
@@ -273,6 +285,7 @@ class InMemoryPrivateValueConsentStore:
         self, *, tenant_id: str, user_id: str, thread_id: str
     ) -> list[dict[str, object]]:
         with self._lock:
+            self._prune_audit(self._clock())
             return [
                 record.public_dict()
                 for record in self._audit
@@ -353,6 +366,22 @@ class InMemoryPrivateValueConsentStore:
                 occurred_at=occurred_at,
             )
         )
+        self._prune_audit(occurred_at)
+
+    def _prune_audit(self, now: float) -> None:
+        cutoff = now - self._audit_ttl_seconds
+        retained: list[PrivateValueDisclosureAuditRecord] = []
+        scope_counts: dict[tuple[str, str, str], int] = {}
+        for record in reversed(self._audit):
+            if record.occurred_at <= cutoff:
+                continue
+            scope = (record.tenant_id, record.user_id, record.thread_id)
+            count = scope_counts.get(scope, 0)
+            if count >= self._max_audit_records_per_scope:
+                continue
+            scope_counts[scope] = count + 1
+            retained.append(record)
+        self._audit = list(reversed(retained))
 
 
 def build_private_value_consent_store_from_env(

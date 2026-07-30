@@ -149,3 +149,34 @@ def test_consent_store_expires_pending_requests() -> None:
     assert store.pending(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1") == []
     audit = store.audit_records(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")
     assert [record["event"] for record in audit] == ["requested", "expired"]
+
+
+def test_consent_store_bounds_and_expires_audit_records() -> None:
+    now = [100.0]
+    store = InMemoryPrivateValueConsentStore(
+        audit_ttl_seconds=5,
+        max_audit_records_per_scope=2,
+        clock=lambda: now[0],
+    )
+    with pytest.raises(HTTPException):
+        _request(store)
+    consent_id = str(
+        store.pending(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1")[0]["consent_id"]
+    )
+    store.decide(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        thread_id="thread-1",
+        consent_id=consent_id,
+        approve=True,
+    )
+    _request(store)
+
+    assert [
+        record["event"]
+        for record in store.audit_records(
+            tenant_id="tenant-1", user_id="user-1", thread_id="thread-1"
+        )
+    ] == ["approved", "disclosed"]
+    now[0] = 106.0
+    assert store.audit_records(tenant_id="tenant-1", user_id="user-1", thread_id="thread-1") == []

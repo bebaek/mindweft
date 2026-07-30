@@ -16,13 +16,17 @@ from fastapi import HTTPException
 
 from app.models import ToolCall
 from app.private_consents import (
+    DEFAULT_CONSENT_AUDIT_TTL_SECONDS,
     DEFAULT_CONSENT_GRANT_TTL_SECONDS,
+    DEFAULT_CONSENT_MAX_AUDIT_RECORDS_PER_SCOPE,
     DEFAULT_CONSENT_REQUEST_TTL_SECONDS,
+    PRIVATE_CONSENT_AUDIT_TTL_ENV,
     PRIVATE_CONSENT_DB_PATH_ENV,
     PRIVATE_CONSENT_ENCRYPTION_KEY_ENV,
     PRIVATE_CONSENT_ENCRYPTION_KEYS_ENV,
     PRIVATE_CONSENT_GRANT_TTL_ENV,
     PRIVATE_CONSENT_KEY_VERSION_ENV,
+    PRIVATE_CONSENT_MAX_AUDIT_RECORDS_ENV,
     PRIVATE_CONSENT_REENCRYPT_ON_STARTUP_ENV,
     PRIVATE_CONSENT_REQUEST_TTL_ENV,
     PendingPrivateToolAction,
@@ -48,6 +52,8 @@ class SQLiteEncryptedPrivateValueConsentStore:
         reencrypt_on_startup: bool = False,
         request_ttl_seconds: float = DEFAULT_CONSENT_REQUEST_TTL_SECONDS,
         grant_ttl_seconds: float = DEFAULT_CONSENT_GRANT_TTL_SECONDS,
+        audit_ttl_seconds: float = DEFAULT_CONSENT_AUDIT_TTL_SECONDS,
+        max_audit_records_per_scope: int = DEFAULT_CONSENT_MAX_AUDIT_RECORDS_PER_SCOPE,
         clock: Callable[[], float] = time.time,
     ) -> None:
         if len(encryption_key) != 32:
@@ -56,6 +62,10 @@ class SQLiteEncryptedPrivateValueConsentStore:
             raise ValueError("private consent key version must be positive")
         if request_ttl_seconds <= 0 or grant_ttl_seconds <= 0:
             raise ValueError("private consent TTLs must be positive")
+        if audit_ttl_seconds <= 0:
+            raise ValueError("private consent audit TTL must be positive")
+        if max_audit_records_per_scope < 1:
+            raise ValueError("private consent audit record limit must be positive")
         if str(db_path) == ":memory:":
             raise ValueError("encrypted private consent DB must use a filesystem path")
         self._db_path = Path(db_path).expanduser()
@@ -71,6 +81,8 @@ class SQLiteEncryptedPrivateValueConsentStore:
         self._aesgcms = {version: AESGCM(key) for version, key in keys.items()}
         self._request_ttl_seconds = request_ttl_seconds
         self._grant_ttl_seconds = grant_ttl_seconds
+        self._audit_ttl_seconds = audit_ttl_seconds
+        self._max_audit_records_per_scope = max_audit_records_per_scope
         self._clock = clock
         self._lock = RLock()
         self._initialize()
@@ -110,6 +122,16 @@ class SQLiteEncryptedPrivateValueConsentStore:
                 lookup.get(PRIVATE_CONSENT_GRANT_TTL_ENV, ""),
                 PRIVATE_CONSENT_GRANT_TTL_ENV,
                 DEFAULT_CONSENT_GRANT_TTL_SECONDS,
+            ),
+            audit_ttl_seconds=_positive_float(
+                lookup.get(PRIVATE_CONSENT_AUDIT_TTL_ENV, ""),
+                PRIVATE_CONSENT_AUDIT_TTL_ENV,
+                DEFAULT_CONSENT_AUDIT_TTL_SECONDS,
+            ),
+            max_audit_records_per_scope=_positive_int(
+                lookup.get(PRIVATE_CONSENT_MAX_AUDIT_RECORDS_ENV, ""),
+                PRIVATE_CONSENT_MAX_AUDIT_RECORDS_ENV,
+                DEFAULT_CONSENT_MAX_AUDIT_RECORDS_PER_SCOPE,
             ),
         )
 
@@ -229,6 +251,8 @@ class SQLiteEncryptedPrivateValueConsentStore:
         self, *, tenant_id: str, user_id: str, thread_id: str
     ) -> list[dict[str, object]]:
         with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._prune_audit(connection, self._clock())
             rows = connection.execute(
                 """
                 SELECT event, tenant_id, user_id, thread_id, consent_id, occurred_at,
@@ -239,6 +263,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
                 """,
                 (tenant_id, user_id, thread_id),
             ).fetchall()
+            connection.commit()
         return [self._audit_from_row(row).public_dict() for row in rows]
 
     def save_pending_action(self, consent_id: str, action: PendingPrivateToolAction) -> None:
@@ -537,6 +562,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
                 self._key_version,
             ),
         )
+        self._prune_audit(connection, occurred_at)
 
     def _audit_from_row(self, row: tuple[Any, ...]) -> PrivateValueDisclosureAuditRecord:
         event, tenant_id, user_id, thread_id, consent_id = map(str, row[:5])
@@ -566,6 +592,30 @@ class SQLiteEncryptedPrivateValueConsentStore:
                 for item in cast(list[dict[str, str]], payload["disclosures"])
             ),
             occurred_at=occurred_at,
+        )
+
+    def _prune_audit(self, connection: sqlite3.Connection, now: float) -> None:
+        connection.execute(
+            "DELETE FROM private_consent_audit WHERE occurred_at <= ?",
+            (now - self._audit_ttl_seconds,),
+        )
+        connection.execute(
+            """
+            DELETE FROM private_consent_audit
+            WHERE audit_id IN (
+                SELECT audit_id
+                FROM (
+                    SELECT audit_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY tenant_id, user_id, thread_id
+                               ORDER BY audit_id DESC
+                           ) AS scope_rank
+                    FROM private_consent_audit
+                )
+                WHERE scope_rank > ?
+            )
+            """,
+            (self._max_audit_records_per_scope,),
         )
 
     def _expire(self, connection: sqlite3.Connection, now: float) -> None:
@@ -826,6 +876,8 @@ class SQLiteEncryptedPrivateValueConsentStore:
                     raise RuntimeError(
                         "Encrypted private consent database could not be opened with the configured key"
                     ) from exc
+            self._prune_audit(connection, self._clock())
+            connection.commit()
         try:
             self._db_path.chmod(0o600)
         except OSError:
@@ -875,4 +927,16 @@ def _positive_float(raw: str, name: str, default: float) -> float:
         raise RuntimeError(f"{name} must be a positive number") from exc
     if value <= 0:
         raise RuntimeError(f"{name} must be a positive number")
+    return value
+
+
+def _positive_int(raw: str, name: str, default: int) -> int:
+    if not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a positive integer") from exc
+    if value < 1:
+        raise RuntimeError(f"{name} must be a positive integer")
     return value
