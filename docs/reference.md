@@ -326,7 +326,12 @@ MINIGENT_LLM_PROMPT_CACHE_KEY=thread
 # Optional: set when the provider requires an account/org header populated from a JWT claim.
 MINIGENT_LLM_ACCOUNT_ID_HEADER=x-provider-account-id
 
-MINIGENT_OAUTH_STORE_PATH=/path/to/oauth.json
+MINIGENT_OAUTH_STORE_PATH=/path/to/oauth.db
+# Configure either one 32-byte base64url key or a versioned keyring. A keyring supports rotation.
+MINIGENT_OAUTH_ENCRYPTION_KEYS='{"1":"BASE64URL_32_BYTE_KEY"}'
+MINIGENT_OAUTH_KEY_VERSION=1
+# Optional one-time import source when migrating from the legacy JSON credential file.
+MINIGENT_OAUTH_LEGACY_STORE_PATH=/path/to/oauth.json
 MINIGENT_OAUTH_PROVIDER_ID=your-provider-id
 MINIGENT_OAUTH_CLIENT_ID=your-client-id
 MINIGENT_OAUTH_AUTHORIZE_URL=https://provider.example/oauth/authorize
@@ -345,9 +350,22 @@ http://127.0.0.1:8000/oauth/generic/open
 ```
 
 Alternatively, `GET /oauth/generic/login` returns an `authorization_url` JSON field that
-can be opened manually. The callback exchanges the code for access/refresh tokens, stores
-them in `MINIGENT_OAUTH_STORE_PATH`, and the `generic-oauth` adapter refreshes expired
-tokens automatically. Minigent accepts callbacks at both `/oauth/generic/callback` and
+can be opened manually. When `MINIGENT_OAUTH_ENCRYPTION_KEY` or
+`MINIGENT_OAUTH_ENCRYPTION_KEYS` is configured, the callback stores encrypted credentials and
+single-use PKCE flow state in the SQLite database at `MINIGENT_OAUTH_STORE_PATH`. The
+`generic-oauth` adapter coordinates refresh-token rotation through a transactional lease, so only
+one replica refreshes an expired credential while other replicas reload the winner's result. The
+same database lets a callback received by one replica consume a login flow started by another.
+
+For migration, set `MINIGENT_OAUTH_LEGACY_STORE_PATH` to the previous JSON file. Its provider
+entries are imported only once and never overwrite later database updates. Remove the legacy file
+after verifying the import because that source remains plaintext. Versioned keys can be rotated by
+starting with old and new keys present, re-encrypting stored rows with
+`SQLiteEncryptedOAuthStore.reencrypt_to_active_key()`, and then retiring the old key.
+
+Without an OAuth encryption key, Minigent retains the compatibility JSON credential store and
+in-memory login-flow store. JSON writes use atomic replacement, but that compatibility mode is not
+safe for multiple replicas. Minigent accepts callbacks at both `/oauth/generic/callback` and
 `/auth/callback` for providers with fixed redirect path requirements.
 
 For same-machine testing, start the API and open:

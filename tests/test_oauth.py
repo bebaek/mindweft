@@ -1,6 +1,8 @@
 import asyncio
+import base64
 import json
 import logging
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,8 @@ from app.oauth import (
     OAuthCredentials,
     OAuthSettings,
     OAuthStoreSettings,
+    PendingOAuthFlow,
+    SQLiteEncryptedOAuthStore,
     extract_jwt_claim,
     generic_oauth_config_from_env,
     oauth_store_path_from_env,
@@ -164,6 +168,149 @@ def test_file_oauth_store_round_trips_credentials(tmp_path: Path) -> None:
         json.loads(store.path.read_text(encoding="utf-8"))["test-oauth"]["account_id"]
         == "acct_test"
     )
+
+
+def test_sqlite_oauth_store_encrypts_credentials_and_shares_flows(tmp_path: Path) -> None:
+    database = tmp_path / "oauth.db"
+    store_a = SQLiteEncryptedOAuthStore(database, keyring={1: b"a" * 32}, active_version=1)
+    store_b = SQLiteEncryptedOAuthStore(database, keyring={1: b"a" * 32}, active_version=1)
+    credentials = OAuthCredentials(
+        access_token="secret-access-token",
+        refresh_token="secret-refresh-token",
+        expires_at=time.time() + 3600,
+        account_id="secret-account",
+    )
+
+    store_a.set("test-oauth", credentials)
+    flow = PendingOAuthFlow("secret-verifier", "https://example.test/callback", time.time())
+    store_a.put("secret-state", flow)
+
+    assert store_b.get("test-oauth") == credentials
+    assert store_b.pop("secret-state") == flow
+    assert store_a.pop("secret-state") is None
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM oauth_credentials").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM oauth_flows").fetchone()[0] == 0
+    for path in tmp_path.glob("oauth.db*"):
+        content = path.read_bytes()
+        assert b"secret-access-token" not in content
+        assert b"secret-refresh-token" not in content
+        assert b"secret-verifier" not in content
+        assert b"secret-state" not in content
+
+
+def test_sqlite_oauth_store_imports_legacy_file_once(tmp_path: Path) -> None:
+    legacy = tmp_path / "oauth.json"
+    credentials = OAuthCredentials(
+        access_token="legacy-access",
+        refresh_token="legacy-refresh",
+        expires_at=time.time() + 3600,
+    )
+    FileOAuthCredentialStore(legacy).set("test-oauth", credentials)
+    database = tmp_path / "oauth.db"
+
+    imported = SQLiteEncryptedOAuthStore(
+        database,
+        keyring={1: b"a" * 32},
+        active_version=1,
+        legacy_path=legacy,
+    )
+    assert imported.get("test-oauth") == credentials
+
+    FileOAuthCredentialStore(legacy).set(
+        "test-oauth",
+        OAuthCredentials("stale-access", "stale-refresh", time.time() + 7200),
+    )
+    reopened = SQLiteEncryptedOAuthStore(
+        database,
+        keyring={1: b"a" * 32},
+        active_version=1,
+        legacy_path=legacy,
+    )
+    assert reopened.get("test-oauth") == credentials
+
+
+def test_sqlite_oauth_store_coordinates_concurrent_refresh(tmp_path: Path) -> None:
+    database = tmp_path / "oauth.db"
+    initial = OAuthCredentials("expired-access", "single-use-refresh", time.time() - 1)
+    first_store = SQLiteEncryptedOAuthStore(database, keyring={1: b"a" * 32}, active_version=1)
+    first_store.set("test-oauth", initial)
+    refresh_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        await asyncio.sleep(0.05)
+        return httpx.Response(
+            200,
+            json={
+                "access_token": _token("acct_test"),
+                "refresh_token": "rotated-refresh",
+                "expires_in": 3600,
+            },
+        )
+
+    first_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    second_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    first = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=first_store,
+        client=first_client,
+    )
+    second = GenericOAuthProvider(
+        config=_config(tmp_path),
+        store=SQLiteEncryptedOAuthStore(database, keyring={1: b"a" * 32}, active_version=1),
+        client=second_client,
+    )
+
+    async def run() -> tuple[OAuthCredentials | None, OAuthCredentials | None]:
+        try:
+            return await asyncio.gather(first.get_credentials(), second.get_credentials())
+        finally:
+            await first_client.aclose()
+            await second_client.aclose()
+
+    first_result, second_result = asyncio.run(run())
+
+    assert refresh_calls == 1
+    assert first_result == second_result
+    assert first_result is not None
+    assert first_result.refresh_token == "rotated-refresh"
+
+
+def test_sqlite_oauth_store_rotates_encryption_keys(tmp_path: Path) -> None:
+    database = tmp_path / "oauth.db"
+    old_store = SQLiteEncryptedOAuthStore(database, keyring={1: b"a" * 32}, active_version=1)
+    credentials = OAuthCredentials("access", "refresh", time.time() + 3600)
+    old_store.set("test-oauth", credentials)
+    old_store.put("state", PendingOAuthFlow("verifier", "https://callback", time.time()))
+
+    rotating = SQLiteEncryptedOAuthStore(
+        database,
+        keyring={1: b"a" * 32, 2: b"b" * 32},
+        active_version=2,
+    )
+    assert rotating.reencrypt_to_active_key() == (1, 1)
+    new_only = SQLiteEncryptedOAuthStore(database, keyring={2: b"b" * 32}, active_version=2)
+    assert new_only.get("test-oauth") == credentials
+    assert new_only.pop("state") is not None
+    old_only = SQLiteEncryptedOAuthStore(database, keyring={1: b"a" * 32}, active_version=1)
+    with pytest.raises(RuntimeError, match="key version is unavailable"):
+        old_only.get("test-oauth")
+
+
+def test_sqlite_oauth_store_from_env_uses_versioned_keyring(tmp_path: Path) -> None:
+    key = base64.urlsafe_b64encode(b"a" * 32).decode().rstrip("=")
+    env = _oauth_env(tmp_path)
+    env["MINIGENT_OAUTH_STORE_PATH"] = str(tmp_path / "oauth.db")
+    env["MINIGENT_OAUTH_ENCRYPTION_KEYS"] = json.dumps({"3": key})
+    env["MINIGENT_OAUTH_KEY_VERSION"] = "3"
+
+    store = SQLiteEncryptedOAuthStore.from_env(env)
+    store.set("test-oauth", OAuthCredentials("access", "refresh", time.time() + 3600))
+
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("SELECT key_version FROM oauth_credentials").fetchone() == (3,)
 
 
 def test_generic_oauth_adapter_sends_headers_and_parses_text(tmp_path: Path) -> None:

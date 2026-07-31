@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
 import os
 import secrets
+import sqlite3
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlencode
+from uuid import uuid4
 
 import httpx
 import jwt
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from app.private_keyring import load_encryption_keyring
 
 GENERIC_OAUTH_PROVIDER = "generic-oauth"
 OAUTH_STORE_PATH_ENV = "MINIGENT_OAUTH_STORE_PATH"
@@ -25,6 +31,12 @@ OAUTH_REDIRECT_URI_ENV = "MINIGENT_OAUTH_REDIRECT_URI"
 OAUTH_SCOPE_ENV = "MINIGENT_OAUTH_SCOPE"
 OAUTH_AUTH_PARAMS_ENV = "MINIGENT_OAUTH_AUTH_PARAMS"
 OAUTH_ACCOUNT_ID_JWT_CLAIM_ENV = "MINIGENT_OAUTH_ACCOUNT_ID_JWT_CLAIM"
+OAUTH_ENCRYPTION_KEY_ENV = "MINIGENT_OAUTH_ENCRYPTION_KEY"
+OAUTH_ENCRYPTION_KEYS_ENV = "MINIGENT_OAUTH_ENCRYPTION_KEYS"
+OAUTH_KEY_VERSION_ENV = "MINIGENT_OAUTH_KEY_VERSION"
+OAUTH_LEGACY_STORE_PATH_ENV = "MINIGENT_OAUTH_LEGACY_STORE_PATH"
+OAUTH_REFRESH_LEASE_SECONDS = 45.0
+OAUTH_REFRESH_WAIT_SECONDS = 50.0
 
 
 @dataclass(frozen=True)
@@ -149,6 +161,372 @@ class OAuthFlowStore:
             self._flows.pop(state, None)
 
 
+@runtime_checkable
+class OAuthCredentialStore(Protocol):
+    def get(self, provider: str) -> OAuthCredentials | None: ...
+
+    def set(self, provider: str, credentials: OAuthCredentials) -> None: ...
+
+    def delete(self, provider: str) -> None: ...
+
+
+@runtime_checkable
+class CoordinatedOAuthCredentialStore(OAuthCredentialStore, Protocol):
+    def get_versioned(self, provider: str) -> tuple[OAuthCredentials, int] | None: ...
+
+    def try_claim_refresh(
+        self, provider: str, *, version: int, owner: str, lease_seconds: float
+    ) -> bool: ...
+
+    def complete_refresh(
+        self,
+        provider: str,
+        *,
+        version: int,
+        owner: str,
+        credentials: OAuthCredentials,
+    ) -> bool: ...
+
+    def release_refresh(self, provider: str, *, version: int, owner: str) -> None: ...
+
+
+class SQLiteEncryptedOAuthStore:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        keyring: dict[int, bytes],
+        active_version: int,
+        legacy_path: Path | None = None,
+        flow_ttl_seconds: float = 600.0,
+    ) -> None:
+        if active_version not in keyring:
+            raise ValueError("active OAuth encryption key is absent from the keyring")
+        if any(version < 1 or len(key) != 32 for version, key in keyring.items()):
+            raise ValueError("OAuth encryption keys must be versioned 32-byte keys")
+        self._path = path
+        self._aesgcms = {version: AESGCM(key) for version, key in keyring.items()}
+        self._active_version = active_version
+        self._legacy_path = legacy_path
+        self._flow_ttl_seconds = flow_ttl_seconds
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._migrate()
+        self._import_legacy_once()
+        try:
+            self._path.chmod(0o600)
+        except OSError:
+            pass
+
+    @classmethod
+    def from_env(
+        cls, env: Mapping[str, str] | None = None, *, flow_ttl_seconds: float = 600.0
+    ) -> SQLiteEncryptedOAuthStore:
+        lookup = os.environ if env is None else env
+        active_key, keyring, active_version = load_encryption_keyring(
+            lookup,
+            single_key_env=OAUTH_ENCRYPTION_KEY_ENV,
+            keyring_env=OAUTH_ENCRYPTION_KEYS_ENV,
+            key_version_env=OAUTH_KEY_VERSION_ENV,
+            database_env=OAUTH_STORE_PATH_ENV,
+        )
+        keyring[active_version] = active_key
+        legacy_value = lookup.get(OAUTH_LEGACY_STORE_PATH_ENV, "").strip()
+        return cls(
+            Path(_required_env(lookup, OAUTH_STORE_PATH_ENV)).expanduser(),
+            keyring=keyring,
+            active_version=active_version,
+            legacy_path=Path(legacy_value).expanduser() if legacy_value else None,
+            flow_ttl_seconds=flow_ttl_seconds,
+        )
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def get(self, provider: str) -> OAuthCredentials | None:
+        versioned = self.get_versioned(provider)
+        return versioned[0] if versioned is not None else None
+
+    def get_versioned(self, provider: str) -> tuple[OAuthCredentials, int] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT credentials_cipher, key_version, version FROM oauth_credentials WHERE provider = ?",
+                (provider,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = self._decrypt_json(
+            bytes(row["credentials_cipher"]),
+            key_version=int(row["key_version"]),
+            aad=f"oauth-credentials|{provider}".encode(),
+        )
+        return OAuthCredentials.from_json(payload), int(row["version"])
+
+    def set(self, provider: str, credentials: OAuthCredentials) -> None:
+        ciphertext = self._encrypt_json(
+            credentials.to_json(), aad=f"oauth-credentials|{provider}".encode()
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO oauth_credentials
+                  (provider, credentials_cipher, key_version, version, updated_at)
+                VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(provider) DO UPDATE SET
+                  credentials_cipher = excluded.credentials_cipher,
+                  key_version = excluded.key_version,
+                  version = oauth_credentials.version + 1,
+                  refresh_owner = NULL,
+                  refresh_lease_expires_at = NULL,
+                  updated_at = excluded.updated_at
+                """,
+                (provider, ciphertext, self._active_version, time.time()),
+            )
+            connection.commit()
+
+    def delete(self, provider: str) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM oauth_credentials WHERE provider = ?", (provider,))
+            connection.commit()
+
+    def try_claim_refresh(
+        self, provider: str, *, version: int, owner: str, lease_seconds: float
+    ) -> bool:
+        now = time.time()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE oauth_credentials
+                SET refresh_owner = ?, refresh_lease_expires_at = ?
+                WHERE provider = ? AND version = ?
+                  AND (refresh_owner IS NULL OR refresh_lease_expires_at <= ?)
+                """,
+                (owner, now + lease_seconds, provider, version, now),
+            )
+            connection.commit()
+            return cursor.rowcount == 1
+
+    def complete_refresh(
+        self,
+        provider: str,
+        *,
+        version: int,
+        owner: str,
+        credentials: OAuthCredentials,
+    ) -> bool:
+        ciphertext = self._encrypt_json(
+            credentials.to_json(), aad=f"oauth-credentials|{provider}".encode()
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE oauth_credentials
+                SET credentials_cipher = ?, key_version = ?, version = version + 1,
+                    refresh_owner = NULL, refresh_lease_expires_at = NULL, updated_at = ?
+                WHERE provider = ? AND version = ? AND refresh_owner = ?
+                """,
+                (ciphertext, self._active_version, time.time(), provider, version, owner),
+            )
+            connection.commit()
+            return cursor.rowcount == 1
+
+    def release_refresh(self, provider: str, *, version: int, owner: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE oauth_credentials
+                SET refresh_owner = NULL, refresh_lease_expires_at = NULL
+                WHERE provider = ? AND version = ? AND refresh_owner = ?
+                """,
+                (provider, version, owner),
+            )
+            connection.commit()
+
+    def put(self, state: str, flow: PendingOAuthFlow) -> None:
+        state_hash = hashlib.sha256(state.encode()).hexdigest()
+        ciphertext = self._encrypt_json(
+            {
+                "state": state,
+                "verifier": flow.verifier,
+                "redirect_uri": flow.redirect_uri,
+                "created_at": flow.created_at,
+            },
+            aad=f"oauth-flow|{state_hash}".encode(),
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("DELETE FROM oauth_flows WHERE expires_at <= ?", (time.time(),))
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO oauth_flows
+                  (state_hash, flow_cipher, key_version, expires_at, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    state_hash,
+                    ciphertext,
+                    self._active_version,
+                    flow.created_at + self._flow_ttl_seconds,
+                    flow.created_at,
+                ),
+            )
+            connection.commit()
+
+    def pop(self, state: str) -> PendingOAuthFlow | None:
+        state_hash = hashlib.sha256(state.encode()).hexdigest()
+        now = time.time()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT flow_cipher, key_version, expires_at FROM oauth_flows WHERE state_hash = ?",
+                (state_hash,),
+            ).fetchone()
+            connection.execute("DELETE FROM oauth_flows WHERE state_hash = ?", (state_hash,))
+            connection.commit()
+        if row is None or float(row["expires_at"]) <= now:
+            return None
+        payload = self._decrypt_json(
+            bytes(row["flow_cipher"]),
+            key_version=int(row["key_version"]),
+            aad=f"oauth-flow|{state_hash}".encode(),
+        )
+        if payload.get("state") != state:
+            raise RuntimeError("OAuth flow state authentication failed")
+        verifier = payload.get("verifier")
+        redirect_uri = payload.get("redirect_uri")
+        created_at = payload.get("created_at")
+        if (
+            not isinstance(verifier, str)
+            or not isinstance(redirect_uri, str)
+            or not isinstance(created_at, int | float)
+        ):
+            raise RuntimeError("Stored OAuth flow is invalid")
+        return PendingOAuthFlow(verifier, redirect_uri, float(created_at))
+
+    def prune(self) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM oauth_flows WHERE expires_at <= ?", (time.time(),))
+            connection.commit()
+
+    def reencrypt_to_active_key(self) -> tuple[int, int]:
+        credential_count = 0
+        flow_count = 0
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            for row in connection.execute(
+                "SELECT provider, credentials_cipher, key_version FROM oauth_credentials WHERE key_version != ?",
+                (self._active_version,),
+            ).fetchall():
+                provider = str(row["provider"])
+                payload = self._decrypt_json(
+                    bytes(row["credentials_cipher"]),
+                    key_version=int(row["key_version"]),
+                    aad=f"oauth-credentials|{provider}".encode(),
+                )
+                connection.execute(
+                    "UPDATE oauth_credentials SET credentials_cipher = ?, key_version = ? WHERE provider = ?",
+                    (
+                        self._encrypt_json(payload, aad=f"oauth-credentials|{provider}".encode()),
+                        self._active_version,
+                        provider,
+                    ),
+                )
+                credential_count += 1
+            for row in connection.execute(
+                "SELECT state_hash, flow_cipher, key_version FROM oauth_flows WHERE key_version != ?",
+                (self._active_version,),
+            ).fetchall():
+                state_hash = str(row["state_hash"])
+                payload = self._decrypt_json(
+                    bytes(row["flow_cipher"]),
+                    key_version=int(row["key_version"]),
+                    aad=f"oauth-flow|{state_hash}".encode(),
+                )
+                connection.execute(
+                    "UPDATE oauth_flows SET flow_cipher = ?, key_version = ? WHERE state_hash = ?",
+                    (
+                        self._encrypt_json(payload, aad=f"oauth-flow|{state_hash}".encode()),
+                        self._active_version,
+                        state_hash,
+                    ),
+                )
+                flow_count += 1
+            connection.commit()
+        return credential_count, flow_count
+
+    def _encrypt_json(self, payload: dict[str, object], *, aad: bytes) -> bytes:
+        nonce = os.urandom(12)
+        plaintext = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return nonce + self._aesgcms[self._active_version].encrypt(nonce, plaintext, aad)
+
+    def _decrypt_json(self, ciphertext: bytes, *, key_version: int, aad: bytes) -> dict[str, Any]:
+        try:
+            aesgcm = self._aesgcms[key_version]
+        except KeyError as exc:
+            raise RuntimeError("OAuth encryption key version is unavailable") from exc
+        decoded = json.loads(aesgcm.decrypt(ciphertext[:12], ciphertext[12:], aad))
+        if not isinstance(decoded, dict):
+            raise RuntimeError("Stored OAuth payload is invalid")
+        return decoded
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self._path, timeout=10)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 10000")
+        return connection
+
+    def _migrate(self) -> None:
+        with self._connect() as connection:
+            connection.executescript(
+                """
+                PRAGMA journal_mode = WAL;
+                CREATE TABLE IF NOT EXISTS oauth_credentials (
+                  provider TEXT PRIMARY KEY,
+                  credentials_cipher BLOB NOT NULL,
+                  key_version INTEGER NOT NULL,
+                  version INTEGER NOT NULL,
+                  refresh_owner TEXT,
+                  refresh_lease_expires_at REAL,
+                  updated_at REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS oauth_flows (
+                  state_hash TEXT PRIMARY KEY,
+                  flow_cipher BLOB NOT NULL,
+                  key_version INTEGER NOT NULL,
+                  expires_at REAL NOT NULL,
+                  created_at REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS oauth_metadata (
+                  key TEXT PRIMARY KEY,
+                  value TEXT NOT NULL
+                );
+                """
+            )
+
+    def _import_legacy_once(self) -> None:
+        with self._connect() as connection:
+            imported = connection.execute(
+                "SELECT 1 FROM oauth_metadata WHERE key = 'legacy_import_complete'"
+            ).fetchone()
+        if imported is not None:
+            return
+        legacy_data: dict[str, object] = {}
+        if self._legacy_path is not None and self._legacy_path.exists():
+            legacy_data = FileOAuthCredentialStore(self._legacy_path)._read()
+        for provider, payload in legacy_data.items():
+            if isinstance(payload, dict) and self.get(provider) is None:
+                self.set(provider, OAuthCredentials.from_json(payload))
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO oauth_metadata (key, value) VALUES ('legacy_import_complete', ?)",
+                (str(time.time()),),
+            )
+            connection.commit()
+
+
 class FileOAuthCredentialStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or oauth_store_path_from_env()
@@ -187,11 +565,41 @@ class FileOAuthCredentialStore:
 
     def _write(self, payload: dict[str, object]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        temporary = self._path.with_name(f".{self._path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+            temporary.chmod(0o600)
+            temporary.replace(self._path)
+        finally:
+            temporary.unlink(missing_ok=True)
         try:
             self._path.chmod(0o600)
         except OSError:
             pass
+
+
+def build_oauth_credential_store_from_env(
+    env: Mapping[str, str] | None = None,
+) -> OAuthCredentialStore:
+    lookup = os.environ if env is None else env
+    if (
+        lookup.get(OAUTH_ENCRYPTION_KEY_ENV, "").strip()
+        or lookup.get(OAUTH_ENCRYPTION_KEYS_ENV, "").strip()
+    ):
+        return SQLiteEncryptedOAuthStore.from_env(lookup)
+    return FileOAuthCredentialStore(Path(_required_env(lookup, OAUTH_STORE_PATH_ENV)).expanduser())
+
+
+def build_oauth_flow_store_from_env(
+    env: Mapping[str, str] | None = None, *, ttl_seconds: float = 600.0
+) -> OAuthFlowStore | SQLiteEncryptedOAuthStore:
+    lookup = os.environ if env is None else env
+    if (
+        lookup.get(OAUTH_ENCRYPTION_KEY_ENV, "").strip()
+        or lookup.get(OAUTH_ENCRYPTION_KEYS_ENV, "").strip()
+    ):
+        return SQLiteEncryptedOAuthStore.from_env(lookup, flow_ttl_seconds=ttl_seconds)
+    return OAuthFlowStore(ttl_seconds=ttl_seconds)
 
 
 class GenericOAuthProvider:
@@ -199,11 +607,11 @@ class GenericOAuthProvider:
         self,
         *,
         config: GenericOAuthConfig | None = None,
-        store: FileOAuthCredentialStore | None = None,
+        store: OAuthCredentialStore | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._config = config or generic_oauth_config_from_env()
-        self._store = store or FileOAuthCredentialStore()
+        self._store = store or build_oauth_credential_store_from_env()
         self._client = client
 
     @property
@@ -250,6 +658,8 @@ class GenericOAuthProvider:
         return credentials
 
     async def get_credentials(self) -> OAuthCredentials | None:
+        if isinstance(self._store, CoordinatedOAuthCredentialStore):
+            return await self._get_coordinated_credentials(self._store)
         credentials = self._store.get(self._config.provider_id)
         if credentials is None:
             return None
@@ -258,6 +668,41 @@ class GenericOAuthProvider:
         refreshed = await self.refresh(credentials)
         self._store.set(self._config.provider_id, refreshed)
         return refreshed
+
+    async def _get_coordinated_credentials(
+        self, store: CoordinatedOAuthCredentialStore
+    ) -> OAuthCredentials | None:
+        owner = uuid4().hex
+        deadline = time.monotonic() + OAUTH_REFRESH_WAIT_SECONDS
+        while True:
+            versioned = store.get_versioned(self._config.provider_id)
+            if versioned is None:
+                return None
+            credentials, version = versioned
+            if time.time() < credentials.expires_at - 60:
+                return credentials
+            claimed = store.try_claim_refresh(
+                self._config.provider_id,
+                version=version,
+                owner=owner,
+                lease_seconds=OAUTH_REFRESH_LEASE_SECONDS,
+            )
+            if claimed:
+                try:
+                    refreshed = await self.refresh(credentials)
+                    if store.complete_refresh(
+                        self._config.provider_id,
+                        version=version,
+                        owner=owner,
+                        credentials=refreshed,
+                    ):
+                        return refreshed
+                except BaseException:
+                    store.release_refresh(self._config.provider_id, version=version, owner=owner)
+                    raise
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Timed out waiting for coordinated OAuth token refresh")
+            await asyncio.sleep(0.1)
 
     async def refresh(self, credentials: OAuthCredentials) -> OAuthCredentials:
         return await self._exchange_token(

@@ -63,7 +63,7 @@ from app.models import (
     ThreadListResponse,
     ThreadStatus,
 )
-from app.oauth import GenericOAuthProvider, OAuthFlowStore
+from app.oauth import GenericOAuthProvider, build_oauth_flow_store_from_env
 from app.observability import configure_logging, configure_tracing
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry
 from app.quality import QualityEnhancer
@@ -315,7 +315,7 @@ def create_app(
         app.state.store = build_thread_store_from_env()
     app.state.mcp_manager = mcp_manager
     app.state.mcp_broker_sessions = MCPBrokerSessionStore()
-    app.state.oauth_flows = OAuthFlowStore()
+    app.state.oauth_flows = build_oauth_flow_store_from_env()
     admin_store_settings = settings.admin_store
     app.state.admin_store_settings = admin_store_settings
     admin_encryption_key = admin_store_settings.encryption_key
