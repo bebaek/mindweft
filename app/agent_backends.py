@@ -172,6 +172,21 @@ class AgentBackendRouter(AgentBackend):
                 payload["prompt"] = prompt + _mcp_broker_prompt_suffix()
             task = await self._peer_agent_registry.create_task(peer, payload)
             task_id = str(task.get("task_id", "")).strip()
+            if not task_id:
+                raise HTTPException(
+                    status_code=502,
+                    detail="peer_agent backend returned task response without task_id",
+                )
+            attached = self._store.attach_peer_task(
+                principal.tenant_id,
+                thread_id,
+                peer_name=peer,
+                peer_base_url=self._peer_agent_registry.agent_base_url(peer),
+                task_id=task_id,
+            )
+            if not attached:
+                await self._cancel_peer_agent_task(peer, task_id)
+                raise HTTPException(status_code=409, detail="Thread run lease was lost")
             await _emit_run_event(
                 event_sink,
                 {
@@ -181,11 +196,6 @@ class AgentBackendRouter(AgentBackend):
                     "status": str(task.get("status", "")),
                 },
             )
-            if not task_id:
-                raise HTTPException(
-                    status_code=502,
-                    detail="peer_agent backend returned task response without task_id",
-                )
             last_peer_event_index = None
             if event_sink is not None:
                 last_peer_event_index = await self._emit_peer_task_events(

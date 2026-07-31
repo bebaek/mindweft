@@ -260,3 +260,31 @@ def test_peer_agent_registry_returns_404_for_unknown_agent() -> None:
         asyncio.run(registry.agent_card("missing"))
 
     assert exc_info.value.status_code == 404
+
+
+def test_peer_agent_registry_cancels_task_at_persisted_base_url() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == "http://persisted-peer.test/tasks/task_123/cancel"
+        return httpx.Response(200, json={"task_id": "task_123", "status": "canceled"})
+
+    registry = PeerAgentRegistry([], transport=httpx.MockTransport(handler))
+
+    response = asyncio.run(
+        registry.cancel_task_at("removed-peer", "http://persisted-peer.test", "task_123")
+    )
+
+    assert response == {"task_id": "task_123", "status": "canceled"}
+
+
+def test_peer_agent_registry_treats_missing_persisted_task_as_canceled() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "missing"})
+
+    registry = PeerAgentRegistry([], transport=httpx.MockTransport(handler))
+
+    response = asyncio.run(
+        registry.cancel_task_at("removed-peer", "http://persisted-peer.test", "task_123")
+    )
+
+    assert response == {"status": "not_found_or_terminal"}

@@ -678,10 +678,15 @@ The runtime can persist thread state and message history in SQLite when
 `MINIGENT_THREAD_DB_PATH` points at a writable database path. SQLite-backed runs acquire an atomic
 per-thread lease, heartbeat that lease while executing, and accept cancellation requests from any
 replica. Expired leases are recovered as errored runs at startup and by a five-second background
-sweep in every replica; run IDs fence late completion and message writes from stale owners. Without
-that setting, threads and run coordination remain in memory and are lost on restart. The optional
-admin control plane can also persist tenant execution
-config in SQLite when `MINIGENT_ADMIN_DB_PATH` points at a mounted volume.
+sweep in every replica; run IDs fence late completion and message writes from stale owners. For a
+peer-agent run, Minigent attaches the trusted peer base URL and remote task ID to the lease before
+emitting the task-created event. Stale recovery moves that metadata into a durable cancellation
+outbox. Replicas claim outbox entries with a lease, send idempotent remote cancellation requests,
+and retry failures with exponential backoff. A claimant crash can cause a repeated cancellation
+after its claim expires, so peer cancellation endpoints must remain idempotent; only one replica can
+hold an active claim at a time. Without SQLite thread storage, threads and run coordination remain
+in memory and are lost on restart. The optional admin control plane can also persist tenant
+execution config in SQLite when `MINIGENT_ADMIN_DB_PATH` points at a mounted volume.
 
 The thread, OAuth, private-value, DAV, run-lease, and optional MCP broker stores support shared
 replica state when their SQLite paths are configured. Keep every replica on the same shared volume

@@ -112,10 +112,17 @@ configure_logging()
 logger = logging.getLogger(__name__)
 WEB_CLIENT_DIR = Path(__file__).resolve().parent / "static" / "web"
 STALE_RUN_RECOVERY_INTERVAL_SECONDS = 5.0
+PEER_TASK_CANCELLATION_CLAIM_SECONDS = 30.0
+PEER_TASK_CANCELLATION_BATCH_SIZE = 10
+
+
+def _peer_task_retry_delay(attempts: int) -> float:
+    return min(300.0, float(2 ** min(max(attempts, 1), 8)))
 
 
 async def _recover_stale_runs_periodically(
     store: ThreadStore,
+    peer_agent_registry: PeerAgentRegistry | None = None,
     *,
     interval_seconds: float = STALE_RUN_RECOVERY_INTERVAL_SECONDS,
 ) -> None:
@@ -128,6 +135,44 @@ async def _recover_stale_runs_periodically(
             continue
         if recovered:
             logger.warning("thread_run.stale_recovered count=%s", recovered)
+        if peer_agent_registry is None:
+            continue
+        cancellations = await asyncio.to_thread(
+            store.claim_peer_task_cancellations,
+            lease_seconds=PEER_TASK_CANCELLATION_CLAIM_SECONDS,
+            limit=PEER_TASK_CANCELLATION_BATCH_SIZE,
+        )
+        for cancellation in cancellations:
+            try:
+                await peer_agent_registry.cancel_task_at(
+                    cancellation.peer_name,
+                    cancellation.peer_base_url,
+                    cancellation.task_id,
+                )
+            except HTTPException:
+                delay = _peer_task_retry_delay(cancellation.attempts)
+                await asyncio.to_thread(
+                    store.release_peer_task_cancellation,
+                    cancellation.cancellation_id,
+                    retry_delay_seconds=delay,
+                )
+                logger.warning(
+                    "peer_task.orphan_cancel_retry peer=%s attempts=%s delay_seconds=%s",
+                    cancellation.peer_name,
+                    cancellation.attempts,
+                    delay,
+                )
+                continue
+            completed = await asyncio.to_thread(
+                store.complete_peer_task_cancellation,
+                cancellation.cancellation_id,
+            )
+            if completed:
+                logger.warning(
+                    "peer_task.orphan_canceled peer=%s attempts=%s",
+                    cancellation.peer_name,
+                    cancellation.attempts,
+                )
 
 
 def build_thread_store(settings: ThreadStoreSettings) -> ThreadStore:
@@ -391,7 +436,12 @@ def create_app(
         if mcp_manager is not None:
             await mcp_manager.start()
         _log_available_internal_tools(app.state.execution_resolver)
-        stale_recovery_task = asyncio.create_task(_recover_stale_runs_periodically(app.state.store))
+        stale_recovery_task = asyncio.create_task(
+            _recover_stale_runs_periodically(
+                app.state.store,
+                app.state.peer_agent_registry,
+            )
+        )
         try:
             yield
         finally:
