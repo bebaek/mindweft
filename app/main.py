@@ -40,7 +40,11 @@ from app.execution import (
     resolve_tenant_config_source,
 )
 from app.llm import LLMAdapter, build_llm_adapter_from_env
-from app.mcp_broker import MCPBrokerSessionStore, handle_mcp_broker_request
+from app.mcp_broker import (
+    MCPBrokerSession,
+    build_mcp_broker_session_store_from_env,
+    handle_mcp_broker_request,
+)
 from app.mcp_manager import MCPServerManager
 from app.models import (
     AddMessageRequest,
@@ -385,7 +389,7 @@ def create_app(
         app.state.store = build_thread_store_from_env()
     app.state.store.recover_stale_runs()
     app.state.mcp_manager = mcp_manager
-    app.state.mcp_broker_sessions = MCPBrokerSessionStore()
+    app.state.mcp_broker_sessions = build_mcp_broker_session_store_from_env()
     app.state.oauth_flows = build_oauth_flow_store_from_env()
     admin_store_settings = settings.admin_store
     app.state.admin_store_settings = admin_store_settings
@@ -594,10 +598,17 @@ def create_app(
 
     @app.post("/mcp/peer/{session_id}", response_model=None)
     async def mcp_peer_broker(session_id: str, request: Request):
+        def resolve_tool_registry(session: MCPBrokerSession) -> ToolRegistry:
+            principal = Principal(user_id=session.user_id, tenant_id=session.tenant_id)
+            return request.app.state.agent_backend.tool_registry_for_thread(
+                principal, session.thread_id
+            )
+
         return await handle_mcp_broker_request(
             session_store=request.app.state.mcp_broker_sessions,
             session_id=session_id,
             request=request,
+            tool_registry_resolver=resolve_tool_registry,
         )
 
     @app.get("/peer-agents/{name}/agent-card")

@@ -32,6 +32,7 @@ from app.peer_agents import PeerAgentRegistry
 from app.redaction import sanitize_value_for_logging
 from app.runtime import AgentRuntime
 from app.store import ThreadStore
+from app.tools import ToolRegistry
 
 _TERMINAL_PEER_STATUSES = {"completed", "failed", "canceled"}
 PEER_TOOL_ARG_ALLOWLIST_ENV = "MINIGENT_PEER_TOOL_ARG_ALLOWLIST"
@@ -281,29 +282,7 @@ class AgentBackendRouter(AgentBackend):
     ) -> dict[str, str]:
         if self._mcp_broker_sessions is None:
             return {}
-        execution = self._execution_resolver.resolve(principal.tenant_id)
-        thread = self._store.get_thread(principal.tenant_id, thread_id)
-        skill_names = thread.skill_names
-        if skill_names is None and thread.skill_name is not None:
-            skill_names = [thread.skill_name]
-        skills = get_skill_configs(execution.config, skill_names)
-        capability_profile = get_capability_profile(execution.config, thread.capability_profile)
-        if capability_profile is not None:
-            tool_registry = build_tool_registry_for_capability_profile(
-                execution.config,
-                thread.capability_profile,
-                mcp_manager=execution.mcp_manager,
-            )
-        elif len(skills) == 1 and (
-            skills[0].allowed_local_tools is not None or skills[0].mcp_server_names is not None
-        ):
-            tool_registry = build_tool_registry_for_skill(
-                execution.config,
-                skills[0].name,
-                mcp_manager=execution.mcp_manager,
-            )
-        else:
-            tool_registry = execution.tool_registry
+        tool_registry = self.tool_registry_for_thread(principal, thread_id)
         session = self._mcp_broker_sessions.create_session(
             principal=principal,
             thread_id=thread_id,
@@ -316,6 +295,30 @@ class AgentBackendRouter(AgentBackend):
             MINIGENT_MCP_BROKER_TOKEN_ENV: session.token,
             MINIGENT_MCP_BROKER_SESSION_ENV: session.session_id,
         }
+
+    def tool_registry_for_thread(self, principal: Principal, thread_id: str) -> ToolRegistry:
+        execution = self._execution_resolver.resolve(principal.tenant_id)
+        thread = self._store.get_thread(principal.tenant_id, thread_id)
+        skill_names = thread.skill_names
+        if skill_names is None and thread.skill_name is not None:
+            skill_names = [thread.skill_name]
+        skills = get_skill_configs(execution.config, skill_names)
+        capability_profile = get_capability_profile(execution.config, thread.capability_profile)
+        if capability_profile is not None:
+            return build_tool_registry_for_capability_profile(
+                execution.config,
+                thread.capability_profile,
+                mcp_manager=execution.mcp_manager,
+            )
+        if len(skills) == 1 and (
+            skills[0].allowed_local_tools is not None or skills[0].mcp_server_names is not None
+        ):
+            return build_tool_registry_for_skill(
+                execution.config,
+                skills[0].name,
+                mcp_manager=execution.mcp_manager,
+            )
+        return execution.tool_registry
 
     def _prompt_for_peer_agent(self, principal: Principal, thread_id: str) -> str:
         messages = self._store.list_messages(principal.tenant_id, thread_id)

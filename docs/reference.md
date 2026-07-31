@@ -428,6 +428,7 @@ MINIGENT_AGENT_BACKEND=peer_agent
 MINIGENT_AGENT_BACKEND_PEER=pi
 MINIGENT_AGENT_BACKEND_CWD=/Users/burm/code/minigent
 MINIGENT_MCP_BROKER_BASE_URL=http://127.0.0.1:8000
+MINIGENT_MCP_BROKER_DB_PATH=/data/minigent-mcp-broker.db
 MINIGENT_MCP_BROKER_ENABLED=true
 ```
 
@@ -551,10 +552,15 @@ MINIGENT_MCP_BROKER_SESSION=<session>
 
 The broker exposes the thread's approved Minigent tools through MCP JSON-RPC and
 forwards allowed `tools/call` requests through Minigent's existing tool registry, so
-OpenCode does not receive upstream MCP server credentials. The wrapper only accepts task
-environment variables whose names start with `MINIGENT_MCP_BROKER_` by default; override
-that allowlist with `AGENT_ALLOWED_TASK_ENV_PREFIXES` if you add more task-scoped
-variables.
+OpenCode does not receive upstream MCP server credentials. When
+`MINIGENT_MCP_BROKER_DB_PATH` is configured, session identity, expiry, and the original approved
+tool-name set are stored in shared SQLite. Bearer tokens are persisted only as SHA-256 hashes, and
+a replica receiving a broker call reconstructs the tenant/thread tool registry locally while still
+enforcing the tool names frozen when the session was created. This allows broker URLs minted by one
+replica to be served by another. Without that setting, broker sessions remain process-local.
+The wrapper only accepts task environment variables whose names start with
+`MINIGENT_MCP_BROKER_` by default; override that allowlist with
+`AGENT_ALLOWED_TASK_ENV_PREFIXES` if you add more task-scoped variables.
 
 For OpenCode tasks, the wrapper also generates per-task `OPENCODE_CONFIG_CONTENT` that
 adds a remote MCP server named `minigent` using the broker URL and bearer token. Existing
@@ -676,9 +682,9 @@ message writes from stale owners. Without that setting, threads and run coordina
 memory and are lost on restart. The optional admin control plane can also persist tenant execution
 config in SQLite when `MINIGENT_ADMIN_DB_PATH` points at a mounted volume.
 
-The thread, OAuth, private-value, and DAV stores support shared replica state. MCP peer-broker
-sessions still contain a process-local tool registry, so deployments using that backend should
-remain single-replica until broker sessions are externalized.
+The thread, OAuth, private-value, DAV, run-lease, and optional MCP broker stores support shared
+replica state when their SQLite paths are configured. Keep every replica on the same shared volume
+and configuration so broker tool registries can be reconstructed consistently.
 
 Thread history is compacted in memory as conversations grow. Older turns are folded into
 the thread summary and removed from the raw message list, so `GET /threads/{thread_id}/messages`
