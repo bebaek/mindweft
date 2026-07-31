@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.admin_api import build_admin_router
@@ -39,6 +39,7 @@ from app.execution import (
     get_skill_configs,
     resolve_tenant_config_source,
 )
+from app.health import database_readiness_checks
 from app.llm import LLMAdapter, build_llm_adapter_from_env
 from app.mcp_broker import (
     MCPBrokerSession,
@@ -476,8 +477,21 @@ def create_app(
         app.mount("/web", StaticFiles(directory=WEB_CLIENT_DIR, html=True), name="web")
 
     @app.get("/health")
+    @app.get("/health/live")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/ready", response_model=None)
+    async def readiness() -> dict[str, object] | JSONResponse:
+        checks = await database_readiness_checks()
+        ready = all(checks.values())
+        payload: dict[str, object] = {
+            "status": "ready" if ready else "not_ready",
+            "checks": {name: "ok" if value else "failed" for name, value in checks.items()},
+        }
+        if not ready:
+            return JSONResponse(status_code=503, content=payload)
+        return payload
 
     @app.get("/config")
     async def config(request: Request, export: bool = False) -> dict[str, object]:

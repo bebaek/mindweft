@@ -824,7 +824,19 @@ By default, [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) binds the A
 network exposure, change the port mapping deliberately instead of binding to all
 interfaces by default.
 
-The container exposes `GET /health` for Compose health checks.
+The container exposes three unauthenticated health endpoints:
+
+- `GET /health` remains a compatibility alias for the shallow process check.
+- `GET /health/live` checks only that the API process can respond; temporary storage or dependency
+  failures do not make liveness fail.
+- `GET /health/ready` opens every configured SQLite-backed thread, MCP broker, private-value,
+  consent, admin, and encrypted OAuth store in read/write mode and queries its schema. It returns
+  `503` with per-store `ok`/`failed` states when any configured database is inaccessible. Paths and
+  raw exception details are not disclosed.
+
+Kubernetes should use `/health/live` for liveness and `/health/ready` for readiness. Dependencies
+running as sidecars should retain their own readiness probes so Kubernetes removes the whole pod
+from Service endpoints when any required container is unready.
 
 [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) mounts a named volume at
 `/data`, so `MINIGENT_THREAD_DB_PATH=/data/minigent-threads.db` survives container
@@ -1917,9 +1929,10 @@ MINIGENT_LOG_JSON_FIELDS={"service":"minigent","env":"dev"}
 MINIGENT_LOG_JSON_INCLUDE_TRACE_CONTEXT=true
 ```
 
-Successful Uvicorn access logs for `GET /health` are suppressed by default so Compose
-health checks do not flood normal logs. Non-2xx health responses are still logged, and
-the endpoint remains available for health probes and `minigent health`.
+Successful Uvicorn access logs for `GET /health`, `GET /health/live`, and
+`GET /health/ready` are suppressed by default so health probes do not flood normal logs. Non-2xx
+health responses are still logged. The compatibility endpoint remains available to `minigent
+health` clients.
 
 OpenTelemetry tracing is optional:
 
