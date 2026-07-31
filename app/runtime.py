@@ -220,6 +220,7 @@ class AgentRuntime:
                     {"text": protected_content},
                     context=ToolExecutionContext(
                         tenant_id=principal.tenant_id,
+                        user_id=principal.user_id,
                         thread_id=thread_id,
                     ),
                 ),
@@ -390,6 +391,7 @@ class AgentRuntime:
     ) -> ToolExecutionContext:
         return ToolExecutionContext(
             tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
             thread_id=thread_id,
             private_value_resolver=lambda text: self._private_value_store.resolve_for_tool(
                 principal.tenant_id,

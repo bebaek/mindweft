@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 from fastapi import HTTPException
 
+from app.mcp_identity import MCPIdentityTokenIssuer
 from app.models import ToolSpec
 from app.redaction import (
     ToolResultRedactionPolicy,
@@ -76,6 +77,9 @@ class MCPServerConfig:
     private_value_policy: MCPPrivateValuePolicy = field(default_factory=MCPPrivateValuePolicy)
     private_value_tool_policies: dict[str, MCPPrivateValuePolicy] = field(default_factory=dict)
     trusted_input_preprocessor_tools: frozenset[str] = frozenset()
+    forward_identity: bool = False
+    identity_audience: str = "private-dav"
+    identity_scopes: tuple[str, ...] = ()
     timeout_seconds: float = DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS
 
 
@@ -95,10 +99,16 @@ class MCPHTTPClient:
         config: MCPServerConfig,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: float | None = None,
+        identity_issuer: MCPIdentityTokenIssuer | None = None,
     ) -> None:
         self._config = config
         self._transport = transport
         self._timeout = timeout if timeout is not None else config.timeout_seconds
+        self._identity_issuer = identity_issuer
+        if config.forward_identity and self._identity_issuer is None:
+            self._identity_issuer = MCPIdentityTokenIssuer.from_env(
+                audience=config.identity_audience
+            )
         self._session_id: str | None = None
         self._negotiated_protocol_version: str = config.protocol_version
         self._initialized = False
@@ -142,7 +152,19 @@ class MCPHTTPClient:
             if not cursor:
                 return tools
 
-    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        context: Any | None = None,
+    ) -> Any:
+        if self._config.forward_identity and (
+            not getattr(context, "tenant_id", None) or not getattr(context, "user_id", None)
+        ):
+            raise HTTPException(
+                status_code=500,
+                detail=f"MCP tool '{self._config.name}.{tool_name}' requires user identity context",
+            )
         if not self._is_tool_allowed(tool_name):
             raise HTTPException(
                 status_code=403,
@@ -153,6 +175,7 @@ class MCPHTTPClient:
         result = await self._request(
             "tools/call",
             {"name": tool_name, "arguments": arguments},
+            identity_context=context,
         )
         if result.get("isError"):
             error_result = {key: value for key, value in result.items() if key != "_meta"}
@@ -267,8 +290,19 @@ class MCPHTTPClient:
                 detail=f"MCP notification failed for server '{self._config.name}': {response.text}",
             )
 
-    async def _request(self, method: str, params: dict[str, Any] | None) -> dict[str, Any]:
-        result, _ = await self._request_raw(method, params, use_protocol_header=True)
+    async def _request(
+        self,
+        method: str,
+        params: dict[str, Any] | None,
+        *,
+        identity_context: Any | None = None,
+    ) -> dict[str, Any]:
+        result, _ = await self._request_raw(
+            method,
+            params,
+            use_protocol_header=True,
+            identity_context=identity_context,
+        )
         return result
 
     async def _request_raw(
@@ -278,10 +312,14 @@ class MCPHTTPClient:
         *,
         use_protocol_header: bool,
         retry_invalid_session: bool = True,
+        identity_context: Any | None = None,
     ) -> tuple[dict[str, Any], httpx.Headers]:
         self._request_id += 1
         request_id = self._request_id
-        headers = self._build_headers(include_protocol=use_protocol_header)
+        headers = self._build_headers(
+            include_protocol=use_protocol_header,
+            identity_context=identity_context,
+        )
         payload: dict[str, Any] = {
             "jsonrpc": "2.0",
             "id": request_id,
@@ -317,6 +355,7 @@ class MCPHTTPClient:
                         params,
                         use_protocol_header=use_protocol_header,
                         retry_invalid_session=False,
+                        identity_context=identity_context,
                     )
                 raise HTTPException(
                     status_code=502,
@@ -396,12 +435,25 @@ class MCPHTTPClient:
             "invalid" in detail or "no valid" in detail or "missing" in detail
         )
 
-    def _build_headers(self, *, include_protocol: bool) -> dict[str, str]:
+    def _build_headers(
+        self,
+        *,
+        include_protocol: bool,
+        identity_context: Any | None = None,
+    ) -> dict[str, str]:
         headers = {
             "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json",
             **self._config.headers,
         }
+        if self._identity_issuer is not None:
+            tenant_id = getattr(identity_context, "tenant_id", None) or "__mcp_discovery__"
+            user_id = getattr(identity_context, "user_id", None) or "__mcp_discovery__"
+            headers["Authorization"] = "Bearer " + self._identity_issuer.issue(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                scopes=self._config.identity_scopes,
+            )
         if include_protocol:
             headers["MCP-Protocol-Version"] = self._negotiated_protocol_version
         if self._session_id:
@@ -498,6 +550,11 @@ def _parse_mcp_server_configs(raw_value: str) -> list[MCPServerConfig]:
             "trusted_input_preprocessor_tools",
             entry.get("trustedInputPreprocessorTools", []),
         )
+        forward_identity = entry.get("forward_identity", entry.get("forwardIdentity", False))
+        identity_audience = entry.get(
+            "identity_audience", entry.get("identityAudience", "private-dav")
+        )
+        identity_scopes = entry.get("identity_scopes", entry.get("identityScopes", []))
         timeout_seconds = _parse_positive_float_config(
             entry.get(
                 "timeout_seconds",
@@ -526,6 +583,20 @@ def _parse_mcp_server_configs(raw_value: str) -> list[MCPServerConfig]:
             raise RuntimeError(
                 f"MCP server '{name}' has duplicate trusted_input_preprocessor_tools"
             )
+        if not isinstance(forward_identity, bool):
+            raise RuntimeError(f"MCP server '{name}' has invalid forward_identity")
+        if not isinstance(identity_audience, str) or not identity_audience:
+            raise RuntimeError(f"MCP server '{name}' has invalid identity_audience")
+        if not isinstance(identity_scopes, list) or not all(
+            isinstance(item, str) and item for item in identity_scopes
+        ):
+            raise RuntimeError(f"MCP server '{name}' has invalid identity_scopes")
+        if len(set(identity_scopes)) != len(identity_scopes):
+            raise RuntimeError(f"MCP server '{name}' has duplicate identity_scopes")
+        if forward_identity and any(key.lower() == "authorization" for key in headers):
+            raise RuntimeError(
+                f"MCP server '{name}' cannot combine forward_identity with Authorization header"
+            )
         if allowed_tools is not None and not set(trusted_input_preprocessor_tools) <= set(
             allowed_tools
         ):
@@ -544,6 +615,9 @@ def _parse_mcp_server_configs(raw_value: str) -> list[MCPServerConfig]:
                 private_value_policy=private_value_policy,
                 private_value_tool_policies=private_value_tool_policies,
                 trusted_input_preprocessor_tools=frozenset(trusted_input_preprocessor_tools),
+                forward_identity=forward_identity,
+                identity_audience=identity_audience,
+                identity_scopes=tuple(identity_scopes),
                 timeout_seconds=timeout_seconds,
             )
         )

@@ -1694,6 +1694,16 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         entry.get("private_value_tool_policies", entry.get("privateValueToolPolicies")),
         context=f"Tenant '{tenant_id}' mcp server '{name}'",
     )
+    forward_identity = entry.get("forward_identity", entry.get("forwardIdentity", False))
+    identity_audience = entry.get("identity_audience", entry.get("identityAudience", "private-dav"))
+    identity_scopes = (
+        _optional_str_list(
+            tenant_id,
+            entry.get("identity_scopes", entry.get("identityScopes")),
+            f"mcp server '{name}' identity_scopes",
+        )
+        or []
+    )
     timeout_seconds = _positive_float_config(
         tenant_id,
         entry.get("timeout_seconds", entry.get("timeoutSeconds", 30.0)),
@@ -1707,6 +1717,18 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         isinstance(key, str) and isinstance(value, str) for key, value in headers.items()
     ):
         raise RuntimeError(f"Tenant '{tenant_id}' mcp server headers must be a string map")
+    if not isinstance(forward_identity, bool):
+        raise RuntimeError(f"Tenant '{tenant_id}' mcp server forward_identity must be a boolean")
+    if not isinstance(identity_audience, str) or not identity_audience:
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' mcp server identity_audience must be a non-empty string"
+        )
+    if len(set(identity_scopes)) != len(identity_scopes):
+        raise RuntimeError(f"Tenant '{tenant_id}' mcp server identity_scopes contains duplicates")
+    if forward_identity and any(key.lower() == "authorization" for key in headers):
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' mcp server cannot combine forward_identity with Authorization header"
+        )
     return MCPServerConfig(
         name=name,
         url=url,
@@ -1717,6 +1739,9 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         result_redaction_policy=result_redaction_policy,
         private_value_policy=private_value_policy,
         private_value_tool_policies=private_value_tool_policies,
+        forward_identity=forward_identity,
+        identity_audience=identity_audience,
+        identity_scopes=tuple(identity_scopes),
         timeout_seconds=timeout_seconds,
     )
 

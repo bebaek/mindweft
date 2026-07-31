@@ -3,7 +3,15 @@ import json
 import logging
 
 import httpx
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+)
 from fastapi import HTTPException
 
 from app.mcp import (
@@ -18,7 +26,9 @@ from app.mcp import (
     mcp_settings_from_env,
     parse_mcp_tool_result,
 )
+from app.mcp_identity import MCPIdentityTokenIssuer
 from app.redaction import RedactingLogFilter, install_log_redaction, redact_urls_in_text
+from app.tools import ToolExecutionContext
 
 
 def test_mcp_settings_from_env_mapping_defaults_to_empty() -> None:
@@ -66,6 +76,28 @@ def test_load_mcp_server_configs_from_env(monkeypatch) -> None:
     assert configs[0].timeout_seconds == 45
     assert configs[0].path_policy.deny_globs == ["**/.env*", "**/.git/**"]
     assert configs[0].path_policy.allow_globs == ["**/.env*.template"]
+
+
+def test_load_mcp_server_config_parses_forwarded_identity() -> None:
+    configs = load_mcp_server_configs_from_env(
+        {
+            "MINIGENT_MCP_SERVERS": json.dumps(
+                [
+                    {
+                        "name": "private-calendar",
+                        "url": "http://127.0.0.1:8769/mcp",
+                        "forward_identity": True,
+                        "identity_audience": "private-dav",
+                        "identity_scopes": ["dav:calendar:read", "dav:calendar:write"],
+                    }
+                ]
+            )
+        }
+    )
+
+    assert configs[0].forward_identity is True
+    assert configs[0].identity_audience == "private-dav"
+    assert configs[0].identity_scopes == ("dav:calendar:read", "dav:calendar:write")
 
 
 def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
@@ -152,6 +184,97 @@ def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
     assert requests[2]["headers"]["mcp-session-id"] == "session-123"
     assert requests[2]["headers"]["mcp-protocol-version"] == "2025-11-25"
     assert requests[3]["body"]["method"] == "tools/call"
+
+
+def test_mcp_http_client_forwards_short_lived_user_identity() -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
+    ).decode()
+    public_pem = (
+        private_key.public_key()
+        .public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
+    claims_by_method: dict[str, dict[str, object]] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read())
+        method = body["method"]
+        token = request.headers["authorization"].removeprefix("Bearer ")
+        claims_by_method[method] = jwt.decode(
+            token,
+            public_pem,
+            algorithms=["RS256"],
+            audience="private-dav",
+            issuer="https://minigent.example",
+        )
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        result: dict[str, object]
+        if method == "initialize":
+            result = {
+                "protocolVersion": "2025-11-25",
+                "serverInfo": {"name": "private-dav-gateway", "version": "1"},
+                "capabilities": {"tools": {}},
+            }
+        elif method == "tools/list":
+            result = {
+                "tools": [
+                    {
+                        "name": "calendar_accounts_list",
+                        "description": "List accounts",
+                        "inputSchema": {"type": "object"},
+                    }
+                ]
+            }
+        elif method == "tools/call":
+            result = {"structuredContent": {"accounts": []}}
+        else:
+            raise AssertionError(method)
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={"jsonrpc": "2.0", "id": body["id"], "result": result},
+        )
+
+    config = MCPServerConfig(
+        name="private-calendar",
+        url="https://calendar.example/mcp",
+        headers={},
+        forward_identity=True,
+        identity_audience="private-dav",
+        identity_scopes=("dav:calendar:read",),
+    )
+    issuer = MCPIdentityTokenIssuer(
+        issuer="https://minigent.example",
+        audience="private-dav",
+        private_key=private_pem,
+        key_id="test-key",
+    )
+    client = MCPHTTPClient(
+        config,
+        transport=httpx.MockTransport(handler),
+        identity_issuer=issuer,
+    )
+
+    asyncio.run(client.list_tools())
+    with pytest.raises(HTTPException, match="requires user identity context"):
+        asyncio.run(client.call_tool("calendar_accounts_list", {}))
+    asyncio.run(
+        client.call_tool(
+            "calendar_accounts_list",
+            {},
+            context=ToolExecutionContext(tenant_id="tenant-a", user_id="user-a"),
+        )
+    )
+
+    assert claims_by_method["initialize"]["tenant_id"] == "__mcp_discovery__"
+    assert claims_by_method["tools/list"]["sub"] == "__mcp_discovery__"
+    assert claims_by_method["tools/call"]["tenant_id"] == "tenant-a"
+    assert claims_by_method["tools/call"]["sub"] == "user-a"
+    assert claims_by_method["tools/call"]["scope"] == "dav:calendar:read"
+    assert "jti" in claims_by_method["tools/call"]
 
 
 def test_parse_mcp_tool_result_separates_private_metadata() -> None:

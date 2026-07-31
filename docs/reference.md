@@ -1623,6 +1623,34 @@ MINIGENT_MCP_SERVERS=[{"name":"demo","url":"https://example.com/mcp","headers":{
 
 Discovered MCP tools are namespaced as `<server>.<tool>`, for example `demo.echo`.
 
+Identity-aware MCP services can request a fresh user-scoped token on each tool call:
+
+```json
+{
+  "name": "private-calendar",
+  "url": "http://127.0.0.1:8769/mcp",
+  "headers": {},
+  "forward_identity": true,
+  "identity_audience": "private-dav",
+  "identity_scopes": ["dav:calendar:read", "dav:calendar:write"]
+}
+```
+
+Forwarded identity requires these Minigent process settings:
+
+```text
+MINIGENT_MCP_IDENTITY_ISSUER
+MINIGENT_MCP_IDENTITY_PRIVATE_KEY
+MINIGENT_MCP_IDENTITY_KEY_ID
+MINIGENT_MCP_IDENTITY_TOKEN_LIFETIME_SECONDS
+```
+
+The private key remains in Minigent; the MCP service receives only short-lived signed bearer
+tokens. Minigent derives `tenant_id` and `sub` from the authenticated runtime principal rather than
+tool arguments. Discovery uses a non-user `__mcp_discovery__` identity. Token lifetime defaults to
+300 seconds and cannot exceed 300 seconds. A server cannot combine `forward_identity` with a static
+`Authorization` header.
+
 Current scope:
 - `initialize`
 - `notifications/initialized`

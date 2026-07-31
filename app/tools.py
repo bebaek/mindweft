@@ -90,6 +90,7 @@ _PEER_AGENT_PREVIEW_CHARS = 500
 @dataclass(frozen=True)
 class ToolExecutionContext:
     tenant_id: str | None = None
+    user_id: str | None = None
     thread_id: str | None = None
     private_value_resolver: Callable[[str], str] | None = None
     private_value_validator: Callable[[str], None] | None = None
@@ -539,7 +540,7 @@ def build_tool_registry(
                         description=spec.description,
                         input_schema=spec.input_schema,
                         handler=lambda arguments, context=None, c=state.client, tool_name=raw_tool_name: (
-                            c.call_tool(tool_name, arguments)
+                            c.call_tool(tool_name, arguments, context=context)
                         ),
                         result_redaction_policy=state.config.result_redaction_policy,
                         private_value_policy=state.config.private_value_tool_policies.get(
@@ -565,7 +566,7 @@ def build_tool_registry(
                     description=spec.description,
                     input_schema=spec.input_schema,
                     handler=lambda arguments, context=None, c=client, tool_name=raw_tool_name: (
-                        c.call_tool(tool_name, arguments)
+                        c.call_tool(tool_name, arguments, context=context)
                     ),
                     result_redaction_policy=config.result_redaction_policy,
                     private_value_policy=config.private_value_tool_policies.get(
@@ -590,6 +591,9 @@ def build_tool_registry(
                     "trusted_input_preprocessor_tools": sorted(
                         config.trusted_input_preprocessor_tools
                     ),
+                    "forward_identity": config.forward_identity,
+                    "identity_audience": config.identity_audience,
+                    "identity_scopes": list(config.identity_scopes),
                     "path_policy": {
                         "deny_globs": list(config.path_policy.deny_globs),
                         "allow_globs": list(config.path_policy.allow_globs),
@@ -633,6 +637,9 @@ def build_tool_registry(
                     "trusted_input_preprocessor_tools": sorted(
                         config.trusted_input_preprocessor_tools
                     ),
+                    "forward_identity": config.forward_identity,
+                    "identity_audience": config.identity_audience,
+                    "identity_scopes": list(config.identity_scopes),
                     "path_policy": {
                         "deny_globs": list(config.path_policy.deny_globs),
                         "allow_globs": list(config.path_policy.allow_globs),

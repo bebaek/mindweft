@@ -1632,6 +1632,9 @@ def test_parse_tenant_execution_config_supports_tool_result_redaction_policy() -
                         "url": "https://docs.example/mcp",
                         "headers": {},
                         "result_redaction": {"enabled": False},
+                        "forward_identity": True,
+                        "identity_audience": "private-dav",
+                        "identity_scopes": ["dav:calendar:read"],
                     }
                 ],
             },
@@ -1642,6 +1645,9 @@ def test_parse_tenant_execution_config_supports_tool_result_redaction_policy() -
     assert config.tools.result_redaction_policy.mode == "full"
     assert config.tools.result_redaction_policy.sensitive_tools == frozenset({"echo"})
     assert config.tools.mcp_servers[0].result_redaction_policy.enabled is False
+    assert config.tools.mcp_servers[0].forward_identity is True
+    assert config.tools.mcp_servers[0].identity_audience == "private-dav"
+    assert config.tools.mcp_servers[0].identity_scopes == ("dav:calendar:read",)
 
 
 def test_runtime_appends_skill_prompt_to_system_prompt() -> None:

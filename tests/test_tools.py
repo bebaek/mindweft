@@ -1238,6 +1238,9 @@ def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(
             "tool_count": 1,
             "allowed_tools": None,
             "trusted_input_preprocessor_tools": [],
+            "forward_identity": False,
+            "identity_audience": "private-dav",
+            "identity_scopes": [],
             "path_policy": {"deny_globs": [], "allow_globs": []},
             "result_redaction": {
                 "enabled": True,

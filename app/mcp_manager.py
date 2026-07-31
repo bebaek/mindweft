@@ -17,7 +17,12 @@ from app.models import ToolSpec
 class MCPClientProtocol(Protocol):
     async def list_tools(self) -> list[ToolSpec]: ...
 
-    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any: ...
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        context: Any | None = None,
+    ) -> Any: ...
 
     def server_info(self) -> MCPServerInfo: ...
 
@@ -50,6 +55,9 @@ class MCPServerRuntimeState:
             "trusted_input_preprocessor_tools": sorted(
                 self.config.trusted_input_preprocessor_tools
             ),
+            "forward_identity": self.config.forward_identity,
+            "identity_audience": self.config.identity_audience,
+            "identity_scopes": list(self.config.identity_scopes),
             "path_policy": {
                 "deny_globs": list(self.config.path_policy.deny_globs),
                 "allow_globs": list(self.config.path_policy.allow_globs),
