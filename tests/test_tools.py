@@ -95,6 +95,9 @@ def test_tool_registry_resolves_only_selected_private_argument_paths(
                 "send",
                 arguments,
                 context=ToolExecutionContext(
+                    tenant_id="tenant-a",
+                    user_id="user-a",
+                    thread_id="thread-a",
                     private_value_resolver=lambda text: values[text],
                     private_value_authorizer=lambda name, fingerprint, disclosures: (
                         authorized.append((name, fingerprint, disclosures))
@@ -113,6 +116,9 @@ def test_tool_registry_resolves_only_selected_private_argument_paths(
     ]
     assert arguments["recipient"] == {"email": "{{pii:email:to-ref}}"}
     assert received_contexts[0] is not None
+    assert received_contexts[0].tenant_id == "tenant-a"
+    assert received_contexts[0].user_id == "user-a"
+    assert received_contexts[0].thread_id == "thread-a"
     assert received_contexts[0].private_value_resolver is None
     assert received_contexts[0].private_value_validator is None
     assert received_contexts[0].private_value_authorizer is None

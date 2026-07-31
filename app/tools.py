@@ -181,6 +181,7 @@ class ToolRegistry:
             handler_context = (
                 ToolExecutionContext(
                     tenant_id=context.tenant_id,
+                    user_id=context.user_id,
                     thread_id=context.thread_id,
                 )
                 if context is not None
