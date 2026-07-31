@@ -82,7 +82,13 @@ from app.settings import (
     _image_input_public_dict,
     load_settings,
 )
-from app.store import InMemoryThreadStore, SQLiteThreadStore, ThreadStore, ThreadStoreSettings
+from app.store import (
+    DEFAULT_RUN_LEASE_SECONDS,
+    InMemoryThreadStore,
+    SQLiteThreadStore,
+    ThreadStore,
+    ThreadStoreSettings,
+)
 from app.tenants import require_active_tenant_principal, require_tenant_context
 from app.tools import ToolRegistry, build_tool_registry_from_env
 
@@ -182,6 +188,57 @@ def _validate_and_normalize_message_request(
     return request.model_copy(update={"content": text_content})
 
 
+async def _monitor_distributed_run(
+    task: asyncio.Task[Any],
+    store: ThreadStore,
+    tenant_id: str,
+    thread_id: str,
+) -> None:
+    run_id: str | None = None
+    while not task.done():
+        await asyncio.sleep(1.0)
+        if task.done():
+            return
+        if run_id is None:
+            run_id = store.owned_run_id(tenant_id, thread_id)
+            if run_id is None:
+                continue
+        active = store.heartbeat_run(
+            tenant_id,
+            thread_id,
+            run_id=run_id,
+            lease_seconds=DEFAULT_RUN_LEASE_SECONDS,
+        )
+        if active:
+            if store.run_cancellation_requested(tenant_id, thread_id, run_id=run_id):
+                task.cancel()
+                return
+        else:
+            task.cancel()
+            return
+
+
+async def _await_backend_run(
+    request: Request, principal: Principal, thread_id: str
+) -> tuple[str, dict[str, Any] | None]:
+    run_key = (principal.tenant_id, thread_id)
+    task = asyncio.create_task(request.app.state.agent_backend.run_thread(principal, thread_id))
+    request.app.state.active_run_tasks[run_key] = task
+    monitor = asyncio.create_task(
+        _monitor_distributed_run(task, request.app.state.store, principal.tenant_id, thread_id)
+    )
+    try:
+        return await task
+    finally:
+        if request.app.state.active_run_tasks.get(run_key) is task:
+            request.app.state.active_run_tasks.pop(run_key, None)
+        monitor.cancel()
+        try:
+            await monitor
+        except asyncio.CancelledError:
+            pass
+
+
 async def _run_thread_ndjson_stream(
     request: Request,
     principal: Principal,
@@ -240,6 +297,14 @@ async def _run_thread_ndjson_stream(
     run_key = (principal.tenant_id, thread_id)
     task = asyncio.create_task(run())
     request.app.state.active_run_tasks[run_key] = task
+    monitor = asyncio.create_task(
+        _monitor_distributed_run(
+            task,
+            request.app.state.store,
+            principal.tenant_id,
+            thread_id,
+        )
+    )
     try:
         while True:
             if task.done() and queue.empty():
@@ -250,6 +315,11 @@ async def _run_thread_ndjson_stream(
     finally:
         if request.app.state.active_run_tasks.get(run_key) is task:
             request.app.state.active_run_tasks.pop(run_key, None)
+        monitor.cancel()
+        try:
+            await monitor
+        except asyncio.CancelledError:
+            pass
         if not task.done():
             task.cancel()
             try:
@@ -313,6 +383,7 @@ def create_app(
         app.state.store = build_thread_store(settings.thread_store)
     else:
         app.state.store = build_thread_store_from_env()
+    app.state.store.recover_stale_runs()
     app.state.mcp_manager = mcp_manager
     app.state.mcp_broker_sessions = MCPBrokerSessionStore()
     app.state.oauth_flows = build_oauth_flow_store_from_env()
@@ -780,7 +851,7 @@ def create_app(
             store=request.app.state.store,
             thread_id=thread_id,
         )
-        reply, _metadata = await request.app.state.agent_backend.run_thread(principal, thread_id)
+        reply, _metadata = await _await_backend_run(request, principal, thread_id)
         return RunThreadResponse(reply=reply)
 
     @app.post("/threads/{thread_id}/run/stream", response_model=None)
@@ -811,8 +882,8 @@ def create_app(
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> dict[str, object]:
         run_key = (principal.tenant_id, thread_id)
-        task = request.app.state.active_run_tasks.pop(run_key, None)
-        cancelled = False
+        task = request.app.state.active_run_tasks.get(run_key)
+        cancelled = request.app.state.store.request_run_cancellation(principal.tenant_id, thread_id)
         if task is not None and not task.done():
             task.cancel()
             cancelled = True
@@ -820,13 +891,12 @@ def create_app(
                 await task
             except asyncio.CancelledError:
                 pass
-        thread = request.app.state.store.get_thread(principal.tenant_id, thread_id)
-        if thread.status == ThreadStatus.RUNNING:
-            request.app.state.store.set_thread_status(
-                principal.tenant_id,
-                thread_id,
-                ThreadStatus.IDLE,
-            )
+        if not cancelled:
+            thread = request.app.state.store.get_thread(principal.tenant_id, thread_id)
+            if thread.status == ThreadStatus.RUNNING:
+                request.app.state.store.set_thread_status(
+                    principal.tenant_id, thread_id, ThreadStatus.IDLE
+                )
         return {"cancelled": cancelled, "thread_id": thread_id}
 
     @app.get("/threads/{thread_id}/private-value-consents/pending")

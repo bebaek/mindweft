@@ -3,19 +3,36 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from collections.abc import Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from contextvars import ContextVar
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any, Iterator, Protocol
+from uuid import uuid4
 
 from fastapi import HTTPException
 
 from app.models import AuditRecord, Message, Thread, ThreadContext, ThreadStatus, utc_now
 
 THREAD_DB_PATH_ENV = "MINIGENT_THREAD_DB_PATH"
+DEFAULT_RUN_LEASE_SECONDS = 30.0
+_CURRENT_RUN: ContextVar[tuple[str, str, str] | None] = ContextVar(
+    "minigent_current_thread_run", default=None
+)
+
+
+@dataclass(frozen=True)
+class ThreadRun:
+    tenant_id: str
+    thread_id: str
+    run_id: str
+    owner_instance_id: str
+    lease_expires_at: float
+    cancellation_requested: bool = False
 
 
 @dataclass(frozen=True)
@@ -139,6 +156,20 @@ class ThreadStore(Protocol):
 
     def start_run(self, tenant_id: str, thread_id: str) -> Thread: ...
 
+    def owned_run_id(self, tenant_id: str, thread_id: str) -> str | None: ...
+
+    def heartbeat_run(
+        self, tenant_id: str, thread_id: str, *, run_id: str, lease_seconds: float
+    ) -> bool: ...
+
+    def run_cancellation_requested(
+        self, tenant_id: str, thread_id: str, *, run_id: str
+    ) -> bool: ...
+
+    def request_run_cancellation(self, tenant_id: str, thread_id: str) -> bool: ...
+
+    def recover_stale_runs(self) -> int: ...
+
 
 class InMemoryThreadStore:
     def __init__(self) -> None:
@@ -147,6 +178,8 @@ class InMemoryThreadStore:
         self._messages: dict[str, list[Message]] = {}
         self._audit_records: list[AuditRecord] = []
         self._lock = Lock()
+        self._instance_id = uuid4().hex
+        self._runs: dict[tuple[str, str], ThreadRun] = {}
 
     def create_thread(
         self,
@@ -343,6 +376,7 @@ class InMemoryThreadStore:
 
     def append_message(self, tenant_id: str, message: Message) -> Message:
         with self._lock:
+            self._require_current_run(tenant_id, message.thread_id)
             thread = self._require_thread(tenant_id, message.thread_id)
             self._messages[message.thread_id].append(message)
             thread.updated_at = utc_now()
@@ -351,6 +385,14 @@ class InMemoryThreadStore:
     def set_thread_status(self, tenant_id: str, thread_id: str, status: ThreadStatus) -> Thread:
         with self._lock:
             thread = self._require_thread(tenant_id, thread_id)
+            current = _CURRENT_RUN.get()
+            run = self._runs.get((tenant_id, thread_id))
+            if current is not None and current[:2] == (tenant_id, thread_id):
+                if run is None or run.run_id != current[2]:
+                    return thread
+                if status != ThreadStatus.RUNNING:
+                    self._runs.pop((tenant_id, thread_id), None)
+                    _CURRENT_RUN.set(None)
             thread.status = status
             thread.updated_at = utc_now()
             return thread
@@ -373,6 +415,7 @@ class InMemoryThreadStore:
         summarized_message_count: int,
     ) -> ThreadContext:
         with self._lock:
+            self._require_current_run(tenant_id, thread_id)
             thread = self._require_thread(tenant_id, thread_id)
             context = self._contexts[thread_id]
             context.summary = summary
@@ -383,6 +426,7 @@ class InMemoryThreadStore:
 
     def compact_thread_messages(self, tenant_id: str, thread_id: str) -> ThreadContext:
         with self._lock:
+            self._require_current_run(tenant_id, thread_id)
             thread = self._require_thread(tenant_id, thread_id)
             context = self._contexts[thread_id]
             if context.summarized_message_count <= 0:
@@ -402,9 +446,82 @@ class InMemoryThreadStore:
                 raise HTTPException(
                     status_code=409, detail=f"Thread '{thread_id}' is already running"
                 )
+            run_id = uuid4().hex
+            now = time.time()
+            self._runs[(tenant_id, thread_id)] = ThreadRun(
+                tenant_id=tenant_id,
+                thread_id=thread_id,
+                run_id=run_id,
+                owner_instance_id=self._instance_id,
+                lease_expires_at=now + DEFAULT_RUN_LEASE_SECONDS,
+            )
+            _CURRENT_RUN.set((tenant_id, thread_id, run_id))
             thread.status = ThreadStatus.RUNNING
             thread.updated_at = utc_now()
             return thread
+
+    def owned_run_id(self, tenant_id: str, thread_id: str) -> str | None:
+        with self._lock:
+            run = self._runs.get((tenant_id, thread_id))
+            if run is None or run.owner_instance_id != self._instance_id:
+                return None
+            return run.run_id
+
+    def heartbeat_run(
+        self, tenant_id: str, thread_id: str, *, run_id: str, lease_seconds: float
+    ) -> bool:
+        with self._lock:
+            key = (tenant_id, thread_id)
+            run = self._runs.get(key)
+            now = time.time()
+            if (
+                run is None
+                or run.run_id != run_id
+                or run.owner_instance_id != self._instance_id
+                or run.lease_expires_at <= now
+            ):
+                return False
+            self._runs[key] = replace(run, lease_expires_at=now + lease_seconds)
+            return True
+
+    def run_cancellation_requested(self, tenant_id: str, thread_id: str, *, run_id: str) -> bool:
+        with self._lock:
+            run = self._runs.get((tenant_id, thread_id))
+            return bool(
+                run is not None
+                and run.run_id == run_id
+                and run.owner_instance_id == self._instance_id
+                and run.cancellation_requested
+            )
+
+    def request_run_cancellation(self, tenant_id: str, thread_id: str) -> bool:
+        with self._lock:
+            key = (tenant_id, thread_id)
+            run = self._runs.get(key)
+            if run is None:
+                return False
+            self._runs[key] = replace(run, cancellation_requested=True)
+            return True
+
+    def recover_stale_runs(self) -> int:
+        with self._lock:
+            now = time.time()
+            stale = [key for key, run in self._runs.items() if run.lease_expires_at <= now]
+            for tenant_id, thread_id in stale:
+                self._runs.pop((tenant_id, thread_id), None)
+                thread = self._require_thread(tenant_id, thread_id)
+                if thread.status == ThreadStatus.RUNNING:
+                    thread.status = ThreadStatus.ERROR
+                    thread.updated_at = utc_now()
+            return len(stale)
+
+    def _require_current_run(self, tenant_id: str, thread_id: str) -> None:
+        current = _CURRENT_RUN.get()
+        if current is None or current[:2] != (tenant_id, thread_id):
+            return
+        run = self._runs.get((tenant_id, thread_id))
+        if run is None or run.run_id != current[2] or run.lease_expires_at <= time.time():
+            raise HTTPException(status_code=409, detail="Thread run lease was lost")
 
     def _require_thread(self, tenant_id: str, thread_id: str) -> Thread:
         thread = self._threads.get(thread_id)
@@ -443,6 +560,7 @@ class SQLiteThreadStore:
         if self._db_path.parent != Path(""):
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = Lock()
+        self._instance_id = uuid4().hex
         self._initialize()
 
     def create_thread(
@@ -657,6 +775,7 @@ class SQLiteThreadStore:
 
     def append_message(self, tenant_id: str, message: Message) -> Message:
         with self._lock, self._connection() as conn:
+            self._require_current_run(conn, tenant_id, message.thread_id)
             thread = self._require_thread(conn, tenant_id, message.thread_id)
             conn.execute(
                 "INSERT INTO messages (thread_id, payload) VALUES (?, ?)",
@@ -669,6 +788,23 @@ class SQLiteThreadStore:
     def set_thread_status(self, tenant_id: str, thread_id: str, status: ThreadStatus) -> Thread:
         with self._lock, self._connection() as conn:
             thread = self._require_thread(conn, tenant_id, thread_id)
+            current = _CURRENT_RUN.get()
+            if current is not None and current[:2] == (tenant_id, thread_id):
+                owned = conn.execute(
+                    """
+                    SELECT 1 FROM thread_runs
+                    WHERE tenant_id = ? AND thread_id = ? AND run_id = ? AND owner_instance_id = ?
+                    """,
+                    (tenant_id, thread_id, current[2], self._instance_id),
+                ).fetchone()
+                if owned is None:
+                    return thread
+                if status != ThreadStatus.RUNNING:
+                    conn.execute(
+                        "DELETE FROM thread_runs WHERE tenant_id = ? AND thread_id = ? AND run_id = ?",
+                        (tenant_id, thread_id, current[2]),
+                    )
+                    _CURRENT_RUN.set(None)
             thread.status = status
             thread.updated_at = utc_now()
             self._save_thread(conn, thread)
@@ -692,6 +828,7 @@ class SQLiteThreadStore:
         summarized_message_count: int,
     ) -> ThreadContext:
         with self._lock, self._connection() as conn:
+            self._require_current_run(conn, tenant_id, thread_id)
             thread = self._require_thread(conn, tenant_id, thread_id)
             context = self._require_context(conn, thread_id)
             context.summary = summary
@@ -704,6 +841,7 @@ class SQLiteThreadStore:
 
     def compact_thread_messages(self, tenant_id: str, thread_id: str) -> ThreadContext:
         with self._lock, self._connection() as conn:
+            self._require_current_run(conn, tenant_id, thread_id)
             thread = self._require_thread(conn, tenant_id, thread_id)
             context = self._require_context(conn, thread_id)
             if context.summarized_message_count <= 0:
@@ -727,21 +865,139 @@ class SQLiteThreadStore:
 
     def start_run(self, tenant_id: str, thread_id: str) -> Thread:
         with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             thread = self._require_thread(conn, tenant_id, thread_id)
             if thread.status == ThreadStatus.RUNNING:
                 raise HTTPException(
                     status_code=409, detail=f"Thread '{thread_id}' is already running"
                 )
+            run_id = uuid4().hex
+            now = time.time()
+            conn.execute(
+                """
+                INSERT INTO thread_runs (
+                  tenant_id, thread_id, run_id, owner_instance_id, lease_expires_at,
+                  cancellation_requested, started_at, heartbeat_at
+                ) VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    tenant_id,
+                    thread_id,
+                    run_id,
+                    self._instance_id,
+                    now + DEFAULT_RUN_LEASE_SECONDS,
+                    now,
+                    now,
+                ),
+            )
             thread.status = ThreadStatus.RUNNING
             thread.updated_at = utc_now()
             self._save_thread(conn, thread)
+            _CURRENT_RUN.set((tenant_id, thread_id, run_id))
             return thread
+
+    def owned_run_id(self, tenant_id: str, thread_id: str) -> str | None:
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT run_id FROM thread_runs
+                WHERE tenant_id = ? AND thread_id = ? AND owner_instance_id = ?
+                """,
+                (tenant_id, thread_id, self._instance_id),
+            ).fetchone()
+            return str(row[0]) if row is not None else None
+
+    def heartbeat_run(
+        self, tenant_id: str, thread_id: str, *, run_id: str, lease_seconds: float
+    ) -> bool:
+        now = time.time()
+        with self._lock, self._connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE thread_runs
+                SET lease_expires_at = ?, heartbeat_at = ?
+                WHERE tenant_id = ? AND thread_id = ? AND run_id = ? AND owner_instance_id = ?
+                  AND lease_expires_at > ?
+                """,
+                (
+                    now + lease_seconds,
+                    now,
+                    tenant_id,
+                    thread_id,
+                    run_id,
+                    self._instance_id,
+                    now,
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def run_cancellation_requested(self, tenant_id: str, thread_id: str, *, run_id: str) -> bool:
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT cancellation_requested FROM thread_runs
+                WHERE tenant_id = ? AND thread_id = ? AND run_id = ? AND owner_instance_id = ?
+                """,
+                (tenant_id, thread_id, run_id, self._instance_id),
+            ).fetchone()
+            return bool(row is not None and row[0])
+
+    def request_run_cancellation(self, tenant_id: str, thread_id: str) -> bool:
+        with self._lock, self._connection() as conn:
+            self._require_thread(conn, tenant_id, thread_id)
+            cursor = conn.execute(
+                """
+                UPDATE thread_runs SET cancellation_requested = 1
+                WHERE tenant_id = ? AND thread_id = ?
+                """,
+                (tenant_id, thread_id),
+            )
+            return cursor.rowcount == 1
+
+    def recover_stale_runs(self) -> int:
+        now = time.time()
+        recovered = 0
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            stale_rows = conn.execute(
+                "SELECT tenant_id, thread_id FROM thread_runs WHERE lease_expires_at <= ?",
+                (now,),
+            ).fetchall()
+            stale_keys = {(str(row[0]), str(row[1])) for row in stale_rows}
+            for tenant_id, thread_id in stale_keys:
+                thread = self._require_thread(conn, tenant_id, thread_id)
+                if thread.status == ThreadStatus.RUNNING:
+                    thread.status = ThreadStatus.ERROR
+                    thread.updated_at = utc_now()
+                    self._save_thread(conn, thread)
+                conn.execute(
+                    "DELETE FROM thread_runs WHERE tenant_id = ? AND thread_id = ?",
+                    (tenant_id, thread_id),
+                )
+                recovered += 1
+            rows = conn.execute("SELECT tenant_id, thread_id, payload FROM threads").fetchall()
+            for tenant_id_value, thread_id_value, payload in rows:
+                thread = Thread.model_validate(json.loads(payload))
+                key = (str(tenant_id_value), str(thread_id_value))
+                if thread.status != ThreadStatus.RUNNING or key in stale_keys:
+                    continue
+                active = conn.execute(
+                    "SELECT 1 FROM thread_runs WHERE tenant_id = ? AND thread_id = ?",
+                    key,
+                ).fetchone()
+                if active is None:
+                    thread.status = ThreadStatus.ERROR
+                    thread.updated_at = utc_now()
+                    self._save_thread(conn, thread)
+                    recovered += 1
+            return recovered
 
     def _initialize(self) -> None:
         with self._connection() as conn:
             conn.executescript(
                 """
                 PRAGMA foreign_keys = ON;
+                PRAGMA journal_mode = WAL;
                 CREATE TABLE IF NOT EXISTS threads (
                     thread_id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
@@ -759,6 +1015,18 @@ class SQLiteThreadStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_thread_position
                     ON messages (thread_id, position);
+                CREATE TABLE IF NOT EXISTS thread_runs (
+                    thread_id TEXT PRIMARY KEY REFERENCES threads(thread_id) ON DELETE CASCADE,
+                    tenant_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL UNIQUE,
+                    owner_instance_id TEXT NOT NULL,
+                    lease_expires_at REAL NOT NULL,
+                    cancellation_requested INTEGER NOT NULL CHECK (cancellation_requested IN (0, 1)),
+                    started_at REAL NOT NULL,
+                    heartbeat_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_thread_runs_lease
+                    ON thread_runs (lease_expires_at);
                 CREATE TABLE IF NOT EXISTS audit_records (
                     audit_id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
@@ -786,8 +1054,9 @@ class SQLiteThreadStore:
             conn.close()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
+        conn = sqlite3.connect(self._db_path, timeout=10)
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 10000")
         return conn
 
     def _load_matching_threads(
@@ -866,6 +1135,23 @@ class SQLiteThreadStore:
             updated_after=None,
         )
         return [thread for thread in threads if thread.updated_at < updated_before]
+
+    def _require_current_run(
+        self, conn: sqlite3.Connection, tenant_id: str, thread_id: str
+    ) -> None:
+        current = _CURRENT_RUN.get()
+        if current is None or current[:2] != (tenant_id, thread_id):
+            return
+        row = conn.execute(
+            """
+            SELECT 1 FROM thread_runs
+            WHERE tenant_id = ? AND thread_id = ? AND run_id = ?
+              AND owner_instance_id = ? AND lease_expires_at > ?
+            """,
+            (tenant_id, thread_id, current[2], self._instance_id, time.time()),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=409, detail="Thread run lease was lost")
 
     def _require_thread(self, conn: sqlite3.Connection, tenant_id: str, thread_id: str) -> Thread:
         row = conn.execute(

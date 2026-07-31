@@ -669,13 +669,16 @@ and [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) for running Minigen
 host that already manages apps with Docker Compose.
 
 The runtime can persist thread state and message history in SQLite when
-`MINIGENT_THREAD_DB_PATH` points at a writable database path. Without that setting,
-threads remain in memory and are lost on restart. The optional admin control plane can
-also persist tenant execution config in SQLite when `MINIGENT_ADMIN_DB_PATH` points at a
-mounted volume.
+`MINIGENT_THREAD_DB_PATH` points at a writable database path. SQLite-backed runs acquire an atomic
+per-thread lease, heartbeat that lease while executing, and accept cancellation requests from any
+replica. Expired leases are recovered as errored runs at startup; run IDs fence late completion and
+message writes from stale owners. Without that setting, threads and run coordination remain in
+memory and are lost on restart. The optional admin control plane can also persist tenant execution
+config in SQLite when `MINIGENT_ADMIN_DB_PATH` points at a mounted volume.
 
-The current safe deployment shape is a single Minigent container behind your existing
-reverse proxy.
+The thread, OAuth, private-value, and DAV stores support shared replica state. MCP peer-broker
+sessions still contain a process-local tool registry, so deployments using that backend should
+remain single-replica until broker sessions are externalized.
 
 Thread history is compacted in memory as conversations grow. Older turns are folded into
 the thread summary and removed from the raw message list, so `GET /threads/{thread_id}/messages`
