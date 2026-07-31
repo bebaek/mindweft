@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import sqlite3
 import threading
@@ -109,3 +110,33 @@ def test_sqlite_stale_run_recovery_fences_old_owner(tmp_path: Path) -> None:
 
     owner.set_thread_status("tenant-a", thread_id, ThreadStatus.IDLE)
     assert recovery.get_thread("tenant-a", thread_id).status == ThreadStatus.ERROR
+
+
+def test_periodic_recovery_marks_expired_run_error_without_restart(tmp_path: Path) -> None:
+    from app.main import _recover_stale_runs_periodically
+
+    async def scenario() -> None:
+        database = tmp_path / "threads.db"
+        owner = SQLiteThreadStore(database)
+        recovery = SQLiteThreadStore(database)
+        thread_id = owner.create_thread("tenant-a").thread_id
+        owner.start_run("tenant-a", thread_id)
+        with sqlite3.connect(database) as connection:
+            connection.execute("UPDATE thread_runs SET lease_expires_at = 0")
+            connection.commit()
+
+        task = asyncio.create_task(
+            _recover_stale_runs_periodically(recovery, interval_seconds=0.01)
+        )
+        try:
+            for _ in range(100):
+                if recovery.get_thread("tenant-a", thread_id).status == ThreadStatus.ERROR:
+                    break
+                await asyncio.sleep(0.01)
+            assert recovery.get_thread("tenant-a", thread_id).status == ThreadStatus.ERROR
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(scenario())

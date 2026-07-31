@@ -111,6 +111,23 @@ configure_logging()
 
 logger = logging.getLogger(__name__)
 WEB_CLIENT_DIR = Path(__file__).resolve().parent / "static" / "web"
+STALE_RUN_RECOVERY_INTERVAL_SECONDS = 5.0
+
+
+async def _recover_stale_runs_periodically(
+    store: ThreadStore,
+    *,
+    interval_seconds: float = STALE_RUN_RECOVERY_INTERVAL_SECONDS,
+) -> None:
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            recovered = await asyncio.to_thread(store.recover_stale_runs)
+        except Exception:  # pragma: no cover - defensive background boundary
+            logger.exception("thread_run.stale_recovery_failed")
+            continue
+        if recovered:
+            logger.warning("thread_run.stale_recovered count=%s", recovered)
 
 
 def build_thread_store(settings: ThreadStoreSettings) -> ThreadStore:
@@ -374,9 +391,15 @@ def create_app(
         if mcp_manager is not None:
             await mcp_manager.start()
         _log_available_internal_tools(app.state.execution_resolver)
+        stale_recovery_task = asyncio.create_task(_recover_stale_runs_periodically(app.state.store))
         try:
             yield
         finally:
+            stale_recovery_task.cancel()
+            try:
+                await stale_recovery_task
+            except asyncio.CancelledError:
+                pass
             if mcp_manager is not None:
                 await mcp_manager.stop()
 

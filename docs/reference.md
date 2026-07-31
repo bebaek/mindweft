@@ -677,9 +677,10 @@ host that already manages apps with Docker Compose.
 The runtime can persist thread state and message history in SQLite when
 `MINIGENT_THREAD_DB_PATH` points at a writable database path. SQLite-backed runs acquire an atomic
 per-thread lease, heartbeat that lease while executing, and accept cancellation requests from any
-replica. Expired leases are recovered as errored runs at startup; run IDs fence late completion and
-message writes from stale owners. Without that setting, threads and run coordination remain in
-memory and are lost on restart. The optional admin control plane can also persist tenant execution
+replica. Expired leases are recovered as errored runs at startup and by a five-second background
+sweep in every replica; run IDs fence late completion and message writes from stale owners. Without
+that setting, threads and run coordination remain in memory and are lost on restart. The optional
+admin control plane can also persist tenant execution
 config in SQLite when `MINIGENT_ADMIN_DB_PATH` points at a mounted volume.
 
 The thread, OAuth, private-value, DAV, run-lease, and optional MCP broker stores support shared
