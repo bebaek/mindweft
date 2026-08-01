@@ -128,6 +128,11 @@ class AgentBackendRouter(AgentBackend):
         if backend.type == AGENT_BACKEND_PEER_AGENT:
             if backend.peer is None or backend.cwd is None:
                 raise HTTPException(status_code=500, detail="peer_agent backend is incomplete")
+            if _thread_has_image_input(self._store, principal.tenant_id, thread_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail="peer_agent backend does not support image input",
+                )
             return await self._run_peer_agent_thread(
                 principal,
                 thread_id,
@@ -540,6 +545,14 @@ def _render_peer_context_message(message: Message) -> str:
         lines.append(message.content)
         return "\n".join(lines)
     return f"[{message.role.value}]\n{message.content}"
+
+
+def _thread_has_image_input(store: ThreadStore, tenant_id: str, thread_id: str) -> bool:
+    return any(
+        part.type == "image"
+        for message in store.list_messages(tenant_id, thread_id)
+        for part in (message.parts or [])
+    )
 
 
 def _usage_from_peer_task(task: dict[str, object]) -> dict[str, int] | None:

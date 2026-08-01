@@ -69,6 +69,8 @@ QUALITY_TIMEOUT_ENV = "MINIGENT_REMOTE_QUALITY_TIMEOUT"
 QUALITY_MAX_PAYLOAD_CHARS_ENV = "MINIGENT_REMOTE_QUALITY_MAX_PAYLOAD_CHARS"
 LLM_PROFILES_ENV = "MINIGENT_LLM_PROFILES"
 LLM_DEFAULT_PROFILE_ENV = "MINIGENT_LLM_DEFAULT_PROFILE"
+LLM_INPUT_MODALITIES_ENV = "MINIGENT_LLM_INPUT_MODALITIES"
+SUPPORTED_INPUT_MODALITIES = frozenset({"text", "image", "audio", "video", "document"})
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,7 @@ class TenantLLMConfig:
     thinking_budget_tokens: int | None = None
     thinking_effort: str = "high"
     prompt_cache_enabled: bool = True
+    input_modalities: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -682,6 +685,8 @@ def _llm_export_public_dict(
         exported["url" if provider == GENERIC_OAUTH_PROVIDER else "base_url"] = url
     if config.extra_headers:
         exported["extra_headers"] = dict(config.extra_headers)
+    if config.input_modalities is not None:
+        exported["input_modalities"] = sorted(config.input_modalities)
     return exported
 
 
@@ -1195,12 +1200,14 @@ def _tenant_llm_config_from_env(env: Mapping[str, str] | None = None) -> TenantL
     lookup = os.environ if env is None else env
     provider = lookup.get("MINIGENT_LLM_PROVIDER", "mock").strip().lower()
     extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS", lookup)
+    input_modalities = _input_modalities_from_env(lookup)
     if provider == GENERIC_OAUTH_PROVIDER:
         return TenantLLMConfig(
             provider=provider,
             model=_optional_str(lookup.get("MINIGENT_LLM_MODEL")),
             base_url=_optional_str(lookup.get("MINIGENT_LLM_URL")),
             extra_headers=extra_headers,
+            input_modalities=input_modalities,
         )
     if provider in {"google", "google-generative-ai", "gemini"}:
         return TenantLLMConfig(
@@ -1213,6 +1220,7 @@ def _tenant_llm_config_from_env(env: Mapping[str, str] | None = None) -> TenantL
             base_url=_optional_str(lookup.get("GOOGLE_BASE_URL")),
             api_key=_optional_str(lookup.get("GEMINI_API_KEY") or lookup.get("GOOGLE_API_KEY")),
             extra_headers=extra_headers,
+            input_modalities=input_modalities,
         )
     if provider == "openai":
         return TenantLLMConfig(
@@ -1221,6 +1229,7 @@ def _tenant_llm_config_from_env(env: Mapping[str, str] | None = None) -> TenantL
             base_url=_optional_str(lookup.get("OPENAI_BASE_URL")),
             api_key=_optional_str(lookup.get("OPENAI_API_KEY")),
             extra_headers=extra_headers,
+            input_modalities=input_modalities,
         )
     if provider == "openrouter":
         return TenantLLMConfig(
@@ -1229,8 +1238,13 @@ def _tenant_llm_config_from_env(env: Mapping[str, str] | None = None) -> TenantL
             base_url=_optional_str(lookup.get("OPENROUTER_BASE_URL")),
             api_key=_optional_str(lookup.get("OPENROUTER_API_KEY")),
             extra_headers=extra_headers,
+            input_modalities=input_modalities,
         )
-    return TenantLLMConfig(provider=provider or "mock", extra_headers=extra_headers)
+    return TenantLLMConfig(
+        provider=provider or "mock",
+        extra_headers=extra_headers,
+        input_modalities=input_modalities,
+    )
 
 
 def _json_string_map_env(name: str, env: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -1249,6 +1263,40 @@ def _json_string_map_env(name: str, env: Mapping[str, str] | None = None) -> dic
     return dict(parsed)
 
 
+def _input_modalities_from_env(
+    env: Mapping[str, str] | None = None,
+) -> frozenset[str] | None:
+    lookup = os.environ if env is None else env
+    raw = lookup.get(LLM_INPUT_MODALITIES_ENV, "").strip()
+    if not raw:
+        return None
+    modalities = frozenset(item.strip().lower() for item in raw.split(",") if item.strip())
+    invalid = modalities - SUPPORTED_INPUT_MODALITIES
+    if not modalities or invalid:
+        supported = ", ".join(sorted(SUPPORTED_INPUT_MODALITIES))
+        raise RuntimeError(
+            f"{LLM_INPUT_MODALITIES_ENV} must be a comma-separated subset of: {supported}"
+        )
+    return modalities
+
+
+def _parse_input_modalities(tenant_id: str, value: object) -> frozenset[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value or not all(isinstance(item, str) for item in value):
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' LLM input_modalities must be a non-empty array of strings"
+        )
+    modalities = frozenset(item.strip().lower() for item in value if item.strip())
+    invalid = modalities - SUPPORTED_INPUT_MODALITIES
+    if not modalities or invalid:
+        supported = ", ".join(sorted(SUPPORTED_INPUT_MODALITIES))
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' LLM input_modalities must be a subset of: {supported}"
+        )
+    return modalities
+
+
 def _parse_tenant_llm_config(tenant_id: str, payload: dict[str, Any]) -> TenantLLMConfig:
     provider = str(payload.get("provider", "mock")).strip().lower()
     extra_headers = payload.get("extra_headers") or payload.get("extraHeaders") or {}
@@ -1256,6 +1304,10 @@ def _parse_tenant_llm_config(tenant_id: str, payload: dict[str, Any]) -> TenantL
         isinstance(key, str) and isinstance(value, str) for key, value in extra_headers.items()
     ):
         raise RuntimeError(f"Tenant '{tenant_id}' LLM extra_headers must be an object of strings")
+    input_modalities = _parse_input_modalities(
+        tenant_id,
+        payload.get("input_modalities", payload.get("inputModalities")),
+    )
     timeout_value = payload.get("timeout", 30.0)
     try:
         timeout = float(timeout_value)
@@ -1319,6 +1371,7 @@ def _parse_tenant_llm_config(tenant_id: str, payload: dict[str, Any]) -> TenantL
         thinking_budget_tokens=thinking_budget_tokens,
         thinking_effort=thinking_effort,
         prompt_cache_enabled=prompt_cache_enabled,
+        input_modalities=input_modalities,
     )
 
 
@@ -1777,6 +1830,22 @@ def _parse_mcp_path_policy(
 
 def _build_llm_adapters(configs: Mapping[str, TenantLLMConfig]) -> dict[str, LLMAdapter]:
     return {name: _build_llm_adapter(config) for name, config in configs.items()}
+
+
+def get_llm_config(
+    context: TenantExecutionContext,
+    profile_name: str | None,
+) -> TenantLLMConfig:
+    resolved = profile_name or context.config.default_llm_profile
+    if resolved is None:
+        return context.config.llm
+    config = context.config.llm_profiles.get(resolved)
+    if config is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown LLM profile '{resolved}' for tenant '{context.config.tenant_id}'",
+        )
+    return config
 
 
 def get_llm_adapter(

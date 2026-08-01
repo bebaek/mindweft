@@ -379,6 +379,8 @@ def _collect_llm_config(
             env["MINIGENT_LLM_URL"] = base_url
     if "extra_headers" in section:
         env["MINIGENT_LLM_EXTRA_HEADERS"] = _format_json_env_value(section["extra_headers"])
+    if "input_modalities" in section:
+        env["MINIGENT_LLM_INPUT_MODALITIES"] = _format_env_value(section["input_modalities"])
     if provider == "anthropic":
         if "max_tokens" in section:
             env["ANTHROPIC_MAX_TOKENS"] = _format_env_value(section["max_tokens"])
@@ -520,6 +522,7 @@ def _tenant_llm_from_unified_llm(
         "thinking_budget_tokens",
         "thinking_effort",
         "prompt_cache_enabled",
+        "input_modalities",
     ):
         if key in section:
             tenant_llm[key] = copy.deepcopy(section[key])

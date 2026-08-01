@@ -61,6 +61,7 @@ class LLMConfig:
     thinking_budget_tokens: object = None
     thinking_effort: object = None
     prompt_cache_enabled: object = None
+    input_modalities: object = None
     timeout: object = None
 
 
@@ -298,6 +299,7 @@ _BOOL_KEYS = {
 
 _STRING_LIST_KEYS = {
     "image_input.allowed_mime_types",
+    "llm.input_modalities",
     "coding.workspaces",
     "coding.shell_allowed_command_prefixes",
     "coding.bridge_allow_globs",

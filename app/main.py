@@ -36,6 +36,7 @@ from app.execution import (
     TenantExecutionResolver,
     build_execution_resolver_from_env,
     get_capability_profile,
+    get_llm_config,
     get_skill_config,
     get_skill_configs,
     resolve_tenant_config_source,
@@ -220,7 +221,10 @@ def _truncate_thread_title(content: str, limit: int = 64) -> str:
 
 
 def _validate_and_normalize_message_request(
-    request: AddMessageRequest, settings: ImageInputSettings
+    request: AddMessageRequest,
+    settings: ImageInputSettings,
+    *,
+    input_modalities: frozenset[str] | None = None,
 ) -> AddMessageRequest:
     if not request.parts:
         if not request.content:
@@ -229,6 +233,10 @@ def _validate_and_normalize_message_request(
     image_parts = [part for part in request.parts if part.type == "image"]
     if image_parts and not settings.enabled:
         raise HTTPException(status_code=400, detail="image input is disabled")
+    if image_parts and input_modalities is not None and "image" not in input_modalities:
+        raise HTTPException(
+            status_code=400, detail="selected LLM profile does not support image input"
+        )
     if len(image_parts) > settings.max_images:
         raise HTTPException(
             status_code=400,
@@ -924,8 +932,13 @@ def create_app(
             store=app_request.app.state.store,
             thread_id=thread_id,
         )
+        execution = app_request.app.state.execution_resolver.resolve(principal.tenant_id)
+        thread = app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        llm_config = get_llm_config(execution, thread.llm_profile)
         request = _validate_and_normalize_message_request(
-            request, app_request.app.state.image_input_settings
+            request,
+            app_request.app.state.image_input_settings,
+            input_modalities=llm_config.input_modalities,
         )
         protected_content = await app_request.app.state.runtime.protect_user_content(
             principal,

@@ -437,7 +437,9 @@ peer agent, including retained assistant tool-call records and tool results, pol
 the task completes, stores sanitized peer tool-execution events as retained tool-call/tool-result
 messages, stores the peer `final_output` as the assistant message, and returns it as the run
 reply. Streamed peer runs forward task `usage` on `peer.task.completed` when the peer reports
-actual token counts. Per-tenant execution config can use the same backend shape:
+actual token counts. The peer-agent prompt protocol is currently text-only; Minigent rejects
+threads containing image parts instead of silently dropping those images. Per-tenant execution
+config can use the same backend shape:
 
 ```json
 {

@@ -366,6 +366,7 @@ Use the tables below as the supported key reference.
 | `url` | `MINIGENT_LLM_URL` | Useful for `generic-oauth` / compatible endpoints. |
 | `base_url` | provider base URL env or `MINIGENT_LLM_URL` | Maps to `OPENAI_BASE_URL`, `OPENROUTER_BASE_URL`, or `GOOGLE_BASE_URL` for known providers. |
 | `extra_headers` | `MINIGENT_LLM_EXTRA_HEADERS` | Serialized as compact JSON. |
+| `input_modalities` | `MINIGENT_LLM_INPUT_MODALITIES` | Optional declared inputs: `text`, `image`, `audio`, `video`, or `document`. Image messages fail early when the selected profile omits `image`. |
 | `account_id_header` | `MINIGENT_LLM_ACCOUNT_ID_HEADER` | Generic OAuth/account routing. |
 | `api_key_env` | provider API key env | Copies the named env value into the provider-specific key env when present. |
 | `api_key` | provider API key env | Convenience only; prefer `api_key_env`. |
@@ -373,7 +374,9 @@ Use the tables below as the supported key reference.
 When `tenant_execution_configs` is present, this top-level `[llm]` is also projected
 internally as the default tenant LLM for any tenant that does not define its own
 `tenant_execution_configs.<tenant>.llm` block. This keeps exported unified configs
-restartable while preserving explicit tenant-level LLM overrides.
+restartable while preserving explicit tenant-level LLM overrides. `input_modalities` is
+optional for backward compatibility; when omitted, Minigent leaves provider capability
+validation to the provider.
 
 Provider key targets:
 

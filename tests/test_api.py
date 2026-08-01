@@ -255,6 +255,14 @@ def test_image_input_settings_from_env_mapping_rejects_invalid_values() -> None:
     assert str(exc_info.value) == "MINIGENT_IMAGE_INPUT_MAX_BYTES must be a positive integer"
 
 
+def test_llm_input_modalities_reject_unknown_values() -> None:
+    with pytest.raises(RuntimeError, match="LLM input_modalities must be a subset"):
+        parse_tenant_execution_config(
+            "tenant-1",
+            {"llm": {"provider": "mock", "input_modalities": ["text", "smell"]}},
+        )
+
+
 def test_config_reports_and_exports_image_input_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_BYTES", "1234")
@@ -1596,6 +1604,47 @@ def test_run_endpoint_can_use_peer_agent_backend(tmp_path: Path) -> None:
     ]
 
 
+def test_peer_agent_backend_rejects_image_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    config = parse_tenant_execution_config(
+        "tenant-1",
+        {
+            "agent_backend": {
+                "type": "peer_agent",
+                "peer": "opencode",
+                "cwd": "/workspace/project",
+            }
+        },
+    )
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "opencode", "base_url": "http://opencode.test"}])
+    )
+    client = TestClient(
+        create_app(
+            execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
+            peer_agent_registry=registry,
+        )
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    message_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={
+            "content": "inspect this",
+            "parts": [
+                {"type": "text", "text": "inspect this"},
+                {"type": "image", "mime_type": "image/png", "data": PNG_1X1_BASE64},
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert message_response.status_code == 200
+    assert run_response.status_code == 400
+    assert run_response.json()["detail"] == "peer_agent backend does not support image input"
+
+
 def test_peer_agent_backend_queues_reserved_task_when_create_fails(tmp_path: Path) -> None:
     database = tmp_path / "threads.db"
     store = SQLiteThreadStore(database)
@@ -2799,6 +2848,56 @@ def test_threads_bind_named_llm_profiles(monkeypatch: pytest.MonkeyPatch) -> Non
     profiles = {thread["thread_id"]: thread["llm_profile"] for thread in threads}
     assert profiles[default_thread.json()["thread_id"]] == "primary"
     assert profiles[backup_thread.json()["thread_id"]] == "backup"
+
+
+def test_selected_llm_profile_enforces_declared_image_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "default_llm_profile": "text-only",
+                    "llm_profiles": {
+                        "text-only": {
+                            "provider": "mock",
+                            "input_modalities": ["text"],
+                        },
+                        "vision": {
+                            "provider": "mock",
+                            "inputModalities": ["text", "image"],
+                        },
+                    },
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+    text_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    vision_thread_id = client.post(
+        "/threads", headers=AUTH_HEADERS, json={"llm_profile": "vision"}
+    ).json()["thread_id"]
+    payload = {
+        "content": "describe it",
+        "parts": [
+            {"type": "text", "text": "describe it"},
+            {"type": "image", "mime_type": "image/png", "data": PNG_1X1_BASE64},
+        ],
+    }
+
+    text_response = client.post(
+        f"/threads/{text_thread_id}/messages", headers=AUTH_HEADERS, json=payload
+    )
+    vision_response = client.post(
+        f"/threads/{vision_thread_id}/messages", headers=AUTH_HEADERS, json=payload
+    )
+
+    assert text_response.status_code == 400
+    assert text_response.json()["detail"] == "selected LLM profile does not support image input"
+    assert vision_response.status_code == 200
 
 
 def test_runtime_uses_thread_llm_profile(monkeypatch: pytest.MonkeyPatch) -> None:

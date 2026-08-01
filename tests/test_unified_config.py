@@ -110,6 +110,7 @@ context_compaction_enabled = true
 [llm]
 provider = "openrouter"
 model = "openai/gpt-test"
+input_modalities = ["text", "image"]
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://example.com/openrouter/v1"
 extra_headers = { "X-Test" = "yes" }
@@ -223,6 +224,7 @@ max_payload_chars = 4096
     }
     assert settings.tenant_execution.default_llm.provider == "openrouter"
     assert settings.tenant_execution.default_llm.model == "openai/gpt-test"
+    assert settings.tenant_execution.default_llm.input_modalities == frozenset({"text", "image"})
     assert settings.quality.enabled is True
     assert settings.quality.provider == "openai-compatible"
     assert settings.quality.model == "quality-model"
