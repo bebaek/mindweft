@@ -1725,6 +1725,10 @@ Current scope:
 - `tools/list`
 - `tools/call`
 
+Because this is a tools-only client, Minigent sends request/response traffic over POST and does
+not open the optional long-lived GET event stream for server-initiated notifications. This keeps
+it compatible with the POST-only stdio bridge and shared gateway routes.
+
 The service retains MCP servers that fail discovery, reports them as `unavailable` in
 `/config`, and retries them in the background with exponential backoff. When a retry
 succeeds, the discovered tools become available to future runs and `/config` reports the

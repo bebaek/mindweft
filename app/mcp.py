@@ -10,10 +10,14 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
+import anyio
 import httpx2 as httpx
 from fastapi import HTTPException
 from mcp import Client
-from mcp.client.streamable_http import streamable_http_client
+from mcp.client.streamable_http import StreamableHTTPTransport
+from mcp.shared._compat import resync_tracer
+from mcp.shared._context_streams import create_context_streams
+from mcp.shared.message import SessionMessage
 from mcp.types import DiscoverResult, Implementation
 
 from app.mcp_identity import MCPIdentityTokenIssuer
@@ -269,10 +273,9 @@ class MCPHTTPClient:
             transport=self._transport,
             event_hooks={"response": [capture_session]},
         )
-        transport = streamable_http_client(
+        transport = _tool_only_streamable_http_client(
             self._config.url,
             http_client=http_client,
-            terminate_on_close=False,
         )
         mode = self._client_mode()
         sdk_client = Client(
@@ -370,6 +373,48 @@ class MCPHTTPClient:
                 {**item, "text": _filter_directory_listing_text(text, self._config.path_policy)}
             )
         return filtered
+
+
+@asynccontextmanager
+async def _tool_only_streamable_http_client(
+    url: str,
+    *,
+    http_client: httpx.AsyncClient,
+) -> AsyncIterator[tuple[Any, Any]]:
+    """Run the SDK HTTP transport without its optional server-initiated GET stream.
+
+    Minigent's MCP surface is tools-only. Its gateway and stdio bridge intentionally expose
+    request/response POST endpoints and do not expose server-initiated notifications.
+    """
+    transport = StreamableHTTPTransport(url)
+    read_stream_writer, read_stream = create_context_streams[SessionMessage | Exception](0)
+    write_stream, write_stream_reader = create_context_streams[SessionMessage](0)
+
+    async with (
+        read_stream_writer,
+        read_stream,
+        write_stream,
+        write_stream_reader,
+        anyio.create_task_group() as task_group,
+    ):
+
+        def skip_get_stream() -> None:
+            logger.debug("Skipping optional MCP GET stream for tools-only client: url=%s", url)
+
+        task_group.start_soon(
+            transport.post_writer,
+            http_client,
+            write_stream_reader,
+            read_stream_writer,
+            write_stream,
+            skip_get_stream,
+            task_group,
+        )
+        try:
+            yield read_stream, write_stream
+        finally:
+            task_group.cancel_scope.cancel()
+    await resync_tracer()
 
 
 def _exception_detail(exc: BaseException) -> str:

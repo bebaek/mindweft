@@ -109,8 +109,10 @@ def test_load_mcp_server_config_parses_forwarded_identity() -> None:
 
 def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
     requests: list[dict[str, Any]] = []
+    http_methods: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        http_methods.append(request.method)
         requests.append(
             {
                 "headers": dict(request.headers),
@@ -195,6 +197,7 @@ def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
     assert requests[2]["headers"]["mcp-protocol-version"] == "2025-11-25"
     assert requests[5]["body"]["method"] == "tools/call"
     assert requests[6]["body"]["method"] == "tools/list"
+    assert http_methods == ["POST"] * len(http_methods)
 
 
 def test_mcp_http_client_discovers_and_uses_modern_stateless_protocol() -> None:
