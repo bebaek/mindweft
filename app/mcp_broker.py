@@ -16,6 +16,13 @@ from typing import Any
 
 from fastapi import HTTPException, Request, Response
 
+from app.mcp import (
+    LEGACY_MCP_PROTOCOL_VERSION,
+    MODERN_MCP_PROTOCOL_VERSION,
+    build_mcp_discover_result,
+    mcp_request_protocol_version,
+    stamp_modern_mcp_result,
+)
 from app.models import Principal
 from app.tools import ToolExecutionContext, ToolRegistry
 
@@ -280,16 +287,25 @@ async def handle_mcp_broker_request(
     request_id = payload.get("id")
     method = str(payload.get("method", ""))
     params = payload.get("params") or {}
+    is_modern_request = mcp_request_protocol_version(payload) == MODERN_MCP_PROTOCOL_VERSION
     if params is not None and not isinstance(params, dict):
         return _jsonrpc_error(request_id, -32602, "Invalid params")
 
+    if method == "server/discover":
+        return _jsonrpc_result(
+            request_id,
+            build_mcp_discover_result(
+                server_name="minigent-mcp-broker",
+                capabilities={"tools": {}},
+            ),
+        )
     if method == "notifications/initialized":
         return Response(status_code=202)
     if method == "initialize":
         return _jsonrpc_result(
             request_id,
             {
-                "protocolVersion": "2025-11-25",
+                "protocolVersion": LEGACY_MCP_PROTOCOL_VERSION,
                 "serverInfo": {"name": "minigent-mcp-broker", "version": "0.1.0"},
                 "capabilities": {"tools": {}},
             },
@@ -302,22 +318,32 @@ async def handle_mcp_broker_request(
             session.thread_id,
             len(session.allowed_tool_names),
         )
-        return _jsonrpc_result(
-            request_id,
-            {
-                "tools": [
-                    {
-                        "name": spec.name,
-                        "description": spec.description,
-                        "inputSchema": spec.input_schema,
-                    }
-                    for spec in tool_registry.specs()
-                    if spec.name in session.allowed_tool_names
-                ]
-            },
-        )
+        result: dict[str, object] = {
+            "tools": [
+                {
+                    "name": spec.name,
+                    "description": spec.description,
+                    "inputSchema": spec.input_schema,
+                }
+                for spec in tool_registry.specs()
+                if spec.name in session.allowed_tool_names
+            ]
+        }
+        if is_modern_request:
+            result.update({"ttlMs": 0, "cacheScope": "private"})
+            result = stamp_modern_mcp_result(
+                result,
+                server_name="minigent-mcp-broker",
+            )
+        return _jsonrpc_result(request_id, result)
     if method == "tools/call":
-        return await _call_tool(session, tool_registry, request_id, params)
+        return await _call_tool(
+            session,
+            tool_registry,
+            request_id,
+            params,
+            modern=is_modern_request,
+        )
     return _jsonrpc_error(request_id, -32601, f"Unsupported MCP method '{method}'")
 
 
@@ -326,6 +352,8 @@ async def _call_tool(
     tool_registry: ToolRegistry,
     request_id: object,
     params: dict[str, Any],
+    *,
+    modern: bool = False,
 ) -> dict[str, object]:
     name = str(params.get("name", "")).strip()
     arguments = params.get("arguments") or {}
@@ -357,13 +385,16 @@ async def _call_tool(
         session.thread_id,
         name,
     )
-    return _jsonrpc_result(
-        request_id,
-        {
-            "structuredContent": result,
-            "content": [{"type": "text", "text": _tool_result_text(result)}],
-        },
-    )
+    response_result: dict[str, object] = {
+        "structuredContent": result,
+        "content": [{"type": "text", "text": _tool_result_text(result)}],
+    }
+    if modern:
+        response_result = stamp_modern_mcp_result(
+            response_result,
+            server_name="minigent-mcp-broker",
+        )
+    return _jsonrpc_result(request_id, response_result)
 
 
 def _tool_result_text(result: object) -> str:

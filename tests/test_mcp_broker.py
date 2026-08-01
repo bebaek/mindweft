@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.llm import MockLLMAdapter
+from app.mcp import MODERN_MCP_PROTOCOL_VERSION
 from app.mcp_broker import MCPBrokerSessionStore
 from app.models import Principal
 from app.store import InMemoryThreadStore
@@ -24,8 +25,23 @@ def test_mcp_broker_lists_and_calls_session_tools() -> None:
         ttl_seconds=60,
     )
     headers = {"Authorization": f"Bearer {session.token}"}
+    modern_metadata = {
+        "io.modelcontextprotocol/protocolVersion": MODERN_MCP_PROTOCOL_VERSION,
+        "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1.0.0"},
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }
 
     with TestClient(app) as client:
+        discover = client.post(
+            f"/mcp/peer/{session.session_id}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 0,
+                "method": "server/discover",
+                "params": {"_meta": modern_metadata},
+            },
+            headers=headers,
+        )
         initialize = client.post(
             f"/mcp/peer/{session.session_id}",
             json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
@@ -46,11 +62,29 @@ def test_mcp_broker_lists_and_calls_session_tools() -> None:
             },
             headers=headers,
         )
+        modern_tools = client.post(
+            f"/mcp/peer/{session.session_id}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/list",
+                "params": {"_meta": modern_metadata},
+            },
+            headers=headers,
+        )
 
+    assert discover.status_code == 200
+    assert discover.json()["result"]["supportedVersions"] == [MODERN_MCP_PROTOCOL_VERSION]
+    assert discover.json()["result"]["resultType"] == "complete"
     assert initialize.status_code == 200
     assert initialize.json()["result"]["serverInfo"]["name"] == "minigent-mcp-broker"
     assert tools.status_code == 200
     assert [tool["name"] for tool in tools.json()["result"]["tools"]] == ["echo"]
+    assert modern_tools.json()["result"]["resultType"] == "complete"
+    assert (
+        modern_tools.json()["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"]
+        == "minigent-mcp-broker"
+    )
     assert call.status_code == 200
     assert call.json()["result"]["structuredContent"] == {"echo": "hello"}
 

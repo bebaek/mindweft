@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from typing import Any
 
 import httpx
 import jwt
@@ -15,7 +16,9 @@ from cryptography.hazmat.primitives.serialization import (
 from fastapi import HTTPException
 
 from app.mcp import (
+    LEGACY_MCP_PROTOCOL_VERSION,
     LEGACY_PRIVATE_VALUES_META_KEY,
+    MODERN_MCP_PROTOCOL_VERSION,
     PRIVATE_VALUES_META_KEY,
     MCPHTTPClient,
     MCPPathPolicy,
@@ -29,6 +32,10 @@ from app.mcp import (
 from app.mcp_identity import MCPIdentityTokenIssuer
 from app.redaction import RedactingLogFilter, install_log_redaction, redact_urls_in_text
 from app.tools import ToolExecutionContext
+
+
+def _legacy_mcp_server_config(**kwargs: Any) -> MCPServerConfig:
+    return MCPServerConfig(protocol_version=LEGACY_MCP_PROTOCOL_VERSION, **kwargs)
 
 
 def test_mcp_settings_from_env_mapping_defaults_to_empty() -> None:
@@ -166,7 +173,7 @@ def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
         raise AssertionError(f"Unexpected method {method}")
 
     client = MCPHTTPClient(
-        config=MCPServerConfig(
+        config=_legacy_mcp_server_config(
             name="demo",
             url="https://example.com/mcp",
             headers={"Authorization": "Bearer token"},
@@ -184,6 +191,137 @@ def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
     assert requests[2]["headers"]["mcp-session-id"] == "session-123"
     assert requests[2]["headers"]["mcp-protocol-version"] == "2025-11-25"
     assert requests[3]["body"]["method"] == "tools/call"
+
+
+def test_mcp_http_client_discovers_and_uses_modern_stateless_protocol() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read().decode())
+        requests.append({"headers": dict(request.headers), "body": body})
+        method = body["method"]
+        if method == "server/discover":
+            result = {
+                "supportedVersions": [MODERN_MCP_PROTOCOL_VERSION],
+                "capabilities": {"tools": {}},
+                "resultType": "complete",
+                "_meta": {
+                    "io.modelcontextprotocol/serverInfo": {
+                        "name": "modern-server",
+                        "version": "2.0.0",
+                    }
+                },
+            }
+        elif method == "tools/list":
+            result = {
+                "tools": [
+                    {
+                        "name": "echo",
+                        "description": "Echo text",
+                        "inputSchema": {"type": "object"},
+                    }
+                ],
+                "resultType": "complete",
+            }
+        elif method == "tools/call":
+            result = {
+                "structuredContent": {"echo": "hello"},
+                "content": [{"type": "text", "text": "hello"}],
+                "resultType": "complete",
+            }
+        else:
+            raise AssertionError(f"Unexpected method {method}")
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={"jsonrpc": "2.0", "id": body["id"], "result": result},
+        )
+
+    client = MCPHTTPClient(
+        config=MCPServerConfig(name="demo", url="https://example.com/mcp", headers={}),
+        transport=httpx.MockTransport(handler),
+    )
+
+    specs = asyncio.run(client.list_tools())
+    result = asyncio.run(client.call_tool("echo", {"text": "hello"}))
+
+    assert [spec.name for spec in specs] == ["demo.echo"]
+    assert result == {"echo": "hello"}
+    assert [request["body"]["method"] for request in requests] == [
+        "server/discover",
+        "tools/list",
+        "tools/call",
+    ]
+    for request in requests:
+        assert "mcp-session-id" not in request["headers"]
+        assert request["headers"]["mcp-protocol-version"] == MODERN_MCP_PROTOCOL_VERSION
+        metadata = request["body"]["params"]["_meta"]
+        assert metadata["io.modelcontextprotocol/protocolVersion"] == MODERN_MCP_PROTOCOL_VERSION
+        assert metadata["io.modelcontextprotocol/clientInfo"]["name"] == "minigent"
+        assert metadata["io.modelcontextprotocol/clientCapabilities"] == {}
+    assert requests[2]["headers"]["mcp-method"] == "tools/call"
+    assert requests[2]["headers"]["mcp-name"] == "echo"
+    assert client.server_info().session_id is None
+    assert client.server_info().server_name == "modern-server"
+
+
+def test_mcp_http_client_falls_back_when_modern_discovery_is_rejected() -> None:
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read().decode())
+        method = body["method"]
+        methods.append(method)
+        if method == "server/discover":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "error": {"code": -32601, "message": "Method not found"},
+                },
+            )
+        if method == "initialize":
+            assert body["params"]["protocolVersion"] == LEGACY_MCP_PROTOCOL_VERSION
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json", "MCP-Session-Id": "legacy-session"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "protocolVersion": LEGACY_MCP_PROTOCOL_VERSION,
+                        "serverInfo": {"name": "legacy-server", "version": "1.0.0"},
+                        "capabilities": {"tools": {}},
+                    },
+                },
+            )
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        if method == "tools/list":
+            assert request.headers["mcp-session-id"] == "legacy-session"
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={"jsonrpc": "2.0", "id": body["id"], "result": {"tools": []}},
+            )
+        raise AssertionError(f"Unexpected method {method}")
+
+    client = MCPHTTPClient(
+        config=MCPServerConfig(name="demo", url="https://example.com/mcp", headers={}),
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert asyncio.run(client.list_tools()) == []
+    assert methods == [
+        "server/discover",
+        "initialize",
+        "notifications/initialized",
+        "tools/list",
+    ]
+    assert client.server_info().protocol_version == LEGACY_MCP_PROTOCOL_VERSION
+    assert client.server_info().session_id == "legacy-session"
 
 
 def test_mcp_http_client_forwards_short_lived_user_identity() -> None:
@@ -238,7 +376,7 @@ def test_mcp_http_client_forwards_short_lived_user_identity() -> None:
             json={"jsonrpc": "2.0", "id": body["id"], "result": result},
         )
 
-    config = MCPServerConfig(
+    config = _legacy_mcp_server_config(
         name="private-calendar",
         url="https://calendar.example/mcp",
         headers={},
@@ -342,7 +480,7 @@ def test_mcp_http_client_rejects_mismatched_jsonrpc_response_id() -> None:
         )
 
     client = MCPHTTPClient(
-        config=MCPServerConfig(name="demo", url="https://example.com/mcp", headers={}),
+        config=_legacy_mcp_server_config(name="demo", url="https://example.com/mcp", headers={}),
         transport=httpx.MockTransport(handler),
     )
 
@@ -394,7 +532,7 @@ def test_mcp_http_client_filters_disallowed_tools() -> None:
         raise AssertionError(f"Unexpected method {method}")
 
     client = MCPHTTPClient(
-        config=MCPServerConfig(
+        config=_legacy_mcp_server_config(
             name="fs",
             url="https://example.com/mcp",
             headers={},
@@ -417,7 +555,7 @@ def test_mcp_http_client_filters_disallowed_tools() -> None:
 
 def test_mcp_http_client_blocks_denied_path_arguments() -> None:
     client = MCPHTTPClient(
-        config=MCPServerConfig(
+        config=_legacy_mcp_server_config(
             name="fs",
             url="https://example.com/mcp",
             headers={},
@@ -459,7 +597,7 @@ def test_mcp_http_client_allows_explicitly_allowed_path_over_denied_glob() -> No
         raise AssertionError(f"Unexpected method {method}")
 
     client = MCPHTTPClient(
-        config=MCPServerConfig(
+        config=_legacy_mcp_server_config(
             name="fs",
             url="https://example.com/mcp",
             headers={},
@@ -511,7 +649,7 @@ def test_mcp_http_client_allows_explicitly_allowed_path_over_denied_glob() -> No
         raise AssertionError(f"Unexpected method {method}")
 
     client = MCPHTTPClient(
-        config=MCPServerConfig(
+        config=_legacy_mcp_server_config(
             name="fs",
             url="https://example.com/mcp",
             headers={},
@@ -565,7 +703,7 @@ def test_mcp_http_client_supports_sse_jsonrpc_responses() -> None:
         raise AssertionError(f"Unexpected method {method}")
 
     client = MCPHTTPClient(
-        config=MCPServerConfig(
+        config=_legacy_mcp_server_config(
             name="demo",
             url="https://example.com/mcp",
             headers={},
@@ -609,7 +747,7 @@ def test_mcp_http_client_logs_redacted_url(caplog) -> None:
         raise AssertionError(f"Unexpected method {method}")
 
     client = MCPHTTPClient(
-        config=MCPServerConfig(
+        config=_legacy_mcp_server_config(
             name="demo",
             url="https://example.com/mcp?token=secret-value&cursor=abc",
             headers={},
@@ -664,7 +802,7 @@ def test_mcp_http_client_reinitializes_and_retries_once_on_invalid_session() -> 
         raise AssertionError(f"Unexpected method {method} with session {session_id}")
 
     client = MCPHTTPClient(
-        config=MCPServerConfig(name="demo", url="https://example.com/mcp", headers={}),
+        config=_legacy_mcp_server_config(name="demo", url="https://example.com/mcp", headers={}),
         transport=httpx.MockTransport(handler),
     )
 
@@ -715,7 +853,7 @@ def test_mcp_http_client_returns_error_if_reinitialized_session_is_still_rejecte
         raise AssertionError(f"Unexpected method {method}")
 
     client = MCPHTTPClient(
-        config=MCPServerConfig(name="demo", url="https://example.com/mcp", headers={}),
+        config=_legacy_mcp_server_config(name="demo", url="https://example.com/mcp", headers={}),
         transport=httpx.MockTransport(handler),
     )
 
@@ -737,7 +875,7 @@ def test_mcp_http_client_maps_request_timeout_to_504() -> None:
         raise httpx.ReadTimeout("slow upstream", request=request)
 
     client = MCPHTTPClient(
-        config=MCPServerConfig(
+        config=_legacy_mcp_server_config(
             name="demo",
             url="https://example.com/mcp",
             headers={},
@@ -773,7 +911,7 @@ def test_mcp_http_client_maps_notification_timeout_to_504() -> None:
         raise httpx.ReadTimeout("slow notification", request=request)
 
     client = MCPHTTPClient(
-        config=MCPServerConfig(
+        config=_legacy_mcp_server_config(
             name="demo",
             url="https://example.com/mcp",
             headers={},

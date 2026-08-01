@@ -4090,7 +4090,7 @@ def test_admin_api_validates_tenant_execution_config(
                     "ok": True,
                     "error": None,
                     "tool_count": 1,
-                    "protocol_version": "2025-11-25",
+                    "protocol_version": "2026-07-28",
                     "session": True,
                     "server_name": "demo-server",
                     "server_version": "1.2.3",

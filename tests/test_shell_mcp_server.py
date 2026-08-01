@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from app.mcp import MODERN_MCP_PROTOCOL_VERSION
 from app.shell_mcp_server import ShellMCPServer
 
 
@@ -14,6 +15,42 @@ def test_shell_mcp_server_lists_run_command_tool(tmp_path: Path) -> None:
 
     assert response is not None
     assert response["result"]["tools"][0]["name"] == "run_command"
+
+
+def test_shell_mcp_server_supports_modern_discovery_and_results(tmp_path: Path) -> None:
+    server = ShellMCPServer(workspace=tmp_path, shell="/bin/sh")
+    metadata = {
+        "io.modelcontextprotocol/protocolVersion": MODERN_MCP_PROTOCOL_VERSION,
+        "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1.0.0"},
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }
+
+    discover = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover",
+            "params": {"_meta": metadata},
+        }
+    )
+    tools = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {"_meta": metadata},
+        }
+    )
+
+    assert discover is not None
+    assert discover["result"]["supportedVersions"] == [MODERN_MCP_PROTOCOL_VERSION]
+    assert discover["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"] == (
+        "minigent-shell-mcp"
+    )
+    assert tools is not None
+    assert tools["result"]["resultType"] == "complete"
+    assert tools["result"]["ttlMs"] == 0
+    assert tools["result"]["cacheScope"] == "private"
 
 
 def test_run_command_executes_inside_workspace(tmp_path: Path) -> None:

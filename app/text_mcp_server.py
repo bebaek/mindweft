@@ -9,7 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-from app.mcp import DEFAULT_MCP_PROTOCOL_VERSION
+from app.mcp import (
+    LEGACY_MCP_PROTOCOL_VERSION,
+    MODERN_MCP_PROTOCOL_VERSION,
+    build_mcp_discover_result,
+    mcp_request_protocol_version,
+    stamp_modern_mcp_result,
+)
 
 DEFAULT_MAX_CHARS = 40_000
 DEFAULT_MAX_MATCHES = 20
@@ -127,19 +133,42 @@ class TextMCPServer:
         if request_id is None:
             return None
         try:
+            if method == "server/discover":
+                return self._result(
+                    request_id,
+                    build_mcp_discover_result(
+                        server_name="minigent-text-mcp",
+                        capabilities={"tools": {}},
+                    ),
+                )
             if method == "initialize":
                 return self._result(
                     request_id,
                     {
-                        "protocolVersion": DEFAULT_MCP_PROTOCOL_VERSION,
+                        "protocolVersion": LEGACY_MCP_PROTOCOL_VERSION,
                         "serverInfo": {"name": "minigent-text-mcp", "version": "0.1.0"},
                         "capabilities": {"tools": {}},
                     },
                 )
             if method == "tools/list":
-                return self._result(request_id, {"tools": TOOLS})
+                result: dict[str, Any] = {"tools": TOOLS}
+                if mcp_request_protocol_version(payload) == MODERN_MCP_PROTOCOL_VERSION:
+                    result.update({"ttlMs": 0, "cacheScope": "private"})
+                    result = stamp_modern_mcp_result(
+                        result,
+                        server_name="minigent-text-mcp",
+                    )
+                return self._result(request_id, result)
             if method == "tools/call":
-                return self._handle_tool_call(request_id, payload.get("params"))
+                response = self._handle_tool_call(request_id, payload.get("params"))
+                if mcp_request_protocol_version(
+                    payload
+                ) == MODERN_MCP_PROTOCOL_VERSION and isinstance(response.get("result"), dict):
+                    response["result"] = stamp_modern_mcp_result(
+                        response["result"],
+                        server_name="minigent-text-mcp",
+                    )
+                return response
             return self._error(request_id, -32601, f"unknown method: {method}")
         except Exception as exc:
             return self._error(request_id, -32000, str(exc))

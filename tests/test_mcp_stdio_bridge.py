@@ -31,7 +31,14 @@ for line in sys.stdin:
     if mode == "large-line" and method == "tools/list":
         print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": {"content": "x" * 200000}}), flush=True)
         continue
-    if method == "initialize":
+    if method == "server/discover":
+        result = {
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {"tools": {}},
+            "resultType": "complete",
+            "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "fake-stdio", "version": "2.0.0"}},
+        }
+    elif method == "initialize":
         result = {
             "protocolVersion": "2025-11-25",
             "serverInfo": {"name": "fake-stdio", "version": "1.0.0"},
@@ -144,6 +151,49 @@ def test_stdio_bridge_initializes_lists_tools_and_calls_tool(tmp_path: Path) -> 
     assert tools.json()["result"]["tools"][0]["name"] == "echo"
     assert call.status_code == 200
     assert call.json()["result"]["structuredContent"] == {"echo": "hello"}
+
+
+def test_stdio_bridge_allows_modern_stateless_requests_without_session(tmp_path: Path) -> None:
+    client = _client(tmp_path, "ok")
+    metadata = {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1.0.0"},
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }
+
+    with client:
+        discover = client.post(
+            "/mcp",
+            headers={
+                "MCP-Protocol-Version": "2026-07-28",
+                "MCP-Method": "server/discover",
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "server/discover",
+                "params": {"_meta": metadata},
+            },
+        )
+        tools = client.post(
+            "/mcp",
+            headers={
+                "MCP-Protocol-Version": "2026-07-28",
+                "MCP-Method": "tools/list",
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {"_meta": metadata},
+            },
+        )
+
+    assert discover.status_code == 200
+    assert discover.json()["result"]["supportedVersions"] == ["2026-07-28"]
+    assert "mcp-session-id" not in discover.headers
+    assert tools.status_code == 200
+    assert tools.json()["result"]["tools"][0]["name"] == "echo"
 
 
 def test_stdio_bridge_requires_session_after_initialize(tmp_path: Path) -> None:

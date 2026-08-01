@@ -20,6 +20,7 @@ from app.llm import (
     build_llm_adapter_from_env,
 )
 from app.mcp import (
+    DEFAULT_MCP_PROTOCOL_VERSION,
     MCPHTTPClient,
     MCPPathPolicy,
     MCPServerConfig,
@@ -1671,7 +1672,11 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
     name = entry.get("name")
     url = entry.get("url")
     headers = entry.get("headers") or {}
-    protocol_version = entry.get("protocolVersion") or entry.get("protocol_version") or "2025-11-25"
+    protocol_version = (
+        entry.get("protocolVersion")
+        or entry.get("protocol_version")
+        or DEFAULT_MCP_PROTOCOL_VERSION
+    )
     allowed_tools = _optional_str_list(
         tenant_id,
         entry.get("allowed_tools") or entry.get("allowedTools"),

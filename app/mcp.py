@@ -22,9 +22,19 @@ from app.redaction import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MCP_PROTOCOL_VERSION = "2025-11-25"
+LEGACY_MCP_PROTOCOL_VERSION = "2025-11-25"
+MODERN_MCP_PROTOCOL_VERSION = "2026-07-28"
+DEFAULT_MCP_PROTOCOL_VERSION = MODERN_MCP_PROTOCOL_VERSION
+SUPPORTED_MCP_PROTOCOL_VERSIONS = (
+    LEGACY_MCP_PROTOCOL_VERSION,
+    MODERN_MCP_PROTOCOL_VERSION,
+)
 DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS = 30.0
 MCP_SERVERS_ENV = "MINIGENT_MCP_SERVERS"
+MCP_PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion"
+MCP_CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
+MCP_CLIENT_CAPABILITIES_META_KEY = "io.modelcontextprotocol/clientCapabilities"
+MCP_SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo"
 PRIVATE_VALUES_META_KEY = "io.minigent/private-values"
 LEGACY_PRIVATE_VALUES_META_KEY = "io.minigent/carddav-private-values"
 PRIVATE_VALUES_META_KEYS = (PRIVATE_VALUES_META_KEY, LEGACY_PRIVATE_VALUES_META_KEY)
@@ -32,6 +42,10 @@ PRIVATE_VALUE_DISCLOSURE_MODES = frozenset({"deny", "pass_through", "resolve_sel
 _PRIVATE_VALUE_ARGUMENT_PATH_PATTERN = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_-]*(?:(?:\.[A-Za-z_][A-Za-z0-9_-]*)|(?:\[\*\]))*$"
 )
+
+
+class _MCPDiscoveryRejected(Exception):
+    """Raised when a peer responds but does not accept the modern discovery probe."""
 
 
 @dataclass(frozen=True)
@@ -227,10 +241,69 @@ class MCPHTTPClient:
         if self._initialized:
             return
 
+        if self._config.protocol_version == MODERN_MCP_PROTOCOL_VERSION:
+            if await self._try_modern_discovery():
+                return
+
+        await self._initialize_legacy()
+
+    async def _try_modern_discovery(self) -> bool:
+        self._negotiated_protocol_version = MODERN_MCP_PROTOCOL_VERSION
+        try:
+            result, _ = await self._request_raw(
+                "server/discover",
+                None,
+                use_protocol_header=True,
+                discovery_probe=True,
+            )
+        except _MCPDiscoveryRejected as exc:
+            logger.info(
+                "MCP modern discovery rejected; falling back to legacy initialization: server=%s url=%s detail=%s",
+                self._config.name,
+                redact_url_secrets(self._config.url),
+                exc,
+            )
+            return False
+
+        supported_versions = result.get("supportedVersions")
+        if not isinstance(supported_versions, list) or MODERN_MCP_PROTOCOL_VERSION not in (
+            str(version) for version in supported_versions
+        ):
+            logger.info(
+                "MCP discovery did not advertise a supported modern version; falling back: server=%s url=%s",
+                self._config.name,
+                redact_url_secrets(self._config.url),
+            )
+            return False
+
+        metadata = result.get("_meta") or {}
+        server_info = metadata.get(MCP_SERVER_INFO_META_KEY) if isinstance(metadata, dict) else {}
+        if not isinstance(server_info, dict):
+            server_info = {}
+        self._session_id = None
+        self._negotiated_protocol_version = MODERN_MCP_PROTOCOL_VERSION
+        self._server_name = server_info.get("name")
+        self._server_version = server_info.get("version")
+        self._initialized = True
+        logger.info(
+            "MCP discovered: server=%s url=%s protocol=%s remote=%s@%s",
+            self._config.name,
+            redact_url_secrets(self._config.url),
+            self._negotiated_protocol_version,
+            self._server_name,
+            self._server_version,
+        )
+        return True
+
+    async def _initialize_legacy(self) -> None:
+        requested_version = self._config.protocol_version
+        if requested_version == MODERN_MCP_PROTOCOL_VERSION:
+            requested_version = LEGACY_MCP_PROTOCOL_VERSION
+        self._negotiated_protocol_version = requested_version
         result, headers = await self._request_raw(
             "initialize",
             {
-                "protocolVersion": self._config.protocol_version,
+                "protocolVersion": requested_version,
                 "capabilities": {},
                 "clientInfo": {
                     "name": "minigent",
@@ -240,9 +313,7 @@ class MCPHTTPClient:
             use_protocol_header=False,
         )
         self._session_id = headers.get("MCP-Session-Id")
-        self._negotiated_protocol_version = result.get(
-            "protocolVersion", self._config.protocol_version
-        )
+        self._negotiated_protocol_version = result.get("protocolVersion", requested_version)
         server_info = result.get("serverInfo") or {}
         self._server_name = server_info.get("name")
         self._server_version = server_info.get("version")
@@ -259,13 +330,14 @@ class MCPHTTPClient:
         )
 
     async def _notify(self, method: str, params: dict[str, Any] | None = None) -> None:
-        headers = self._build_headers(include_protocol=True)
+        headers = self._build_headers(include_protocol=True, method=method, params=params)
+        wire_params = self._with_modern_protocol_envelope(params)
         payload: dict[str, Any] = {
             "jsonrpc": "2.0",
             "method": method,
         }
-        if params is not None:
-            payload["params"] = params
+        if wire_params is not None:
+            payload["params"] = wire_params
 
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             try:
@@ -313,20 +385,24 @@ class MCPHTTPClient:
         use_protocol_header: bool,
         retry_invalid_session: bool = True,
         identity_context: Any | None = None,
+        discovery_probe: bool = False,
     ) -> tuple[dict[str, Any], httpx.Headers]:
         self._request_id += 1
         request_id = self._request_id
+        wire_params = self._with_modern_protocol_envelope(params)
         headers = self._build_headers(
             include_protocol=use_protocol_header,
             identity_context=identity_context,
+            method=method,
+            params=wire_params,
         )
         payload: dict[str, Any] = {
             "jsonrpc": "2.0",
             "id": request_id,
             "method": method,
         }
-        if params is not None:
-            payload["params"] = params
+        if wire_params is not None:
+            payload["params"] = wire_params
 
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             try:
@@ -337,6 +413,10 @@ class MCPHTTPClient:
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
+                if discovery_probe:
+                    raise _MCPDiscoveryRejected(
+                        f"HTTP {exc.response.status_code}: {exc.response.text}"
+                    ) from exc
                 if self._should_retry_invalid_session(
                     exc.response,
                     use_protocol_header=use_protocol_header,
@@ -387,22 +467,30 @@ class MCPHTTPClient:
                 detail=f"MCP server '{self._config.name}' returned unsupported content type '{content_type}'",
             )
         if not isinstance(body, dict):
+            if discovery_probe:
+                raise _MCPDiscoveryRejected("non-object JSON-RPC response")
             raise HTTPException(
                 status_code=502,
                 detail=f"MCP server '{self._config.name}' returned non-object JSON-RPC response",
             )
         if body.get("id") != request_id:
+            if discovery_probe:
+                raise _MCPDiscoveryRejected("mismatched JSON-RPC response id")
             raise HTTPException(
                 status_code=502,
                 detail=f"MCP server '{self._config.name}' returned mismatched JSON-RPC response id",
             )
         if "error" in body:
+            if discovery_probe:
+                raise _MCPDiscoveryRejected(json.dumps(body["error"], ensure_ascii=True))
             raise HTTPException(
                 status_code=502,
                 detail=f"MCP server '{self._config.name}' protocol error: {json.dumps(body['error'], ensure_ascii=True)}",
             )
         result = body.get("result")
         if not isinstance(result, dict):
+            if discovery_probe:
+                raise _MCPDiscoveryRejected("invalid JSON-RPC result")
             raise HTTPException(
                 status_code=502,
                 detail=f"MCP server '{self._config.name}' returned invalid JSON-RPC result",
@@ -440,6 +528,8 @@ class MCPHTTPClient:
         *,
         include_protocol: bool,
         identity_context: Any | None = None,
+        method: str | None = None,
+        params: dict[str, Any] | None = None,
     ) -> dict[str, str]:
         headers = {
             "Accept": "application/json, text/event-stream",
@@ -456,9 +546,83 @@ class MCPHTTPClient:
             )
         if include_protocol:
             headers["MCP-Protocol-Version"] = self._negotiated_protocol_version
+        if include_protocol and self._is_modern_protocol() and method is not None:
+            headers["MCP-Method"] = method
+            if method == "tools/call" and isinstance(params, dict):
+                tool_name = params.get("name")
+                if isinstance(tool_name, str) and tool_name:
+                    headers["MCP-Name"] = tool_name
         if self._session_id:
             headers["MCP-Session-Id"] = self._session_id
         return headers
+
+    def _is_modern_protocol(self) -> bool:
+        return self._negotiated_protocol_version == MODERN_MCP_PROTOCOL_VERSION
+
+    def _with_modern_protocol_envelope(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        if not self._is_modern_protocol():
+            return params
+        merged = dict(params or {})
+        existing_meta = merged.get("_meta")
+        metadata = dict(existing_meta) if isinstance(existing_meta, dict) else {}
+        metadata.update(
+            {
+                MCP_PROTOCOL_VERSION_META_KEY: MODERN_MCP_PROTOCOL_VERSION,
+                MCP_CLIENT_INFO_META_KEY: {"name": "minigent", "version": "0.1.0"},
+                MCP_CLIENT_CAPABILITIES_META_KEY: {},
+            }
+        )
+        merged["_meta"] = metadata
+        return merged
+
+
+def mcp_request_protocol_version(payload: Mapping[str, Any]) -> str | None:
+    params = payload.get("params")
+    if not isinstance(params, Mapping):
+        return None
+    metadata = params.get("_meta")
+    if not isinstance(metadata, Mapping):
+        return None
+    version = metadata.get(MCP_PROTOCOL_VERSION_META_KEY)
+    return version if isinstance(version, str) and version else None
+
+
+def build_mcp_discover_result(
+    *,
+    server_name: str,
+    server_version: str = "0.1.0",
+    capabilities: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return stamp_modern_mcp_result(
+        {
+            "supportedVersions": [MODERN_MCP_PROTOCOL_VERSION],
+            "capabilities": dict(capabilities or {}),
+            "ttlMs": 0,
+            "cacheScope": "private",
+        },
+        server_name=server_name,
+        server_version=server_version,
+    )
+
+
+def stamp_modern_mcp_result(
+    result: Mapping[str, Any],
+    *,
+    server_name: str,
+    server_version: str = "0.1.0",
+) -> dict[str, Any]:
+    stamped = dict(result)
+    stamped.setdefault("resultType", "complete")
+    raw_metadata = stamped.get("_meta")
+    metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+    metadata[MCP_SERVER_INFO_META_KEY] = {
+        "name": server_name,
+        "version": server_version,
+    }
+    stamped["_meta"] = metadata
+    return stamped
 
 
 def load_mcp_server_configs_from_env(env: Mapping[str, str] | None = None) -> list[MCPServerConfig]:

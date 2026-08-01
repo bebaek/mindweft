@@ -1676,6 +1676,11 @@ OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 ## MCP Config
 
 You can attach HTTP MCP servers by setting `MINIGENT_MCP_SERVERS` to a JSON array in `.env`.
+Minigent defaults new server entries to MCP `2026-07-28`: it probes `server/discover`, uses
+stateless requests with the per-request protocol metadata envelope when the server advertises
+the modern revision, and falls back to the `2025-11-25` `initialize` handshake when discovery
+is rejected. Set an entry's `protocolVersion` to `2025-11-25` to skip the probe for a known
+legacy server.
 
 Example:
 
@@ -1928,9 +1933,11 @@ The bridge binds to `127.0.0.1` by default and accepts the stdio server command 
 argv array after `--`; it does not run commands through a shell. It buffers stdio MCP
 responses up to 16 MiB by default so large single-line JSON tool results such as file reads
 can be forwarded; override this with `--stdio-stream-limit <bytes>` if a deployment needs a
-different cap. The v1 bridge starts one stdio MCP server per bridge process and supports
-the same tools-only MCP scope Minigent uses today: `initialize`,
-`notifications/initialized`, `tools/list`, and `tools/call`.
+different cap. The bridge supports the tools-only MCP scope Minigent uses today. For MCP
+`2026-07-28`, it forwards `server/discover`, `tools/list`, and `tools/call` without requiring
+an `MCP-Session-Id`; modern requests carry their protocol, client information, and client
+capabilities in `params._meta`. Legacy peers continue to use `initialize`,
+`notifications/initialized`, `tools/list`, and `tools/call` with bridge-issued session IDs.
 
 ## Observability
 

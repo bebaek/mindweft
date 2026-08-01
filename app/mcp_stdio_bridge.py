@@ -15,10 +15,12 @@ from pydantic import BaseModel, Field
 
 from app.mcp import (
     DEFAULT_MCP_PROTOCOL_VERSION,
+    MODERN_MCP_PROTOCOL_VERSION,
     MCPPathPolicy,
     _filter_directory_listing_text,
     _iter_path_arguments,
     _path_denied,
+    mcp_request_protocol_version,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,7 +122,8 @@ class StdioMCPBridge:
         if not isinstance(method, str):
             raise HTTPException(status_code=400, detail="JSON-RPC payload must include method")
 
-        if method != "initialize":
+        is_modern_request = mcp_request_protocol_version(payload) == MODERN_MCP_PROTOCOL_VERSION
+        if method not in {"initialize", "server/discover"} and not is_modern_request:
             self._require_session(headers)
 
         if "id" not in payload:
