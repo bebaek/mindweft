@@ -844,6 +844,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "mcp" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-instrumentation-fastapi" },
@@ -869,7 +870,6 @@ voice = [
 [package.dev-dependencies]
 dev = [
     { name = "basedpyright" },
-    { name = "mcp" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -879,6 +879,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1.0" },
     { name = "faster-whisper", marker = "extra == 'voice'", specifier = ">=1.1,<2.0" },
     { name = "httpx", specifier = ">=0.28,<1.0" },
+    { name = "mcp", specifier = ">=2,<3" },
     { name = "numpy", marker = "extra == 'voice'", specifier = ">=2,<3" },
     { name = "opentelemetry-api", specifier = ">=1.33,<2.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.33,<2.0" },
@@ -900,7 +901,6 @@ provides-extras = ["voice"]
 [package.metadata.requires-dev]
 dev = [
     { name = "basedpyright", specifier = ">=1.20.0" },
-    { name = "mcp", specifier = ">=2,<3" },
     { name = "pytest", specifier = ">=8.0,<9.0" },
     { name = "ruff", specifier = ">=0.11,<1.0" },
 ]

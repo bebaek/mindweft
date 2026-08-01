@@ -4,58 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.mcp import MODERN_MCP_PROTOCOL_VERSION
 from app.text_mcp_server import TextMCPServer
-
-
-def test_text_mcp_server_lists_targeted_read_tools(tmp_path: Path) -> None:
-    server = TextMCPServer(workspace=tmp_path)
-
-    response = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
-
-    assert response is not None
-    assert [tool["name"] for tool in response["result"]["tools"]] == [
-        "read_text_file_lines",
-        "read_text_file_around",
-        "search_text_file",
-    ]
-
-
-def test_text_mcp_server_supports_modern_discovery_and_results(tmp_path: Path) -> None:
-    server = TextMCPServer(workspace=tmp_path)
-    metadata = {
-        "io.modelcontextprotocol/protocolVersion": MODERN_MCP_PROTOCOL_VERSION,
-        "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1.0.0"},
-        "io.modelcontextprotocol/clientCapabilities": {},
-    }
-
-    discover = server.handle(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "server/discover",
-            "params": {"_meta": metadata},
-        }
-    )
-    tools = server.handle(
-        {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/list",
-            "params": {"_meta": metadata},
-        }
-    )
-
-    assert discover is not None
-    assert discover["result"]["supportedVersions"] == [MODERN_MCP_PROTOCOL_VERSION]
-    assert discover["result"]["resultType"] == "complete"
-    assert discover["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"] == (
-        "minigent-text-mcp"
-    )
-    assert tools is not None
-    assert tools["result"]["resultType"] == "complete"
-    assert tools["result"]["ttlMs"] == 0
-    assert tools["result"]["cacheScope"] == "private"
 
 
 def test_read_text_file_lines_reads_inclusive_line_range(tmp_path: Path) -> None:
@@ -167,24 +116,3 @@ def test_text_mcp_server_rejects_invalid_line_range(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="end_line must be >= start_line"):
         server.read_text_file_lines({"path": str(file_path), "start_line": 2, "end_line": 1})
-
-
-def test_text_mcp_server_tool_call_returns_structured_content(tmp_path: Path) -> None:
-    file_path = tmp_path / "sample.txt"
-    file_path.write_text("alpha\nbeta\n", encoding="utf-8")
-    server = TextMCPServer(workspace=tmp_path)
-
-    response = server.handle(
-        {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "read_text_file_lines",
-                "arguments": {"path": str(file_path), "start_line": 2, "end_line": 2},
-            },
-        }
-    )
-
-    assert response is not None
-    assert response["result"]["structuredContent"]["content"] == "beta\n"

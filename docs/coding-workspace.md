@@ -437,9 +437,11 @@ uv run minigent-mcp-stdio-gateway --config .data/mcp-gateway.json --port 8765
 
 ### Targeted text reads
 
-The convenience runner can also start Minigent's small targeted text-read MCP server. This
-server complements the authoritative filesystem MCP by exposing efficient exact reads for
-known files and regions:
+The convenience runner can also start Minigent's small targeted text-read MCP server. Its stdio
+protocol transport and request validation use the official MCP Python SDK v2, while Minigent's
+workspace policy layer continues to enforce path containment and text/output limits. This server
+complements the authoritative filesystem MCP by exposing efficient exact reads for known files
+and regions:
 
 - `read_text_file_lines(path, start_line, end_line)` reads an inclusive 1-based line range.
 - `read_text_file_around(path, line, before, after)` reads context around a 1-based line.
@@ -533,12 +535,14 @@ uv run python scripts/demo_client.py \
   '/tool shell-workspace.run_command {"command":"uv run pytest","cwd":"/path/to/workspace"}'
 ```
 
-The shell MCP server requires command working directories to stay under one of the configured
-workspace roots, passes through only a small environment allowlist, disables stdin, enforces a
-timeout, and truncates stdout/stderr. Keep `[app].tool_timeout_seconds` greater than or equal
-to the shell MCP `request_timeout`/`timeout_seconds`; `minigent config doctor` warns when the
-outer runtime timeout is shorter. Commands run through `/bin/sh` by default. If you define
-`shell-workspace` explicitly in unified config and want zsh, configure the server command itself:
+The shell MCP server uses the official MCP Python SDK v2 for its stdio protocol transport and
+request validation. Minigent's shell policy layer still requires command working directories to
+stay under one of the configured workspace roots, passes through only a small environment
+allowlist, disables stdin, enforces a timeout, and truncates stdout/stderr. Keep
+`[app].tool_timeout_seconds` greater than or equal to the shell MCP
+`request_timeout`/`timeout_seconds`; `minigent config doctor` warns when the outer runtime
+timeout is shorter. Commands run through `/bin/sh` by default. If you define `shell-workspace`
+explicitly in unified config and want zsh, configure the server command itself:
 
 ```toml
 [[coding.mcp_server_specs]]

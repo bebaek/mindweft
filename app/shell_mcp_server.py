@@ -1,22 +1,15 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import signal
 import subprocess
-import sys
 import time
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Annotated, Any, Sequence
 
-from app.mcp import (
-    LEGACY_MCP_PROTOCOL_VERSION,
-    MODERN_MCP_PROTOCOL_VERSION,
-    build_mcp_discover_result,
-    mcp_request_protocol_version,
-    stamp_modern_mcp_result,
-)
+from mcp.server import MCPServer
+from pydantic import Field
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_OUTPUT_CHARS = 12_000
@@ -32,29 +25,7 @@ DEFAULT_ENV_ALLOWLIST = (
     "XDG_CACHE_HOME",
 )
 
-RUN_COMMAND_TOOL = {
-    "name": "run_command",
-    "description": "Run a non-interactive shell command in the configured workspace.",
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "command": {"type": "string", "description": "Shell command to run."},
-            "cwd": {
-                "type": "string",
-                "description": "Working directory. Must be inside one configured workspace root.",
-            },
-            "timeout_seconds": {
-                "type": "number",
-                "description": "Optional command timeout in seconds.",
-            },
-            "max_output_chars": {
-                "type": "integer",
-                "description": "Optional maximum characters kept for stdout and stderr each.",
-            },
-        },
-        "required": ["command"],
-    },
-}
+RUN_COMMAND_DESCRIPTION = "Run a non-interactive shell command in the configured workspace."
 
 
 class _ShutdownRequested(BaseException):
@@ -105,71 +76,6 @@ class ShellMCPServer:
                 raise RuntimeError(
                     f"workspace does not exist or is not a directory: {workspace_root}"
                 )
-
-    def handle(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        request_id = payload.get("id")
-        method = payload.get("method")
-        if not isinstance(method, str):
-            return self._error(request_id, -32600, "JSON-RPC payload must include method")
-        if request_id is None:
-            return None
-        try:
-            if method == "server/discover":
-                return self._result(
-                    request_id,
-                    build_mcp_discover_result(
-                        server_name="minigent-shell-mcp",
-                        capabilities={"tools": {}},
-                    ),
-                )
-            if method == "initialize":
-                return self._result(
-                    request_id,
-                    {
-                        "protocolVersion": LEGACY_MCP_PROTOCOL_VERSION,
-                        "serverInfo": {"name": "minigent-shell-mcp", "version": "0.1.0"},
-                        "capabilities": {"tools": {}},
-                    },
-                )
-            if method == "tools/list":
-                result: dict[str, Any] = {"tools": [RUN_COMMAND_TOOL]}
-                if mcp_request_protocol_version(payload) == MODERN_MCP_PROTOCOL_VERSION:
-                    result.update({"ttlMs": 0, "cacheScope": "private"})
-                    result = stamp_modern_mcp_result(
-                        result,
-                        server_name="minigent-shell-mcp",
-                    )
-                return self._result(request_id, result)
-            if method == "tools/call":
-                response = self._handle_tool_call(request_id, payload.get("params"))
-                if mcp_request_protocol_version(
-                    payload
-                ) == MODERN_MCP_PROTOCOL_VERSION and isinstance(response.get("result"), dict):
-                    response["result"] = stamp_modern_mcp_result(
-                        response["result"],
-                        server_name="minigent-shell-mcp",
-                    )
-                return response
-            return self._error(request_id, -32601, f"unknown method: {method}")
-        except Exception as exc:
-            return self._error(request_id, -32000, str(exc))
-
-    def _handle_tool_call(self, request_id: Any, params: Any) -> dict[str, Any]:
-        if not isinstance(params, dict):
-            return self._error(request_id, -32602, "tools/call params must be an object")
-        if params.get("name") != "run_command":
-            return self._error(request_id, -32602, "unknown tool")
-        arguments = params.get("arguments") or {}
-        if not isinstance(arguments, dict):
-            return self._error(request_id, -32602, "tool arguments must be an object")
-        result = self.run_command(arguments)
-        return self._result(
-            request_id,
-            {
-                "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=True)}],
-                "structuredContent": result,
-            },
-        )
 
     def run_command(self, arguments: dict[str, Any]) -> dict[str, Any]:
         command = arguments.get("command")
@@ -259,14 +165,6 @@ class ShellMCPServer:
             raise ValueError(f"numeric argument must be >= {minimum}")
         return number
 
-    @staticmethod
-    def _result(request_id: Any, result: dict[str, Any]) -> dict[str, Any]:
-        return {"jsonrpc": "2.0", "id": request_id, "result": result}
-
-    @staticmethod
-    def _error(request_id: Any, code: int, message: str) -> dict[str, Any]:
-        return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
-
 
 def _terminate_process_group(process: subprocess.Popen[str]) -> None:
     try:
@@ -294,23 +192,48 @@ def _truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
     return text[: max_chars - len(marker)] + marker, True
 
 
+def build_shell_sdk_server(server: ShellMCPServer) -> MCPServer[Any]:
+    sdk_server = MCPServer(
+        "minigent-shell-mcp",
+        version="0.1.0",
+        instructions="Trusted-local workspace-scoped shell command execution.",
+    )
+
+    @sdk_server.tool(
+        name="run_command",
+        description=RUN_COMMAND_DESCRIPTION,
+        structured_output=True,
+    )
+    def run_command(
+        command: Annotated[str, Field(description="Shell command to run.")],
+        cwd: Annotated[
+            str | None,
+            Field(description="Working directory inside a configured workspace root."),
+        ] = None,
+        timeout_seconds: Annotated[
+            float | None, Field(description="Optional command timeout in seconds.")
+        ] = None,
+        max_output_chars: Annotated[
+            int | None,
+            Field(description="Optional maximum characters kept for stdout and stderr each."),
+        ] = None,
+    ) -> dict[str, Any]:
+        return server.run_command(
+            {
+                "command": command,
+                "cwd": cwd,
+                "timeout_seconds": timeout_seconds,
+                "max_output_chars": max_output_chars,
+            }
+        )
+
+    return sdk_server
+
+
 def serve_stdio(server: ShellMCPServer) -> int:
     _install_shutdown_signal_handlers()
     try:
-        for line in sys.stdin:
-            try:
-                payload = json.loads(line)
-                if not isinstance(payload, dict):
-                    response = ShellMCPServer._error(
-                        None, -32600, "JSON-RPC payload must be an object"
-                    )
-                else:
-                    response = server.handle(payload)
-            except json.JSONDecodeError:
-                response = ShellMCPServer._error(None, -32700, "invalid JSON")
-            if response is None:
-                continue
-            print(json.dumps(response, ensure_ascii=True, separators=(",", ":")), flush=True)
+        build_shell_sdk_server(server).run(transport="stdio")
     except (KeyboardInterrupt, _ShutdownRequested):
         return 0
     return 0

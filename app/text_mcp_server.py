@@ -1,100 +1,26 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
-import signal
-import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Annotated, Any, Sequence
 
-from app.mcp import (
-    LEGACY_MCP_PROTOCOL_VERSION,
-    MODERN_MCP_PROTOCOL_VERSION,
-    build_mcp_discover_result,
-    mcp_request_protocol_version,
-    stamp_modern_mcp_result,
-)
+from mcp.server import MCPServer
+from pydantic import Field
 
 DEFAULT_MAX_CHARS = 40_000
 DEFAULT_MAX_MATCHES = 20
 
-READ_TEXT_FILE_LINES_TOOL = {
-    "name": "read_text_file_lines",
-    "description": "Read an exact inclusive line range from a text file under the configured workspace roots.",
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "path": {"type": "string", "description": "Absolute or workspace-relative file path."},
-            "start_line": {
-                "type": "integer",
-                "description": "1-based first line to read, inclusive.",
-            },
-            "end_line": {
-                "type": "integer",
-                "description": "1-based last line to read, inclusive.",
-            },
-            "max_chars": {
-                "type": "integer",
-                "description": "Optional maximum characters returned in content.",
-            },
-        },
-        "required": ["path", "start_line", "end_line"],
-    },
-}
-
-READ_TEXT_FILE_AROUND_TOOL = {
-    "name": "read_text_file_around",
-    "description": "Read text around a 1-based line number from a file under the configured workspace roots.",
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "path": {"type": "string", "description": "Absolute or workspace-relative file path."},
-            "line": {"type": "integer", "description": "1-based center line."},
-            "before": {
-                "type": "integer",
-                "description": "Lines of context before the center line.",
-            },
-            "after": {"type": "integer", "description": "Lines of context after the center line."},
-            "max_chars": {
-                "type": "integer",
-                "description": "Optional maximum characters returned in content.",
-            },
-        },
-        "required": ["path", "line"],
-    },
-}
-
-SEARCH_TEXT_FILE_TOOL = {
-    "name": "search_text_file",
-    "description": "Search a text file for a literal string or regex and return matching line contexts.",
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "path": {"type": "string", "description": "Absolute or workspace-relative file path."},
-            "pattern": {"type": "string", "description": "Pattern to search for."},
-            "regex": {
-                "type": "boolean",
-                "description": "Treat pattern as a Python regular expression. Defaults to false.",
-            },
-            "before": {"type": "integer", "description": "Lines of context before each match."},
-            "after": {"type": "integer", "description": "Lines of context after each match."},
-            "max_matches": {"type": "integer", "description": "Maximum matches to return."},
-            "max_chars": {
-                "type": "integer",
-                "description": "Optional maximum characters returned across snippets.",
-            },
-        },
-        "required": ["path", "pattern"],
-    },
-}
-
-TOOLS = [READ_TEXT_FILE_LINES_TOOL, READ_TEXT_FILE_AROUND_TOOL, SEARCH_TEXT_FILE_TOOL]
-
-
-class _ShutdownRequested(BaseException):
-    """Raised by signal handlers to exit the stdio server without a traceback."""
+READ_TEXT_FILE_LINES_DESCRIPTION = (
+    "Read an exact inclusive line range from a text file under the configured workspace roots."
+)
+READ_TEXT_FILE_AROUND_DESCRIPTION = (
+    "Read text around a 1-based line number from a file under the configured workspace roots."
+)
+SEARCH_TEXT_FILE_DESCRIPTION = (
+    "Search a text file for a literal string or regex and return matching line contexts."
+)
 
 
 @dataclass(frozen=True)
@@ -124,77 +50,6 @@ class TextMCPServer:
                 raise RuntimeError(
                     f"workspace does not exist or is not a directory: {workspace_root}"
                 )
-
-    def handle(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        request_id = payload.get("id")
-        method = payload.get("method")
-        if not isinstance(method, str):
-            return self._error(request_id, -32600, "JSON-RPC payload must include method")
-        if request_id is None:
-            return None
-        try:
-            if method == "server/discover":
-                return self._result(
-                    request_id,
-                    build_mcp_discover_result(
-                        server_name="minigent-text-mcp",
-                        capabilities={"tools": {}},
-                    ),
-                )
-            if method == "initialize":
-                return self._result(
-                    request_id,
-                    {
-                        "protocolVersion": LEGACY_MCP_PROTOCOL_VERSION,
-                        "serverInfo": {"name": "minigent-text-mcp", "version": "0.1.0"},
-                        "capabilities": {"tools": {}},
-                    },
-                )
-            if method == "tools/list":
-                result: dict[str, Any] = {"tools": TOOLS}
-                if mcp_request_protocol_version(payload) == MODERN_MCP_PROTOCOL_VERSION:
-                    result.update({"ttlMs": 0, "cacheScope": "private"})
-                    result = stamp_modern_mcp_result(
-                        result,
-                        server_name="minigent-text-mcp",
-                    )
-                return self._result(request_id, result)
-            if method == "tools/call":
-                response = self._handle_tool_call(request_id, payload.get("params"))
-                if mcp_request_protocol_version(
-                    payload
-                ) == MODERN_MCP_PROTOCOL_VERSION and isinstance(response.get("result"), dict):
-                    response["result"] = stamp_modern_mcp_result(
-                        response["result"],
-                        server_name="minigent-text-mcp",
-                    )
-                return response
-            return self._error(request_id, -32601, f"unknown method: {method}")
-        except Exception as exc:
-            return self._error(request_id, -32000, str(exc))
-
-    def _handle_tool_call(self, request_id: Any, params: Any) -> dict[str, Any]:
-        if not isinstance(params, dict):
-            return self._error(request_id, -32602, "tools/call params must be an object")
-        tool_name = params.get("name")
-        arguments = params.get("arguments") or {}
-        if not isinstance(arguments, dict):
-            return self._error(request_id, -32602, "tool arguments must be an object")
-        if tool_name == "read_text_file_lines":
-            result = self.read_text_file_lines(arguments)
-        elif tool_name == "read_text_file_around":
-            result = self.read_text_file_around(arguments)
-        elif tool_name == "search_text_file":
-            result = self.search_text_file(arguments)
-        else:
-            return self._error(request_id, -32602, "unknown tool")
-        return self._result(
-            request_id,
-            {
-                "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=True)}],
-                "structuredContent": result,
-            },
-        )
 
     def read_text_file_lines(self, arguments: dict[str, Any]) -> dict[str, Any]:
         path = self._resolve_file(arguments.get("path"))
@@ -317,14 +172,6 @@ class TextMCPServer:
             return default
         return cls._int_argument(value, "numeric argument", minimum=minimum)
 
-    @staticmethod
-    def _result(request_id: Any, result: dict[str, Any]) -> dict[str, Any]:
-        return {"jsonrpc": "2.0", "id": request_id, "result": result}
-
-    @staticmethod
-    def _error(request_id: Any, code: int, message: str) -> dict[str, Any]:
-        return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
-
 
 def _slice_lines(lines: list[str], start_line: int, end_line: int, *, max_chars: int) -> LineSlice:
     actual_start = min(start_line, len(lines) + 1)
@@ -341,35 +188,93 @@ def _slice_lines(lines: list[str], start_line: int, end_line: int, *, max_chars:
     return LineSlice(actual_start, actual_end, content[: max_chars - len(marker)] + marker, True)
 
 
-def _request_shutdown(_signum: int, _frame: Any) -> None:
-    raise _ShutdownRequested
+def build_text_sdk_server(server: TextMCPServer) -> MCPServer[Any]:
+    sdk_server = MCPServer(
+        "minigent-text-mcp",
+        version="0.1.0",
+        instructions="Workspace-scoped targeted text reading and search.",
+    )
 
+    @sdk_server.tool(
+        name="read_text_file_lines",
+        description=READ_TEXT_FILE_LINES_DESCRIPTION,
+        structured_output=True,
+    )
+    def read_text_file_lines(
+        path: Annotated[str, Field(description="Absolute or workspace-relative file path.")],
+        start_line: Annotated[int, Field(description="1-based first line to read, inclusive.")],
+        end_line: Annotated[int, Field(description="1-based last line to read, inclusive.")],
+        max_chars: Annotated[
+            int | None, Field(description="Optional maximum characters returned in content.")
+        ] = None,
+    ) -> dict[str, Any]:
+        return server.read_text_file_lines(
+            {
+                "path": path,
+                "start_line": start_line,
+                "end_line": end_line,
+                "max_chars": max_chars,
+            }
+        )
 
-def _install_shutdown_signal_handlers() -> None:
-    signal.signal(signal.SIGINT, _request_shutdown)
-    signal.signal(signal.SIGTERM, _request_shutdown)
+    @sdk_server.tool(
+        name="read_text_file_around",
+        description=READ_TEXT_FILE_AROUND_DESCRIPTION,
+        structured_output=True,
+    )
+    def read_text_file_around(
+        path: Annotated[str, Field(description="Absolute or workspace-relative file path.")],
+        line: Annotated[int, Field(description="1-based center line.")],
+        before: Annotated[int, Field(description="Lines of context before the center line.")] = 5,
+        after: Annotated[int, Field(description="Lines of context after the center line.")] = 5,
+        max_chars: Annotated[
+            int | None, Field(description="Optional maximum characters returned in content.")
+        ] = None,
+    ) -> dict[str, Any]:
+        return server.read_text_file_around(
+            {
+                "path": path,
+                "line": line,
+                "before": before,
+                "after": after,
+                "max_chars": max_chars,
+            }
+        )
 
+    @sdk_server.tool(
+        name="search_text_file",
+        description=SEARCH_TEXT_FILE_DESCRIPTION,
+        structured_output=True,
+    )
+    def search_text_file(
+        path: Annotated[str, Field(description="Absolute or workspace-relative file path.")],
+        pattern: Annotated[str, Field(description="Pattern to search for.")],
+        regex: Annotated[
+            bool, Field(description="Treat pattern as a Python regular expression.")
+        ] = False,
+        before: Annotated[int, Field(description="Lines of context before each match.")] = 0,
+        after: Annotated[int, Field(description="Lines of context after each match.")] = 0,
+        max_matches: Annotated[int, Field(description="Maximum matches to return.")] = (
+            DEFAULT_MAX_MATCHES
+        ),
+        max_chars: Annotated[
+            int | None,
+            Field(description="Optional maximum characters returned across snippets."),
+        ] = None,
+    ) -> dict[str, Any]:
+        return server.search_text_file(
+            {
+                "path": path,
+                "pattern": pattern,
+                "regex": regex,
+                "before": before,
+                "after": after,
+                "max_matches": max_matches,
+                "max_chars": max_chars,
+            }
+        )
 
-def serve_stdio(server: TextMCPServer) -> int:
-    _install_shutdown_signal_handlers()
-    try:
-        for line in sys.stdin:
-            try:
-                payload = json.loads(line)
-                if not isinstance(payload, dict):
-                    response = TextMCPServer._error(
-                        None, -32600, "JSON-RPC payload must be an object"
-                    )
-                else:
-                    response = server.handle(payload)
-            except json.JSONDecodeError:
-                response = TextMCPServer._error(None, -32700, "invalid JSON")
-            if response is None:
-                continue
-            print(json.dumps(response, ensure_ascii=True, separators=(",", ":")), flush=True)
-    except (KeyboardInterrupt, _ShutdownRequested):
-        return 0
-    return 0
+    return sdk_server
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -395,7 +300,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         workspaces=[Path(workspace) for workspace in args.workspace],
         max_chars=args.max_chars,
     )
-    return serve_stdio(server)
+    build_text_sdk_server(server).run(transport="stdio")
+    return 0
 
 
 if __name__ == "__main__":

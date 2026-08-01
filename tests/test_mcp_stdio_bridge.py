@@ -196,6 +196,56 @@ def test_stdio_bridge_allows_modern_stateless_requests_without_session(tmp_path:
     assert tools.json()["result"]["tools"][0]["name"] == "echo"
 
 
+def test_stdio_bridge_interoperates_with_sdk_v2_text_server(tmp_path: Path) -> None:
+    client = TestClient(
+        create_bridge_app(
+            BridgeSettings(
+                name="text-sdk",
+                command=[
+                    sys.executable,
+                    "-m",
+                    "app.text_mcp_server",
+                    "--workspace",
+                    str(tmp_path),
+                ],
+            )
+        )
+    )
+    metadata = {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1.0.0"},
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }
+
+    with client:
+        discover = client.post(
+            "/mcp",
+            headers={"MCP-Protocol-Version": "2026-07-28"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "server/discover",
+                "params": {"_meta": metadata},
+            },
+        )
+        modern_tools = client.post(
+            "/mcp",
+            headers={"MCP-Protocol-Version": "2026-07-28"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {"_meta": metadata},
+            },
+        )
+
+    assert discover.json()["result"]["supportedVersions"] == ["2026-07-28"]
+    assert "mcp-session-id" not in discover.headers
+    assert modern_tools.status_code == 200
+    assert modern_tools.json()["result"]["resultType"] == "complete"
+    assert modern_tools.json()["result"]["tools"][0]["name"] == "read_text_file_lines"
+
+
 def test_stdio_bridge_requires_session_after_initialize(tmp_path: Path) -> None:
     client = _client(tmp_path, "ok")
 
