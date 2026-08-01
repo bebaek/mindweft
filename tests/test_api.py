@@ -893,25 +893,29 @@ def test_run_stream_endpoint_emits_tool_events() -> None:
 
 
 def test_run_stream_endpoint_emits_peer_task_events() -> None:
+    task_id = ""
+
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal task_id
         if request.method == "POST" and request.url.path == "/tasks":
-            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            task_id = str(json.loads(request.content)["task_id"])
+            return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
             return httpx.Response(
                 200,
                 json={
-                    "task_id": "task_123",
+                    "task_id": task_id,
                     "status": "completed",
                     "final_output": "Pi result",
                 },
             )
-        if request.method == "GET" and request.url.path == "/tasks/task_123/events":
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}/events":
             after = request.url.params.get("after")
             if after is None:
                 return httpx.Response(
                     200,
                     json={
-                        "task_id": "task_123",
+                        "task_id": task_id,
                         "next_index": 1,
                         "events": [{"index": 0, "type": "session_start"}],
                     },
@@ -920,7 +924,7 @@ def test_run_stream_endpoint_emits_peer_task_events() -> None:
                 return httpx.Response(
                     200,
                     json={
-                        "task_id": "task_123",
+                        "task_id": task_id,
                         "next_index": 2,
                         "events": [
                             {
@@ -933,7 +937,7 @@ def test_run_stream_endpoint_emits_peer_task_events() -> None:
                 )
             return httpx.Response(
                 200,
-                json={"task_id": "task_123", "next_index": 2, "events": []},
+                json={"task_id": task_id, "next_index": 2, "events": []},
             )
         return httpx.Response(404, json={"detail": "missing"})
 
@@ -991,21 +995,25 @@ def test_run_stream_endpoint_emits_peer_task_events() -> None:
 
 
 def test_run_stream_endpoint_emits_peer_task_usage() -> None:
+    task_id = ""
+
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal task_id
         if request.method == "POST" and request.url.path == "/tasks":
-            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            task_id = str(json.loads(request.content)["task_id"])
+            return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
             return httpx.Response(
                 200,
                 json={
-                    "task_id": "task_123",
+                    "task_id": task_id,
                     "status": "completed",
                     "final_output": "Pi result",
                     "usage": {"input": 12, "output": 5, "totalTokens": 17},
                 },
             )
-        if request.method == "GET" and request.url.path == "/tasks/task_123/events":
-            return httpx.Response(200, json={"task_id": "task_123", "next_index": 0, "events": []})
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}/events":
+            return httpx.Response(200, json={"task_id": task_id, "next_index": 0, "events": []})
         return httpx.Response(404, json={"detail": "missing"})
 
     config = parse_tenant_execution_config(
@@ -1057,14 +1065,18 @@ def test_run_stream_endpoint_emits_peer_task_usage() -> None:
 
 
 def test_peer_agent_backend_persists_peer_tool_events_in_raw_context() -> None:
+    task_id = ""
+
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal task_id
         if request.method == "POST" and request.url.path == "/tasks":
-            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            task_id = str(json.loads(request.content)["task_id"])
+            return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
             return httpx.Response(
                 200,
                 json={
-                    "task_id": "task_123",
+                    "task_id": task_id,
                     "status": "completed",
                     "final_output": "Pi result",
                     "events_tail": [
@@ -1405,10 +1417,14 @@ def test_run_endpoint_handles_tool_call_flow() -> None:
     assert "[tool_result]\nname: echo" in raw_context["rendered"]
 
 
-def test_run_endpoint_can_use_peer_agent_backend() -> None:
+def test_run_endpoint_can_use_peer_agent_backend(tmp_path: Path) -> None:
     requests: list[tuple[str, str, dict[str, object] | None]] = []
+    task_id = ""
+    database = tmp_path / "threads.db"
+    store = SQLiteThreadStore(database)
 
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal task_id
         payload = json.loads(request.content) if request.content else None
         requests.append((request.method, request.url.path, payload))
         if request.method == "POST" and request.url.path == "/tasks":
@@ -1422,12 +1438,18 @@ def test_run_endpoint_can_use_peer_agent_backend() -> None:
             assert "You are running as the execution backend for a Minigent thread." in prompt
             assert "Minigent MCP broker:" in prompt
             assert "[user]\nplease inspect the repo" in prompt
-            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            task_id = str(payload["task_id"])
+            with sqlite3.connect(database) as connection:
+                reserved_task_id = connection.execute(
+                    "SELECT peer_task_id FROM thread_runs"
+                ).fetchone()[0]
+            assert reserved_task_id == task_id
+            return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
             return httpx.Response(
                 200,
                 json={
-                    "task_id": "task_123",
+                    "task_id": task_id,
                     "status": "completed",
                     "final_output": "OpenCode result",
                 },
@@ -1453,6 +1475,7 @@ def test_run_endpoint_can_use_peer_agent_backend() -> None:
         create_app(
             execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
             peer_agent_registry=registry,
+            thread_store=store,
         )
     )
     thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
@@ -1469,11 +1492,82 @@ def test_run_endpoint_can_use_peer_agent_backend() -> None:
     messages = client.get(f"/threads/{thread_id}/messages", headers=AUTH_HEADERS).json()
     assert [message["role"] for message in messages] == [MessageRole.USER, MessageRole.ASSISTANT]
     assert messages[-1]["content"] == "OpenCode result"
-    assert [request[:2] for request in requests] == [("POST", "/tasks"), ("GET", "/tasks/task_123")]
+    assert [request[:2] for request in requests] == [
+        ("POST", "/tasks"),
+        ("GET", f"/tasks/{task_id}"),
+    ]
+
+
+def test_peer_agent_backend_queues_reserved_task_when_create_fails(tmp_path: Path) -> None:
+    database = tmp_path / "threads.db"
+    store = SQLiteThreadStore(database)
+    recovery = SQLiteThreadStore(database)
+    reserved_task_id = ""
+    requests: list[tuple[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal reserved_task_id
+        requests.append((request.method, request.url.path))
+        if request.method == "POST" and request.url.path == "/tasks":
+            payload = json.loads(request.content)
+            reserved_task_id = str(payload["task_id"])
+            with sqlite3.connect(database) as connection:
+                persisted = connection.execute("SELECT peer_task_id FROM thread_runs").fetchone()[0]
+            assert persisted == reserved_task_id
+            return httpx.Response(503, json={"detail": "creation outcome unknown"})
+        if request.method == "POST" and request.url.path == f"/tasks/{reserved_task_id}/cancel":
+            return httpx.Response(503, json={"detail": "peer unavailable"})
+        return httpx.Response(404, json={"detail": "missing"})
+
+    config = parse_tenant_execution_config(
+        "tenant-1",
+        {
+            "agent_backend": {
+                "type": "peer_agent",
+                "peer": "opencode",
+                "cwd": "/workspace/project",
+                "mcp_broker_enabled": False,
+            }
+        },
+    )
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "opencode", "base_url": "http://opencode.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    client = TestClient(
+        create_app(
+            execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
+            peer_agent_registry=registry,
+            thread_store=store,
+        )
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "please inspect the repo"},
+        headers=AUTH_HEADERS,
+    )
+
+    response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    claimed = recovery.claim_peer_task_cancellations(lease_seconds=30, limit=1)
+
+    assert response.status_code == 502
+    assert reserved_task_id.startswith("task_")
+    assert len(reserved_task_id) == 37
+    assert requests == [
+        ("POST", "/tasks"),
+        ("POST", f"/tasks/{reserved_task_id}/cancel"),
+    ]
+    assert len(claimed) == 1
+    assert claimed[0].task_id == reserved_task_id
+    assert store.get_thread("tenant-1", thread_id).status == ThreadStatus.ERROR
 
 
 def test_peer_agent_backend_prompt_includes_tool_call_context() -> None:
+    task_id = ""
+
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal task_id
         payload = json.loads(request.content) if request.content else None
         if request.method == "POST" and request.url.path == "/tasks":
             assert payload is not None
@@ -1482,12 +1576,13 @@ def test_peer_agent_backend_prompt_includes_tool_call_context() -> None:
             assert 'arguments: {"text": "hello from peer context"}' in prompt
             assert "[tool_result]\nname: echo\nid: call-1" in prompt
             assert '{"echo": "hello from peer context"}' in prompt
-            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            task_id = str(payload["task_id"])
+            return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
             return httpx.Response(
                 200,
                 json={
-                    "task_id": "task_123",
+                    "task_id": task_id,
                     "status": "completed",
                     "final_output": "Peer result",
                 },
@@ -1556,17 +1651,20 @@ def test_peer_agent_backend_cancellation_cancels_peer_task_and_resets_thread() -
         requests: list[tuple[str, str]] = []
         task_polled = asyncio.Event()
         release_poll = asyncio.Event()
+        task_id = ""
 
         async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal task_id
             requests.append((request.method, request.url.path))
             if request.method == "POST" and request.url.path == "/tasks":
-                return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-            if request.method == "GET" and request.url.path == "/tasks/task_123":
+                task_id = str(json.loads(request.content)["task_id"])
+                return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+            if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
                 task_polled.set()
                 await release_poll.wait()
-                return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-            if request.method == "POST" and request.url.path == "/tasks/task_123/cancel":
-                return httpx.Response(200, json={"task_id": "task_123", "status": "canceled"})
+                return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+            if request.method == "POST" and request.url.path == f"/tasks/{task_id}/cancel":
+                return httpx.Response(200, json={"task_id": task_id, "status": "canceled"})
             return httpx.Response(404, json={"detail": "missing"})
 
         config = parse_tenant_execution_config(
@@ -1608,7 +1706,7 @@ def test_peer_agent_backend_cancellation_cancels_peer_task_and_resets_thread() -
             await task
         release_poll.set()
 
-        assert ("POST", "/tasks/task_123/cancel") in requests
+        assert ("POST", f"/tasks/{task_id}/cancel") in requests
         assert store.get_thread(principal.tenant_id, thread.thread_id).status == ThreadStatus.IDLE
 
     asyncio.run(scenario())
@@ -1619,16 +1717,18 @@ def test_peer_agent_backend_persists_failed_cancellation_for_retry(tmp_path: Pat
         task_polled = asyncio.Event()
         release_poll = asyncio.Event()
         cancel_requests = 0
+        task_id = ""
 
         async def handler(request: httpx.Request) -> httpx.Response:
-            nonlocal cancel_requests
+            nonlocal cancel_requests, task_id
             if request.method == "POST" and request.url.path == "/tasks":
-                return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-            if request.method == "GET" and request.url.path == "/tasks/task_123":
+                task_id = str(json.loads(request.content)["task_id"])
+                return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+            if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
                 task_polled.set()
                 await release_poll.wait()
-                return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-            if request.method == "POST" and request.url.path == "/tasks/task_123/cancel":
+                return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+            if request.method == "POST" and request.url.path == f"/tasks/{task_id}/cancel":
                 cancel_requests += 1
                 return httpx.Response(503, json={"detail": "temporarily unavailable"})
             return httpx.Response(404, json={"detail": "missing"})
@@ -1675,7 +1775,7 @@ def test_peer_agent_backend_persists_failed_cancellation_for_retry(tmp_path: Pat
         assert len(claimed) == 1
         assert claimed[0].peer_name == "opencode"
         assert claimed[0].peer_base_url == "http://opencode.test"
-        assert claimed[0].task_id == "task_123"
+        assert claimed[0].task_id == task_id
         assert store.get_thread(principal.tenant_id, thread.thread_id).status == ThreadStatus.IDLE
 
     asyncio.run(scenario())
@@ -1693,7 +1793,11 @@ def test_run_endpoint_can_disable_peer_agent_mcp_broker() -> None:
             assert "Minigent MCP broker:" not in str(payload["prompt"])
             return httpx.Response(
                 200,
-                json={"task_id": "task_123", "status": "completed", "final_output": "ok"},
+                json={
+                    "task_id": payload["task_id"],
+                    "status": "completed",
+                    "final_output": "ok",
+                },
             )
         return httpx.Response(404, json={"detail": "missing"})
 

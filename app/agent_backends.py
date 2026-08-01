@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -171,13 +172,8 @@ class AgentBackendRouter(AgentBackend):
                 broker_session_id = broker_env[MINIGENT_MCP_BROKER_SESSION_ENV]
                 payload["env"] = broker_env
                 payload["prompt"] = prompt + _mcp_broker_prompt_suffix()
-            task = await self._peer_agent_registry.create_task(peer, payload)
-            task_id = str(task.get("task_id", "")).strip()
-            if not task_id:
-                raise HTTPException(
-                    status_code=502,
-                    detail="peer_agent backend returned task response without task_id",
-                )
+            task_id = f"task_{uuid4().hex}"
+            payload["task_id"] = task_id
             attached = self._store.attach_peer_task(
                 principal.tenant_id,
                 thread_id,
@@ -186,8 +182,14 @@ class AgentBackendRouter(AgentBackend):
                 task_id=task_id,
             )
             if not attached:
-                await self._cancel_peer_agent_task(peer, task_id)
                 raise HTTPException(status_code=409, detail="Thread run lease was lost")
+            task = await self._peer_agent_registry.create_task(peer, payload)
+            returned_task_id = str(task.get("task_id", "")).strip()
+            if returned_task_id != task_id:
+                raise HTTPException(
+                    status_code=502,
+                    detail="peer_agent backend returned an unexpected task_id",
+                )
             await _emit_run_event(
                 event_sink,
                 {

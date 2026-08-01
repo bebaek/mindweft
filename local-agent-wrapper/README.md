@@ -146,8 +146,17 @@ Example:
 ```bash
 curl -s http://127.0.0.1:8010/tasks \
   -H 'content-type: application/json' \
-  -d '{"cwd":"/Users/burm/code/minigent","prompt":"Summarize this repository in one paragraph."}'
+  -d '{"task_id":"task_0123456789abcdef0123456789abcdef","cwd":"/Users/burm/code/minigent","prompt":"Summarize this repository in one paragraph."}'
 ```
+
+`task_id` is optional for standalone callers, but coordinating runtimes should generate a
+cryptographically random `task_` ID with 32 lowercase hexadecimal characters and persist it before
+submission. Repeating an identical request with that ID returns the original task without starting
+a second process; reusing it with different prompt, workspace, or allowed environment returns
+`409`. Canceling a valid ID before its create request arrives records a canceled tombstone, so a
+late or retried create returns `canceled` and never starts the process. This closes ambiguous create
+outcomes when the client disconnects or fails between submission and response. Task IDs and
+cancellation tombstones are process-local and disappear when the wrapper restarts.
 
 Then poll:
 
