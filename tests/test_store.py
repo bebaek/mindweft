@@ -193,6 +193,31 @@ def test_periodic_recovery_cancels_persisted_peer_task(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_sqlite_owner_can_enqueue_peer_cancellation_before_finishing_run(tmp_path: Path) -> None:
+    database = tmp_path / "threads.db"
+    owner = SQLiteThreadStore(database)
+    recovery = SQLiteThreadStore(database)
+    thread_id = owner.create_thread("tenant-a").thread_id
+    owner.start_run("tenant-a", thread_id)
+    assert owner.attach_peer_task(
+        "tenant-a",
+        thread_id,
+        peer_name="peer-a",
+        peer_base_url="http://peer.test",
+        task_id="task-1",
+    )
+
+    assert owner.enqueue_owned_peer_task_cancellation("tenant-a", thread_id)
+    owner.set_thread_status("tenant-a", thread_id, ThreadStatus.IDLE)
+    claimed = recovery.claim_peer_task_cancellations(lease_seconds=30, limit=1)
+
+    assert len(claimed) == 1
+    assert claimed[0].peer_name == "peer-a"
+    assert claimed[0].peer_base_url == "http://peer.test"
+    assert claimed[0].task_id == "task-1"
+    assert recovery.get_thread("tenant-a", thread_id).status == ThreadStatus.IDLE
+
+
 def test_sqlite_stale_peer_run_enqueues_single_claimed_cancellation(tmp_path: Path) -> None:
     database = tmp_path / "threads.db"
     owner = SQLiteThreadStore(database)

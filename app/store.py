@@ -198,6 +198,8 @@ class ThreadStore(Protocol):
         task_id: str,
     ) -> bool: ...
 
+    def enqueue_owned_peer_task_cancellation(self, tenant_id: str, thread_id: str) -> bool: ...
+
     def claim_peer_task_cancellations(
         self, *, lease_seconds: float, limit: int
     ) -> list[PeerTaskCancellation]: ...
@@ -570,6 +572,36 @@ class InMemoryThreadStore:
                 peer_name=peer_name,
                 peer_base_url=peer_base_url,
                 peer_task_id=task_id,
+            )
+            return True
+
+    def enqueue_owned_peer_task_cancellation(self, tenant_id: str, thread_id: str) -> bool:
+        with self._lock:
+            current = _CURRENT_RUN.get()
+            run = self._runs.get((tenant_id, thread_id))
+            if (
+                current is None
+                or current[:2] != (tenant_id, thread_id)
+                or run is None
+                or run.run_id != current[2]
+                or run.owner_instance_id != self._instance_id
+                or run.peer_name is None
+                or run.peer_base_url is None
+                or run.peer_task_id is None
+            ):
+                return False
+            self._peer_task_cancellations.setdefault(
+                run.run_id,
+                _QueuedPeerTaskCancellation(
+                    cancellation=PeerTaskCancellation(
+                        cancellation_id=run.run_id,
+                        peer_name=run.peer_name,
+                        peer_base_url=run.peer_base_url,
+                        task_id=run.peer_task_id,
+                        attempts=0,
+                    ),
+                    next_attempt_at=time.time(),
+                ),
             )
             return True
 
@@ -1124,6 +1156,37 @@ class SQLiteThreadStore:
                     current[2],
                     self._instance_id,
                     now,
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def enqueue_owned_peer_task_cancellation(self, tenant_id: str, thread_id: str) -> bool:
+        current = _CURRENT_RUN.get()
+        if current is None or current[:2] != (tenant_id, thread_id):
+            return False
+        now = time.time()
+        with self._lock, self._connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO peer_task_cancellations (
+                  cancellation_id, tenant_id, thread_id, peer_name, peer_base_url,
+                  peer_task_id, attempts, next_attempt_at, created_at
+                )
+                SELECT run_id, tenant_id, thread_id, peer_name, peer_base_url,
+                       peer_task_id, 0, ?, ?
+                FROM thread_runs
+                WHERE tenant_id = ? AND thread_id = ? AND run_id = ?
+                  AND owner_instance_id = ?
+                  AND peer_name IS NOT NULL AND peer_base_url IS NOT NULL
+                  AND peer_task_id IS NOT NULL
+                """,
+                (
+                    now,
+                    now,
+                    tenant_id,
+                    thread_id,
+                    current[2],
+                    self._instance_id,
                 ),
             )
             return cursor.rowcount == 1

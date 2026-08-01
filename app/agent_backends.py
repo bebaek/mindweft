@@ -154,6 +154,7 @@ class AgentBackendRouter(AgentBackend):
         self._store.start_run(principal.tenant_id, thread_id)
         broker_session_id: str | None = None
         task_id: str | None = None
+        peer_task_terminal = False
         try:
             prompt = self._prompt_for_peer_agent(principal, thread_id)
             payload: dict[str, object] = {"cwd": cwd, "prompt": prompt}
@@ -209,7 +210,6 @@ class AgentBackendRouter(AgentBackend):
             deadline = time.monotonic() + timeout_seconds
             while str(task.get("status", "")) not in _TERMINAL_PEER_STATUSES:
                 if time.monotonic() >= deadline:
-                    await self._cancel_peer_agent_task(peer, task_id)
                     raise HTTPException(
                         status_code=504,
                         detail=f"peer_agent backend task '{task_id}' timed out",
@@ -234,6 +234,7 @@ class AgentBackendRouter(AgentBackend):
                         task_id=task_id,
                         after=last_peer_event_index,
                     )
+            peer_task_terminal = True
             if event_sink is not None:
                 last_peer_event_index = await self._emit_peer_task_events(
                     event_sink,
@@ -269,14 +270,18 @@ class AgentBackendRouter(AgentBackend):
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
             return reply, None
         except asyncio.CancelledError:
-            if task_id:
-                await self._cancel_peer_agent_task(peer, task_id)
+            if task_id and not peer_task_terminal:
+                await self._cancel_or_enqueue_peer_agent_task(principal, thread_id, peer, task_id)
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
             raise
         except HTTPException:
+            if task_id and not peer_task_terminal:
+                await self._cancel_or_enqueue_peer_agent_task(principal, thread_id, peer, task_id)
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.ERROR)
             raise
         except Exception as exc:  # pragma: no cover - defensive boundary
+            if task_id and not peer_task_terminal:
+                await self._cancel_or_enqueue_peer_agent_task(principal, thread_id, peer, task_id)
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.ERROR)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         finally:
@@ -492,11 +497,23 @@ class AgentBackendRouter(AgentBackend):
         detail = final_output or str(task.get("stderr_tail") or "").strip() or status
         raise HTTPException(status_code=502, detail=f"peer_agent backend task {status}: {detail}")
 
-    async def _cancel_peer_agent_task(self, peer: str, task_id: str) -> None:
+    async def _cancel_or_enqueue_peer_agent_task(
+        self,
+        principal: Principal,
+        thread_id: str,
+        peer: str,
+        task_id: str,
+    ) -> None:
+        if await self._cancel_peer_agent_task(peer, task_id):
+            return
+        self._store.enqueue_owned_peer_task_cancellation(principal.tenant_id, thread_id)
+
+    async def _cancel_peer_agent_task(self, peer: str, task_id: str) -> bool:
         try:
             await self._peer_agent_registry.cancel_task(peer, task_id)
         except HTTPException:
-            return
+            return False
+        return True
 
 
 def _render_peer_context_message(message: Message) -> str:

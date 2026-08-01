@@ -1614,6 +1614,73 @@ def test_peer_agent_backend_cancellation_cancels_peer_task_and_resets_thread() -
     asyncio.run(scenario())
 
 
+def test_peer_agent_backend_persists_failed_cancellation_for_retry(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        task_polled = asyncio.Event()
+        release_poll = asyncio.Event()
+        cancel_requests = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal cancel_requests
+            if request.method == "POST" and request.url.path == "/tasks":
+                return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+            if request.method == "GET" and request.url.path == "/tasks/task_123":
+                task_polled.set()
+                await release_poll.wait()
+                return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
+            if request.method == "POST" and request.url.path == "/tasks/task_123/cancel":
+                cancel_requests += 1
+                return httpx.Response(503, json={"detail": "temporarily unavailable"})
+            return httpx.Response(404, json={"detail": "missing"})
+
+        config = parse_tenant_execution_config(
+            "tenant-1",
+            {
+                "agent_backend": {
+                    "type": "peer_agent",
+                    "peer": "opencode",
+                    "cwd": "/workspace/project",
+                    "poll_interval_seconds": 0.001,
+                }
+            },
+        )
+        registry = PeerAgentRegistry(
+            parse_peer_agent_configs([{"name": "opencode", "base_url": "http://opencode.test"}]),
+            transport=httpx.MockTransport(handler),
+        )
+        database = tmp_path / "threads.db"
+        store = SQLiteThreadStore(database)
+        recovery = SQLiteThreadStore(database)
+        app = create_app(
+            execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
+            peer_agent_registry=registry,
+            thread_store=store,
+        )
+        principal = Principal(user_id="user-1", tenant_id="tenant-1")
+        thread = store.create_thread(principal.tenant_id)
+        store.append_message(
+            principal.tenant_id,
+            Message(thread_id=thread.thread_id, role=MessageRole.USER, content="please inspect"),
+        )
+
+        task = asyncio.create_task(app.state.agent_backend.run_thread(principal, thread.thread_id))
+        await task_polled.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release_poll.set()
+
+        claimed = recovery.claim_peer_task_cancellations(lease_seconds=30, limit=1)
+        assert cancel_requests == 1
+        assert len(claimed) == 1
+        assert claimed[0].peer_name == "opencode"
+        assert claimed[0].peer_base_url == "http://opencode.test"
+        assert claimed[0].task_id == "task_123"
+        assert store.get_thread(principal.tenant_id, thread.thread_id).status == ThreadStatus.IDLE
+
+    asyncio.run(scenario())
+
+
 def test_run_endpoint_can_disable_peer_agent_mcp_broker() -> None:
     requests: list[dict[str, object] | None] = []
 
