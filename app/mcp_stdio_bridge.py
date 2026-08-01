@@ -7,14 +7,24 @@ import json
 import logging
 import os
 import secrets
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Sequence
 
+import anyio
 from fastapi import FastAPI, HTTPException, Request, Response
+from mcp import Client
+from mcp.shared.message import SessionMessage
+from mcp.types import (
+    CallToolRequest,
+    CallToolRequestParams,
+    CallToolResult,
+    Implementation,
+    jsonrpc_message_adapter,
+)
 from pydantic import BaseModel, Field
 
 from app.mcp import (
-    DEFAULT_MCP_PROTOCOL_VERSION,
     MODERN_MCP_PROTOCOL_VERSION,
     MCPPathPolicy,
     _filter_directory_listing_text,
@@ -53,7 +63,12 @@ class StdioMCPBridge:
         self._request_lock = asyncio.Lock()
         self._stderr_task: asyncio.Task[None] | None = None
         self._session_id: str | None = None
-        self._protocol_version = DEFAULT_MCP_PROTOCOL_VERSION
+        self._sdk_worker_task: asyncio.Task[None] | None = None
+        self._sdk_queue: (
+            asyncio.Queue[tuple[dict[str, Any], bool, asyncio.Future[dict[str, Any]]] | None] | None
+        ) = None
+        self._sdk_ready: asyncio.Future[None] | None = None
+        self._sdk_transport_error: asyncio.Future[Exception] | None = None
 
     async def start(self) -> None:
         if self._process is not None:
@@ -78,6 +93,7 @@ class StdioMCPBridge:
         )
 
     async def stop(self, *, force: bool = False) -> None:
+        await self._stop_sdk_worker(force=force)
         process = self._process
         if process is None:
             return
@@ -127,31 +143,223 @@ class StdioMCPBridge:
             self._require_session(headers)
 
         if "id" not in payload:
-            async with self._request_lock:
-                await self._write_json(payload)
+            if method != "notifications/initialized":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported MCP notification for tools-only bridge: {method}",
+                )
             return Response(status_code=202)
 
         self._validate_request_policy(payload)
         file_modes_to_restore = self._file_modes_to_preserve(payload)
         try:
-            response_payload = await self._request(payload)
+            async with self._request_lock:
+                response_payload = await self._sdk_request(
+                    payload, is_modern_request=is_modern_request
+                )
         finally:
             self._restore_file_modes(file_modes_to_restore)
         response_payload = self._filter_response_payload(method, response_payload, payload)
         response_headers = {"content-type": "application/json"}
-        if method == "initialize":
+        if method == "initialize" and "result" in response_payload:
             self._session_id = secrets.token_urlsafe(24)
-            result = response_payload.get("result")
-            if isinstance(result, dict):
-                protocol_version = result.get("protocolVersion")
-                if isinstance(protocol_version, str) and protocol_version:
-                    self._protocol_version = protocol_version
             response_headers["MCP-Session-Id"] = self._session_id
         return Response(
             content=json.dumps(response_payload, ensure_ascii=True),
             media_type="application/json",
             headers=response_headers,
         )
+
+    async def _sdk_request(
+        self,
+        payload: dict[str, Any],
+        *,
+        is_modern_request: bool,
+    ) -> dict[str, Any]:
+        try:
+            async with asyncio.timeout(self._settings.request_timeout):
+                await self._ensure_sdk_worker()
+                queue = self._sdk_queue
+                if queue is None:
+                    raise RuntimeError("MCP SDK worker queue is unavailable")
+                future = asyncio.get_running_loop().create_future()
+                future.add_done_callback(_consume_future_exception)
+                await queue.put((payload, is_modern_request, future))
+                transport_error = self._sdk_transport_error
+                if transport_error is None:
+                    raise RuntimeError("MCP SDK transport error signal is unavailable")
+                done, _ = await asyncio.wait(
+                    (future, transport_error),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if transport_error in done:
+                    future.cancel()
+                    error = transport_error.result()
+                    await self.restart(force=True)
+                    raise HTTPException(status_code=502, detail=str(error))
+                return future.result()
+        except TimeoutError as exc:
+            if self._settings.restart_on_timeout:
+                await self.restart(force=True)
+            raise HTTPException(
+                status_code=504, detail="Timed out waiting for MCP stdio server"
+            ) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"MCP stdio server request failed: {_exception_detail(exc)}",
+            ) from exc
+
+    async def _ensure_sdk_worker(self) -> None:
+        if self._sdk_worker_task is not None and self._sdk_worker_task.done():
+            await self.restart(force=True)
+        if self._sdk_worker_task is None:
+            loop = asyncio.get_running_loop()
+            self._sdk_queue = asyncio.Queue()
+            self._sdk_ready = loop.create_future()
+            self._sdk_transport_error = loop.create_future()
+            self._sdk_worker_task = asyncio.create_task(
+                self._run_sdk_worker(),
+                name=f"mcp-stdio-bridge-{self._settings.name}-sdk",
+            )
+        ready = self._sdk_ready
+        if ready is None:
+            raise RuntimeError("MCP SDK worker readiness signal is unavailable")
+        await asyncio.shield(ready)
+
+    async def _run_sdk_worker(self) -> None:
+        ready = self._sdk_ready
+        queue = self._sdk_queue
+        assert ready is not None
+        assert queue is not None
+        try:
+            async with Client(
+                _process_stdio_transport(self),
+                client_info=Implementation(name="minigent-stdio-bridge", version="0.1.0"),
+                mode="auto",
+                read_timeout_seconds=self._settings.request_timeout,
+            ) as client:
+                if not ready.done():
+                    ready.set_result(None)
+                while True:
+                    work = await queue.get()
+                    if work is None:
+                        return
+                    payload, is_modern_request, future = work
+                    if future.cancelled():
+                        continue
+                    try:
+                        response = await self._sdk_request_with_client(
+                            client,
+                            payload,
+                            is_modern_request=is_modern_request,
+                        )
+                    except Exception as exc:
+                        if not future.done():
+                            future.set_exception(exc)
+                    else:
+                        if not future.done():
+                            future.set_result(response)
+        except BaseException as exc:
+            if not ready.done():
+                ready.set_exception(exc)
+            while not queue.empty():
+                work = queue.get_nowait()
+                if work is not None and not work[2].done():
+                    work[2].set_exception(RuntimeError("MCP SDK worker stopped"))
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            self._signal_transport_error(
+                RuntimeError(f"MCP stdio SDK worker stopped: {_exception_detail(exc)}")
+            )
+            logger.warning(
+                "MCP stdio SDK worker stopped: name=%s detail=%s",
+                self._settings.name,
+                _exception_detail(exc),
+            )
+
+    async def _sdk_request_with_client(
+        self,
+        client: Client,
+        payload: dict[str, Any],
+        *,
+        is_modern_request: bool,
+    ) -> dict[str, Any]:
+        request_id = payload.get("id")
+        method = payload["method"]
+        if method == "server/discover":
+            if client.protocol_version != MODERN_MCP_PROTOCOL_VERSION:
+                return _jsonrpc_error(request_id, -32601, "Method not found")
+            result: Any = client.session.discover_result
+        elif method == "initialize":
+            result = _legacy_initialize_result(client)
+        elif method == "tools/list":
+            params = payload.get("params")
+            cursor = params.get("cursor") if isinstance(params, dict) else None
+            result = await client.list_tools(
+                cursor=cursor if isinstance(cursor, str) else None,
+                cache_mode="bypass",
+            )
+        elif method == "tools/call":
+            params = payload.get("params")
+            assert isinstance(params, dict)
+            arguments = params.get("arguments") or {}
+            assert isinstance(arguments, dict)
+            result = await client.session.send_request(
+                CallToolRequest(
+                    params=CallToolRequestParams(
+                        name=params["name"],
+                        arguments=arguments,
+                    )
+                ),
+                CallToolResult,
+                request_read_timeout_seconds=self._settings.request_timeout,
+            )
+        else:
+            return _jsonrpc_error(request_id, -32601, f"unknown method: {method}")
+
+        if isinstance(result, dict):
+            result_payload = result
+        elif result is None:
+            return _jsonrpc_error(request_id, -32603, "MCP SDK returned no result")
+        else:
+            result_payload = result.model_dump(by_alias=True, mode="json", exclude_none=True)
+        if is_modern_request:
+            result_payload.setdefault("resultType", "complete")
+            result_payload.setdefault("ttlMs", 0)
+            result_payload.setdefault("cacheScope", "private")
+        return {"jsonrpc": "2.0", "id": request_id, "result": result_payload}
+
+    async def _stop_sdk_worker(self, *, force: bool = False) -> None:
+        task = self._sdk_worker_task
+        queue = self._sdk_queue
+        self._sdk_worker_task = None
+        self._sdk_queue = None
+        self._sdk_ready = None
+        self._sdk_transport_error = None
+        if task is None:
+            return
+        if force and not task.done():
+            task.cancel()
+        elif queue is not None and not task.done():
+            await queue.put(None)
+        try:
+            await asyncio.wait_for(task, timeout=self._settings.request_timeout)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                return
+            raise
+        except TimeoutError:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    def _signal_transport_error(self, error: Exception) -> None:
+        signal = self._sdk_transport_error
+        if signal is not None and not signal.done():
+            signal.set_result(error)
 
     def _validate_request_policy(self, payload: dict[str, Any]) -> None:
         method = payload.get("method")
@@ -284,17 +492,6 @@ class StdioMCPBridge:
         if session_id != self._session_id:
             raise HTTPException(status_code=400, detail="No valid MCP session ID provided")
 
-    async def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
-        expected_id = payload.get("id")
-        async with self._request_lock:
-            try:
-                await self._write_json(payload)
-                return await self._read_json(expected_id=expected_id)
-            except asyncio.CancelledError:
-                if self._settings.restart_on_timeout:
-                    await self.restart(force=True)
-                raise
-
     async def _write_json(self, payload: dict[str, Any]) -> None:
         process = self._live_process()
         stdin = process.stdin
@@ -307,60 +504,26 @@ class StdioMCPBridge:
         except BrokenPipeError as exc:
             raise HTTPException(status_code=502, detail="MCP stdio server closed stdin") from exc
         except TimeoutError as exc:
-            if self._settings.restart_on_timeout:
-                await self.restart(force=True)
             raise HTTPException(
                 status_code=504, detail="Timed out writing to MCP stdio server"
             ) from exc
 
-    async def _read_json(self, *, expected_id: Any) -> dict[str, Any]:
+    async def _read_stdio_message(self) -> SessionMessage | Exception | None:
         process = self._live_process()
         stdout = process.stdout
         if stdout is None:
-            raise HTTPException(status_code=502, detail="MCP stdio server stdout is unavailable")
-        deadline = asyncio.get_running_loop().time() + self._settings.request_timeout
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                if self._settings.restart_on_timeout:
-                    await self.restart(force=True)
-                raise HTTPException(
-                    status_code=504, detail="Timed out reading from MCP stdio server"
-                )
-            try:
-                line = await asyncio.wait_for(stdout.readline(), timeout=remaining)
-            except TimeoutError as exc:
-                if self._settings.restart_on_timeout:
-                    await self.restart(force=True)
-                raise HTTPException(
-                    status_code=504, detail="Timed out reading from MCP stdio server"
-                ) from exc
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=502,
-                    detail="MCP stdio server response exceeded stream buffer limit",
-                ) from exc
-            if not line:
-                raise HTTPException(status_code=502, detail="MCP stdio server closed stdout")
-            try:
-                payload = json.loads(line.decode("utf-8"))
-            except json.JSONDecodeError as exc:
-                raise HTTPException(
-                    status_code=502, detail="MCP stdio server returned invalid JSON"
-                ) from exc
-            if not isinstance(payload, dict):
-                raise HTTPException(
-                    status_code=502, detail="MCP stdio server returned non-object JSON"
-                )
-            response_id = payload.get("id")
-            if response_id == expected_id:
-                return payload
-            logger.warning(
-                "Ignoring stale or unrelated MCP stdio response: name=%s expected_id=%r response_id=%r",
-                self._settings.name,
-                expected_id,
-                response_id,
-            )
+            return RuntimeError("MCP stdio server stdout is unavailable")
+        try:
+            line = await stdout.readline()
+        except ValueError:
+            return ValueError("MCP stdio server response exceeded stream buffer limit")
+        if not line:
+            return None
+        try:
+            message = jsonrpc_message_adapter.validate_json(line, by_name=False)
+        except ValueError:
+            return ValueError("MCP stdio server returned invalid JSON")
+        return SessionMessage(message)
 
     def _live_process(self) -> asyncio.subprocess.Process:
         process = self._process
@@ -386,6 +549,97 @@ class StdioMCPBridge:
                 self._settings.name,
                 line.decode("utf-8", errors="replace").rstrip(),
             )
+
+
+@asynccontextmanager
+async def _process_stdio_transport(
+    bridge: StdioMCPBridge,
+) -> AsyncIterator[tuple[Any, Any]]:
+    """Adapt the bridge-managed subprocess pipes to the SDK client transport contract."""
+    read_stream_writer, read_stream = anyio.create_memory_object_stream[SessionMessage | Exception](
+        0
+    )
+    write_stream, write_stream_reader = anyio.create_memory_object_stream[SessionMessage](0)
+
+    async def stdout_reader() -> None:
+        async with read_stream_writer:
+            while True:
+                message = await bridge._read_stdio_message()
+                if message is None:
+                    bridge._signal_transport_error(RuntimeError("MCP stdio server closed stdout"))
+                    return
+                if isinstance(message, Exception):
+                    bridge._signal_transport_error(message)
+                try:
+                    await read_stream_writer.send(message)
+                except (anyio.BrokenResourceError, anyio.ClosedResourceError):
+                    return
+
+    async def stdin_writer() -> None:
+        try:
+            async with write_stream_reader:
+                async for session_message in write_stream_reader:
+                    await bridge._write_json(
+                        session_message.message.model_dump(
+                            by_alias=True,
+                            mode="json",
+                            exclude_unset=True,
+                        )
+                    )
+        except Exception as exc:
+            bridge._signal_transport_error(exc)
+            with contextlib.suppress(anyio.BrokenResourceError, anyio.ClosedResourceError):
+                await read_stream_writer.send(exc)
+
+    async with (
+        read_stream,
+        write_stream,
+        anyio.create_task_group() as task_group,
+    ):
+        task_group.start_soon(stdout_reader)
+        task_group.start_soon(stdin_writer)
+        try:
+            yield read_stream, write_stream
+        finally:
+            task_group.cancel_scope.cancel()
+
+
+def _consume_future_exception(future: asyncio.Future[Any]) -> None:
+    if not future.cancelled():
+        future.exception()
+
+
+def _legacy_initialize_result(client: Client) -> dict[str, Any]:
+    server_info = client.server_info
+    capabilities = client.server_capabilities
+    return {
+        "protocolVersion": "2025-11-25",
+        "serverInfo": (
+            server_info.model_dump(by_alias=True, mode="json", exclude_none=True)
+            if server_info is not None
+            else {"name": "stdio-mcp-server", "version": "unknown"}
+        ),
+        "capabilities": (
+            capabilities.model_dump(by_alias=True, mode="json", exclude_none=True)
+            if capabilities is not None
+            else {}
+        ),
+    }
+
+
+def _jsonrpc_error(request_id: Any, code: int, message: str) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {"code": code, "message": message},
+    }
+
+
+def _exception_detail(exc: BaseException) -> str:
+    if isinstance(exc, BaseExceptionGroup):
+        details = [_exception_detail(item) for item in exc.exceptions]
+        return "; ".join(dict.fromkeys(detail for detail in details if detail))
+    return str(exc)
 
 
 def create_bridge_app(settings: BridgeSettings) -> FastAPI:

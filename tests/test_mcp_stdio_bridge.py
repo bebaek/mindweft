@@ -31,7 +31,7 @@ for line in sys.stdin:
     if mode == "delayed-tools-list" and method == "tools/list":
         time.sleep(0.25)
     if mode == "large-line" and method == "tools/list":
-        print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": {"content": "x" * 200000}}), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": {"tools": [{"name": "large", "description": "x" * 200000, "inputSchema": {"type": "object"}}], "resultType": "complete", "ttlMs": 0, "cacheScope": "private"}}), flush=True)
         continue
     if method == "server/discover":
         result = {
@@ -102,6 +102,9 @@ for line in sys.stdin:
     else:
         print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "error": {"code": -32601, "message": "not found"}}), flush=True)
         continue
+    metadata = payload.get("params", {}).get("_meta", {})
+    if metadata.get("io.modelcontextprotocol/protocolVersion") == "2026-07-28":
+        result.update({"resultType": "complete", "ttlMs": 0, "cacheScope": "private"})
     print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": result}), flush=True)
 """
 
@@ -335,7 +338,7 @@ def test_stdio_bridge_reads_large_subprocess_response_lines(tmp_path: Path) -> N
         )
 
     assert response.status_code == 200
-    assert len(response.json()["result"]["content"]) == 200000
+    assert len(response.json()["result"]["tools"][0]["description"]) == 200000
 
 
 def test_stdio_bridge_reports_oversized_subprocess_response_lines(tmp_path: Path) -> None:
@@ -433,6 +436,7 @@ def test_stdio_bridge_reports_exited_subprocess(tmp_path: Path) -> None:
         "MCP stdio server closed stdin",
         "MCP stdio server closed stdout",
         "MCP stdio server exited with code 7",
+        "MCP stdio server request failed: Connection closed",
     }
 
 

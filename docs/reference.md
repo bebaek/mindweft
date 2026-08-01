@@ -1938,11 +1938,15 @@ The bridge binds to `127.0.0.1` by default and accepts the stdio server command 
 argv array after `--`; it does not run commands through a shell. It buffers stdio MCP
 responses up to 16 MiB by default so large single-line JSON tool results such as file reads
 can be forwarded; override this with `--stdio-stream-limit <bytes>` if a deployment needs a
-different cap. The bridge supports the tools-only MCP scope Minigent uses today. For MCP
-`2026-07-28`, it forwards `server/discover`, `tools/list`, and `tools/call` without requiring
-an `MCP-Session-Id`; modern requests carry their protocol, client information, and client
-capabilities in `params._meta`. Legacy peers continue to use `initialize`,
-`notifications/initialized`, `tools/list`, and `tools/call` with bridge-issued session IDs.
+different cap. The bridge supports the tools-only MCP scope Minigent uses today and uses the
+official SDK v2 client for subprocess negotiation, stdio request correlation, and protocol result
+validation. Minigent still owns process restart, stream-size limits, tool filtering, and path
+policy. For MCP `2026-07-28`, the HTTP side accepts `server/discover`, `tools/list`, and
+`tools/call` without requiring an `MCP-Session-Id`; modern requests carry their protocol, client
+information, and client capabilities in `params._meta`. Legacy HTTP clients continue to use
+`initialize`, `notifications/initialized`, `tools/list`, and `tools/call` with bridge-issued
+session IDs. The bridge translates either HTTP-facing form to the protocol negotiated by its
+SDK client with the stdio subprocess.
 
 ## Observability
 

@@ -52,6 +52,9 @@ for line in sys.stdin:
     else:
         print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "error": {"code": -32601, "message": "not found"}}), flush=True)
         continue
+    metadata = payload.get("params", {}).get("_meta", {})
+    if metadata.get("io.modelcontextprotocol/protocolVersion") == "2026-07-28":
+        result.update({"resultType": "complete", "ttlMs": 0, "cacheScope": "private"})
     print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": result}), flush=True)
 """
 

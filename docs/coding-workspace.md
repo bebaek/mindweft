@@ -236,9 +236,10 @@ unified config self-contained instead of pointing at a secondary MCP server file
 server entries default to MCP `2026-07-28`: Minigent's official SDK v2 client probes
 `server/discover`, uses stateless per-request metadata when supported, and falls back to the
 `2025-11-25` initialization/session flow for older servers. Minigent applies tool and path
-policy around the SDK client. The stdio bridge and shared gateway pass both forms through, so
-modern requests do not need bridge-issued `MCP-Session-Id` headers while legacy requests remain
-session-checked. Each server entry can define:
+policy around the SDK client. The stdio bridge and shared gateway translate both HTTP-facing
+forms through an SDK v2 client connected to each stdio subprocess, so modern requests do not
+need bridge-issued `MCP-Session-Id` headers while legacy requests remain session-checked. Each
+server entry can define:
 
 - `name`: MCP server name registered in tenant config.
 - `transport`: `stdio` to start it behind the stdio bridge/gateway, or `http` to register an
