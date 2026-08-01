@@ -4062,6 +4062,7 @@ def test_build_chat_prompt_session_for_tty_streams(
     assert isinstance(session_kwargs["key_bindings"], FakeKeyBindings)
     assert session_kwargs["multiline"] is True
     assert session_kwargs["prompt_continuation"] == ""
+    assert session_kwargs["erase_when_done"] is True
 
 
 def test_build_chat_prompt_session_uses_thread_scoped_history(
@@ -4381,10 +4382,11 @@ def test_read_chat_line_uses_interactive_input_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prompts: list[str] = []
+    output_stream = StringIO()
 
     line = voice_cli._read_chat_line(
         input_stream=StringIO(),
-        output_stream=StringIO(),
+        output_stream=output_stream,
         prompt_session=type(
             "FakePromptSession",
             (),
@@ -4394,6 +4396,7 @@ def test_read_chat_line_uses_interactive_input_when_enabled(
 
     assert line == "hello"
     assert prompts == ["[user] "]
+    assert output_stream.getvalue() == "[user] hello\n"
 
 
 def test_read_chat_line_wraps_colored_interactive_prompt_as_ansi(
@@ -4413,9 +4416,10 @@ def test_read_chat_line_wraps_colored_interactive_prompt_as_ansi(
 
     monkeypatch.setattr(voice_cli, "import_module", fake_import)
 
+    output_stream = TtyStringIO()
     line = voice_cli._read_chat_line(
         input_stream=StringIO(),
-        output_stream=TtyStringIO(),
+        output_stream=output_stream,
         prompt_session=type(
             "FakePromptSession",
             (),
@@ -4427,6 +4431,7 @@ def test_read_chat_line_wraps_colored_interactive_prompt_as_ansi(
     assert len(prompts) == 1
     assert isinstance(prompts[0], FakeAnsi)
     assert prompts[0].value == "\033[34m[user]\033[0m "
+    assert output_stream.getvalue() == "\033[34m[user]\033[0m hello\n"
 
 
 def test_read_chat_line_uses_plain_readline_when_not_interactive() -> None:
@@ -4754,7 +4759,9 @@ def test_run_chat_loop_ignores_blank_interactive_submit(
     assert exit_code == 0
     assert messages == ["real question"]
     assert prompts == ["[user] ", "[user] ", "[user] "]
-    assert output_stream.getvalue() == "[assistant] reply\n[idle] shutting down\n"
+    assert output_stream.getvalue() == (
+        "[user] real question\n[assistant] reply\n[idle] shutting down\n"
+    )
 
 
 def test_run_chat_loop_rebuilds_prompt_history_after_thread_switch(
