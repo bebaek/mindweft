@@ -127,7 +127,6 @@ elements.contextClose.addEventListener("click", closeContextSheet);
 elements.contextBackdrop.addEventListener("click", closeContextSheet);
 elements.compactContextButton.addEventListener("click", compactThreadContext);
 elements.stopButton.addEventListener("click", cancelActiveRun);
-elements.attachImageButton.addEventListener("click", chooseImages);
 elements.imageInput.addEventListener("change", async () => {
   await addImageFiles(elements.imageInput.files || []);
   elements.imageInput.value = "";
@@ -263,10 +262,6 @@ elements.composer.addEventListener("submit", async (event) => {
     elements.messageInput.focus();
   }
 });
-
-function chooseImages() {
-  elements.imageInput.click();
-}
 
 async function addImageFiles(files) {
   const candidates = [...files];
@@ -1458,7 +1453,8 @@ function setBusy(isBusy) {
   elements.moreContextButton.disabled = isBusy || !state.threadId;
   elements.threadsButton.disabled = isBusy;
   elements.messageInput.disabled = isBusy;
-  elements.attachImageButton.disabled = isBusy;
+  elements.attachImageButton.classList.toggle("disabled", isBusy);
+  elements.attachImageButton.ariaDisabled = String(isBusy);
   elements.imageInput.disabled = isBusy;
 }
 

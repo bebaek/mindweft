@@ -193,6 +193,15 @@ def _run_node_script(tmp_path: Path, repo_root: Path, name: str, source: str) ->
     subprocess.run(["node", str(runner)], cwd=repo_root, check=True)
 
 
+def test_web_client_image_picker_uses_native_file_input_overlay() -> None:
+    repo_root = Path(__file__).parents[1]
+    html = (repo_root / "app" / "static" / "web" / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="attach-image-button"' in html
+    assert '<input id="image-input" type="file" accept="image/*" multiple />' in html
+    assert "app.js?v=browser-images-2" in html
+
+
 def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
     repo_root = Path(__file__).parents[1]
     app_path = repo_root / "app" / "static" / "web" / "app.js"

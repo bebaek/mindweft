@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>Minigent Web Client</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=browser-images-2" />
   </head>
   <body>
     <main class="shell">
@@ -101,16 +101,15 @@
           placeholder="Message Minigent"
             autocomplete="off"
           ></textarea>
-          <button
+          <label
             id="attach-image-button"
             class="attach-image-button"
-            type="button"
             aria-label="Attach images"
             title="Attach images"
           >
             Image
-          </button>
-          <input id="image-input" type="file" accept="image/*" multiple hidden />
+            <input id="image-input" type="file" accept="image/*" multiple />
+          </label>
         </div>
         <div class="composer-actions">
           <button id="send-button" type="submit">Send</button>
@@ -234,6 +233,6 @@
       </div>
     </aside>
 
-    <script src="./app.js"></script>
+    <script src="./app.js?v=browser-images-2"></script>
   </body>
 </html>
