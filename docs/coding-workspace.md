@@ -233,10 +233,11 @@ Direct bridge env vars take precedence over the mirrored tenant path policy.
 For more than the built-in filesystem/text/shell tools, keep MCP server launch/connect
 definitions directly in `minigent.toml` with `[[coding.mcp_server_specs]]`. This keeps the
 unified config self-contained instead of pointing at a secondary MCP server file. Generated
-server entries default to MCP `2026-07-28`: Minigent probes `server/discover`, uses stateless
-per-request metadata when supported, and falls back to the `2025-11-25` initialization/session
-flow for older servers. The stdio bridge and shared gateway pass both forms through, so modern
-requests do not need bridge-issued `MCP-Session-Id` headers while legacy requests remain
+server entries default to MCP `2026-07-28`: Minigent's official SDK v2 client probes
+`server/discover`, uses stateless per-request metadata when supported, and falls back to the
+`2025-11-25` initialization/session flow for older servers. Minigent applies tool and path
+policy around the SDK client. The stdio bridge and shared gateway pass both forms through, so
+modern requests do not need bridge-issued `MCP-Session-Id` headers while legacy requests remain
 session-checked. Each server entry can define:
 
 - `name`: MCP server name registered in tenant config.

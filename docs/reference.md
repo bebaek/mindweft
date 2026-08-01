@@ -1676,10 +1676,11 @@ OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 ## MCP Config
 
 You can attach HTTP MCP servers by setting `MINIGENT_MCP_SERVERS` to a JSON array in `.env`.
-Minigent defaults new server entries to MCP `2026-07-28`: it probes `server/discover`, uses
-stateless requests with the per-request protocol metadata envelope when the server advertises
-the modern revision, and falls back to the `2025-11-25` `initialize` handshake when discovery
-is rejected. Set an entry's `protocolVersion` to `2025-11-25` to skip the probe for a known
+Minigent defaults new server entries to MCP `2026-07-28`: the outbound client uses the
+official MCP Python SDK v2 to probe `server/discover`, validate schemas/results, and fall back
+to the `2025-11-25` `initialize` handshake when discovery is rejected. Minigent wraps the SDK
+with allowed-tool filtering, path policy, short-lived identity forwarding, redaction, and HTTP
+error mapping. Set an entry's `protocolVersion` to `2025-11-25` to skip the probe for a known
 legacy server.
 
 Example:

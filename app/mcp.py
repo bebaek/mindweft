@@ -5,12 +5,16 @@ import json
 import logging
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NoReturn
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
+from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.types import DiscoverResult, Implementation
 
 from app.mcp_identity import MCPIdentityTokenIssuer
 from app.models import ToolSpec
@@ -18,6 +22,7 @@ from app.redaction import (
     ToolResultRedactionPolicy,
     parse_tool_result_redaction_policy,
     redact_url_secrets,
+    redact_urls_in_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,8 +37,6 @@ SUPPORTED_MCP_PROTOCOL_VERSIONS = (
 DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS = 30.0
 MCP_SERVERS_ENV = "MINIGENT_MCP_SERVERS"
 MCP_PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion"
-MCP_CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
-MCP_CLIENT_CAPABILITIES_META_KEY = "io.modelcontextprotocol/clientCapabilities"
 MCP_SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo"
 PRIVATE_VALUES_META_KEY = "io.minigent/private-values"
 LEGACY_PRIVATE_VALUES_META_KEY = "io.minigent/carddav-private-values"
@@ -42,10 +45,6 @@ PRIVATE_VALUE_DISCLOSURE_MODES = frozenset({"deny", "pass_through", "resolve_sel
 _PRIVATE_VALUE_ARGUMENT_PATH_PATTERN = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_-]*(?:(?:\.[A-Za-z_][A-Za-z0-9_-]*)|(?:\[\*\]))*$"
 )
-
-
-class _MCPDiscoveryRejected(Exception):
-    """Raised when a peer responds but does not accept the modern discovery probe."""
 
 
 @dataclass(frozen=True)
@@ -108,6 +107,8 @@ class MCPServerInfo:
 
 
 class MCPHTTPClient:
+    """Minigent policy facade over the official MCP SDK v2 HTTP client."""
+
     def __init__(
         self,
         config: MCPServerConfig,
@@ -124,11 +125,12 @@ class MCPHTTPClient:
                 audience=config.identity_audience
             )
         self._session_id: str | None = None
-        self._negotiated_protocol_version: str = config.protocol_version
-        self._initialized = False
-        self._request_id = 0
+        self._negotiated_protocol_version = config.protocol_version
         self._server_name: str | None = None
         self._server_version: str | None = None
+        self._prior_discover: DiscoverResult | None = None
+        self._legacy_mode = config.protocol_version == LEGACY_MCP_PROTOCOL_VERSION
+        self._invalid_session_detail: str | None = None
 
     def server_info(self) -> MCPServerInfo:
         return MCPServerInfo(
@@ -141,30 +143,33 @@ class MCPHTTPClient:
         )
 
     async def list_tools(self) -> list[ToolSpec]:
-        await self._ensure_initialized()
-        tools: list[ToolSpec] = []
-        cursor: str | None = None
-        while True:
-            params = {"cursor": cursor} if cursor else {}
-            result = await self._request("tools/list", params or None)
-            for tool in result.get("tools", []):
-                tool_name = tool["name"]
-                if not self._is_tool_allowed(tool_name):
-                    continue
-                namespaced_name = f"{self._config.name}.{tool_name}"
-                description = (
-                    tool.get("description") or f"MCP tool {tool_name} from {self._config.name}"
-                )
-                tools.append(
-                    ToolSpec(
-                        name=namespaced_name,
-                        description=description,
-                        input_schema=tool.get("inputSchema") or {"type": "object"},
+        async def operation(client: Client) -> list[ToolSpec]:
+            tools: list[ToolSpec] = []
+            cursor: str | None = None
+            while True:
+                result = await client.list_tools(cursor=cursor, cache_mode="bypass")
+                for tool in result.tools:
+                    if not self._is_tool_allowed(tool.name):
+                        continue
+                    tools.append(
+                        ToolSpec(
+                            name=f"{self._config.name}.{tool.name}",
+                            description=(
+                                tool.description or f"MCP tool {tool.name} from {self._config.name}"
+                            ),
+                            input_schema=tool.input_schema or {"type": "object"},
+                        )
                     )
-                )
-            cursor = result.get("nextCursor")
-            if not cursor:
-                return tools
+                cursor = result.next_cursor
+                if not cursor:
+                    return tools
+
+        try:
+            return await self._run_sdk_operation(operation)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            self._raise_sdk_error("request", exc)
 
     async def call_tool(
         self,
@@ -185,12 +190,22 @@ class MCPHTTPClient:
                 detail=f"MCP tool '{self._config.name}.{tool_name}' is not allowed",
             )
         self._validate_path_policy(tool_name, arguments)
-        await self._ensure_initialized()
-        result = await self._request(
-            "tools/call",
-            {"name": tool_name, "arguments": arguments},
-            identity_context=context,
-        )
+
+        async def operation(client: Client) -> Any:
+            return await client.call_tool(
+                tool_name,
+                arguments,
+                read_timeout_seconds=self._timeout,
+            )
+
+        try:
+            sdk_result = await self._run_sdk_operation(operation, identity_context=context)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            self._raise_sdk_error("request", exc)
+
+        result = sdk_result.model_dump(by_alias=True, mode="json", exclude_none=True)
         if result.get("isError"):
             error_result = {key: value for key, value in result.items() if key != "_meta"}
             raise HTTPException(
@@ -205,6 +220,125 @@ class MCPHTTPClient:
             tool_name=tool_name,
             content_filter=self._filter_content,
         )
+
+    async def _run_sdk_operation(
+        self,
+        operation: Callable[[Client], Awaitable[Any]],
+        *,
+        identity_context: Any | None = None,
+    ) -> Any:
+        for attempt in range(2):
+            try:
+                async with self._sdk_client(identity_context=identity_context) as client:
+                    return await operation(client)
+            except Exception:
+                if attempt == 0 and self._invalid_session_detail is not None:
+                    logger.warning(
+                        "MCP session rejected; reconnecting and retrying once: server=%s url=%s",
+                        self._config.name,
+                        redact_url_secrets(self._config.url),
+                    )
+                    continue
+                raise
+        raise AssertionError("unreachable")
+
+    @asynccontextmanager
+    async def _sdk_client(self, identity_context: Any | None = None) -> AsyncIterator[Client]:
+        self._session_id = None
+        self._invalid_session_detail = None
+        headers = self._build_headers(identity_context)
+
+        async def capture_session(response: httpx.Response) -> None:
+            session_id = response.headers.get("MCP-Session-Id")
+            if session_id:
+                self._session_id = session_id
+            if response.status_code not in (400, 404):
+                return
+            await response.aread()
+            detail = response.text
+            normalized = detail.lower()
+            if response.status_code == 404 or (
+                "session" in normalized
+                and ("invalid" in normalized or "no valid" in normalized or "missing" in normalized)
+            ):
+                self._invalid_session_detail = detail
+
+        http_client = httpx.AsyncClient(
+            headers=headers,
+            timeout=self._timeout,
+            transport=self._transport,
+            event_hooks={"response": [capture_session]},
+        )
+        transport = streamable_http_client(
+            self._config.url,
+            http_client=http_client,
+            terminate_on_close=False,
+        )
+        mode = self._client_mode()
+        sdk_client = Client(
+            transport,
+            client_info=Implementation(name="minigent", version="0.1.0"),
+            mode=mode,
+            prior_discover=self._prior_discover if mode == MODERN_MCP_PROTOCOL_VERSION else None,
+            read_timeout_seconds=self._timeout,
+        )
+        async with http_client, sdk_client:
+            self._capture_sdk_state(sdk_client)
+            yield sdk_client
+
+    def _client_mode(self) -> str:
+        if self._legacy_mode:
+            return "legacy"
+        if self._prior_discover is not None:
+            return MODERN_MCP_PROTOCOL_VERSION
+        return "auto"
+
+    def _capture_sdk_state(self, client: Client) -> None:
+        protocol_version = client.protocol_version
+        if protocol_version:
+            self._negotiated_protocol_version = protocol_version
+        self._legacy_mode = protocol_version == LEGACY_MCP_PROTOCOL_VERSION
+        if protocol_version == MODERN_MCP_PROTOCOL_VERSION:
+            self._prior_discover = client.session.discover_result
+        server_info = client.server_info
+        self._server_name = server_info.name if server_info is not None else None
+        self._server_version = server_info.version if server_info is not None else None
+        logger.info(
+            "MCP connected: server=%s url=%s protocol=%s session=%s remote=%s@%s",
+            self._config.name,
+            redact_url_secrets(self._config.url),
+            self._negotiated_protocol_version,
+            bool(self._session_id),
+            self._server_name,
+            self._server_version,
+        )
+
+    def _build_headers(self, identity_context: Any | None) -> dict[str, str]:
+        headers = dict(self._config.headers)
+        if self._identity_issuer is not None:
+            tenant_id = getattr(identity_context, "tenant_id", None) or "__mcp_discovery__"
+            user_id = getattr(identity_context, "user_id", None) or "__mcp_discovery__"
+            headers["Authorization"] = "Bearer " + self._identity_issuer.issue(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                scopes=self._config.identity_scopes,
+            )
+        return headers
+
+    def _raise_sdk_error(self, action: str, exc: Exception) -> NoReturn:
+        if _exception_group_contains(exc, httpx.TimeoutException):
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    f"MCP server '{self._config.name}' {action} timed out after {self._timeout:g}s"
+                ),
+            ) from exc
+        detail = self._invalid_session_detail or _exception_detail(exc)
+        detail = redact_urls_in_text(detail)
+        raise HTTPException(
+            status_code=502,
+            detail=f"MCP server '{self._config.name}' {action} failed: {detail}",
+        ) from exc
 
     def _is_tool_allowed(self, tool_name: str) -> bool:
         return self._config.allowed_tools is None or tool_name in self._config.allowed_tools
@@ -237,345 +371,20 @@ class MCPHTTPClient:
             )
         return filtered
 
-    async def _ensure_initialized(self) -> None:
-        if self._initialized:
-            return
 
-        if self._config.protocol_version == MODERN_MCP_PROTOCOL_VERSION:
-            if await self._try_modern_discovery():
-                return
+def _exception_detail(exc: BaseException) -> str:
+    if isinstance(exc, BaseExceptionGroup):
+        details = [_exception_detail(item) for item in exc.exceptions]
+        return "; ".join(dict.fromkeys(detail for detail in details if detail))
+    return str(exc)
 
-        await self._initialize_legacy()
 
-    async def _try_modern_discovery(self) -> bool:
-        self._negotiated_protocol_version = MODERN_MCP_PROTOCOL_VERSION
-        try:
-            result, _ = await self._request_raw(
-                "server/discover",
-                None,
-                use_protocol_header=True,
-                discovery_probe=True,
-            )
-        except _MCPDiscoveryRejected as exc:
-            logger.info(
-                "MCP modern discovery rejected; falling back to legacy initialization: server=%s url=%s detail=%s",
-                self._config.name,
-                redact_url_secrets(self._config.url),
-                exc,
-            )
-            return False
-
-        supported_versions = result.get("supportedVersions")
-        if not isinstance(supported_versions, list) or MODERN_MCP_PROTOCOL_VERSION not in (
-            str(version) for version in supported_versions
-        ):
-            logger.info(
-                "MCP discovery did not advertise a supported modern version; falling back: server=%s url=%s",
-                self._config.name,
-                redact_url_secrets(self._config.url),
-            )
-            return False
-
-        metadata = result.get("_meta") or {}
-        server_info = metadata.get(MCP_SERVER_INFO_META_KEY) if isinstance(metadata, dict) else {}
-        if not isinstance(server_info, dict):
-            server_info = {}
-        self._session_id = None
-        self._negotiated_protocol_version = MODERN_MCP_PROTOCOL_VERSION
-        self._server_name = server_info.get("name")
-        self._server_version = server_info.get("version")
-        self._initialized = True
-        logger.info(
-            "MCP discovered: server=%s url=%s protocol=%s remote=%s@%s",
-            self._config.name,
-            redact_url_secrets(self._config.url),
-            self._negotiated_protocol_version,
-            self._server_name,
-            self._server_version,
-        )
+def _exception_group_contains(exc: BaseException, error_type: type[BaseException]) -> bool:
+    if isinstance(exc, error_type):
         return True
-
-    async def _initialize_legacy(self) -> None:
-        requested_version = self._config.protocol_version
-        if requested_version == MODERN_MCP_PROTOCOL_VERSION:
-            requested_version = LEGACY_MCP_PROTOCOL_VERSION
-        self._negotiated_protocol_version = requested_version
-        result, headers = await self._request_raw(
-            "initialize",
-            {
-                "protocolVersion": requested_version,
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "minigent",
-                    "version": "0.1.0",
-                },
-            },
-            use_protocol_header=False,
-        )
-        self._session_id = headers.get("MCP-Session-Id")
-        self._negotiated_protocol_version = result.get("protocolVersion", requested_version)
-        server_info = result.get("serverInfo") or {}
-        self._server_name = server_info.get("name")
-        self._server_version = server_info.get("version")
-        await self._notify("notifications/initialized")
-        self._initialized = True
-        logger.info(
-            "MCP initialized: server=%s url=%s protocol=%s session=%s remote=%s@%s",
-            self._config.name,
-            redact_url_secrets(self._config.url),
-            self._negotiated_protocol_version,
-            bool(self._session_id),
-            self._server_name,
-            self._server_version,
-        )
-
-    async def _notify(self, method: str, params: dict[str, Any] | None = None) -> None:
-        headers = self._build_headers(include_protocol=True, method=method, params=params)
-        wire_params = self._with_modern_protocol_envelope(params)
-        payload: dict[str, Any] = {
-            "jsonrpc": "2.0",
-            "method": method,
-        }
-        if wire_params is not None:
-            payload["params"] = wire_params
-
-        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
-            try:
-                response = await client.post(
-                    self._config.url,
-                    json=payload,
-                    headers=headers,
-                )
-            except httpx.TimeoutException as exc:
-                raise HTTPException(
-                    status_code=504,
-                    detail=f"MCP notification timed out for server '{self._config.name}' after {self._timeout:g}s",
-                ) from exc
-            except httpx.HTTPError as exc:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"MCP notification failed for server '{self._config.name}': {exc}",
-                ) from exc
-        if response.status_code not in (200, 202):
-            raise HTTPException(
-                status_code=502,
-                detail=f"MCP notification failed for server '{self._config.name}': {response.text}",
-            )
-
-    async def _request(
-        self,
-        method: str,
-        params: dict[str, Any] | None,
-        *,
-        identity_context: Any | None = None,
-    ) -> dict[str, Any]:
-        result, _ = await self._request_raw(
-            method,
-            params,
-            use_protocol_header=True,
-            identity_context=identity_context,
-        )
-        return result
-
-    async def _request_raw(
-        self,
-        method: str,
-        params: dict[str, Any] | None,
-        *,
-        use_protocol_header: bool,
-        retry_invalid_session: bool = True,
-        identity_context: Any | None = None,
-        discovery_probe: bool = False,
-    ) -> tuple[dict[str, Any], httpx.Headers]:
-        self._request_id += 1
-        request_id = self._request_id
-        wire_params = self._with_modern_protocol_envelope(params)
-        headers = self._build_headers(
-            include_protocol=use_protocol_header,
-            identity_context=identity_context,
-            method=method,
-            params=wire_params,
-        )
-        payload: dict[str, Any] = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": method,
-        }
-        if wire_params is not None:
-            payload["params"] = wire_params
-
-        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
-            try:
-                response = await client.post(
-                    self._config.url,
-                    json=payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                if discovery_probe:
-                    raise _MCPDiscoveryRejected(
-                        f"HTTP {exc.response.status_code}: {exc.response.text}"
-                    ) from exc
-                if self._should_retry_invalid_session(
-                    exc.response,
-                    use_protocol_header=use_protocol_header,
-                    retry_invalid_session=retry_invalid_session,
-                ):
-                    logger.warning(
-                        "MCP session rejected; reinitializing and retrying once: server=%s url=%s status=%s",
-                        self._config.name,
-                        redact_url_secrets(self._config.url),
-                        exc.response.status_code,
-                    )
-                    self._reset_session_state()
-                    await self._ensure_initialized()
-                    return await self._request_raw(
-                        method,
-                        params,
-                        use_protocol_header=use_protocol_header,
-                        retry_invalid_session=False,
-                        identity_context=identity_context,
-                    )
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"MCP server '{self._config.name}' HTTP error: {exc.response.text}",
-                ) from exc
-            except httpx.TimeoutException as exc:
-                raise HTTPException(
-                    status_code=504,
-                    detail=f"MCP server '{self._config.name}' request timed out after {self._timeout:g}s",
-                ) from exc
-            except httpx.HTTPError as exc:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"MCP server '{self._config.name}' request failed: {exc}",
-                ) from exc
-
-        content_type = response.headers.get("content-type", "")
-        if "application/json" in content_type:
-            body = response.json()
-        elif "text/event-stream" in content_type:
-            body = _parse_sse_jsonrpc_response(
-                response.text,
-                request_id=request_id,
-                server_name=self._config.name,
-            )
-        else:
-            raise HTTPException(
-                status_code=502,
-                detail=f"MCP server '{self._config.name}' returned unsupported content type '{content_type}'",
-            )
-        if not isinstance(body, dict):
-            if discovery_probe:
-                raise _MCPDiscoveryRejected("non-object JSON-RPC response")
-            raise HTTPException(
-                status_code=502,
-                detail=f"MCP server '{self._config.name}' returned non-object JSON-RPC response",
-            )
-        if body.get("id") != request_id:
-            if discovery_probe:
-                raise _MCPDiscoveryRejected("mismatched JSON-RPC response id")
-            raise HTTPException(
-                status_code=502,
-                detail=f"MCP server '{self._config.name}' returned mismatched JSON-RPC response id",
-            )
-        if "error" in body:
-            if discovery_probe:
-                raise _MCPDiscoveryRejected(json.dumps(body["error"], ensure_ascii=True))
-            raise HTTPException(
-                status_code=502,
-                detail=f"MCP server '{self._config.name}' protocol error: {json.dumps(body['error'], ensure_ascii=True)}",
-            )
-        result = body.get("result")
-        if not isinstance(result, dict):
-            if discovery_probe:
-                raise _MCPDiscoveryRejected("invalid JSON-RPC result")
-            raise HTTPException(
-                status_code=502,
-                detail=f"MCP server '{self._config.name}' returned invalid JSON-RPC result",
-            )
-        return result, response.headers
-
-    def _reset_session_state(self) -> None:
-        self._session_id = None
-        self._negotiated_protocol_version = self._config.protocol_version
-        self._initialized = False
-        self._server_name = None
-        self._server_version = None
-
-    def _should_retry_invalid_session(
-        self,
-        response: httpx.Response,
-        *,
-        use_protocol_header: bool,
-        retry_invalid_session: bool,
-    ) -> bool:
-        if not retry_invalid_session or not use_protocol_header or not self._session_id:
-            return False
-        if response.status_code == 404:
-            return True
-        if response.status_code != 400:
-            return False
-
-        detail = response.text.lower()
-        return "session" in detail and (
-            "invalid" in detail or "no valid" in detail or "missing" in detail
-        )
-
-    def _build_headers(
-        self,
-        *,
-        include_protocol: bool,
-        identity_context: Any | None = None,
-        method: str | None = None,
-        params: dict[str, Any] | None = None,
-    ) -> dict[str, str]:
-        headers = {
-            "Accept": "application/json, text/event-stream",
-            "Content-Type": "application/json",
-            **self._config.headers,
-        }
-        if self._identity_issuer is not None:
-            tenant_id = getattr(identity_context, "tenant_id", None) or "__mcp_discovery__"
-            user_id = getattr(identity_context, "user_id", None) or "__mcp_discovery__"
-            headers["Authorization"] = "Bearer " + self._identity_issuer.issue(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                scopes=self._config.identity_scopes,
-            )
-        if include_protocol:
-            headers["MCP-Protocol-Version"] = self._negotiated_protocol_version
-        if include_protocol and self._is_modern_protocol() and method is not None:
-            headers["MCP-Method"] = method
-            if method == "tools/call" and isinstance(params, dict):
-                tool_name = params.get("name")
-                if isinstance(tool_name, str) and tool_name:
-                    headers["MCP-Name"] = tool_name
-        if self._session_id:
-            headers["MCP-Session-Id"] = self._session_id
-        return headers
-
-    def _is_modern_protocol(self) -> bool:
-        return self._negotiated_protocol_version == MODERN_MCP_PROTOCOL_VERSION
-
-    def _with_modern_protocol_envelope(
-        self, params: dict[str, Any] | None
-    ) -> dict[str, Any] | None:
-        if not self._is_modern_protocol():
-            return params
-        merged = dict(params or {})
-        existing_meta = merged.get("_meta")
-        metadata = dict(existing_meta) if isinstance(existing_meta, dict) else {}
-        metadata.update(
-            {
-                MCP_PROTOCOL_VERSION_META_KEY: MODERN_MCP_PROTOCOL_VERSION,
-                MCP_CLIENT_INFO_META_KEY: {"name": "minigent", "version": "0.1.0"},
-                MCP_CLIENT_CAPABILITIES_META_KEY: {},
-            }
-        )
-        merged["_meta"] = metadata
-        return merged
+    if isinstance(exc, BaseExceptionGroup):
+        return any(_exception_group_contains(item, error_type) for item in exc.exceptions)
+    return False
 
 
 def mcp_request_protocol_version(payload: Mapping[str, Any]) -> str | None:
@@ -941,43 +750,3 @@ def _filter_directory_listing_text(text: str, policy: MCPPathPolicy) -> str:
             f"[hidden {hidden_count} entr{'y' if hidden_count == 1 else 'ies'} by path policy]"
         )
     return "\n".join(kept_lines)
-
-
-def _parse_sse_jsonrpc_response(
-    stream_text: str, *, request_id: int, server_name: str
-) -> dict[str, Any]:
-    for event_data in _iter_sse_data_messages(stream_text):
-        try:
-            payload = json.loads(event_data)
-        except json.JSONDecodeError:
-            logger.debug(
-                "Ignoring non-JSON SSE event from MCP server '%s': %s", server_name, event_data
-            )
-            continue
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("id") == request_id:
-            return payload
-    raise HTTPException(
-        status_code=502,
-        detail=f"MCP server '{server_name}' returned no matching JSON-RPC response in event stream",
-    )
-
-
-def _iter_sse_data_messages(stream_text: str) -> list[str]:
-    messages: list[str] = []
-    data_lines: list[str] = []
-    for raw_line in stream_text.splitlines():
-        line = raw_line.rstrip("\r")
-        if not line:
-            if data_lines:
-                messages.append("\n".join(data_lines))
-                data_lines = []
-            continue
-        if line.startswith(":"):
-            continue
-        if line.startswith("data:"):
-            data_lines.append(line[5:].lstrip())
-    if data_lines:
-        messages.append("\n".join(data_lines))
-    return messages

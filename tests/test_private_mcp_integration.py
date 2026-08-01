@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Any
 
-import httpx
+import httpx2 as httpx
 from fastapi import FastAPI, Request, Response
 
 from app.llm import LLMAdapter

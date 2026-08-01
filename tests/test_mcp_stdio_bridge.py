@@ -1,10 +1,12 @@
+import asyncio
 import sys
 import time
 from pathlib import Path
 
+import httpx2
 from fastapi.testclient import TestClient
 
-from app.mcp import MCPPathPolicy
+from app.mcp import MCPHTTPClient, MCPPathPolicy, MCPServerConfig
 from app.mcp_stdio_bridge import BridgeSettings, build_parser, create_bridge_app
 
 FAKE_STDIO_MCP_SERVER = r"""
@@ -244,6 +246,41 @@ def test_stdio_bridge_interoperates_with_sdk_v2_text_server(tmp_path: Path) -> N
     assert modern_tools.status_code == 200
     assert modern_tools.json()["result"]["resultType"] == "complete"
     assert modern_tools.json()["result"]["tools"][0]["name"] == "read_text_file_lines"
+
+
+def test_sdk_http_client_interoperates_with_sdk_text_server_through_bridge(
+    tmp_path: Path,
+) -> None:
+    bridge_app = create_bridge_app(
+        BridgeSettings(
+            name="text-sdk",
+            command=[
+                sys.executable,
+                "-m",
+                "app.text_mcp_server",
+                "--workspace",
+                str(tmp_path),
+            ],
+        )
+    )
+
+    async def run() -> None:
+        async with bridge_app.router.lifespan_context(bridge_app):
+            client = MCPHTTPClient(
+                MCPServerConfig(name="text", url="http://testserver/mcp", headers={}),
+                transport=httpx2.ASGITransport(app=bridge_app),
+            )
+            tools = await client.list_tools()
+
+        assert [tool.name for tool in tools] == [
+            "text.read_text_file_lines",
+            "text.read_text_file_around",
+            "text.search_text_file",
+        ]
+        assert client.server_info().protocol_version == "2026-07-28"
+        assert client.server_info().server_name == "minigent-text-mcp"
+
+    asyncio.run(run())
 
 
 def test_stdio_bridge_requires_session_after_initialize(tmp_path: Path) -> None:

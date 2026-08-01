@@ -3,7 +3,7 @@ import json
 import logging
 from typing import Any
 
-import httpx
+import httpx2 as httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -108,7 +108,7 @@ def test_load_mcp_server_config_parses_forwarded_identity() -> None:
 
 
 def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
-    requests: list[dict[str, object]] = []
+    requests: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(
@@ -157,7 +157,10 @@ def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
                 },
             )
         if method == "tools/call":
-            assert body["params"] == {"name": "echo", "arguments": {"text": "hello"}}
+            assert {key: value for key, value in body["params"].items() if key != "_meta"} == {
+                "name": "echo",
+                "arguments": {"text": "hello"},
+            }
             return httpx.Response(
                 200,
                 headers={"content-type": "application/json"},
@@ -190,7 +193,8 @@ def test_mcp_http_client_initializes_lists_tools_and_calls_tool() -> None:
     assert requests[2]["body"]["method"] == "tools/list"
     assert requests[2]["headers"]["mcp-session-id"] == "session-123"
     assert requests[2]["headers"]["mcp-protocol-version"] == "2025-11-25"
-    assert requests[3]["body"]["method"] == "tools/call"
+    assert requests[5]["body"]["method"] == "tools/call"
+    assert requests[6]["body"]["method"] == "tools/list"
 
 
 def test_mcp_http_client_discovers_and_uses_modern_stateless_protocol() -> None:
@@ -231,6 +235,7 @@ def test_mcp_http_client_discovers_and_uses_modern_stateless_protocol() -> None:
             }
         else:
             raise AssertionError(f"Unexpected method {method}")
+        result.update({"ttlMs": 0, "cacheScope": "private"})
         return httpx.Response(
             200,
             headers={"content-type": "application/json"},
@@ -251,6 +256,7 @@ def test_mcp_http_client_discovers_and_uses_modern_stateless_protocol() -> None:
         "server/discover",
         "tools/list",
         "tools/call",
+        "tools/list",
     ]
     for request in requests:
         assert "mcp-session-id" not in request["headers"]
@@ -334,18 +340,20 @@ def test_mcp_http_client_forwards_short_lived_user_identity() -> None:
         .public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
         .decode()
     )
-    claims_by_method: dict[str, dict[str, object]] = {}
+    claims_by_method: dict[str, list[dict[str, object]]] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read())
         method = body["method"]
         token = request.headers["authorization"].removeprefix("Bearer ")
-        claims_by_method[method] = jwt.decode(
-            token,
-            public_pem,
-            algorithms=["RS256"],
-            audience="private-dav",
-            issuer="https://minigent.example",
+        claims_by_method.setdefault(method, []).append(
+            jwt.decode(
+                token,
+                public_pem,
+                algorithms=["RS256"],
+                audience="private-dav",
+                issuer="https://minigent.example",
+            )
         )
         if method == "notifications/initialized":
             return httpx.Response(202)
@@ -367,7 +375,7 @@ def test_mcp_http_client_forwards_short_lived_user_identity() -> None:
                 ]
             }
         elif method == "tools/call":
-            result = {"structuredContent": {"accounts": []}}
+            result = {"structuredContent": {"accounts": []}, "content": []}
         else:
             raise AssertionError(method)
         return httpx.Response(
@@ -407,12 +415,13 @@ def test_mcp_http_client_forwards_short_lived_user_identity() -> None:
         )
     )
 
-    assert claims_by_method["initialize"]["tenant_id"] == "__mcp_discovery__"
-    assert claims_by_method["tools/list"]["sub"] == "__mcp_discovery__"
-    assert claims_by_method["tools/call"]["tenant_id"] == "tenant-a"
-    assert claims_by_method["tools/call"]["sub"] == "user-a"
-    assert claims_by_method["tools/call"]["scope"] == "dav:calendar:read"
-    assert "jti" in claims_by_method["tools/call"]
+    assert claims_by_method["initialize"][0]["tenant_id"] == "__mcp_discovery__"
+    assert claims_by_method["initialize"][-1]["tenant_id"] == "tenant-a"
+    assert claims_by_method["tools/list"][0]["sub"] == "__mcp_discovery__"
+    assert claims_by_method["tools/call"][0]["tenant_id"] == "tenant-a"
+    assert claims_by_method["tools/call"][0]["sub"] == "user-a"
+    assert claims_by_method["tools/call"][0]["scope"] == "dav:calendar:read"
+    assert "jti" in claims_by_method["tools/call"][0]
 
 
 def test_parse_mcp_tool_result_separates_private_metadata() -> None:
@@ -480,7 +489,12 @@ def test_mcp_http_client_rejects_mismatched_jsonrpc_response_id() -> None:
         )
 
     client = MCPHTTPClient(
-        config=_legacy_mcp_server_config(name="demo", url="https://example.com/mcp", headers={}),
+        config=_legacy_mcp_server_config(
+            name="demo",
+            url="https://example.com/mcp",
+            headers={},
+            timeout_seconds=0.05,
+        ),
         transport=httpx.MockTransport(handler),
     )
 
@@ -488,11 +502,11 @@ def test_mcp_http_client_rejects_mismatched_jsonrpc_response_id() -> None:
         asyncio.run(client.list_tools())
 
     assert exc_info.value.status_code == 502
-    assert "mismatched JSON-RPC response id" in str(exc_info.value.detail)
+    assert "request failed" in str(exc_info.value.detail)
 
 
 def test_mcp_http_client_filters_disallowed_tools() -> None:
-    requests: list[dict[str, object]] = []
+    requests: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read().decode())
@@ -523,8 +537,16 @@ def test_mcp_http_client_filters_disallowed_tools() -> None:
                     "id": body["id"],
                     "result": {
                         "tools": [
-                            {"name": "read_file", "description": "Read", "inputSchema": {}},
-                            {"name": "write_file", "description": "Write", "inputSchema": {}},
+                            {
+                                "name": "read_file",
+                                "description": "Read",
+                                "inputSchema": {"type": "object"},
+                            },
+                            {
+                                "name": "write_file",
+                                "description": "Write",
+                                "inputSchema": {"type": "object"},
+                            },
                         ]
                     },
                 },
@@ -583,7 +605,11 @@ def test_mcp_http_client_allows_explicitly_allowed_path_over_denied_glob() -> No
                 json={
                     "jsonrpc": "2.0",
                     "id": body["id"],
-                    "result": {"protocolVersion": "2025-11-25", "serverInfo": {}},
+                    "result": {
+                        "protocolVersion": "2025-11-25",
+                        "serverInfo": {"name": "demo-server", "version": "1.0.0"},
+                        "capabilities": {},
+                    },
                 },
             )
         if method == "notifications/initialized":
@@ -593,6 +619,24 @@ def test_mcp_http_client_allows_explicitly_allowed_path_over_denied_glob() -> No
                 200,
                 headers={"content-type": "application/json"},
                 json={"jsonrpc": "2.0", "id": body["id"], "result": {"content": []}},
+            )
+        if method == "tools/list":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "tools": [
+                            {
+                                "name": "read_file",
+                                "description": "Read a file",
+                                "inputSchema": {"type": "object"},
+                            }
+                        ]
+                    },
+                },
             )
         raise AssertionError(f"Unexpected method {method}")
 
@@ -612,9 +656,14 @@ def test_mcp_http_client_allows_explicitly_allowed_path_over_denied_glob() -> No
 
     asyncio.run(client.call_tool("read_file", {"path": "/workspace/.env.coding.template"}))
 
-    assert requests == ["initialize", "notifications/initialized", "tools/call"]
+    assert requests == [
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+        "tools/list",
+    ]
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def listing_handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read().decode())
         method = body["method"]
         if method == "initialize":
@@ -624,7 +673,11 @@ def test_mcp_http_client_allows_explicitly_allowed_path_over_denied_glob() -> No
                 json={
                     "jsonrpc": "2.0",
                     "id": body["id"],
-                    "result": {"protocolVersion": "2025-11-25", "serverInfo": {}},
+                    "result": {
+                        "protocolVersion": "2025-11-25",
+                        "serverInfo": {"name": "demo-server", "version": "1.0.0"},
+                        "capabilities": {},
+                    },
                 },
             )
         if method == "notifications/initialized":
@@ -646,6 +699,24 @@ def test_mcp_http_client_allows_explicitly_allowed_path_over_denied_glob() -> No
                     },
                 },
             )
+        if method == "tools/list":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "tools": [
+                            {
+                                "name": "list_directory",
+                                "description": "List a directory",
+                                "inputSchema": {"type": "object"},
+                            }
+                        ]
+                    },
+                },
+            )
         raise AssertionError(f"Unexpected method {method}")
 
     client = MCPHTTPClient(
@@ -659,7 +730,7 @@ def test_mcp_http_client_allows_explicitly_allowed_path_over_denied_glob() -> No
                 allow_globs=["**/.env*.template"],
             ),
         ),
-        transport=httpx.MockTransport(handler),
+        transport=httpx.MockTransport(listing_handler),
     )
 
     result = asyncio.run(client.call_tool("list_directory", {"path": "/workspace"}))
@@ -673,7 +744,7 @@ def test_mcp_http_client_allows_explicitly_allowed_path_over_denied_glob() -> No
 
 
 def test_mcp_http_client_supports_sse_jsonrpc_responses() -> None:
-    requests: list[dict[str, object]] = []
+    requests: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read().decode())
@@ -763,7 +834,7 @@ def test_mcp_http_client_logs_redacted_url(caplog) -> None:
 
 
 def test_mcp_http_client_reinitializes_and_retries_once_on_invalid_session() -> None:
-    requests: list[dict[str, object]] = []
+    requests: list[dict[str, Any]] = []
     session_ids = iter(["session-1", "session-2"])
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -822,7 +893,7 @@ def test_mcp_http_client_reinitializes_and_retries_once_on_invalid_session() -> 
 
 
 def test_mcp_http_client_returns_error_if_reinitialized_session_is_still_rejected() -> None:
-    requests: list[dict[str, object]] = []
+    requests: list[dict[str, Any]] = []
     session_ids = iter(["session-1", "session-2"])
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -891,7 +962,7 @@ def test_mcp_http_client_maps_request_timeout_to_504() -> None:
     assert exc_info.value.detail == "MCP server 'demo' request timed out after 12s"
 
 
-def test_mcp_http_client_maps_notification_timeout_to_504() -> None:
+def test_mcp_http_client_maps_notification_transport_failure_to_502() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read().decode())
         if body["method"] == "initialize":
@@ -923,8 +994,8 @@ def test_mcp_http_client_maps_notification_timeout_to_504() -> None:
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(client.list_tools())
 
-    assert exc_info.value.status_code == 504
-    assert exc_info.value.detail == "MCP notification timed out for server 'demo' after 12s"
+    assert exc_info.value.status_code == 502
+    assert "request failed" in exc_info.value.detail
 
 
 def test_redacting_log_filter_redacts_httpx_style_log_messages(

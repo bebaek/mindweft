@@ -844,6 +844,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "httpx2" },
     { name = "mcp" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
@@ -879,6 +880,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1.0" },
     { name = "faster-whisper", marker = "extra == 'voice'", specifier = ">=1.1,<2.0" },
     { name = "httpx", specifier = ">=0.28,<1.0" },
+    { name = "httpx2", specifier = ">=2.9,<3" },
     { name = "mcp", specifier = ">=2,<3" },
     { name = "numpy", marker = "extra == 'voice'", specifier = ">=2,<3" },
     { name = "opentelemetry-api", specifier = ">=1.33,<2.0" },
