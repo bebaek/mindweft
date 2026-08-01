@@ -833,19 +833,26 @@ By default, [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) binds the A
 network exposure, change the port mapping deliberately instead of binding to all
 interfaces by default.
 
-The container exposes three unauthenticated health endpoints:
+The container exposes four unauthenticated health and lifecycle endpoints:
 
 - `GET /health` remains a compatibility alias for the shallow process check.
 - `GET /health/live` checks only that the API process can respond; temporary storage or dependency
   failures do not make liveness fail.
 - `GET /health/ready` opens every configured SQLite-backed thread, MCP broker, private-value,
   consent, admin, and encrypted OAuth store in read/write mode and queries its schema. It returns
-  `503` with per-store `ok`/`failed` states when any configured database is inaccessible. Paths and
-  raw exception details are not disclosed.
+  `503` with per-store `ok`/`failed` states when any configured database is inaccessible. A draining
+  process also returns `503` with a failed `lifecycle` check. Paths and raw exception details are not
+  disclosed.
+- `POST /health/drain` is restricted to loopback clients for container lifecycle hooks. It marks the
+  process unready, rejects new runs with `503`, cancels active local run tasks, and waits for their
+  cancellation handlers. Peer backends immediately request remote cancellation and durably enqueue
+  a retry before releasing their run lease if that request fails. Drain is one-way for the process;
+  restart it to accept runs again.
 
-Kubernetes should use `/health/live` for liveness and `/health/ready` for readiness. Dependencies
-running as sidecars should retain their own readiness probes so Kubernetes removes the whole pod
-from Service endpoints when any required container is unready.
+Kubernetes should use `/health/live` for liveness, `/health/ready` for readiness, and invoke
+`POST /health/drain` from an exec-based `preStop` hook through `127.0.0.1`. Dependencies running as
+sidecars should retain their own readiness probes so Kubernetes removes the whole pod from Service
+endpoints when any required container is unready.
 
 [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) mounts a named volume at
 `/data`, so `MINIGENT_THREAD_DB_PATH=/data/minigent-threads.db` survives container

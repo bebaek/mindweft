@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.health import database_readiness_checks
 from app.llm import MockLLMAdapter
-from app.main import create_app
+from app.main import _drain_active_runs, create_app
 from app.tools import build_local_tool_registry
 
 
@@ -76,6 +76,77 @@ def test_health_live_remains_shallow_when_readiness_fails(
         "checks": {"thread_store": "failed"},
     }
     assert str(missing) not in ready.text
+
+
+def test_health_drain_is_loopback_only() -> None:
+    app = create_app(
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=build_local_tool_registry(),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/health/drain")
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Drain endpoint is loopback-only"}
+
+
+def test_health_drain_rejects_new_runs_and_marks_instance_unready() -> None:
+    app = create_app(
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=build_local_tool_registry(),
+    )
+
+    with TestClient(app, client=("127.0.0.1", 50000)) as client:
+        auth_headers = {
+            "X-Minigent-User-Id": "user-1",
+            "X-Minigent-Tenant-Id": "tenant-1",
+        }
+        thread_id = client.post("/threads", headers=auth_headers).json()["thread_id"]
+        response = client.post("/health/drain")
+        ready = client.get("/health/ready")
+        run = client.post(
+            f"/threads/{thread_id}/run",
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "draining", "cancelled_runs": 0}
+    assert ready.status_code == 503
+    assert ready.json() == {
+        "status": "not_ready",
+        "checks": {"process": "ok", "lifecycle": "failed"},
+    }
+    assert run.status_code == 503
+    assert run.json() == {"detail": "Instance is draining"}
+
+
+def test_drain_cancels_and_waits_for_active_runs() -> None:
+    async def scenario() -> None:
+        app = create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def active_run() -> None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        task = asyncio.create_task(active_run())
+        app.state.active_run_tasks[("tenant-1", "thread-1")] = task
+        await started.wait()
+
+        assert await _drain_active_runs(app) == 1
+        assert cancelled.is_set()
+        assert task.cancelled()
+        assert app.state.accepting_runs is False
+
+    asyncio.run(scenario())
 
 
 def test_health_ready_succeeds_for_accessible_database(

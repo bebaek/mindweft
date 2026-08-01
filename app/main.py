@@ -285,9 +285,31 @@ async def _monitor_distributed_run(
             return
 
 
+def _instance_accepting_runs(request: Request) -> bool:
+    return bool(request.app.state.accepting_runs)
+
+
+def _reject_if_draining(request: Request) -> None:
+    if not _instance_accepting_runs(request):
+        raise HTTPException(status_code=503, detail="Instance is draining")
+
+
+async def _drain_active_runs(app: FastAPI) -> int:
+    app.state.accepting_runs = False
+    # Let request handlers that were admitted before the flag changed register their backend task.
+    await asyncio.sleep(0)
+    tasks = [task for task in app.state.active_run_tasks.values() if not task.done()]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    return len(tasks)
+
+
 async def _await_backend_run(
     request: Request, principal: Principal, thread_id: str
 ) -> tuple[str, dict[str, Any] | None]:
+    _reject_if_draining(request)
     run_key = (principal.tenant_id, thread_id)
     task = asyncio.create_task(request.app.state.agent_backend.run_thread(principal, thread_id))
     request.app.state.active_run_tasks[run_key] = task
@@ -311,6 +333,11 @@ async def _run_thread_ndjson_stream(
     principal: Principal,
     thread_id: str,
 ) -> AsyncIterator[str]:
+    if not _instance_accepting_runs(request):
+        yield _ndjson_event(
+            {"type": "run.error", "status_code": 503, "detail": "Instance is draining"}
+        )
+        return
     queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
 
     async def emit(event: dict[str, object]) -> None:
@@ -363,6 +390,7 @@ async def _run_thread_ndjson_stream(
 
     run_key = (principal.tenant_id, thread_id)
     task = asyncio.create_task(run())
+    task.add_done_callback(lambda _task: queue.put_nowait(None))
     request.app.state.active_run_tasks[run_key] = task
     monitor = asyncio.create_task(
         _monitor_distributed_run(
@@ -445,6 +473,7 @@ def create_app(
         try:
             yield
         finally:
+            await _drain_active_runs(app)
             stale_recovery_task.cancel()
             try:
                 await stale_recovery_task
@@ -538,6 +567,7 @@ def create_app(
         else build_peer_agent_registry(settings.peer_agents)
     )
     app.state.active_run_tasks = {}
+    app.state.accepting_runs = True
     app.state.agent_backend = AgentBackendRouter(
         store=app.state.store,
         execution_resolver=execution_resolver,
@@ -557,6 +587,8 @@ def create_app(
     @app.get("/health/ready", response_model=None)
     async def readiness() -> dict[str, object] | JSONResponse:
         checks = await database_readiness_checks()
+        if not app.state.accepting_runs:
+            checks["lifecycle"] = False
         ready = all(checks.values())
         payload: dict[str, object] = {
             "status": "ready" if ready else "not_ready",
@@ -565,6 +597,14 @@ def create_app(
         if not ready:
             return JSONResponse(status_code=503, content=payload)
         return payload
+
+    @app.post("/health/drain")
+    async def drain(request: Request) -> dict[str, object]:
+        client_host = request.client.host if request.client is not None else None
+        if client_host not in {"127.0.0.1", "::1"}:
+            raise HTTPException(status_code=403, detail="Drain endpoint is loopback-only")
+        cancelled_runs = await _drain_active_runs(request.app)
+        return {"status": "draining", "cancelled_runs": cancelled_runs}
 
     @app.get("/config")
     async def config(request: Request, export: bool = False) -> dict[str, object]:
@@ -939,6 +979,7 @@ def create_app(
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> RunThreadResponse:
+        _reject_if_draining(request)
         execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
         enforce_execution_entitlements(
             context=tenant_context_from_request_state(request.state),
@@ -958,6 +999,7 @@ def create_app(
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> StreamingResponse:
+        _reject_if_draining(request)
         execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
         enforce_execution_entitlements(
             context=tenant_context_from_request_state(request.state),
