@@ -40,6 +40,8 @@ provider = "mock"
 # Enable attaching images with --image or /image when using a vision-capable model/provider.
 enabled = false
 # max_bytes = 5242880
+# max_images = 8
+# max_total_bytes = 20971520
 # allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
 
 [coding]

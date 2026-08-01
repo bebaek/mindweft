@@ -255,6 +255,8 @@ api_key_env = "OPENROUTER_API_KEY"
 # Enable --image and /image attachments when using a vision-capable model/provider.
 enabled = true
 # max_bytes = 5242880
+# max_images = 8
+# max_total_bytes = 20971520
 # allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
 
 [coding]
@@ -387,8 +389,14 @@ Provider key targets:
 | Key | Maps to | Notes |
 | --- | --- | --- |
 | `enabled` | `MINIGENT_IMAGE_INPUT_ENABLED` | Enables image parts from `--image` and `/image`; requires a vision-capable model/provider. |
-| `max_bytes` | `MINIGENT_IMAGE_INPUT_MAX_BYTES` | Maximum base64-decoded image size in bytes. |
+| `max_bytes` | `MINIGENT_IMAGE_INPUT_MAX_BYTES` | Maximum base64-decoded size of each inline image in bytes. |
+| `max_images` | `MINIGENT_IMAGE_INPUT_MAX_IMAGES` | Maximum number of image parts in one message; defaults to 8. |
+| `max_total_bytes` | `MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES` | Maximum combined decoded size of inline images in one message; defaults to 20 MiB. |
 | `allowed_mime_types` | `MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES` | String or list of image MIME types; lists are converted to comma-separated env strings. |
+
+Image parts must use exactly one source. Inline `data` must be valid base64 and match known
+configured image signatures; remote URLs must be absolute HTTP(S) URLs. `attachment_id` is
+reserved for a future attachment store and is currently rejected.
 
 ### `[coding]`
 

@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -225,21 +226,36 @@ def _validate_and_normalize_message_request(
         if not request.content:
             raise HTTPException(status_code=400, detail="message content is required")
         return request
-    has_image = any(part.type == "image" for part in request.parts)
-    if has_image and not settings.enabled:
+    image_parts = [part for part in request.parts if part.type == "image"]
+    if image_parts and not settings.enabled:
         raise HTTPException(status_code=400, detail="image input is disabled")
-    for part in request.parts:
-        if part.type != "image":
-            continue
+    if len(image_parts) > settings.max_images:
+        raise HTTPException(
+            status_code=400,
+            detail=f"message exceeds maximum image count ({settings.max_images})",
+        )
+    total_inline_bytes = 0
+    for part in image_parts:
         mime_type = part.mime_type.lower()
         if mime_type not in settings.allowed_mime_types:
             raise HTTPException(
                 status_code=400, detail=f"unsupported image MIME type: {part.mime_type}"
             )
-        if not part.data and not part.url and not part.attachment_id:
+        source_count = sum(bool(source) for source in (part.data, part.url, part.attachment_id))
+        if source_count != 1:
             raise HTTPException(
-                status_code=400, detail="image part must include data, url, or attachment_id"
+                status_code=400,
+                detail="image part must include exactly one of data, url, or attachment_id",
             )
+        if part.attachment_id:
+            raise HTTPException(status_code=400, detail="image attachment_id is not supported")
+        if part.url:
+            parsed_url = urlsplit(part.url)
+            if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="image URL must be an absolute HTTP or HTTPS URL",
+                )
         if part.data:
             try:
                 decoded = base64.b64decode(part.data, validate=True)
@@ -247,12 +263,43 @@ def _validate_and_normalize_message_request(
                 raise HTTPException(status_code=400, detail="image data must be base64") from exc
             if len(decoded) > settings.max_bytes:
                 raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
+            if not _image_bytes_match_mime_type(decoded, mime_type):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"image data does not match declared MIME type: {part.mime_type}",
+                )
+            total_inline_bytes += len(decoded)
+            if total_inline_bytes > settings.max_total_bytes:
+                raise HTTPException(
+                    status_code=400,
+                    detail="message images exceed maximum total allowed size",
+                )
     if request.content:
         return request
     text_content = "\n".join(
         part.text for part in request.parts if isinstance(part, TextPart) and part.text
     )
     return request.model_copy(update={"content": text_content})
+
+
+def _image_bytes_match_mime_type(data: bytes, mime_type: str) -> bool:
+    if mime_type == "image/png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime_type == "image/jpeg":
+        return data.startswith(b"\xff\xd8\xff")
+    if mime_type == "image/gif":
+        return data.startswith((b"GIF87a", b"GIF89a"))
+    if mime_type == "image/webp":
+        return len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
+    if mime_type in {"image/avif", "image/heif", "image/heic"}:
+        return (
+            len(data) >= 12
+            and data[4:8] == b"ftyp"
+            and any(brand in data[8:32] for brand in (b"avif", b"avis", b"heic", b"heix", b"mif1"))
+        )
+    # Custom configured image MIME types remain permitted when Minigent has no
+    # signature matcher for them.
+    return True
 
 
 async def _monitor_distributed_run(

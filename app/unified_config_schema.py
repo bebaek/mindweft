@@ -68,6 +68,8 @@ class LLMConfig:
 class ImageInputConfig:
     enabled: object = None
     max_bytes: object = None
+    max_images: object = None
+    max_total_bytes: object = None
     allowed_mime_types: object = None
 
 
@@ -268,6 +270,8 @@ _INT_KEYS = {
     "llm.max_tokens",
     "llm.thinking_budget_tokens",
     "image_input.max_bytes",
+    "image_input.max_images",
+    "image_input.max_total_bytes",
     "coding.bridge_port",
     "coding.mcp_gateway_port",
     "quality.max_payload_chars",

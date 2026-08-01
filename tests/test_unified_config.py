@@ -118,6 +118,8 @@ account_id_header = "X-Account-ID"
 [image_input]
 enabled = true
 max_bytes = 1234
+max_images = 3
+max_total_bytes = 2468
 allowed_mime_types = ["image/png", "image/webp"]
 
 [mcp]
@@ -231,6 +233,8 @@ max_payload_chars = 4096
     assert settings.quality.max_payload_chars == 4096
     assert settings.image_input.enabled is True
     assert settings.image_input.max_bytes == 1234
+    assert settings.image_input.max_images == 3
+    assert settings.image_input.max_total_bytes == 2468
     assert settings.image_input.allowed_mime_types == frozenset({"image/png", "image/webp"})
     assert settings.mcp.servers[0].name == "filesystem"
     assert settings.peer_agents.agents[0].name == "local-agent"

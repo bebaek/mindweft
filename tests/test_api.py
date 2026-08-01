@@ -72,6 +72,10 @@ ADMIN_HEADERS = {
 TOKEN_HEADERS = {"Authorization": "Bearer token-1"}
 OTHER_TOKEN_HEADERS = {"Authorization": "Bearer token-2"}
 
+PNG_1X1_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
 
 def test_peer_backend_settings_from_env_mapping_uses_defaults() -> None:
     settings = PeerBackendSettings.from_env({})
@@ -224,6 +228,8 @@ def test_image_input_settings_from_env_mapping_parses_values() -> None:
         {
             "MINIGENT_IMAGE_INPUT_ENABLED": "yes",
             "MINIGENT_IMAGE_INPUT_MAX_BYTES": "1234",
+            "MINIGENT_IMAGE_INPUT_MAX_IMAGES": "3",
+            "MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES": "2468",
             "MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES": "image/png, image/avif",
         }
     )
@@ -231,6 +237,8 @@ def test_image_input_settings_from_env_mapping_parses_values() -> None:
     assert settings == ImageInputSettings(
         enabled=True,
         max_bytes=1234,
+        max_images=3,
+        max_total_bytes=2468,
         allowed_mime_types=frozenset({"image/png", "image/avif"}),
     )
 
@@ -250,6 +258,8 @@ def test_image_input_settings_from_env_mapping_rejects_invalid_values() -> None:
 def test_config_reports_and_exports_image_input_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_BYTES", "1234")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_IMAGES", "3")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES", "2468")
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES", "image/png,image/webp")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
@@ -262,11 +272,15 @@ def test_config_reports_and_exports_image_input_settings(monkeypatch: pytest.Mon
     assert body["image_input"] == {
         "enabled": True,
         "max_bytes": 1234,
+        "max_images": 3,
+        "max_total_bytes": 2468,
         "allowed_mime_types": ["image/png", "image/webp"],
     }
     assert body["unified_config_export"]["image_input"] == {
         "enabled": True,
         "max_bytes": 1234,
+        "max_images": 3,
+        "max_total_bytes": 2468,
         "allowed_mime_types": ["image/png", "image/webp"],
     }
 
@@ -284,7 +298,7 @@ def test_add_message_rejects_image_when_disabled() -> None:
             "content": "describe it",
             "parts": [
                 {"type": "text", "text": "describe it"},
-                {"type": "image", "mime_type": "image/png", "data": "aGk="},
+                {"type": "image", "mime_type": "image/png", "data": PNG_1X1_BASE64},
             ],
         },
         headers=AUTH_HEADERS,
@@ -308,7 +322,7 @@ def test_add_message_accepts_image_when_enabled(monkeypatch: pytest.MonkeyPatch)
             "content": "describe it",
             "parts": [
                 {"type": "text", "text": "describe it"},
-                {"type": "image", "mime_type": "image/png", "data": "aGk="},
+                {"type": "image", "mime_type": "image/png", "data": PNG_1X1_BASE64},
             ],
         },
         headers=AUTH_HEADERS,
@@ -316,6 +330,90 @@ def test_add_message_accepts_image_when_enabled(monkeypatch: pytest.MonkeyPatch)
 
     assert response.status_code == 200
     assert response.json()["parts"][1]["mime_type"] == "image/png"
+
+
+@pytest.mark.parametrize(
+    ("image", "detail"),
+    [
+        (
+            {"mime_type": "image/png", "attachment_id": "image-1"},
+            "image attachment_id is not supported",
+        ),
+        (
+            {
+                "mime_type": "image/png",
+                "data": PNG_1X1_BASE64,
+                "url": "https://example.com/image.png",
+            },
+            "image part must include exactly one of data, url, or attachment_id",
+        ),
+        (
+            {"mime_type": "image/png", "url": "file:///tmp/image.png"},
+            "image URL must be an absolute HTTP or HTTPS URL",
+        ),
+        (
+            {"mime_type": "image/jpeg", "data": PNG_1X1_BASE64},
+            "image data does not match declared MIME type: image/jpeg",
+        ),
+    ],
+)
+def test_add_message_rejects_unsafe_or_ambiguous_image_sources(
+    monkeypatch: pytest.MonkeyPatch,
+    image: dict[str, str],
+    detail: str,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "describe it", "parts": [{"type": "image", **image}]},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == detail
+
+
+def test_add_message_enforces_image_count_and_total_size_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_IMAGES", "1")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES", "1")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    first_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    count_response = client.post(
+        f"/threads/{first_thread_id}/messages",
+        json={
+            "content": "compare",
+            "parts": [
+                {"type": "image", "mime_type": "image/png", "url": "https://example.com/a"},
+                {"type": "image", "mime_type": "image/png", "url": "https://example.com/b"},
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+    second_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    size_response = client.post(
+        f"/threads/{second_thread_id}/messages",
+        json={
+            "content": "describe",
+            "parts": [{"type": "image", "mime_type": "image/png", "data": PNG_1X1_BASE64}],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert count_response.status_code == 400
+    assert count_response.json()["detail"] == "message exceeds maximum image count (1)"
+    assert size_response.status_code == 400
+    assert size_response.json()["detail"] == "message images exceed maximum total allowed size"
 
 
 def test_sqlite_thread_store_persists_threads_and_messages(tmp_path: Path) -> None:

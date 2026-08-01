@@ -20,8 +20,12 @@ from app.store import ThreadStoreSettings
 
 IMAGE_INPUT_ENABLED_ENV = "MINIGENT_IMAGE_INPUT_ENABLED"
 IMAGE_INPUT_MAX_BYTES_ENV = "MINIGENT_IMAGE_INPUT_MAX_BYTES"
+IMAGE_INPUT_MAX_IMAGES_ENV = "MINIGENT_IMAGE_INPUT_MAX_IMAGES"
+IMAGE_INPUT_MAX_TOTAL_BYTES_ENV = "MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES"
 IMAGE_INPUT_ALLOWED_MIME_TYPES_ENV = "MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES"
 DEFAULT_IMAGE_INPUT_MAX_BYTES = 5 * 1024 * 1024
+DEFAULT_IMAGE_INPUT_MAX_IMAGES = 8
+DEFAULT_IMAGE_INPUT_MAX_TOTAL_BYTES = 20 * 1024 * 1024
 DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/webp", "image/gif"}
 )
@@ -31,6 +35,8 @@ DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES = frozenset(
 class ImageInputSettings:
     enabled: bool = False
     max_bytes: int = DEFAULT_IMAGE_INPUT_MAX_BYTES
+    max_images: int = DEFAULT_IMAGE_INPUT_MAX_IMAGES
+    max_total_bytes: int = DEFAULT_IMAGE_INPUT_MAX_TOTAL_BYTES
     allowed_mime_types: frozenset[str] = DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES
 
     @classmethod
@@ -38,7 +44,17 @@ class ImageInputSettings:
         lookup = os.environ if env is None else env
         return cls(
             enabled=_parse_image_input_enabled(lookup),
-            max_bytes=_parse_image_input_max_bytes(lookup),
+            max_bytes=_parse_positive_int(
+                lookup, IMAGE_INPUT_MAX_BYTES_ENV, DEFAULT_IMAGE_INPUT_MAX_BYTES
+            ),
+            max_images=_parse_positive_int(
+                lookup, IMAGE_INPUT_MAX_IMAGES_ENV, DEFAULT_IMAGE_INPUT_MAX_IMAGES
+            ),
+            max_total_bytes=_parse_positive_int(
+                lookup,
+                IMAGE_INPUT_MAX_TOTAL_BYTES_ENV,
+                DEFAULT_IMAGE_INPUT_MAX_TOTAL_BYTES,
+            ),
             allowed_mime_types=_parse_image_input_allowed_mime_types(lookup),
         )
 
@@ -91,6 +107,8 @@ def _image_input_public_dict(settings: ImageInputSettings) -> dict[str, object]:
     return {
         "enabled": settings.enabled,
         "max_bytes": settings.max_bytes,
+        "max_images": settings.max_images,
+        "max_total_bytes": settings.max_total_bytes,
         "allowed_mime_types": sorted(settings.allowed_mime_types),
     }
 
@@ -101,6 +119,10 @@ def _image_input_export_public_dict(settings: ImageInputSettings) -> dict[str, o
         exported["enabled"] = True
     if settings.max_bytes != DEFAULT_IMAGE_INPUT_MAX_BYTES:
         exported["max_bytes"] = settings.max_bytes
+    if settings.max_images != DEFAULT_IMAGE_INPUT_MAX_IMAGES:
+        exported["max_images"] = settings.max_images
+    if settings.max_total_bytes != DEFAULT_IMAGE_INPUT_MAX_TOTAL_BYTES:
+        exported["max_total_bytes"] = settings.max_total_bytes
     if settings.allowed_mime_types != DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES:
         exported["allowed_mime_types"] = sorted(settings.allowed_mime_types)
     return exported
@@ -127,14 +149,14 @@ def _parse_image_input_allowed_mime_types(env: Mapping[str, str]) -> frozenset[s
     return frozenset(item.strip().lower() for item in configured.split(",") if item.strip())
 
 
-def _parse_image_input_max_bytes(env: Mapping[str, str]) -> int:
-    configured = env.get(IMAGE_INPUT_MAX_BYTES_ENV, "").strip()
+def _parse_positive_int(env: Mapping[str, str], name: str, default: int) -> int:
+    configured = env.get(name, "").strip()
     if not configured:
-        return DEFAULT_IMAGE_INPUT_MAX_BYTES
+        return default
     try:
         value = int(configured)
     except ValueError as exc:
-        raise RuntimeError(f"{IMAGE_INPUT_MAX_BYTES_ENV} must be a positive integer") from exc
+        raise RuntimeError(f"{name} must be a positive integer") from exc
     if value < 1:
-        raise RuntimeError(f"{IMAGE_INPUT_MAX_BYTES_ENV} must be a positive integer")
+        raise RuntimeError(f"{name} must be a positive integer")
     return value
