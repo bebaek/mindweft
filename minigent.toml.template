@@ -40,7 +40,7 @@ input_modalities = ["text"]
 # thinking_effort = "high"
 
 [image_input]
-# Enable attaching images with --image or /image when using a vision-capable model/provider.
+# Enable image attachments from the CLI and browser when using a vision-capable model/provider.
 enabled = false
 # max_bytes = 5242880
 # max_images = 8

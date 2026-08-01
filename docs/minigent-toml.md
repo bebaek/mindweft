@@ -252,7 +252,7 @@ model = "anthropic/claude-sonnet-4.5"
 api_key_env = "OPENROUTER_API_KEY"
 
 [image_input]
-# Enable --image and /image attachments when using a vision-capable model/provider.
+# Enable CLI and browser image attachments when using a vision-capable model/provider.
 enabled = true
 # max_bytes = 5242880
 # max_images = 8
@@ -391,7 +391,7 @@ Provider key targets:
 
 | Key | Maps to | Notes |
 | --- | --- | --- |
-| `enabled` | `MINIGENT_IMAGE_INPUT_ENABLED` | Enables image parts from `--image` and `/image`; requires a vision-capable model/provider. |
+| `enabled` | `MINIGENT_IMAGE_INPUT_ENABLED` | Enables image parts from the CLI and browser client; requires a vision-capable model/provider. |
 | `max_bytes` | `MINIGENT_IMAGE_INPUT_MAX_BYTES` | Maximum base64-decoded size of each inline image in bytes. |
 | `max_images` | `MINIGENT_IMAGE_INPUT_MAX_IMAGES` | Maximum number of image parts in one message; defaults to 8. |
 | `max_total_bytes` | `MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES` | Maximum combined decoded size of inline images in one message; defaults to 20 MiB. |

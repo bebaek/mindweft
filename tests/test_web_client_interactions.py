@@ -110,12 +110,12 @@ WEB_CLIENT_ELEMENT_IDS_JS = r"""[
               "context-summary", "context-rendered", "compact-context-button", "threads-backdrop",
               "threads-sheet", "threads-close", "threads-summary", "threads-list",
               "threads-new-button", "threads-refresh-button", "composer", "message-input",
-              "send-button", "stop-button",
+              "image-preview-list", "attach-image-button", "image-input", "send-button", "stop-button",
             ]"""
 
 WEB_CLIENT_HIDDEN_ELEMENT_IDS_JS = r"""["more-backdrop", "more-sheet", "settings-backdrop", "activity-backdrop",
               "activity-sheet", "context-backdrop", "context-sheet", "threads-backdrop", "threads-sheet",
-              "activity-button", "stop-button"]"""
+              "activity-button", "image-preview-list", "image-input", "stop-button"]"""
 
 WEB_CLIENT_ASYNC_HELPERS = r"""
             async function flushAsyncWork() {
@@ -191,6 +191,95 @@ def _run_node_script(tmp_path: Path, repo_root: Path, name: str, source: str) ->
     runner = tmp_path / name
     runner.write_text(textwrap.dedent(source), encoding="utf-8")
     subprocess.run(["node", str(runner)], cwd=repo_root, check=True)
+
+
+def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
+    repo_root = Path(__file__).parents[1]
+    app_path = repo_root / "app" / "static" / "web" / "app.js"
+    _run_node_script(
+        tmp_path,
+        repo_root,
+        "web_image_input.mjs",
+        f"""
+            import assert from "node:assert/strict";
+            import fs from "node:fs";
+            import vm from "node:vm";
+
+            {WEB_CLIENT_DOM_CLASSES}
+            {WEB_CLIENT_BROWSER_HARNESS}
+            {WEB_CLIENT_ASYNC_HELPERS}
+
+            function jsonResponse(payload) {{
+              return {{ ok: true, status: 200, json: async () => payload, text: async () => "" }};
+            }}
+
+            const harness = createWebClientHarness({{
+              storageValue: JSON.stringify({{ baseUrl: "http://ui.test", threadId: "t1" }}),
+              async fetchImpl(url, options, path) {{
+                if (path === "/execution-options") {{
+                  return jsonResponse({{ skills: {{ items: [] }}, capability_profiles: {{ items: [] }} }});
+                }}
+                if (path === "/config") {{
+                  return jsonResponse({{
+                    image_input: {{
+                      enabled: true,
+                      max_bytes: 1024,
+                      max_images: 2,
+                      max_total_bytes: 2048,
+                      allowed_mime_types: ["image/png"],
+                    }},
+                  }});
+                }}
+                if (path === "/threads/t1/messages") return jsonResponse([]);
+                return jsonResponse({{}});
+              }},
+            }});
+            globalThis.document = harness.document;
+            harness.context.FileReader = class FileReader {{
+              constructor() {{ this.listeners = new Map(); this.result = ""; }}
+              addEventListener(type, listener) {{ this.listeners.set(type, listener); }}
+              readAsDataURL(file) {{
+                this.result = file.dataUrl;
+                this.listeners.get("load")();
+              }}
+            }};
+            vm.runInContext(fs.readFileSync({str(app_path)!r}, "utf8"), harness.context, {{ filename: "app.js" }});
+            await flushAsyncWork();
+            harness.context.streamRun = async () => {{}};
+
+            const image = {{
+              name: "diagram.png",
+              type: "image/png",
+              size: 12,
+              dataUrl: "data:image/png;base64,aW1hZ2U=",
+            }};
+            const pasteEvent = {{ type: "paste", clipboardData: {{ files: [image] }} }};
+            await harness.elements.get("message-input").dispatchEvent(pasteEvent);
+
+            assert.equal(pasteEvent.defaultPrevented, true);
+            assert.equal(harness.elements.get("image-preview-list").hidden, false);
+            assert.equal(harness.elements.get("image-preview-list").children.length, 1);
+            harness.elements.get("message-input").value = "Describe this";
+            await harness.elements.get("composer").requestSubmit();
+            await flushAsyncWork();
+
+            const post = harness.fetchCalls.find(
+              (call) => call.method === "POST" && call.url.endsWith("/threads/t1/messages"),
+            );
+            assert.deepEqual(JSON.parse(post.body), {{
+              content: "Describe this",
+              parts: [
+                {{ type: "text", text: "Describe this" }},
+                {{ type: "image", mime_type: "image/png", data: "aW1hZ2U=", detail: "auto" }},
+              ],
+            }});
+            assert.equal(harness.elements.get("image-preview-list").hidden, true);
+            assert.equal(harness.elements.get("image-preview-list").children.length, 0);
+            const message = harness.elements.get("messages").children.at(-1);
+            assert.equal(message.children.length, 3);
+            assert.equal(message.children[2].children[0].src, "data:image/png;base64,aW1hZ2U=");
+        """,
+    )
 
 
 def test_web_client_reconciles_uncertain_private_action(tmp_path: Path) -> None:

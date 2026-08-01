@@ -19,6 +19,9 @@ const runState = {
   currentThreadId: "",
 };
 
+const pendingImages = [];
+let imageInputConfigPromise = null;
+
 const elements = {
   status: document.querySelector("#status"),
   threadsButton: document.querySelector("#threads-button"),
@@ -74,6 +77,9 @@ const elements = {
   threadsRefreshButton: document.querySelector("#threads-refresh-button"),
   composer: document.querySelector("#composer"),
   messageInput: document.querySelector("#message-input"),
+  imagePreviewList: document.querySelector("#image-preview-list"),
+  attachImageButton: document.querySelector("#attach-image-button"),
+  imageInput: document.querySelector("#image-input"),
   sendButton: document.querySelector("#send-button"),
   stopButton: document.querySelector("#stop-button"),
 };
@@ -121,6 +127,11 @@ elements.contextClose.addEventListener("click", closeContextSheet);
 elements.contextBackdrop.addEventListener("click", closeContextSheet);
 elements.compactContextButton.addEventListener("click", compactThreadContext);
 elements.stopButton.addEventListener("click", cancelActiveRun);
+elements.attachImageButton.addEventListener("click", chooseImages);
+elements.imageInput.addEventListener("change", async () => {
+  await addImageFiles(elements.imageInput.files || []);
+  elements.imageInput.value = "";
+});
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
@@ -138,6 +149,7 @@ for (const input of [elements.skill, elements.capabilityProfile, elements.llmPro
 
 for (const input of [elements.baseUrl, elements.apiToken, elements.userId, elements.tenantId]) {
   input.addEventListener("change", () => {
+    imageInputConfigPromise = null;
     saveFormState();
     loadExecutionOptions();
   });
@@ -146,6 +158,17 @@ for (const input of [elements.baseUrl, elements.apiToken, elements.userId, eleme
 elements.messageInput.addEventListener("input", () => {
   elements.messageInput.style.height = "auto";
   elements.messageInput.style.height = `${elements.messageInput.scrollHeight}px`;
+});
+
+elements.messageInput.addEventListener("paste", async (event) => {
+  const files = [...(event.clipboardData?.files || [])].filter((file) =>
+    String(file.type || "").toLowerCase().startsWith("image/"),
+  );
+  if (!files.length) {
+    return;
+  }
+  event.preventDefault();
+  await addImageFiles(files);
 });
 
 window.visualViewport?.addEventListener("resize", syncViewportHeight);
@@ -173,9 +196,21 @@ elements.messageInput.addEventListener("keydown", (event) => {
 elements.composer.addEventListener("submit", async (event) => {
   event.preventDefault();
   const content = elements.messageInput.value.trim();
-  if (!content) {
+  if (!content && !pendingImages.length) {
     return;
   }
+  const imageParts = pendingImages.map((image) => ({
+    type: "image",
+    mime_type: image.mimeType,
+    data: image.data,
+    detail: "auto",
+  }));
+  const parts = imageParts.length
+    ? [
+        ...(content ? [{ type: "text", text: content }] : []),
+        ...imageParts,
+      ]
+    : null;
 
   saveFormState();
   setBusy(true);
@@ -184,14 +219,15 @@ elements.composer.addEventListener("submit", async (event) => {
   let threadId = state.threadId;
   try {
     threadId = await ensureThread();
-    appendMessage({ role: "user", content });
+    appendMessage({ role: "user", content, ...(parts ? { parts } : {}) });
     elements.messageInput.value = "";
     elements.messageInput.style.height = "auto";
 
     await requestJson(`/threads/${encodeURIComponent(threadId)}/messages`, {
       method: "POST",
-      body: { content },
+      body: parts ? { content, parts } : { content },
     });
+    clearPendingImages();
 
     setStatus("Running");
     await streamRun(threadId);
@@ -227,6 +263,107 @@ elements.composer.addEventListener("submit", async (event) => {
     elements.messageInput.focus();
   }
 });
+
+function chooseImages() {
+  elements.imageInput.click();
+}
+
+async function addImageFiles(files) {
+  const candidates = [...files];
+  if (!candidates.length) {
+    return;
+  }
+  try {
+    const config = await getImageInputConfig();
+    if (!config.enabled) {
+      throw new Error("Image input is disabled on this server");
+    }
+    if (pendingImages.length + candidates.length > config.max_images) {
+      throw new Error(`A message can include at most ${config.max_images} images`);
+    }
+    const allowedMimeTypes = new Set(config.allowed_mime_types || []);
+    const currentBytes = pendingImages.reduce((total, image) => total + image.size, 0);
+    const candidateBytes = candidates.reduce((total, file) => total + Number(file.size || 0), 0);
+    if (currentBytes + candidateBytes > config.max_total_bytes) {
+      throw new Error("Selected images exceed the total size limit");
+    }
+    for (const file of candidates) {
+      const mimeType = String(file.type || "").toLowerCase();
+      if (!allowedMimeTypes.has(mimeType)) {
+        throw new Error(`Unsupported image type: ${mimeType || file.name || "unknown"}`);
+      }
+      if (Number(file.size || 0) > config.max_bytes) {
+        throw new Error(`Image exceeds the per-image size limit: ${file.name || "image"}`);
+      }
+    }
+    const encoded = await Promise.all(
+      candidates.map(async (file) => {
+        const dataUrl = await readFileAsDataUrl(file);
+        return {
+          name: file.name || "image",
+          mimeType: String(file.type).toLowerCase(),
+          size: Number(file.size || 0),
+          data: dataUrl.slice(dataUrl.indexOf(",") + 1),
+          dataUrl,
+        };
+      }),
+    );
+    pendingImages.push(...encoded);
+    renderPendingImages();
+    setStatus(`${pendingImages.length} image(s) ready`);
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+function getImageInputConfig() {
+  if (!imageInputConfigPromise) {
+    imageInputConfigPromise = requestJson("/config")
+      .then((config) => config.image_input || { enabled: false })
+      .catch((error) => {
+        imageInputConfigPromise = null;
+        throw error;
+      });
+  }
+  return imageInputConfigPromise;
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(String(reader.result || "")));
+    reader.addEventListener("error", () => reject(new Error(`Could not read ${file.name || "image"}`)));
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderPendingImages() {
+  elements.imagePreviewList.replaceChildren();
+  pendingImages.forEach((image, index) => {
+    const preview = document.createElement("div");
+    preview.className = "image-preview";
+    const thumbnail = document.createElement("img");
+    thumbnail.src = image.dataUrl;
+    thumbnail.alt = image.name;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.title = `Remove ${image.name}`;
+    remove.ariaLabel = `Remove ${image.name}`;
+    remove.addEventListener("click", () => {
+      pendingImages.splice(index, 1);
+      renderPendingImages();
+    });
+    preview.append(thumbnail, remove);
+    elements.imagePreviewList.append(preview);
+  });
+  elements.imagePreviewList.hidden = pendingImages.length === 0;
+}
+
+function clearPendingImages() {
+  pendingImages.splice(0, pendingImages.length);
+  renderPendingImages();
+}
 
 function openSettingsPanel() {
   elements.settingsPanel.classList.add("open");
@@ -283,6 +420,7 @@ function startNewThread() {
   state.threadId = "";
   saveFormState();
   renderMessages([]);
+  clearPendingImages();
   clearActivity();
   clearContext();
   updateThreadControls();
@@ -695,9 +833,27 @@ function appendMessage(message) {
   content.className = "content";
   renderMessageContent(content, message.content || "", message.role || "assistant");
   item.append(role, content);
+  appendMessageImages(item, message.parts || []);
   elements.messages.append(item);
   scrollMessagesToBottom();
   return item;
+}
+
+function appendMessageImages(item, parts) {
+  const imageParts = parts.filter((part) => part?.type === "image" && part.data);
+  if (!imageParts.length) {
+    return;
+  }
+  const images = document.createElement("div");
+  images.className = "message-images";
+  for (const part of imageParts) {
+    const image = document.createElement("img");
+    image.src = `data:${part.mime_type};base64,${part.data}`;
+    image.alt = "Attached image";
+    image.loading = "lazy";
+    images.append(image);
+  }
+  item.append(images);
 }
 
 function renderMessageContent(target, text, role) {
@@ -1301,6 +1457,9 @@ function setBusy(isBusy) {
   elements.contextButton.disabled = isBusy || !state.threadId;
   elements.moreContextButton.disabled = isBusy || !state.threadId;
   elements.threadsButton.disabled = isBusy;
+  elements.messageInput.disabled = isBusy;
+  elements.attachImageButton.disabled = isBusy;
+  elements.imageInput.disabled = isBusy;
 }
 
 function setStatus(message, isError = false) {
