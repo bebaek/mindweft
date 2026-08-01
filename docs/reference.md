@@ -556,7 +556,9 @@ OpenCode does not receive upstream MCP server credentials. The official SDK v2 l
 owns broker discovery, initialization, request validation, dispatch, and modern result envelopes;
 Minigent retains short-lived bearer authentication, session routing, frozen tool allowlists, and
 execution context. Each authenticated HTTP request is adapted to an isolated SDK server exchange,
-so modern stateless clients and the legacy initialization shape remain compatible. When
+so modern stateless clients and the legacy initialization shape remain compatible. SDK JSON-RPC
+models are also used for boundary errors, while modern-only result envelope fields are removed from
+legacy responses. When
 `MINIGENT_MCP_BROKER_DB_PATH` is configured, session identity, expiry, and the original approved
 tool-name set are stored in shared SQLite. Bearer tokens are persisted only as SHA-256 hashes, and
 a replica receiving a broker call reconstructs the tenant/thread tool registry locally while still
@@ -1950,7 +1952,8 @@ policy. For MCP `2026-07-28`, the HTTP side accepts `server/discover`, `tools/li
 information, and client capabilities in `params._meta`. Legacy HTTP clients continue to use
 `initialize`, `notifications/initialized`, `tools/list`, and `tools/call` with bridge-issued
 session IDs. The bridge translates either HTTP-facing form to the protocol negotiated by its
-SDK client with the stdio subprocess.
+SDK client with the stdio subprocess. Shared compatibility helpers use SDK JSON-RPC models for
+responses and remove modern-only result envelope fields when serving legacy HTTP callers.
 
 ## Observability
 

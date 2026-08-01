@@ -25,7 +25,9 @@ from mcp.shared.message import SessionMessage
 from app.mcp import (
     LEGACY_MCP_PROTOCOL_VERSION,
     MODERN_MCP_PROTOCOL_VERSION,
+    mcp_jsonrpc_error,
     mcp_request_protocol_version,
+    strip_modern_mcp_result_envelope,
 )
 from app.models import Principal
 from app.tools import ToolExecutionContext, ToolRegistry
@@ -291,12 +293,12 @@ async def handle_mcp_broker_request(
     request_id = payload.get("id")
     method = payload.get("method")
     if not isinstance(method, str) or not method:
-        return _jsonrpc_error(request_id, -32600, "Invalid Request")
+        return mcp_jsonrpc_error(request_id, -32600, "Invalid Request")
     if "id" not in payload:
         return Response(status_code=202)
     params = payload.get("params") or {}
     if not isinstance(params, dict):
-        return _jsonrpc_error(request_id, -32602, "Invalid params")
+        return mcp_jsonrpc_error(request_id, -32602, "Invalid params")
 
     is_modern_request = (
         method == "server/discover"
@@ -306,7 +308,7 @@ async def handle_mcp_broker_request(
     sdk_server = _build_broker_sdk_server(session, tool_registry)
     response_payload = await _run_broker_sdk_request(sdk_server, sdk_payload)
     if not is_modern_request and method in {"tools/list", "tools/call"}:
-        response_payload = _strip_modern_result_envelope(response_payload)
+        response_payload = strip_modern_mcp_result_envelope(response_payload)
     return response_payload
 
 
@@ -425,9 +427,9 @@ async def _run_broker_sdk_request(
     try:
         message = mcp_types.jsonrpc_message_adapter.validate_python(payload, by_name=False)
     except ValueError:
-        return _jsonrpc_error(payload.get("id"), -32600, "Invalid Request")
+        return mcp_jsonrpc_error(payload.get("id"), -32600, "Invalid Request")
     if not isinstance(message, mcp_types.JSONRPCRequest):
-        return _jsonrpc_error(payload.get("id"), -32600, "Invalid Request")
+        return mcp_jsonrpc_error(payload.get("id"), -32600, "Invalid Request")
 
     read_writer, read_stream = anyio.create_memory_object_stream[SessionMessage | Exception](0)
     write_stream, write_reader = anyio.create_memory_object_stream[SessionMessage](0)
@@ -451,21 +453,11 @@ async def _run_broker_sdk_request(
         task_group.cancel_scope.cancel()
 
     if response is None:  # pragma: no cover - receive() either returns or raises
-        return _jsonrpc_error(payload.get("id"), -32603, "MCP SDK returned no response")
+        return mcp_jsonrpc_error(payload.get("id"), -32603, "MCP SDK returned no response")
     response_message = response.message
     if not isinstance(response_message, (mcp_types.JSONRPCResponse, mcp_types.JSONRPCError)):
-        return _jsonrpc_error(payload.get("id"), -32603, "Invalid MCP SDK response")
+        return mcp_jsonrpc_error(payload.get("id"), -32603, "Invalid MCP SDK response")
     return response_message.model_dump(by_alias=True, mode="json", exclude_none=True)
-
-
-def _strip_modern_result_envelope(payload: dict[str, object]) -> dict[str, object]:
-    result = payload.get("result")
-    if not isinstance(result, dict):
-        return payload
-    legacy_result = dict(result)
-    for key in ("resultType", "ttlMs", "cacheScope", "_meta"):
-        legacy_result.pop(key, None)
-    return {**payload, "result": legacy_result}
 
 
 def _tool_result_text(result: object) -> str:
@@ -480,7 +472,3 @@ def _bearer_token(request: Request) -> str | None:
     if scheme.lower() != "bearer" or not token.strip():
         return None
     return token.strip()
-
-
-def _jsonrpc_error(request_id: object, code: int, message: str) -> dict[str, object]:
-    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}

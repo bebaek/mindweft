@@ -154,8 +154,12 @@ def test_stdio_bridge_initializes_lists_tools_and_calls_tool(tmp_path: Path) -> 
     assert notification.status_code == 202
     assert tools.status_code == 200
     assert tools.json()["result"]["tools"][0]["name"] == "echo"
+    assert "resultType" not in tools.json()["result"]
+    assert "_meta" not in tools.json()["result"]
     assert call.status_code == 200
     assert call.json()["result"]["structuredContent"] == {"echo": "hello"}
+    assert "resultType" not in call.json()["result"]
+    assert "_meta" not in call.json()["result"]
 
 
 def test_stdio_bridge_allows_modern_stateless_requests_without_session(tmp_path: Path) -> None:

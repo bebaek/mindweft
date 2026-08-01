@@ -30,7 +30,10 @@ from app.mcp import (
     _filter_directory_listing_text,
     _iter_path_arguments,
     _path_denied,
+    mcp_jsonrpc_error,
+    mcp_jsonrpc_result,
     mcp_request_protocol_version,
+    strip_modern_mcp_result_envelope,
 )
 
 logger = logging.getLogger(__name__)
@@ -291,7 +294,7 @@ class StdioMCPBridge:
         method = payload["method"]
         if method == "server/discover":
             if client.protocol_version != MODERN_MCP_PROTOCOL_VERSION:
-                return _jsonrpc_error(request_id, -32601, "Method not found")
+                return mcp_jsonrpc_error(request_id, -32601, "Method not found")
             result: Any = client.session.discover_result
         elif method == "initialize":
             result = _legacy_initialize_result(client)
@@ -318,19 +321,22 @@ class StdioMCPBridge:
                 request_read_timeout_seconds=self._settings.request_timeout,
             )
         else:
-            return _jsonrpc_error(request_id, -32601, f"unknown method: {method}")
+            return mcp_jsonrpc_error(request_id, -32601, f"unknown method: {method}")
 
         if isinstance(result, dict):
             result_payload = result
         elif result is None:
-            return _jsonrpc_error(request_id, -32603, "MCP SDK returned no result")
+            return mcp_jsonrpc_error(request_id, -32603, "MCP SDK returned no result")
         else:
             result_payload = result.model_dump(by_alias=True, mode="json", exclude_none=True)
         if is_modern_request:
             result_payload.setdefault("resultType", "complete")
             result_payload.setdefault("ttlMs", 0)
             result_payload.setdefault("cacheScope", "private")
-        return {"jsonrpc": "2.0", "id": request_id, "result": result_payload}
+        response_payload = mcp_jsonrpc_result(request_id, result_payload)
+        if not is_modern_request and method in {"tools/list", "tools/call"}:
+            return strip_modern_mcp_result_envelope(response_payload)
+        return response_payload
 
     async def _stop_sdk_worker(self, *, force: bool = False) -> None:
         task = self._sdk_worker_task
@@ -624,14 +630,6 @@ def _legacy_initialize_result(client: Client) -> dict[str, Any]:
             if capabilities is not None
             else {}
         ),
-    }
-
-
-def _jsonrpc_error(request_id: Any, code: int, message: str) -> dict[str, Any]:
-    return {
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "error": {"code": code, "message": message},
     }
 
 

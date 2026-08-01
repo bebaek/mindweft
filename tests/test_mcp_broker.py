@@ -112,6 +112,8 @@ def test_mcp_broker_lists_and_calls_session_tools() -> None:
     assert initialize.json()["result"]["serverInfo"]["name"] == "minigent-mcp-broker"
     assert tools.status_code == 200
     assert [tool["name"] for tool in tools.json()["result"]["tools"]] == ["echo"]
+    assert "resultType" not in tools.json()["result"]
+    assert "_meta" not in tools.json()["result"]
     assert modern_tools.json()["result"]["resultType"] == "complete"
     assert (
         modern_tools.json()["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"]
@@ -119,6 +121,8 @@ def test_mcp_broker_lists_and_calls_session_tools() -> None:
     )
     assert call.status_code == 200
     assert call.json()["result"]["structuredContent"] == {"echo": "hello"}
+    assert "resultType" not in call.json()["result"]
+    assert "_meta" not in call.json()["result"]
     assert modern_call.json()["result"]["resultType"] == "complete"
     assert (
         modern_call.json()["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"]

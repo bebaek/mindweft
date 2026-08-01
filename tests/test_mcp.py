@@ -26,8 +26,11 @@ from app.mcp import (
     MCPServerConfig,
     MCPSettings,
     load_mcp_server_configs_from_env,
+    mcp_jsonrpc_error,
+    mcp_jsonrpc_result,
     mcp_settings_from_env,
     parse_mcp_tool_result,
+    strip_modern_mcp_result_envelope,
 )
 from app.mcp_identity import MCPIdentityTokenIssuer
 from app.redaction import RedactingLogFilter, install_log_redaction, redact_urls_in_text
@@ -36,6 +39,45 @@ from app.tools import ToolExecutionContext
 
 def _legacy_mcp_server_config(**kwargs: Any) -> MCPServerConfig:
     return MCPServerConfig(protocol_version=LEGACY_MCP_PROTOCOL_VERSION, **kwargs)
+
+
+def test_mcp_jsonrpc_helpers_use_sdk_models_and_normalize_invalid_ids() -> None:
+    assert mcp_jsonrpc_result("request-1", {"ok": True}) == {
+        "jsonrpc": "2.0",
+        "id": "request-1",
+        "result": {"ok": True},
+    }
+    assert mcp_jsonrpc_error(False, -32600, "Invalid Request") == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32600, "message": "Invalid Request"},
+    }
+    assert mcp_jsonrpc_result(1.5, {"ok": True}) == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32600, "message": "Invalid Request"},
+    }
+
+
+def test_strip_modern_mcp_result_envelope_preserves_payload_and_business_result() -> None:
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "tools": [{"name": "echo"}],
+            "resultType": "complete",
+            "ttlMs": 0,
+            "cacheScope": "private",
+            "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "server"}},
+        },
+    }
+
+    assert strip_modern_mcp_result_envelope(payload) == {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {"tools": [{"name": "echo"}]},
+    }
+    assert payload["result"]["resultType"] == "complete"
 
 
 def test_mcp_settings_from_env_mapping_defaults_to_empty() -> None:

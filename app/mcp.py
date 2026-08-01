@@ -18,7 +18,7 @@ from mcp.client.streamable_http import StreamableHTTPTransport
 from mcp.shared._compat import resync_tracer
 from mcp.shared._context_streams import create_context_streams
 from mcp.shared.message import SessionMessage
-from mcp.types import DiscoverResult, Implementation
+from mcp.types import DiscoverResult, ErrorData, Implementation, JSONRPCError, JSONRPCResponse
 
 from app.mcp_identity import MCPIdentityTokenIssuer
 from app.models import ToolSpec
@@ -41,7 +41,6 @@ SUPPORTED_MCP_PROTOCOL_VERSIONS = (
 DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS = 30.0
 MCP_SERVERS_ENV = "MINIGENT_MCP_SERVERS"
 MCP_PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion"
-MCP_SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo"
 PRIVATE_VALUES_META_KEY = "io.minigent/private-values"
 LEGACY_PRIVATE_VALUES_META_KEY = "io.minigent/carddav-private-values"
 PRIVATE_VALUES_META_KEYS = (PRIVATE_VALUES_META_KEY, LEGACY_PRIVATE_VALUES_META_KEY)
@@ -443,40 +442,42 @@ def mcp_request_protocol_version(payload: Mapping[str, Any]) -> str | None:
     return version if isinstance(version, str) and version else None
 
 
-def build_mcp_discover_result(
-    *,
-    server_name: str,
-    server_version: str = "0.1.0",
-    capabilities: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    return stamp_modern_mcp_result(
-        {
-            "supportedVersions": [MODERN_MCP_PROTOCOL_VERSION],
-            "capabilities": dict(capabilities or {}),
-            "ttlMs": 0,
-            "cacheScope": "private",
-        },
-        server_name=server_name,
-        server_version=server_version,
+def mcp_jsonrpc_error(request_id: object, code: int, message: str) -> dict[str, Any]:
+    response = JSONRPCError(
+        jsonrpc="2.0",
+        id=_mcp_jsonrpc_id(request_id),
+        error=ErrorData(code=code, message=message),
     )
+    payload = response.model_dump(by_alias=True, mode="json", exclude_none=True)
+    if response.id is None:
+        payload["id"] = None
+    return payload
 
 
-def stamp_modern_mcp_result(
-    result: Mapping[str, Any],
-    *,
-    server_name: str,
-    server_version: str = "0.1.0",
-) -> dict[str, Any]:
-    stamped = dict(result)
-    stamped.setdefault("resultType", "complete")
-    raw_metadata = stamped.get("_meta")
-    metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
-    metadata[MCP_SERVER_INFO_META_KEY] = {
-        "name": server_name,
-        "version": server_version,
-    }
-    stamped["_meta"] = metadata
-    return stamped
+def mcp_jsonrpc_result(request_id: object, result: Mapping[str, Any]) -> dict[str, Any]:
+    normalized_id = _mcp_jsonrpc_id(request_id)
+    if normalized_id is None:
+        return mcp_jsonrpc_error(None, -32600, "Invalid Request")
+    response = JSONRPCResponse(jsonrpc="2.0", id=normalized_id, result=dict(result))
+    return response.model_dump(by_alias=True, mode="json", exclude_none=True)
+
+
+def strip_modern_mcp_result_envelope(payload: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    result = normalized.get("result")
+    if not isinstance(result, Mapping):
+        return normalized
+    legacy_result = dict(result)
+    for key in ("resultType", "ttlMs", "cacheScope", "_meta"):
+        legacy_result.pop(key, None)
+    normalized["result"] = legacy_result
+    return normalized
+
+
+def _mcp_jsonrpc_id(value: object) -> int | str | None:
+    if type(value) is int or isinstance(value, str):
+        return value
+    return None
 
 
 def load_mcp_server_configs_from_env(env: Mapping[str, str] | None = None) -> list[MCPServerConfig]:
