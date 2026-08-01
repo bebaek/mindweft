@@ -50,14 +50,15 @@ from minigent_client.speech import (
     SilentSpeechOutput,
 )
 from minigent_client.state import (
-    STATE_DIR_NAME,
-    PromptCommand,
-    ThreadHistoryItem,
-    normalize_prompt_command_name,
-    state_scope_key,
+    ClientState as PersistentClientState,
 )
 from minigent_client.state import (
-    ClientState as PersistentClientState,
+    PromptCommand,
+    ThreadHistoryItem,
+    legacy_state_dir_path,
+    normalize_prompt_command_name,
+    state_dir_path,
+    state_scope_key,
 )
 from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
 from minigent_client.vad import SileroVoiceActivityDetector
@@ -93,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         default=None,
-        help="Path to a TOML client config file. Defaults to MINIGENT_CLIENT_CONFIG, ~/.config/minigent/client.toml, ~/.minigent/client.toml, or ./.minigent-client.toml.",
+        help="Path to a TOML client config file. Defaults to MINIGENT_CLIENT_CONFIG, $XDG_CONFIG_HOME/minigent/client.toml (or ~/.config/minigent/client.toml), legacy ~/.minigent/client.toml, or ./.minigent-client.toml.",
     )
     parser.add_argument(
         "--base-url",
@@ -1949,13 +1950,28 @@ def chat_history_file_path(
     thread_id: str | None = None,
     scope_key: str | None = None,
 ) -> Path:
-    legacy_file_path = Path.home() / STATE_DIR_NAME / CHAT_HISTORY_FILE_NAME
+    state_dir = state_dir_path()
+    legacy_state_dir = legacy_state_dir_path()
     if not thread_id:
-        return legacy_file_path
-    history_dir_path = Path.home() / STATE_DIR_NAME / CHAT_HISTORY_DIR_NAME
+        path = state_dir / CHAT_HISTORY_FILE_NAME
+        _copy_legacy_history_if_missing(path, legacy_state_dir / CHAT_HISTORY_FILE_NAME)
+        return path
     scope_digest = hashlib.sha256((scope_key or "default").encode("utf-8")).hexdigest()[:16]
     safe_thread_id = re.sub(r"[^A-Za-z0-9_.-]", "_", thread_id).strip("._") or "thread"
-    return history_dir_path / scope_digest / safe_thread_id
+    relative_path = Path(CHAT_HISTORY_DIR_NAME) / scope_digest / safe_thread_id
+    path = state_dir / relative_path
+    _copy_legacy_history_if_missing(path, legacy_state_dir / relative_path)
+    return path
+
+
+def _copy_legacy_history_if_missing(path: Path, legacy_path: Path) -> None:
+    if path.exists() or not legacy_path.is_file():
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(legacy_path, path)
+    except OSError:
+        return
 
 
 def _extract_user_prompt_history_entries(messages: object) -> list[str]:

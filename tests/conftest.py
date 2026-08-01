@@ -6,8 +6,6 @@ import pytest
 import app.store
 from app.store import InMemoryThreadStore
 
-_ORIGINAL_CONFIG_FILE = os.environ.get("MINIGENT_CONFIG_FILE")
-_ORIGINAL_DOTENV_FILE = os.environ.get("MINIGENT_DOTENV_FILE")
 _TEST_CONFIG_FILE = str(Path(__file__).with_name("__no_default_minigent.toml"))
 _TEST_DOTENV_FILE = str(Path(__file__).with_name("__no_default_minigent.env"))
 
@@ -24,27 +22,28 @@ def pytest_configure(config: pytest.Config) -> None:
     already patched above, we also clear the env var so no other code
     path can accidentally reach the developer's SQLite database.
     """
-    if _ORIGINAL_CONFIG_FILE is None:
-        os.environ["MINIGENT_CONFIG_FILE"] = _TEST_CONFIG_FILE
-    if _ORIGINAL_DOTENV_FILE is None:
-        os.environ["MINIGENT_DOTENV_FILE"] = _TEST_DOTENV_FILE
+    os.environ["MINIGENT_CONFIG_FILE"] = _TEST_CONFIG_FILE
+    os.environ["MINIGENT_DOTENV_FILE"] = _TEST_DOTENV_FILE
     os.environ.pop("MINIGENT_THREAD_DB_PATH", None)
     os.environ.pop("MINIGENT_PRIVATE_VALUE_DB_PATH", None)
     os.environ.pop("MINIGENT_PRIVATE_CONSENT_DB_PATH", None)
 
 
 @pytest.fixture(autouse=True)
-def isolate_thread_db_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force InMemoryThreadStore for all tests so they never touch the developer's DB.
+def isolate_test_storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep test configuration, client state, and databases out of developer storage.
 
-    1. Remove MINIGENT_THREAD_DB_PATH so the env-based fallback never picks SQLite.
-    2. Patch build_thread_store_from_env so any code path that calls it
-       (including create_app() without an explicit thread_store) gets InMemoryThreadStore.
+    Each test gets an ephemeral HOME/XDG config root, cannot discover the repository's local
+    config files through the explicit config variables, and uses InMemoryThreadStore unless it
+    deliberately supplies its own temporary store.
     """
-    if _ORIGINAL_CONFIG_FILE is None:
-        monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
-    if _ORIGINAL_DOTENV_FILE is None:
-        monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
+    test_home = tmp_path / "home"
+    test_home.mkdir()
+    monkeypatch.setenv("HOME", str(test_home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(test_home / ".config"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(test_home / ".local" / "state"))
+    monkeypatch.setenv("MINIGENT_CONFIG_FILE", _TEST_CONFIG_FILE)
+    monkeypatch.setenv("MINIGENT_DOTENV_FILE", _TEST_DOTENV_FILE)
     monkeypatch.delenv("MINIGENT_THREAD_DB_PATH", raising=False)
     monkeypatch.delenv("MINIGENT_PRIVATE_VALUE_DB_PATH", raising=False)
     monkeypatch.delenv("MINIGENT_PRIVATE_CONSENT_DB_PATH", raising=False)

@@ -41,6 +41,7 @@ from minigent_client.config import (
     AgentPreset,
     ClientConfig,
     PrincipalConfig,
+    default_client_config_paths,
     parse_agent_presets,
 )
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
@@ -161,6 +162,19 @@ class FakeAmbientVolumeController:
         self.close_calls += 1
 
 
+def test_default_client_config_paths_honor_xdg_config_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config_home = tmp_path / "xdg-config"
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    paths = default_client_config_paths()
+
+    assert paths[0] == config_home / "minigent" / "client.toml"
+    assert paths[1] == tmp_path / "home" / ".minigent" / "client.toml"
+
+
 def test_persistent_client_state_round_trips_last_thread(tmp_path: Path) -> None:
     state_path = tmp_path / "cli-state.json"
     key = state_scope_key(
@@ -189,6 +203,24 @@ def test_persistent_client_state_round_trips_last_thread(tmp_path: Path) -> None
     assert loaded.forget_last_thread(key, "thread-1") is True
     assert loaded.get_last_thread(key) is None
     assert loaded.list_threads(key) == []
+
+
+def test_persistent_client_state_migrates_legacy_default_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
+    legacy_path = tmp_path / ".minigent" / "cli-state.json"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text(
+        json.dumps({"recent_threads": {"scope": "legacy-thread"}}), encoding="utf-8"
+    )
+
+    state = PersistentClientState.load()
+
+    assert state.get_last_thread("scope") == "legacy-thread"
+    assert state.path == tmp_path / "xdg-state" / "minigent" / "cli-state.json"
+    assert state.path.exists()
 
 
 def test_persistent_client_state_round_trips_prompt_commands(tmp_path: Path) -> None:
@@ -4110,6 +4142,7 @@ def test_build_chat_prompt_session_uses_thread_scoped_history(
         raise ImportError(name)
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / ".local" / "state"))
     monkeypatch.setattr(voice_cli, "import_module", fake_import)
 
     session = voice_cli._build_chat_prompt_session(
@@ -4124,8 +4157,25 @@ def test_build_chat_prompt_session_uses_thread_scoped_history(
     assert len(history_calls) == 1
     history_path = history_calls[0][1]
     assert isinstance(history_path, str)
-    assert history_path.startswith(str(tmp_path / ".minigent" / "client-chat-history.d"))
+    assert history_path.startswith(
+        str(tmp_path / ".local" / "state" / "minigent" / "client-chat-history.d")
+    )
     assert history_path.endswith("thread_one")
+
+
+def test_chat_history_file_path_migrates_legacy_history(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
+    legacy_path = tmp_path / ".minigent" / "client-chat-history"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text("legacy prompt history\n", encoding="utf-8")
+
+    path = voice_cli.chat_history_file_path()
+
+    assert path == tmp_path / "xdg-state" / "minigent" / "client-chat-history"
+    assert path.read_text(encoding="utf-8") == "legacy prompt history\n"
 
 
 def test_append_missing_user_messages_to_chat_history_seeds_resumed_thread(
@@ -4256,6 +4306,7 @@ def test_build_chat_prompt_session_uses_thread_history_dir_when_legacy_history_f
         raise ImportError(name)
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / ".local" / "state"))
     monkeypatch.setattr(voice_cli, "import_module", fake_import)
     legacy_history_path = tmp_path / ".minigent" / "client-chat-history"
     legacy_history_path.parent.mkdir(parents=True)
@@ -4273,7 +4324,9 @@ def test_build_chat_prompt_session_uses_thread_history_dir_when_legacy_history_f
     assert len(history_calls) == 1
     history_path = history_calls[0][1]
     assert isinstance(history_path, str)
-    assert history_path.startswith(str(tmp_path / ".minigent" / "client-chat-history.d"))
+    assert history_path.startswith(
+        str(tmp_path / ".local" / "state" / "minigent" / "client-chat-history.d")
+    )
     assert history_path.endswith("thread-one")
 
 
@@ -4766,6 +4819,7 @@ def test_run_chat_loop_ignores_blank_interactive_submit(
 
 def test_run_chat_loop_rebuilds_prompt_history_after_thread_switch(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     output_stream = StringIO()
     sessions: list[object] = []
@@ -4821,6 +4875,8 @@ def test_run_chat_loop_rebuilds_prompt_history_after_thread_switch(
     assert exit_code == 0
     assert history_thread_ids[:2] == [None, "existing-thread"]
     assert messages == [("existing-thread", "hello")]
+    assert Path.home() == tmp_path / "home"
+    assert (tmp_path / "home" / ".local" / "state" / "minigent" / "cli-state.json").exists()
 
 
 def test_run_chat_loop_handles_local_chat_commands(

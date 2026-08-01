@@ -21,9 +21,14 @@ lookup order is:
 
 1. `--config <path>`
 2. `MINIGENT_CLIENT_CONFIG`
-3. `~/.config/minigent/client.toml`
-4. `~/.minigent/client.toml`
+3. `$XDG_CONFIG_HOME/minigent/client.toml` when `XDG_CONFIG_HOME` is absolute, otherwise
+   `~/.config/minigent/client.toml`
+4. `~/.minigent/client.toml` (legacy compatibility)
 5. `./.minigent-client.toml`
+
+Mutable client state and prompt history are stored under `$XDG_STATE_HOME/minigent`, falling
+back to `~/.local/state/minigent`. Existing files under `~/.minigent` are read and migrated
+when their XDG-state equivalents do not exist.
 
 Environment variables still override file values, and CLI flags override both. Prefer
 keeping secrets such as API tokens and provider keys in environment variables rather than in

@@ -534,6 +534,7 @@ def test_load_environment_precedence_real_env_then_dotenv_then_minigent_toml(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     config_path = tmp_path / "minigent.toml"
     config_path.write_text(
@@ -569,6 +570,7 @@ def test_load_environment_supports_custom_dotenv_file(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     (tmp_path / "minigent.toml").write_text(
         """
 [llm]
@@ -749,6 +751,7 @@ def test_coding_runner_env_applies_minigent_toml_then_env_file_override(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CODING_WORKSPACES", raising=False)
     monkeypatch.delenv("MINIGENT_CODING_SHELL_ENABLED", raising=False)
