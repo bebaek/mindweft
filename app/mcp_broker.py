@@ -14,14 +14,18 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+import anyio
 from fastapi import HTTPException, Request, Response
+from mcp import types as mcp_types
+from mcp.server.context import ServerRequestContext
+from mcp.server.lowlevel import Server
+from mcp.shared.exceptions import MCPError
+from mcp.shared.message import SessionMessage
 
 from app.mcp import (
     LEGACY_MCP_PROTOCOL_VERSION,
     MODERN_MCP_PROTOCOL_VERSION,
-    build_mcp_discover_result,
     mcp_request_protocol_version,
-    stamp_modern_mcp_result,
 )
 from app.models import Principal
 from app.tools import ToolExecutionContext, ToolRegistry
@@ -285,116 +289,183 @@ async def handle_mcp_broker_request(
         raise HTTPException(status_code=400, detail="MCP broker request must be a JSON object")
 
     request_id = payload.get("id")
-    method = str(payload.get("method", ""))
+    method = payload.get("method")
+    if not isinstance(method, str) or not method:
+        return _jsonrpc_error(request_id, -32600, "Invalid Request")
+    if "id" not in payload:
+        return Response(status_code=202)
     params = payload.get("params") or {}
-    is_modern_request = mcp_request_protocol_version(payload) == MODERN_MCP_PROTOCOL_VERSION
-    if params is not None and not isinstance(params, dict):
+    if not isinstance(params, dict):
         return _jsonrpc_error(request_id, -32602, "Invalid params")
 
-    if method == "server/discover":
-        return _jsonrpc_result(
-            request_id,
-            build_mcp_discover_result(
-                server_name="minigent-mcp-broker",
-                capabilities={"tools": {}},
-            ),
-        )
-    if method == "notifications/initialized":
-        return Response(status_code=202)
+    is_modern_request = (
+        method == "server/discover"
+        or mcp_request_protocol_version(payload) == MODERN_MCP_PROTOCOL_VERSION
+    )
+    sdk_payload = _broker_sdk_payload(payload, method=method, params=params)
+    sdk_server = _build_broker_sdk_server(session, tool_registry)
+    response_payload = await _run_broker_sdk_request(sdk_server, sdk_payload)
+    if not is_modern_request and method in {"tools/list", "tools/call"}:
+        response_payload = _strip_modern_result_envelope(response_payload)
+    return response_payload
+
+
+def _broker_sdk_payload(
+    payload: dict[str, Any],
+    *,
+    method: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    sdk_payload = dict(payload)
+    sdk_params = dict(params)
     if method == "initialize":
-        return _jsonrpc_result(
-            request_id,
-            {
-                "protocolVersion": LEGACY_MCP_PROTOCOL_VERSION,
-                "serverInfo": {"name": "minigent-mcp-broker", "version": "0.1.0"},
-                "capabilities": {"tools": {}},
-            },
+        sdk_params.setdefault("protocolVersion", LEGACY_MCP_PROTOCOL_VERSION)
+        sdk_params.setdefault("capabilities", {})
+        sdk_params.setdefault(
+            "clientInfo",
+            {"name": "minigent-mcp-broker-http-client", "version": "0.1.0"},
         )
-    if method == "tools/list":
+    else:
+        raw_meta = sdk_params.get("_meta")
+        metadata = dict(raw_meta) if isinstance(raw_meta, dict) else {}
+        metadata.setdefault("io.modelcontextprotocol/protocolVersion", MODERN_MCP_PROTOCOL_VERSION)
+        metadata.setdefault(
+            "io.modelcontextprotocol/clientInfo",
+            {"name": "minigent-mcp-broker-http-client", "version": "0.1.0"},
+        )
+        metadata.setdefault("io.modelcontextprotocol/clientCapabilities", {})
+        sdk_params["_meta"] = metadata
+    sdk_payload["params"] = sdk_params
+    return sdk_payload
+
+
+def _build_broker_sdk_server(
+    session: MCPBrokerSession,
+    tool_registry: ToolRegistry,
+) -> Server[Any]:
+    sdk_server: Server[Any] = Server("minigent-mcp-broker", version="0.1.0")
+
+    async def list_tools(
+        _context: ServerRequestContext[Any, Any],
+        _params: mcp_types.PaginatedRequestParams,
+    ) -> mcp_types.ListToolsResult:
+        tools = [
+            mcp_types.Tool(
+                name=spec.name,
+                description=spec.description,
+                input_schema=spec.input_schema,
+            )
+            for spec in tool_registry.specs()
+            if spec.name in session.allowed_tool_names
+        ]
         logger.info(
             "mcp_broker.tools_list session_id=%s tenant_id=%s thread_id=%s tools=%s",
             session.session_id,
             session.tenant_id,
             session.thread_id,
-            len(session.allowed_tool_names),
+            len(tools),
         )
-        result: dict[str, object] = {
-            "tools": [
-                {
-                    "name": spec.name,
-                    "description": spec.description,
-                    "inputSchema": spec.input_schema,
-                }
-                for spec in tool_registry.specs()
-                if spec.name in session.allowed_tool_names
-            ]
-        }
-        if is_modern_request:
-            result.update({"ttlMs": 0, "cacheScope": "private"})
-            result = stamp_modern_mcp_result(
-                result,
-                server_name="minigent-mcp-broker",
+        return mcp_types.ListToolsResult(tools=tools)
+
+    async def call_tool(
+        _context: ServerRequestContext[Any, Any],
+        params: mcp_types.CallToolRequestParams,
+    ) -> mcp_types.CallToolResult:
+        name = params.name.strip()
+        arguments = params.arguments or {}
+        if name not in session.allowed_tool_names:
+            raise MCPError(code=-32602, message=f"Unknown tool '{name}'")
+        context = ToolExecutionContext(
+            tenant_id=session.tenant_id,
+            user_id=session.user_id,
+            thread_id=session.thread_id,
+        )
+        try:
+            result = await tool_registry.execute(name, arguments, context=context)
+        except HTTPException as exc:
+            logger.warning(
+                "mcp_broker.tool_call_error session_id=%s tenant_id=%s thread_id=%s "
+                "tool=%s detail=%s",
+                session.session_id,
+                session.tenant_id,
+                session.thread_id,
+                name,
+                exc.detail,
             )
-        return _jsonrpc_result(request_id, result)
-    if method == "tools/call":
-        return await _call_tool(
-            session,
-            tool_registry,
-            request_id,
-            params,
-            modern=is_modern_request,
-        )
-    return _jsonrpc_error(request_id, -32601, f"Unsupported MCP method '{method}'")
-
-
-async def _call_tool(
-    session: MCPBrokerSession,
-    tool_registry: ToolRegistry,
-    request_id: object,
-    params: dict[str, Any],
-    *,
-    modern: bool = False,
-) -> dict[str, object]:
-    name = str(params.get("name", "")).strip()
-    arguments = params.get("arguments") or {}
-    if not name or not isinstance(arguments, dict):
-        return _jsonrpc_error(request_id, -32602, "tools/call requires name and object arguments")
-    if name not in session.allowed_tool_names:
-        return _jsonrpc_error(request_id, -32602, f"Unknown tool '{name}'")
-    context = ToolExecutionContext(
-        tenant_id=session.tenant_id,
-        user_id=session.user_id,
-        thread_id=session.thread_id,
-    )
-    try:
-        result = await tool_registry.execute(name, arguments, context=context)
-    except HTTPException as exc:
-        logger.warning(
-            "mcp_broker.tool_call_error session_id=%s tenant_id=%s thread_id=%s tool=%s detail=%s",
+            raise MCPError(code=-32000, message=str(exc.detail)) from exc
+        logger.info(
+            "mcp_broker.tool_call session_id=%s tenant_id=%s thread_id=%s tool=%s",
             session.session_id,
             session.tenant_id,
             session.thread_id,
             name,
-            exc.detail,
         )
-        return _jsonrpc_error(request_id, -32000, str(exc.detail))
-    logger.info(
-        "mcp_broker.tool_call session_id=%s tenant_id=%s thread_id=%s tool=%s",
-        session.session_id,
-        session.tenant_id,
-        session.thread_id,
-        name,
+        return mcp_types.CallToolResult(
+            structured_content=result,
+            content=[mcp_types.TextContent(text=_tool_result_text(result))],
+        )
+
+    sdk_server.add_request_handler(
+        "tools/list",
+        mcp_types.PaginatedRequestParams,
+        list_tools,
     )
-    response_result: dict[str, object] = {
-        "structuredContent": result,
-        "content": [{"type": "text", "text": _tool_result_text(result)}],
-    }
-    if modern:
-        response_result = stamp_modern_mcp_result(
-            response_result,
-            server_name="minigent-mcp-broker",
+    sdk_server.add_request_handler(
+        "tools/call",
+        mcp_types.CallToolRequestParams,
+        call_tool,
+    )
+    return sdk_server
+
+
+async def _run_broker_sdk_request(
+    sdk_server: Server[Any],
+    payload: dict[str, Any],
+) -> dict[str, object]:
+    try:
+        message = mcp_types.jsonrpc_message_adapter.validate_python(payload, by_name=False)
+    except ValueError:
+        return _jsonrpc_error(payload.get("id"), -32600, "Invalid Request")
+    if not isinstance(message, mcp_types.JSONRPCRequest):
+        return _jsonrpc_error(payload.get("id"), -32600, "Invalid Request")
+
+    read_writer, read_stream = anyio.create_memory_object_stream[SessionMessage | Exception](0)
+    write_stream, write_reader = anyio.create_memory_object_stream[SessionMessage](0)
+    response: SessionMessage | None = None
+    async with (
+        read_writer,
+        read_stream,
+        write_stream,
+        write_reader,
+        anyio.create_task_group() as task_group,
+    ):
+        task_group.start_soon(
+            sdk_server.run,
+            read_stream,
+            write_stream,
+            sdk_server.create_initialization_options(),
         )
-    return _jsonrpc_result(request_id, response_result)
+        await read_writer.send(SessionMessage(message))
+        response = await write_reader.receive()
+        await read_writer.aclose()
+        task_group.cancel_scope.cancel()
+
+    if response is None:  # pragma: no cover - receive() either returns or raises
+        return _jsonrpc_error(payload.get("id"), -32603, "MCP SDK returned no response")
+    response_message = response.message
+    if not isinstance(response_message, (mcp_types.JSONRPCResponse, mcp_types.JSONRPCError)):
+        return _jsonrpc_error(payload.get("id"), -32603, "Invalid MCP SDK response")
+    return response_message.model_dump(by_alias=True, mode="json", exclude_none=True)
+
+
+def _strip_modern_result_envelope(payload: dict[str, object]) -> dict[str, object]:
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return payload
+    legacy_result = dict(result)
+    for key in ("resultType", "ttlMs", "cacheScope", "_meta"):
+        legacy_result.pop(key, None)
+    return {**payload, "result": legacy_result}
 
 
 def _tool_result_text(result: object) -> str:
@@ -409,10 +480,6 @@ def _bearer_token(request: Request) -> str | None:
     if scheme.lower() != "bearer" or not token.strip():
         return None
     return token.strip()
-
-
-def _jsonrpc_result(request_id: object, result: dict[str, object]) -> dict[str, object]:
-    return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
 def _jsonrpc_error(request_id: object, code: int, message: str) -> dict[str, object]:

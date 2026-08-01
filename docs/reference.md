@@ -552,7 +552,11 @@ MINIGENT_MCP_BROKER_SESSION=<session>
 
 The broker exposes the thread's approved Minigent tools through MCP JSON-RPC and
 forwards allowed `tools/call` requests through Minigent's existing tool registry, so
-OpenCode does not receive upstream MCP server credentials. When
+OpenCode does not receive upstream MCP server credentials. The official SDK v2 low-level server
+owns broker discovery, initialization, request validation, dispatch, and modern result envelopes;
+Minigent retains short-lived bearer authentication, session routing, frozen tool allowlists, and
+execution context. Each authenticated HTTP request is adapted to an isolated SDK server exchange,
+so modern stateless clients and the legacy initialization shape remain compatible. When
 `MINIGENT_MCP_BROKER_DB_PATH` is configured, session identity, expiry, and the original approved
 tool-name set are stored in shared SQLite. Bearer tokens are persisted only as SHA-256 hashes, and
 a replica receiving a broker call reconstructs the tenant/thread tool registry locally while still
