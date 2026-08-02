@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
+import type { AdminAuditRecord } from "../src/api/client";
 
 async function installApiMocks(page: Page, onExecutionOptions?: (route: Route) => void) {
   await page.route("**/health/ready", async (route) => {
@@ -357,6 +358,14 @@ async function installAdminMocks(page: Page) {
     }
     if (path.endsWith("/run-concurrency")) {
       await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenant_id: tenantId, active_runs: 3, active_users: 2, tenant_capacity: 20, user_capacity: 5 }) });
+      return;
+    }
+    if (path.endsWith("/threads")) {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenant_id: tenantId, threads: [], limit: 10, offset: 0, total: 0, next_offset: null }) });
+      return;
+    }
+    if (path.endsWith("/audit-records")) {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenant_id: tenantId, audit_records: [], limit: 10, offset: 0, total: 0, next_offset: null }) });
       return;
     }
     await route.fulfill({ status: 404, contentType: "application/json", body: '{"detail":"not found"}' });
@@ -787,6 +796,98 @@ test("validates and applies execution configuration without exposing stored secr
   await confirmation.getByRole("button", { name: "Reset configuration" }).click();
   await expect(confirmation).not.toBeVisible();
   await expect(page.getByText("No tenant-specific execution configuration")).toBeVisible();
+});
+
+test("inspects, deletes, prunes, and audits tenant threads", async ({ page }) => {
+  await installApiMocks(page);
+  await installAdminMocks(page);
+  const now = new Date().toISOString();
+  let threads = [
+    { thread_id: "thread-old-review", tenant_id: "tenant-acme", status: "idle", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-02T00:00:00Z", skill_name: "review", skill_names: ["review"], capability_profile: "safe", message_count: 2 },
+    { thread_id: "thread-old-research", tenant_id: "tenant-acme", status: "error", created_at: "2026-01-03T00:00:00Z", updated_at: "2026-01-04T00:00:00Z", skill_name: "research", skill_names: ["research"], capability_profile: "default", message_count: 1 },
+  ];
+  let audit: AdminAuditRecord[] = [{ audit_id: "audit-config", tenant_id: "tenant-acme", actor_user_id: "admin-user", action: "tenant_execution_config.put", affected_count: 1, thread_ids: [], resource_type: "tenant_execution_config", resource_id: "tenant-acme", old_values: null, new_values: { llm: { provider: "mock" } }, metadata: null, created_at: now }];
+  await page.route("**/admin/tenants/tenant-acme/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    if (path.endsWith("/threads/prune")) {
+      const candidates = threads.map((thread) => thread.thread_id);
+      const dryRun = url.searchParams.get("dry_run") === "true";
+      if (!dryRun) {
+        threads = [];
+        audit = [{ audit_id: "audit-prune", tenant_id: "tenant-acme", actor_user_id: "admin-user", action: "threads.prune", affected_count: candidates.length, thread_ids: candidates, resource_type: null, resource_id: null, old_values: null, new_values: null, metadata: null, created_at: new Date().toISOString() }, ...audit];
+      }
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenant_id: "tenant-acme", deleted_count: dryRun ? 0 : candidates.length, updated_before: url.searchParams.get("updated_before"), dry_run: dryRun, candidate_thread_ids: candidates }) });
+      return;
+    }
+    if (path.endsWith("/audit-records")) {
+      const action = url.searchParams.get("action");
+      const records = action ? audit.filter((record) => record.action === action) : audit;
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenant_id: "tenant-acme", audit_records: records, limit: 10, offset: 0, total: records.length, next_offset: null }) });
+      return;
+    }
+    if (path.endsWith("/threads")) {
+      const skill = url.searchParams.get("skill");
+      const filtered = skill ? threads.filter((thread) => thread.skill_names.includes(skill)) : threads;
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenant_id: "tenant-acme", threads: filtered, limit: 10, offset: 0, total: filtered.length, next_offset: null }) });
+      return;
+    }
+    const match = path.match(/\/threads\/([^/]+)$/);
+    if (match) {
+      const thread = threads.find((item) => item.thread_id === match[1]);
+      if (!thread) {
+        await route.fulfill({ status: 404, contentType: "application/json", body: '{"detail":"Thread not found"}' });
+        return;
+      }
+      if (request.method() === "DELETE") {
+        threads = threads.filter((item) => item.thread_id !== match[1]);
+        audit = [{ audit_id: "audit-delete", tenant_id: "tenant-acme", actor_user_id: "admin-user", action: "threads.delete", affected_count: 1, thread_ids: [match[1]], resource_type: null, resource_id: null, old_values: null, new_values: null, metadata: null, created_at: new Date().toISOString() }, ...audit];
+        await route.fulfill({ contentType: "application/json", body: JSON.stringify({ deleted: true, tenant_id: "tenant-acme", thread_id: match[1] }) });
+      } else {
+        await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...thread, context: { summary: "Reviewed deployment readiness and remaining risks.", summarized_message_count: 3, updated_at: thread.updated_at }, messages: [{ id: "message-user", thread_id: thread.thread_id, role: "user", content: "Review the deployment plan", parts: null, metadata: null, tool_name: null, tool_call_id: null, tool_arguments: null, created_at: thread.created_at }, { id: "message-tool", thread_id: thread.thread_id, role: "tool", content: "Checks passed", parts: null, metadata: { duration_ms: 42 }, tool_name: "deployment.check", tool_call_id: "call-1", tool_arguments: { environment: "staging" }, created_at: thread.updated_at }] }) });
+      }
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto("./");
+  await navigateToAdmin(page);
+  await expect(page.getByText("2 threads", { exact: true })).toBeVisible();
+  await page.getByLabel("Skill", { exact: true }).fill("review");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+  await expect(page.getByText("1 thread", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /thread-old-review/ }).click();
+  const detail = page.getByRole("dialog", { name: /thread-o/ });
+  await expect(detail.getByText("Reviewed deployment readiness and remaining risks.")).toBeVisible();
+  await expect(detail.getByText("Review the deployment plan")).toBeVisible();
+  await detail.getByText("Tool arguments").click();
+  await expect(detail.getByText(/staging/)).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await detail.getByRole("button", { name: "Delete thread" }).click();
+  const deletion = detail.getByRole("alertdialog", { name: "Delete thread confirmation" });
+  await deletion.getByRole("button", { name: "Delete thread" }).click();
+  await expect(detail).not.toBeVisible();
+  await expect(page.getByText("Thread deleted and recorded in the audit log.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Clear" }).click();
+  await page.getByRole("button", { name: "Prune threads" }).click();
+  const prune = page.getByRole("dialog", { name: "Prune stale threads" });
+  await prune.getByRole("button", { name: "Preview candidates" }).click();
+  await expect(prune.getByText("1 candidate", { exact: true })).toBeVisible();
+  await prune.getByRole("button", { name: "Delete 1 thread" }).click();
+  await expect(prune).not.toBeVisible();
+  await expect(page.getByText("1 thread deleted and recorded in the audit log.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Audit log" }).click();
+  await expect(page.getByText("3 audit records", { exact: true })).toBeVisible();
+  const pruneAudit = page.getByRole("button", { name: /Threads · Prune/ });
+  await pruneAudit.click();
+  await expect(page.getByText("thread-old-research")).toBeVisible();
+  await page.getByLabel("Action").fill("threads.delete");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+  await expect(page.getByText("1 audit record", { exact: true })).toBeVisible();
 });
 
 test("supports mobile navigation", async ({ page }) => {

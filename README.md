@@ -348,8 +348,10 @@ reload, uncertain-action reconciliation, and an administration workspace with te
 editing, user role/status management, domain verification, typed feature and limit entitlement
 editing with server validation, version visibility and confirmed reset, a sectioned execution
 configuration editor for LLMs, tools, MCP servers, backends, quality review, skills, capability
-profiles, and agent presets with redacted-secret preservation and unsaved-change protection, conflict
-feedback, confirmed removals, tenant search, attachment and run-capacity metrics, confirmed lifecycle
+profiles, and agent presets with redacted-secret preservation and unsaved-change protection,
+tenant-scoped thread browsing with runtime filters, retained-message and compacted-context inspection,
+previewed pruning, confirmed deletion, and paginated audit review, conflict feedback, confirmed
+removals, tenant search, attachment and run-capacity metrics, confirmed lifecycle
 transitions, typed API transport, TanStack Query request lifecycle management, and connection modes
 for same-origin sessions, in-memory bearer tokens, and trusted-local development headers. Session
 mode is the
@@ -388,8 +390,7 @@ safety, responsive navigation, and automated axe accessibility checks. Use
 `npm run test:e2e:ui` for interactive debugging. CI environments should install Chromium and its
 system dependencies with `npx playwright install --with-deps chromium`.
 
-The existing dependency-free browser client remains at `/web/` while advanced administration flows
-such as thread pruning and audit inspection are implemented.
+The existing dependency-free browser client remains at `/web/` as a lightweight development fallback.
 It uses the streaming run
 endpoint to show live LLM, tool, and peer-agent progress, with mobile-friendly run
 controls, a stop action, basic assistant markdown rendering, execution option selectors,

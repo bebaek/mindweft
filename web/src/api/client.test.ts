@@ -98,6 +98,41 @@ describe("MinigentApiClient", () => {
     expect(headers.get("x-minigent-tenant-id")).toBe("tenant-1");
   });
 
+  it("encodes tenant thread filters and prune previews", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ tenant_id: "tenant/1", threads: [], total: 0, limit: 10, offset: 0 }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      ),
+    );
+    const client = new MinigentApiClient({ mode: "session" });
+
+    await client.getAdminTenantThreads("tenant/1", {
+      limit: 10,
+      offset: 20,
+      status: "error",
+      skill: "code review",
+    });
+    await client.pruneAdminTenantThreads("tenant/1", {
+      updated_before: "2026-01-01T00:00:00Z",
+      profile: "safe/default",
+      dry_run: true,
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/admin/tenants/tenant%2F1/threads?limit=10&offset=20&status=error&skill=code+review",
+    );
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/admin/tenants/tenant%2F1/threads/prune?updated_before=2026-01-01T00%3A00%3A00Z&profile=safe%2Fdefault&dry_run=true",
+    );
+    expect(fetchMock.mock.calls[1][1]?.method).toBe("POST");
+  });
+
   it("returns structured API failures", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ detail: "Admin access required" }), {

@@ -100,8 +100,9 @@ streaming run activity, cancellation, context inspection, confirmed context comp
 image selection, authenticated attachment upload/display, image detail controls, one-time
 private-value approval/denial, pending-consent recovery, uncertain-action reconciliation, tenant
 search/detail views, tenant and user provisioning, domain verification, entitlement and execution
-configuration editing, operational capacity metrics, and confirmed tenant lifecycle transitions.
-Thread administration and audit views remain on the migration roadmap.
+configuration editing, operational capacity metrics, confirmed tenant lifecycle transitions,
+filtered thread and retained-message inspection, previewed pruning, confirmed thread deletion, and
+paginated audit review.
 
 The dependency-free development client remains at `/web/` and provides the complete current chat
 workflow.
@@ -1645,6 +1646,12 @@ audit records.
 When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, public thread endpoints reject authenticated principals whose `tenant_id` is missing from the registry or not `active`. The default is `false` to preserve local and migration workflows. When `MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true`, request-time tenant context resolution also requires an active tenant membership for `(tenant_id, user_id)` and populates membership fields such as `membership_id`, `user_role`, and `user_status` on `TenantContext`.
 
 Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. Admin deletion removes a thread and its messages and writes an audit record. The prune endpoint deletes matching tenant threads with `updated_at` older than required `updated_before`, with optional `status`, `profile`, and `skill` filters. Add `dry_run=true` to preview `candidate_thread_ids` without deleting threads or writing audit records. The audit endpoint lists deletion/prune records and tenant mutation records with actor, action, affected count, thread IDs, optional `resource_type`/`resource_id`, optional `old_values`/`new_values`, optional metadata, timestamp, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `action`, `actor`, `created_after`, and `created_before` query parameters. Tenant audit payloads redact secret-like keys such as `token`, `secret`, `key`, `authorization`, and `password`. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect and manage persisted threads and audit records after process restarts.
+
+The React administration workspace exposes these thread operations with status/profile/skill/date
+filters, tenant-scoped detail views for compacted context and retained messages, a dry-run preview
+before filtered pruning, explicit confirmation before individual deletion, and action/actor/date
+filters for the paginated audit log. Audit detail expansion displays only the already-redacted values
+returned by the admin API.
 
 The attachment statistics endpoint returns only tenant-level counts and byte totals split across pending, referenced, and lifecycle-exempt records, plus the oldest pending timestamp and age and the configured tenant quota. It does not read or return attachment contents or per-record metadata. The run-concurrency endpoint returns only aggregate active-run and active-user counts, the next lease expiration, and configured capacities/timings; it does not expose user IDs, thread IDs, or lease IDs.
 

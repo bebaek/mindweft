@@ -15,6 +15,7 @@ import type {
 import { useAuth } from "../auth/auth-context";
 import { EntitlementsPanel } from "../components/EntitlementsPanel";
 import { ExecutionConfigPanel } from "../components/ExecutionConfigPanel";
+import { TenantOperationsPanel } from "../components/TenantOperationsPanel";
 
 type PendingRemoval =
   | { kind: "user"; id: string; label: string }
@@ -220,6 +221,7 @@ export function AdminPage() {
 
               <EntitlementsPanel key={`entitlements-${tenant.id}`} tenantId={tenant.id} />
               <ExecutionConfigPanel key={`execution-${tenant.id}`} tenantId={tenant.id} />
+              <TenantOperationsPanel key={`operations-${tenant.id}`} tenantId={tenant.id} />
 
               <section className="lifecycle-panel">
                 <div><p className="eyebrow">Lifecycle</p><h3>Tenant status</h3><p>Lifecycle changes are audited and immediately affect tenant access.</p></div>

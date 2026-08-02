@@ -70,6 +70,11 @@ export interface Message {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
   parts?: MessagePart[] | null;
+  created_by?: string | null;
+  metadata?: Record<string, unknown> | null;
+  tool_name?: string | null;
+  tool_call_id?: string | null;
+  tool_arguments?: Record<string, unknown> | null;
   created_at: string;
 }
 
@@ -181,6 +186,101 @@ export interface AdminTenantEntitlementsValidation {
   valid: boolean;
   features: { ok: boolean; errors: string[] };
   limits: { ok: boolean; errors: string[] };
+}
+
+export interface AdminThreadSummary {
+  thread_id: string;
+  tenant_id: string;
+  status: ThreadStatus;
+  created_at: string;
+  updated_at: string;
+  skill_name?: string | null;
+  skill_names?: string[] | null;
+  capability_profile?: string | null;
+  message_count: number;
+}
+
+export interface AdminThreadList {
+  tenant_id: string;
+  threads: AdminThreadSummary[];
+  limit: number;
+  offset: number;
+  total: number;
+  next_offset?: number | null;
+}
+
+export interface AdminThreadDetail extends AdminThreadSummary {
+  context: {
+    summary: string;
+    summarized_message_count: number;
+    updated_at: string;
+  };
+  messages: Message[];
+}
+
+export interface AdminThreadFilters {
+  limit?: number;
+  offset?: number;
+  status?: ThreadStatus | "";
+  profile?: string;
+  skill?: string;
+  created_after?: string;
+  updated_after?: string;
+}
+
+export interface AdminThreadDeleteResult {
+  deleted: boolean;
+  tenant_id: string;
+  thread_id: string;
+}
+
+export interface AdminThreadPruneInput {
+  updated_before: string;
+  status?: ThreadStatus | "";
+  profile?: string;
+  skill?: string;
+  dry_run?: boolean;
+}
+
+export interface AdminThreadPruneResult {
+  tenant_id: string;
+  deleted_count: number;
+  updated_before: string;
+  dry_run: boolean;
+  candidate_thread_ids: string[];
+}
+
+export interface AdminAuditRecord {
+  audit_id: string;
+  tenant_id: string;
+  actor_user_id: string;
+  action: string;
+  affected_count: number;
+  thread_ids: string[];
+  resource_type?: string | null;
+  resource_id?: string | null;
+  old_values?: Record<string, unknown> | null;
+  new_values?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface AdminAuditRecordList {
+  tenant_id: string;
+  audit_records: AdminAuditRecord[];
+  limit: number;
+  offset: number;
+  total: number;
+  next_offset?: number | null;
+}
+
+export interface AdminAuditFilters {
+  limit?: number;
+  offset?: number;
+  action?: string;
+  actor?: string;
+  created_after?: string;
+  created_before?: string;
 }
 
 export interface AdminTenantExecutionConfig {
@@ -483,6 +583,56 @@ export class MinigentApiClient {
     );
   }
 
+  getAdminTenantThreads(
+    tenantId: string,
+    filters: AdminThreadFilters = {},
+    signal?: AbortSignal,
+  ): Promise<AdminThreadList> {
+    return this.#request<AdminThreadList>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/threads${queryString(filters)}`,
+      { signal },
+    );
+  }
+
+  getAdminTenantThread(
+    tenantId: string,
+    threadId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminThreadDetail> {
+    return this.#request<AdminThreadDetail>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/threads/${encodeURIComponent(threadId)}`,
+      { signal },
+    );
+  }
+
+  deleteAdminTenantThread(tenantId: string, threadId: string): Promise<AdminThreadDeleteResult> {
+    return this.#request<AdminThreadDeleteResult>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/threads/${encodeURIComponent(threadId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  pruneAdminTenantThreads(
+    tenantId: string,
+    input: AdminThreadPruneInput,
+  ): Promise<AdminThreadPruneResult> {
+    return this.#request<AdminThreadPruneResult>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/threads/prune${queryString(input)}`,
+      { method: "POST" },
+    );
+  }
+
+  getAdminTenantAuditRecords(
+    tenantId: string,
+    filters: AdminAuditFilters = {},
+    signal?: AbortSignal,
+  ): Promise<AdminAuditRecordList> {
+    return this.#request<AdminAuditRecordList>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/audit-records${queryString(filters)}`,
+      { signal },
+    );
+  }
+
   getAdminTenantExecutionConfig(
     tenantId: string,
     signal?: AbortSignal,
@@ -759,6 +909,16 @@ export class MinigentApiClient {
     }
     return (await response.json()) as T;
   }
+}
+
+function queryString(input: object): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(input)) {
+    if (value === undefined || value === null || value === "") continue;
+    search.set(key, String(value));
+  }
+  const query = search.toString();
+  return query ? `?${query}` : "";
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {
