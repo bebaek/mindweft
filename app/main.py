@@ -88,6 +88,7 @@ from app.runtime import (
     estimate_thread_context_usage,
     render_raw_thread_context,
 )
+from app.security_headers import SecurityHeadersMiddleware
 from app.settings import (
     DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES,
     DEFAULT_IMAGE_INPUT_MAX_BYTES,
@@ -597,6 +598,7 @@ def create_app(
                 await mcp_manager.stop()
 
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(SecurityHeadersMiddleware)
     configure_tracing(app, settings.tracing)
     if thread_store is not None:
         app.state.store = thread_store

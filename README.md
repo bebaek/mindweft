@@ -337,9 +337,11 @@ controls, a stop action, basic assistant markdown rendering, execution option se
 image file selection, mobile camera capture, drag-and-drop, and clipboard paste with previews and
 per-image detail controls when server image input is enabled; the browser streams binary image
 bodies to thread-scoped attachment storage instead of base64-wrapping them, then keeps references
-in message history. A mobile More menu provides secondary actions, alongside a thread context
-sheet with compaction controls, a thread drawer backed by `GET /threads`, thread refresh/delete
-actions, and a collapsible activity sheet for run details.
+in message history. Browser responses include MIME-sniffing, framing, referrer, permissions, and
+Content Security Policy headers; the CSP limits scripts and network requests to the Minigent origin
+while allowing same-origin, blob, and data image previews. A mobile More menu provides secondary
+actions, alongside a thread context sheet with compaction controls, a thread drawer backed by
+`GET /threads`, thread refresh/delete actions, and a collapsible activity sheet for run details.
 
 #### Mobile UI demo
 
