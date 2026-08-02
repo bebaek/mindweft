@@ -661,14 +661,13 @@ def build_admin_router() -> APIRouter:
         store = _require_admin_store(request)
         _require_tenant(request, tenant_id)
         old_user = store.get_tenant_user(tenant_id, user_record_id)
+        user_updates = body.model_dump(exclude_unset=True)
+        if "email" in body.model_fields_set:
+            user_updates["email"] = email
         user = store.update_tenant_user(
             tenant_id,
             user_record_id,
-            email=email,
-            display_name=body.display_name,
-            role=body.role,
-            status=body.status,
-            metadata=body.metadata,
+            **user_updates,
             updated_by=admin.user_id,
         )
         if user is None:
@@ -962,13 +961,10 @@ def build_admin_router() -> APIRouter:
         store = _require_admin_store(request)
         old_tenant = store.get_tenant(tenant_id)
         try:
+            tenant_updates = body.model_dump(exclude_unset=True)
             tenant = store.update_tenant(
                 tenant_id,
-                slug=body.slug,
-                name=body.name,
-                plan=body.plan,
-                region=body.region,
-                metadata=body.metadata,
+                **tenant_updates,
                 updated_by=admin.user_id,
             )
         except sqlite3.IntegrityError as exc:

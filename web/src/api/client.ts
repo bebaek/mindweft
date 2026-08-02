@@ -126,6 +126,43 @@ export interface CompactThreadResponse {
 }
 
 export type TenantStatus = "provisioning" | "active" | "suspended" | "archived" | "deleted";
+export type TenantUserRole = "owner" | "admin" | "member" | "viewer";
+export type TenantUserStatus = "invited" | "active" | "suspended" | "deleted";
+
+export interface AdminTenantInput {
+  id?: string;
+  slug: string;
+  name: string;
+  status?: TenantStatus;
+  plan?: string | null;
+  region?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AdminTenantPatch {
+  slug?: string;
+  name?: string;
+  plan?: string | null;
+  region?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AdminTenantUserInput {
+  user_id: string;
+  email?: string | null;
+  display_name?: string | null;
+  role: TenantUserRole;
+  status: TenantUserStatus;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AdminTenantUserPatch {
+  email?: string | null;
+  display_name?: string | null;
+  role?: TenantUserRole;
+  status?: TenantUserStatus;
+  metadata?: Record<string, unknown>;
+}
 
 export interface AdminTenant {
   id: string;
@@ -155,8 +192,8 @@ export interface AdminTenantUser {
   user_id: string;
   email?: string | null;
   display_name?: string | null;
-  role: "owner" | "admin" | "member" | "viewer";
-  status: "invited" | "active" | "suspended" | "deleted";
+  role: TenantUserRole;
+  status: TenantUserStatus;
   created_at: string;
   updated_at: string;
 }
@@ -268,6 +305,20 @@ export class MinigentApiClient {
     return this.#request<AdminTenantListResponse>("/admin/tenants?limit=200", { signal });
   }
 
+  createAdminTenant(input: AdminTenantInput): Promise<AdminTenant> {
+    return this.#request<AdminTenant>("/admin/tenants", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  updateAdminTenant(tenantId: string, input: AdminTenantPatch): Promise<AdminTenant> {
+    return this.#request<AdminTenant>(`/admin/tenants/${encodeURIComponent(tenantId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  }
+
   listAdminTenantUsers(
     tenantId: string,
     signal?: AbortSignal,
@@ -275,6 +326,34 @@ export class MinigentApiClient {
     return this.#request<AdminTenantUserListResponse>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/users?limit=200`,
       { signal },
+    );
+  }
+
+  createAdminTenantUser(
+    tenantId: string,
+    input: AdminTenantUserInput,
+  ): Promise<AdminTenantUser> {
+    return this.#request<AdminTenantUser>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/users`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
+
+  updateAdminTenantUser(
+    tenantId: string,
+    userRecordId: string,
+    input: AdminTenantUserPatch,
+  ): Promise<AdminTenantUser> {
+    return this.#request<AdminTenantUser>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/users/${encodeURIComponent(userRecordId)}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    );
+  }
+
+  deleteAdminTenantUser(tenantId: string, userRecordId: string): Promise<void> {
+    return this.#request<void>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/users/${encodeURIComponent(userRecordId)}`,
+      { method: "DELETE" },
     );
   }
 
@@ -287,6 +366,27 @@ export class MinigentApiClient {
       { signal },
     );
     return response.domains;
+  }
+
+  addAdminTenantDomain(tenantId: string, domain: string): Promise<AdminTenantDomain> {
+    return this.#request<AdminTenantDomain>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/domains`,
+      { method: "POST", body: JSON.stringify({ domain }) },
+    );
+  }
+
+  verifyAdminTenantDomain(tenantId: string, domainId: string): Promise<AdminTenantDomain> {
+    return this.#request<AdminTenantDomain>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/domains/${encodeURIComponent(domainId)}/verify`,
+      { method: "POST" },
+    );
+  }
+
+  deleteAdminTenantDomain(tenantId: string, domainId: string): Promise<void> {
+    return this.#request<void>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/domains/${encodeURIComponent(domainId)}`,
+      { method: "DELETE" },
+    );
   }
 
   getAdminAttachmentStatistics(

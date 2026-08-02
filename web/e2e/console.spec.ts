@@ -525,6 +525,133 @@ test("inspects tenant operations and confirms lifecycle changes", async ({ page 
   await expect(page.getByRole("heading", { name: "Beta Labs" })).toBeVisible();
 });
 
+test("creates a tenant and reports provisioning conflicts", async ({ page }) => {
+  await installApiMocks(page);
+  await installAdminMocks(page);
+  const now = new Date().toISOString();
+  const created = { id: "tenant-northwind", slug: "northwind", name: "Northwind", status: "provisioning", plan: "growth", region: "us-west", metadata: {}, created_at: now, updated_at: now };
+  let includeCreated = false;
+  await page.route("**/admin/tenants**", async (route) => {
+    const request = route.request();
+    if (request.method() === "POST") {
+      const body = request.postDataJSON() as { slug: string };
+      if (body.slug === "acme") {
+        await route.fulfill({ status: 409, contentType: "application/json", body: '{"detail":"Tenant id or slug already exists"}' });
+      } else {
+        includeCreated = true;
+        await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(created) });
+      }
+      return;
+    }
+    if (includeCreated) {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenants: [created], total: 1, limit: 200, offset: 0 }) });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto("./");
+  await navigateToAdmin(page);
+
+  await page.getByRole("button", { name: "New tenant" }).click();
+  const dialog = page.getByRole("dialog", { name: "Create tenant" });
+  await dialog.getByLabel("Slug").fill("acme");
+  await dialog.getByLabel("Name").fill("Duplicate Acme");
+  await dialog.getByRole("button", { name: "Create tenant" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("Tenant id or slug already exists");
+
+  await dialog.getByLabel("Slug").fill("northwind");
+  await dialog.getByLabel("Name").fill("Northwind");
+  await dialog.getByLabel("Plan").fill("growth");
+  await dialog.getByLabel("Region").fill("us-west");
+  await dialog.getByRole("button", { name: "Create tenant" }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(includeCreated).toBe(true);
+});
+
+test("manages tenant users and domains with destructive confirmations", async ({ page }) => {
+  await installApiMocks(page);
+  await installAdminMocks(page);
+  const now = new Date().toISOString();
+  const memberships: Array<Record<string, unknown>> = [];
+  const tenantDomains: Array<Record<string, unknown>> = [];
+  await page.route("**/admin/tenants/tenant-acme/users**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const userId = path.split("/")[5];
+    if (request.method() === "POST") {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      const created = { ...body, id: "membership-new", tenant_id: "tenant-acme", created_at: now, updated_at: now };
+      memberships.push(created);
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(created) });
+    } else if (request.method() === "PATCH") {
+      const user = memberships.find((item) => item.id === userId)!;
+      Object.assign(user, request.postDataJSON());
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(user) });
+    } else if (request.method() === "DELETE") {
+      memberships.splice(memberships.findIndex((item) => item.id === userId), 1);
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ deleted: true }) });
+    } else {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenant_id: "tenant-acme", users: memberships, total: memberships.length, limit: 200, offset: 0 }) });
+    }
+  });
+  await page.route("**/admin/tenants/tenant-acme/domains**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const domainId = path.split("/")[5];
+    if (request.method() === "POST" && path.endsWith("/verify")) {
+      const domain = tenantDomains.find((item) => item.id === domainId)!;
+      domain.verified = true;
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(domain) });
+    } else if (request.method() === "POST") {
+      const body = request.postDataJSON() as { domain: string };
+      const created = { id: "domain-new", tenant_id: "tenant-acme", domain: body.domain, verified: false, created_at: now };
+      tenantDomains.push(created);
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(created) });
+    } else if (request.method() === "DELETE") {
+      tenantDomains.splice(tenantDomains.findIndex((item) => item.id === domainId), 1);
+      await route.fulfill({ status: 204, body: "" });
+    } else {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenant_id: "tenant-acme", domains: tenantDomains }) });
+    }
+  });
+  await page.goto("./");
+  await navigateToAdmin(page);
+
+  await page.getByRole("button", { name: "Add user" }).click();
+  const userDialog = page.getByRole("dialog", { name: "Add tenant user" });
+  await userDialog.getByLabel("User ID").fill("sam-1");
+  await userDialog.getByLabel("Display name").fill("Sam Rivera");
+  await userDialog.getByLabel("Role").selectOption("admin");
+  await userDialog.getByRole("button", { name: "Add user" }).click();
+  await expect(page.getByText("Sam Rivera")).toBeVisible();
+
+  await page.getByRole("button", { name: "Edit Sam Rivera" }).click();
+  const editUserDialog = page.getByRole("dialog", { name: "Edit tenant user" });
+  await editUserDialog.getByLabel("Role").selectOption("viewer");
+  await editUserDialog.getByLabel("Status").selectOption("active");
+  await editUserDialog.getByRole("button", { name: "Save user" }).click();
+  await expect(page.getByText("sam-1 · active")).toBeVisible();
+
+  await page.getByRole("button", { name: "Remove Sam Rivera" }).click();
+  const userConfirmation = page.getByRole("dialog", { name: "Remove tenant user?" });
+  await expect(userConfirmation.getByText(/immediately lose access/)).toBeVisible();
+  await userConfirmation.getByRole("button", { name: "Remove" }).click();
+  await expect(userConfirmation).not.toBeVisible();
+  await expect(page.getByText("Sam Rivera", { exact: true })).not.toBeVisible();
+
+  await page.getByPlaceholder("company.example").fill("northwind.example");
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  const domainRow = page.locator(".domain-list li").filter({ hasText: "northwind.example" });
+  await domainRow.getByRole("button", { name: "Verify" }).click();
+  await expect(domainRow.locator(".domain-status")).toHaveClass(/verified/);
+  await domainRow.getByRole("button", { name: "Remove northwind.example" }).click();
+  const domainConfirmation = page.getByRole("dialog", { name: "Remove tenant domain?" });
+  await expect(domainConfirmation.getByText(/no longer route users/)).toBeVisible();
+  await domainConfirmation.getByRole("button", { name: "Remove" }).click();
+  await expect(domainConfirmation).not.toBeVisible();
+  await expect(page.getByText("northwind.example", { exact: true })).not.toBeVisible();
+});
+
 test("supports mobile navigation", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installApiMocks(page);

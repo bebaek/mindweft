@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Iterator, TypeGuard
+from typing import Any, Iterator, TypeGuard, cast
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -22,6 +22,7 @@ from app.models import (
 )
 
 SECRET_WRAPPER_KEY = "__secret__"
+_UNSET = object()
 
 
 class SQLiteTenantConfigStore:
@@ -118,8 +119,8 @@ class SQLiteTenantConfigStore:
         slug: str | None = None,
         name: str | None = None,
         status: TenantStatus | None = None,
-        plan: str | None = None,
-        region: str | None = None,
+        plan: str | None | object = _UNSET,
+        region: str | None | object = _UNSET,
         metadata: dict[str, Any] | None = None,
         updated_by: str | None = None,
     ) -> Tenant | None:
@@ -129,8 +130,8 @@ class SQLiteTenantConfigStore:
         next_slug = current.slug if slug is None else slug
         next_name = current.name if name is None else name
         next_status = current.status if status is None else status
-        next_plan = current.plan if plan is None else plan
-        next_region = current.region if region is None else region
+        next_plan = current.plan if plan is _UNSET else cast(str | None, plan)
+        next_region = current.region if region is _UNSET else cast(str | None, region)
         next_metadata = current.metadata if metadata is None else metadata
         now = _utc_now_iso()
         with self._lock:
@@ -262,8 +263,8 @@ class SQLiteTenantConfigStore:
         tenant_id: str,
         user_record_id: str,
         *,
-        email: str | None = None,
-        display_name: str | None = None,
+        email: str | None | object = _UNSET,
+        display_name: str | None | object = _UNSET,
         role: TenantUserRole | None = None,
         status: TenantUserStatus | None = None,
         metadata: dict[str, Any] | None = None,
@@ -272,8 +273,10 @@ class SQLiteTenantConfigStore:
         current = self.get_tenant_user(tenant_id, user_record_id)
         if current is None:
             return None
-        next_email = current.email if email is None else email
-        next_display_name = current.display_name if display_name is None else display_name
+        next_email = current.email if email is _UNSET else cast(str | None, email)
+        next_display_name = (
+            current.display_name if display_name is _UNSET else cast(str | None, display_name)
+        )
         next_role = current.role if role is None else role
         next_status = current.status if status is None else status
         next_metadata = current.metadata if metadata is None else metadata

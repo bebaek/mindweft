@@ -5579,3 +5579,42 @@ def _sqlite_store(tmp_path: Path, *, encryption_key: str | None = None):
         str(tmp_path / "tenant-configs.db"),
         encryption_key=encryption_key,
     )
+
+
+def test_admin_api_patch_can_clear_optional_tenant_and_user_fields(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+    client.post(
+        "/admin/tenants",
+        json={
+            "id": "tenant-clear",
+            "slug": "tenant-clear",
+            "name": "Tenant Clear",
+            "plan": "enterprise",
+            "region": "us-east",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    user_response = client.post(
+        "/admin/tenants/tenant-clear/users",
+        json={"user_id": "user-clear", "display_name": "Clear Me"},
+        headers=ADMIN_HEADERS,
+    )
+
+    tenant_response = client.patch(
+        "/admin/tenants/tenant-clear",
+        json={"plan": None, "region": None},
+        headers=ADMIN_HEADERS,
+    )
+    user_patch_response = client.patch(
+        f"/admin/tenants/tenant-clear/users/{user_response.json()['id']}",
+        json={"display_name": None},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert tenant_response.status_code == 200
+    assert tenant_response.json()["plan"] is None
+    assert tenant_response.json()["region"] is None
+    assert user_patch_response.status_code == 200
+    assert user_patch_response.json()["display_name"] is None

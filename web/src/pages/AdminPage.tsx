@@ -1,14 +1,39 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { TenantStatus } from "../api/client";
+import type {
+  AdminTenant,
+  AdminTenantInput,
+  AdminTenantListResponse,
+  AdminTenantPatch,
+  AdminTenantUser,
+  AdminTenantUserInput,
+  AdminTenantUserPatch,
+  TenantStatus,
+  TenantUserRole,
+  TenantUserStatus,
+} from "../api/client";
 import { useAuth } from "../auth/auth-context";
+
+type PendingRemoval =
+  | { kind: "user"; id: string; label: string }
+  | { kind: "domain"; id: string; label: string };
+
+type DomainAction =
+  | { kind: "add"; domain: string }
+  | { kind: "verify"; domainId: string }
+  | { kind: "delete"; domainId: string };
 
 export function AdminPage() {
   const { api, authentication } = useAuth();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [selection, setSelection] = useState<string | null>(null);
+  const [tenantEditor, setTenantEditor] = useState<"create" | "edit" | null>(null);
+  const [userEditor, setUserEditor] = useState<"create" | AdminTenantUser | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
   const [pendingStatus, setPendingStatus] = useState<"active" | "suspended" | "archived" | null>(null);
+  const [domainDraft, setDomainDraft] = useState("");
+
   const tenants = useQuery({
     queryKey: ["admin-tenants", authentication],
     queryFn: ({ signal }) => api.listAdminTenants(signal),
@@ -32,6 +57,7 @@ export function AdminPage() {
     enabled: tenantId !== null,
     retry: false,
   });
+  const visibleUsers = users.data?.users.filter((user) => user.status !== "deleted") ?? [];
   const domains = useQuery({
     queryKey: ["admin-tenant-domains", tenantId, authentication],
     queryFn: ({ signal }) => api.listAdminTenantDomains(tenantId, signal),
@@ -50,6 +76,58 @@ export function AdminPage() {
     enabled: tenantId !== null,
     retry: false,
   });
+
+  const tenantSave = useMutation({
+    mutationFn: (request: { mode: "create"; input: AdminTenantInput } | { mode: "edit"; input: AdminTenantPatch }) =>
+      request.mode === "create"
+        ? api.createAdminTenant(request.input)
+        : api.updateAdminTenant(tenantId, request.input),
+    onSuccess: (saved, request) => {
+      setSelection(saved.id);
+      setTenantEditor(null);
+      queryClient.setQueryData<AdminTenantListResponse>(["admin-tenants", authentication], (current) => {
+        if (!current) return current;
+        const existing = current.tenants.some((item) => item.id === saved.id);
+        return {
+          ...current,
+          tenants: existing
+            ? current.tenants.map((item) => item.id === saved.id ? saved : item)
+            : [saved, ...current.tenants],
+          total: current.total + (request.mode === "create" && !existing ? 1 : 0),
+        };
+      });
+      void queryClient.invalidateQueries({ queryKey: ["admin-tenants"] });
+    },
+  });
+  const userSave = useMutation({
+    mutationFn: (request: { mode: "create"; input: AdminTenantUserInput } | { mode: "edit"; userId: string; input: AdminTenantUserPatch }) =>
+      request.mode === "create"
+        ? api.createAdminTenantUser(tenantId, request.input)
+        : api.updateAdminTenantUser(tenantId, request.userId, request.input),
+    onSuccess: () => {
+      setUserEditor(null);
+      void queryClient.invalidateQueries({ queryKey: ["admin-tenant-users", tenantId] });
+    },
+  });
+  const userDelete = useMutation({
+    mutationFn: (userId: string) => api.deleteAdminTenantUser(tenantId, userId),
+    onSuccess: () => {
+      setPendingRemoval(null);
+      void queryClient.invalidateQueries({ queryKey: ["admin-tenant-users", tenantId] });
+    },
+  });
+  const domainChange = useMutation({
+    mutationFn: async (action: DomainAction) => {
+      if (action.kind === "add") await api.addAdminTenantDomain(tenantId, action.domain);
+      else if (action.kind === "verify") await api.verifyAdminTenantDomain(tenantId, action.domainId);
+      else await api.deleteAdminTenantDomain(tenantId, action.domainId);
+    },
+    onSuccess: (_, action) => {
+      if (action.kind === "add") setDomainDraft("");
+      if (action.kind === "delete") setPendingRemoval(null);
+      void queryClient.invalidateQueries({ queryKey: ["admin-tenant-domains", tenantId] });
+    },
+  });
   const transition = useMutation({
     mutationFn: (status: "active" | "suspended" | "archived") =>
       api.transitionAdminTenant(tenantId, status),
@@ -59,11 +137,21 @@ export function AdminPage() {
     },
   });
 
+  function selectTenant(id: string) {
+    setSelection(id);
+    setPendingStatus(null);
+    setUserEditor(null);
+    setPendingRemoval(null);
+  }
+
   return (
     <section className="admin-page">
       <header className="admin-heading">
-        <div><p className="eyebrow">Administration</p><h1>Tenant operations</h1><p>Inspect customer environments, capacity, membership, and lifecycle state.</p></div>
-        <div className="tenant-total"><strong>{tenants.data?.total ?? "—"}</strong><span>Total tenants</span></div>
+        <div><p className="eyebrow">Administration</p><h1>Tenant operations</h1><p>Provision customer environments, membership, domains, capacity, and lifecycle state.</p></div>
+        <div className="admin-heading-actions">
+          <div className="tenant-total"><strong>{tenants.data?.total ?? "—"}</strong><span>Total tenants</span></div>
+          <button type="button" className="admin-primary-action" onClick={() => setTenantEditor("create")}>New tenant</button>
+        </div>
       </header>
 
       {tenants.isError && (
@@ -78,7 +166,7 @@ export function AdminPage() {
           <label className="tenant-search"><span className="sr-only">Search tenants</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search tenants…" /></label>
           <div className="tenant-directory-list">
             {filteredTenants.map((item) => (
-              <button aria-label={item.name} key={item.id} type="button" className={item.id === tenantId ? "active" : ""} onClick={() => { setSelection(item.id); setPendingStatus(null); }}>
+              <button aria-label={item.name} key={item.id} type="button" className={item.id === tenantId ? "active" : ""} onClick={() => selectTenant(item.id)}>
                 <span className="tenant-avatar">{initials(item.name)}</span>
                 <span><strong>{item.name}</strong><small>{item.slug}</small></span>
                 <StatusPill status={item.status} />
@@ -93,11 +181,11 @@ export function AdminPage() {
             <>
               <section className="tenant-summary">
                 <div><span className="tenant-avatar large">{initials(tenant.name)}</span><div><p className="eyebrow">{tenant.id}</p><h2>{tenant.name}</h2><p>{tenant.plan || "No plan"} · {tenant.region || "No region"}</p></div></div>
-                <StatusPill status={tenant.status} />
+                <div className="tenant-summary-actions"><StatusPill status={tenant.status} /><button type="button" onClick={() => setTenantEditor("edit")}>Edit tenant</button></div>
               </section>
 
               <section className="admin-metrics" aria-label="Tenant metrics">
-                <Metric label="Members" value={users.data?.total} detail={`${activeUsers(users.data?.users)} active`} />
+                <Metric label="Members" value={users.data ? visibleUsers.length : undefined} detail={`${activeUsers(visibleUsers)} active`} />
                 <Metric label="Active runs" value={concurrency.data?.active_runs} detail={`${concurrency.data?.tenant_capacity ?? "—"} tenant capacity`} />
                 <Metric label="Attachments" value={attachments.data?.total_count} detail={formatBytes(attachments.data?.total_bytes)} />
                 <Metric label="Domains" value={domains.data?.length} detail={`${domains.data?.filter((domain) => domain.verified).length ?? 0} verified`} />
@@ -105,16 +193,23 @@ export function AdminPage() {
 
               <section className="admin-detail-grid">
                 <article className="admin-panel">
-                  <div className="admin-panel-heading"><div><p className="eyebrow">Membership</p><h3>Users</h3></div><span>{users.data?.total ?? 0}</span></div>
+                  <div className="admin-panel-heading"><div><p className="eyebrow">Membership</p><h3>Users</h3></div><button type="button" onClick={() => setUserEditor("create")}>Add user</button></div>
+                  {users.isError && <p className="inline-error" role="alert">Could not load tenant users.</p>}
                   <ul className="admin-user-list">
-                    {users.data?.users.slice(0, 6).map((user) => <li key={user.id}><span className="user-avatar">{initials(user.display_name || user.user_id)}</span><div><strong>{user.display_name || user.user_id}</strong><small>{user.email || user.user_id}</small></div><span>{user.role}</span></li>)}
-                    {!users.isPending && !users.data?.users.length && <li className="admin-empty">No users registered.</li>}
+                    {visibleUsers.map((user) => <li key={user.id}><span className="user-avatar">{initials(user.display_name || user.user_id)}</span><div><strong>{user.display_name || user.user_id}</strong><small>{user.email || user.user_id} · {user.status}</small></div><span>{user.role}</span><button type="button" aria-label={`Edit ${user.display_name || user.user_id}`} onClick={() => setUserEditor(user)}>Edit</button><button type="button" className="danger-link" aria-label={`Remove ${user.display_name || user.user_id}`} onClick={() => setPendingRemoval({ kind: "user", id: user.id, label: user.display_name || user.user_id })}>Remove</button></li>)}
+                    {!users.isPending && visibleUsers.length === 0 && <li className="admin-empty">No users registered.</li>}
                   </ul>
                 </article>
                 <article className="admin-panel">
                   <div className="admin-panel-heading"><div><p className="eyebrow">Routing</p><h3>Domains</h3></div><span>{domains.data?.length ?? 0}</span></div>
+                  <form className="domain-add-form" onSubmit={(event) => { event.preventDefault(); if (domainDraft.trim()) domainChange.mutate({ kind: "add", domain: domainDraft.trim() }); }}>
+                    <label><span className="sr-only">Domain name</span><input required value={domainDraft} onChange={(event) => setDomainDraft(event.target.value)} placeholder="company.example" /></label>
+                    <button type="submit" disabled={domainChange.isPending || !domainDraft.trim()}>Add</button>
+                  </form>
+                  {domains.isError && <p className="inline-error" role="alert">Could not load tenant domains.</p>}
+                  {domainChange.isError && <p className="inline-error" role="alert">{mutationError(domainChange.error)}</p>}
                   <ul className="domain-list">
-                    {domains.data?.map((domain) => <li key={domain.id}><span className={`domain-status ${domain.verified ? "verified" : ""}`} /><strong>{domain.domain}</strong><small>{domain.verified ? "Verified" : "Pending"}</small></li>)}
+                    {domains.data?.map((domain) => <li key={domain.id}><span className={`domain-status ${domain.verified ? "verified" : ""}`} /><strong>{domain.domain}</strong><small>{domain.verified ? "Verified" : "Pending"}</small>{!domain.verified && <button type="button" onClick={() => domainChange.mutate({ kind: "verify", domainId: domain.id })}>Verify</button>}<button type="button" className="danger-link" aria-label={`Remove ${domain.domain}`} onClick={() => setPendingRemoval({ kind: "domain", id: domain.id, label: domain.domain })}>Remove</button></li>)}
                     {!domains.isPending && !domains.data?.length && <li className="admin-empty">No domains configured.</li>}
                   </ul>
                   <div className="capacity-bar"><div><span>Attachment storage</span><small>{formatBytes(attachments.data?.total_bytes)} of {formatBytes(attachments.data?.max_bytes)}</small></div><progress value={attachments.data?.total_bytes ?? 0} max={attachments.data?.max_bytes || 1} /></div>
@@ -136,20 +231,73 @@ export function AdminPage() {
                     {tenant.status !== "archived" && <button type="button" className="archive" onClick={() => setPendingStatus("archived")}>Archive</button>}
                   </div>
                 )}
-                {transition.isError && <p className="transition-error" role="alert">The lifecycle change failed. No status was changed.</p>}
+                {transition.isError && <p className="transition-error" role="alert">{mutationError(transition.error)}</p>}
               </section>
             </>
           ) : (
-            <div className="admin-empty-state"><h2>Select a tenant</h2><p>Choose an environment to inspect operational details.</p></div>
+            <div className="admin-empty-state"><h2>Select a tenant</h2><p>Choose an environment to inspect operational details.</p><button type="button" className="admin-primary-action" onClick={() => setTenantEditor("create")}>Create the first tenant</button></div>
           )}
         </div>
       </div>
+
+      {tenantEditor && <TenantEditor key={`${tenantEditor}-${tenant?.id ?? "new"}`} tenant={tenantEditor === "edit" ? tenant : null} pending={tenantSave.isPending} error={tenantSave.isError ? mutationError(tenantSave.error) : null} onClose={() => setTenantEditor(null)} onSave={(input) => tenantSave.mutate(tenantEditor === "create" ? { mode: "create", input } : { mode: "edit", input })} />}
+      {userEditor && tenant && <UserEditor key={userEditor === "create" ? "new-user" : userEditor.id} user={userEditor === "create" ? null : userEditor} pending={userSave.isPending} error={userSave.isError ? mutationError(userSave.error) : null} onClose={() => setUserEditor(null)} onSave={(input) => userSave.mutate(userEditor === "create" ? { mode: "create", input } : { mode: "edit", userId: userEditor.id, input })} />}
+      {pendingRemoval && <ConfirmationDialog title={pendingRemoval.kind === "user" ? "Remove tenant user?" : "Remove tenant domain?"} message={pendingRemoval.kind === "user" ? `${pendingRemoval.label} will immediately lose access to this tenant.` : `${pendingRemoval.label} will no longer route users to this tenant.`} pending={userDelete.isPending || domainChange.isPending} error={(userDelete.isError && mutationError(userDelete.error)) || (domainChange.isError && mutationError(domainChange.error)) || null} onCancel={() => setPendingRemoval(null)} onConfirm={() => pendingRemoval.kind === "user" ? userDelete.mutate(pendingRemoval.id) : domainChange.mutate({ kind: "delete", domainId: pendingRemoval.id })} />}
     </section>
   );
 }
 
+function TenantEditor({ tenant, pending, error, onClose, onSave }: { tenant: AdminTenant | null; pending: boolean; error: string | null; onClose: () => void; onSave: (input: AdminTenantInput) => void }) {
+  const dialogRef = useModalDialog();
+  const [id, setId] = useState("");
+  const [slug, setSlug] = useState(tenant?.slug ?? "");
+  const [name, setName] = useState(tenant?.name ?? "");
+  const [plan, setPlan] = useState(tenant?.plan ?? "");
+  const [region, setRegion] = useState(tenant?.region ?? "");
+  const [status, setStatus] = useState<TenantStatus>("provisioning");
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const common = { slug: slug.trim(), name: name.trim(), plan: optional(plan), region: optional(region) };
+    onSave(tenant ? common : { ...common, ...(id.trim() ? { id: id.trim() } : {}), status });
+  }
+  return <dialog ref={dialogRef} className="admin-dialog" aria-labelledby="tenant-editor-title" onCancel={onClose} onClose={onClose}><form onSubmit={submit}><DialogHeading id="tenant-editor-title" title={tenant ? "Edit tenant" : "Create tenant"} onClose={onClose} /><div className="admin-form-grid">{!tenant && <label>Tenant ID <input value={id} onChange={(event) => setId(event.target.value)} placeholder="Generated when blank" /></label>}<label>Slug <input required pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?" value={slug} onChange={(event) => setSlug(event.target.value)} placeholder="acme-corp" /></label><label className="wide">Name <input required value={name} onChange={(event) => setName(event.target.value)} /></label><label>Plan <input value={plan} onChange={(event) => setPlan(event.target.value)} placeholder="enterprise" /></label><label>Region <input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="us-east" /></label>{!tenant && <label>Status <select value={status} onChange={(event) => setStatus(event.target.value as TenantStatus)}><option value="provisioning">Provisioning</option><option value="active">Active</option></select></label>}</div>{error && <p className="dialog-error" role="alert">{error}</p>}<DialogActions pending={pending} submitLabel={tenant ? "Save tenant" : "Create tenant"} onClose={onClose} /></form></dialog>;
+}
+
+function UserEditor({ user, pending, error, onClose, onSave }: { user: AdminTenantUser | null; pending: boolean; error: string | null; onClose: () => void; onSave: (input: AdminTenantUserInput) => void }) {
+  const dialogRef = useModalDialog();
+  const [userId, setUserId] = useState(user?.user_id ?? "");
+  const [displayName, setDisplayName] = useState(user?.display_name ?? "");
+  const [email, setEmail] = useState(user?.email ?? "");
+  const [role, setRole] = useState<TenantUserRole>(user?.role ?? "member");
+  const [status, setStatus] = useState<TenantUserStatus>(user?.status === "deleted" ? "suspended" : user?.status ?? "invited");
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const common = { display_name: optional(displayName), email: optional(email), role, status };
+    onSave({ ...common, user_id: userId.trim() });
+  }
+  return <dialog ref={dialogRef} className="admin-dialog" aria-labelledby="user-editor-title" onCancel={onClose} onClose={onClose}><form onSubmit={submit}><DialogHeading id="user-editor-title" title={user ? "Edit tenant user" : "Add tenant user"} onClose={onClose} /><div className="admin-form-grid"><label>User ID <input required disabled={Boolean(user)} value={userId} onChange={(event) => setUserId(event.target.value)} /></label><label>Display name <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label><label className="wide">Email <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Role <select value={role} onChange={(event) => setRole(event.target.value as TenantUserRole)}><option value="owner">Owner</option><option value="admin">Admin</option><option value="member">Member</option><option value="viewer">Viewer</option></select></label><label>Status <select value={status} onChange={(event) => setStatus(event.target.value as TenantUserStatus)}><option value="invited">Invited</option><option value="active">Active</option><option value="suspended">Suspended</option></select></label></div>{error && <p className="dialog-error" role="alert">{error}</p>}<DialogActions pending={pending} submitLabel={user ? "Save user" : "Add user"} onClose={onClose} /></form></dialog>;
+}
+
+function ConfirmationDialog({ title, message, pending, error, onCancel, onConfirm }: { title: string; message: string; pending: boolean; error: string | null; onCancel: () => void; onConfirm: () => void }) {
+  const dialogRef = useModalDialog();
+  return <dialog ref={dialogRef} className="admin-dialog admin-confirm-dialog" aria-labelledby="removal-title" onCancel={onCancel} onClose={onCancel}><div><p className="eyebrow">Confirm removal</p><h2 id="removal-title">{title}</h2><p>{message}</p>{error && <p className="dialog-error" role="alert">{error}</p>}<div className="dialog-actions"><button type="button" className="button button-secondary" onClick={onCancel}>Cancel</button><button type="button" className="button button-danger" disabled={pending} onClick={onConfirm}>{pending ? "Removing…" : "Remove"}</button></div></div></dialog>;
+}
+
+function useModalDialog() {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+  }, []);
+  return dialogRef;
+}
+
+function DialogHeading({ id, title, onClose }: { id: string; title: string; onClose: () => void }) { return <header className="dialog-heading"><div><p className="eyebrow">Tenant administration</p><h2 id={id}>{title}</h2></div><button type="button" className="icon-button" aria-label="Close" onClick={onClose}>×</button></header>; }
+function DialogActions({ pending, submitLabel, onClose }: { pending: boolean; submitLabel: string; onClose: () => void }) { return <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={onClose}>Cancel</button><button type="submit" className="button button-primary" disabled={pending}>{pending ? "Saving…" : submitLabel}</button></div>; }
 function StatusPill({ status }: { status: TenantStatus }) { return <span className={`tenant-status ${status}`}>{status}</span>; }
 function Metric({ label, value, detail }: { label: string; value?: number; detail: string }) { return <article><span>{label}</span><strong>{value?.toLocaleString() ?? "—"}</strong><small>{detail}</small></article>; }
 function activeUsers(users: Array<{ status: string }> = []) { return users.filter((user) => user.status === "active").length; }
 function initials(value: string) { return value.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "T"; }
 function formatBytes(value?: number) { if (value === undefined) return "—"; if (value < 1024) return `${String(value)} B`; if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`; return `${(value / 1024 ** 2).toFixed(1)} MB`; }
+function optional(value: string) { return value.trim() || null; }
+function mutationError(error: unknown) { return error instanceof Error ? error.message : "The request failed. No changes were applied."; }
