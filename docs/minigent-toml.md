@@ -400,14 +400,20 @@ Provider key targets:
 | `max_bytes` | `MINIGENT_IMAGE_INPUT_MAX_BYTES` | Maximum base64-decoded size of each inline image in bytes. |
 | `max_images` | `MINIGENT_IMAGE_INPUT_MAX_IMAGES` | Maximum number of image parts in one message; defaults to 8. |
 | `max_total_bytes` | `MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES` | Maximum combined decoded size of inline images in one message; defaults to 20 MiB. |
+| `max_pixels` | `MINIGENT_IMAGE_INPUT_MAX_PIXELS` | Maximum width × height for PNG, JPEG, GIF, and WebP images; defaults to 64 million pixels. |
+| `max_dimension` | `MINIGENT_IMAGE_INPUT_MAX_DIMENSION` | Maximum width or height for PNG, JPEG, GIF, and WebP images; defaults to 16,384 pixels. |
 | `allowed_mime_types` | `MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES` | String or list of image MIME types; lists are converted to comma-separated env strings. |
 
 Image parts must use exactly one source. Inline `data` must be valid base64 and match known
-configured image signatures; remote URLs must be absolute HTTP(S) URLs. The browser streams raw
-image bodies to the binary attachment endpoint first and stores `attachment_id` references in
-message history. The original JSON/base64 upload endpoint remains available for compatibility.
-The browser preview lets users choose `auto`, `low`, or `high` detail per image; providers that
-support image detail receive that value, while other providers use their native/default behavior.
+configured image signatures; uploaded and inline PNG, JPEG, GIF, and WebP images must also contain
+readable dimensions within the configured pixel and edge limits. These header checks reject
+pathological dimensions before bytes are persisted or sent to a model provider. Explicitly
+configured formats without a built-in parser and remote HTTP(S) URLs remain subject to provider-side
+validation. The browser streams raw image bodies to the binary attachment endpoint first and stores
+`attachment_id` references in message history. The original JSON/base64 upload endpoint remains
+available for compatibility. The browser preview lets users choose `auto`, `low`, or `high` detail;
+providers that support image detail receive that value, while other providers use their
+native/default behavior.
 The dedicated camera action is shown only on coarse-pointer touch devices; desktop browsers retain
 the regular image picker because they commonly ignore the HTML camera-capture hint.
 

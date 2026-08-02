@@ -82,6 +82,8 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "max_bytes": "MINIGENT_IMAGE_INPUT_MAX_BYTES",
         "max_images": "MINIGENT_IMAGE_INPUT_MAX_IMAGES",
         "max_total_bytes": "MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES",
+        "max_pixels": "MINIGENT_IMAGE_INPUT_MAX_PIXELS",
+        "max_dimension": "MINIGENT_IMAGE_INPUT_MAX_DIMENSION",
         "allowed_mime_types": "MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES",
     },
     "attachments": {

@@ -45,6 +45,8 @@ enabled = false
 # max_bytes = 5242880
 # max_images = 8
 # max_total_bytes = 20971520
+# max_pixels = 64000000
+# max_dimension = 16384
 # allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
 
 [attachments]

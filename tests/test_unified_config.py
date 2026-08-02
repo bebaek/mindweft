@@ -121,6 +121,8 @@ enabled = true
 max_bytes = 1234
 max_images = 3
 max_total_bytes = 2468
+max_pixels = 4000000
+max_dimension = 4096
 allowed_mime_types = ["image/png", "image/webp"]
 
 [attachments]
@@ -242,6 +244,8 @@ max_payload_chars = 4096
     assert settings.image_input.max_bytes == 1234
     assert settings.image_input.max_images == 3
     assert settings.image_input.max_total_bytes == 2468
+    assert settings.image_input.max_pixels == 4_000_000
+    assert settings.image_input.max_dimension == 4096
     assert settings.image_input.allowed_mime_types == frozenset({"image/png", "image/webp"})
     assert settings.attachment_store.db_path == "attachments.db"
     assert settings.attachment_store.max_per_thread == 12

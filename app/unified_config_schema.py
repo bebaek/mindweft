@@ -71,6 +71,8 @@ class ImageInputConfig:
     max_bytes: object = None
     max_images: object = None
     max_total_bytes: object = None
+    max_pixels: object = None
+    max_dimension: object = None
     allowed_mime_types: object = None
 
 
@@ -284,6 +286,8 @@ _INT_KEYS = {
     "image_input.max_bytes",
     "image_input.max_images",
     "image_input.max_total_bytes",
+    "image_input.max_pixels",
+    "image_input.max_dimension",
     "attachments.max_per_thread",
     "attachments.max_bytes_per_thread",
     "coding.bridge_port",

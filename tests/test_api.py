@@ -232,6 +232,8 @@ def test_image_input_settings_from_env_mapping_parses_values() -> None:
             "MINIGENT_IMAGE_INPUT_MAX_BYTES": "1234",
             "MINIGENT_IMAGE_INPUT_MAX_IMAGES": "3",
             "MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES": "2468",
+            "MINIGENT_IMAGE_INPUT_MAX_PIXELS": "4000000",
+            "MINIGENT_IMAGE_INPUT_MAX_DIMENSION": "4096",
             "MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES": "image/png, image/avif",
         }
     )
@@ -241,6 +243,8 @@ def test_image_input_settings_from_env_mapping_parses_values() -> None:
         max_bytes=1234,
         max_images=3,
         max_total_bytes=2468,
+        max_pixels=4_000_000,
+        max_dimension=4096,
         allowed_mime_types=frozenset({"image/png", "image/avif"}),
     )
 
@@ -270,6 +274,8 @@ def test_config_reports_and_exports_image_input_settings(monkeypatch: pytest.Mon
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_BYTES", "1234")
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_IMAGES", "3")
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES", "2468")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_PIXELS", "4000000")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_DIMENSION", "4096")
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES", "image/png,image/webp")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
@@ -284,6 +290,8 @@ def test_config_reports_and_exports_image_input_settings(monkeypatch: pytest.Mon
         "max_bytes": 1234,
         "max_images": 3,
         "max_total_bytes": 2468,
+        "max_pixels": 4_000_000,
+        "max_dimension": 4096,
         "allowed_mime_types": ["image/png", "image/webp"],
     }
     assert body["unified_config_export"]["image_input"] == {
@@ -291,6 +299,8 @@ def test_config_reports_and_exports_image_input_settings(monkeypatch: pytest.Mon
         "max_bytes": 1234,
         "max_images": 3,
         "max_total_bytes": 2468,
+        "max_pixels": 4_000_000,
+        "max_dimension": 4096,
         "allowed_mime_types": ["image/png", "image/webp"],
     }
 
@@ -551,6 +561,41 @@ def test_binary_attachment_upload_enforces_type_and_stream_size(
     assert unsupported.json()["detail"] == "unsupported image MIME type: application/octet-stream"
     assert oversized.status_code == 400
     assert oversized.json()["detail"] == "image exceeds maximum allowed size"
+
+
+def test_binary_attachment_upload_enforces_pixel_and_dimension_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_PIXELS", "3")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    two_by_two_png = (
+        b"\x89PNG\r\n\x1a\n"
+        + (13).to_bytes(4, "big")
+        + b"IHDR"
+        + (2).to_bytes(4, "big")
+        + (2).to_bytes(4, "big")
+        + b"\x08\x06\x00\x00\x00"
+    )
+
+    excessive_pixels = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=two_by_two_png,
+        headers={**AUTH_HEADERS, "Content-Type": "image/png"},
+    )
+    malformed_header = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=b"\x89PNG\r\n\x1a\n",
+        headers={**AUTH_HEADERS, "Content-Type": "image/png"},
+    )
+
+    assert excessive_pixels.status_code == 400
+    assert excessive_pixels.json()["detail"] == "image exceeds maximum allowed pixel count (3)"
+    assert malformed_header.status_code == 400
+    assert malformed_header.json()["detail"] == "image dimensions could not be determined"
 
 
 def test_attachment_reference_is_scoped_to_thread(monkeypatch: pytest.MonkeyPatch) -> None:

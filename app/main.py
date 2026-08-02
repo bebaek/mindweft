@@ -49,6 +49,7 @@ from app.execution import (
     resolve_tenant_config_source,
 )
 from app.health import database_readiness_checks
+from app.image_validation import ImageDimensionError, enforce_image_dimensions
 from app.llm import LLMAdapter, build_llm_adapter_from_env
 from app.mcp_broker import (
     MCPBrokerSession,
@@ -276,6 +277,7 @@ def _validate_and_normalize_message_request(
                     status_code=400,
                     detail="image attachment MIME type does not match uploaded attachment",
                 )
+            _enforce_image_dimension_limits(record.data, mime_type, settings)
             total_image_bytes += record.metadata.size_bytes
         if part.url:
             parsed_url = urlsplit(part.url)
@@ -296,6 +298,7 @@ def _validate_and_normalize_message_request(
                     status_code=400,
                     detail=f"image data does not match declared MIME type: {part.mime_type}",
                 )
+            _enforce_image_dimension_limits(decoded, mime_type, settings)
             total_image_bytes += len(decoded)
         if total_image_bytes > settings.max_total_bytes:
             raise HTTPException(
@@ -327,6 +330,22 @@ async def _read_limited_request_body(request: Request, max_bytes: int) -> bytes:
             raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
         body.extend(chunk)
     return bytes(body)
+
+
+def _enforce_image_dimension_limits(
+    data: bytes,
+    mime_type: str,
+    settings: ImageInputSettings,
+) -> None:
+    try:
+        enforce_image_dimensions(
+            data,
+            mime_type,
+            max_pixels=settings.max_pixels,
+            max_dimension=settings.max_dimension,
+        )
+    except ImageDimensionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _image_bytes_match_mime_type(data: bytes, mime_type: str) -> bool:
@@ -990,6 +1009,7 @@ def create_app(
                 status_code=400,
                 detail=f"image data does not match declared MIME type: {normalized_mime_type}",
             )
+        _enforce_image_dimension_limits(data, normalized_mime_type, image_settings)
         attachment_settings = app_request.app.state.attachment_store_settings
         try:
             return app_request.app.state.attachment_store.put(
