@@ -76,6 +76,16 @@ textarea {
   cursor: pointer;
 }
 
+.camera-image-button {
+  display: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .camera-image-button {
+    display: flex;
+  }
+}
+
 .attach-image-button:hover {
   border-color: var(--accent);
 }

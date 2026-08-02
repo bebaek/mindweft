@@ -202,12 +202,15 @@ def _run_node_script(tmp_path: Path, repo_root: Path, name: str, source: str) ->
 def test_web_client_image_picker_uses_native_file_input_overlay() -> None:
     repo_root = Path(__file__).parents[1]
     html = (repo_root / "app" / "static" / "web" / "index.html").read_text(encoding="utf-8")
+    styles = (repo_root / "app" / "static" / "web" / "styles.css").read_text(encoding="utf-8")
 
     assert 'id="attach-image-button"' in html
     assert '<input id="image-input" type="file" accept="image/*" multiple />' in html
     assert 'id="camera-image-input"' in html
     assert 'capture="environment"' in html
-    assert "app.js?v=camera-input-1" in html
+    assert "app.js?v=camera-mobile-2" in html
+    assert ".camera-image-button {\n  display: none;" in styles
+    assert "@media (hover: none) and (pointer: coarse)" in styles
 
 
 def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:

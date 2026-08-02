@@ -408,6 +408,8 @@ image bodies to the binary attachment endpoint first and stores `attachment_id` 
 message history. The original JSON/base64 upload endpoint remains available for compatibility.
 The browser preview lets users choose `auto`, `low`, or `high` detail per image; providers that
 support image detail receive that value, while other providers use their native/default behavior.
+The dedicated camera action is shown only on coarse-pointer touch devices; desktop browsers retain
+the regular image picker because they commonly ignore the HTML camera-capture hint.
 
 ### `[attachments]`
 
