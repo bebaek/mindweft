@@ -4,7 +4,7 @@ import json
 import os
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any, Mapping, Protocol
@@ -21,6 +21,8 @@ ATTACHMENT_MAX_PER_THREAD_ENV = "MINIGENT_ATTACHMENT_MAX_PER_THREAD"
 ATTACHMENT_MAX_BYTES_PER_THREAD_ENV = "MINIGENT_ATTACHMENT_MAX_BYTES_PER_THREAD"
 ATTACHMENT_MAX_PER_TENANT_ENV = "MINIGENT_ATTACHMENT_MAX_PER_TENANT"
 ATTACHMENT_MAX_BYTES_PER_TENANT_ENV = "MINIGENT_ATTACHMENT_MAX_BYTES_PER_TENANT"
+ATTACHMENT_PENDING_TTL_SECONDS_ENV = "MINIGENT_ATTACHMENT_PENDING_TTL_SECONDS"
+ATTACHMENT_CLEANUP_INTERVAL_SECONDS_ENV = "MINIGENT_ATTACHMENT_CLEANUP_INTERVAL_SECONDS"
 ATTACHMENT_ENCRYPTION_KEY_ENV = "MINIGENT_ATTACHMENT_ENCRYPTION_KEY"
 ATTACHMENT_ENCRYPTION_KEYS_ENV = "MINIGENT_ATTACHMENT_ENCRYPTION_KEYS"
 ATTACHMENT_KEY_VERSION_ENV = "MINIGENT_ATTACHMENT_KEY_VERSION"
@@ -29,6 +31,8 @@ DEFAULT_ATTACHMENT_MAX_PER_THREAD = 100
 DEFAULT_ATTACHMENT_MAX_BYTES_PER_THREAD = 256 * 1024 * 1024
 DEFAULT_ATTACHMENT_MAX_PER_TENANT = 1_000
 DEFAULT_ATTACHMENT_MAX_BYTES_PER_TENANT = 1024 * 1024 * 1024
+DEFAULT_ATTACHMENT_PENDING_TTL_SECONDS = 24 * 60 * 60
+DEFAULT_ATTACHMENT_CLEANUP_INTERVAL_SECONDS = 15 * 60
 _NONCE_BYTES = 12
 
 
@@ -65,6 +69,8 @@ class AttachmentStoreSettings:
     max_bytes_per_thread: int = DEFAULT_ATTACHMENT_MAX_BYTES_PER_THREAD
     max_per_tenant: int = DEFAULT_ATTACHMENT_MAX_PER_TENANT
     max_bytes_per_tenant: int = DEFAULT_ATTACHMENT_MAX_BYTES_PER_TENANT
+    pending_ttl_seconds: int = DEFAULT_ATTACHMENT_PENDING_TTL_SECONDS
+    cleanup_interval_seconds: int = DEFAULT_ATTACHMENT_CLEANUP_INTERVAL_SECONDS
     encryption_key: bytes | None = field(default=None, repr=False)
     decryption_keys: Mapping[int, bytes] = field(default_factory=dict, repr=False)
     key_version: int = 1
@@ -122,6 +128,16 @@ class AttachmentStoreSettings:
                 ATTACHMENT_MAX_BYTES_PER_TENANT_ENV,
                 DEFAULT_ATTACHMENT_MAX_BYTES_PER_TENANT,
             ),
+            pending_ttl_seconds=_positive_int_env(
+                lookup,
+                ATTACHMENT_PENDING_TTL_SECONDS_ENV,
+                DEFAULT_ATTACHMENT_PENDING_TTL_SECONDS,
+            ),
+            cleanup_interval_seconds=_positive_int_env(
+                lookup,
+                ATTACHMENT_CLEANUP_INTERVAL_SECONDS_ENV,
+                DEFAULT_ATTACHMENT_CLEANUP_INTERVAL_SECONDS,
+            ),
             encryption_key=encryption_key,
             decryption_keys=decryption_keys,
             key_version=key_version,
@@ -142,6 +158,7 @@ class AttachmentStore(Protocol):
         max_bytes_per_thread: int | None = None,
         max_per_tenant: int | None = None,
         max_bytes_per_tenant: int | None = None,
+        pending_ttl_seconds: int | None = None,
     ) -> AttachmentMetadata: ...
 
     def get(
@@ -152,6 +169,14 @@ class AttachmentStore(Protocol):
 
     def tenant_usage(self, tenant_id: str) -> tuple[int, int]: ...
 
+    def mark_referenced(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool: ...
+
+    def unmark_referenced(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool: ...
+
+    def delete_unreferenced(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool: ...
+
+    def delete_expired_pending(self, *, now: datetime | None = None) -> int: ...
+
     def delete(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool: ...
 
     def delete_thread(self, tenant_id: str, thread_id: str) -> int: ...
@@ -160,6 +185,8 @@ class AttachmentStore(Protocol):
 class InMemoryAttachmentStore:
     def __init__(self) -> None:
         self._records: dict[tuple[str, str, str], AttachmentRecord] = {}
+        self._reference_counts: dict[tuple[str, str, str], int] = {}
+        self._expires_at: dict[tuple[str, str, str], datetime | None] = {}
         self._lock = RLock()
 
     def put(
@@ -174,6 +201,7 @@ class InMemoryAttachmentStore:
         max_bytes_per_thread: int | None = None,
         max_per_tenant: int | None = None,
         max_bytes_per_tenant: int | None = None,
+        pending_ttl_seconds: int | None = None,
     ) -> AttachmentMetadata:
         metadata = AttachmentMetadata(
             attachment_id=str(uuid4()),
@@ -196,9 +224,15 @@ class InMemoryAttachmentStore:
                 max_per_tenant=max_per_tenant,
                 max_bytes_per_tenant=max_bytes_per_tenant,
             )
-            self._records[(tenant_id, thread_id, metadata.attachment_id)] = AttachmentRecord(
+            key = (tenant_id, thread_id, metadata.attachment_id)
+            self._records[key] = AttachmentRecord(
                 metadata=metadata,
                 data=bytes(data),
+            )
+            self._reference_counts[key] = 0
+            self._expires_at[key] = _pending_expiration(
+                metadata.created_at,
+                pending_ttl_seconds,
             )
         return metadata
 
@@ -224,15 +258,63 @@ class InMemoryAttachmentStore:
         with self._lock:
             return self._tenant_usage_unlocked(tenant_id)
 
-    def delete(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
+    def mark_referenced(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
+        key = (tenant_id, thread_id, attachment_id)
         with self._lock:
-            return self._records.pop((tenant_id, thread_id, attachment_id), None) is not None
+            if key not in self._records:
+                return False
+            self._reference_counts[key] += 1
+            return True
+
+    def unmark_referenced(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
+        key = (tenant_id, thread_id, attachment_id)
+        with self._lock:
+            if key not in self._records:
+                return False
+            if self._reference_counts[key] > 0:
+                self._reference_counts[key] -= 1
+            return True
+
+    def delete_unreferenced(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
+        key = (tenant_id, thread_id, attachment_id)
+        with self._lock:
+            if key not in self._records or self._reference_counts[key] != 0:
+                return False
+            self._delete_key_unlocked(key)
+            return True
+
+    def delete_expired_pending(self, *, now: datetime | None = None) -> int:
+        cutoff = _utc_now() if now is None else _ensure_utc(now)
+        with self._lock:
+            keys = [
+                key
+                for key, expires_at in self._expires_at.items()
+                if self._reference_counts[key] == 0
+                and expires_at is not None
+                and expires_at <= cutoff
+            ]
+            for key in keys:
+                self._delete_key_unlocked(key)
+            return len(keys)
+
+    def _delete_key_unlocked(self, key: tuple[str, str, str]) -> None:
+        del self._records[key]
+        self._reference_counts.pop(key, None)
+        self._expires_at.pop(key, None)
+
+    def delete(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
+        key = (tenant_id, thread_id, attachment_id)
+        with self._lock:
+            if key not in self._records:
+                return False
+            self._delete_key_unlocked(key)
+            return True
 
     def delete_thread(self, tenant_id: str, thread_id: str) -> int:
         with self._lock:
             keys = [key for key in self._records if key[:2] == (tenant_id, thread_id)]
             for key in keys:
-                del self._records[key]
+                self._delete_key_unlocked(key)
             return len(keys)
 
 
@@ -290,7 +372,9 @@ class SQLiteAttachmentStore:
                     created_at TEXT NOT NULL,
                     data BLOB NOT NULL,
                     nonce BLOB,
-                    key_version INTEGER
+                    key_version INTEGER,
+                    reference_count INTEGER,
+                    expires_at TEXT
                 )
                 """
             )
@@ -299,9 +383,17 @@ class SQLiteAttachmentStore:
                 connection.execute("ALTER TABLE attachments ADD COLUMN nonce BLOB")
             if "key_version" not in columns:
                 connection.execute("ALTER TABLE attachments ADD COLUMN key_version INTEGER")
+            if "reference_count" not in columns:
+                connection.execute("ALTER TABLE attachments ADD COLUMN reference_count INTEGER")
+            if "expires_at" not in columns:
+                connection.execute("ALTER TABLE attachments ADD COLUMN expires_at TEXT")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_attachments_scope "
                 "ON attachments (tenant_id, thread_id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_attachments_pending "
+                "ON attachments (expires_at) WHERE reference_count = 0"
             )
             versions = {
                 int(row[0])
@@ -339,6 +431,7 @@ class SQLiteAttachmentStore:
         max_bytes_per_thread: int | None = None,
         max_per_tenant: int | None = None,
         max_bytes_per_tenant: int | None = None,
+        pending_ttl_seconds: int | None = None,
     ) -> AttachmentMetadata:
         metadata = AttachmentMetadata(
             attachment_id=str(uuid4()),
@@ -348,6 +441,7 @@ class SQLiteAttachmentStore:
             created_by=created_by,
         )
         created_at = metadata.created_at.isoformat()
+        expires_at = _pending_expiration(metadata.created_at, pending_ttl_seconds)
         stored_data = data
         nonce: bytes | None = None
         key_version = self._active_key_version
@@ -388,8 +482,9 @@ class SQLiteAttachmentStore:
                 """
                 INSERT INTO attachments (
                     attachment_id, tenant_id, thread_id, mime_type,
-                    size_bytes, created_by, created_at, data, nonce, key_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    size_bytes, created_by, created_at, data, nonce, key_version,
+                    reference_count, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     metadata.attachment_id,
@@ -402,6 +497,8 @@ class SQLiteAttachmentStore:
                     stored_data,
                     nonce,
                     key_version,
+                    0,
+                    expires_at.isoformat() if expires_at is not None else None,
                 ),
             )
         return metadata
@@ -542,6 +639,61 @@ class SQLiteAttachmentStore:
         with self._lock, self._connection() as connection:
             return self._tenant_usage_with_connection(connection, tenant_id)
 
+    def mark_referenced(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE attachments
+                SET reference_count = CASE
+                    WHEN reference_count IS NULL THEN -1
+                    WHEN reference_count < 0 THEN reference_count
+                    ELSE reference_count + 1
+                END
+                WHERE tenant_id = ? AND thread_id = ? AND attachment_id = ?
+                """,
+                (tenant_id, thread_id, attachment_id),
+            )
+            return cursor.rowcount > 0
+
+    def unmark_referenced(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE attachments
+                SET reference_count = CASE
+                    WHEN reference_count > 0 THEN reference_count - 1
+                    ELSE reference_count
+                END
+                WHERE tenant_id = ? AND thread_id = ? AND attachment_id = ?
+                """,
+                (tenant_id, thread_id, attachment_id),
+            )
+            return cursor.rowcount > 0
+
+    def delete_unreferenced(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM attachments
+                WHERE tenant_id = ? AND thread_id = ? AND attachment_id = ?
+                  AND reference_count = 0
+                """,
+                (tenant_id, thread_id, attachment_id),
+            )
+            return cursor.rowcount > 0
+
+    def delete_expired_pending(self, *, now: datetime | None = None) -> int:
+        cutoff = _utc_now() if now is None else _ensure_utc(now)
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM attachments
+                WHERE reference_count = 0 AND expires_at IS NOT NULL AND expires_at <= ?
+                """,
+                (cutoff.isoformat(),),
+            )
+            return cursor.rowcount
+
     def delete(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
         with self._lock, self._connection() as connection:
             cursor = connection.execute(
@@ -560,6 +712,24 @@ class SQLiteAttachmentStore:
                 (tenant_id, thread_id),
             )
             return cursor.rowcount
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _ensure_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _pending_expiration(created_at: datetime, ttl_seconds: int | None) -> datetime | None:
+    if ttl_seconds is None:
+        return None
+    if ttl_seconds < 1:
+        raise ValueError("attachment pending TTL must be positive")
+    return _ensure_utc(created_at) + timedelta(seconds=ttl_seconds)
 
 
 def _attachment_associated_data(

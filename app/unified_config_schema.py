@@ -83,6 +83,8 @@ class AttachmentConfig:
     max_bytes_per_thread: object = None
     max_per_tenant: object = None
     max_bytes_per_tenant: object = None
+    pending_ttl_seconds: object = None
+    cleanup_interval_seconds: object = None
 
 
 @dataclass(frozen=True)
@@ -294,6 +296,8 @@ _INT_KEYS = {
     "attachments.max_bytes_per_thread",
     "attachments.max_per_tenant",
     "attachments.max_bytes_per_tenant",
+    "attachments.pending_ttl_seconds",
+    "attachments.cleanup_interval_seconds",
     "coding.bridge_port",
     "coding.mcp_gateway_port",
     "quality.max_payload_chars",

@@ -92,6 +92,8 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "max_bytes_per_thread": "MINIGENT_ATTACHMENT_MAX_BYTES_PER_THREAD",
         "max_per_tenant": "MINIGENT_ATTACHMENT_MAX_PER_TENANT",
         "max_bytes_per_tenant": "MINIGENT_ATTACHMENT_MAX_BYTES_PER_TENANT",
+        "pending_ttl_seconds": "MINIGENT_ATTACHMENT_PENDING_TTL_SECONDS",
+        "cleanup_interval_seconds": "MINIGENT_ATTACHMENT_CLEANUP_INTERVAL_SECONDS",
     },
     "coding": {
         "enabled": "MINIGENT_CODING_MCP_GATEWAY_ENABLED",

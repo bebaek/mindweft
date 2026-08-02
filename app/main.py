@@ -131,6 +131,22 @@ def _peer_task_retry_delay(attempts: int) -> float:
     return min(300.0, float(2 ** min(max(attempts, 1), 8)))
 
 
+async def _cleanup_pending_attachments_periodically(
+    store: AttachmentStore,
+    *,
+    interval_seconds: float,
+) -> None:
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            deleted = await asyncio.to_thread(store.delete_expired_pending)
+        except Exception:  # pragma: no cover - defensive background boundary
+            logger.exception("attachment.pending_cleanup_failed")
+            continue
+        if deleted:
+            logger.info("attachment.pending_cleanup deleted=%s", deleted)
+
+
 async def _recover_stale_runs_periodically(
     store: ThreadStore,
     peer_agent_registry: PeerAgentRegistry | None = None,
@@ -585,15 +601,23 @@ def create_app(
                 app.state.peer_agent_registry,
             )
         )
+        attachment_cleanup_task = asyncio.create_task(
+            _cleanup_pending_attachments_periodically(
+                app.state.attachment_store,
+                interval_seconds=app.state.attachment_store_settings.cleanup_interval_seconds,
+            )
+        )
         try:
             yield
         finally:
             await _drain_active_runs(app)
             stale_recovery_task.cancel()
-            try:
-                await stale_recovery_task
-            except asyncio.CancelledError:
-                pass
+            attachment_cleanup_task.cancel()
+            for task in (stale_recovery_task, attachment_cleanup_task):
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
             if mcp_manager is not None:
                 await mcp_manager.stop()
 
@@ -1013,8 +1037,10 @@ def create_app(
             )
         _enforce_image_dimension_limits(data, normalized_mime_type, image_settings)
         attachment_settings = app_request.app.state.attachment_store_settings
+        attachment_store = app_request.app.state.attachment_store
+        attachment_store.delete_expired_pending()
         try:
-            return app_request.app.state.attachment_store.put(
+            return attachment_store.put(
                 principal.tenant_id,
                 thread_id,
                 mime_type=normalized_mime_type,
@@ -1024,6 +1050,7 @@ def create_app(
                 max_bytes_per_thread=attachment_settings.max_bytes_per_thread,
                 max_per_tenant=attachment_settings.max_per_tenant,
                 max_bytes_per_tenant=attachment_settings.max_bytes_per_tenant,
+                pending_ttl_seconds=attachment_settings.pending_ttl_seconds,
             )
         except AttachmentLimitExceeded as exc:
             detail = {
@@ -1120,12 +1147,22 @@ def create_app(
             raise HTTPException(
                 status_code=409, detail="attachment is referenced by message history"
             )
-        deleted = app_request.app.state.attachment_store.delete(
+        deleted = app_request.app.state.attachment_store.delete_unreferenced(
             principal.tenant_id,
             thread_id,
             attachment_id,
         )
         if not deleted:
+            existing = app_request.app.state.attachment_store.get(
+                principal.tenant_id,
+                thread_id,
+                attachment_id,
+            )
+            if existing is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="attachment is referenced by message history",
+                )
             raise HTTPException(status_code=404, detail="attachment not found")
 
     @app.post("/threads/{thread_id}/messages", response_model=Message)
@@ -1174,17 +1211,47 @@ def create_app(
                     )
                 else:
                     protected_parts.append(part)
-        stored_message = app_request.app.state.store.append_message(
-            principal.tenant_id,
-            Message(
-                thread_id=thread_id,
-                role=MessageRole.USER,
-                content=protected_content,
-                parts=protected_parts,
-                created_by=principal.user_id,
-                metadata=request.metadata,
-            ),
-        )
+        attachment_ids = [
+            part.attachment_id
+            for part in (protected_parts or [])
+            if part.type == "image" and part.attachment_id is not None
+        ]
+        marked_attachment_ids: list[str] = []
+        for attachment_id in attachment_ids:
+            marked = app_request.app.state.attachment_store.mark_referenced(
+                principal.tenant_id,
+                thread_id,
+                attachment_id,
+            )
+            if not marked:
+                for marked_id in marked_attachment_ids:
+                    app_request.app.state.attachment_store.unmark_referenced(
+                        principal.tenant_id,
+                        thread_id,
+                        marked_id,
+                    )
+                raise HTTPException(status_code=400, detail="image attachment_id is invalid")
+            marked_attachment_ids.append(attachment_id)
+        try:
+            stored_message = app_request.app.state.store.append_message(
+                principal.tenant_id,
+                Message(
+                    thread_id=thread_id,
+                    role=MessageRole.USER,
+                    content=protected_content,
+                    parts=protected_parts,
+                    created_by=principal.user_id,
+                    metadata=request.metadata,
+                ),
+            )
+        except Exception:
+            for attachment_id in marked_attachment_ids:
+                app_request.app.state.attachment_store.unmark_referenced(
+                    principal.tenant_id,
+                    thread_id,
+                    attachment_id,
+                )
+            raise
         return app_request.app.state.runtime.render_messages_for_user(
             principal,
             thread_id,

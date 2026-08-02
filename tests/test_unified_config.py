@@ -131,6 +131,8 @@ max_per_thread = 12
 max_bytes_per_thread = 3456
 max_per_tenant = 78
 max_bytes_per_tenant = 9012
+pending_ttl_seconds = 34
+cleanup_interval_seconds = 56
 
 [mcp]
 servers = [{ name = "filesystem", url = "http://127.0.0.1:8765/mcp", headers = {} }]
@@ -254,6 +256,8 @@ max_payload_chars = 4096
     assert settings.attachment_store.max_bytes_per_thread == 3456
     assert settings.attachment_store.max_per_tenant == 78
     assert settings.attachment_store.max_bytes_per_tenant == 9012
+    assert settings.attachment_store.pending_ttl_seconds == 34
+    assert settings.attachment_store.cleanup_interval_seconds == 56
     assert settings.mcp.servers[0].name == "filesystem"
     assert settings.peer_agents.agents[0].name == "local-agent"
     assert settings.logging.level == "DEBUG"

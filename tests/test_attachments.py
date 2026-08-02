@@ -1,6 +1,7 @@
 import base64
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Barrier
 
@@ -25,6 +26,8 @@ def test_attachment_store_settings_from_env() -> None:
     assert defaults.max_bytes_per_thread == 256 * 1024 * 1024
     assert defaults.max_per_tenant == 1_000
     assert defaults.max_bytes_per_tenant == 1024 * 1024 * 1024
+    assert defaults.pending_ttl_seconds == 24 * 60 * 60
+    assert defaults.cleanup_interval_seconds == 15 * 60
     assert AttachmentStoreSettings.from_env(
         {
             "MINIGENT_ATTACHMENT_DB_PATH": "/data/attachments.db",
@@ -32,6 +35,8 @@ def test_attachment_store_settings_from_env() -> None:
             "MINIGENT_ATTACHMENT_MAX_BYTES_PER_THREAD": "3456",
             "MINIGENT_ATTACHMENT_MAX_PER_TENANT": "78",
             "MINIGENT_ATTACHMENT_MAX_BYTES_PER_TENANT": "9012",
+            "MINIGENT_ATTACHMENT_PENDING_TTL_SECONDS": "34",
+            "MINIGENT_ATTACHMENT_CLEANUP_INTERVAL_SECONDS": "56",
         }
     ) == AttachmentStoreSettings(
         db_path="/data/attachments.db",
@@ -39,6 +44,8 @@ def test_attachment_store_settings_from_env() -> None:
         max_bytes_per_thread=3456,
         max_per_tenant=78,
         max_bytes_per_tenant=9012,
+        pending_ttl_seconds=34,
+        cleanup_interval_seconds=56,
     )
 
 
@@ -110,7 +117,16 @@ def test_sqlite_attachment_store_migrates_pre_encryption_schema(tmp_path: Path) 
     assert record.data == b"legacy"
     with sqlite3.connect(path) as connection:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(attachments)")}
-    assert {"nonce", "key_version"} <= columns
+    assert {"nonce", "key_version", "reference_count", "expires_at"} <= columns
+    assert store.delete_expired_pending(now=datetime(2100, 1, 1, tzinfo=timezone.utc)) == 0
+    assert store.mark_referenced("tenant-1", "thread-1", "legacy-1") is True
+    assert store.unmark_referenced("tenant-1", "thread-1", "legacy-1") is True
+    assert store.delete_unreferenced("tenant-1", "thread-1", "legacy-1") is False
+    with sqlite3.connect(path) as connection:
+        reference_count = connection.execute(
+            "SELECT reference_count FROM attachments WHERE attachment_id = 'legacy-1'"
+        ).fetchone()[0]
+    assert reference_count == -1
 
 
 def test_sqlite_attachment_store_encrypts_and_authenticates_data(tmp_path: Path) -> None:
@@ -209,6 +225,53 @@ def test_sqlite_attachment_store_persists_and_scopes_records(tmp_path: Path) -> 
     assert second.tenant_usage("tenant-1") == (1, len(b"image-bytes"))
     assert second.get("tenant-1", "thread-2", metadata.attachment_id) is None
     assert second.get("tenant-2", "thread-1", metadata.attachment_id) is None
+
+
+def test_attachment_stores_expire_only_unreferenced_pending_uploads(tmp_path: Path) -> None:
+    stores = [InMemoryAttachmentStore(), SQLiteAttachmentStore(tmp_path / "pending.db")]
+    for store in stores:
+        metadata = store.put(
+            "tenant-1",
+            "thread-1",
+            mime_type="image/png",
+            data=b"pending-image",
+            created_by="user-1",
+            pending_ttl_seconds=60,
+        )
+        before_expiry = metadata.created_at + timedelta(seconds=59)
+        after_expiry = metadata.created_at + timedelta(seconds=61)
+
+        assert store.delete_expired_pending(now=before_expiry) == 0
+        assert store.mark_referenced("tenant-1", "thread-1", metadata.attachment_id) is True
+        assert store.delete_expired_pending(now=after_expiry) == 0
+        assert store.delete_unreferenced("tenant-1", "thread-1", metadata.attachment_id) is False
+        assert store.unmark_referenced("tenant-1", "thread-1", metadata.attachment_id) is True
+        assert store.delete_expired_pending(now=after_expiry) == 1
+        assert store.get("tenant-1", "thread-1", metadata.attachment_id) is None
+
+
+def test_sqlite_pending_cleanup_is_atomic_across_instances(tmp_path: Path) -> None:
+    path = tmp_path / "pending-shared.db"
+    stores = [SQLiteAttachmentStore(path), SQLiteAttachmentStore(path)]
+    metadata = stores[0].put(
+        "tenant-1",
+        "thread-1",
+        mime_type="image/png",
+        data=b"pending-image",
+        created_by="user-1",
+        pending_ttl_seconds=1,
+    )
+    barrier = Barrier(2)
+
+    def cleanup(store: SQLiteAttachmentStore) -> int:
+        barrier.wait()
+        return store.delete_expired_pending(now=metadata.created_at + timedelta(seconds=2))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        deleted = list(executor.map(cleanup, stores))
+
+    assert sorted(deleted) == [0, 1]
+    assert stores[0].get("tenant-1", "thread-1", metadata.attachment_id) is None
 
 
 def test_attachment_stores_enforce_limits_atomically(tmp_path: Path) -> None:
