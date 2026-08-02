@@ -27,7 +27,7 @@ type DomainAction =
   | { kind: "delete"; domainId: string };
 
 export function AdminPage() {
-  const { api, authentication } = useAuth();
+  const { api, authentication, session } = useAuth();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [selection, setSelection] = useState<string | null>(null);
@@ -247,16 +247,16 @@ export function AdminPage() {
         </div>
       </div>
 
-      {tenantEditor && <TenantEditor key={`${tenantEditor}-${tenant?.id ?? "new"}`} tenant={tenantEditor === "edit" ? tenant : null} pending={tenantSave.isPending} error={tenantSave.isError ? mutationError(tenantSave.error) : null} onClose={() => setTenantEditor(null)} onSave={(input) => tenantSave.mutate(tenantEditor === "create" ? { mode: "create", input } : { mode: "edit", input })} />}
-      {userEditor && tenant && <UserEditor key={userEditor === "create" ? "new-user" : userEditor.id} user={userEditor === "create" ? null : userEditor} pending={userSave.isPending} error={userSave.isError ? mutationError(userSave.error) : null} onClose={() => setUserEditor(null)} onSave={(input) => userSave.mutate(userEditor === "create" ? { mode: "create", input } : { mode: "edit", userId: userEditor.id, input })} />}
+      {tenantEditor && <TenantEditor key={`${tenantEditor}-${tenant?.id ?? "new"}`} tenant={tenantEditor === "edit" ? tenant : null} defaultId={tenants.data?.total === 0 ? session.principal?.tenant_id : undefined} pending={tenantSave.isPending} error={tenantSave.isError ? mutationError(tenantSave.error) : null} onClose={() => setTenantEditor(null)} onSave={(input) => tenantSave.mutate(tenantEditor === "create" ? { mode: "create", input } : { mode: "edit", input })} />}
+      {userEditor && tenant && <UserEditor key={userEditor === "create" ? "new-user" : userEditor.id} user={userEditor === "create" ? null : userEditor} defaultUserId={visibleUsers.length === 0 ? session.principal?.user_id : undefined} pending={userSave.isPending} error={userSave.isError ? mutationError(userSave.error) : null} onClose={() => setUserEditor(null)} onSave={(input) => userSave.mutate(userEditor === "create" ? { mode: "create", input } : { mode: "edit", userId: userEditor.id, input })} />}
       {pendingRemoval && <ConfirmationDialog title={pendingRemoval.kind === "user" ? "Remove tenant user?" : "Remove tenant domain?"} message={pendingRemoval.kind === "user" ? `${pendingRemoval.label} will immediately lose access to this tenant.` : `${pendingRemoval.label} will no longer route users to this tenant.`} pending={userDelete.isPending || domainChange.isPending} error={(userDelete.isError && mutationError(userDelete.error)) || (domainChange.isError && mutationError(domainChange.error)) || null} onCancel={() => setPendingRemoval(null)} onConfirm={() => pendingRemoval.kind === "user" ? userDelete.mutate(pendingRemoval.id) : domainChange.mutate({ kind: "delete", domainId: pendingRemoval.id })} />}
     </section>
   );
 }
 
-function TenantEditor({ tenant, pending, error, onClose, onSave }: { tenant: AdminTenant | null; pending: boolean; error: string | null; onClose: () => void; onSave: (input: AdminTenantInput) => void }) {
+function TenantEditor({ tenant, defaultId, pending, error, onClose, onSave }: { tenant: AdminTenant | null; defaultId?: string; pending: boolean; error: string | null; onClose: () => void; onSave: (input: AdminTenantInput) => void }) {
   const dialogRef = useModalDialog();
-  const [id, setId] = useState("");
+  const [id, setId] = useState(defaultId ?? "");
   const [slug, setSlug] = useState(tenant?.slug ?? "");
   const [name, setName] = useState(tenant?.name ?? "");
   const [plan, setPlan] = useState(tenant?.plan ?? "");
@@ -270,13 +270,13 @@ function TenantEditor({ tenant, pending, error, onClose, onSave }: { tenant: Adm
   return <dialog ref={dialogRef} className="admin-dialog" aria-labelledby="tenant-editor-title" onCancel={onClose} onClose={onClose}><form onSubmit={submit}><DialogHeading id="tenant-editor-title" title={tenant ? "Edit tenant" : "Create tenant"} onClose={onClose} /><div className="admin-form-grid">{!tenant && <label>Tenant ID <input value={id} onChange={(event) => setId(event.target.value)} placeholder="Generated when blank" /></label>}<label>Slug <input required pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?" value={slug} onChange={(event) => setSlug(event.target.value)} placeholder="acme-corp" /></label><label className="wide">Name <input required value={name} onChange={(event) => setName(event.target.value)} /></label><label>Plan <input value={plan} onChange={(event) => setPlan(event.target.value)} placeholder="enterprise" /></label><label>Region <input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="us-east" /></label>{!tenant && <label>Status <select value={status} onChange={(event) => setStatus(event.target.value as TenantStatus)}><option value="provisioning">Provisioning</option><option value="active">Active</option></select></label>}</div>{error && <p className="dialog-error" role="alert">{error}</p>}<DialogActions pending={pending} submitLabel={tenant ? "Save tenant" : "Create tenant"} onClose={onClose} /></form></dialog>;
 }
 
-function UserEditor({ user, pending, error, onClose, onSave }: { user: AdminTenantUser | null; pending: boolean; error: string | null; onClose: () => void; onSave: (input: AdminTenantUserInput) => void }) {
+function UserEditor({ user, defaultUserId, pending, error, onClose, onSave }: { user: AdminTenantUser | null; defaultUserId?: string; pending: boolean; error: string | null; onClose: () => void; onSave: (input: AdminTenantUserInput) => void }) {
   const dialogRef = useModalDialog();
-  const [userId, setUserId] = useState(user?.user_id ?? "");
+  const [userId, setUserId] = useState(user?.user_id ?? defaultUserId ?? "");
   const [displayName, setDisplayName] = useState(user?.display_name ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
-  const [role, setRole] = useState<TenantUserRole>(user?.role ?? "member");
-  const [status, setStatus] = useState<TenantUserStatus>(user?.status === "deleted" ? "suspended" : user?.status ?? "invited");
+  const [role, setRole] = useState<TenantUserRole>(user?.role ?? (defaultUserId ? "owner" : "member"));
+  const [status, setStatus] = useState<TenantUserStatus>(user?.status === "deleted" ? "suspended" : user?.status ?? (defaultUserId ? "active" : "invited"));
   function submit(event: FormEvent) {
     event.preventDefault();
     const common = { display_name: optional(displayName), email: optional(email), role, status };

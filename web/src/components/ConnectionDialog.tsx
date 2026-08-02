@@ -114,7 +114,7 @@ export function ConnectionDialog({
           <label className="field">Bearer token<input required type="password" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} /></label>
         )}
         {mode === "session" && (
-          <p className="callout">Requests use same-origin cookies. The session endpoint will be connected when the production identity provider is selected.</p>
+          <p className="callout">Requests use a secure, same-origin session cookie. Sign out from the connection control in the application header.</p>
         )}
 
         <div className="dialog-actions">

@@ -5,6 +5,7 @@ import { ConnectionDialog } from "./components/ConnectionDialog";
 import { OverviewPage } from "./pages/OverviewPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 import { AdminPage } from "./pages/AdminPage";
+import { LoginPage } from "./pages/LoginPage";
 
 type Page = "overview" | "workspace" | "admin";
 
@@ -18,8 +19,15 @@ export function App() {
   const [page, setPage] = useState<Page>("overview");
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const { authentication, setAuthentication } = useAuth();
+  const { authentication, setAuthentication, session, logout } = useAuth();
   const queryClient = useQueryClient();
+
+  if (authentication.mode === "session" && session.loading) {
+    return <main className="login-page"><p className="session-loading">Checking secure session…</p></main>;
+  }
+  if (authentication.mode === "session" && session.enabled && !session.authenticated) {
+    return <LoginPage />;
+  }
 
   function navigate(nextPage: Page) {
     setPage(nextPage);
@@ -46,8 +54,19 @@ export function App() {
         <header className="topbar">
           <button className="menu-button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation">☰</button>
           <div><strong>{pages[page].label}</strong><small>{pages[page].description}</small></div>
-          <button className="connection-button" onClick={() => setConnectionOpen(true)}>
-            <span className="connection-indicator" /><span>{authLabel(authentication.mode)}</span><small>Configure</small>
+          <button
+            className="connection-button"
+            onClick={() => {
+              if (authentication.mode === "session" && session.authenticated) {
+                void logout().then(() => queryClient.clear());
+              } else {
+                setConnectionOpen(true);
+              }
+            }}
+          >
+            <span className="connection-indicator" />
+            <span>{sessionLabel(authentication.mode, session.principal?.user_id)}</span>
+            <small>{authentication.mode === "session" && session.authenticated ? "Sign out" : "Configure"}</small>
           </button>
         </header>
         <main id="main-content">
@@ -68,6 +87,11 @@ export function App() {
       />
     </div>
   );
+}
+
+function sessionLabel(mode: "session" | "development" | "bearer", userId?: string) {
+  if (mode === "session" && userId) return userId;
+  return authLabel(mode);
 }
 
 function authLabel(mode: "session" | "development" | "bearer") {

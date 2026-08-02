@@ -3,6 +3,18 @@ export type Authentication =
   | { mode: "development"; tenantId: string; userId: string; isAdmin: boolean }
   | { mode: "bearer"; token: string };
 
+export interface SessionPrincipal {
+  user_id: string;
+  tenant_id: string;
+  is_admin: boolean;
+}
+
+export interface SessionStatusResponse {
+  enabled: boolean;
+  authenticated: boolean;
+  principal?: SessionPrincipal | null;
+}
+
 export interface HealthResponse {
   status: "ok";
 }
@@ -452,6 +464,21 @@ export class MinigentApiClient {
 
   getReadiness(signal?: AbortSignal): Promise<ReadinessResponse> {
     return this.#request<ReadinessResponse>("/health/ready", { signal });
+  }
+
+  getSession(signal?: AbortSignal): Promise<SessionStatusResponse> {
+    return this.#request<SessionStatusResponse>("/auth/session", { signal });
+  }
+
+  login(username: string, password: string): Promise<SessionStatusResponse> {
+    return this.#request<SessionStatusResponse>("/auth/session", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+  }
+
+  logout(): Promise<void> {
+    return this.#request<void>("/auth/session", { method: "DELETE" });
   }
 
   getExecutionOptions(signal?: AbortSignal): Promise<ExecutionOptionsResponse> {

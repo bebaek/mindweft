@@ -23,6 +23,27 @@ describe("MinigentApiClient", () => {
     expect(headers.has("X-Minigent-User-Id")).toBe(false);
   });
 
+  it("creates and clears same-origin sessions", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) =>
+      Promise.resolve(
+        new Response(
+          init?.method === "DELETE"
+            ? null
+            : JSON.stringify({ enabled: true, authenticated: true, principal: { user_id: "admin", tenant_id: "platform", is_admin: true } }),
+          { status: init?.method === "DELETE" ? 204 : 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const client = new MinigentApiClient({ mode: "session" });
+
+    await client.login("admin", "secret");
+    await client.logout();
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/auth/session");
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "POST", credentials: "include", body: JSON.stringify({ username: "admin", password: "secret" }) }));
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: "DELETE", credentials: "include" }));
+  });
+
   it("adds explicit development principal headers", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ status: "ok" }), {

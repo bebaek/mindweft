@@ -1353,6 +1353,48 @@ Authentication is controlled by `MINIGENT_AUTH_MODE`:
 - `static-tokens`: resolve bearer tokens from `MINIGENT_AUTH_TOKENS`
 - `jwt`: verify bearer JWTs and map claims into a `Principal`
 
+### Generic Console Sessions
+
+The production console can authenticate with deployment-managed static credentials without tying
+Minigent to a specific identity provider. This browser session layer works alongside any
+`MINIGENT_AUTH_MODE`; bearer tokens and JWTs remain available for API clients.
+
+Generate a scrypt password hash interactively (the password is not echoed or stored):
+
+```bash
+uv run python scripts/hash-session-password.py
+```
+
+Configure one or more usernames with hashed passwords and principals, plus an independent random
+session-signing secret of at least 32 bytes:
+
+```dotenv
+MINIGENT_SESSION_CREDENTIALS={"admin":{"password_hash":"scrypt$16384$8$1$...","principal":{"user_id":"admin","tenant_id":"platform","is_admin":true}}}
+MINIGENT_SESSION_SECRET=replace-with-at-least-32-random-bytes
+MINIGENT_SESSION_TTL_SECONDS=28800
+MINIGENT_SESSION_COOKIE_SECURE=true
+MINIGENT_SESSION_ALLOWED_ORIGINS=https://minigent.example.com
+```
+
+`MINIGENT_SESSION_ALLOWED_ORIGINS` is optional and accepts a comma-separated list or JSON array.
+The request's same origin is always allowed. Successful login sets an `HttpOnly`, `SameSite=Strict`
+cookie. Cookie-authenticated mutations require a matching `Origin` header to prevent cross-site
+request forgery. Passwords are verified with scrypt; store only generated hashes in deployment
+secrets. Login, status, and logout use `POST`, `GET`, and `DELETE /auth/session`, respectively.
+
+For a first-run administration deployment, also configure durable encrypted administration state
+and allow console execution changes to override environment defaults:
+
+```dotenv
+MINIGENT_ADMIN_DB_PATH=/data/minigent-admin.db
+MINIGENT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
+MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults
+```
+
+After an `is_admin=true` credential signs in, an empty administration store presents the tenant
+creation workflow. Create the initial tenant, membership, entitlements, and execution configuration
+before using the workspace.
+
 ### JWT Mode
 
 Production-oriented mode uses JWT verification:

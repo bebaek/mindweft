@@ -95,6 +95,7 @@ from app.runtime import (
     render_raw_thread_context,
 )
 from app.security_headers import SecurityHeadersMiddleware
+from app.session_auth import build_session_auth_router, validate_session_auth_settings
 from app.settings import (
     DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES,
     DEFAULT_IMAGE_INPUT_MAX_BYTES,
@@ -731,6 +732,7 @@ def create_app(
     settings_was_provided = settings is not None
     settings = settings or load_settings()
     validate_auth_settings()
+    session_auth_settings = validate_session_auth_settings()
     mcp_manager = (
         MCPServerManager() if execution_resolver is None and tool_registry is None else None
     )
@@ -767,6 +769,7 @@ def create_app(
                 await mcp_manager.stop()
 
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0", lifespan=lifespan)
+    app.state.session_auth_settings = session_auth_settings
     app.add_middleware(SecurityHeadersMiddleware)
     configure_tracing(app, settings.tracing)
     if thread_store is not None:
@@ -867,6 +870,7 @@ def create_app(
         peer_agent_registry=app.state.peer_agent_registry,
         mcp_broker_sessions=app.state.mcp_broker_sessions,
     )
+    app.include_router(build_session_auth_router())
     app.include_router(build_admin_router())
     if CONSOLE_CLIENT_DIR.exists():
         app.mount(
@@ -885,6 +889,14 @@ def create_app(
     @app.get("/health/ready", response_model=None)
     async def readiness() -> dict[str, object] | JSONResponse:
         checks = await database_readiness_checks()
+        if (
+            any(
+                credential.principal.is_admin
+                for credential in app.state.session_auth_settings.credentials.values()
+            )
+            and app.state.admin_store is None
+        ):
+            checks["admin_store"] = False
         if not app.state.accepting_runs:
             checks["lifecycle"] = False
         ready = all(checks.values())
