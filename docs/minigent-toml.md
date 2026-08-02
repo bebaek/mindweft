@@ -403,8 +403,9 @@ Provider key targets:
 | `allowed_mime_types` | `MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES` | String or list of image MIME types; lists are converted to comma-separated env strings. |
 
 Image parts must use exactly one source. Inline `data` must be valid base64 and match known
-configured image signatures; remote URLs must be absolute HTTP(S) URLs. The browser uploads
-images first and stores `attachment_id` references in message history.
+configured image signatures; remote URLs must be absolute HTTP(S) URLs. The browser streams raw
+image bodies to the binary attachment endpoint first and stores `attachment_id` references in
+message history. The original JSON/base64 upload endpoint remains available for compatibility.
 
 ### `[attachments]`
 

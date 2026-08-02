@@ -171,7 +171,12 @@ WEB_CLIENT_BROWSER_HARNESS = (
               };
               const fetchCalls = [];
               async function fetch(url, options = {}) {
-                fetchCalls.push({ url, method: options.method || "GET", body: options.body || "" });
+                fetchCalls.push({
+                  url,
+                  method: options.method || "GET",
+                  headers: options.headers || {},
+                  body: options.body || "",
+                });
                 const path = new URL(url).pathname + new URL(url).search;
                 return fetchImpl(url, options, path);
               }
@@ -199,7 +204,7 @@ def test_web_client_image_picker_uses_native_file_input_overlay() -> None:
 
     assert 'id="attach-image-button"' in html
     assert '<input id="image-input" type="file" accept="image/*" multiple />' in html
-    assert "app.js?v=attachment-lifecycle-1" in html
+    assert "app.js?v=binary-drop-1" in html
 
 
 def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
@@ -241,7 +246,10 @@ def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
                     }},
                   }});
                 }}
-                if (path === "/threads/t1/attachments" && options.method === "POST") {{
+                if (
+                  path === "/threads/t1/attachments/binary" &&
+                  options.method === "POST"
+                ) {{
                   uploadCount += 1;
                   return jsonResponse({{ attachment_id: `attachment-${{uploadCount}}` }});
                 }}
@@ -309,12 +317,12 @@ def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
               (call) => call.method === "POST" && call.url.endsWith("/threads/t1/messages"),
             );
             const upload = harness.fetchCalls.find(
-              (call) => call.method === "POST" && call.url.endsWith("/threads/t1/attachments"),
+              (call) =>
+                call.method === "POST" &&
+                call.url.endsWith("/threads/t1/attachments/binary"),
             );
-            assert.deepEqual(JSON.parse(upload.body), {{
-              mime_type: "image/png",
-              data: "aW1hZ2U=",
-            }});
+            assert.equal(upload.headers["Content-Type"], "image/png");
+            assert.equal(upload.body, image);
             assert.deepEqual(JSON.parse(post.body), {{
               content: "Describe this",
               parts: [
@@ -350,8 +358,9 @@ def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
             const restored = harness.elements.get("messages").children.at(-1);
             assert.equal(restored.children[2].children[0].src, "blob:attachment-1");
 
-            harness.elements.get("image-input").files = [image];
-            await harness.elements.get("image-input").dispatchEvent({{ type: "change" }});
+            const dropEvent = {{ type: "drop", dataTransfer: {{ files: [image] }} }};
+            await harness.elements.get("composer").dispatchEvent(dropEvent);
+            assert.equal(dropEvent.defaultPrevented, true);
             await flushAsyncWork();
             failMessage = true;
             harness.elements.get("message-input").value = "Fail this message";

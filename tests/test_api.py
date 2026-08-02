@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import sqlite3
@@ -503,11 +504,13 @@ def test_unreferenced_attachment_can_be_deleted(monkeypatch: pytest.MonkeyPatch)
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     )
     thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
-    attachment_id = client.post(
-        f"/threads/{thread_id}/attachments",
-        json={"mime_type": "image/png", "data": PNG_1X1_BASE64},
-        headers=AUTH_HEADERS,
-    ).json()["attachment_id"]
+    upload_response = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=base64.b64decode(PNG_1X1_BASE64),
+        headers={**AUTH_HEADERS, "Content-Type": "image/png"},
+    )
+    assert upload_response.status_code == 200
+    attachment_id = upload_response.json()["attachment_id"]
 
     delete_response = client.delete(
         f"/threads/{thread_id}/attachments/{attachment_id}",
@@ -520,6 +523,34 @@ def test_unreferenced_attachment_can_be_deleted(monkeypatch: pytest.MonkeyPatch)
 
     assert delete_response.status_code == 204
     assert get_response.status_code == 404
+
+
+def test_binary_attachment_upload_enforces_type_and_stream_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_BYTES", "8")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    png = base64.b64decode(PNG_1X1_BASE64)
+
+    unsupported = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=b"content",
+        headers={**AUTH_HEADERS, "Content-Type": "application/octet-stream"},
+    )
+    oversized = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=png,
+        headers={**AUTH_HEADERS, "Content-Type": "image/png"},
+    )
+
+    assert unsupported.status_code == 400
+    assert unsupported.json()["detail"] == "unsupported image MIME type: application/octet-stream"
+    assert oversized.status_code == 400
+    assert oversized.json()["detail"] == "image exceeds maximum allowed size"
 
 
 def test_attachment_reference_is_scoped_to_thread(monkeypatch: pytest.MonkeyPatch) -> None:

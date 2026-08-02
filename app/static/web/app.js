@@ -170,6 +170,26 @@ elements.messageInput.addEventListener("paste", async (event) => {
   await addImageFiles(files);
 });
 
+for (const eventName of ["dragenter", "dragover"]) {
+  elements.composer.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    elements.composer.classList.add("drag-active");
+  });
+}
+
+elements.composer.addEventListener("dragleave", () => {
+  elements.composer.classList.remove("drag-active");
+});
+
+elements.composer.addEventListener("drop", async (event) => {
+  event.preventDefault();
+  elements.composer.classList.remove("drag-active");
+  const files = [...(event.dataTransfer?.files || [])].filter((file) =>
+    String(file.type || "").toLowerCase().startsWith("image/"),
+  );
+  await addImageFiles(files);
+});
+
 window.visualViewport?.addEventListener("resize", syncViewportHeight);
 window.visualViewport?.addEventListener("scroll", syncViewportHeight);
 window.addEventListener("resize", syncViewportHeight);
@@ -290,13 +310,7 @@ async function uploadImages(threadId, images) {
   const uploaded = [];
   try {
     for (const image of images) {
-      const attachment = await requestJson(
-        `/threads/${encodeURIComponent(threadId)}/attachments`,
-        {
-          method: "POST",
-          body: { mime_type: image.mimeType, data: image.data },
-        },
-      );
+      const attachment = await uploadImageAttachment(threadId, image);
       uploaded.push({ ...image, attachmentId: attachment.attachment_id });
     }
     return uploaded;
@@ -304,6 +318,25 @@ async function uploadImages(threadId, images) {
     await discardUploadedImages(threadId, uploaded);
     throw error;
   }
+}
+
+async function uploadImageAttachment(threadId, image) {
+  const response = await fetch(
+    `${state.baseUrl}/threads/${encodeURIComponent(threadId)}/attachments/binary`,
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        "Content-Type": image.mimeType,
+      },
+      body: image.file,
+    },
+  );
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`${response.status} ${detail || response.statusText}`);
+  }
+  return response.json();
 }
 
 async function discardUploadedImages(threadId, images) {
@@ -352,6 +385,7 @@ async function addImageFiles(files) {
           name: file.name || "image",
           mimeType: String(file.type).toLowerCase(),
           size: Number(file.size || 0),
+          file,
           data: dataUrl.slice(dataUrl.indexOf(",") + 1),
           dataUrl,
         };

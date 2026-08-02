@@ -310,6 +310,25 @@ def _validate_and_normalize_message_request(
     return request.model_copy(update={"content": text_content})
 
 
+async def _read_limited_request_body(request: Request, max_bytes: int) -> bytes:
+    content_length = request.headers.get("content-length", "").strip()
+    if content_length:
+        try:
+            declared_size = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid Content-Length header") from exc
+        if declared_size < 0:
+            raise HTTPException(status_code=400, detail="invalid Content-Length header")
+        if declared_size > max_bytes:
+            raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > max_bytes:
+            raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
+        body.extend(chunk)
+    return bytes(body)
+
+
 def _image_bytes_match_mime_type(data: bytes, mime_type: str) -> bool:
     if mime_type == "image/png":
         return data.startswith(b"\x89PNG\r\n\x1a\n")
@@ -946,40 +965,37 @@ def create_app(
         )
         return CreateThreadResponse(thread_id=thread.thread_id)
 
-    @app.post(
-        "/threads/{thread_id}/attachments",
-        response_model=AttachmentMetadata,
-    )
-    async def upload_attachment(
-        thread_id: str,
-        upload: UploadAttachmentRequest,
+    def persist_image_attachment(
         app_request: Request,
-        principal: Principal = Depends(require_active_tenant_principal),
+        principal: Principal,
+        thread_id: str,
+        *,
+        mime_type: str,
+        data: bytes,
     ) -> AttachmentMetadata:
         app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
         image_settings = app_request.app.state.image_input_settings
         if not image_settings.enabled:
             raise HTTPException(status_code=400, detail="image input is disabled")
-        mime_type = upload.mime_type.strip().lower()
-        if mime_type not in image_settings.allowed_mime_types:
-            raise HTTPException(status_code=400, detail=f"unsupported image MIME type: {mime_type}")
-        try:
-            data = base64.b64decode(upload.data, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="image data must be base64") from exc
-        if len(data) > image_settings.max_bytes:
-            raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
-        if not _image_bytes_match_mime_type(data, mime_type):
+        normalized_mime_type = mime_type.strip().lower().split(";", 1)[0]
+        if normalized_mime_type not in image_settings.allowed_mime_types:
             raise HTTPException(
                 status_code=400,
-                detail=f"image data does not match declared MIME type: {mime_type}",
+                detail=f"unsupported image MIME type: {normalized_mime_type}",
+            )
+        if len(data) > image_settings.max_bytes:
+            raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
+        if not _image_bytes_match_mime_type(data, normalized_mime_type):
+            raise HTTPException(
+                status_code=400,
+                detail=f"image data does not match declared MIME type: {normalized_mime_type}",
             )
         attachment_settings = app_request.app.state.attachment_store_settings
         try:
             return app_request.app.state.attachment_store.put(
                 principal.tenant_id,
                 thread_id,
-                mime_type=mime_type,
+                mime_type=normalized_mime_type,
                 data=data,
                 created_by=principal.user_id,
                 max_per_thread=attachment_settings.max_per_thread,
@@ -992,6 +1008,54 @@ def create_app(
                 else "thread attachment storage limit exceeded"
             )
             raise HTTPException(status_code=400, detail=detail) from exc
+
+    @app.post(
+        "/threads/{thread_id}/attachments",
+        response_model=AttachmentMetadata,
+    )
+    async def upload_attachment(
+        thread_id: str,
+        upload: UploadAttachmentRequest,
+        app_request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> AttachmentMetadata:
+        app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        try:
+            data = base64.b64decode(upload.data, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="image data must be base64") from exc
+        return persist_image_attachment(
+            app_request,
+            principal,
+            thread_id,
+            mime_type=upload.mime_type,
+            data=data,
+        )
+
+    @app.post(
+        "/threads/{thread_id}/attachments/binary",
+        response_model=AttachmentMetadata,
+    )
+    async def upload_binary_attachment(
+        thread_id: str,
+        app_request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> AttachmentMetadata:
+        app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        image_settings = app_request.app.state.image_input_settings
+        if not image_settings.enabled:
+            raise HTTPException(status_code=400, detail="image input is disabled")
+        mime_type = app_request.headers.get("content-type", "").strip().lower().split(";", 1)[0]
+        if mime_type not in image_settings.allowed_mime_types:
+            raise HTTPException(status_code=400, detail=f"unsupported image MIME type: {mime_type}")
+        data = await _read_limited_request_body(app_request, image_settings.max_bytes)
+        return persist_image_attachment(
+            app_request,
+            principal,
+            thread_id,
+            mime_type=mime_type,
+            data=data,
+        )
 
     @app.get("/threads/{thread_id}/attachments/{attachment_id}")
     async def get_attachment(

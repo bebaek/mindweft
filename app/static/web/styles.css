@@ -385,6 +385,13 @@ textarea:focus {
   padding-top: 8px;
   padding-bottom: max(0px, env(safe-area-inset-bottom));
   background: var(--bg);
+  border-radius: 10px;
+  transition: box-shadow 120ms ease, background 120ms ease;
+}
+
+.composer.drag-active {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 textarea {
