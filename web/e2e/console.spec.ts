@@ -304,6 +304,71 @@ async function navigateToWorkspace(page: Page) {
   await page.getByRole("button", { name: "Workspace", exact: true }).click();
 }
 
+async function installAdminMocks(page: Page) {
+  let acmeStatus = "active";
+  const now = new Date().toISOString();
+  await page.route("**/admin/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path === "/admin/tenants") {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          tenants: [
+            { id: "tenant-acme", slug: "acme", name: "Acme Corporation", status: acmeStatus, plan: "enterprise", region: "us-east", metadata: {}, created_at: now, updated_at: now },
+            { id: "tenant-beta", slug: "beta-labs", name: "Beta Labs", status: "provisioning", plan: "starter", region: "eu-west", metadata: {}, created_at: now, updated_at: now },
+          ],
+          total: 2,
+          limit: 200,
+          offset: 0,
+        }),
+      });
+      return;
+    }
+    const transition = path.match(/^\/admin\/tenants\/([^/]+)\/(activate|suspend|archive)$/);
+    if (transition) {
+      acmeStatus = transition[2] === "activate" ? "active" : transition[2] === "suspend" ? "suspended" : "archived";
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ id: transition[1], slug: "acme", name: "Acme Corporation", status: acmeStatus, plan: "enterprise", region: "us-east", metadata: {}, created_at: now, updated_at: now }),
+      });
+      return;
+    }
+    const tenantId = path.split("/")[3];
+    if (path.endsWith("/users")) {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ tenant_id: tenantId, users: [
+          { id: "membership-1", tenant_id: tenantId, user_id: "owner-1", email: "owner@example.test", display_name: "Alex Morgan", role: "owner", status: "active", created_at: now, updated_at: now },
+          { id: "membership-2", tenant_id: tenantId, user_id: "member-1", email: "member@example.test", display_name: "Jordan Lee", role: "member", status: "invited", created_at: now, updated_at: now },
+        ], total: 2, limit: 200, offset: 0 }),
+      });
+      return;
+    }
+    if (path.endsWith("/domains")) {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenant_id: tenantId, domains: [
+        { id: "domain-1", tenant_id: tenantId, domain: tenantId === "tenant-acme" ? "acme.example" : "beta.example", verified: true, created_at: now },
+      ] }) });
+      return;
+    }
+    if (path.endsWith("/attachments/statistics")) {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenant_id: tenantId, total_count: 24, total_bytes: 4_194_304, pending_count: 1, pending_bytes: 1024, referenced_count: 23, referenced_bytes: 4_193_280, max_count: 1000, max_bytes: 104_857_600 }) });
+      return;
+    }
+    if (path.endsWith("/run-concurrency")) {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenant_id: tenantId, active_runs: 3, active_users: 2, tenant_capacity: 20, user_capacity: 5 }) });
+      return;
+    }
+    await route.fulfill({ status: 404, contentType: "application/json", body: '{"detail":"not found"}' });
+  });
+}
+
+async function navigateToAdmin(page: Page) {
+  const menu = page.getByRole("button", { name: "Open navigation" });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole("button", { name: "Administration", exact: true }).click();
+}
+
 test("loads the production console and passes an accessibility scan", async ({ page }) => {
   await installApiMocks(page);
   await page.goto("./");
@@ -434,6 +499,30 @@ test("requires reconciliation when an approved action outcome is unknown", async
   await expect(
     page.locator(".activity-tray summary").getByText("Uncertain private action record discarded"),
   ).toBeVisible();
+});
+
+test("inspects tenant operations and confirms lifecycle changes", async ({ page }) => {
+  await installApiMocks(page);
+  await installAdminMocks(page);
+  await page.goto("./");
+  await navigateToAdmin(page);
+
+  await expect(page.getByRole("heading", { name: "Tenant operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Acme Corporation" })).toBeVisible();
+  await expect(page.getByText("owner@example.test")).toBeVisible();
+  await expect(page.getByText("acme.example")).toBeVisible();
+  await expect(page.getByText("4.0 MB").first()).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await page.getByRole("button", { name: "Suspend" }).click();
+  const confirmation = page.getByRole("alertdialog", { name: "Confirm tenant status change" });
+  await expect(confirmation.getByText(/Change Acme Corporation to suspended/)).toBeVisible();
+  await confirmation.getByRole("button", { name: "Confirm change" }).click();
+  await expect(page.getByRole("button", { name: "Activate" })).toBeVisible();
+
+  await page.getByPlaceholder("Search tenants…").fill("Beta");
+  await page.locator(".tenant-directory-list > button").click();
+  await expect(page.getByRole("heading", { name: "Beta Labs" })).toBeVisible();
 });
 
 test("supports mobile navigation", async ({ page }) => {

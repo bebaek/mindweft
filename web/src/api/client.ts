@@ -125,6 +125,79 @@ export interface CompactThreadResponse {
   usage: ThreadContextUsage;
 }
 
+export type TenantStatus = "provisioning" | "active" | "suspended" | "archived" | "deleted";
+
+export interface AdminTenant {
+  id: string;
+  slug: string;
+  name: string;
+  status: TenantStatus;
+  plan?: string | null;
+  region?: string | null;
+  metadata: Record<string, unknown>;
+  created_by?: string | null;
+  updated_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminTenantListResponse {
+  tenants: AdminTenant[];
+  limit: number;
+  offset: number;
+  total: number;
+  next_offset?: number | null;
+}
+
+export interface AdminTenantUser {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  email?: string | null;
+  display_name?: string | null;
+  role: "owner" | "admin" | "member" | "viewer";
+  status: "invited" | "active" | "suspended" | "deleted";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminTenantUserListResponse {
+  tenant_id: string;
+  users: AdminTenantUser[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AdminTenantDomain {
+  id: string;
+  tenant_id: string;
+  domain: string;
+  verified: boolean;
+  created_at: string;
+}
+
+export interface AdminAttachmentStatistics {
+  tenant_id: string;
+  total_count: number;
+  total_bytes: number;
+  pending_count: number;
+  pending_bytes: number;
+  referenced_count: number;
+  referenced_bytes: number;
+  max_count: number;
+  max_bytes: number;
+}
+
+export interface AdminRunConcurrency {
+  tenant_id: string;
+  active_runs: number;
+  active_users: number;
+  tenant_capacity: number;
+  user_capacity: number;
+  next_expiration?: string | null;
+}
+
 export interface PrivateValueDisclosure {
   path: string;
   kind: string;
@@ -189,6 +262,62 @@ export class MinigentApiClient {
 
   getExecutionOptions(signal?: AbortSignal): Promise<ExecutionOptionsResponse> {
     return this.#request<ExecutionOptionsResponse>("/execution-options", { signal });
+  }
+
+  listAdminTenants(signal?: AbortSignal): Promise<AdminTenantListResponse> {
+    return this.#request<AdminTenantListResponse>("/admin/tenants?limit=200", { signal });
+  }
+
+  listAdminTenantUsers(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminTenantUserListResponse> {
+    return this.#request<AdminTenantUserListResponse>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/users?limit=200`,
+      { signal },
+    );
+  }
+
+  async listAdminTenantDomains(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminTenantDomain[]> {
+    const response = await this.#request<{ domains: AdminTenantDomain[] }>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/domains`,
+      { signal },
+    );
+    return response.domains;
+  }
+
+  getAdminAttachmentStatistics(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminAttachmentStatistics> {
+    return this.#request<AdminAttachmentStatistics>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/attachments/statistics`,
+      { signal },
+    );
+  }
+
+  getAdminRunConcurrency(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminRunConcurrency> {
+    return this.#request<AdminRunConcurrency>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/run-concurrency`,
+      { signal },
+    );
+  }
+
+  transitionAdminTenant(
+    tenantId: string,
+    status: "active" | "suspended" | "archived",
+  ): Promise<AdminTenant> {
+    const action = status === "active" ? "activate" : status === "suspended" ? "suspend" : "archive";
+    return this.#request<AdminTenant>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/${action}`,
+      { method: "POST" },
+    );
   }
 
   getPublicConfig(signal?: AbortSignal): Promise<PublicConfig> {

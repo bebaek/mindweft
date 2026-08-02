@@ -98,8 +98,10 @@ assets packaged under `app/static/console/`. Run `npm run test:e2e:install` once
 currently provides runtime readiness, connection setup, thread history, message composition,
 streaming run activity, cancellation, context inspection, confirmed context compaction, validated
 image selection, authenticated attachment upload/display, image detail controls, one-time
-private-value approval/denial, pending-consent recovery, and uncertain-action reconciliation.
-Administration remains on the migration roadmap.
+private-value approval/denial, pending-consent recovery, uncertain-action reconciliation, tenant
+search/detail views, membership and domain visibility, operational capacity metrics, and confirmed
+tenant lifecycle transitions. Tenant/user creation, entitlements, execution configuration, thread
+administration, and audit views remain on the migration roadmap.
 
 The dependency-free development client remains at `/web/` and provides the complete current chat
 workflow.

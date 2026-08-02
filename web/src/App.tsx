@@ -3,8 +3,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "./auth/auth-context";
 import { ConnectionDialog } from "./components/ConnectionDialog";
 import { OverviewPage } from "./pages/OverviewPage";
-import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
+import { AdminPage } from "./pages/AdminPage";
 
 type Page = "overview" | "workspace" | "admin";
 
@@ -53,7 +53,7 @@ export function App() {
         <main id="main-content">
           {page === "overview" && <OverviewPage />}
           {page === "workspace" && <WorkspacePage />}
-          {page === "admin" && <PlaceholderPage eyebrow="Administration" title="Operate every tenant with confidence." copy="The admin surface will use Minigent’s existing tenant APIs with explicit validation, auditability, and safe destructive actions." features={["Tenant, user, domain, and entitlement management", "Execution configuration validation", "Thread, attachment, concurrency, and audit inspection"]} />}
+          {page === "admin" && <AdminPage />}
         </main>
       </div>
 
