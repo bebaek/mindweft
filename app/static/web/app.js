@@ -80,6 +80,8 @@ const elements = {
   imagePreviewList: document.querySelector("#image-preview-list"),
   attachImageButton: document.querySelector("#attach-image-button"),
   imageInput: document.querySelector("#image-input"),
+  cameraImageButton: document.querySelector("#camera-image-button"),
+  cameraImageInput: document.querySelector("#camera-image-input"),
   sendButton: document.querySelector("#send-button"),
   stopButton: document.querySelector("#stop-button"),
 };
@@ -130,6 +132,10 @@ elements.stopButton.addEventListener("click", cancelActiveRun);
 elements.imageInput.addEventListener("change", async () => {
   await addImageFiles(elements.imageInput.files || []);
   elements.imageInput.value = "";
+});
+elements.cameraImageInput.addEventListener("change", async () => {
+  await addImageFiles(elements.cameraImageInput.files || []);
+  elements.cameraImageInput.value = "";
 });
 
 window.addEventListener("keydown", (event) => {
@@ -1585,6 +1591,9 @@ function setBusy(isBusy) {
   elements.attachImageButton.classList.toggle("disabled", isBusy);
   elements.attachImageButton.ariaDisabled = String(isBusy);
   elements.imageInput.disabled = isBusy;
+  elements.cameraImageButton.classList.toggle("disabled", isBusy);
+  elements.cameraImageButton.ariaDisabled = String(isBusy);
+  elements.cameraImageInput.disabled = isBusy;
 }
 
 function setStatus(message, isError = false) {

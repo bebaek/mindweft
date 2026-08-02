@@ -110,12 +110,13 @@ WEB_CLIENT_ELEMENT_IDS_JS = r"""[
               "context-summary", "context-rendered", "compact-context-button", "threads-backdrop",
               "threads-sheet", "threads-close", "threads-summary", "threads-list",
               "threads-new-button", "threads-refresh-button", "composer", "message-input",
-              "image-preview-list", "attach-image-button", "image-input", "send-button", "stop-button",
+              "image-preview-list", "attach-image-button", "image-input", "camera-image-button",
+              "camera-image-input", "send-button", "stop-button",
             ]"""
 
 WEB_CLIENT_HIDDEN_ELEMENT_IDS_JS = r"""["more-backdrop", "more-sheet", "settings-backdrop", "activity-backdrop",
               "activity-sheet", "context-backdrop", "context-sheet", "threads-backdrop", "threads-sheet",
-              "activity-button", "image-preview-list", "image-input", "stop-button"]"""
+              "activity-button", "image-preview-list", "image-input", "camera-image-input", "stop-button"]"""
 
 WEB_CLIENT_ASYNC_HELPERS = r"""
             async function flushAsyncWork() {
@@ -204,7 +205,9 @@ def test_web_client_image_picker_uses_native_file_input_overlay() -> None:
 
     assert 'id="attach-image-button"' in html
     assert '<input id="image-input" type="file" accept="image/*" multiple />' in html
-    assert "app.js?v=image-detail-1" in html
+    assert 'id="camera-image-input"' in html
+    assert 'capture="environment"' in html
+    assert "app.js?v=camera-input-1" in html
 
 
 def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
@@ -378,6 +381,10 @@ def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
               ),
               true,
             );
+
+            harness.elements.get("camera-image-input").files = [image];
+            await harness.elements.get("camera-image-input").dispatchEvent({{ type: "change" }});
+            assert.equal(harness.elements.get("image-preview-list").children.length, 2);
         """,
     )
 

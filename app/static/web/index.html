@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>Minigent Web Client</title>
-    <link rel="stylesheet" href="./styles.css?v=image-detail-1" />
+    <link rel="stylesheet" href="./styles.css?v=camera-input-1" />
   </head>
   <body>
     <main class="shell">
@@ -109,6 +109,20 @@
           >
             Image
             <input id="image-input" type="file" accept="image/*" multiple />
+          </label>
+          <label
+            id="camera-image-button"
+            class="attach-image-button camera-image-button"
+            aria-label="Take a photo"
+            title="Take a photo"
+          >
+            Camera
+            <input
+              id="camera-image-input"
+              type="file"
+              accept="image/*"
+              capture="environment"
+            />
           </label>
         </div>
         <div class="composer-actions">
@@ -233,6 +247,6 @@
       </div>
     </aside>
 
-    <script src="./app.js?v=image-detail-1"></script>
+    <script src="./app.js?v=camera-input-1"></script>
   </body>
 </html>

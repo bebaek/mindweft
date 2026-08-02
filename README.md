@@ -333,12 +333,12 @@ environment variables belong on the external sidecar, not the Minigent process.
 The API serves a dependency-free browser client at `/web/`. It uses the streaming run
 endpoint to show live LLM, tool, and peer-agent progress, with mobile-friendly run
 controls, a stop action, basic assistant markdown rendering, execution option selectors,
-image file selection, drag-and-drop, and clipboard paste with previews and per-image detail controls
-when server image input is enabled; the browser streams binary image bodies to thread-scoped
-attachment storage instead of base64-wrapping them, then keeps references in message history. A
-mobile More menu provides secondary actions, alongside a thread context sheet with
-compaction controls, a thread drawer backed by `GET /threads`, thread refresh/delete actions,
-and a collapsible activity sheet for run details.
+image file selection, mobile camera capture, drag-and-drop, and clipboard paste with previews and
+per-image detail controls when server image input is enabled; the browser streams binary image
+bodies to thread-scoped attachment storage instead of base64-wrapping them, then keeps references
+in message history. A mobile More menu provides secondary actions, alongside a thread context
+sheet with compaction controls, a thread drawer backed by `GET /threads`, thread refresh/delete
+actions, and a collapsible activity sheet for run details.
 
 #### Mobile UI demo
 
