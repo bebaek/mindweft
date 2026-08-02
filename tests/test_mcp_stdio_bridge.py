@@ -29,7 +29,7 @@ for line in sys.stdin:
         print("not json", flush=True)
         continue
     if mode == "delayed-tools-list" and method == "tools/list":
-        time.sleep(0.25)
+        time.sleep(0.75)
     if mode == "large-line" and method == "tools/list":
         print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": {"tools": [{"name": "large", "description": "x" * 200000, "inputSchema": {"type": "object"}}], "resultType": "complete", "ttlMs": 0, "cacheScope": "private"}}), flush=True)
         continue
@@ -364,7 +364,7 @@ def test_stdio_bridge_reports_oversized_subprocess_response_lines(tmp_path: Path
 
 
 def test_stdio_bridge_skips_stale_response_after_timeout(tmp_path: Path) -> None:
-    client = _client(tmp_path, "delayed-tools-list", request_timeout=0.1)
+    client = _client(tmp_path, "delayed-tools-list", request_timeout=0.3)
 
     with client:
         initialize = client.post(
@@ -377,7 +377,7 @@ def test_stdio_bridge_skips_stale_response_after_timeout(tmp_path: Path) -> None
             headers={"MCP-Session-Id": session_id},
             json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         )
-        time.sleep(0.3)
+        time.sleep(0.8)
         response = client.post(
             "/mcp",
             headers={"MCP-Session-Id": session_id},
@@ -396,7 +396,7 @@ def test_stdio_bridge_skips_stale_response_after_timeout(tmp_path: Path) -> None
 
 
 def test_stdio_bridge_can_restart_subprocess_after_timeout(tmp_path: Path) -> None:
-    client = _client(tmp_path, "delayed-tools-list", request_timeout=0.1, restart_on_timeout=True)
+    client = _client(tmp_path, "delayed-tools-list", request_timeout=0.3, restart_on_timeout=True)
 
     with client:
         initialize = client.post(
