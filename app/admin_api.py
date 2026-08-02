@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import secrets
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -34,10 +36,12 @@ from app.models import (
     ThreadContext,
     ThreadStatus,
 )
+from app.session_auth import validate_session_auth_settings
 
 ADMIN_DB_PATH_ENV = "MINIGENT_ADMIN_DB_PATH"
 ADMIN_ENCRYPTION_KEY_ENV = "MINIGENT_ADMIN_ENCRYPTION_KEY"
 TENANT_SLUG_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+LOGIN_USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._@+-]{0,127}$")
 DOMAIN_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
@@ -190,6 +194,29 @@ class AdminTenantUserDeleteResponse(BaseModel):
     tenant_id: str
     id: str
     status: TenantUserStatus
+
+
+class AdminCredentialSetupRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    expires_in_seconds: int = Field(default=86_400, ge=300, le=604_800)
+
+
+class AdminCredentialStatusResponse(BaseModel):
+    configured: bool
+    username: str | None = None
+    disabled: bool = False
+    managed_externally: bool = False
+    updated_at: datetime | None = None
+
+
+class AdminCredentialSetupResponse(BaseModel):
+    username: str
+    setup_token: str
+    expires_at: datetime
+
+
+class AdminCredentialDisableResponse(BaseModel):
+    disabled: bool
 
 
 class AdminTenantDomainResponse(BaseModel):
@@ -760,6 +787,126 @@ def build_admin_router() -> APIRouter:
             id=user_record_id,
             status=TenantUserStatus.DELETED,
         )
+
+    @router.get(
+        "/tenants/{tenant_id}/users/{user_record_id}/credential",
+        response_model=AdminCredentialStatusResponse,
+    )
+    async def get_tenant_user_credential(
+        tenant_id: str,
+        user_record_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminCredentialStatusResponse:
+        _ = admin
+        store = _require_admin_store(request)
+        user = store.get_tenant_user(tenant_id, user_record_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail=f"Tenant user '{user_record_id}' not found")
+        identity = store.get_local_identity_for_user(tenant_id, user.user_id)
+        environment_username = next(
+            (
+                username
+                for username, credential in validate_session_auth_settings().credentials.items()
+                if credential.principal.user_id == user.user_id
+                and credential.principal.tenant_id == tenant_id
+            ),
+            None,
+        )
+        return AdminCredentialStatusResponse(
+            configured=identity is not None or environment_username is not None,
+            username=(identity.username if identity is not None else environment_username),
+            disabled=identity.disabled if identity is not None else False,
+            managed_externally=environment_username is not None and identity is None,
+            updated_at=identity.updated_at if identity is not None else None,
+        )
+
+    @router.post(
+        "/tenants/{tenant_id}/users/{user_record_id}/credential/setup",
+        response_model=AdminCredentialSetupResponse,
+    )
+    async def create_tenant_user_credential_setup(
+        tenant_id: str,
+        user_record_id: str,
+        body: AdminCredentialSetupRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminCredentialSetupResponse:
+        store = _require_admin_store(request)
+        tenant = _require_tenant(request, tenant_id)
+        if tenant.status not in {TenantStatus.PROVISIONING, TenantStatus.ACTIVE}:
+            raise HTTPException(status_code=409, detail="Tenant is not available for user setup")
+        user = store.get_tenant_user(tenant_id, user_record_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail=f"Tenant user '{user_record_id}' not found")
+        if user.status not in {TenantUserStatus.INVITED, TenantUserStatus.ACTIVE}:
+            raise HTTPException(status_code=409, detail="Tenant user is not available for sign-in")
+        username = body.username.strip().lower()
+        if username in validate_session_auth_settings().credentials:
+            raise HTTPException(
+                status_code=409, detail="Username is managed by deployment configuration"
+            )
+        if not LOGIN_USERNAME_PATTERN.fullmatch(username):
+            raise HTTPException(
+                status_code=400,
+                detail="Username must start with a letter or digit and use only letters, digits, '.', '_', '@', '+', or '-'",
+            )
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=body.expires_in_seconds)
+        try:
+            store.create_password_setup(
+                token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                username=username,
+                tenant_id=tenant_id,
+                user_id=user.user_id,
+                expires_at=expires_at,
+                created_by=admin.user_id,
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(
+                status_code=409, detail="Username is unavailable or cannot be changed"
+            ) from exc
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_user_credentials.setup_created",
+            new_values={"username": username, "expires_at": expires_at.isoformat()},
+            resource_type="tenant_user",
+            resource_id=user_record_id,
+        )
+        return AdminCredentialSetupResponse(
+            username=username,
+            setup_token=token,
+            expires_at=expires_at,
+        )
+
+    @router.delete(
+        "/tenants/{tenant_id}/users/{user_record_id}/credential",
+        response_model=AdminCredentialDisableResponse,
+    )
+    async def disable_tenant_user_credential(
+        tenant_id: str,
+        user_record_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminCredentialDisableResponse:
+        store = _require_admin_store(request)
+        user = store.get_tenant_user(tenant_id, user_record_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail=f"Tenant user '{user_record_id}' not found")
+        disabled = store.disable_local_identity(tenant_id, user.user_id)
+        if not disabled:
+            raise HTTPException(status_code=404, detail="Tenant user has no local credential")
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_user_credentials.disabled",
+            resource_type="tenant_user",
+            resource_id=user_record_id,
+        )
+        return AdminCredentialDisableResponse(disabled=True)
 
     @router.get(
         "/tenants/{tenant_id}/domains",

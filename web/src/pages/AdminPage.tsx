@@ -13,6 +13,7 @@ import type {
   TenantUserStatus,
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
+import { CredentialSetupDialog } from "../components/CredentialSetupDialog";
 import { EntitlementsPanel } from "../components/EntitlementsPanel";
 import { ExecutionConfigPanel } from "../components/ExecutionConfigPanel";
 import { TenantOperationsPanel } from "../components/TenantOperationsPanel";
@@ -33,6 +34,7 @@ export function AdminPage() {
   const [selection, setSelection] = useState<string | null>(null);
   const [tenantEditor, setTenantEditor] = useState<"create" | "edit" | null>(null);
   const [userEditor, setUserEditor] = useState<"create" | AdminTenantUser | null>(null);
+  const [credentialUser, setCredentialUser] = useState<AdminTenantUser | null>(null);
   const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
   const [pendingStatus, setPendingStatus] = useState<"active" | "suspended" | "archived" | null>(null);
   const [domainDraft, setDomainDraft] = useState("");
@@ -199,7 +201,7 @@ export function AdminPage() {
                   <div className="admin-panel-heading"><div><p className="eyebrow">Membership</p><h3>Users</h3></div><button type="button" onClick={() => setUserEditor("create")}>Add user</button></div>
                   {users.isError && <p className="inline-error" role="alert">Could not load tenant users.</p>}
                   <ul className="admin-user-list">
-                    {visibleUsers.map((user) => <li key={user.id}><span className="user-avatar">{initials(user.display_name || user.user_id)}</span><div><strong>{user.display_name || user.user_id}</strong><small>{user.email || user.user_id} · {user.status}</small></div><span>{user.role}</span><button type="button" aria-label={`Edit ${user.display_name || user.user_id}`} onClick={() => setUserEditor(user)}>Edit</button><button type="button" className="danger-link" aria-label={`Remove ${user.display_name || user.user_id}`} onClick={() => setPendingRemoval({ kind: "user", id: user.id, label: user.display_name || user.user_id })}>Remove</button></li>)}
+                    {visibleUsers.map((user) => <li key={user.id}><span className="user-avatar">{initials(user.display_name || user.user_id)}</span><div><strong>{user.display_name || user.user_id}</strong><small>{user.email || user.user_id} · {user.status}</small></div><span>{user.role}</span><button type="button" aria-label={`Configure sign-in for ${user.display_name || user.user_id}`} onClick={() => setCredentialUser(user)}>Sign-in</button><button type="button" aria-label={`Edit ${user.display_name || user.user_id}`} onClick={() => setUserEditor(user)}>Edit</button><button type="button" className="danger-link" aria-label={`Remove ${user.display_name || user.user_id}`} onClick={() => setPendingRemoval({ kind: "user", id: user.id, label: user.display_name || user.user_id })}>Remove</button></li>)}
                     {!users.isPending && visibleUsers.length === 0 && <li className="admin-empty">No users registered.</li>}
                   </ul>
                 </article>
@@ -249,6 +251,7 @@ export function AdminPage() {
 
       {tenantEditor && <TenantEditor key={`${tenantEditor}-${tenant?.id ?? "new"}`} tenant={tenantEditor === "edit" ? tenant : null} defaultId={tenants.data?.total === 0 ? session.principal?.tenant_id : undefined} pending={tenantSave.isPending} error={tenantSave.isError ? mutationError(tenantSave.error) : null} onClose={() => setTenantEditor(null)} onSave={(input) => tenantSave.mutate(tenantEditor === "create" ? { mode: "create", input } : { mode: "edit", input })} />}
       {userEditor && tenant && <UserEditor key={userEditor === "create" ? "new-user" : userEditor.id} user={userEditor === "create" ? null : userEditor} defaultUserId={visibleUsers.length === 0 ? session.principal?.user_id : undefined} pending={userSave.isPending} error={userSave.isError ? mutationError(userSave.error) : null} onClose={() => setUserEditor(null)} onSave={(input) => userSave.mutate(userEditor === "create" ? { mode: "create", input } : { mode: "edit", userId: userEditor.id, input })} />}
+      {credentialUser && tenant && <CredentialSetupDialog tenantId={tenant.id} user={credentialUser} onClose={() => setCredentialUser(null)} />}
       {pendingRemoval && <ConfirmationDialog title={pendingRemoval.kind === "user" ? "Remove tenant user?" : "Remove tenant domain?"} message={pendingRemoval.kind === "user" ? `${pendingRemoval.label} will immediately lose access to this tenant.` : `${pendingRemoval.label} will no longer route users to this tenant.`} pending={userDelete.isPending || domainChange.isPending} error={(userDelete.isError && mutationError(userDelete.error)) || (domainChange.isError && mutationError(domainChange.error)) || null} onCancel={() => setPendingRemoval(null)} onConfirm={() => pendingRemoval.kind === "user" ? userDelete.mutate(pendingRemoval.id) : domainChange.mutate({ kind: "delete", domainId: pendingRemoval.id })} />}
     </section>
   );

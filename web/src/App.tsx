@@ -6,6 +6,7 @@ import { OverviewPage } from "./pages/OverviewPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 import { AdminPage } from "./pages/AdminPage";
 import { LoginPage } from "./pages/LoginPage";
+import { PasswordSetupPage } from "./pages/PasswordSetupPage";
 
 type Page = "overview" | "workspace" | "admin";
 
@@ -21,7 +22,9 @@ export function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const { authentication, setAuthentication, session, logout } = useAuth();
   const queryClient = useQueryClient();
+  const setupToken = passwordSetupToken();
 
+  if (setupToken) return <PasswordSetupPage token={setupToken} />;
   if (authentication.mode === "session" && session.loading) {
     return <main className="login-page"><p className="session-loading">Checking secure session…</p></main>;
   }
@@ -87,6 +90,16 @@ export function App() {
       />
     </div>
   );
+}
+
+function passwordSetupToken(): string | null {
+  const match = /^#setup=(.+)$/.exec(window.location.hash);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
 }
 
 function sessionLabel(mode: "session" | "development" | "bearer", userId?: string) {

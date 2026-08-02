@@ -8,6 +8,7 @@ import secrets
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import jwt
@@ -16,12 +17,15 @@ from jwt import InvalidTokenError
 from pydantic import BaseModel, Field
 
 from app.models import Principal
+from app.rate_limits import RateLimitPolicy
 
 SESSION_CREDENTIALS_ENV = "MINIGENT_SESSION_CREDENTIALS"
 SESSION_SECRET_ENV = "MINIGENT_SESSION_SECRET"
 SESSION_TTL_SECONDS_ENV = "MINIGENT_SESSION_TTL_SECONDS"
 SESSION_COOKIE_SECURE_ENV = "MINIGENT_SESSION_COOKIE_SECURE"
 SESSION_ALLOWED_ORIGINS_ENV = "MINIGENT_SESSION_ALLOWED_ORIGINS"
+SESSION_LOGIN_RATE_LIMIT_CAPACITY_ENV = "MINIGENT_SESSION_LOGIN_RATE_LIMIT_CAPACITY"
+SESSION_LOGIN_RATE_LIMIT_REFILL_ENV = "MINIGENT_SESSION_LOGIN_RATE_LIMIT_REFILL_PER_SECOND"
 SESSION_COOKIE_NAME = "minigent_session"
 SESSION_TOKEN_ISSUER = "minigent-console"
 
@@ -48,10 +52,11 @@ class SessionAuthSettings:
     ttl_seconds: int
     cookie_secure: bool
     allowed_origins: tuple[str, ...]
+    login_rate_limit: RateLimitPolicy
 
     @property
     def enabled(self) -> bool:
-        return bool(self.credentials)
+        return self.secret is not None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> SessionAuthSettings:
@@ -62,6 +67,14 @@ class SessionAuthSettings:
             ttl_seconds=_positive_int_env(SESSION_TTL_SECONDS_ENV, lookup, default=28_800),
             cookie_secure=_bool_env(SESSION_COOKIE_SECURE_ENV, lookup, default=True),
             allowed_origins=tuple(_list_env(SESSION_ALLOWED_ORIGINS_ENV, lookup)),
+            login_rate_limit=RateLimitPolicy(
+                user_capacity=_non_negative_int_env(
+                    SESSION_LOGIN_RATE_LIMIT_CAPACITY_ENV, lookup, default=10
+                ),
+                user_refill_per_second=_positive_float_env(
+                    SESSION_LOGIN_RATE_LIMIT_REFILL_ENV, lookup, default=1.0 / 60.0
+                ),
+            ),
         )
 
 
@@ -76,21 +89,30 @@ class SessionStatusResponse(BaseModel):
     principal: Principal | None = None
 
 
+class PasswordSetupRequest(BaseModel):
+    token: str = Field(min_length=32, max_length=512)
+
+
+class PasswordSetupCompleteRequest(PasswordSetupRequest):
+    password: str = Field(min_length=12, max_length=1024)
+
+
+class PasswordSetupStatusResponse(BaseModel):
+    valid: bool
+    username: str | None = None
+    expires_at: datetime | None = None
+
+
 def validate_session_auth_settings(
     env: Mapping[str, str] | None = None,
 ) -> SessionAuthSettings:
     settings = SessionAuthSettings.from_env(env)
-    if settings.enabled:
-        if settings.secret is None:
-            raise RuntimeError(
-                f"{SESSION_SECRET_ENV} is required when {SESSION_CREDENTIALS_ENV} is configured"
-            )
-        if len(settings.secret.encode()) < 32:
-            raise RuntimeError(f"{SESSION_SECRET_ENV} must be at least 32 bytes")
-    elif settings.secret is not None:
+    if settings.credentials and settings.secret is None:
         raise RuntimeError(
-            f"{SESSION_CREDENTIALS_ENV} is required when {SESSION_SECRET_ENV} is configured"
+            f"{SESSION_SECRET_ENV} is required when {SESSION_CREDENTIALS_ENV} is configured"
         )
+    if settings.secret is not None and len(settings.secret.encode()) < 32:
+        raise RuntimeError(f"{SESSION_SECRET_ENV} must be at least 32 bytes")
     return settings
 
 
@@ -115,26 +137,95 @@ def build_session_auth_router() -> APIRouter:
         if not settings.enabled:
             raise HTTPException(status_code=404, detail="Session authentication is not configured")
         require_same_origin(request, settings)
-        credential = settings.credentials.get(body.username)
-        expected_hash = credential.password_hash if credential is not None else _DUMMY_PASSWORD_HASH
-        password_valid = verify_password(body.password, expected_hash)
-        if credential is None or not password_valid:
+        _enforce_login_rate_limit(request, body.username, settings)
+        environment_username = body.username
+        credential = settings.credentials.get(environment_username)
+        local_username = body.username.strip().lower()
+        store = getattr(request.app.state, "admin_store", None)
+        identity = (
+            store.get_local_identity(local_username) if credential is None and store else None
+        )
+        expected_hash = (
+            credential.password_hash
+            if credential is not None
+            else identity.password_hash
+            if identity is not None
+            else _DUMMY_PASSWORD_HASH
+        )
+        if not verify_password(body.password, expected_hash) or (
+            credential is None and identity is None
+        ):
             raise HTTPException(status_code=401, detail="Invalid username or password")
-        token = _encode_session(credential.principal, settings)
-        response.set_cookie(
-            SESSION_COOKIE_NAME,
-            token,
-            max_age=settings.ttl_seconds,
-            httponly=True,
-            secure=settings.cookie_secure,
-            samesite="strict",
-            path="/",
+        if credential is not None:
+            principal = credential.principal
+            source = "environment"
+            version = 0
+        else:
+            if identity is None:  # pragma: no cover - narrowed by credential check
+                raise HTTPException(status_code=401, detail="Invalid username or password")
+            principal = _principal_for_local_identity(request, identity)
+            if principal is None:  # pragma: no cover - required=True raises instead
+                raise HTTPException(status_code=403, detail="Account or tenant is not active")
+            source = "local"
+            version = identity.credential_version
+        token = _encode_session(
+            principal,
+            settings,
+            username=environment_username if credential is not None else local_username,
+            source=source,
+            credential_version=version,
         )
-        return SessionStatusResponse(
-            enabled=True,
-            authenticated=True,
-            principal=credential.principal,
+        _set_session_cookie(response, token, settings)
+        return SessionStatusResponse(enabled=True, authenticated=True, principal=principal)
+
+    @router.post("/password/setup/status", response_model=PasswordSetupStatusResponse)
+    async def password_setup_status(
+        body: PasswordSetupRequest, request: Request
+    ) -> PasswordSetupStatusResponse:
+        settings = validate_session_auth_settings()
+        if not settings.enabled:
+            raise HTTPException(status_code=404, detail="Session authentication is not configured")
+        require_same_origin(request, settings)
+        setup = _valid_password_setup(request, body.token)
+        if setup is None:
+            return PasswordSetupStatusResponse(valid=False)
+        return PasswordSetupStatusResponse(
+            valid=True,
+            username=setup.username,
+            expires_at=setup.expires_at,
         )
+
+    @router.post("/password/setup", response_model=SessionStatusResponse)
+    async def complete_password_setup(
+        body: PasswordSetupCompleteRequest, request: Request, response: Response
+    ) -> SessionStatusResponse:
+        settings = validate_session_auth_settings()
+        if not settings.enabled:
+            raise HTTPException(status_code=404, detail="Session authentication is not configured")
+        require_same_origin(request, settings)
+        setup = _valid_password_setup(request, body.token)
+        if setup is None:
+            raise HTTPException(status_code=400, detail="Password setup link is invalid or expired")
+        store = _require_admin_store(request)
+        identity = store.consume_password_setup(
+            token_hash=_token_hash(body.token),
+            password_hash=hash_password(body.password),
+            now=datetime.now(timezone.utc),
+        )
+        if identity is None:
+            raise HTTPException(status_code=409, detail="Password setup link has already been used")
+        principal = _principal_for_local_identity(request, identity)
+        if principal is None:  # pragma: no cover - required=True raises instead
+            raise HTTPException(status_code=403, detail="Account or tenant is not active")
+        token = _encode_session(
+            principal,
+            settings,
+            username=identity.username,
+            source="local",
+            credential_version=identity.credential_version,
+        )
+        _set_session_cookie(response, token, settings)
+        return SessionStatusResponse(enabled=True, authenticated=True, principal=principal)
 
     @router.delete("/session", status_code=204)
     async def logout(request: Request, response: Response) -> None:
@@ -174,13 +265,23 @@ def principal_from_session_request(
             settings.secret,
             algorithms=["HS256"],
             issuer=SESSION_TOKEN_ISSUER,
-            options={"require": ["exp", "iat", "iss", "sub", "tenant_id", "is_admin"]},
+            options={
+                "require": [
+                    "exp",
+                    "iat",
+                    "iss",
+                    "sub",
+                    "tenant_id",
+                    "is_admin",
+                    "username",
+                    "source",
+                    "credential_version",
+                ]
+            },
         )
-        principal = Principal(
-            user_id=payload["sub"],
-            tenant_id=payload["tenant_id"],
-            is_admin=payload["is_admin"],
-        )
+        principal = _principal_from_session_payload(request, payload, settings)
+        if principal is None:
+            raise ValueError("Session credential is no longer active")
     except (InvalidTokenError, KeyError, TypeError, ValueError):
         if required:
             raise HTTPException(status_code=401, detail="Invalid or expired session") from None
@@ -260,7 +361,14 @@ def require_same_origin(request: Request, settings: SessionAuthSettings) -> None
         raise HTTPException(status_code=403, detail="Cross-origin session request rejected")
 
 
-def _encode_session(principal: Principal, settings: SessionAuthSettings) -> str:
+def _encode_session(
+    principal: Principal,
+    settings: SessionAuthSettings,
+    *,
+    username: str,
+    source: str,
+    credential_version: int,
+) -> str:
     if settings.secret is None:  # pragma: no cover - validated by caller
         raise RuntimeError(f"{SESSION_SECRET_ENV} is required")
     now = int(time.time())
@@ -270,12 +378,127 @@ def _encode_session(principal: Principal, settings: SessionAuthSettings) -> str:
             "sub": principal.user_id,
             "tenant_id": principal.tenant_id,
             "is_admin": principal.is_admin,
+            "username": username,
+            "source": source,
+            "credential_version": credential_version,
             "iat": now,
             "exp": now + settings.ttl_seconds,
         },
         settings.secret,
         algorithm="HS256",
     )
+
+
+def _set_session_cookie(response: Response, token: str, settings: SessionAuthSettings) -> None:
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        max_age=settings.ttl_seconds,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="strict",
+        path="/",
+    )
+
+
+def _principal_from_session_payload(
+    request: Request,
+    payload: dict[str, Any],
+    settings: SessionAuthSettings,
+) -> Principal | None:
+    username = payload.get("username")
+    source = payload.get("source")
+    version = payload.get("credential_version")
+    if not isinstance(username, str) or not isinstance(source, str) or not isinstance(version, int):
+        return None
+    if source == "environment":
+        credential = settings.credentials.get(username)
+        if credential is None or version != 0:
+            return None
+        principal = credential.principal
+    elif source == "local":
+        store = getattr(request.app.state, "admin_store", None)
+        identity = store.get_local_identity(username) if store is not None else None
+        if identity is None or identity.credential_version != version:
+            return None
+        principal = _principal_for_local_identity(request, identity, required=False)
+        if principal is None:
+            return None
+    else:
+        return None
+    if (
+        principal.user_id != payload.get("sub")
+        or principal.tenant_id != payload.get("tenant_id")
+        or principal.is_admin != payload.get("is_admin")
+    ):
+        return None
+    return principal
+
+
+def _principal_for_local_identity(
+    request: Request, identity: Any, *, required: bool = True
+) -> Principal | None:
+    store = _require_admin_store(request)
+    tenant = store.get_tenant(identity.tenant_id)
+    membership = store.get_tenant_user_by_user_id(identity.tenant_id, identity.user_id)
+    active = (
+        not identity.disabled
+        and tenant is not None
+        and tenant.status.value == "active"
+        and membership is not None
+        and membership.status.value == "active"
+    )
+    if not active:
+        if required:
+            raise HTTPException(status_code=403, detail="Account or tenant is not active")
+        return None
+    return Principal(user_id=identity.user_id, tenant_id=identity.tenant_id, is_admin=False)
+
+
+def _valid_password_setup(request: Request, token: str) -> Any | None:
+    store = _require_admin_store(request)
+    setup = store.get_password_setup(_token_hash(token))
+    if setup is None or setup.used_at is not None or setup.expires_at <= datetime.now(timezone.utc):
+        return None
+    tenant = store.get_tenant(setup.tenant_id)
+    membership = store.get_tenant_user_by_user_id(setup.tenant_id, setup.user_id)
+    if (
+        tenant is None
+        or tenant.status.value not in {"provisioning", "active"}
+        or membership is None
+        or membership.status.value not in {"invited", "active"}
+    ):
+        return None
+    return setup
+
+
+def _require_admin_store(request: Request) -> Any:
+    store = getattr(request.app.state, "admin_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="Administration store is not configured")
+    return store
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _enforce_login_rate_limit(
+    request: Request, username: str, settings: SessionAuthSettings
+) -> None:
+    policy = settings.login_rate_limit
+    if not policy.enabled:
+        return
+    limiter = request.app.state.rate_limiter
+    username_key = hashlib.sha256(username.strip().lower().encode()).hexdigest()
+    decision = limiter.consume("session-login", "session-auth", username_key, policy)
+    if not decision.allowed:
+        retry_after = max(1, decision.retry_after_seconds)
+        raise HTTPException(
+            status_code=429,
+            detail="Too many sign-in attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 def _request_origin(request: Request) -> str:
@@ -333,6 +556,28 @@ def _positive_int_env(name: str, env: Mapping[str, str], *, default: int) -> int
         value = int(raw)
     except ValueError as exc:
         raise RuntimeError(f"{name} must be an integer") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} must be greater than zero")
+    return value
+
+
+def _non_negative_int_env(name: str, env: Mapping[str, str], *, default: int) -> int:
+    raw = env.get(name, str(default)).strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
+    if value < 0:
+        raise RuntimeError(f"{name} must be zero or greater")
+    return value
+
+
+def _positive_float_env(name: str, env: Mapping[str, str], *, default: float) -> float:
+    raw = env.get(name, str(default)).strip()
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number") from exc
     if value <= 0:
         raise RuntimeError(f"{name} must be greater than zero")
     return value

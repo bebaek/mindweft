@@ -1380,7 +1380,10 @@ MINIGENT_SESSION_ALLOWED_ORIGINS=https://minigent.example.com
 The request's same origin is always allowed. Successful login sets an `HttpOnly`, `SameSite=Strict`
 cookie. Cookie-authenticated mutations require a matching `Origin` header to prevent cross-site
 request forgery. Passwords are verified with scrypt; store only generated hashes in deployment
-secrets. Login, status, and logout use `POST`, `GET`, and `DELETE /auth/session`, respectively.
+secrets. Login attempts are limited per normalized username using the configured shared rate-limit
+store; tune `MINIGENT_SESSION_LOGIN_RATE_LIMIT_CAPACITY` and
+`MINIGENT_SESSION_LOGIN_RATE_LIMIT_REFILL_PER_SECOND` when needed. Login, status, and logout
+use `POST`, `GET`, and `DELETE /auth/session`, respectively.
 
 For a first-run administration deployment, also configure durable encrypted administration state
 and allow console execution changes to override environment defaults:
@@ -1394,6 +1397,34 @@ MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults
 After an `is_admin=true` credential signs in, an empty administration store presents the tenant
 creation workflow. Create the initial tenant, membership, entitlements, and execution configuration
 before using the workspace.
+
+Deployment credentials are intended for bootstrap and break-glass administration. Additional tenant
+users use local identities stored in the administration database:
+
+1. Create an invited tenant user.
+2. Select **Sign-in** beside that user and choose a globally unique login username.
+3. Create a single-use setup link and deliver it to the user through a trusted channel.
+4. The user opens the link and chooses a password of at least 12 characters. The URL keeps the raw
+   token in its fragment so reverse proxies and HTTP access logs do not receive it.
+5. Successful setup stores only a scrypt password hash, activates an invited membership, signs the
+   user in, and permanently consumes the setup token.
+
+Setup tokens are random, stored only as SHA-256 hashes, expire after 24 hours by default, and are
+invalidated when a replacement link is generated. Administrators can create password-reset links or
+disable local sign-in from the same user dialog. Password replacement and credential disabling bump
+a credential version, immediately invalidating existing signed sessions. Local sessions also check
+current tenant and membership status on every authenticated request, so suspension, archival, or
+deletion takes effect without waiting for cookie expiry. Local tenant roles do not grant global
+`is_admin` access; control-plane administration remains restricted to explicitly configured
+bootstrap administrators.
+
+The corresponding API routes are:
+
+- `GET /admin/tenants/{tenant_id}/users/{user_record_id}/credential`
+- `POST /admin/tenants/{tenant_id}/users/{user_record_id}/credential/setup`
+- `DELETE /admin/tenants/{tenant_id}/users/{user_record_id}/credential`
+- `POST /auth/password/setup/status`
+- `POST /auth/password/setup`
 
 ### JWT Mode
 

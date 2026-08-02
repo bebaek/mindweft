@@ -6,6 +6,7 @@ import { AuthProvider } from "./auth/AuthProvider";
 
 afterEach(() => {
   cleanup();
+  window.history.replaceState(null, "", "/");
 });
 
 beforeEach(() => {
@@ -41,6 +42,39 @@ beforeEach(() => {
       );
     }),
   );
+});
+
+it("activates a tenant user from a single-use setup link", async () => {
+  window.location.hash = "setup=setup-token";
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (path.endsWith("/auth/password/setup/status")) {
+        return Promise.resolve(new Response(JSON.stringify({ valid: true, username: "new-user", expires_at: "2026-08-03T00:00:00Z" }), { status: 200, headers: { "content-type": "application/json" } }));
+      }
+      if (path.endsWith("/auth/password/setup") && init?.method === "POST") {
+        return Promise.resolve(new Response(JSON.stringify({ enabled: true, authenticated: true, principal: { user_id: "new-user", tenant_id: "default", is_admin: false } }), { status: 200, headers: { "content-type": "application/json" } }));
+      }
+      if (path.endsWith("/auth/session")) {
+        return Promise.resolve(new Response(JSON.stringify({ enabled: true, authenticated: false, principal: null }), { status: 200, headers: { "content-type": "application/json" } }));
+      }
+      if (path.endsWith("/health/ready")) {
+        return Promise.resolve(new Response(JSON.stringify({ status: "ready", checks: {} }), { status: 200, headers: { "content-type": "application/json" } }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ detail: "Not found" }), { status: 404, headers: { "content-type": "application/json" } }));
+    }),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={queryClient}><AuthProvider><App /></AuthProvider></QueryClientProvider>);
+
+  expect(await screen.findByRole("heading", { name: "Choose a password" })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("New password"), { target: { value: "a secure local password" } });
+  fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "a secure local password" } });
+  fireEvent.click(screen.getByRole("button", { name: "Activate account" }));
+
+  expect(await screen.findByText("Build, observe, and govern your agents.")).toBeInTheDocument();
+  expect(window.location.hash).toBe("");
 });
 
 it("signs in with configured static credentials", async () => {

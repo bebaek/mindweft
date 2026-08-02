@@ -78,6 +78,18 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setAuthentication({ mode: "session" });
   }, []);
 
+  const completePasswordSetup = useCallback(async (token: string, password: string) => {
+    const status = await new MinigentApiClient({ mode: "session" }).completePasswordSetup(token, password);
+    setSession({
+      loading: false,
+      enabled: status.enabled,
+      authenticated: status.authenticated,
+      principal: status.principal ?? null,
+      error: null,
+    });
+    setAuthentication({ mode: "session" });
+  }, []);
+
   const logout = useCallback(async () => {
     await new MinigentApiClient({ mode: "session" }).logout();
     setSession((current) => ({
@@ -96,10 +108,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
       session,
       setAuthentication,
       login,
+      completePasswordSetup,
       logout,
       refreshSession,
     }),
-    [api, authentication, login, logout, refreshSession, session],
+    [api, authentication, completePasswordSetup, login, logout, refreshSession, session],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -19,6 +19,7 @@ export interface AuthContextValue {
   session: SessionState;
   setAuthentication: (authentication: Authentication) => void;
   login: (username: string, password: string) => Promise<void>;
+  completePasswordSetup: (token: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<void>;
 }

@@ -4,6 +4,7 @@ import base64
 import json
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -23,6 +24,30 @@ from app.models import (
 
 SECRET_WRAPPER_KEY = "__secret__"
 _UNSET = object()
+
+
+@dataclass(frozen=True)
+class LocalIdentity:
+    username: str
+    tenant_id: str
+    user_id: str
+    password_hash: str
+    credential_version: int
+    disabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class PasswordSetup:
+    token_hash: str
+    username: str
+    tenant_id: str
+    user_id: str
+    expires_at: datetime
+    used_at: datetime | None
+    created_by: str
+    created_at: datetime
 
 
 class SQLiteTenantConfigStore:
@@ -327,6 +352,163 @@ class SQLiteTenantConfigStore:
             is not None
         )
 
+    def get_local_identity(self, username: str) -> LocalIdentity | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM local_identities WHERE username = ?", (username,)
+            ).fetchone()
+        return _local_identity_from_row(row) if row is not None else None
+
+    def get_local_identity_for_user(self, tenant_id: str, user_id: str) -> LocalIdentity | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM local_identities WHERE tenant_id = ? AND user_id = ?",
+                (tenant_id, user_id),
+            ).fetchone()
+        return _local_identity_from_row(row) if row is not None else None
+
+    def create_password_setup(
+        self,
+        *,
+        token_hash: str,
+        username: str,
+        tenant_id: str,
+        user_id: str,
+        expires_at: datetime,
+        created_by: str,
+    ) -> PasswordSetup:
+        now = _utc_now_iso()
+        with self._lock:
+            with self._connection() as connection:
+                existing_for_user = connection.execute(
+                    "SELECT username FROM local_identities WHERE tenant_id = ? AND user_id = ?",
+                    (tenant_id, user_id),
+                ).fetchone()
+                if existing_for_user is not None and str(existing_for_user["username"]) != username:
+                    raise sqlite3.IntegrityError("Login username cannot be changed")
+                conflict = connection.execute(
+                    "SELECT tenant_id, user_id FROM local_identities WHERE username = ?",
+                    (username,),
+                ).fetchone()
+                if conflict is not None and (
+                    str(conflict["tenant_id"]) != tenant_id or str(conflict["user_id"]) != user_id
+                ):
+                    raise sqlite3.IntegrityError("Username is already assigned")
+                connection.execute(
+                    """
+                    UPDATE password_setups SET used_at = ?
+                    WHERE tenant_id = ? AND user_id = ? AND used_at IS NULL
+                    """,
+                    (now, tenant_id, user_id),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO password_setups (
+                        token_hash, username, tenant_id, user_id, expires_at,
+                        used_at, created_by, created_at
+                    ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+                    """,
+                    (
+                        token_hash,
+                        username,
+                        tenant_id,
+                        user_id,
+                        expires_at.isoformat(),
+                        created_by,
+                        now,
+                    ),
+                )
+                connection.commit()
+        setup = self.get_password_setup(token_hash)
+        if setup is None:  # pragma: no cover - defensive
+            raise RuntimeError("Password setup was not created")
+        return setup
+
+    def get_password_setup(self, token_hash: str) -> PasswordSetup | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM password_setups WHERE token_hash = ?", (token_hash,)
+            ).fetchone()
+        return _password_setup_from_row(row) if row is not None else None
+
+    def consume_password_setup(
+        self,
+        *,
+        token_hash: str,
+        password_hash: str,
+        now: datetime,
+    ) -> LocalIdentity | None:
+        now_iso = now.isoformat()
+        with self._lock:
+            with self._connection() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    "SELECT * FROM password_setups WHERE token_hash = ?", (token_hash,)
+                ).fetchone()
+                if row is None or row["used_at"] is not None:
+                    return None
+                setup = _password_setup_from_row(row)
+                if setup.expires_at <= now:
+                    return None
+                existing = connection.execute(
+                    "SELECT * FROM local_identities WHERE username = ?", (setup.username,)
+                ).fetchone()
+                if existing is not None and (
+                    str(existing["tenant_id"]) != setup.tenant_id
+                    or str(existing["user_id"]) != setup.user_id
+                ):
+                    return None
+                connection.execute(
+                    """
+                    INSERT INTO local_identities (
+                        username, tenant_id, user_id, password_hash,
+                        credential_version, disabled, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 1, 0, ?, ?)
+                    ON CONFLICT(username) DO UPDATE SET
+                        password_hash = excluded.password_hash,
+                        credential_version = local_identities.credential_version + 1,
+                        disabled = 0,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        setup.username,
+                        setup.tenant_id,
+                        setup.user_id,
+                        password_hash,
+                        now_iso,
+                        now_iso,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE tenant_users SET status = 'active', updated_at = ?
+                    WHERE tenant_id = ? AND user_id = ? AND status = 'invited'
+                    """,
+                    (now_iso, setup.tenant_id, setup.user_id),
+                )
+                connection.execute(
+                    "UPDATE password_setups SET used_at = ? WHERE token_hash = ?",
+                    (now_iso, token_hash),
+                )
+                connection.commit()
+        return self.get_local_identity(setup.username)
+
+    def disable_local_identity(self, tenant_id: str, user_id: str) -> bool:
+        with self._lock:
+            with self._connection() as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE local_identities SET
+                        disabled = 1,
+                        credential_version = credential_version + 1,
+                        updated_at = ?
+                    WHERE tenant_id = ? AND user_id = ?
+                    """,
+                    (_utc_now_iso(), tenant_id, user_id),
+                )
+                connection.commit()
+        return cursor.rowcount > 0
+
     def list_tenant_domains(self, tenant_id: str) -> list[TenantDomain]:
         with self._connection() as connection:
             rows = connection.execute(
@@ -574,6 +756,44 @@ class SQLiteTenantConfigStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS local_identities (
+                    username TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    credential_version INTEGER NOT NULL DEFAULT 1,
+                    disabled INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE (tenant_id, user_id)
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_local_identities_user ON local_identities(tenant_id, user_id)"
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS password_setups (
+                    token_hash TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_password_setups_user ON password_setups(tenant_id, user_id, created_at)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_password_setups_expiry ON password_setups(expires_at, used_at)"
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS tenant_domains (
                     id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
@@ -631,6 +851,34 @@ class SQLiteTenantConfigStore:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _local_identity_from_row(row: sqlite3.Row) -> LocalIdentity:
+    return LocalIdentity(
+        username=str(row["username"]),
+        tenant_id=str(row["tenant_id"]),
+        user_id=str(row["user_id"]),
+        password_hash=str(row["password_hash"]),
+        credential_version=int(row["credential_version"]),
+        disabled=bool(row["disabled"]),
+        created_at=datetime.fromisoformat(str(row["created_at"])),
+        updated_at=datetime.fromisoformat(str(row["updated_at"])),
+    )
+
+
+def _password_setup_from_row(row: sqlite3.Row) -> PasswordSetup:
+    return PasswordSetup(
+        token_hash=str(row["token_hash"]),
+        username=str(row["username"]),
+        tenant_id=str(row["tenant_id"]),
+        user_id=str(row["user_id"]),
+        expires_at=datetime.fromisoformat(str(row["expires_at"])),
+        used_at=(
+            datetime.fromisoformat(str(row["used_at"])) if row["used_at"] is not None else None
+        ),
+        created_by=str(row["created_by"]),
+        created_at=datetime.fromisoformat(str(row["created_at"])),
+    )
 
 
 def _tenant_from_row(row: sqlite3.Row) -> Tenant:

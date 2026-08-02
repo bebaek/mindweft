@@ -15,6 +15,12 @@ export interface SessionStatusResponse {
   principal?: SessionPrincipal | null;
 }
 
+export interface PasswordSetupStatus {
+  valid: boolean;
+  username?: string | null;
+  expires_at?: string | null;
+}
+
 export interface HealthResponse {
   status: "ok";
 }
@@ -375,6 +381,20 @@ export interface AdminTenantUserListResponse {
   offset: number;
 }
 
+export interface AdminCredentialStatus {
+  configured: boolean;
+  username?: string | null;
+  disabled: boolean;
+  managed_externally: boolean;
+  updated_at?: string | null;
+}
+
+export interface AdminCredentialSetup {
+  username: string;
+  setup_token: string;
+  expires_at: string;
+}
+
 export interface AdminTenantDomain {
   id: string;
   tenant_id: string;
@@ -481,6 +501,20 @@ export class MinigentApiClient {
     return this.#request<void>("/auth/session", { method: "DELETE" });
   }
 
+  getPasswordSetupStatus(token: string): Promise<PasswordSetupStatus> {
+    return this.#request<PasswordSetupStatus>("/auth/password/setup/status", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+  }
+
+  completePasswordSetup(token: string, password: string): Promise<SessionStatusResponse> {
+    return this.#request<SessionStatusResponse>("/auth/password/setup", {
+      method: "POST",
+      body: JSON.stringify({ token, password }),
+    });
+  }
+
   getExecutionOptions(signal?: AbortSignal): Promise<ExecutionOptionsResponse> {
     return this.#request<ExecutionOptionsResponse>("/execution-options", { signal });
   }
@@ -531,6 +565,38 @@ export class MinigentApiClient {
     return this.#request<AdminTenantUser>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/users/${encodeURIComponent(userRecordId)}`,
       { method: "PATCH", body: JSON.stringify(input) },
+    );
+  }
+
+  getAdminTenantUserCredential(
+    tenantId: string,
+    userRecordId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminCredentialStatus> {
+    return this.#request<AdminCredentialStatus>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/users/${encodeURIComponent(userRecordId)}/credential`,
+      { signal },
+    );
+  }
+
+  createAdminTenantUserCredentialSetup(
+    tenantId: string,
+    userRecordId: string,
+    username: string,
+  ): Promise<AdminCredentialSetup> {
+    return this.#request<AdminCredentialSetup>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/users/${encodeURIComponent(userRecordId)}/credential/setup`,
+      { method: "POST", body: JSON.stringify({ username }) },
+    );
+  }
+
+  disableAdminTenantUserCredential(
+    tenantId: string,
+    userRecordId: string,
+  ): Promise<{ disabled: boolean }> {
+    return this.#request<{ disabled: boolean }>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/users/${encodeURIComponent(userRecordId)}/credential`,
+      { method: "DELETE" },
     );
   }
 

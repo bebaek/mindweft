@@ -889,10 +889,15 @@ def create_app(
     @app.get("/health/ready", response_model=None)
     async def readiness() -> dict[str, object] | JSONResponse:
         checks = await database_readiness_checks()
+        session_settings = app.state.session_auth_settings
         if (
-            any(
-                credential.principal.is_admin
-                for credential in app.state.session_auth_settings.credentials.values()
+            session_settings.enabled
+            and (
+                not session_settings.credentials
+                or any(
+                    credential.principal.is_admin
+                    for credential in session_settings.credentials.values()
+                )
             )
             and app.state.admin_store is None
         ):
