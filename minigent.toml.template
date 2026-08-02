@@ -72,6 +72,10 @@ enabled = false
 # run_tenant_refill_per_second = 0.0166666667
 # run_user_capacity = 0
 # run_user_refill_per_second = 0.0166666667
+# concurrent_run_tenant_capacity = 0
+# concurrent_run_user_capacity = 0
+# concurrent_run_lease_seconds = 60
+# concurrent_run_heartbeat_seconds = 20
 
 [coding]
 enabled = true

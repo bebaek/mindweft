@@ -98,6 +98,10 @@ class RateLimitConfig:
     run_tenant_refill_per_second: object = None
     run_user_capacity: object = None
     run_user_refill_per_second: object = None
+    concurrent_run_tenant_capacity: object = None
+    concurrent_run_user_capacity: object = None
+    concurrent_run_lease_seconds: object = None
+    concurrent_run_heartbeat_seconds: object = None
 
 
 @dataclass(frozen=True)
@@ -320,6 +324,10 @@ _INT_KEYS = {
     "rate_limits.upload_user_capacity",
     "rate_limits.run_tenant_capacity",
     "rate_limits.run_user_capacity",
+    "rate_limits.concurrent_run_tenant_capacity",
+    "rate_limits.concurrent_run_user_capacity",
+    "rate_limits.concurrent_run_lease_seconds",
+    "rate_limits.concurrent_run_heartbeat_seconds",
     "coding.bridge_port",
     "coding.mcp_gateway_port",
     "quality.max_payload_chars",

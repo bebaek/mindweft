@@ -477,6 +477,10 @@ retain old key versions until rotation has completed on every replica.
 | `run_tenant_refill_per_second` | `MINIGENT_RUN_RATE_LIMIT_TENANT_REFILL_PER_SECOND` | Tenant run tokens restored per second. |
 | `run_user_capacity` | `MINIGENT_RUN_RATE_LIMIT_USER_CAPACITY` | Run burst per tenant/user pair; `0` disables this bucket. |
 | `run_user_refill_per_second` | `MINIGENT_RUN_RATE_LIMIT_USER_REFILL_PER_SECOND` | User run tokens restored per second. |
+| `concurrent_run_tenant_capacity` | `MINIGENT_RUN_CONCURRENCY_TENANT_CAPACITY` | Maximum active leased runs across a tenant; `0` disables this scope. |
+| `concurrent_run_user_capacity` | `MINIGENT_RUN_CONCURRENCY_USER_CAPACITY` | Maximum active leased runs per tenant/user pair; `0` disables this scope. |
+| `concurrent_run_lease_seconds` | `MINIGENT_RUN_CONCURRENCY_LEASE_SECONDS` | Crash-recovery lease duration; defaults to 60 seconds. |
+| `concurrent_run_heartbeat_seconds` | `MINIGENT_RUN_CONCURRENCY_HEARTBEAT_SECONDS` | Renewal interval, which must be shorter than the lease; defaults to 20 seconds. |
 
 Upload limits cover both attachment upload endpoints. Run limits cover standard and NDJSON-streamed
 runs, and both variants consume the same run bucket. Every accepted request atomically consumes the
@@ -484,6 +488,12 @@ applicable tenant and user tokens; a rejection consumes neither. Rejections retu
 bounded integer `Retry-After` header and a structured body, and logs contain category, tenant,
 rejected scope, and retry delay without request contents. Limits default to disabled. When enabling
 limits on more than one replica, configure a shared SQLite path rather than process-local state.
+Concurrent-run leases use the same store and cover standard runs, streamed runs, and resumed private
+consent actions. Leases are renewed while work is active and released on completion, failure,
+cancellation, streaming disconnect, or shutdown. An expired lease is removed atomically during the
+next acquisition or admin statistics read, so a crashed replica cannot reserve capacity forever.
+Admins can inspect aggregate active-run and active-user counts without user IDs or lease IDs at
+`GET /admin/tenants/{tenant_id}/run-concurrency`.
 
 ### `[coding]`
 

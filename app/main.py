@@ -83,7 +83,11 @@ from app.oauth import GenericOAuthProvider, build_oauth_flow_store_from_env
 from app.observability import configure_logging, configure_tracing
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry
 from app.quality import QualityEnhancer
-from app.rate_limits import RateLimiter, build_rate_limiter
+from app.rate_limits import (
+    RateLimiter,
+    RunConcurrencyLease,
+    build_rate_limiter,
+)
 from app.redaction import install_log_redaction
 from app.runtime import (
     AgentRuntime,
@@ -259,6 +263,86 @@ def _enforce_request_rate_limit(
         },
         headers={"Retry-After": str(decision.retry_after_seconds)},
     )
+
+
+async def _acquire_run_concurrency_slot(
+    request: Request,
+    principal: Principal,
+) -> RunConcurrencyLease:
+    policy = request.app.state.rate_limit_settings.concurrent_runs
+    decision = await asyncio.to_thread(
+        request.app.state.rate_limiter.acquire_run_slot,
+        principal.tenant_id,
+        principal.user_id,
+        policy,
+    )
+    if decision.allowed and decision.lease is not None:
+        return decision.lease
+    logger.warning(
+        "request.concurrency_limited tenant_id=%s scope=%s retry_after_seconds=%s",
+        principal.tenant_id,
+        decision.rejected_scope,
+        decision.retry_after_seconds,
+    )
+    raise HTTPException(
+        status_code=429,
+        detail={
+            "error": "concurrent_run_limit_exceeded",
+            "category": "thread_run_concurrency",
+            "retry_after_seconds": decision.retry_after_seconds,
+        },
+        headers={"Retry-After": str(decision.retry_after_seconds)},
+    )
+
+
+@asynccontextmanager
+async def _maintain_run_concurrency_slot(
+    app: FastAPI,
+    lease: RunConcurrencyLease,
+):
+    policy = app.state.rate_limit_settings.concurrent_runs
+    owner_task = asyncio.current_task()
+
+    async def heartbeat() -> None:
+        while lease.lease_id is not None:
+            await asyncio.sleep(policy.heartbeat_seconds)
+            renewed = await asyncio.to_thread(
+                app.state.rate_limiter.renew_run_slot,
+                lease,
+                policy,
+            )
+            if renewed:
+                continue
+            logger.error(
+                "thread_run.concurrency_lease_lost tenant_id=%s",
+                lease.tenant_id,
+            )
+            if owner_task is not None:
+                owner_task.cancel()
+            return
+
+    heartbeat_task = asyncio.create_task(heartbeat()) if lease.lease_id is not None else None
+    try:
+        yield
+    finally:
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        await asyncio.to_thread(app.state.rate_limiter.release_run_slot, lease)
+
+
+async def _run_thread_stream_with_concurrency_slot(
+    request: Request,
+    principal: Principal,
+    thread_id: str,
+    lease: RunConcurrencyLease,
+) -> AsyncIterator[str]:
+    async with _maintain_run_concurrency_slot(request.app, lease):
+        async for event in _run_thread_ndjson_stream(request, principal, thread_id):
+            yield event
 
 
 def build_thread_store(settings: ThreadStoreSettings) -> ThreadStore:
@@ -1400,7 +1484,9 @@ def create_app(
             store=request.app.state.store,
             thread_id=thread_id,
         )
-        reply, _metadata = await _await_backend_run(request, principal, thread_id)
+        lease = await _acquire_run_concurrency_slot(request, principal)
+        async with _maintain_run_concurrency_slot(request.app, lease):
+            reply, _metadata = await _await_backend_run(request, principal, thread_id)
         return RunThreadResponse(reply=reply)
 
     @app.post("/threads/{thread_id}/run/stream", response_model=None)
@@ -1421,8 +1507,9 @@ def create_app(
             store=request.app.state.store,
             thread_id=thread_id,
         )
+        lease = await _acquire_run_concurrency_slot(request, principal)
         return StreamingResponse(
-            _run_thread_ndjson_stream(request, principal, thread_id),
+            _run_thread_stream_with_concurrency_slot(request, principal, thread_id, lease),
             media_type="application/x-ndjson",
         )
 
@@ -1489,12 +1576,16 @@ def create_app(
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> RunThreadResponse:
+        _reject_if_draining(request)
+        _enforce_request_rate_limit(request, principal, RUN_RATE_LIMIT_CATEGORY)
         request.app.state.store.get_thread(principal.tenant_id, thread_id)
-        reply, _metadata = await request.app.state.runtime.resume_private_value_consent(
-            principal,
-            thread_id,
-            consent_id,
-        )
+        lease = await _acquire_run_concurrency_slot(request, principal)
+        async with _maintain_run_concurrency_slot(request.app, lease):
+            reply, _metadata = await request.app.state.runtime.resume_private_value_consent(
+                principal,
+                thread_id,
+                consent_id,
+            )
         return RunThreadResponse(reply=reply)
 
     @app.get("/threads/{thread_id}/private-value-actions")

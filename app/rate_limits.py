@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from typing import Protocol
+from uuid import uuid4
 
 RATE_LIMIT_DB_PATH_ENV = "MINIGENT_RATE_LIMIT_DB_PATH"
 UPLOAD_TENANT_CAPACITY_ENV = "MINIGENT_UPLOAD_RATE_LIMIT_TENANT_CAPACITY"
@@ -19,7 +20,13 @@ RUN_TENANT_CAPACITY_ENV = "MINIGENT_RUN_RATE_LIMIT_TENANT_CAPACITY"
 RUN_TENANT_REFILL_ENV = "MINIGENT_RUN_RATE_LIMIT_TENANT_REFILL_PER_SECOND"
 RUN_USER_CAPACITY_ENV = "MINIGENT_RUN_RATE_LIMIT_USER_CAPACITY"
 RUN_USER_REFILL_ENV = "MINIGENT_RUN_RATE_LIMIT_USER_REFILL_PER_SECOND"
+RUN_CONCURRENCY_TENANT_CAPACITY_ENV = "MINIGENT_RUN_CONCURRENCY_TENANT_CAPACITY"
+RUN_CONCURRENCY_USER_CAPACITY_ENV = "MINIGENT_RUN_CONCURRENCY_USER_CAPACITY"
+RUN_CONCURRENCY_LEASE_SECONDS_ENV = "MINIGENT_RUN_CONCURRENCY_LEASE_SECONDS"
+RUN_CONCURRENCY_HEARTBEAT_SECONDS_ENV = "MINIGENT_RUN_CONCURRENCY_HEARTBEAT_SECONDS"
 DEFAULT_RATE_LIMIT_REFILL_PER_SECOND = 1.0 / 60.0
+DEFAULT_RUN_CONCURRENCY_LEASE_SECONDS = 60
+DEFAULT_RUN_CONCURRENCY_HEARTBEAT_SECONDS = 20
 MAX_RETRY_AFTER_SECONDS = 86_400
 
 
@@ -36,15 +43,28 @@ class RateLimitPolicy:
 
 
 @dataclass(frozen=True)
+class RunConcurrencyPolicy:
+    tenant_capacity: int = 0
+    user_capacity: int = 0
+    lease_seconds: int = DEFAULT_RUN_CONCURRENCY_LEASE_SECONDS
+    heartbeat_seconds: int = DEFAULT_RUN_CONCURRENCY_HEARTBEAT_SECONDS
+
+    @property
+    def enabled(self) -> bool:
+        return self.tenant_capacity > 0 or self.user_capacity > 0
+
+
+@dataclass(frozen=True)
 class RateLimitSettings:
     db_path: str | None = None
     uploads: RateLimitPolicy = RateLimitPolicy()
     runs: RateLimitPolicy = RateLimitPolicy()
+    concurrent_runs: RunConcurrencyPolicy = RunConcurrencyPolicy()
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> RateLimitSettings:
         lookup = os.environ if env is None else env
-        return cls(
+        settings = cls(
             db_path=lookup.get(RATE_LIMIT_DB_PATH_ENV, "").strip() or None,
             uploads=_policy_from_env(
                 lookup,
@@ -60,7 +80,30 @@ class RateLimitSettings:
                 user_capacity_env=RUN_USER_CAPACITY_ENV,
                 user_refill_env=RUN_USER_REFILL_ENV,
             ),
+            concurrent_runs=RunConcurrencyPolicy(
+                tenant_capacity=_non_negative_int_env(
+                    lookup, RUN_CONCURRENCY_TENANT_CAPACITY_ENV, 0
+                ),
+                user_capacity=_non_negative_int_env(lookup, RUN_CONCURRENCY_USER_CAPACITY_ENV, 0),
+                lease_seconds=_positive_int_env(
+                    lookup,
+                    RUN_CONCURRENCY_LEASE_SECONDS_ENV,
+                    DEFAULT_RUN_CONCURRENCY_LEASE_SECONDS,
+                ),
+                heartbeat_seconds=_positive_int_env(
+                    lookup,
+                    RUN_CONCURRENCY_HEARTBEAT_SECONDS_ENV,
+                    DEFAULT_RUN_CONCURRENCY_HEARTBEAT_SECONDS,
+                ),
+            ),
         )
+        concurrency = settings.concurrent_runs
+        if concurrency.enabled and concurrency.heartbeat_seconds >= concurrency.lease_seconds:
+            raise RuntimeError(
+                f"{RUN_CONCURRENCY_HEARTBEAT_SECONDS_ENV} must be less than "
+                f"{RUN_CONCURRENCY_LEASE_SECONDS_ENV}"
+            )
+        return settings
 
 
 @dataclass(frozen=True)
@@ -68,6 +111,29 @@ class RateLimitDecision:
     allowed: bool
     retry_after_seconds: int = 0
     rejected_scope: str | None = None
+
+
+@dataclass(frozen=True)
+class RunConcurrencyLease:
+    lease_id: str | None
+    tenant_id: str
+    user_id: str
+    expires_at: float
+
+
+@dataclass(frozen=True)
+class RunConcurrencyDecision:
+    allowed: bool
+    lease: RunConcurrencyLease | None = None
+    retry_after_seconds: int = 0
+    rejected_scope: str | None = None
+
+
+@dataclass(frozen=True)
+class RunConcurrencyStatistics:
+    active_runs: int
+    active_users: int
+    next_expiration: float | None = None
 
 
 class RateLimiter(Protocol):
@@ -80,6 +146,29 @@ class RateLimiter(Protocol):
         *,
         now: float | None = None,
     ) -> RateLimitDecision: ...
+
+    def acquire_run_slot(
+        self,
+        tenant_id: str,
+        user_id: str,
+        policy: RunConcurrencyPolicy,
+        *,
+        now: float | None = None,
+    ) -> RunConcurrencyDecision: ...
+
+    def renew_run_slot(
+        self,
+        lease: RunConcurrencyLease,
+        policy: RunConcurrencyPolicy,
+        *,
+        now: float | None = None,
+    ) -> bool: ...
+
+    def release_run_slot(self, lease: RunConcurrencyLease) -> bool: ...
+
+    def run_concurrency_statistics(
+        self, tenant_id: str, *, now: float | None = None
+    ) -> RunConcurrencyStatistics: ...
 
 
 @dataclass
@@ -95,9 +184,18 @@ class _BucketSpec:
     refill_per_second: float
 
 
+@dataclass
+class _RunLeaseRecord:
+    lease_id: str
+    tenant_id: str
+    user_id: str
+    expires_at: float
+
+
 class InMemoryRateLimiter:
     def __init__(self) -> None:
         self._buckets: dict[tuple[str, str, str, str], _Bucket] = {}
+        self._run_leases: dict[str, _RunLeaseRecord] = {}
         self._lock = RLock()
 
     def consume(
@@ -133,6 +231,81 @@ class InMemoryRateLimiter:
                 )
         return RateLimitDecision(allowed=True)
 
+    def acquire_run_slot(
+        self,
+        tenant_id: str,
+        user_id: str,
+        policy: RunConcurrencyPolicy,
+        *,
+        now: float | None = None,
+    ) -> RunConcurrencyDecision:
+        timestamp = time.time() if now is None else now
+        if not policy.enabled:
+            return RunConcurrencyDecision(
+                allowed=True,
+                lease=RunConcurrencyLease(None, tenant_id, user_id, timestamp),
+            )
+        with self._lock:
+            self._purge_expired_run_leases(timestamp)
+            records = list(self._run_leases.values())
+            rejected = _concurrency_rejection(records, tenant_id, user_id, policy, timestamp)
+            if rejected is not None:
+                return rejected
+            lease_id = str(uuid4())
+            expires_at = timestamp + policy.lease_seconds
+            self._run_leases[lease_id] = _RunLeaseRecord(
+                lease_id=lease_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                expires_at=expires_at,
+            )
+        return RunConcurrencyDecision(
+            allowed=True,
+            lease=RunConcurrencyLease(lease_id, tenant_id, user_id, expires_at),
+        )
+
+    def renew_run_slot(
+        self,
+        lease: RunConcurrencyLease,
+        policy: RunConcurrencyPolicy,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        if lease.lease_id is None:
+            return True
+        timestamp = time.time() if now is None else now
+        with self._lock:
+            record = self._run_leases.get(lease.lease_id)
+            if record is None or record.expires_at <= timestamp:
+                self._run_leases.pop(lease.lease_id, None)
+                return False
+            record.expires_at = timestamp + policy.lease_seconds
+            return True
+
+    def release_run_slot(self, lease: RunConcurrencyLease) -> bool:
+        if lease.lease_id is None:
+            return True
+        with self._lock:
+            return self._run_leases.pop(lease.lease_id, None) is not None
+
+    def run_concurrency_statistics(
+        self, tenant_id: str, *, now: float | None = None
+    ) -> RunConcurrencyStatistics:
+        timestamp = time.time() if now is None else now
+        with self._lock:
+            self._purge_expired_run_leases(timestamp)
+            records = [
+                record for record in self._run_leases.values() if record.tenant_id == tenant_id
+            ]
+        return _run_concurrency_statistics(records)
+
+    def _purge_expired_run_leases(self, now: float) -> None:
+        expired = [
+            lease_id for lease_id, record in self._run_leases.items() if record.expires_at <= now
+        ]
+        for lease_id in expired:
+            del self._run_leases[lease_id]
+
 
 class SQLiteRateLimiter:
     def __init__(self, db_path: str | Path) -> None:
@@ -161,6 +334,24 @@ class SQLiteRateLimiter:
                     PRIMARY KEY (category, scope, tenant_id, user_id)
                 )
                 """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS concurrent_run_leases (
+                    lease_id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    expires_at REAL NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_concurrent_run_leases_tenant "
+                "ON concurrent_run_leases (tenant_id, expires_at)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_concurrent_run_leases_user "
+                "ON concurrent_run_leases (tenant_id, user_id, expires_at)"
             )
 
     def consume(
@@ -213,6 +404,118 @@ class SQLiteRateLimiter:
                     (*spec.key, state.tokens - 1.0, state.updated_at),
                 )
         return RateLimitDecision(allowed=True)
+
+    def acquire_run_slot(
+        self,
+        tenant_id: str,
+        user_id: str,
+        policy: RunConcurrencyPolicy,
+        *,
+        now: float | None = None,
+    ) -> RunConcurrencyDecision:
+        timestamp = time.time() if now is None else now
+        if not policy.enabled:
+            return RunConcurrencyDecision(
+                allowed=True,
+                lease=RunConcurrencyLease(None, tenant_id, user_id, timestamp),
+            )
+        with self._lock, self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "DELETE FROM concurrent_run_leases WHERE expires_at <= ?",
+                (timestamp,),
+            )
+            records = [
+                _RunLeaseRecord(str(row[0]), str(row[1]), str(row[2]), float(row[3]))
+                for row in connection.execute(
+                    """
+                    SELECT lease_id, tenant_id, user_id, expires_at
+                    FROM concurrent_run_leases
+                    WHERE tenant_id = ?
+                    """,
+                    (tenant_id,),
+                ).fetchall()
+            ]
+            rejected = _concurrency_rejection(records, tenant_id, user_id, policy, timestamp)
+            if rejected is not None:
+                return rejected
+            lease_id = str(uuid4())
+            expires_at = timestamp + policy.lease_seconds
+            connection.execute(
+                """
+                INSERT INTO concurrent_run_leases (lease_id, tenant_id, user_id, expires_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (lease_id, tenant_id, user_id, expires_at),
+            )
+        return RunConcurrencyDecision(
+            allowed=True,
+            lease=RunConcurrencyLease(lease_id, tenant_id, user_id, expires_at),
+        )
+
+    def renew_run_slot(
+        self,
+        lease: RunConcurrencyLease,
+        policy: RunConcurrencyPolicy,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        if lease.lease_id is None:
+            return True
+        timestamp = time.time() if now is None else now
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE concurrent_run_leases
+                SET expires_at = ?
+                WHERE lease_id = ? AND tenant_id = ? AND user_id = ? AND expires_at > ?
+                """,
+                (
+                    timestamp + policy.lease_seconds,
+                    lease.lease_id,
+                    lease.tenant_id,
+                    lease.user_id,
+                    timestamp,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def release_run_slot(self, lease: RunConcurrencyLease) -> bool:
+        if lease.lease_id is None:
+            return True
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM concurrent_run_leases
+                WHERE lease_id = ? AND tenant_id = ? AND user_id = ?
+                """,
+                (lease.lease_id, lease.tenant_id, lease.user_id),
+            )
+            return cursor.rowcount > 0
+
+    def run_concurrency_statistics(
+        self, tenant_id: str, *, now: float | None = None
+    ) -> RunConcurrencyStatistics:
+        timestamp = time.time() if now is None else now
+        with self._lock, self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "DELETE FROM concurrent_run_leases WHERE expires_at <= ?",
+                (timestamp,),
+            )
+            row = connection.execute(
+                """
+                SELECT COUNT(*), COUNT(DISTINCT user_id), MIN(expires_at)
+                FROM concurrent_run_leases
+                WHERE tenant_id = ?
+                """,
+                (tenant_id,),
+            ).fetchone()
+        return RunConcurrencyStatistics(
+            active_runs=int(row[0]),
+            active_users=int(row[1]),
+            next_expiration=float(row[2]) if row[2] is not None else None,
+        )
 
 
 def build_rate_limiter(settings: RateLimitSettings) -> RateLimiter:
@@ -287,6 +590,46 @@ def _rejected_decision(
     )
 
 
+def _concurrency_rejection(
+    records: list[_RunLeaseRecord],
+    tenant_id: str,
+    user_id: str,
+    policy: RunConcurrencyPolicy,
+    now: float,
+) -> RunConcurrencyDecision | None:
+    tenant_records = [record for record in records if record.tenant_id == tenant_id]
+    user_records = [record for record in tenant_records if record.user_id == user_id]
+    rejected_scope: str | None = None
+    blocking_records: list[_RunLeaseRecord] = []
+    if policy.tenant_capacity > 0 and len(tenant_records) >= policy.tenant_capacity:
+        rejected_scope = "tenant"
+        blocking_records = tenant_records
+    elif policy.user_capacity > 0 and len(user_records) >= policy.user_capacity:
+        rejected_scope = "user"
+        blocking_records = user_records
+    if rejected_scope is None:
+        return None
+    retry_after = min(
+        MAX_RETRY_AFTER_SECONDS,
+        max(1, math.ceil(min(record.expires_at for record in blocking_records) - now)),
+    )
+    return RunConcurrencyDecision(
+        allowed=False,
+        retry_after_seconds=retry_after,
+        rejected_scope=rejected_scope,
+    )
+
+
+def _run_concurrency_statistics(
+    records: list[_RunLeaseRecord],
+) -> RunConcurrencyStatistics:
+    return RunConcurrencyStatistics(
+        active_runs=len(records),
+        active_users=len({record.user_id for record in records}),
+        next_expiration=min((record.expires_at for record in records), default=None),
+    )
+
+
 def _policy_from_env(
     env: Mapping[str, str],
     *,
@@ -321,6 +664,23 @@ def _non_negative_int_env(
         raise RuntimeError(f"{name} must be a non-negative integer") from exc
     if value < 0:
         raise RuntimeError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _positive_int_env(
+    env: Mapping[str, str],
+    name: str,
+    default: int,
+) -> int:
+    configured = env.get(name, "").strip()
+    if not configured:
+        return default
+    try:
+        value = int(configured)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a positive integer") from exc
+    if value < 1:
+        raise RuntimeError(f"{name} must be a positive integer")
     return value
 
 

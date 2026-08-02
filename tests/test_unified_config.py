@@ -144,6 +144,10 @@ run_tenant_capacity = 15
 run_tenant_refill_per_second = 0.3
 run_user_capacity = 5
 run_user_refill_per_second = 0.1
+concurrent_run_tenant_capacity = 4
+concurrent_run_user_capacity = 2
+concurrent_run_lease_seconds = 60
+concurrent_run_heartbeat_seconds = 20
 
 [mcp]
 servers = [{ name = "filesystem", url = "http://127.0.0.1:8765/mcp", headers = {} }]
@@ -278,6 +282,10 @@ max_payload_chars = 4096
     assert settings.rate_limits.runs.tenant_refill_per_second == 0.3
     assert settings.rate_limits.runs.user_capacity == 5
     assert settings.rate_limits.runs.user_refill_per_second == 0.1
+    assert settings.rate_limits.concurrent_runs.tenant_capacity == 4
+    assert settings.rate_limits.concurrent_runs.user_capacity == 2
+    assert settings.rate_limits.concurrent_runs.lease_seconds == 60
+    assert settings.rate_limits.concurrent_runs.heartbeat_seconds == 20
     assert settings.mcp.servers[0].name == "filesystem"
     assert settings.peer_agents.agents[0].name == "local-agent"
     assert settings.logging.level == "DEBUG"

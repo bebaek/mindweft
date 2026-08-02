@@ -52,6 +52,7 @@ from app.models import (
     ToolSpec,
 )
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
+from app.rate_limits import InMemoryRateLimiter, RunConcurrencyPolicy
 from app.runtime import AgentRuntime
 from app.store import InMemoryThreadStore, SQLiteThreadStore
 from app.tools import build_local_tool_registry
@@ -1331,6 +1332,62 @@ def test_run_rate_limit_is_shared_by_standard_and_stream_endpoints(
     assert rejected.json()["detail"]["category"] == "thread_run"
 
 
+def test_run_concurrency_limit_covers_run_stream_and_consent_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_TENANT_CAPACITY", "1")
+    monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_USER_CAPACITY", "1")
+    monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_LEASE_SECONDS", "60")
+    monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_HEARTBEAT_SECONDS", "20")
+    limiter = InMemoryRateLimiter()
+    policy = RunConcurrencyPolicy(
+        tenant_capacity=1,
+        user_capacity=1,
+        lease_seconds=60,
+        heartbeat_seconds=20,
+    )
+    occupied = limiter.acquire_run_slot("tenant-1", "other-user", policy)
+    assert occupied.lease is not None
+    app = create_app(
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=build_local_tool_registry(),
+        rate_limiter=limiter,
+    )
+    client = TestClient(app)
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    responses = [
+        client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS),
+        client.post(f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS),
+        client.post(
+            f"/threads/{thread_id}/private-value-consents/missing/resume",
+            headers=AUTH_HEADERS,
+        ),
+    ]
+
+    for response in responses:
+        assert response.status_code == 429
+        assert response.headers["retry-after"]
+        assert response.json()["detail"]["error"] == "concurrent_run_limit_exceeded"
+        assert response.json()["detail"]["category"] == "thread_run_concurrency"
+
+    statistics = client.get(
+        "/admin/tenants/tenant-1/run-concurrency",
+        headers=ADMIN_HEADERS,
+    )
+    assert statistics.status_code == 200
+    assert statistics.json()["active_runs"] == 1
+    assert statistics.json()["active_users"] == 1
+    assert statistics.json()["tenant_capacity"] == 1
+    assert "user_id" not in statistics.json()
+    assert "lease_id" not in statistics.json()
+
+    assert limiter.release_run_slot(occupied.lease) is True
+    completed = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    assert completed.status_code == 200
+    assert limiter.run_concurrency_statistics("tenant-1").active_runs == 0
+
+
 def test_run_stream_endpoint_emits_ndjson_events() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
@@ -1910,6 +1967,55 @@ class BlockingLLMAdapter(LLMAdapter):
 
     def describe(self) -> dict[str, object]:
         return {"provider": "blocking"}
+
+
+def test_run_concurrency_lease_heartbeats_and_releases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_TENANT_CAPACITY", "1")
+        monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_USER_CAPACITY", "1")
+        monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_LEASE_SECONDS", "2")
+        monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_HEARTBEAT_SECONDS", "1")
+        limiter = InMemoryRateLimiter()
+        adapter = BlockingLLMAdapter()
+        app = create_app(
+            llm_adapter=adapter,
+            tool_registry=build_local_tool_registry(),
+            rate_limiter=limiter,
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            first_thread = (await client.post("/threads", headers=AUTH_HEADERS)).json()["thread_id"]
+            second_thread = (await client.post("/threads", headers=AUTH_HEADERS)).json()[
+                "thread_id"
+            ]
+            await client.post(
+                f"/threads/{first_thread}/messages",
+                json={"content": "first"},
+                headers=AUTH_HEADERS,
+            )
+            first_run = asyncio.create_task(
+                client.post(f"/threads/{first_thread}/run", headers=AUTH_HEADERS)
+            )
+            await adapter.started.wait()
+
+            rejected = await client.post(
+                f"/threads/{second_thread}/run",
+                headers=AUTH_HEADERS,
+            )
+            assert rejected.status_code == 429
+            assert rejected.json()["detail"]["error"] == "concurrent_run_limit_exceeded"
+
+            await asyncio.sleep(2.2)
+            statistics = limiter.run_concurrency_statistics("tenant-1")
+            assert statistics.active_runs == 1
+            adapter.release.set()
+            completed = await first_run
+            assert completed.status_code == 200
+            assert limiter.run_concurrency_statistics("tenant-1").active_runs == 0
+
+    asyncio.run(scenario())
 
 
 def test_agent_runtime_cancellation_resets_thread_to_idle() -> None:

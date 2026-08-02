@@ -105,6 +105,10 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "run_tenant_refill_per_second": "MINIGENT_RUN_RATE_LIMIT_TENANT_REFILL_PER_SECOND",
         "run_user_capacity": "MINIGENT_RUN_RATE_LIMIT_USER_CAPACITY",
         "run_user_refill_per_second": "MINIGENT_RUN_RATE_LIMIT_USER_REFILL_PER_SECOND",
+        "concurrent_run_tenant_capacity": "MINIGENT_RUN_CONCURRENCY_TENANT_CAPACITY",
+        "concurrent_run_user_capacity": "MINIGENT_RUN_CONCURRENCY_USER_CAPACITY",
+        "concurrent_run_lease_seconds": "MINIGENT_RUN_CONCURRENCY_LEASE_SECONDS",
+        "concurrent_run_heartbeat_seconds": "MINIGENT_RUN_CONCURRENCY_HEARTBEAT_SECONDS",
     },
     "coding": {
         "enabled": "MINIGENT_CODING_MCP_GATEWAY_ENABLED",

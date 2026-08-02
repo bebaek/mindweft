@@ -738,8 +738,10 @@ Rate limits use shared atomic token buckets for attachment uploads and thread ru
 buckets are configured independently with the `MINIGENT_UPLOAD_RATE_LIMIT_*` and
 `MINIGENT_RUN_RATE_LIMIT_*` capacity/refill settings. Capacity `0` disables a bucket. A rejected
 request returns HTTP 429 with `Retry-After`; standard and streaming runs share the same run category,
-and binary and base64 attachment endpoints share the same upload category. Configure the shared
-rate-limit database whenever more than one replica is active.
+and binary and base64 attachment endpoints share the same upload category. Concurrent-run limits
+use `MINIGENT_RUN_CONCURRENCY_*` tenant/user capacities plus renewable expiry leases in the same
+SQLite store, and also cover private-consent resumes. Configure the shared rate-limit database
+whenever more than one replica is active.
 
 Bring the service up with:
 
@@ -1586,6 +1588,7 @@ Admin endpoints:
 - `DELETE /admin/tenants/{tenant_id}/entitlements`
 - `GET /admin/execution-config-tenants`
 - `GET /admin/tenants/{tenant_id}/attachments/statistics`
+- `GET /admin/tenants/{tenant_id}/run-concurrency`
 - `GET /admin/tenants/{tenant_id}/threads`
 - `GET /admin/tenants/{tenant_id}/threads/{thread_id}`
 - `DELETE /admin/tenants/{tenant_id}/threads/{thread_id}`
@@ -1610,7 +1613,7 @@ When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, public thread endpoints reject au
 
 Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. Admin deletion removes a thread and its messages and writes an audit record. The prune endpoint deletes matching tenant threads with `updated_at` older than required `updated_before`, with optional `status`, `profile`, and `skill` filters. Add `dry_run=true` to preview `candidate_thread_ids` without deleting threads or writing audit records. The audit endpoint lists deletion/prune records and tenant mutation records with actor, action, affected count, thread IDs, optional `resource_type`/`resource_id`, optional `old_values`/`new_values`, optional metadata, timestamp, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `action`, `actor`, `created_after`, and `created_before` query parameters. Tenant audit payloads redact secret-like keys such as `token`, `secret`, `key`, `authorization`, and `password`. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect and manage persisted threads and audit records after process restarts.
 
-The attachment statistics endpoint returns only tenant-level counts and byte totals split across pending, referenced, and lifecycle-exempt records, plus the oldest pending timestamp and age and the configured tenant quota. It does not read or return attachment contents or per-record metadata.
+The attachment statistics endpoint returns only tenant-level counts and byte totals split across pending, referenced, and lifecycle-exempt records, plus the oldest pending timestamp and age and the configured tenant quota. It does not read or return attachment contents or per-record metadata. The run-concurrency endpoint returns only aggregate active-run and active-user counts, the next lease expiration, and configured capacities/timings; it does not expose user IDs, thread IDs, or lease IDs.
 
 The packaged CLI can inspect and manage the same tenant registry and thread data when authenticated as an admin:
 

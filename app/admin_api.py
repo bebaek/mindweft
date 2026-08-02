@@ -100,6 +100,17 @@ class AdminTenantAttachmentStatisticsResponse(BaseModel):
     max_bytes: int
 
 
+class AdminTenantRunConcurrencyResponse(BaseModel):
+    tenant_id: str
+    active_runs: int
+    active_users: int
+    next_expiration: datetime | None = None
+    tenant_capacity: int
+    user_capacity: int
+    lease_seconds: int
+    heartbeat_seconds: int
+
+
 class AdminTenantCreateRequest(BaseModel):
     id: str | None = None
     slug: str
@@ -1027,6 +1038,33 @@ def build_admin_router() -> APIRouter:
             deleted=True,
             tenant_id=tenant_id,
             status=TenantStatus.DELETED,
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/run-concurrency",
+        response_model=AdminTenantRunConcurrencyResponse,
+    )
+    async def tenant_run_concurrency(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantRunConcurrencyResponse:
+        _ = admin
+        statistics = request.app.state.rate_limiter.run_concurrency_statistics(tenant_id)
+        policy = request.app.state.rate_limit_settings.concurrent_runs
+        return AdminTenantRunConcurrencyResponse(
+            tenant_id=tenant_id,
+            active_runs=statistics.active_runs,
+            active_users=statistics.active_users,
+            next_expiration=(
+                datetime.fromtimestamp(statistics.next_expiration, tz=timezone.utc)
+                if statistics.next_expiration is not None
+                else None
+            ),
+            tenant_capacity=policy.tenant_capacity,
+            user_capacity=policy.user_capacity,
+            lease_seconds=policy.lease_seconds,
+            heartbeat_seconds=policy.heartbeat_seconds,
         )
 
     @router.get(
