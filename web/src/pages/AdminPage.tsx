@@ -27,7 +27,8 @@ type DomainAction =
   | { kind: "verify"; domainId: string }
   | { kind: "delete"; domainId: string };
 
-export function AdminPage() {
+export function AdminPage({ tenantId: scopedTenantId }: { tenantId?: string }) {
+  const tenantScoped = scopedTenantId !== undefined;
   const { api, authentication, session } = useAuth();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
@@ -42,6 +43,13 @@ export function AdminPage() {
   const tenants = useQuery({
     queryKey: ["admin-tenants", authentication],
     queryFn: ({ signal }) => api.listAdminTenants(signal),
+    enabled: !tenantScoped,
+    retry: false,
+  });
+  const scopedTenant = useQuery({
+    queryKey: ["admin-tenant", scopedTenantId, authentication],
+    queryFn: ({ signal }) => api.getAdminTenant(scopedTenantId!, signal),
+    enabled: tenantScoped,
     retry: false,
   });
   const filteredTenants = useMemo(() => {
@@ -53,8 +61,10 @@ export function AdminPage() {
         .some((value) => String(value).toLowerCase().includes(needle)),
     );
   }, [search, tenants.data]);
-  const tenantId = selection ?? filteredTenants[0]?.id ?? null;
-  const tenant = tenants.data?.tenants.find((item) => item.id === tenantId) ?? null;
+  const tenantId = scopedTenantId ?? selection ?? filteredTenants[0]?.id ?? null;
+  const tenant = tenantScoped
+    ? scopedTenant.data ?? null
+    : tenants.data?.tenants.find((item) => item.id === tenantId) ?? null;
 
   const users = useQuery({
     queryKey: ["admin-tenant-users", tenantId, authentication],
@@ -72,13 +82,13 @@ export function AdminPage() {
   const attachments = useQuery({
     queryKey: ["admin-attachment-statistics", tenantId, authentication],
     queryFn: ({ signal }) => api.getAdminAttachmentStatistics(tenantId, signal),
-    enabled: tenantId !== null,
+    enabled: tenantId !== null && !tenantScoped,
     retry: false,
   });
   const concurrency = useQuery({
     queryKey: ["admin-run-concurrency", tenantId, authentication],
     queryFn: ({ signal }) => api.getAdminRunConcurrency(tenantId, signal),
-    enabled: tenantId !== null,
+    enabled: tenantId !== null && !tenantScoped,
     retry: false,
   });
 
@@ -90,18 +100,22 @@ export function AdminPage() {
     onSuccess: (saved, request) => {
       setSelection(saved.id);
       setTenantEditor(null);
-      queryClient.setQueryData<AdminTenantListResponse>(["admin-tenants", authentication], (current) => {
-        if (!current) return current;
-        const existing = current.tenants.some((item) => item.id === saved.id);
-        return {
-          ...current,
-          tenants: existing
-            ? current.tenants.map((item) => item.id === saved.id ? saved : item)
-            : [saved, ...current.tenants],
-          total: current.total + (request.mode === "create" && !existing ? 1 : 0),
-        };
-      });
-      void queryClient.invalidateQueries({ queryKey: ["admin-tenants"] });
+      if (tenantScoped) {
+        queryClient.setQueryData(["admin-tenant", scopedTenantId, authentication], saved);
+      } else {
+        queryClient.setQueryData<AdminTenantListResponse>(["admin-tenants", authentication], (current) => {
+          if (!current) return current;
+          const existing = current.tenants.some((item) => item.id === saved.id);
+          return {
+            ...current,
+            tenants: existing
+              ? current.tenants.map((item) => item.id === saved.id ? saved : item)
+              : [saved, ...current.tenants],
+            total: current.total + (request.mode === "create" && !existing ? 1 : 0),
+          };
+        });
+        void queryClient.invalidateQueries({ queryKey: ["admin-tenants"] });
+      }
     },
   });
   const userSave = useMutation({
@@ -152,22 +166,22 @@ export function AdminPage() {
   return (
     <section className="admin-page">
       <header className="admin-heading">
-        <div><p className="eyebrow">Administration</p><h1>Tenant operations</h1><p>Provision customer environments, membership, domains, capacity, and lifecycle state.</p></div>
-        <div className="admin-heading-actions">
+        <div><p className="eyebrow">{tenantScoped ? "Tenant settings" : "Administration"}</p><h1>{tenantScoped ? "Configure your tenant" : "Tenant operations"}</h1><p>{tenantScoped ? "Manage your organization, members, sign-in, domains, and agent runtime." : "Provision customer environments, membership, domains, capacity, and lifecycle state."}</p></div>
+        {!tenantScoped && <div className="admin-heading-actions">
           <div className="tenant-total"><strong>{tenants.data?.total ?? "—"}</strong><span>Total tenants</span></div>
           <button type="button" className="admin-primary-action" onClick={() => setTenantEditor("create")}>New tenant</button>
-        </div>
+        </div>}
       </header>
 
-      {tenants.isError && (
+      {(tenantScoped ? scopedTenant.isError : tenants.isError) && (
         <div className="admin-access-error" role="alert">
-          <strong>Tenant administration is unavailable.</strong>
-          <span>Confirm the admin principal and configured administration store, then retry.</span>
+          <strong>{tenantScoped ? "Tenant settings are unavailable." : "Tenant administration is unavailable."}</strong>
+          <span>{tenantScoped ? "Confirm that your membership is an active tenant owner, then retry." : "Confirm the admin principal and configured administration store, then retry."}</span>
         </div>
       )}
 
-      <div className="admin-layout">
-        <aside className="tenant-directory" aria-label="Tenant directory">
+      <div className={`admin-layout ${tenantScoped ? "tenant-settings-layout" : ""}`}>
+        {!tenantScoped && <aside className="tenant-directory" aria-label="Tenant directory">
           <label className="tenant-search"><span className="sr-only">Search tenants</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search tenants…" /></label>
           <div className="tenant-directory-list">
             {filteredTenants.map((item) => (
@@ -179,7 +193,7 @@ export function AdminPage() {
             ))}
             {!tenants.isPending && filteredTenants.length === 0 && <p>No matching tenants.</p>}
           </div>
-        </aside>
+        </aside>}
 
         <div className="tenant-detail">
           {tenant ? (
@@ -191,8 +205,8 @@ export function AdminPage() {
 
               <section className="admin-metrics" aria-label="Tenant metrics">
                 <Metric label="Members" value={users.data ? visibleUsers.length : undefined} detail={`${activeUsers(visibleUsers)} active`} />
-                <Metric label="Active runs" value={concurrency.data?.active_runs} detail={`${concurrency.data?.tenant_capacity ?? "—"} tenant capacity`} />
-                <Metric label="Attachments" value={attachments.data?.total_count} detail={formatBytes(attachments.data?.total_bytes)} />
+                {!tenantScoped && <Metric label="Active runs" value={concurrency.data?.active_runs} detail={`${concurrency.data?.tenant_capacity ?? "—"} tenant capacity`} />}
+                {!tenantScoped && <Metric label="Attachments" value={attachments.data?.total_count} detail={formatBytes(attachments.data?.total_bytes)} />}
                 <Metric label="Domains" value={domains.data?.length} detail={`${domains.data?.filter((domain) => domain.verified).length ?? 0} verified`} />
               </section>
 
@@ -214,18 +228,18 @@ export function AdminPage() {
                   {domains.isError && <p className="inline-error" role="alert">Could not load tenant domains.</p>}
                   {domainChange.isError && <p className="inline-error" role="alert">{mutationError(domainChange.error)}</p>}
                   <ul className="domain-list">
-                    {domains.data?.map((domain) => <li key={domain.id}><span className={`domain-status ${domain.verified ? "verified" : ""}`} /><strong>{domain.domain}</strong><small>{domain.verified ? "Verified" : "Pending"}</small>{!domain.verified && <button type="button" onClick={() => domainChange.mutate({ kind: "verify", domainId: domain.id })}>Verify</button>}<button type="button" className="danger-link" aria-label={`Remove ${domain.domain}`} onClick={() => setPendingRemoval({ kind: "domain", id: domain.id, label: domain.domain })}>Remove</button></li>)}
+                    {domains.data?.map((domain) => <li key={domain.id}><span className={`domain-status ${domain.verified ? "verified" : ""}`} /><strong>{domain.domain}</strong><small>{domain.verified ? "Verified" : "Pending platform verification"}</small>{!tenantScoped && !domain.verified && <button type="button" onClick={() => domainChange.mutate({ kind: "verify", domainId: domain.id })}>Verify</button>}<button type="button" className="danger-link" aria-label={`Remove ${domain.domain}`} onClick={() => setPendingRemoval({ kind: "domain", id: domain.id, label: domain.domain })}>Remove</button></li>)}
                     {!domains.isPending && !domains.data?.length && <li className="admin-empty">No domains configured.</li>}
                   </ul>
-                  <div className="capacity-bar"><div><span>Attachment storage</span><small>{formatBytes(attachments.data?.total_bytes)} of {formatBytes(attachments.data?.max_bytes)}</small></div><progress value={attachments.data?.total_bytes ?? 0} max={attachments.data?.max_bytes || 1} /></div>
+                  {!tenantScoped && <div className="capacity-bar"><div><span>Attachment storage</span><small>{formatBytes(attachments.data?.total_bytes)} of {formatBytes(attachments.data?.max_bytes)}</small></div><progress value={attachments.data?.total_bytes ?? 0} max={attachments.data?.max_bytes || 1} /></div>}
                 </article>
               </section>
 
-              <EntitlementsPanel key={`entitlements-${tenant.id}`} tenantId={tenant.id} />
+              <EntitlementsPanel key={`entitlements-${tenant.id}`} tenantId={tenant.id} readOnly={tenantScoped} />
               <ExecutionConfigPanel key={`execution-${tenant.id}`} tenantId={tenant.id} />
-              <TenantOperationsPanel key={`operations-${tenant.id}`} tenantId={tenant.id} />
+              {!tenantScoped && <TenantOperationsPanel key={`operations-${tenant.id}`} tenantId={tenant.id} />}
 
-              <section className="lifecycle-panel">
+              {!tenantScoped && <section className="lifecycle-panel">
                 <div><p className="eyebrow">Lifecycle</p><h3>Tenant status</h3><p>Lifecycle changes are audited and immediately affect tenant access.</p></div>
                 {pendingStatus ? (
                   <div className="transition-confirm" role="alertdialog" aria-label="Confirm tenant status change">
@@ -241,15 +255,15 @@ export function AdminPage() {
                   </div>
                 )}
                 {transition.isError && <p className="transition-error" role="alert">{mutationError(transition.error)}</p>}
-              </section>
+              </section>}
             </>
           ) : (
-            <div className="admin-empty-state"><h2>Select a tenant</h2><p>Choose an environment to inspect operational details.</p><button type="button" className="admin-primary-action" onClick={() => setTenantEditor("create")}>Create the first tenant</button></div>
+            <div className="admin-empty-state"><h2>{tenantScoped ? "Loading tenant settings" : "Select a tenant"}</h2><p>{tenantScoped ? "Retrieving your tenant configuration…" : "Choose an environment to inspect operational details."}</p>{!tenantScoped && <button type="button" className="admin-primary-action" onClick={() => setTenantEditor("create")}>Create the first tenant</button>}</div>
           )}
         </div>
       </div>
 
-      {tenantEditor && <TenantEditor key={`${tenantEditor}-${tenant?.id ?? "new"}`} tenant={tenantEditor === "edit" ? tenant : null} defaultId={tenants.data?.total === 0 ? session.principal?.tenant_id : undefined} pending={tenantSave.isPending} error={tenantSave.isError ? mutationError(tenantSave.error) : null} onClose={() => setTenantEditor(null)} onSave={(input) => tenantSave.mutate(tenantEditor === "create" ? { mode: "create", input } : { mode: "edit", input })} />}
+      {tenantEditor && <TenantEditor key={`${tenantEditor}-${tenant?.id ?? "new"}`} tenant={tenantEditor === "edit" ? tenant : null} tenantScoped={tenantScoped} defaultId={tenants.data?.total === 0 ? session.principal?.tenant_id : undefined} pending={tenantSave.isPending} error={tenantSave.isError ? mutationError(tenantSave.error) : null} onClose={() => setTenantEditor(null)} onSave={(input) => tenantSave.mutate(tenantEditor === "create" ? { mode: "create", input } : { mode: "edit", input })} />}
       {userEditor && tenant && <UserEditor key={userEditor === "create" ? "new-user" : userEditor.id} user={userEditor === "create" ? null : userEditor} defaultUserId={visibleUsers.length === 0 ? session.principal?.user_id : undefined} pending={userSave.isPending} error={userSave.isError ? mutationError(userSave.error) : null} onClose={() => setUserEditor(null)} onSave={(input) => userSave.mutate(userEditor === "create" ? { mode: "create", input } : { mode: "edit", userId: userEditor.id, input })} />}
       {credentialUser && tenant && <CredentialSetupDialog tenantId={tenant.id} user={credentialUser} onClose={() => setCredentialUser(null)} />}
       {pendingRemoval && <ConfirmationDialog title={pendingRemoval.kind === "user" ? "Remove tenant user?" : "Remove tenant domain?"} message={pendingRemoval.kind === "user" ? `${pendingRemoval.label} will immediately lose access to this tenant.` : `${pendingRemoval.label} will no longer route users to this tenant.`} pending={userDelete.isPending || domainChange.isPending} error={(userDelete.isError && mutationError(userDelete.error)) || (domainChange.isError && mutationError(domainChange.error)) || null} onCancel={() => setPendingRemoval(null)} onConfirm={() => pendingRemoval.kind === "user" ? userDelete.mutate(pendingRemoval.id) : domainChange.mutate({ kind: "delete", domainId: pendingRemoval.id })} />}
@@ -257,7 +271,7 @@ export function AdminPage() {
   );
 }
 
-function TenantEditor({ tenant, defaultId, pending, error, onClose, onSave }: { tenant: AdminTenant | null; defaultId?: string; pending: boolean; error: string | null; onClose: () => void; onSave: (input: AdminTenantInput) => void }) {
+function TenantEditor({ tenant, tenantScoped, defaultId, pending, error, onClose, onSave }: { tenant: AdminTenant | null; tenantScoped: boolean; defaultId?: string; pending: boolean; error: string | null; onClose: () => void; onSave: (input: AdminTenantInput) => void }) {
   const dialogRef = useModalDialog();
   const [id, setId] = useState(defaultId ?? "");
   const [slug, setSlug] = useState(tenant?.slug ?? "");
@@ -267,10 +281,12 @@ function TenantEditor({ tenant, defaultId, pending, error, onClose, onSave }: { 
   const [status, setStatus] = useState<TenantStatus>("provisioning");
   function submit(event: FormEvent) {
     event.preventDefault();
-    const common = { slug: slug.trim(), name: name.trim(), plan: optional(plan), region: optional(region) };
+    const common = tenantScoped
+      ? { slug: slug.trim(), name: name.trim() }
+      : { slug: slug.trim(), name: name.trim(), plan: optional(plan), region: optional(region) };
     onSave(tenant ? common : { ...common, ...(id.trim() ? { id: id.trim() } : {}), status });
   }
-  return <dialog ref={dialogRef} className="admin-dialog" aria-labelledby="tenant-editor-title" onCancel={onClose} onClose={onClose}><form onSubmit={submit}><DialogHeading id="tenant-editor-title" title={tenant ? "Edit tenant" : "Create tenant"} onClose={onClose} /><div className="admin-form-grid">{!tenant && <label>Tenant ID <input value={id} onChange={(event) => setId(event.target.value)} placeholder="Generated when blank" /></label>}<label>Slug <input required pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?" value={slug} onChange={(event) => setSlug(event.target.value)} placeholder="acme-corp" /></label><label className="wide">Name <input required value={name} onChange={(event) => setName(event.target.value)} /></label><label>Plan <input value={plan} onChange={(event) => setPlan(event.target.value)} placeholder="enterprise" /></label><label>Region <input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="us-east" /></label>{!tenant && <label>Status <select value={status} onChange={(event) => setStatus(event.target.value as TenantStatus)}><option value="provisioning">Provisioning</option><option value="active">Active</option></select></label>}</div>{error && <p className="dialog-error" role="alert">{error}</p>}<DialogActions pending={pending} submitLabel={tenant ? "Save tenant" : "Create tenant"} onClose={onClose} /></form></dialog>;
+  return <dialog ref={dialogRef} className="admin-dialog" aria-labelledby="tenant-editor-title" onCancel={onClose} onClose={onClose}><form onSubmit={submit}><DialogHeading id="tenant-editor-title" title={tenant ? "Edit tenant" : "Create tenant"} onClose={onClose} /><div className="admin-form-grid">{!tenant && <label>Tenant ID <input value={id} onChange={(event) => setId(event.target.value)} placeholder="Generated when blank" /></label>}<label>Slug <input required pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?" value={slug} onChange={(event) => setSlug(event.target.value)} placeholder="acme-corp" /></label><label className="wide">Name <input required value={name} onChange={(event) => setName(event.target.value)} /></label>{!tenantScoped && <><label>Plan <input value={plan} onChange={(event) => setPlan(event.target.value)} placeholder="enterprise" /></label><label>Region <input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="us-east" /></label>{!tenant && <label>Status <select value={status} onChange={(event) => setStatus(event.target.value as TenantStatus)}><option value="provisioning">Provisioning</option><option value="active">Active</option></select></label>}</>}</div>{error && <p className="dialog-error" role="alert">{error}</p>}<DialogActions pending={pending} submitLabel={tenant ? "Save tenant" : "Create tenant"} onClose={onClose} /></form></dialog>;
 }
 
 function UserEditor({ user, defaultUserId, pending, error, onClose, onSave }: { user: AdminTenantUser | null; defaultUserId?: string; pending: boolean; error: string | null; onClose: () => void; onSave: (input: AdminTenantUserInput) => void }) {

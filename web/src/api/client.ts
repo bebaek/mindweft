@@ -15,6 +15,25 @@ export interface SessionStatusResponse {
   principal?: SessionPrincipal | null;
 }
 
+export interface TenantContextResponse {
+  principal: SessionPrincipal;
+  tenant_id: string;
+  slug?: string | null;
+  status?: TenantStatus | null;
+  plan?: string | null;
+  region?: string | null;
+  features: Record<string, boolean>;
+  limits: Record<string, number | string | boolean | null>;
+  execution_config_version?: number | null;
+  entitlements_version?: number | null;
+  membership_id?: string | null;
+  membership_email?: string | null;
+  membership_display_name?: string | null;
+  user_role?: TenantUserRole | null;
+  user_status?: TenantUserStatus | null;
+  membership_metadata: Record<string, unknown>;
+}
+
 export interface PasswordSetupStatus {
   valid: boolean;
   username?: string | null;
@@ -519,6 +538,10 @@ export class MinigentApiClient {
     return this.#request<ExecutionOptionsResponse>("/execution-options", { signal });
   }
 
+  getTenantContext(signal?: AbortSignal): Promise<TenantContextResponse> {
+    return this.#request<TenantContextResponse>("/tenant-context", { signal });
+  }
+
   listAdminTenants(signal?: AbortSignal): Promise<AdminTenantListResponse> {
     return this.#request<AdminTenantListResponse>("/admin/tenants?limit=200", { signal });
   }
@@ -528,6 +551,10 @@ export class MinigentApiClient {
       method: "POST",
       body: JSON.stringify(input),
     });
+  }
+
+  getAdminTenant(tenantId: string, signal?: AbortSignal): Promise<AdminTenant> {
+    return this.#request<AdminTenant>(`/admin/tenants/${encodeURIComponent(tenantId)}`, { signal });
   }
 
   updateAdminTenant(tenantId: string, input: AdminTenantPatch): Promise<AdminTenant> {

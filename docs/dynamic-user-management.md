@@ -2,12 +2,12 @@
 
 Status: Partially implemented
 
-Implemented: tenant membership model and SQLite store, admin CRUD/list/status-transition
-APIs and CLI commands, mutation audit records, optional request-time active-membership
-enforcement with `MINIGENT_TENANT_USER_REGISTRY_REQUIRED`, and membership fields on
-`TenantContext`.
+Implemented: tenant membership model and SQLite store, global-admin and tenant-owner scoped
+CRUD/list/status-transition APIs and UI, last-active-owner and self-credential lockout protection,
+mutation audit records, optional request-time active-membership enforcement with
+`MINIGENT_TENANT_USER_REGISTRY_REQUIRED`, and membership fields on `TenantContext`.
 
-Still pending or partial: invite-token/email workflows, granular tenant-admin RBAC, richer
+Still pending or partial: invite-token/email delivery workflows, granular tenant-admin RBAC, richer
 identity-provider mapping, service-account modeling, and seat/billing limits.
 
 Focus: tenant user and membership management, not full identity management.
@@ -137,9 +137,9 @@ user_status
 membership_metadata
 ```
 
-These fields remain optional for compatibility mode and are populated when
-`MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true` and the authenticated user has an active
-membership.
+These fields remain optional for compatibility mode. Active membership metadata is included whenever
+a matching record exists; when `MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true`, missing or inactive
+membership is rejected instead of being omitted.
 
 ## Admin operations
 
@@ -215,8 +215,11 @@ matrices.
 - Do not use tenant membership records as authentication credentials.
 - Keep authentication delegated to the existing auth modes and external identity providers.
 - Treat membership as authorization and lifecycle metadata.
-- Require global admin access for first-iteration membership admin APIs, or explicitly design
-  tenant-admin delegation before exposing member management to tenant admins.
+- Require global admin access for cross-tenant operations. Active `owner` memberships may use the
+  explicitly delegated tenant-scoped profile, member, credential, domain, entitlement-read, and
+  execution-configuration routes only for their own tenant.
+- Tenant owners cannot change plan/region/metadata, verify domains, perform lifecycle operations,
+  remove or demote the final active owner, or disable their own local credential.
 - Audit every membership mutation.
 - Redact secrets from membership metadata in read responses and audit records.
 - Normalize and validate email addresses if email is provided.

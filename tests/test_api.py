@@ -4142,6 +4142,95 @@ def test_admin_api_tenant_users_require_admin(tmp_path: Path) -> None:
     assert response.status_code == 403
 
 
+def test_tenant_owner_can_manage_only_their_tenant(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+    assert (
+        client.post(
+            "/admin/tenants",
+            json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "active"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    owner_response = client.post(
+        "/admin/tenants/tenant-1/users",
+        json={"user_id": "user-1", "role": "owner", "status": "active"},
+        headers=ADMIN_HEADERS,
+    )
+    assert owner_response.status_code == 201
+    owner_id = owner_response.json()["id"]
+
+    context = client.get("/tenant-context", headers=AUTH_HEADERS)
+    assert context.status_code == 200
+    assert context.json()["user_role"] == "owner"
+    assert client.get("/admin/tenants", headers=AUTH_HEADERS).status_code == 403
+    assert client.get("/admin/tenants/tenant-2", headers=AUTH_HEADERS).status_code == 403
+    assert client.get("/admin/tenants/tenant-1", headers=AUTH_HEADERS).status_code == 200
+
+    profile = client.patch(
+        "/admin/tenants/tenant-1",
+        json={"name": "Tenant One Updated", "slug": "tenant-one-updated"},
+        headers=AUTH_HEADERS,
+    )
+    assert profile.status_code == 200
+    assert profile.json()["name"] == "Tenant One Updated"
+    assert (
+        client.patch(
+            "/admin/tenants/tenant-1",
+            json={"plan": "enterprise"},
+            headers=AUTH_HEADERS,
+        ).status_code
+        == 403
+    )
+
+    member = client.post(
+        "/admin/tenants/tenant-1/users",
+        json={"user_id": "user-2", "role": "member", "status": "invited"},
+        headers=AUTH_HEADERS,
+    )
+    assert member.status_code == 201
+    assert client.get("/admin/tenants/tenant-1/users", headers=AUTH_HEADERS).status_code == 200
+    assert (
+        client.get(
+            "/admin/tenants/tenant-1/users",
+            headers=SAME_TENANT_OTHER_USER_HEADERS,
+        ).status_code
+        == 403
+    )
+
+    last_owner = client.patch(
+        f"/admin/tenants/tenant-1/users/{owner_id}",
+        json={"role": "member"},
+        headers=AUTH_HEADERS,
+    )
+    assert last_owner.status_code == 409
+    assert last_owner.json()["detail"] == "A tenant must retain an active owner"
+
+    domain = client.post(
+        "/admin/tenants/tenant-1/domains",
+        json={"domain": "tenant-one.example"},
+        headers=AUTH_HEADERS,
+    )
+    assert domain.status_code == 201
+    assert (
+        client.post(
+            f"/admin/tenants/tenant-1/domains/{domain.json()['id']}/verify",
+            headers=AUTH_HEADERS,
+        ).status_code
+        == 403
+    )
+
+    execution = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        json={"config": {"llm": {"provider": "mock"}}},
+        headers=AUTH_HEADERS,
+    )
+    assert execution.status_code == 200
+    assert execution.json()["config"]["llm"]["provider"] == "mock"
+
+
 def test_admin_api_rejects_invalid_tenant_slug(tmp_path: Path) -> None:
     client = TestClient(
         create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")

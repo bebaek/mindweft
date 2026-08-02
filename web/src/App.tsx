@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "./auth/auth-context";
 import { ConnectionDialog } from "./components/ConnectionDialog";
 import { OverviewPage } from "./pages/OverviewPage";
@@ -8,11 +8,12 @@ import { AdminPage } from "./pages/AdminPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PasswordSetupPage } from "./pages/PasswordSetupPage";
 
-type Page = "overview" | "workspace" | "admin";
+type Page = "overview" | "workspace" | "settings" | "admin";
 
 const pages: Record<Page, { label: string; description: string }> = {
   overview: { label: "Overview", description: "Runtime health and delivery status" },
   workspace: { label: "Workspace", description: "Threads and agent runs" },
+  settings: { label: "Tenant settings", description: "Members, domains, and runtime configuration" },
   admin: { label: "Administration", description: "Tenant operations and governance" },
 };
 
@@ -20,9 +21,22 @@ export function App() {
   const [page, setPage] = useState<Page>("overview");
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const { authentication, setAuthentication, session, logout } = useAuth();
+  const { api, authentication, setAuthentication, session, logout } = useAuth();
   const queryClient = useQueryClient();
   const setupToken = passwordSetupToken();
+  const tenantContext = useQuery({
+    queryKey: ["tenant-context", authentication],
+    queryFn: ({ signal }) => api.getTenantContext(signal),
+    enabled: authentication.mode !== "session" || session.authenticated,
+    retry: false,
+  });
+  const platformAdmin = tenantContext.data?.principal.is_admin === true
+    || session.principal?.is_admin === true
+    || (authentication.mode === "development" && authentication.isAdmin);
+  const tenantOwner = tenantContext.data?.user_role === "owner";
+  const visiblePages = (Object.keys(pages) as Page[]).filter((key) =>
+    key !== "admin" || platformAdmin,
+  ).filter((key) => key !== "settings" || tenantOwner);
 
   if (setupToken) return <PasswordSetupPage token={setupToken} />;
   if (authentication.mode === "session" && session.loading) {
@@ -43,7 +57,7 @@ export function App() {
       <aside className={`sidebar ${mobileNavOpen ? "is-open" : ""}`}>
         <div className="brand"><span className="brand-mark">M</span><div><strong>Minigent</strong><small>Agent operations</small></div></div>
         <nav aria-label="Primary navigation">
-          {(Object.keys(pages) as Page[]).map((key) => (
+          {visiblePages.map((key) => (
             <button key={key} className={page === key ? "active" : ""} onClick={() => navigate(key)}>
               <NavIcon page={key} /><span>{pages[key].label}</span>
             </button>
@@ -75,7 +89,8 @@ export function App() {
         <main id="main-content">
           {page === "overview" && <OverviewPage />}
           {page === "workspace" && <WorkspacePage />}
-          {page === "admin" && <AdminPage />}
+          {page === "settings" && tenantOwner && tenantContext.data && <AdminPage tenantId={tenantContext.data.tenant_id} />}
+          {page === "admin" && platformAdmin && <AdminPage />}
         </main>
       </div>
 
@@ -115,6 +130,7 @@ function authLabel(mode: "session" | "development" | "bearer") {
 
 function NavIcon({ page }: { page: Page }) {
   if (page === "workspace") return <span aria-hidden="true">◇</span>;
+  if (page === "settings") return <span aria-hidden="true">⚙</span>;
   if (page === "admin") return <span aria-hidden="true">⌘</span>;
   return <span aria-hidden="true">◫</span>;
 }

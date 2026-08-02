@@ -315,6 +315,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 34px 56px; }
 .admin-access-error { display:grid; gap:4px; padding:15px 18px; border-left:3px solid var(--danger); color:#793a34; background:#fff0ee; }
 .admin-access-error strong { font-size:12px; } .admin-access-error span { font-size:10px; }
 .admin-layout { display:grid; grid-template-columns:280px minmax(0,1fr); min-height:650px; overflow:hidden; border:1px solid var(--line); border-radius:16px; background:white; box-shadow:var(--shadow); }
+.admin-layout.tenant-settings-layout { grid-template-columns:minmax(0,1fr); }
 .tenant-directory { min-width:0; border-right:1px solid var(--line); background:#f3f5f1; }
 .tenant-search { display:block; padding:16px 13px 11px; }
 .tenant-search input { width:100%; padding:10px 12px; border:1px solid #d8ded7; border-radius:9px; color:var(--ink); background:white; font-size:11px; }

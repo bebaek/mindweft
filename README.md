@@ -346,7 +346,9 @@ conversation workspace with thread history, message composition, NDJSON run stre
 inspection, cancellation controls, context usage inspection, raw model-context previews, and
 confirmed compaction, validated image selection, authenticated binary uploads, attachment previews,
 and per-image detail controls, one-time private-value approval/denial, pending-consent recovery after
-reload, uncertain-action reconciliation, and an administration workspace with tenant provisioning and
+reload, uncertain-action reconciliation, a tenant-owner settings workspace for profile, membership,
+password onboarding, domains, read-only entitlements, and execution configuration, and a separate
+platform administration workspace with tenant provisioning and
 editing, user role/status management, domain verification, typed feature and limit entitlement
 editing with server validation, version visibility and confirmed reset, a sectioned execution
 configuration editor for LLMs, tools, MCP servers, backends, quality review, skills, capability

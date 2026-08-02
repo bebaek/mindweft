@@ -14,7 +14,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.auth import require_admin_principal
+from app.auth import require_admin_principal, require_principal
 from app.execution import (
     TenantExecutionResolver,
     parse_tenant_execution_config,
@@ -397,6 +397,29 @@ class AdminTenantExecutionConfigValidationResponse(BaseModel):
     tools: AdminToolsValidationResponse
 
 
+async def require_tenant_owner_principal(
+    request: Request,
+    principal: Principal = Depends(require_principal),
+) -> Principal:
+    if principal.is_admin:
+        return principal
+    tenant_id = request.path_params.get("tenant_id")
+    if not isinstance(tenant_id, str) or tenant_id != principal.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant owner access required")
+    store = _require_admin_store(request)
+    tenant = store.get_tenant(tenant_id)
+    if tenant is None or tenant.status not in {TenantStatus.PROVISIONING, TenantStatus.ACTIVE}:
+        raise HTTPException(status_code=403, detail="Tenant owner access required")
+    membership = store.get_tenant_user_by_user_id(tenant_id, principal.user_id)
+    if (
+        membership is None
+        or membership.status != TenantUserStatus.ACTIVE
+        or membership.role != TenantUserRole.OWNER
+    ):
+        raise HTTPException(status_code=403, detail="Tenant owner access required")
+    return principal
+
+
 def build_admin_router() -> APIRouter:
     router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -590,7 +613,7 @@ def build_admin_router() -> APIRouter:
     async def list_tenant_users(
         tenant_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
         status: TenantUserStatus | None = Query(default=None),
         role: TenantUserRole | None = Query(default=None),
         email: str | None = Query(default=None),
@@ -628,7 +651,7 @@ def build_admin_router() -> APIRouter:
         tenant_id: str,
         body: AdminTenantUserCreateRequest,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantUserResponse:
         _validate_user_id(body.user_id)
         email = _normalize_email(body.email) if body.email is not None else None
@@ -669,7 +692,7 @@ def build_admin_router() -> APIRouter:
         tenant_id: str,
         user_record_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantUserResponse:
         _ = admin
         store = _require_admin_store(request)
@@ -688,13 +711,20 @@ def build_admin_router() -> APIRouter:
         user_record_id: str,
         body: AdminTenantUserPatchRequest,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantUserResponse:
         email = _normalize_email(body.email) if body.email is not None else None
         store = _require_admin_store(request)
         _require_tenant(request, tenant_id)
         old_user = store.get_tenant_user(tenant_id, user_record_id)
+        if old_user is not None:
+            next_role = body.role if body.role is not None else old_user.role
+            next_status = body.status if body.status is not None else old_user.status
+            _protect_last_active_owner(store, tenant_id, old_user, next_role, next_status)
         user_updates = body.model_dump(exclude_unset=True)
+        for field in ("role", "status"):
+            if user_updates.get(field) is None:
+                user_updates.pop(field, None)
         if "email" in body.model_fields_set:
             user_updates["email"] = email
         user = store.update_tenant_user(
@@ -725,7 +755,7 @@ def build_admin_router() -> APIRouter:
         tenant_id: str,
         user_record_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantUserResponse:
         return _update_tenant_user_status(
             request,
@@ -744,7 +774,7 @@ def build_admin_router() -> APIRouter:
         tenant_id: str,
         user_record_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantUserResponse:
         return _update_tenant_user_status(
             request,
@@ -763,11 +793,19 @@ def build_admin_router() -> APIRouter:
         tenant_id: str,
         user_record_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantUserDeleteResponse:
         store = _require_admin_store(request)
         _require_tenant(request, tenant_id)
         old_user = store.get_tenant_user(tenant_id, user_record_id)
+        if old_user is not None:
+            _protect_last_active_owner(
+                store,
+                tenant_id,
+                old_user,
+                old_user.role,
+                TenantUserStatus.DELETED,
+            )
         deleted = store.delete_tenant_user(tenant_id, user_record_id, updated_by=admin.user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail=f"Tenant user '{user_record_id}' not found")
@@ -796,7 +834,7 @@ def build_admin_router() -> APIRouter:
         tenant_id: str,
         user_record_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminCredentialStatusResponse:
         _ = admin
         store = _require_admin_store(request)
@@ -830,7 +868,7 @@ def build_admin_router() -> APIRouter:
         user_record_id: str,
         body: AdminCredentialSetupRequest,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminCredentialSetupResponse:
         store = _require_admin_store(request)
         tenant = _require_tenant(request, tenant_id)
@@ -889,12 +927,16 @@ def build_admin_router() -> APIRouter:
         tenant_id: str,
         user_record_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminCredentialDisableResponse:
         store = _require_admin_store(request)
         user = store.get_tenant_user(tenant_id, user_record_id)
         if user is None:
             raise HTTPException(status_code=404, detail=f"Tenant user '{user_record_id}' not found")
+        if not admin.is_admin and user.user_id == admin.user_id:
+            raise HTTPException(
+                status_code=409, detail="Owners cannot disable their own credential"
+            )
         disabled = store.disable_local_identity(tenant_id, user.user_id)
         if not disabled:
             raise HTTPException(status_code=404, detail="Tenant user has no local credential")
@@ -915,7 +957,7 @@ def build_admin_router() -> APIRouter:
     async def list_tenant_domains(
         tenant_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantDomainListResponse:
         _ = admin
         store = _require_admin_store(request)
@@ -934,7 +976,7 @@ def build_admin_router() -> APIRouter:
         tenant_id: str,
         body: AdminTenantDomainCreateRequest,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantDomainResponse:
         domain_name = _normalize_domain(body.domain)
         store = _require_admin_store(request)
@@ -984,7 +1026,7 @@ def build_admin_router() -> APIRouter:
         tenant_id: str,
         domain_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> None:
         store = _require_admin_store(request)
         _require_tenant(request, tenant_id)
@@ -1007,7 +1049,7 @@ def build_admin_router() -> APIRouter:
     async def get_tenant_entitlements(
         tenant_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantEntitlementsResponse:
         _ = admin
         store = _require_admin_store(request)
@@ -1094,7 +1136,7 @@ def build_admin_router() -> APIRouter:
     async def get_tenant(
         tenant_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantResponse:
         _ = admin
         tenant = _require_tenant(request, tenant_id)
@@ -1105,8 +1147,15 @@ def build_admin_router() -> APIRouter:
         tenant_id: str,
         body: AdminTenantPatchRequest,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantResponse:
+        if not admin.is_admin:
+            disallowed = body.model_fields_set - {"slug", "name"}
+            if disallowed:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Tenant owners can only update the tenant name and slug",
+                )
         if body.slug is not None:
             _validate_slug(body.slug)
         if body.name is not None:
@@ -1443,7 +1492,7 @@ def build_admin_router() -> APIRouter:
     async def get_tenant_execution_config(
         tenant_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantExecutionConfigResponse:
         _ = admin
         store = _require_admin_store(request)
@@ -1471,7 +1520,7 @@ def build_admin_router() -> APIRouter:
         tenant_id: str,
         request: AdminTenantExecutionConfigRequest,
         app_request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantExecutionConfigResponse:
         store = _require_admin_store(app_request)
         old_payload = store.get_raw_config(tenant_id)
@@ -1509,7 +1558,7 @@ def build_admin_router() -> APIRouter:
         tenant_id: str,
         body: AdminTenantExecutionConfigRequest,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminTenantExecutionConfigValidationResponse:
         _ = admin
         store = _require_admin_store(request)
@@ -1521,7 +1570,7 @@ def build_admin_router() -> APIRouter:
     async def delete_tenant_execution_config(
         tenant_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_owner_principal),
     ) -> None:
         store = _require_admin_store(request)
         old_payload = store.get_raw_config(tenant_id)
@@ -1698,6 +1747,8 @@ def _update_tenant_user_status(
     store = _require_admin_store(request)
     _require_tenant(request, tenant_id)
     old_user = store.get_tenant_user(tenant_id, user_record_id)
+    if old_user is not None:
+        _protect_last_active_owner(store, tenant_id, old_user, old_user.role, status)
     user = store.update_tenant_user(
         tenant_id,
         user_record_id,
@@ -1717,6 +1768,29 @@ def _update_tenant_user_status(
         resource_id=user.id,
     )
     return _tenant_user_response(user)
+
+
+def _protect_last_active_owner(
+    store: Any,
+    tenant_id: str,
+    user: TenantUser,
+    next_role: TenantUserRole,
+    next_status: TenantUserStatus,
+) -> None:
+    if user.role != TenantUserRole.OWNER or user.status != TenantUserStatus.ACTIVE:
+        return
+    if next_role == TenantUserRole.OWNER and next_status == TenantUserStatus.ACTIVE:
+        return
+    active_owners, total = store.list_tenant_users(
+        tenant_id,
+        role=TenantUserRole.OWNER,
+        status=TenantUserStatus.ACTIVE,
+        limit=2,
+        offset=0,
+    )
+    _ = active_owners
+    if total <= 1:
+        raise HTTPException(status_code=409, detail="A tenant must retain an active owner")
 
 
 def _append_tenant_audit(

@@ -12,7 +12,7 @@ type FeatureRow = { id: number; key: string; enabled: boolean };
 type LimitType = "number" | "text" | "boolean" | "unlimited";
 type LimitRow = { id: number; key: string; type: LimitType; value: string };
 
-export function EntitlementsPanel({ tenantId }: { tenantId: string }) {
+export function EntitlementsPanel({ tenantId, readOnly = false }: { tenantId: string; readOnly?: boolean }) {
   const { api, authentication } = useAuth();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
@@ -85,9 +85,9 @@ export function EntitlementsPanel({ tenantId }: { tenantId: string }) {
               Version {entitlements.data.version}
             </span>
           )}
-          <button type="button" onClick={openEditor}>
+          {!readOnly && <button type="button" onClick={openEditor}>
             {entitlements.data ? "Edit entitlements" : "Configure entitlements"}
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -122,12 +122,12 @@ export function EntitlementsPanel({ tenantId }: { tenantId: string }) {
           />
           <footer>
             <span>Updated {formatDate(entitlements.data.updated_at)}</span>
-            <button type="button" onClick={openResetConfirmation}>Reset to defaults</button>
+            {!readOnly && <button type="button" onClick={openResetConfirmation}>Reset to defaults</button>}
           </footer>
         </div>
       )}
 
-      {editing && (
+      {!readOnly && editing && (
         <EntitlementsEditor
           key={`${tenantId}-${entitlements.data?.version ?? "new"}`}
           current={entitlements.data ?? null}
@@ -137,7 +137,7 @@ export function EntitlementsPanel({ tenantId }: { tenantId: string }) {
           onSave={(input) => save.mutate(input)}
         />
       )}
-      {confirmReset && (
+      {!readOnly && confirmReset && (
         <ResetDialog
           pending={reset.isPending}
           error={reset.isError ? errorMessage(reset.error) : null}
