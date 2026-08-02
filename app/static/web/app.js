@@ -198,18 +198,7 @@ elements.composer.addEventListener("submit", async (event) => {
   if (!content && !pendingImages.length) {
     return;
   }
-  const imageParts = pendingImages.map((image) => ({
-    type: "image",
-    mime_type: image.mimeType,
-    data: image.data,
-    detail: "auto",
-  }));
-  const parts = imageParts.length
-    ? [
-        ...(content ? [{ type: "text", text: content }] : []),
-        ...imageParts,
-      ]
-    : null;
+  const queuedImages = [...pendingImages];
 
   saveFormState();
   setBusy(true);
@@ -218,7 +207,31 @@ elements.composer.addEventListener("submit", async (event) => {
   let threadId = state.threadId;
   try {
     threadId = await ensureThread();
-    appendMessage({ role: "user", content, ...(parts ? { parts } : {}) });
+    const uploadedImages = await uploadImages(threadId, queuedImages);
+    const parts = uploadedImages.length
+      ? [
+          ...(content ? [{ type: "text", text: content }] : []),
+          ...uploadedImages.map((image) => ({
+            type: "image",
+            mime_type: image.mimeType,
+            attachment_id: image.attachmentId,
+            detail: "auto",
+          })),
+        ]
+      : null;
+    const displayParts = uploadedImages.length
+      ? [
+          ...(content ? [{ type: "text", text: content }] : []),
+          ...uploadedImages.map((image) => ({
+            type: "image",
+            mime_type: image.mimeType,
+            data: image.data,
+            attachment_id: image.attachmentId,
+            detail: "auto",
+          })),
+        ]
+      : null;
+    appendMessage({ role: "user", content, ...(displayParts ? { parts: displayParts } : {}) });
     elements.messageInput.value = "";
     elements.messageInput.style.height = "auto";
 
@@ -262,6 +275,25 @@ elements.composer.addEventListener("submit", async (event) => {
     elements.messageInput.focus();
   }
 });
+
+async function uploadImages(threadId, images) {
+  if (!images.length) {
+    return [];
+  }
+  setStatus("Uploading images");
+  return Promise.all(
+    images.map(async (image) => {
+      const attachment = await requestJson(
+        `/threads/${encodeURIComponent(threadId)}/attachments`,
+        {
+          method: "POST",
+          body: { mime_type: image.mimeType, data: image.data },
+        },
+      );
+      return { ...image, attachmentId: attachment.attachment_id };
+    }),
+  );
+}
 
 async function addImageFiles(files) {
   const candidates = [...files];
@@ -835,7 +867,9 @@ function appendMessage(message) {
 }
 
 function appendMessageImages(item, parts) {
-  const imageParts = parts.filter((part) => part?.type === "image" && part.data);
+  const imageParts = parts.filter(
+    (part) => part?.type === "image" && (part.data || part.attachment_id),
+  );
   if (!imageParts.length) {
     return;
   }
@@ -843,12 +877,33 @@ function appendMessageImages(item, parts) {
   images.className = "message-images";
   for (const part of imageParts) {
     const image = document.createElement("img");
-    image.src = `data:${part.mime_type};base64,${part.data}`;
+    if (part.data) {
+      image.src = `data:${part.mime_type};base64,${part.data}`;
+    } else {
+      loadAttachmentUrl(state.threadId, part.attachment_id)
+        .then((url) => {
+          image.src = url;
+        })
+        .catch(() => {
+          image.alt = "Attached image unavailable";
+        });
+    }
     image.alt = "Attached image";
     image.loading = "lazy";
     images.append(image);
   }
   item.append(images);
+}
+
+async function loadAttachmentUrl(threadId, attachmentId) {
+  const response = await fetch(
+    `${state.baseUrl}/threads/${encodeURIComponent(threadId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    { headers: authHeaders() },
+  );
+  if (!response.ok) {
+    throw new Error(`Attachment fetch failed: ${response.status}`);
+  }
+  return URL.createObjectURL(await response.blob());
 }
 
 function renderMessageContent(target, text, role) {

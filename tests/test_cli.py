@@ -110,6 +110,10 @@ def test_run_sends_image_parts(monkeypatch: Any, tmp_path: Path, capsys: Any) ->
     def urlopen(request: Any) -> _Response:
         if request.full_url.endswith("/threads"):
             return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/attachments"):
+            body = json.loads(request.data.decode("utf-8"))
+            assert body == {"mime_type": "image/png", "data": "aGk="}
+            return _Response(body={"attachment_id": "attachment-1"})
         if request.full_url.endswith("/threads/thread-1/messages"):
             body = json.loads(request.data.decode("utf-8"))
             assert body == {
@@ -119,7 +123,7 @@ def test_run_sends_image_parts(monkeypatch: Any, tmp_path: Path, capsys: Any) ->
                     {
                         "type": "image",
                         "mime_type": "image/png",
-                        "data": "aGk=",
+                        "attachment_id": "attachment-1",
                         "detail": "high",
                     },
                 ],

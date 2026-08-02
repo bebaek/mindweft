@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import inspect
 import json
 import os
@@ -14,6 +15,7 @@ from typing import Any, cast
 from fastapi import HTTPException
 
 from app.agent_skills import load_agent_skill_body
+from app.attachments import AttachmentStore, InMemoryAttachmentStore
 from app.execution import (
     FixedTenantExecutionResolver,
     TenantExecutionContext,
@@ -34,6 +36,7 @@ from app.llm import (
 )
 from app.mcp import MCPPrivateToolResult
 from app.models import (
+    ImagePart,
     LLMResponse,
     Message,
     MessageRole,
@@ -172,6 +175,7 @@ class AgentRuntime:
         private_value_store: PrivateValueStore | None = None,
         input_pii_protector: LocalPIIProtector | None = None,
         private_value_consent_store: PrivateValueConsentStore | None = None,
+        attachment_store: AttachmentStore | None = None,
     ) -> None:
         self._store = store
         if execution_resolver is not None:
@@ -199,6 +203,7 @@ class AgentRuntime:
         self._private_value_consent_store = (
             private_value_consent_store or build_private_value_consent_store_from_env()
         )
+        self._attachment_store = attachment_store or InMemoryAttachmentStore()
 
     async def protect_user_content(
         self,
@@ -991,12 +996,47 @@ class AgentRuntime:
                     content=f"Thread summary:\n{context.summary}",
                 )
             )
+        stored_messages = self._store.list_messages(principal.tenant_id, thread_id)[
+            context.summarized_message_count :
+        ]
         prompt_messages.extend(
-            self._store.list_messages(principal.tenant_id, thread_id)[
-                context.summarized_message_count :
-            ]
+            self._resolve_attachment_parts(principal.tenant_id, thread_id, stored_messages)
         )
         return prompt_messages
+
+    def _resolve_attachment_parts(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        messages: list[Message],
+    ) -> list[Message]:
+        resolved_messages: list[Message] = []
+        for message in messages:
+            if not message.parts:
+                resolved_messages.append(message)
+                continue
+            resolved_parts = []
+            for part in message.parts:
+                if not isinstance(part, ImagePart) or not part.attachment_id:
+                    resolved_parts.append(part)
+                    continue
+                record = self._attachment_store.get(tenant_id, thread_id, part.attachment_id)
+                if record is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"image attachment is unavailable: {part.attachment_id}",
+                    )
+                resolved_parts.append(
+                    part.model_copy(
+                        update={
+                            "mime_type": record.metadata.mime_type,
+                            "data": base64.b64encode(record.data).decode("ascii"),
+                            "attachment_id": None,
+                        }
+                    )
+                )
+            resolved_messages.append(message.model_copy(update={"parts": resolved_parts}))
+        return resolved_messages
 
     def _refresh_thread_context(self, principal: Principal, thread_id: str) -> ThreadContext:
         messages = self._store.list_messages(principal.tenant_id, thread_id)
@@ -1018,7 +1058,14 @@ class AgentRuntime:
             summary=new_summary,
             summarized_message_count=summarize_upto,
         )
-        return self._store.compact_thread_messages(principal.tenant_id, thread_id)
+        compacted = self._store.compact_thread_messages(principal.tenant_id, thread_id)
+        self._delete_compacted_attachments(
+            principal.tenant_id,
+            thread_id,
+            messages,
+            summarize_upto,
+        )
+        return compacted
 
     def compact_thread(self, principal: Principal, thread_id: str) -> ThreadContext:
         messages = self._store.list_messages(principal.tenant_id, thread_id)
@@ -1045,7 +1092,26 @@ class AgentRuntime:
             summary=new_summary,
             summarized_message_count=summarize_upto,
         )
-        return self._store.compact_thread_messages(principal.tenant_id, thread_id)
+        compacted = self._store.compact_thread_messages(principal.tenant_id, thread_id)
+        self._delete_compacted_attachments(
+            principal.tenant_id,
+            thread_id,
+            messages,
+            summarize_upto,
+        )
+        return compacted
+
+    def _delete_compacted_attachments(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        messages: list[Message],
+        summarize_upto: int,
+    ) -> None:
+        removed_ids = _attachment_ids(messages[:summarize_upto])
+        retained_ids = _attachment_ids(messages[summarize_upto:])
+        for attachment_id in removed_ids - retained_ids:
+            self._attachment_store.delete(tenant_id, thread_id, attachment_id)
 
     def _compute_summarize_upto(self, messages: list[Message], context: ThreadContext) -> int:
         max_summarize_upto = max(0, len(messages) - self._min_recent_message_limit)
@@ -1070,6 +1136,15 @@ class AgentRuntime:
             summarize_upto,
             min_boundary=context.summarized_message_count,
         )
+
+
+def _attachment_ids(messages: list[Message]) -> set[str]:
+    return {
+        part.attachment_id
+        for message in messages
+        for part in (message.parts or [])
+        if isinstance(part, ImagePart) and part.attachment_id
+    }
 
 
 async def _emit_run_event(

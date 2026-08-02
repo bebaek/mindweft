@@ -706,7 +706,7 @@ thread storage, threads and run coordination remain in memory and are lost on re
 admin control plane can also persist tenant execution config in SQLite when
 `MINIGENT_ADMIN_DB_PATH` points at a mounted volume.
 
-The thread, OAuth, private-value, DAV, run-lease, and optional MCP broker stores support shared
+The thread, attachment, OAuth, private-value, DAV, run-lease, and optional MCP broker stores support shared
 replica state when their SQLite paths are configured. Keep every replica on the same shared volume
 and configuration so broker tool registries can be reconstructed consistently.
 
@@ -730,6 +730,7 @@ MINIGENT_LLM_PROVIDER=openai
 OPENAI_API_KEY=...
 MINIGENT_LOG_FORMAT=json
 MINIGENT_THREAD_DB_PATH=/data/minigent-threads.db
+MINIGENT_ATTACHMENT_DB_PATH=/data/minigent-attachments.db
 ```
 
 Bring the service up with:

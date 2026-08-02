@@ -199,7 +199,7 @@ def test_web_client_image_picker_uses_native_file_input_overlay() -> None:
 
     assert 'id="attach-image-button"' in html
     assert '<input id="image-input" type="file" accept="image/*" multiple />' in html
-    assert "app.js?v=browser-images-2" in html
+    assert "app.js?v=attachment-refs-1" in html
 
 
 def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
@@ -239,11 +239,23 @@ def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
                     }},
                   }});
                 }}
+                if (path === "/threads/t1/attachments" && options.method === "POST") {{
+                  return jsonResponse({{ attachment_id: "attachment-1" }});
+                }}
+                if (path === "/threads/t1/attachments/attachment-1") {{
+                  return {{
+                    ok: true,
+                    status: 200,
+                    blob: async () => "attachment-blob",
+                    text: async () => "",
+                  }};
+                }}
                 if (path === "/threads/t1/messages") return jsonResponse([]);
                 return jsonResponse({{}});
               }},
             }});
             globalThis.document = harness.document;
+            harness.context.URL.createObjectURL = () => "blob:attachment-1";
             harness.context.FileReader = class FileReader {{
               constructor() {{ this.listeners = new Map(); this.result = ""; }}
               addEventListener(type, listener) {{ this.listeners.set(type, listener); }}
@@ -275,11 +287,23 @@ def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
             const post = harness.fetchCalls.find(
               (call) => call.method === "POST" && call.url.endsWith("/threads/t1/messages"),
             );
+            const upload = harness.fetchCalls.find(
+              (call) => call.method === "POST" && call.url.endsWith("/threads/t1/attachments"),
+            );
+            assert.deepEqual(JSON.parse(upload.body), {{
+              mime_type: "image/png",
+              data: "aW1hZ2U=",
+            }});
             assert.deepEqual(JSON.parse(post.body), {{
               content: "Describe this",
               parts: [
                 {{ type: "text", text: "Describe this" }},
-                {{ type: "image", mime_type: "image/png", data: "aW1hZ2U=", detail: "auto" }},
+                {{
+                  type: "image",
+                  mime_type: "image/png",
+                  attachment_id: "attachment-1",
+                  detail: "auto",
+                }},
               ],
             }});
             assert.equal(harness.elements.get("image-preview-list").hidden, true);
@@ -287,6 +311,23 @@ def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
             const message = harness.elements.get("messages").children.at(-1);
             assert.equal(message.children.length, 3);
             assert.equal(message.children[2].children[0].src, "data:image/png;base64,aW1hZ2U=");
+
+            harness.context.renderMessages([
+              {{
+                role: "user",
+                content: "Describe this",
+                parts: [
+                  {{
+                    type: "image",
+                    mime_type: "image/png",
+                    attachment_id: "attachment-1",
+                  }},
+                ],
+              }},
+            ]);
+            await flushAsyncWork();
+            const restored = harness.elements.get("messages").children.at(-1);
+            assert.equal(restored.children[2].children[0].src, "blob:attachment-1");
         """,
     )
 

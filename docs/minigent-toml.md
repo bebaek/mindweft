@@ -259,6 +259,11 @@ enabled = true
 # max_total_bytes = 20971520
 # allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
 
+[attachments]
+db_path = ".data/minigent-attachments.db"
+# max_per_thread = 100
+# max_bytes_per_thread = 268435456
+
 [coding]
 enabled = true
 workspaces = ["/Users/you/code"]
@@ -398,8 +403,21 @@ Provider key targets:
 | `allowed_mime_types` | `MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES` | String or list of image MIME types; lists are converted to comma-separated env strings. |
 
 Image parts must use exactly one source. Inline `data` must be valid base64 and match known
-configured image signatures; remote URLs must be absolute HTTP(S) URLs. `attachment_id` is
-reserved for a future attachment store and is currently rejected.
+configured image signatures; remote URLs must be absolute HTTP(S) URLs. The browser uploads
+images first and stores `attachment_id` references in message history.
+
+### `[attachments]`
+
+| Key | Maps to | Notes |
+| --- | --- | --- |
+| `db_path` | `MINIGENT_ATTACHMENT_DB_PATH` | Optional SQLite store for attachment bytes. Without it, attachments are process-local and disappear on restart. Use a shared path for multiple replicas. |
+| `max_per_thread` | `MINIGENT_ATTACHMENT_MAX_PER_THREAD` | Maximum stored attachment records per thread; defaults to 100. |
+| `max_bytes_per_thread` | `MINIGENT_ATTACHMENT_MAX_BYTES_PER_THREAD` | Maximum aggregate attachment bytes per thread; defaults to 256 MiB. |
+
+Attachment records are scoped by tenant and thread. Provider requests resolve references to
+image bytes only in transient model-facing message copies; stored messages retain references.
+Deleting a thread deletes its attachment records. Attachment SQLite bytes are not encrypted by
+Minigent, so protect the database volume and backups according to the sensitivity of uploaded media.
 
 ### `[coding]`
 

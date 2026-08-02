@@ -47,6 +47,12 @@ enabled = false
 # max_total_bytes = 20971520
 # allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
 
+[attachments]
+# Use persistent SQLite in multi-replica or restart-safe deployments.
+# db_path = "/data/minigent-attachments.db"
+# max_per_thread = 100
+# max_bytes_per_thread = 268435456
+
 [coding]
 enabled = true
 workspaces = ["/Users/you/code"]

@@ -75,6 +75,13 @@ class ImageInputConfig:
 
 
 @dataclass(frozen=True)
+class AttachmentConfig:
+    db_path: object = None
+    max_per_thread: object = None
+    max_bytes_per_thread: object = None
+
+
+@dataclass(frozen=True)
 class CodingConfig:
     enabled: object = None
     tenant_id: object = None
@@ -149,6 +156,7 @@ class UnifiedConfig:
     oauth: OAuthConfig = field(default_factory=OAuthConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     image_input: ImageInputConfig = field(default_factory=ImageInputConfig)
+    attachments: AttachmentConfig = field(default_factory=AttachmentConfig)
     coding: CodingConfig = field(default_factory=CodingConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
@@ -166,6 +174,7 @@ SECTION_FIELDS: dict[str, set[str]] = {
     "oauth": set(OAuthConfig.__dataclass_fields__),
     "llm": set(LLMConfig.__dataclass_fields__),
     "image_input": set(ImageInputConfig.__dataclass_fields__),
+    "attachments": set(AttachmentConfig.__dataclass_fields__),
     "coding": set(CodingConfig.__dataclass_fields__),
     "mcp": set(MCPConfig.__dataclass_fields__),
     "voice": set(VoiceConfig.__dataclass_fields__),
@@ -181,6 +190,7 @@ TOP_LEVEL_KEYS = {
     "oauth",
     "llm",
     "image_input",
+    "attachments",
     "coding",
     "mcp",
     "voice",
@@ -198,6 +208,7 @@ SECTION_TYPES: dict[str, type[Any]] = {
     "oauth": OAuthConfig,
     "llm": LLMConfig,
     "image_input": ImageInputConfig,
+    "attachments": AttachmentConfig,
     "coding": CodingConfig,
     "mcp": MCPConfig,
     "voice": VoiceConfig,
@@ -273,6 +284,8 @@ _INT_KEYS = {
     "image_input.max_bytes",
     "image_input.max_images",
     "image_input.max_total_bytes",
+    "attachments.max_per_thread",
+    "attachments.max_bytes_per_thread",
     "coding.bridge_port",
     "coding.mcp_gateway_port",
     "quality.max_payload_chars",

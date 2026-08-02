@@ -37,6 +37,7 @@ from app.mcp import MCPServerInfo
 from app.mcp_broker import MINIGENT_MCP_BROKER_TOKEN_ENV, MINIGENT_MCP_BROKER_URL_ENV
 from app.models import (
     AuditRecord,
+    ImagePart,
     LLMResponse,
     Message,
     MessageRole,
@@ -345,7 +346,7 @@ def test_add_message_accepts_image_when_enabled(monkeypatch: pytest.MonkeyPatch)
     [
         (
             {"mime_type": "image/png", "attachment_id": "image-1"},
-            "image attachment_id is not supported",
+            "image attachment_id is invalid",
         ),
         (
             {
@@ -422,6 +423,122 @@ def test_add_message_enforces_image_count_and_total_size_limits(
     assert count_response.json()["detail"] == "message exceeds maximum image count (1)"
     assert size_response.status_code == 400
     assert size_response.json()["detail"] == "message images exceed maximum total allowed size"
+
+
+def test_attachment_upload_stores_reference_and_resolves_for_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingAdapter(LLMAdapter):
+        def __init__(self) -> None:
+            self.messages: list[Message] = []
+
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            del tools
+            self.messages = messages
+            return LLMResponse(content="described")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "recording"}
+
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    adapter = RecordingAdapter()
+    client = TestClient(create_app(llm_adapter=adapter, tool_registry=build_local_tool_registry()))
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    upload_response = client.post(
+        f"/threads/{thread_id}/attachments",
+        json={"mime_type": "image/png", "data": PNG_1X1_BASE64},
+        headers=AUTH_HEADERS,
+    )
+    assert upload_response.status_code == 200
+    attachment = upload_response.json()
+    attachment_id = attachment["attachment_id"]
+    assert attachment["size_bytes"] > 0
+
+    message_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={
+            "content": "describe it",
+            "parts": [
+                {"type": "text", "text": "describe it"},
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "attachment_id": attachment_id,
+                },
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert message_response.status_code == 200
+    stored_image = message_response.json()["parts"][1]
+    assert stored_image["attachment_id"] == attachment_id
+    assert stored_image["data"] is None
+
+    download_response = client.get(
+        f"/threads/{thread_id}/attachments/{attachment_id}",
+        headers=AUTH_HEADERS,
+    )
+    assert download_response.status_code == 200
+    assert download_response.headers["content-type"] == "image/png"
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    assert run_response.status_code == 200
+    user_message = next(message for message in adapter.messages if message.role == MessageRole.USER)
+    assert isinstance(user_message.parts[1], ImagePart)
+    assert user_message.parts[1].attachment_id is None
+    assert user_message.parts[1].data == PNG_1X1_BASE64
+
+
+def test_attachment_reference_is_scoped_to_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    first_thread = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    second_thread = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    attachment_id = client.post(
+        f"/threads/{first_thread}/attachments",
+        json={"mime_type": "image/png", "data": PNG_1X1_BASE64},
+        headers=AUTH_HEADERS,
+    ).json()["attachment_id"]
+
+    response = client.post(
+        f"/threads/{second_thread}/messages",
+        json={
+            "content": "describe",
+            "parts": [
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "attachment_id": attachment_id,
+                }
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "image attachment_id is invalid"
+
+
+def test_attachment_upload_enforces_thread_count_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_ATTACHMENT_MAX_PER_THREAD", "1")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    payload = {"mime_type": "image/png", "data": PNG_1X1_BASE64}
+
+    first = client.post(f"/threads/{thread_id}/attachments", json=payload, headers=AUTH_HEADERS)
+    second = client.post(f"/threads/{thread_id}/attachments", json=payload, headers=AUTH_HEADERS)
+
+    assert first.status_code == 200
+    assert second.status_code == 400
+    assert second.json()["detail"] == "thread attachment count limit exceeded"
 
 
 def test_sqlite_thread_store_persists_threads_and_messages(tmp_path: Path) -> None:

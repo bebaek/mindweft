@@ -18,6 +18,12 @@ from fastapi.staticfiles import StaticFiles
 from app.admin_api import build_admin_router
 from app.admin_store import SQLiteTenantConfigStore
 from app.agent_backends import AgentBackendRouter, NativeAgentBackend
+from app.attachments import (
+    AttachmentMetadata,
+    AttachmentStore,
+    UploadAttachmentRequest,
+    build_attachment_store,
+)
 from app.auth import validate_auth_settings
 from app.config import load_environment
 from app.entitlements import (
@@ -225,6 +231,9 @@ def _validate_and_normalize_message_request(
     settings: ImageInputSettings,
     *,
     input_modalities: frozenset[str] | None = None,
+    attachment_store: AttachmentStore | None = None,
+    tenant_id: str | None = None,
+    thread_id: str | None = None,
 ) -> AddMessageRequest:
     if not request.parts:
         if not request.content:
@@ -242,7 +251,7 @@ def _validate_and_normalize_message_request(
             status_code=400,
             detail=f"message exceeds maximum image count ({settings.max_images})",
         )
-    total_inline_bytes = 0
+    total_image_bytes = 0
     for part in image_parts:
         mime_type = part.mime_type.lower()
         if mime_type not in settings.allowed_mime_types:
@@ -256,7 +265,17 @@ def _validate_and_normalize_message_request(
                 detail="image part must include exactly one of data, url, or attachment_id",
             )
         if part.attachment_id:
-            raise HTTPException(status_code=400, detail="image attachment_id is not supported")
+            if attachment_store is None or tenant_id is None or thread_id is None:
+                raise HTTPException(status_code=400, detail="image attachment_id is not supported")
+            record = attachment_store.get(tenant_id, thread_id, part.attachment_id)
+            if record is None:
+                raise HTTPException(status_code=400, detail="image attachment_id is invalid")
+            if record.metadata.mime_type != mime_type:
+                raise HTTPException(
+                    status_code=400,
+                    detail="image attachment MIME type does not match uploaded attachment",
+                )
+            total_image_bytes += record.metadata.size_bytes
         if part.url:
             parsed_url = urlsplit(part.url)
             if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
@@ -276,12 +295,12 @@ def _validate_and_normalize_message_request(
                     status_code=400,
                     detail=f"image data does not match declared MIME type: {part.mime_type}",
                 )
-            total_inline_bytes += len(decoded)
-            if total_inline_bytes > settings.max_total_bytes:
-                raise HTTPException(
-                    status_code=400,
-                    detail="message images exceed maximum total allowed size",
-                )
+            total_image_bytes += len(decoded)
+        if total_image_bytes > settings.max_total_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail="message images exceed maximum total allowed size",
+            )
     if request.content:
         return request
     text_content = "\n".join(
@@ -505,6 +524,7 @@ def create_app(
     tenant_config_source: str | None = None,
     peer_agent_registry: PeerAgentRegistry | None = None,
     thread_store: ThreadStore | None = None,
+    attachment_store: AttachmentStore | None = None,
     settings: MinigentSettings | None = None,
 ) -> FastAPI:
     settings_was_provided = settings is not None
@@ -546,6 +566,10 @@ def create_app(
     else:
         app.state.store = build_thread_store_from_env()
     app.state.store.recover_stale_runs()
+    app.state.attachment_store_settings = settings.attachment_store
+    app.state.attachment_store = attachment_store or build_attachment_store(
+        settings.attachment_store
+    )
     app.state.mcp_manager = mcp_manager
     app.state.mcp_broker_sessions = build_mcp_broker_session_store_from_env()
     app.state.oauth_flows = build_oauth_flow_store_from_env()
@@ -615,6 +639,7 @@ def create_app(
         tool_timeout_seconds=runtime_settings.tool_timeout_seconds,
         quality_enhancer=app.state.quality_enhancer,
         context_compaction_enabled=runtime_settings.context_compaction_enabled,
+        attachment_store=app.state.attachment_store,
     )
     app.state.peer_agent_registry = (
         peer_agent_registry
@@ -920,6 +945,72 @@ def create_app(
         )
         return CreateThreadResponse(thread_id=thread.thread_id)
 
+    @app.post(
+        "/threads/{thread_id}/attachments",
+        response_model=AttachmentMetadata,
+    )
+    async def upload_attachment(
+        thread_id: str,
+        upload: UploadAttachmentRequest,
+        app_request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> AttachmentMetadata:
+        app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        image_settings = app_request.app.state.image_input_settings
+        if not image_settings.enabled:
+            raise HTTPException(status_code=400, detail="image input is disabled")
+        mime_type = upload.mime_type.strip().lower()
+        if mime_type not in image_settings.allowed_mime_types:
+            raise HTTPException(status_code=400, detail=f"unsupported image MIME type: {mime_type}")
+        try:
+            data = base64.b64decode(upload.data, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="image data must be base64") from exc
+        if len(data) > image_settings.max_bytes:
+            raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
+        if not _image_bytes_match_mime_type(data, mime_type):
+            raise HTTPException(
+                status_code=400,
+                detail=f"image data does not match declared MIME type: {mime_type}",
+            )
+        attachment_settings = app_request.app.state.attachment_store_settings
+        attachment_count, attachment_bytes = app_request.app.state.attachment_store.usage(
+            principal.tenant_id,
+            thread_id,
+        )
+        if attachment_count >= attachment_settings.max_per_thread:
+            raise HTTPException(status_code=400, detail="thread attachment count limit exceeded")
+        if attachment_bytes + len(data) > attachment_settings.max_bytes_per_thread:
+            raise HTTPException(status_code=400, detail="thread attachment storage limit exceeded")
+        return app_request.app.state.attachment_store.put(
+            principal.tenant_id,
+            thread_id,
+            mime_type=mime_type,
+            data=data,
+            created_by=principal.user_id,
+        )
+
+    @app.get("/threads/{thread_id}/attachments/{attachment_id}")
+    async def get_attachment(
+        thread_id: str,
+        attachment_id: str,
+        app_request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> Response:
+        app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        record = app_request.app.state.attachment_store.get(
+            principal.tenant_id,
+            thread_id,
+            attachment_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="attachment not found")
+        return Response(
+            content=record.data,
+            media_type=record.metadata.mime_type,
+            headers={"Cache-Control": "private, max-age=300"},
+        )
+
     @app.post("/threads/{thread_id}/messages", response_model=Message)
     async def add_message(
         thread_id: str,
@@ -939,6 +1030,9 @@ def create_app(
             request,
             app_request.app.state.image_input_settings,
             input_modalities=llm_config.input_modalities,
+            attachment_store=app_request.app.state.attachment_store,
+            tenant_id=principal.tenant_id,
+            thread_id=thread_id,
         )
         protected_content = await app_request.app.state.runtime.protect_user_content(
             principal,
@@ -1188,6 +1282,7 @@ def create_app(
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> None:
         request.app.state.store.delete_thread(principal.tenant_id, thread_id)
+        request.app.state.attachment_store.delete_thread(principal.tenant_id, thread_id)
         request.app.state.runtime.clear_private_values(principal, thread_id)
 
     return app

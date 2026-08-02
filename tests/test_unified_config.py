@@ -123,6 +123,11 @@ max_images = 3
 max_total_bytes = 2468
 allowed_mime_types = ["image/png", "image/webp"]
 
+[attachments]
+db_path = "attachments.db"
+max_per_thread = 12
+max_bytes_per_thread = 3456
+
 [mcp]
 servers = [{ name = "filesystem", url = "http://127.0.0.1:8765/mcp", headers = {} }]
 
@@ -238,6 +243,9 @@ max_payload_chars = 4096
     assert settings.image_input.max_images == 3
     assert settings.image_input.max_total_bytes == 2468
     assert settings.image_input.allowed_mime_types == frozenset({"image/png", "image/webp"})
+    assert settings.attachment_store.db_path == "attachments.db"
+    assert settings.attachment_store.max_per_thread == 12
+    assert settings.attachment_store.max_bytes_per_thread == 3456
     assert settings.mcp.servers[0].name == "filesystem"
     assert settings.peer_agents.agents[0].name == "local-agent"
     assert settings.logging.level == "DEBUG"

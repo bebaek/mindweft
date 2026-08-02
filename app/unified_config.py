@@ -84,6 +84,11 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "max_total_bytes": "MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES",
         "allowed_mime_types": "MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES",
     },
+    "attachments": {
+        "db_path": "MINIGENT_ATTACHMENT_DB_PATH",
+        "max_per_thread": "MINIGENT_ATTACHMENT_MAX_PER_THREAD",
+        "max_bytes_per_thread": "MINIGENT_ATTACHMENT_MAX_BYTES_PER_THREAD",
+    },
     "coding": {
         "enabled": "MINIGENT_CODING_MCP_GATEWAY_ENABLED",
         "tenant_id": "MINIGENT_CODING_TENANT_ID",

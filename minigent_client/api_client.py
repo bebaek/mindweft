@@ -485,8 +485,9 @@ class MinigentAPIClient:
         parts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"content": content}
-        if parts is not None:
-            payload["parts"] = parts
+        uploaded_parts = self._upload_inline_image_parts(thread_id, parts)
+        if uploaded_parts is not None:
+            payload["parts"] = uploaded_parts
         if metadata is not None:
             payload["metadata"] = metadata
         response = self.request_json(
@@ -507,6 +508,22 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent create-thread response must include thread_id")
         return thread_id
 
+    def upload_attachment(
+        self,
+        thread_id: str,
+        *,
+        mime_type: str,
+        data: str,
+    ) -> dict[str, Any]:
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/threads/{thread_id}/attachments",
+            payload={"mime_type": mime_type, "data": data},
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent attachment response must be an object")
+        return cast(dict[str, Any], response)
+
     def send_user_message(
         self, content: str, *, parts: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
@@ -520,6 +537,36 @@ class MinigentAPIClient:
             metadata={"raw_user_prompt": content},
             parts=formatted_parts,
         )
+
+    def _upload_inline_image_parts(
+        self,
+        thread_id: str,
+        parts: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]] | None:
+        if parts is None:
+            return None
+        uploaded: list[dict[str, Any]] = []
+        for part in parts:
+            clean_part = dict(part)
+            data = clean_part.get("data")
+            if clean_part.get("type") != "image" or not isinstance(data, str) or not data:
+                uploaded.append(clean_part)
+                continue
+            mime_type = clean_part.get("mime_type")
+            if not isinstance(mime_type, str) or not mime_type:
+                raise RuntimeError("Image part must include mime_type")
+            attachment = self.upload_attachment(
+                thread_id,
+                mime_type=mime_type,
+                data=data,
+            )
+            attachment_id = attachment.get("attachment_id")
+            if not isinstance(attachment_id, str) or not attachment_id:
+                raise RuntimeError("Minigent attachment response must include attachment_id")
+            clean_part.pop("data", None)
+            clean_part["attachment_id"] = attachment_id
+            uploaded.append(clean_part)
+        return uploaded
 
     def run_thread(
         self, thread_id: str | None = None, *, stream: bool | None = None

@@ -107,6 +107,7 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | `MINIGENT_LLM_PROVIDER` | LLM provider such as `mock`, `openai`, `openrouter`, `openai-compatible`, `generic-oauth`, `google`, or `anthropic`. |
 | `MINIGENT_LLM_MODEL` | Model identifier for the selected provider. |
 | `MINIGENT_IMAGE_INPUT_ENABLED` | Enables image attachments from CLI/chat clients; unified config key is `[image_input].enabled`. |
+| `MINIGENT_ATTACHMENT_DB_PATH` | Optional SQLite store for uploaded attachment bytes; unified config key is `[attachments].db_path`. |
 | `MINIGENT_THREAD_DB_PATH` | Optional SQLite path for persistent thread/message storage plus atomic cross-replica run leases and cancellation. |
 | `MINIGENT_OAUTH_STORE_PATH` / `MINIGENT_OAUTH_ENCRYPTION_KEYS` | Shared encrypted SQLite OAuth credentials, login-flow state, and coordinated multi-replica token refresh. |
 | `MINIGENT_TENANT_EXECUTION_CONFIGS` | Optional per-tenant LLM, tool, skill, capability, backend, and quality config. |
@@ -332,10 +333,11 @@ environment variables belong on the external sidecar, not the Minigent process.
 The API serves a dependency-free browser client at `/web/`. It uses the streaming run
 endpoint to show live LLM, tool, and peer-agent progress, with mobile-friendly run
 controls, a stop action, basic assistant markdown rendering, execution option selectors,
-image file selection and clipboard paste with previews when server image input is enabled,
-a mobile More menu for secondary actions, a thread context sheet with compaction controls,
-a thread drawer backed by `GET /threads`, thread refresh/delete actions, and a collapsible
-activity sheet for run details.
+image file selection and clipboard paste with previews when server image input is enabled;
+the browser uploads bytes to thread-scoped attachment storage and keeps references in message
+history. A mobile More menu provides secondary actions, alongside a thread context sheet with
+compaction controls, a thread drawer backed by `GET /threads`, thread refresh/delete actions,
+and a collapsible activity sheet for run details.
 
 #### Mobile UI demo
 
