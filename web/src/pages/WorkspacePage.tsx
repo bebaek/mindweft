@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { RunEvent, ThreadListItem } from "../api/client";
+import type { ImagePart, Message, RunEvent, ThreadListItem } from "../api/client";
 import { useAuth } from "../auth/auth-context";
 import { ContextDialog } from "../components/ContextDialog";
+
+interface PendingImage {
+  file: File;
+  previewUrl: string;
+  detail: "auto" | "low" | "high";
+}
 
 interface ActivityItem {
   id: number;
@@ -20,10 +26,21 @@ export function WorkspacePage() {
   const [streamedReply, setStreamedReply] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const activityId = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const pendingImagesRef = useRef<PendingImage[]>([]);
 
+  useEffect(() => {
+    pendingImagesRef.current = pendingImages;
+  }, [pendingImages]);
+
+  const config = useQuery({
+    queryKey: ["public-config"],
+    queryFn: ({ signal }) => api.getPublicConfig(signal),
+    staleTime: 300_000,
+  });
   const threads = useQuery({
     queryKey: ["threads", authentication],
     queryFn: ({ signal }) => api.listThreads(50, signal),
@@ -40,7 +57,13 @@ export function WorkspacePage() {
     messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [messages.data, streamedReply, activity]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(
+    () => () => {
+      abortRef.current?.abort();
+      for (const image of pendingImagesRef.current) URL.revokeObjectURL(image.previewUrl);
+    },
+    [],
+  );
 
   function addActivity(label: string, event?: RunEvent) {
     activityId.current += 1;
@@ -65,7 +88,8 @@ export function WorkspacePage() {
   async function sendMessage(event: FormEvent) {
     event.preventDefault();
     const content = draft.trim();
-    if (!content || isRunning) return;
+    const queuedImages = [...pendingImages];
+    if ((!content && queuedImages.length === 0) || isRunning) return;
 
     setError(null);
     setDraft("");
@@ -75,13 +99,32 @@ export function WorkspacePage() {
     const controller = new AbortController();
     abortRef.current = controller;
     let threadId = selectedThreadId;
+    const uploaded: Array<{ attachment_id: string }> = [];
+    let messageStored = false;
     try {
       if (threadId === null) {
         const created = await api.createThread(controller.signal);
         threadId = created.thread_id;
         setSelectedThreadId(threadId);
       }
-      await api.addMessage(threadId, content, controller.signal);
+      for (const image of queuedImages) {
+        uploaded.push(await api.uploadAttachment(threadId, image.file, controller.signal));
+      }
+      const parts = uploaded.length
+        ? [
+            ...(content ? [{ type: "text" as const, text: content }] : []),
+            ...uploaded.map((attachment, index) => ({
+              type: "image" as const,
+              mime_type: queuedImages[index].file.type,
+              attachment_id: attachment.attachment_id,
+              detail: queuedImages[index].detail,
+            })),
+          ]
+        : undefined;
+      await api.addMessage(threadId, content, parts, controller.signal);
+      messageStored = true;
+      for (const image of queuedImages) URL.revokeObjectURL(image.previewUrl);
+      setPendingImages([]);
       await queryClient.invalidateQueries({ queryKey: ["messages", threadId] });
       addActivity("Run started");
       await api.streamRun(threadId, handleRunEvent, controller.signal);
@@ -91,6 +134,11 @@ export function WorkspacePage() {
       ]);
       setStreamedReply(null);
     } catch (caught) {
+      if (!messageStored && threadId !== null) {
+        await Promise.allSettled(
+          uploaded.map((attachment) => api.deleteAttachment(threadId!, attachment.attachment_id)),
+        );
+      }
       if (caught instanceof DOMException && caught.name === "AbortError") {
         addActivity("Run stopped");
       } else {
@@ -100,6 +148,50 @@ export function WorkspacePage() {
       abortRef.current = null;
       setIsRunning(false);
     }
+  }
+
+  function addImageFiles(files: FileList | null) {
+    if (!files?.length) return;
+    const imageConfig = config.data?.image_input;
+    if (!imageConfig?.enabled) {
+      setError("Image input is disabled on this server.");
+      return;
+    }
+    const candidates = Array.from(files);
+    const totalCount = pendingImages.length + candidates.length;
+    const totalBytes = [...pendingImages.map((image) => image.file.size), ...candidates.map((file) => file.size)]
+      .reduce((sum, size) => sum + size, 0);
+    if (totalCount > imageConfig.max_images) {
+      setError(`A message can include at most ${String(imageConfig.max_images)} images.`);
+      return;
+    }
+    if (totalBytes > imageConfig.max_total_bytes) {
+      setError("Selected images exceed the total message size limit.");
+      return;
+    }
+    for (const file of candidates) {
+      if (!imageConfig.allowed_mime_types.includes(file.type.toLowerCase())) {
+        setError(`Unsupported image type: ${file.type || file.name}`);
+        return;
+      }
+      if (file.size > imageConfig.max_bytes) {
+        setError(`${file.name} exceeds the per-image size limit.`);
+        return;
+      }
+    }
+    setError(null);
+    setPendingImages((images) => [
+      ...images,
+      ...candidates.map((file) => ({ file, previewUrl: URL.createObjectURL(file), detail: "auto" as const })),
+    ]);
+  }
+
+  function removeImage(index: number) {
+    setPendingImages((images) => {
+      const removed = images[index];
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return images.filter((_, imageIndex) => imageIndex !== index);
+    });
   }
 
   async function stopRun() {
@@ -117,6 +209,8 @@ export function WorkspacePage() {
     setStreamedReply(null);
     setActivity([]);
     setError(null);
+    for (const image of pendingImages) URL.revokeObjectURL(image.previewUrl);
+    setPendingImages([]);
   }
 
   return (
@@ -164,7 +258,8 @@ export function WorkspacePage() {
           {messages.data?.filter((message) => message.role === "user" || message.role === "assistant").map((message) => (
             <article className={`chat-message ${message.role}`} key={message.id}>
               <span className="message-author">{message.role === "user" ? "You" : "Minigent"}</span>
-              <p>{message.content}</p>
+              {message.content && <p>{message.content}</p>}
+              <MessageImages message={message} />
             </article>
           ))}
           {streamedReply !== null && <article className="chat-message assistant streaming"><span className="message-author">Minigent</span><p>{streamedReply}</p></article>}
@@ -181,6 +276,33 @@ export function WorkspacePage() {
         )}
 
         <form className="chat-composer" onSubmit={(event) => void sendMessage(event)}>
+          {pendingImages.length > 0 && (
+            <div className="pending-images">
+              {pendingImages.map((image, index) => (
+                <div className="pending-image" key={image.previewUrl}>
+                  <img src={image.previewUrl} alt={image.file.name} />
+                  <select
+                    aria-label={`Image detail for ${image.file.name}`}
+                    value={image.detail}
+                    onChange={(event) => setPendingImages((images) => images.map((item, imageIndex) => imageIndex === index ? { ...item, detail: event.target.value as PendingImage["detail"] } : item))}
+                  >
+                    <option value="auto">Auto detail</option><option value="low">Low detail</option><option value="high">High detail</option>
+                  </select>
+                  <button type="button" aria-label={`Remove ${image.file.name}`} onClick={() => removeImage(index)}>×</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <label className={`attach-image ${config.data?.image_input.enabled ? "" : "disabled"}`} title={config.data?.image_input.enabled ? "Attach images" : "Image input is unavailable"}>
+            <span aria-hidden="true">+</span><span className="sr-only">Attach images</span>
+            <input
+              type="file"
+              accept={config.data?.image_input.allowed_mime_types.join(",") ?? "image/*"}
+              multiple
+              disabled={isRunning || !config.data?.image_input.enabled}
+              onChange={(event) => { addImageFiles(event.target.files); event.target.value = ""; }}
+            />
+          </label>
           <textarea
             aria-label="Message Minigent"
             placeholder="Ask Minigent anything…"
@@ -198,7 +320,7 @@ export function WorkspacePage() {
           {isRunning ? (
             <button className="stop-run" type="button" onClick={() => void stopRun()}>Stop</button>
           ) : (
-            <button className="send-message" type="submit" disabled={!draft.trim()} aria-label="Send message">↑</button>
+            <button className="send-message" type="submit" disabled={!draft.trim() && pendingImages.length === 0} aria-label="Send message">↑</button>
           )}
           <small>Enter to send · Shift+Enter for a new line</small>
         </form>
@@ -246,4 +368,32 @@ function formatRunEvent(event: RunEvent) {
     "run.completed": "Run completed",
   };
   return labels[event.type] ?? event.type.replaceAll(".", " ");
+}
+
+function MessageImages({ message }: { message: Message }) {
+  const images = message.parts?.filter((part): part is ImagePart => part.type === "image") ?? [];
+  if (images.length === 0) return null;
+  return <div className="message-images">{images.map((image) => <AuthenticatedImage key={image.attachment_id} threadId={message.thread_id} image={image} />)}</div>;
+}
+
+function AuthenticatedImage({ threadId, image }: { threadId: string; image: ImagePart }) {
+  const { api } = useAuth();
+  const [source, setSource] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    void api.getAttachmentBlob(threadId, image.attachment_id, controller.signal).then((blob) => {
+      objectUrl = URL.createObjectURL(blob);
+      setSource(objectUrl);
+    }).catch((caught: unknown) => {
+      if (!(caught instanceof DOMException && caught.name === "AbortError")) setSource("");
+    });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [api, image.attachment_id, threadId]);
+  if (source === null) return <div className="message-image-loading">Loading image…</div>;
+  if (!source) return <div className="message-image-error">Image unavailable</div>;
+  return <img src={source} alt="User attachment" />;
 }

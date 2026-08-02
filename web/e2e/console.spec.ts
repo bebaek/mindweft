@@ -15,6 +15,22 @@ async function installApiMocks(page: Page, onExecutionOptions?: (route: Route) =
       }),
     });
   });
+  await page.route("**/config", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        image_input: {
+          enabled: true,
+          max_bytes: 5_000_000,
+          max_images: 4,
+          max_total_bytes: 10_000_000,
+          max_pixels: 20_000_000,
+          max_dimension: 8_000,
+          allowed_mime_types: ["image/png", "image/jpeg"],
+        },
+      }),
+    });
+  });
   await page.route("**/execution-options", async (route) => {
     onExecutionOptions?.(route);
     await route.fulfill({
@@ -31,7 +47,7 @@ async function installApiMocks(page: Page, onExecutionOptions?: (route: Route) =
 }
 
 async function installWorkspaceMocks(page: Page) {
-  const messages = new Map<string, Array<Record<string, string>>>([
+  const messages = new Map<string, Array<Record<string, unknown>>>([
     [
       "thread-1",
       [
@@ -79,12 +95,13 @@ async function installWorkspaceMocks(page: Page) {
     if (messageMatch) {
       const threadId = messageMatch[1];
       if (request.method() === "POST") {
-        const content = (request.postDataJSON() as { content: string }).content;
+        const body = request.postDataJSON() as { content: string; parts?: unknown[] };
         const message = {
           id: `message-${String((messages.get(threadId)?.length ?? 0) + 1)}`,
           thread_id: threadId,
           role: "user",
-          content,
+          content: body.content,
+          ...(body.parts ? { parts: body.parts } : {}),
           created_at: new Date().toISOString(),
         };
         messages.get(threadId)?.push(message);
@@ -94,6 +111,32 @@ async function installWorkspaceMocks(page: Page) {
           contentType: "application/json",
           body: JSON.stringify(messages.get(threadId) ?? []),
         });
+      }
+      return;
+    }
+    const attachmentMatch = path.match(/^\/threads\/([^/]+)\/attachments(?:\/binary|\/([^/]+))$/);
+    if (attachmentMatch) {
+      if (path.endsWith("/binary")) {
+        await route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({
+            attachment_id: "attachment-1",
+            thread_id: attachmentMatch[1],
+            mime_type: "image/png",
+            size_bytes: 68,
+            created_at: new Date().toISOString(),
+          }),
+        });
+      } else if (request.method() === "GET") {
+        await route.fulfill({
+          contentType: "image/png",
+          body: Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "base64",
+          ),
+        });
+      } else {
+        await route.fulfill({ status: 204, body: "" });
       }
       return;
     }
@@ -216,10 +259,21 @@ test("runs a streamed conversation without accessibility violations", async ({ p
   await page.getByRole("button", { name: "Review the deployment plan" }).click();
   await expect(page.getByText("Review the deployment plan", { exact: true }).last()).toBeVisible();
   await page.getByRole("button", { name: "New conversation" }).click();
+  await page.getByLabel("Attach images").setInputFiles({
+    name: "release-diagram.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
+  await expect(page.getByRole("img", { name: "release-diagram.png" })).toBeVisible();
+  await page.getByLabel("Image detail for release-diagram.png").selectOption("high");
   await page.getByLabel("Message Minigent").fill("Prepare the release");
   await page.getByRole("button", { name: "Send message" }).click();
 
   await expect(page.getByText("The deployment plan is ready.")).toBeVisible();
+  await expect(page.getByRole("img", { name: "User attachment" })).toBeVisible();
   await expect(page.locator(".activity-tray summary").getByText("Run completed")).toBeVisible();
 
   await page.getByRole("button", { name: "Context" }).click();

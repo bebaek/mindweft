@@ -50,11 +50,50 @@ export interface ThreadListResponse {
   offset: number;
 }
 
+export interface ImagePart {
+  type: "image";
+  mime_type: string;
+  attachment_id: string;
+  detail: "auto" | "low" | "high";
+}
+
+export interface TextPart {
+  type: "text";
+  text: string;
+}
+
+export type MessagePart = TextPart | ImagePart;
+
 export interface Message {
   id: string;
   thread_id: string;
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  parts?: MessagePart[] | null;
+  created_at: string;
+}
+
+export interface ImageInputConfig {
+  enabled: boolean;
+  max_bytes: number;
+  max_images: number;
+  max_total_bytes: number;
+  max_pixels: number;
+  max_dimension: number;
+  allowed_mime_types: string[];
+}
+
+export interface PublicConfig {
+  image_input: ImageInputConfig;
+  [key: string]: unknown;
+}
+
+export interface AttachmentMetadata {
+  attachment_id: string;
+  thread_id: string;
+  mime_type: string;
+  size_bytes: number;
+  created_by?: string | null;
   created_at: string;
 }
 
@@ -127,6 +166,10 @@ export class MinigentApiClient {
     return this.#request<ExecutionOptionsResponse>("/execution-options", { signal });
   }
 
+  getPublicConfig(signal?: AbortSignal): Promise<PublicConfig> {
+    return this.#request<PublicConfig>("/config", { signal });
+  }
+
   listThreads(limit = 50, signal?: AbortSignal): Promise<ThreadListResponse> {
     return this.#request<ThreadListResponse>(`/threads?limit=${String(limit)}`, { signal });
   }
@@ -143,12 +186,58 @@ export class MinigentApiClient {
     return this.#request<Message[]>(`/threads/${encodeURIComponent(threadId)}/messages`, { signal });
   }
 
-  addMessage(threadId: string, content: string, signal?: AbortSignal): Promise<Message> {
+  addMessage(
+    threadId: string,
+    content: string,
+    parts?: MessagePart[],
+    signal?: AbortSignal,
+  ): Promise<Message> {
     return this.#request<Message>(`/threads/${encodeURIComponent(threadId)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, ...(parts ? { parts } : {}) }),
       signal,
     });
+  }
+
+  async uploadAttachment(
+    threadId: string,
+    file: File,
+    signal?: AbortSignal,
+  ): Promise<AttachmentMetadata> {
+    const headers = this.#headers();
+    headers.set("Content-Type", file.type);
+    const response = await fetch(
+      `${this.#baseUrl}/threads/${encodeURIComponent(threadId)}/attachments/binary`,
+      { method: "POST", headers, body: file, credentials: "include", signal },
+    );
+    if (!response.ok) {
+      const details = await readResponseBody(response);
+      throw new ApiError(errorMessage(details, response.status), response.status, details);
+    }
+    return (await response.json()) as AttachmentMetadata;
+  }
+
+  async getAttachmentBlob(
+    threadId: string,
+    attachmentId: string,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    const response = await fetch(
+      `${this.#baseUrl}/threads/${encodeURIComponent(threadId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { headers: this.#headers(), credentials: "include", signal },
+    );
+    if (!response.ok) {
+      const details = await readResponseBody(response);
+      throw new ApiError(errorMessage(details, response.status), response.status, details);
+    }
+    return await response.blob();
+  }
+
+  deleteAttachment(threadId: string, attachmentId: string): Promise<void> {
+    return this.#request<void>(
+      `/threads/${encodeURIComponent(threadId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: "DELETE" },
+    );
   }
 
   getThreadContext(threadId: string, signal?: AbortSignal): Promise<RawThreadContext> {

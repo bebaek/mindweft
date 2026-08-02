@@ -68,6 +68,36 @@ describe("MinigentApiClient", () => {
     expect(events).toEqual(["run.started", "assistant.message"]);
   });
 
+  it("uploads binary attachments with authentication and MIME headers", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          attachment_id: "attachment-1",
+          thread_id: "thread-1",
+          mime_type: "image/png",
+          size_bytes: 3,
+          created_at: "2026-01-01T00:00:00Z",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const file = new File([new Uint8Array([1, 2, 3])], "image.png", { type: "image/png" });
+
+    await new MinigentApiClient({
+      mode: "development",
+      tenantId: "tenant-1",
+      userId: "user-1",
+      isAdmin: false,
+    }).uploadAttachment("thread-1", file);
+
+    const request = fetchMock.mock.calls[0];
+    const headers = new Headers(request[1]?.headers);
+    expect(request[0]).toBe("/threads/thread-1/attachments/binary");
+    expect(request[1]?.body).toBe(file);
+    expect(headers.get("content-type")).toBe("image/png");
+    expect(headers.get("x-minigent-tenant-id")).toBe("tenant-1");
+  });
+
   it("returns structured API failures", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ detail: "Admin access required" }), {
