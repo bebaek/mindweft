@@ -71,6 +71,10 @@ WEB_CLIENT_DOM_CLASSES = r"""
                 document.activeElement = this;
                 this.dispatchEvent({ type: "focus" });
               }
+              blur() {
+                if (document.activeElement === this) document.activeElement = null;
+                this.dispatchEvent({ type: "blur" });
+              }
               append(...nodes) {
                 this.children.push(...nodes);
                 this.textContent = this.children.map((node) => node.textContent || "").join("");
@@ -208,7 +212,7 @@ def test_web_client_image_picker_uses_native_file_input_overlay() -> None:
     assert '<input id="image-input" type="file" accept="image/*" multiple />' in html
     assert 'id="camera-image-input"' in html
     assert 'capture="environment"' in html
-    assert "app.js?v=camera-mobile-2" in html
+    assert "app.js?v=keyboard-dismiss-1" in html
     assert ".camera-image-button {\n  display: none;" in styles
     assert "@media (hover: none) and (pointer: coarse)" in styles
 
@@ -772,6 +776,7 @@ def test_web_client_new_thread_send_flow(tmp_path: Path) -> None:
             }};
             const {{ elements, localStorageStore, fetchCalls, context, document }} = createWebClientHarness({{
               storageValue: JSON.stringify({{ baseUrl: "http://ui.test" }}),
+              isMobile: true,
               fetchImpl: async (_url, _options, path) => {{
                 if (path === "/threads") return {{ ok: true, status: 200, json: async () => ({{ thread_id: "t-new" }}), text: async () => "" }};
                 if (path === "/threads/t-new/run/stream") return ndjsonResponse([{{ type: "assistant.message", content: "New assistant reply" }}]);
@@ -783,9 +788,11 @@ def test_web_client_new_thread_send_flow(tmp_path: Path) -> None:
             await flushAsyncWork();
             assert.equal(elements.get("context-button").hidden, true);
 
+            elements.get("message-input").focus();
             elements.get("message-input").value = "Start thread";
             const submitPromise = elements.get("composer").requestSubmit();
             await waitUntil(() => fetchCalls.some((call) => call.url === "http://ui.test/threads/t-new/run/stream"));
+            assert.equal(document.activeElement, null);
             assert.equal(elements.get("send-button").hidden, true);
             assert.equal(elements.get("stop-button").hidden, false);
             assert.equal(elements.get("context-button").hidden, false);
@@ -796,6 +803,7 @@ def test_web_client_new_thread_send_flow(tmp_path: Path) -> None:
 
             assert.equal(elements.get("send-button").hidden, false);
             assert.equal(elements.get("stop-button").hidden, true);
+            assert.equal(document.activeElement, null);
             assert.equal(elements.get("message-input").value, "");
             assert.equal(elements.get("messages").textContent.includes("Start thread"), true);
             assert.equal(elements.get("messages").textContent.includes("New assistant reply"), true);
@@ -892,6 +900,7 @@ def test_web_client_new_thread_button_clears_state_then_sends(tmp_path: Path) ->
 
             assert.equal(elements.get("send-button").hidden, false);
             assert.equal(elements.get("stop-button").hidden, true);
+            assert.equal(document.activeElement, elements.get("message-input"));
             assert.equal(elements.get("message-input").value, "");
             assert.equal(elements.get("messages").textContent.includes("old prompt"), false);
             assert.equal(elements.get("messages").textContent.includes("Fresh prompt"), true);

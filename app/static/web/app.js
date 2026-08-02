@@ -225,6 +225,10 @@ elements.composer.addEventListener("submit", async (event) => {
     return;
   }
   const queuedImages = [...pendingImages];
+  const dismissKeyboard = usesOnScreenKeyboard();
+  if (dismissKeyboard) {
+    elements.messageInput.blur();
+  }
 
   saveFormState();
   setBusy(true);
@@ -304,7 +308,9 @@ elements.composer.addEventListener("submit", async (event) => {
     runState.cancelRequested = false;
     runState.currentThreadId = "";
     setBusy(false);
-    elements.messageInput.focus();
+    if (!dismissKeyboard) {
+      elements.messageInput.focus();
+    }
   }
 });
 
@@ -1569,6 +1575,10 @@ function scrollMessagesToBottom() {
   requestAnimationFrame(() => {
     elements.messages.scrollTop = elements.messages.scrollHeight;
   });
+}
+
+function usesOnScreenKeyboard() {
+  return window.matchMedia?.("(hover: none) and (pointer: coarse)")?.matches || false;
 }
 
 function shouldSubmitOnEnter(event) {
