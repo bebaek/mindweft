@@ -95,6 +95,17 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "pending_ttl_seconds": "MINIGENT_ATTACHMENT_PENDING_TTL_SECONDS",
         "cleanup_interval_seconds": "MINIGENT_ATTACHMENT_CLEANUP_INTERVAL_SECONDS",
     },
+    "rate_limits": {
+        "db_path": "MINIGENT_RATE_LIMIT_DB_PATH",
+        "upload_tenant_capacity": "MINIGENT_UPLOAD_RATE_LIMIT_TENANT_CAPACITY",
+        "upload_tenant_refill_per_second": ("MINIGENT_UPLOAD_RATE_LIMIT_TENANT_REFILL_PER_SECOND"),
+        "upload_user_capacity": "MINIGENT_UPLOAD_RATE_LIMIT_USER_CAPACITY",
+        "upload_user_refill_per_second": "MINIGENT_UPLOAD_RATE_LIMIT_USER_REFILL_PER_SECOND",
+        "run_tenant_capacity": "MINIGENT_RUN_RATE_LIMIT_TENANT_CAPACITY",
+        "run_tenant_refill_per_second": "MINIGENT_RUN_RATE_LIMIT_TENANT_REFILL_PER_SECOND",
+        "run_user_capacity": "MINIGENT_RUN_RATE_LIMIT_USER_CAPACITY",
+        "run_user_refill_per_second": "MINIGENT_RUN_RATE_LIMIT_USER_REFILL_PER_SECOND",
+    },
     "coding": {
         "enabled": "MINIGENT_CODING_MCP_GATEWAY_ENABLED",
         "tenant_id": "MINIGENT_CODING_TENANT_ID",

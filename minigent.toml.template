@@ -60,6 +60,19 @@ enabled = false
 # cleanup_interval_seconds = 900
 # Encryption keys are environment-only; see MINIGENT_ATTACHMENT_ENCRYPTION_KEYS.
 
+[rate_limits]
+# Set a shared SQLite path when enabling limits across multiple replicas.
+# db_path = "/data/minigent-rate-limits.db"
+# A capacity of 0 disables that tenant or user bucket.
+# upload_tenant_capacity = 0
+# upload_tenant_refill_per_second = 0.0166666667
+# upload_user_capacity = 0
+# upload_user_refill_per_second = 0.0166666667
+# run_tenant_capacity = 0
+# run_tenant_refill_per_second = 0.0166666667
+# run_user_capacity = 0
+# run_user_refill_per_second = 0.0166666667
+
 [coding]
 enabled = true
 workspaces = ["/Users/you/code"]

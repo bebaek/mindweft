@@ -464,6 +464,27 @@ fails. Existing plaintext rows remain readable for migration; enable re-encrypti
 provisioning the keyring to encrypt them. Protect encryption keys separately from the database and
 retain old key versions until rotation has completed on every replica.
 
+### `[rate_limits]`
+
+| Key | Maps to | Notes |
+| --- | --- | --- |
+| `db_path` | `MINIGENT_RATE_LIMIT_DB_PATH` | Optional SQLite token-bucket store. Use one shared path for multi-replica enforcement. |
+| `upload_tenant_capacity` | `MINIGENT_UPLOAD_RATE_LIMIT_TENANT_CAPACITY` | Upload burst shared by a tenant; `0` disables this bucket. |
+| `upload_tenant_refill_per_second` | `MINIGENT_UPLOAD_RATE_LIMIT_TENANT_REFILL_PER_SECOND` | Tenant upload tokens restored per second. |
+| `upload_user_capacity` | `MINIGENT_UPLOAD_RATE_LIMIT_USER_CAPACITY` | Upload burst per tenant/user pair; `0` disables this bucket. |
+| `upload_user_refill_per_second` | `MINIGENT_UPLOAD_RATE_LIMIT_USER_REFILL_PER_SECOND` | User upload tokens restored per second. |
+| `run_tenant_capacity` | `MINIGENT_RUN_RATE_LIMIT_TENANT_CAPACITY` | Run burst shared by a tenant; `0` disables this bucket. |
+| `run_tenant_refill_per_second` | `MINIGENT_RUN_RATE_LIMIT_TENANT_REFILL_PER_SECOND` | Tenant run tokens restored per second. |
+| `run_user_capacity` | `MINIGENT_RUN_RATE_LIMIT_USER_CAPACITY` | Run burst per tenant/user pair; `0` disables this bucket. |
+| `run_user_refill_per_second` | `MINIGENT_RUN_RATE_LIMIT_USER_REFILL_PER_SECOND` | User run tokens restored per second. |
+
+Upload limits cover both attachment upload endpoints. Run limits cover standard and NDJSON-streamed
+runs, and both variants consume the same run bucket. Every accepted request atomically consumes the
+applicable tenant and user tokens; a rejection consumes neither. Rejections return HTTP 429 with a
+bounded integer `Retry-After` header and a structured body, and logs contain category, tenant,
+rejected scope, and retry delay without request contents. Limits default to disabled. When enabling
+limits on more than one replica, configure a shared SQLite path rather than process-local state.
+
 ### `[coding]`
 
 | Key | Maps to |

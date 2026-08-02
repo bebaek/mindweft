@@ -24,6 +24,7 @@ def test_database_readiness_checks_configured_sqlite_stores(tmp_path: Path) -> N
                 "MINIGENT_PRIVATE_VALUE_DB_PATH": str(database),
                 "MINIGENT_PRIVATE_CONSENT_DB_PATH": str(database),
                 "MINIGENT_ADMIN_DB_PATH": str(database),
+                "MINIGENT_RATE_LIMIT_DB_PATH": str(database),
                 "MINIGENT_OAUTH_STORE_PATH": str(database),
                 "MINIGENT_OAUTH_ENCRYPTION_KEYS": '{"1":"configured"}',
             }
@@ -36,6 +37,7 @@ def test_database_readiness_checks_configured_sqlite_stores(tmp_path: Path) -> N
         "private_value_store": True,
         "private_consent_store": True,
         "admin_store": True,
+        "rate_limit_store": True,
         "oauth_store": True,
     }
 

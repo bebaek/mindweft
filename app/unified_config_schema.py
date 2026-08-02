@@ -88,6 +88,19 @@ class AttachmentConfig:
 
 
 @dataclass(frozen=True)
+class RateLimitConfig:
+    db_path: object = None
+    upload_tenant_capacity: object = None
+    upload_tenant_refill_per_second: object = None
+    upload_user_capacity: object = None
+    upload_user_refill_per_second: object = None
+    run_tenant_capacity: object = None
+    run_tenant_refill_per_second: object = None
+    run_user_capacity: object = None
+    run_user_refill_per_second: object = None
+
+
+@dataclass(frozen=True)
 class CodingConfig:
     enabled: object = None
     tenant_id: object = None
@@ -163,6 +176,7 @@ class UnifiedConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     image_input: ImageInputConfig = field(default_factory=ImageInputConfig)
     attachments: AttachmentConfig = field(default_factory=AttachmentConfig)
+    rate_limits: RateLimitConfig = field(default_factory=RateLimitConfig)
     coding: CodingConfig = field(default_factory=CodingConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
@@ -181,6 +195,7 @@ SECTION_FIELDS: dict[str, set[str]] = {
     "llm": set(LLMConfig.__dataclass_fields__),
     "image_input": set(ImageInputConfig.__dataclass_fields__),
     "attachments": set(AttachmentConfig.__dataclass_fields__),
+    "rate_limits": set(RateLimitConfig.__dataclass_fields__),
     "coding": set(CodingConfig.__dataclass_fields__),
     "mcp": set(MCPConfig.__dataclass_fields__),
     "voice": set(VoiceConfig.__dataclass_fields__),
@@ -197,6 +212,7 @@ TOP_LEVEL_KEYS = {
     "llm",
     "image_input",
     "attachments",
+    "rate_limits",
     "coding",
     "mcp",
     "voice",
@@ -215,6 +231,7 @@ SECTION_TYPES: dict[str, type[Any]] = {
     "llm": LLMConfig,
     "image_input": ImageInputConfig,
     "attachments": AttachmentConfig,
+    "rate_limits": RateLimitConfig,
     "coding": CodingConfig,
     "mcp": MCPConfig,
     "voice": VoiceConfig,
@@ -238,6 +255,7 @@ _STRING_KEYS = {
     "auth.jwt_tenant_claim",
     "auth.jwt_admin_claim",
     "oauth.store_path",
+    "rate_limits.db_path",
     "oauth.provider_id",
     "oauth.client_id",
     "oauth.authorize_url",
@@ -298,6 +316,10 @@ _INT_KEYS = {
     "attachments.max_bytes_per_tenant",
     "attachments.pending_ttl_seconds",
     "attachments.cleanup_interval_seconds",
+    "rate_limits.upload_tenant_capacity",
+    "rate_limits.upload_user_capacity",
+    "rate_limits.run_tenant_capacity",
+    "rate_limits.run_user_capacity",
     "coding.bridge_port",
     "coding.mcp_gateway_port",
     "quality.max_payload_chars",
@@ -307,6 +329,10 @@ _NUMBER_KEYS = {
     "app.tool_timeout_seconds",
     "llm.timeout",
     "quality.timeout",
+    "rate_limits.upload_tenant_refill_per_second",
+    "rate_limits.upload_user_refill_per_second",
+    "rate_limits.run_tenant_refill_per_second",
+    "rate_limits.run_user_refill_per_second",
 }
 
 _BOOL_KEYS = {

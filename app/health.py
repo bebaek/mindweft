@@ -13,6 +13,7 @@ _READINESS_DATABASE_ENVS: tuple[tuple[str, str], ...] = (
     ("private_value_store", "MINIGENT_PRIVATE_VALUE_DB_PATH"),
     ("private_consent_store", "MINIGENT_PRIVATE_CONSENT_DB_PATH"),
     ("admin_store", "MINIGENT_ADMIN_DB_PATH"),
+    ("rate_limit_store", "MINIGENT_RATE_LIMIT_DB_PATH"),
 )
 _OAUTH_STORE_PATH_ENV = "MINIGENT_OAUTH_STORE_PATH"
 _OAUTH_ENCRYPTION_KEY_ENVS = (

@@ -109,6 +109,7 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | `MINIGENT_IMAGE_INPUT_ENABLED` | Enables image attachments from CLI/chat clients; unified config key is `[image_input].enabled`. |
 | `MINIGENT_ATTACHMENT_DB_PATH` | Optional SQLite store for uploaded attachment bytes; unified config key is `[attachments].db_path`. |
 | `MINIGENT_ATTACHMENT_ENCRYPTION_KEY` / `MINIGENT_ATTACHMENT_ENCRYPTION_KEYS` | Optional AES-256-GCM key or versioned keyring for attachment bytes at rest. |
+| `MINIGENT_RATE_LIMIT_DB_PATH` | Optional shared SQLite token-bucket state for upload and run rate limits. |
 | `MINIGENT_THREAD_DB_PATH` | Optional SQLite path for persistent thread/message storage plus atomic cross-replica run leases and cancellation. |
 | `MINIGENT_OAUTH_STORE_PATH` / `MINIGENT_OAUTH_ENCRYPTION_KEYS` | Shared encrypted SQLite OAuth credentials, login-flow state, and coordinated multi-replica token refresh. |
 | `MINIGENT_TENANT_EXECUTION_CONFIGS` | Optional per-tenant LLM, tool, skill, capability, backend, and quality config. |

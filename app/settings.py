@@ -16,6 +16,7 @@ from app.llm import LLMSettings
 from app.mcp import MCPSettings
 from app.observability import LoggingSettings, TracingSettings
 from app.peer_agents import PeerAgentSettings
+from app.rate_limits import RateLimitSettings
 from app.runtime import RuntimeSettings
 from app.store import ThreadStoreSettings
 
@@ -84,6 +85,7 @@ class MinigentSettings:
     mcp: MCPSettings
     peer_agents: PeerAgentSettings
     quality: TenantQualityConfig
+    rate_limits: RateLimitSettings
     runtime: RuntimeSettings
     tenant_execution: TenantExecutionSettings
     thread_store: ThreadStoreSettings
@@ -103,6 +105,7 @@ class MinigentSettings:
             mcp=MCPSettings.from_env(lookup),
             peer_agents=PeerAgentSettings.from_env(lookup),
             quality=TenantQualityConfig.from_env(lookup),
+            rate_limits=RateLimitSettings.from_env(lookup),
             runtime=RuntimeSettings.from_env(lookup),
             tenant_execution=TenantExecutionSettings.from_env(lookup),
             thread_store=ThreadStoreSettings.from_env(lookup),

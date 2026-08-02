@@ -83,6 +83,7 @@ from app.oauth import GenericOAuthProvider, build_oauth_flow_store_from_env
 from app.observability import configure_logging, configure_tracing
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry
 from app.quality import QualityEnhancer
+from app.rate_limits import RateLimiter, build_rate_limiter
 from app.redaction import install_log_redaction
 from app.runtime import (
     AgentRuntime,
@@ -126,6 +127,8 @@ WEB_CLIENT_DIR = Path(__file__).resolve().parent / "static" / "web"
 STALE_RUN_RECOVERY_INTERVAL_SECONDS = 5.0
 PEER_TASK_CANCELLATION_CLAIM_SECONDS = 30.0
 PEER_TASK_CANCELLATION_BATCH_SIZE = 10
+UPLOAD_RATE_LIMIT_CATEGORY = "attachment_upload"
+RUN_RATE_LIMIT_CATEGORY = "thread_run"
 
 
 def _peer_task_retry_delay(attempts: int) -> float:
@@ -223,6 +226,39 @@ async def _recover_stale_runs_periodically(
                     cancellation.peer_name,
                     cancellation.attempts,
                 )
+
+
+def _enforce_request_rate_limit(
+    request: Request,
+    principal: Principal,
+    category: str,
+) -> None:
+    settings = request.app.state.rate_limit_settings
+    policy = settings.uploads if category == UPLOAD_RATE_LIMIT_CATEGORY else settings.runs
+    decision = request.app.state.rate_limiter.consume(
+        category,
+        principal.tenant_id,
+        principal.user_id,
+        policy,
+    )
+    if decision.allowed:
+        return
+    logger.warning(
+        "request.rate_limited category=%s tenant_id=%s scope=%s retry_after_seconds=%s",
+        category,
+        principal.tenant_id,
+        decision.rejected_scope,
+        decision.retry_after_seconds,
+    )
+    raise HTTPException(
+        status_code=429,
+        detail={
+            "error": "rate_limit_exceeded",
+            "category": category,
+            "retry_after_seconds": decision.retry_after_seconds,
+        },
+        headers={"Retry-After": str(decision.retry_after_seconds)},
+    )
 
 
 def build_thread_store(settings: ThreadStoreSettings) -> ThreadStore:
@@ -604,6 +640,7 @@ def create_app(
     peer_agent_registry: PeerAgentRegistry | None = None,
     thread_store: ThreadStore | None = None,
     attachment_store: AttachmentStore | None = None,
+    rate_limiter: RateLimiter | None = None,
     settings: MinigentSettings | None = None,
 ) -> FastAPI:
     settings_was_provided = settings is not None
@@ -658,6 +695,8 @@ def create_app(
     app.state.attachment_store = attachment_store or build_attachment_store(
         settings.attachment_store
     )
+    app.state.rate_limit_settings = settings.rate_limits
+    app.state.rate_limiter = rate_limiter or build_rate_limiter(settings.rate_limits)
     app.state.mcp_manager = mcp_manager
     app.state.mcp_broker_sessions = build_mcp_broker_session_store_from_env()
     app.state.oauth_flows = build_oauth_flow_store_from_env()
@@ -1101,6 +1140,7 @@ def create_app(
         app_request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> AttachmentMetadata:
+        _enforce_request_rate_limit(app_request, principal, UPLOAD_RATE_LIMIT_CATEGORY)
         app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
         try:
             data = base64.b64decode(upload.data, validate=True)
@@ -1123,6 +1163,7 @@ def create_app(
         app_request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> AttachmentMetadata:
+        _enforce_request_rate_limit(app_request, principal, UPLOAD_RATE_LIMIT_CATEGORY)
         app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
         image_settings = app_request.app.state.image_input_settings
         if not image_settings.enabled:
@@ -1348,6 +1389,7 @@ def create_app(
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> RunThreadResponse:
         _reject_if_draining(request)
+        _enforce_request_rate_limit(request, principal, RUN_RATE_LIMIT_CATEGORY)
         execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
         enforce_execution_entitlements(
             context=tenant_context_from_request_state(request.state),
@@ -1368,6 +1410,7 @@ def create_app(
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> StreamingResponse:
         _reject_if_draining(request)
+        _enforce_request_rate_limit(request, principal, RUN_RATE_LIMIT_CATEGORY)
         execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
         enforce_execution_entitlements(
             context=tenant_context_from_request_state(request.state),

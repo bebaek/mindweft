@@ -706,7 +706,7 @@ thread storage, threads and run coordination remain in memory and are lost on re
 admin control plane can also persist tenant execution config in SQLite when
 `MINIGENT_ADMIN_DB_PATH` points at a mounted volume.
 
-The thread, attachment, OAuth, private-value, DAV, run-lease, and optional MCP broker stores support shared
+The thread, attachment, rate-limit, OAuth, private-value, DAV, run-lease, and optional MCP broker stores support shared
 replica state when their SQLite paths are configured. Keep every replica on the same shared volume
 and configuration so broker tool registries can be reconstructed consistently.
 
@@ -731,7 +731,15 @@ OPENAI_API_KEY=...
 MINIGENT_LOG_FORMAT=json
 MINIGENT_THREAD_DB_PATH=/data/minigent-threads.db
 MINIGENT_ATTACHMENT_DB_PATH=/data/minigent-attachments.db
+MINIGENT_RATE_LIMIT_DB_PATH=/data/minigent-rate-limits.db
 ```
+
+Rate limits use shared atomic token buckets for attachment uploads and thread runs. Tenant and user
+buckets are configured independently with the `MINIGENT_UPLOAD_RATE_LIMIT_*` and
+`MINIGENT_RUN_RATE_LIMIT_*` capacity/refill settings. Capacity `0` disables a bucket. A rejected
+request returns HTTP 429 with `Retry-After`; standard and streaming runs share the same run category,
+and binary and base64 attachment endpoints share the same upload category. Configure the shared
+rate-limit database whenever more than one replica is active.
 
 Bring the service up with:
 

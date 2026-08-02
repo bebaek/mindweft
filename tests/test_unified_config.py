@@ -134,6 +134,17 @@ max_bytes_per_tenant = 9012
 pending_ttl_seconds = 34
 cleanup_interval_seconds = 56
 
+[rate_limits]
+db_path = "rate-limits.db"
+upload_tenant_capacity = 30
+upload_tenant_refill_per_second = 0.5
+upload_user_capacity = 10
+upload_user_refill_per_second = 0.2
+run_tenant_capacity = 15
+run_tenant_refill_per_second = 0.3
+run_user_capacity = 5
+run_user_refill_per_second = 0.1
+
 [mcp]
 servers = [{ name = "filesystem", url = "http://127.0.0.1:8765/mcp", headers = {} }]
 
@@ -258,6 +269,15 @@ max_payload_chars = 4096
     assert settings.attachment_store.max_bytes_per_tenant == 9012
     assert settings.attachment_store.pending_ttl_seconds == 34
     assert settings.attachment_store.cleanup_interval_seconds == 56
+    assert settings.rate_limits.db_path == "rate-limits.db"
+    assert settings.rate_limits.uploads.tenant_capacity == 30
+    assert settings.rate_limits.uploads.tenant_refill_per_second == 0.5
+    assert settings.rate_limits.uploads.user_capacity == 10
+    assert settings.rate_limits.uploads.user_refill_per_second == 0.2
+    assert settings.rate_limits.runs.tenant_capacity == 15
+    assert settings.rate_limits.runs.tenant_refill_per_second == 0.3
+    assert settings.rate_limits.runs.user_capacity == 5
+    assert settings.rate_limits.runs.user_refill_per_second == 0.1
     assert settings.mcp.servers[0].name == "filesystem"
     assert settings.peer_agents.agents[0].name == "local-agent"
     assert settings.logging.level == "DEBUG"

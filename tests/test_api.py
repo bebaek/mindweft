@@ -65,6 +65,10 @@ OTHER_TENANT_HEADERS = {
     "X-Minigent-User-Id": "user-2",
     "X-Minigent-Tenant-Id": "tenant-2",
 }
+SAME_TENANT_OTHER_USER_HEADERS = {
+    "X-Minigent-User-Id": "user-2",
+    "X-Minigent-Tenant-Id": "tenant-1",
+}
 ADMIN_HEADERS = {
     "X-Minigent-User-Id": "admin-user",
     "X-Minigent-Tenant-Id": "admin-tenant",
@@ -511,6 +515,53 @@ def test_attachment_upload_stores_reference_and_resolves_for_llm(
     )
     assert delete_response.status_code == 409
     assert delete_response.json()["detail"] == "attachment is referenced by message history"
+
+
+def test_attachment_upload_rate_limit_covers_both_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_UPLOAD_RATE_LIMIT_TENANT_CAPACITY", "4")
+    monkeypatch.setenv("MINIGENT_UPLOAD_RATE_LIMIT_TENANT_REFILL_PER_SECOND", "0.01")
+    monkeypatch.setenv("MINIGENT_UPLOAD_RATE_LIMIT_USER_CAPACITY", "2")
+    monkeypatch.setenv("MINIGENT_UPLOAD_RATE_LIMIT_USER_REFILL_PER_SECOND", "0.01")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    legacy = client.post(
+        f"/threads/{thread_id}/attachments",
+        json={"mime_type": "image/png", "data": PNG_1X1_BASE64},
+        headers=AUTH_HEADERS,
+    )
+    binary = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=base64.b64decode(PNG_1X1_BASE64),
+        headers={**AUTH_HEADERS, "Content-Type": "image/png"},
+    )
+    rejected = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=b"not-an-image",
+        headers={**AUTH_HEADERS, "Content-Type": "text/plain"},
+    )
+
+    assert legacy.status_code == 200
+    assert binary.status_code == 200
+    assert rejected.status_code == 429
+    assert rejected.headers["retry-after"] == "100"
+    assert rejected.json()["detail"] == {
+        "error": "rate_limit_exceeded",
+        "category": "attachment_upload",
+        "retry_after_seconds": 100,
+    }
+
+    other_user = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=base64.b64decode(PNG_1X1_BASE64),
+        headers={**SAME_TENANT_OTHER_USER_HEADERS, "Content-Type": "image/png"},
+    )
+    assert other_user.status_code == 200
 
 
 def test_admin_attachment_statistics_are_aggregate_and_tenant_scoped(
@@ -1250,6 +1301,34 @@ def test_peer_agent_events_and_artifact_proxy_endpoints() -> None:
         ("GET", "http://codex-agent.test/tasks/task_123/events?after=0"),
         ("GET", "http://codex-agent.test/tasks/task_123/artifacts/final-output"),
     ]
+
+
+def test_run_rate_limit_is_shared_by_standard_and_stream_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_RUN_RATE_LIMIT_TENANT_CAPACITY", "4")
+    monkeypatch.setenv("MINIGENT_RUN_RATE_LIMIT_TENANT_REFILL_PER_SECOND", "0.01")
+    monkeypatch.setenv("MINIGENT_RUN_RATE_LIMIT_USER_CAPACITY", "2")
+    monkeypatch.setenv("MINIGENT_RUN_RATE_LIMIT_USER_REFILL_PER_SECOND", "0.01")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "hello"},
+        headers=AUTH_HEADERS,
+    )
+
+    standard = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    streamed = client.post(f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS)
+    rejected = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert standard.status_code == 200
+    assert streamed.status_code == 200
+    assert rejected.status_code == 429
+    assert rejected.headers["retry-after"] == "100"
+    assert rejected.json()["detail"]["category"] == "thread_run"
 
 
 def test_run_stream_endpoint_emits_ndjson_events() -> None:
