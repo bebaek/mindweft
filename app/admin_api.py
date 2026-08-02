@@ -42,6 +42,12 @@ TENANT_SLUG_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 DOMAIN_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
+NON_NEGATIVE_INTEGER_ENTITLEMENT_LIMITS = {
+    "max_threads",
+    "max_messages_per_thread",
+    "max_messages",
+    "max_thread_runs",
+}
 
 
 @dataclass(frozen=True)
@@ -1451,6 +1457,9 @@ def _entitlement_validation_errors(
             limit_errors.append("Limit names must be non-empty")
         if value is not None and not isinstance(value, (int, float, str, bool)):
             limit_errors.append(f"Limit '{key}' must be a scalar or null")
+        if key in NON_NEGATIVE_INTEGER_ENTITLEMENT_LIMITS and value is not None:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                limit_errors.append(f"Limit '{key}' must be a non-negative integer or null")
     return feature_errors, limit_errors
 
 

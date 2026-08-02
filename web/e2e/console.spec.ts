@@ -652,6 +652,63 @@ test("manages tenant users and domains with destructive confirmations", async ({
   await expect(page.getByText("northwind.example", { exact: true })).not.toBeVisible();
 });
 
+test("validates, saves, and resets tenant entitlements", async ({ page }) => {
+  await installApiMocks(page);
+  await installAdminMocks(page);
+  const now = new Date().toISOString();
+  let saved: Record<string, unknown> | null = null;
+  await page.route("**/admin/tenants/tenant-acme/entitlements**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/validate")) {
+      const input = request.postDataJSON() as { features: Record<string, boolean>; limits: Record<string, unknown> };
+      const invalid = "reserved" in input.features;
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ valid: !invalid, features: { ok: !invalid, errors: invalid ? ["Feature 'reserved' is not available"] : [] }, limits: { ok: true, errors: [] } }) });
+    } else if (request.method() === "PUT") {
+      const input = request.postDataJSON() as Record<string, unknown>;
+      saved = { tenant_id: "tenant-acme", ...input, version: 1, updated_at: now };
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(saved) });
+    } else if (request.method() === "DELETE") {
+      saved = null;
+      await route.fulfill({ status: 204, body: "" });
+    } else if (saved) {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(saved) });
+    } else {
+      await route.fulfill({ status: 404, contentType: "application/json", body: '{"detail":"No entitlements"}' });
+    }
+  });
+  await page.goto("./");
+  await navigateToAdmin(page);
+
+  await expect(page.getByText("No tenant-specific entitlements")).toBeVisible();
+  await page.getByRole("button", { name: "Configure entitlements" }).click();
+  const dialog = page.getByRole("dialog", { name: "Configure entitlements" });
+  await dialog.getByRole("button", { name: "Add feature" }).click();
+  const featureRow = dialog.locator(".entitlement-row.feature");
+  await featureRow.getByLabel("Feature name").fill("reserved");
+  await dialog.getByRole("button", { name: "Add limit" }).click();
+  const limitRow = dialog.locator(".entitlement-row.limit");
+  await limitRow.getByLabel("Limit name").fill("max_threads");
+  await limitRow.getByLabel("Value").fill("100");
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await dialog.getByRole("button", { name: "Validate and save" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("Feature 'reserved' is not available");
+
+  await featureRow.getByLabel("Feature name").fill("mcp");
+  await dialog.getByRole("button", { name: "Validate and save" }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByText("Version 1")).toBeVisible();
+  await expect(page.getByText("mcp", { exact: true })).toBeVisible();
+  await expect(page.getByText("100", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Reset to defaults" }).click();
+  const confirmation = page.getByRole("dialog", { name: "Reset entitlements?" });
+  await expect(confirmation.getByText(/Runtime defaults will apply immediately/)).toBeVisible();
+  await confirmation.getByRole("button", { name: "Reset to defaults" }).click();
+  await expect(confirmation).not.toBeVisible();
+  await expect(page.getByText("No tenant-specific entitlements")).toBeVisible();
+});
+
 test("supports mobile navigation", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installApiMocks(page);

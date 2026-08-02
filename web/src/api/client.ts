@@ -164,6 +164,25 @@ export interface AdminTenantUserPatch {
   metadata?: Record<string, unknown>;
 }
 
+export type EntitlementLimitValue = number | string | boolean | null;
+
+export interface AdminTenantEntitlementsInput {
+  features: Record<string, boolean>;
+  limits: Record<string, EntitlementLimitValue>;
+}
+
+export interface AdminTenantEntitlements extends AdminTenantEntitlementsInput {
+  tenant_id: string;
+  version: number;
+  updated_at: string;
+}
+
+export interface AdminTenantEntitlementsValidation {
+  valid: boolean;
+  features: { ok: boolean; errors: string[] };
+  limits: { ok: boolean; errors: string[] };
+}
+
 export interface AdminTenant {
   id: string;
   slug: string;
@@ -385,6 +404,43 @@ export class MinigentApiClient {
   deleteAdminTenantDomain(tenantId: string, domainId: string): Promise<void> {
     return this.#request<void>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/domains/${encodeURIComponent(domainId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  getAdminTenantEntitlements(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminTenantEntitlements> {
+    return this.#request<AdminTenantEntitlements>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/entitlements`,
+      { signal },
+    );
+  }
+
+  validateAdminTenantEntitlements(
+    tenantId: string,
+    input: AdminTenantEntitlementsInput,
+  ): Promise<AdminTenantEntitlementsValidation> {
+    return this.#request<AdminTenantEntitlementsValidation>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/entitlements/validate`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
+
+  updateAdminTenantEntitlements(
+    tenantId: string,
+    input: AdminTenantEntitlementsInput,
+  ): Promise<AdminTenantEntitlements> {
+    return this.#request<AdminTenantEntitlements>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/entitlements`,
+      { method: "PUT", body: JSON.stringify(input) },
+    );
+  }
+
+  deleteAdminTenantEntitlements(tenantId: string): Promise<void> {
+    return this.#request<void>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/entitlements`,
       { method: "DELETE" },
     );
   }

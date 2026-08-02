@@ -13,6 +13,7 @@ import type {
   TenantUserStatus,
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
+import { EntitlementsPanel } from "../components/EntitlementsPanel";
 
 type PendingRemoval =
   | { kind: "user"; id: string; label: string }
@@ -215,6 +216,8 @@ export function AdminPage() {
                   <div className="capacity-bar"><div><span>Attachment storage</span><small>{formatBytes(attachments.data?.total_bytes)} of {formatBytes(attachments.data?.max_bytes)}</small></div><progress value={attachments.data?.total_bytes ?? 0} max={attachments.data?.max_bytes || 1} /></div>
                 </article>
               </section>
+
+              <EntitlementsPanel key={tenant.id} tenantId={tenant.id} />
 
               <section className="lifecycle-panel">
                 <div><p className="eyebrow">Lifecycle</p><h3>Tenant status</h3><p>Lifecycle changes are audited and immediately affect tenant access.</p></div>

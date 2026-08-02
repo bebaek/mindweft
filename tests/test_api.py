@@ -4355,6 +4355,24 @@ def test_admin_api_can_manage_tenant_entitlements(tmp_path: Path) -> None:
     assert validate_response.status_code == 200
     assert validate_response.json()["valid"] is True
 
+    invalid_limit_response = client.post(
+        "/admin/tenants/tenant-1/entitlements/validate",
+        json={"limits": {"max_threads": -1.5}},
+        headers=ADMIN_HEADERS,
+    )
+    assert invalid_limit_response.status_code == 200
+    assert invalid_limit_response.json()["valid"] is False
+    assert invalid_limit_response.json()["limits"]["errors"] == [
+        "Limit 'max_threads' must be a non-negative integer or null"
+    ]
+
+    rejected_limit_response = client.put(
+        "/admin/tenants/tenant-1/entitlements",
+        json={"limits": {"max_threads": -1}},
+        headers=ADMIN_HEADERS,
+    )
+    assert rejected_limit_response.status_code == 400
+
     first_response = client.put(
         "/admin/tenants/tenant-1/entitlements",
         json={
