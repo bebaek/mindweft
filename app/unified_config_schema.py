@@ -81,6 +81,8 @@ class AttachmentConfig:
     db_path: object = None
     max_per_thread: object = None
     max_bytes_per_thread: object = None
+    max_per_tenant: object = None
+    max_bytes_per_tenant: object = None
 
 
 @dataclass(frozen=True)
@@ -290,6 +292,8 @@ _INT_KEYS = {
     "image_input.max_dimension",
     "attachments.max_per_thread",
     "attachments.max_bytes_per_thread",
+    "attachments.max_per_tenant",
+    "attachments.max_bytes_per_tenant",
     "coding.bridge_port",
     "coding.mcp_gateway_port",
     "quality.max_payload_chars",

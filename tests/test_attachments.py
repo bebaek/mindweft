@@ -23,16 +23,22 @@ def test_attachment_store_settings_from_env() -> None:
     assert defaults.db_path is None
     assert defaults.max_per_thread == 100
     assert defaults.max_bytes_per_thread == 256 * 1024 * 1024
+    assert defaults.max_per_tenant == 1_000
+    assert defaults.max_bytes_per_tenant == 1024 * 1024 * 1024
     assert AttachmentStoreSettings.from_env(
         {
             "MINIGENT_ATTACHMENT_DB_PATH": "/data/attachments.db",
             "MINIGENT_ATTACHMENT_MAX_PER_THREAD": "12",
             "MINIGENT_ATTACHMENT_MAX_BYTES_PER_THREAD": "3456",
+            "MINIGENT_ATTACHMENT_MAX_PER_TENANT": "78",
+            "MINIGENT_ATTACHMENT_MAX_BYTES_PER_TENANT": "9012",
         }
     ) == AttachmentStoreSettings(
         db_path="/data/attachments.db",
         max_per_thread=12,
         max_bytes_per_thread=3456,
+        max_per_tenant=78,
+        max_bytes_per_tenant=9012,
     )
 
 
@@ -200,6 +206,7 @@ def test_sqlite_attachment_store_persists_and_scopes_records(tmp_path: Path) -> 
     assert record.data == b"image-bytes"
     assert record.metadata.mime_type == "image/png"
     assert second.usage("tenant-1", "thread-1") == (1, len(b"image-bytes"))
+    assert second.tenant_usage("tenant-1") == (1, len(b"image-bytes"))
     assert second.get("tenant-1", "thread-2", metadata.attachment_id) is None
     assert second.get("tenant-2", "thread-1", metadata.attachment_id) is None
 
@@ -250,6 +257,52 @@ def test_attachment_stores_enforce_limits_atomically(tmp_path: Path) -> None:
         assert store.usage("tenant-1", "thread-2") == (1, len(b"first"))
 
 
+def test_attachment_stores_enforce_tenant_limits_across_threads(tmp_path: Path) -> None:
+    stores = [InMemoryAttachmentStore(), SQLiteAttachmentStore(tmp_path / "tenant-limits.db")]
+    for store in stores:
+        for thread_id in ("thread-1", "thread-2"):
+            store.put(
+                "tenant-1",
+                thread_id,
+                mime_type="image/png",
+                data=b"image",
+                created_by="user-1",
+                max_per_tenant=2,
+                max_bytes_per_tenant=100,
+            )
+        with pytest.raises(AttachmentLimitExceeded, match="tenant_count"):
+            store.put(
+                "tenant-1",
+                "thread-3",
+                mime_type="image/png",
+                data=b"image",
+                created_by="user-1",
+                max_per_tenant=2,
+                max_bytes_per_tenant=100,
+            )
+        store.put(
+            "tenant-2",
+            "thread-1",
+            mime_type="image/png",
+            data=b"separate",
+            created_by="user-2",
+            max_per_tenant=2,
+            max_bytes_per_tenant=100,
+        )
+        with pytest.raises(AttachmentLimitExceeded, match="tenant_bytes"):
+            store.put(
+                "tenant-2",
+                "thread-2",
+                mime_type="image/png",
+                data=b"more",
+                created_by="user-2",
+                max_per_tenant=5,
+                max_bytes_per_tenant=10,
+            )
+        assert store.tenant_usage("tenant-1") == (2, 2 * len(b"image"))
+        assert store.tenant_usage("tenant-2") == (1, len(b"separate"))
+
+
 def test_sqlite_attachment_store_enforces_limit_across_instances(tmp_path: Path) -> None:
     path = tmp_path / "shared-limits.db"
     stores = [SQLiteAttachmentStore(path), SQLiteAttachmentStore(path)]
@@ -275,6 +328,34 @@ def test_sqlite_attachment_store_enforces_limit_across_instances(tmp_path: Path)
 
     assert sum(isinstance(result, AttachmentLimitExceeded) for result in results) == 1
     assert stores[0].usage("tenant-1", "thread-1") == (1, len(b"image"))
+
+
+def test_sqlite_attachment_store_enforces_tenant_limit_across_instances(tmp_path: Path) -> None:
+    path = tmp_path / "shared-tenant-limits.db"
+    stores = [SQLiteAttachmentStore(path), SQLiteAttachmentStore(path)]
+    barrier = Barrier(2)
+
+    def upload(item: tuple[int, SQLiteAttachmentStore]) -> object:
+        index, store = item
+        barrier.wait()
+        try:
+            return store.put(
+                "tenant-1",
+                f"thread-{index}",
+                mime_type="image/png",
+                data=b"image",
+                created_by="user-1",
+                max_per_tenant=1,
+                max_bytes_per_tenant=100,
+            )
+        except AttachmentLimitExceeded as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(upload, enumerate(stores)))
+
+    assert sum(isinstance(result, AttachmentLimitExceeded) for result in results) == 1
+    assert stores[0].tenant_usage("tenant-1") == (1, len(b"image"))
 
 
 def test_sqlite_attachment_store_deletes_thread_records(tmp_path: Path) -> None:

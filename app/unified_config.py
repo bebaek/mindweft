@@ -90,6 +90,8 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "db_path": "MINIGENT_ATTACHMENT_DB_PATH",
         "max_per_thread": "MINIGENT_ATTACHMENT_MAX_PER_THREAD",
         "max_bytes_per_thread": "MINIGENT_ATTACHMENT_MAX_BYTES_PER_THREAD",
+        "max_per_tenant": "MINIGENT_ATTACHMENT_MAX_PER_TENANT",
+        "max_bytes_per_tenant": "MINIGENT_ATTACHMENT_MAX_BYTES_PER_TENANT",
     },
     "coding": {
         "enabled": "MINIGENT_CODING_MCP_GATEWAY_ENABLED",

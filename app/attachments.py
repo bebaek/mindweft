@@ -19,12 +19,16 @@ from app.private_keyring import load_encryption_keyring, parse_boolean
 ATTACHMENT_DB_PATH_ENV = "MINIGENT_ATTACHMENT_DB_PATH"
 ATTACHMENT_MAX_PER_THREAD_ENV = "MINIGENT_ATTACHMENT_MAX_PER_THREAD"
 ATTACHMENT_MAX_BYTES_PER_THREAD_ENV = "MINIGENT_ATTACHMENT_MAX_BYTES_PER_THREAD"
+ATTACHMENT_MAX_PER_TENANT_ENV = "MINIGENT_ATTACHMENT_MAX_PER_TENANT"
+ATTACHMENT_MAX_BYTES_PER_TENANT_ENV = "MINIGENT_ATTACHMENT_MAX_BYTES_PER_TENANT"
 ATTACHMENT_ENCRYPTION_KEY_ENV = "MINIGENT_ATTACHMENT_ENCRYPTION_KEY"
 ATTACHMENT_ENCRYPTION_KEYS_ENV = "MINIGENT_ATTACHMENT_ENCRYPTION_KEYS"
 ATTACHMENT_KEY_VERSION_ENV = "MINIGENT_ATTACHMENT_KEY_VERSION"
 ATTACHMENT_REENCRYPT_ON_STARTUP_ENV = "MINIGENT_ATTACHMENT_REENCRYPT_ON_STARTUP"
 DEFAULT_ATTACHMENT_MAX_PER_THREAD = 100
 DEFAULT_ATTACHMENT_MAX_BYTES_PER_THREAD = 256 * 1024 * 1024
+DEFAULT_ATTACHMENT_MAX_PER_TENANT = 1_000
+DEFAULT_ATTACHMENT_MAX_BYTES_PER_TENANT = 1024 * 1024 * 1024
 _NONCE_BYTES = 12
 
 
@@ -59,6 +63,8 @@ class AttachmentStoreSettings:
     db_path: str | None = None
     max_per_thread: int = DEFAULT_ATTACHMENT_MAX_PER_THREAD
     max_bytes_per_thread: int = DEFAULT_ATTACHMENT_MAX_BYTES_PER_THREAD
+    max_per_tenant: int = DEFAULT_ATTACHMENT_MAX_PER_TENANT
+    max_bytes_per_tenant: int = DEFAULT_ATTACHMENT_MAX_BYTES_PER_TENANT
     encryption_key: bytes | None = field(default=None, repr=False)
     decryption_keys: Mapping[int, bytes] = field(default_factory=dict, repr=False)
     key_version: int = 1
@@ -108,6 +114,14 @@ class AttachmentStoreSettings:
                 ATTACHMENT_MAX_BYTES_PER_THREAD_ENV,
                 DEFAULT_ATTACHMENT_MAX_BYTES_PER_THREAD,
             ),
+            max_per_tenant=_positive_int_env(
+                lookup, ATTACHMENT_MAX_PER_TENANT_ENV, DEFAULT_ATTACHMENT_MAX_PER_TENANT
+            ),
+            max_bytes_per_tenant=_positive_int_env(
+                lookup,
+                ATTACHMENT_MAX_BYTES_PER_TENANT_ENV,
+                DEFAULT_ATTACHMENT_MAX_BYTES_PER_TENANT,
+            ),
             encryption_key=encryption_key,
             decryption_keys=decryption_keys,
             key_version=key_version,
@@ -126,6 +140,8 @@ class AttachmentStore(Protocol):
         created_by: str | None,
         max_per_thread: int | None = None,
         max_bytes_per_thread: int | None = None,
+        max_per_tenant: int | None = None,
+        max_bytes_per_tenant: int | None = None,
     ) -> AttachmentMetadata: ...
 
     def get(
@@ -133,6 +149,8 @@ class AttachmentStore(Protocol):
     ) -> AttachmentRecord | None: ...
 
     def usage(self, tenant_id: str, thread_id: str) -> tuple[int, int]: ...
+
+    def tenant_usage(self, tenant_id: str) -> tuple[int, int]: ...
 
     def delete(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool: ...
 
@@ -154,6 +172,8 @@ class InMemoryAttachmentStore:
         created_by: str | None,
         max_per_thread: int | None = None,
         max_bytes_per_thread: int | None = None,
+        max_per_tenant: int | None = None,
+        max_bytes_per_tenant: int | None = None,
     ) -> AttachmentMetadata:
         metadata = AttachmentMetadata(
             attachment_id=str(uuid4()),
@@ -164,12 +184,17 @@ class InMemoryAttachmentStore:
         )
         with self._lock:
             count, total_bytes = self._usage_unlocked(tenant_id, thread_id)
+            tenant_count, tenant_total_bytes = self._tenant_usage_unlocked(tenant_id)
             _enforce_limits(
                 count=count,
                 total_bytes=total_bytes,
+                tenant_count=tenant_count,
+                tenant_total_bytes=tenant_total_bytes,
                 incoming_bytes=len(data),
                 max_per_thread=max_per_thread,
                 max_bytes_per_thread=max_bytes_per_thread,
+                max_per_tenant=max_per_tenant,
+                max_bytes_per_tenant=max_bytes_per_tenant,
             )
             self._records[(tenant_id, thread_id, metadata.attachment_id)] = AttachmentRecord(
                 metadata=metadata,
@@ -190,6 +215,14 @@ class InMemoryAttachmentStore:
     def usage(self, tenant_id: str, thread_id: str) -> tuple[int, int]:
         with self._lock:
             return self._usage_unlocked(tenant_id, thread_id)
+
+    def _tenant_usage_unlocked(self, tenant_id: str) -> tuple[int, int]:
+        records = [record for key, record in self._records.items() if key[0] == tenant_id]
+        return len(records), sum(record.metadata.size_bytes for record in records)
+
+    def tenant_usage(self, tenant_id: str) -> tuple[int, int]:
+        with self._lock:
+            return self._tenant_usage_unlocked(tenant_id)
 
     def delete(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
         with self._lock:
@@ -304,6 +337,8 @@ class SQLiteAttachmentStore:
         created_by: str | None,
         max_per_thread: int | None = None,
         max_bytes_per_thread: int | None = None,
+        max_per_tenant: int | None = None,
+        max_bytes_per_tenant: int | None = None,
     ) -> AttachmentMetadata:
         metadata = AttachmentMetadata(
             attachment_id=str(uuid4()),
@@ -335,12 +370,19 @@ class SQLiteAttachmentStore:
         with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             count, total_bytes = self._usage_with_connection(connection, tenant_id, thread_id)
+            tenant_count, tenant_total_bytes = self._tenant_usage_with_connection(
+                connection, tenant_id
+            )
             _enforce_limits(
                 count=count,
                 total_bytes=total_bytes,
+                tenant_count=tenant_count,
+                tenant_total_bytes=tenant_total_bytes,
                 incoming_bytes=len(data),
                 max_per_thread=max_per_thread,
                 max_bytes_per_thread=max_bytes_per_thread,
+                max_per_tenant=max_per_tenant,
+                max_bytes_per_tenant=max_bytes_per_tenant,
             )
             connection.execute(
                 """
@@ -481,6 +523,25 @@ class SQLiteAttachmentStore:
         with self._lock, self._connection() as connection:
             return self._usage_with_connection(connection, tenant_id, thread_id)
 
+    @staticmethod
+    def _tenant_usage_with_connection(
+        connection: sqlite3.Connection,
+        tenant_id: str,
+    ) -> tuple[int, int]:
+        row = connection.execute(
+            """
+            SELECT COUNT(*), COALESCE(SUM(size_bytes), 0)
+            FROM attachments
+            WHERE tenant_id = ?
+            """,
+            (tenant_id,),
+        ).fetchone()
+        return int(row[0]), int(row[1])
+
+    def tenant_usage(self, tenant_id: str) -> tuple[int, int]:
+        with self._lock, self._connection() as connection:
+            return self._tenant_usage_with_connection(connection, tenant_id)
+
     def delete(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
         with self._lock, self._connection() as connection:
             cursor = connection.execute(
@@ -531,14 +592,24 @@ def _enforce_limits(
     *,
     count: int,
     total_bytes: int,
+    tenant_count: int,
+    tenant_total_bytes: int,
     incoming_bytes: int,
     max_per_thread: int | None,
     max_bytes_per_thread: int | None,
+    max_per_tenant: int | None,
+    max_bytes_per_tenant: int | None,
 ) -> None:
     if max_per_thread is not None and count >= max_per_thread:
         raise AttachmentLimitExceeded("count")
     if max_bytes_per_thread is not None and total_bytes + incoming_bytes > max_bytes_per_thread:
         raise AttachmentLimitExceeded("bytes")
+    if max_per_tenant is not None and tenant_count >= max_per_tenant:
+        raise AttachmentLimitExceeded("tenant_count")
+    if max_bytes_per_tenant is not None and (
+        tenant_total_bytes + incoming_bytes > max_bytes_per_tenant
+    ):
+        raise AttachmentLimitExceeded("tenant_bytes")
 
 
 def _positive_int_env(env: Mapping[str, str], name: str, default: int) -> int:

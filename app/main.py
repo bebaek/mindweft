@@ -1022,13 +1022,16 @@ def create_app(
                 created_by=principal.user_id,
                 max_per_thread=attachment_settings.max_per_thread,
                 max_bytes_per_thread=attachment_settings.max_bytes_per_thread,
+                max_per_tenant=attachment_settings.max_per_tenant,
+                max_bytes_per_tenant=attachment_settings.max_bytes_per_tenant,
             )
         except AttachmentLimitExceeded as exc:
-            detail = (
-                "thread attachment count limit exceeded"
-                if exc.limit == "count"
-                else "thread attachment storage limit exceeded"
-            )
+            detail = {
+                "count": "thread attachment count limit exceeded",
+                "bytes": "thread attachment storage limit exceeded",
+                "tenant_count": "tenant attachment count limit exceeded",
+                "tenant_bytes": "tenant attachment storage limit exceeded",
+            }[exc.limit]
             raise HTTPException(status_code=400, detail=detail) from exc
 
     @app.post(

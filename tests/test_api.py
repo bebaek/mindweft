@@ -649,6 +649,28 @@ def test_attachment_upload_enforces_thread_count_limit(
     assert second.json()["detail"] == "thread attachment count limit exceeded"
 
 
+def test_attachment_upload_enforces_tenant_count_limit_across_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_ATTACHMENT_MAX_PER_TENANT", "1")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    first_thread = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    second_thread = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    payload = {"mime_type": "image/png", "data": PNG_1X1_BASE64}
+
+    first = client.post(f"/threads/{first_thread}/attachments", json=payload, headers=AUTH_HEADERS)
+    second = client.post(
+        f"/threads/{second_thread}/attachments", json=payload, headers=AUTH_HEADERS
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 400
+    assert second.json()["detail"] == "tenant attachment count limit exceeded"
+
+
 def test_sqlite_thread_store_persists_threads_and_messages(tmp_path: Path) -> None:
     db_path = tmp_path / "threads.db"
     first_client = TestClient(

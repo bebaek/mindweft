@@ -424,12 +424,15 @@ the regular image picker because they commonly ignore the HTML camera-capture hi
 | `db_path` | `MINIGENT_ATTACHMENT_DB_PATH` | Optional SQLite store for attachment bytes. Without it, attachments are process-local and disappear on restart. Use a shared path for multiple replicas. |
 | `max_per_thread` | `MINIGENT_ATTACHMENT_MAX_PER_THREAD` | Maximum stored attachment records per thread; defaults to 100. |
 | `max_bytes_per_thread` | `MINIGENT_ATTACHMENT_MAX_BYTES_PER_THREAD` | Maximum aggregate attachment bytes per thread; defaults to 256 MiB. |
+| `max_per_tenant` | `MINIGENT_ATTACHMENT_MAX_PER_TENANT` | Maximum stored attachment records across all of one tenant's threads; defaults to 1,000. |
+| `max_bytes_per_tenant` | `MINIGENT_ATTACHMENT_MAX_BYTES_PER_TENANT` | Maximum aggregate attachment bytes across one tenant; defaults to 1 GiB. |
 
 Attachment records are scoped by tenant and thread. Provider requests resolve references to
 image bytes only in transient model-facing message copies; stored messages retain references.
 Deleting a thread deletes its attachment records. Unreferenced uploads can be deleted explicitly;
-clients clean them up automatically if a later upload or message creation fails. Quotas are checked
-atomically when the attachment is inserted, including across SQLite-backed replicas.
+clients clean them up automatically if a later upload or message creation fails. Per-thread and
+per-tenant quotas are checked atomically when an attachment is inserted, including across
+SQLite-backed replicas, so concurrent uploads cannot race past the configured storage limits.
 
 Attachment encryption settings are intentionally environment-only so key material is not written to
 `minigent.toml`:

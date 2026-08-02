@@ -54,6 +54,8 @@ enabled = false
 # db_path = "/data/minigent-attachments.db"
 # max_per_thread = 100
 # max_bytes_per_thread = 268435456
+# max_per_tenant = 1000
+# max_bytes_per_tenant = 1073741824
 # Encryption keys are environment-only; see MINIGENT_ATTACHMENT_ENCRYPTION_KEYS.
 
 [coding]
