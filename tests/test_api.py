@@ -3501,7 +3501,7 @@ def test_runtime_uses_thread_llm_profile(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(
         execution_module,
         "_build_llm_adapter",
-        lambda config: ProfileAdapter(config.model or "legacy"),
+        lambda config, **_kwargs: ProfileAdapter(config.model or "legacy"),
     )
     client = TestClient(create_app())
     created = client.post("/threads", headers=AUTH_HEADERS, json={"llm_profile": "backup"})
@@ -3566,7 +3566,7 @@ provider = "mock"
     monkeypatch.setattr(
         execution_module,
         "_build_llm_adapter",
-        lambda _config: RecordingLLMAdapter(),
+        lambda _config, **_kwargs: RecordingLLMAdapter(),
     )
     load_environment(discover_default_files=False)
     client = TestClient(create_app())
@@ -4229,6 +4229,121 @@ def test_tenant_owner_can_manage_only_their_tenant(tmp_path: Path) -> None:
     )
     assert execution.status_code == 200
     assert execution.json()["config"]["llm"]["provider"] == "mock"
+
+
+def test_tenant_owner_can_import_pi_openai_oauth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oauth_db = tmp_path / "oauth.db"
+    oauth_key = base64.urlsafe_b64encode(b"o" * 32).decode().rstrip("=")
+    oauth_env = {
+        "MINIGENT_OAUTH_STORE_PATH": str(oauth_db),
+        "MINIGENT_OAUTH_ENCRYPTION_KEYS": json.dumps({"1": oauth_key}),
+        "MINIGENT_OAUTH_KEY_VERSION": "1",
+        "MINIGENT_OAUTH_PROVIDER_ID": "openai-codex",
+        "MINIGENT_OAUTH_CLIENT_ID": "pi-client",
+        "MINIGENT_OAUTH_AUTHORIZE_URL": "https://auth.example/authorize",
+        "MINIGENT_OAUTH_TOKEN_URL": "https://auth.example/token",
+        "MINIGENT_OAUTH_REDIRECT_URI": "http://localhost:1455/auth/callback",
+        "MINIGENT_OAUTH_SCOPE": "openid profile email offline_access",
+    }
+    for name, value in oauth_env.items():
+        monkeypatch.setenv(name, value)
+
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+    assert (
+        client.post(
+            "/admin/tenants",
+            json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "active"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/admin/tenants/tenant-1/users",
+            json={"user_id": "user-1", "role": "owner", "status": "active"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+
+    disconnected = client.get(
+        "/admin/tenants/tenant-1/oauth/openai-codex",
+        headers=AUTH_HEADERS,
+    )
+    assert disconnected.status_code == 200
+    assert disconnected.json()["connected"] is False
+
+    pi_credential = {
+        "type": "oauth",
+        "access": "pi-access-token",
+        "refresh": "pi-refresh-token",
+        "expires": 1_900_000_000_000,
+        "accountId": "account-1",
+    }
+    assert (
+        client.post(
+            "/admin/tenants/tenant-1/oauth/openai-codex/import/pi",
+            json={"credential": pi_credential, "acknowledge_transfer": False},
+            headers=AUTH_HEADERS,
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/admin/tenants/tenant-1/oauth/openai-codex/import/pi",
+            json={
+                "credential": {"type": "api_key", "key": "not-oauth"},
+                "acknowledge_transfer": True,
+            },
+            headers=AUTH_HEADERS,
+        ).status_code
+        == 400
+    )
+    imported = client.post(
+        "/admin/tenants/tenant-1/oauth/openai-codex/import/pi",
+        json={"credential": pi_credential, "acknowledge_transfer": True},
+        headers=AUTH_HEADERS,
+    )
+    assert imported.status_code == 200
+    assert imported.json() == {
+        "tenant_id": "tenant-1",
+        "provider_id": "openai-codex",
+        "source": "pi",
+        "connected": True,
+        "account_id": "account-1",
+        "expires_at": "2030-03-17T17:46:40Z",
+    }
+    assert "pi-access-token" not in imported.text
+    assert "pi-refresh-token" not in imported.text
+    assert (
+        client.get(
+            "/admin/tenants/tenant-1/oauth/openai-codex",
+            headers=SAME_TENANT_OTHER_USER_HEADERS,
+        ).status_code
+        == 403
+    )
+
+    encrypted_database = oauth_db.read_bytes()
+    assert b"pi-access-token" not in encrypted_database
+    assert b"pi-refresh-token" not in encrypted_database
+
+    deleted = client.delete(
+        "/admin/tenants/tenant-1/oauth/openai-codex",
+        headers=AUTH_HEADERS,
+    )
+    assert deleted.status_code == 204
+    assert (
+        client.get(
+            "/admin/tenants/tenant-1/oauth/openai-codex",
+            headers=AUTH_HEADERS,
+        ).json()["connected"]
+        is False
+    )
 
 
 def test_admin_api_rejects_invalid_tenant_slug(tmp_path: Path) -> None:

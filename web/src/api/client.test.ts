@@ -154,6 +154,24 @@ describe("MinigentApiClient", () => {
     expect(fetchMock.mock.calls[1][1]?.method).toBe("POST");
   });
 
+  it("imports only the selected Pi OAuth credential", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ tenant_id: "tenant/1", provider_id: "openai-codex", source: "pi", connected: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const credential = { type: "oauth", access: "access", refresh: "refresh", expires: 1, accountId: "account" };
+
+    await new MinigentApiClient({ mode: "session" }).importTenantOpenAIOAuthFromPi("tenant/1", credential);
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/admin/tenants/tenant%2F1/oauth/openai-codex/import/pi");
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ credential, acknowledge_transfer: true }),
+    }));
+  });
+
   it("returns structured API failures", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ detail: "Admin access required" }), {

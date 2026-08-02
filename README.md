@@ -347,7 +347,8 @@ inspection, cancellation controls, context usage inspection, raw model-context p
 confirmed compaction, validated image selection, authenticated binary uploads, attachment previews,
 and per-image detail controls, one-time private-value approval/denial, pending-consent recovery after
 reload, uncertain-action reconciliation, a tenant-owner settings workspace for profile, membership,
-password onboarding, domains, read-only entitlements, and execution configuration, and a separate
+password onboarding, domains, read-only entitlements, execution configuration, and tenant-scoped
+OpenAI OAuth credential import from Pi, and a separate
 platform administration workspace with tenant provisioning and
 editing, user role/status management, domain verification, typed feature and limit entitlement
 editing with server validation, version visibility and confirmed reset, a sectioned execution

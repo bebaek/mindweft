@@ -40,6 +40,7 @@ from app.oauth import (
     OAUTH_SCOPE_ENV,
     OAUTH_STORE_PATH_ENV,
     OAUTH_TOKEN_URL_ENV,
+    GenericOAuthProvider,
 )
 from app.redaction import ToolResultRedactionPolicy, parse_tool_result_redaction_policy
 from app.tools import DEFAULT_LOCAL_TOOL_NAMES, LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry
@@ -442,10 +443,10 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
                 mcp_manager=self._mcp_manager,
             )
             context = TenantExecutionContext(
-                llm_adapter=_build_llm_adapter(config.llm),
+                llm_adapter=_build_llm_adapter(config.llm, tenant_id=tenant_id),
                 tool_registry=registry,
                 config=config,
-                llm_adapters=_build_llm_adapters(config.llm_profiles),
+                llm_adapters=_build_llm_adapters(config.llm_profiles, tenant_id=tenant_id),
                 mcp_generation=generation,
                 mcp_manager=self._mcp_manager,
             )
@@ -540,10 +541,10 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
                 mcp_manager=self._mcp_manager,
             )
             context = TenantExecutionContext(
-                llm_adapter=_build_llm_adapter(config.llm),
+                llm_adapter=_build_llm_adapter(config.llm, tenant_id=tenant_id),
                 tool_registry=registry,
                 config=config,
-                llm_adapters=_build_llm_adapters(config.llm_profiles),
+                llm_adapters=_build_llm_adapters(config.llm_profiles, tenant_id=tenant_id),
                 mcp_generation=generation,
                 mcp_manager=self._mcp_manager,
             )
@@ -1828,8 +1829,14 @@ def _parse_mcp_path_policy(
     return MCPPathPolicy(deny_globs=deny_globs or [], allow_globs=allow_globs or [])
 
 
-def _build_llm_adapters(configs: Mapping[str, TenantLLMConfig]) -> dict[str, LLMAdapter]:
-    return {name: _build_llm_adapter(config) for name, config in configs.items()}
+def _build_llm_adapters(
+    configs: Mapping[str, TenantLLMConfig],
+    *,
+    tenant_id: str | None = None,
+) -> dict[str, LLMAdapter]:
+    return {
+        name: _build_llm_adapter(config, tenant_id=tenant_id) for name, config in configs.items()
+    }
 
 
 def get_llm_config(
@@ -1864,7 +1871,11 @@ def get_llm_adapter(
     return adapter
 
 
-def _build_llm_adapter(config: TenantLLMConfig) -> LLMAdapter:
+def _build_llm_adapter(
+    config: TenantLLMConfig,
+    *,
+    tenant_id: str | None = None,
+) -> LLMAdapter:
     if config.provider == "mock":
         return MockLLMAdapter()
     if config.provider == "generic-oauth":
@@ -1872,9 +1883,11 @@ def _build_llm_adapter(config: TenantLLMConfig) -> LLMAdapter:
             raise RuntimeError("Tenant LLM provider 'generic-oauth' requires model")
         if not config.base_url:
             raise RuntimeError("Tenant LLM provider 'generic-oauth' requires base_url")
+        oauth_provider = GenericOAuthProvider(credential_tenant_id=tenant_id)
         return GenericOAuthResponsesAdapter(
             url=config.base_url,
             model=config.model,
+            oauth_provider=oauth_provider,
             extra_headers=config.extra_headers,
             timeout=config.timeout,
         )

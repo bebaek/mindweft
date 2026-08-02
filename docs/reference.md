@@ -359,6 +359,33 @@ MINIGENT_OAUTH_AUTH_PARAMS='{"prompt":"login"}'
 MINIGENT_OAUTH_ACCOUNT_ID_JWT_CLAIM=auth.account_id
 ```
 
+The tenant-owner console can also import Pi's `openai-codex` OAuth credential from
+`~/.pi/agent/auth.json`. The browser extracts only the `openai-codex` entry; Minigent validates and
+normalizes the Pi OAuth fields, encrypts them in the configured SQLite OAuth store, and keys them to
+the authenticated tenant. The raw auth file and tokens are never returned by the API or included in
+audit records.
+
+Use **Tenant settings → Import from Pi**, acknowledge the rotating-refresh-token warning, and select
+Pi's `auth.json`. Configure the tenant execution provider as `generic-oauth`, choose a Codex model,
+and use `https://chatgpt.com/backend-api/codex/responses` as the LLM URL. The deployment's generic
+OAuth client, token URL, and account-ID-header settings still apply to refreshes and requests.
+Encrypted OAuth storage is mandatory for tenant imports.
+
+Pi and Minigent must not independently refresh copies of the same credential. OpenAI refresh-token
+rotation can invalidate the other copy, so treat import as a credential transfer and avoid continuing
+to use that Pi login concurrently.
+
+Tenant-owner credential routes are:
+
+```text
+GET    /admin/tenants/{tenant_id}/oauth/openai-codex
+POST   /admin/tenants/{tenant_id}/oauth/openai-codex/import/pi
+DELETE /admin/tenants/{tenant_id}/oauth/openai-codex
+```
+
+The routes enforce active owner membership and same-tenant access. Import and deletion are audited
+without credential material.
+
 Start Minigent, then begin login from a browser:
 
 ```text

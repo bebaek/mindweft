@@ -609,10 +609,19 @@ class GenericOAuthProvider:
         config: GenericOAuthConfig | None = None,
         store: OAuthCredentialStore | None = None,
         client: httpx.AsyncClient | None = None,
+        credential_key: str | None = None,
+        credential_tenant_id: str | None = None,
     ) -> None:
         self._config = config or generic_oauth_config_from_env()
         self._store = store or build_oauth_credential_store_from_env()
         self._client = client
+        if credential_key is not None and credential_tenant_id is not None:
+            raise ValueError("Provide either credential_key or credential_tenant_id, not both")
+        self._credential_key = credential_key or (
+            tenant_oauth_credential_key(self._config.provider_id, credential_tenant_id)
+            if credential_tenant_id is not None
+            else self._config.provider_id
+        )
 
     @property
     def provider_id(self) -> str:
@@ -654,19 +663,19 @@ class GenericOAuthProvider:
                 "redirect_uri": flow.redirect_uri,
             }
         )
-        self._store.set(self._config.provider_id, credentials)
+        self._store.set(self._credential_key, credentials)
         return credentials
 
     async def get_credentials(self) -> OAuthCredentials | None:
         if isinstance(self._store, CoordinatedOAuthCredentialStore):
             return await self._get_coordinated_credentials(self._store)
-        credentials = self._store.get(self._config.provider_id)
+        credentials = self._store.get(self._credential_key)
         if credentials is None:
             return None
         if time.time() < credentials.expires_at - 60:
             return credentials
         refreshed = await self.refresh(credentials)
-        self._store.set(self._config.provider_id, refreshed)
+        self._store.set(self._credential_key, refreshed)
         return refreshed
 
     async def _get_coordinated_credentials(
@@ -675,14 +684,14 @@ class GenericOAuthProvider:
         owner = uuid4().hex
         deadline = time.monotonic() + OAUTH_REFRESH_WAIT_SECONDS
         while True:
-            versioned = store.get_versioned(self._config.provider_id)
+            versioned = store.get_versioned(self._credential_key)
             if versioned is None:
                 return None
             credentials, version = versioned
             if time.time() < credentials.expires_at - 60:
                 return credentials
             claimed = store.try_claim_refresh(
-                self._config.provider_id,
+                self._credential_key,
                 version=version,
                 owner=owner,
                 lease_seconds=OAUTH_REFRESH_LEASE_SECONDS,
@@ -691,14 +700,14 @@ class GenericOAuthProvider:
                 try:
                     refreshed = await self.refresh(credentials)
                     if store.complete_refresh(
-                        self._config.provider_id,
+                        self._credential_key,
                         version=version,
                         owner=owner,
                         credentials=refreshed,
                     ):
                         return refreshed
                 except BaseException:
-                    store.release_refresh(self._config.provider_id, version=version, owner=owner)
+                    store.release_refresh(self._credential_key, version=version, owner=owner)
                     raise
             if time.monotonic() >= deadline:
                 raise RuntimeError("Timed out waiting for coordinated OAuth token refresh")
@@ -774,6 +783,10 @@ def extract_jwt_claim(access_token: str, claim_path: str | None) -> str | None:
     if not isinstance(current, str) or not current:
         raise RuntimeError(f"OAuth token JWT claim '{claim_path}' must be a non-empty string")
     return current
+
+
+def tenant_oauth_credential_key(provider_id: str, tenant_id: str) -> str:
+    return f"{provider_id}:tenant:{tenant_id}"
 
 
 def oauth_store_path_from_env() -> Path:

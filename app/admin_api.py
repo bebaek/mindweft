@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import secrets
@@ -35,6 +36,13 @@ from app.models import (
     Thread,
     ThreadContext,
     ThreadStatus,
+)
+from app.oauth import (
+    OAuthCredentials,
+    SQLiteEncryptedOAuthStore,
+    build_oauth_credential_store_from_env,
+    generic_oauth_config_from_env,
+    tenant_oauth_credential_key,
 )
 from app.session_auth import validate_session_auth_settings
 
@@ -213,6 +221,20 @@ class AdminCredentialSetupResponse(BaseModel):
     username: str
     setup_token: str
     expires_at: datetime
+
+
+class AdminPiOAuthImportRequest(BaseModel):
+    credential: dict[str, Any]
+    acknowledge_transfer: bool = False
+
+
+class AdminTenantOAuthCredentialResponse(BaseModel):
+    tenant_id: str
+    provider_id: str
+    source: str
+    connected: bool
+    account_id: str | None = None
+    expires_at: datetime | None = None
 
 
 class AdminCredentialDisableResponse(BaseModel):
@@ -949,6 +971,83 @@ def build_admin_router() -> APIRouter:
             resource_id=user_record_id,
         )
         return AdminCredentialDisableResponse(disabled=True)
+
+    @router.get(
+        "/tenants/{tenant_id}/oauth/openai-codex",
+        response_model=AdminTenantOAuthCredentialResponse,
+    )
+    async def get_tenant_openai_oauth_credential(
+        tenant_id: str,
+        request: Request,
+        owner: Principal = Depends(require_tenant_owner_principal),
+    ) -> AdminTenantOAuthCredentialResponse:
+        _ = owner
+        store, provider_id, credential_key = _tenant_oauth_store(tenant_id)
+        credentials = store.get(credential_key)
+        return _tenant_oauth_credential_response(tenant_id, provider_id, credentials)
+
+    @router.post(
+        "/tenants/{tenant_id}/oauth/openai-codex/import/pi",
+        response_model=AdminTenantOAuthCredentialResponse,
+    )
+    async def import_tenant_openai_oauth_from_pi(
+        tenant_id: str,
+        body: AdminPiOAuthImportRequest,
+        request: Request,
+        owner: Principal = Depends(require_tenant_owner_principal),
+    ) -> AdminTenantOAuthCredentialResponse:
+        if not body.acknowledge_transfer:
+            raise HTTPException(
+                status_code=400,
+                detail="Credential transfer acknowledgement is required",
+            )
+        credentials = _parse_pi_openai_oauth_credential(body.credential)
+        store, provider_id, credential_key = _tenant_oauth_store(tenant_id)
+        store.set(credential_key, credentials)
+        _invalidate_resolver(request.app.state.execution_resolver, tenant_id)
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            owner,
+            "tenant_oauth_credentials.import",
+            new_values={
+                "provider_id": provider_id,
+                "source": "pi",
+                "account_id": credentials.account_id,
+                "expires_at": datetime.fromtimestamp(
+                    credentials.expires_at, timezone.utc
+                ).isoformat(),
+            },
+            resource_type="oauth_credential",
+            resource_id=provider_id,
+        )
+        return _tenant_oauth_credential_response(tenant_id, provider_id, credentials)
+
+    @router.delete("/tenants/{tenant_id}/oauth/openai-codex", status_code=204)
+    async def delete_tenant_openai_oauth_credential(
+        tenant_id: str,
+        request: Request,
+        owner: Principal = Depends(require_tenant_owner_principal),
+    ) -> None:
+        store, provider_id, credential_key = _tenant_oauth_store(tenant_id)
+        credentials = store.get(credential_key)
+        if credentials is None:
+            raise HTTPException(status_code=404, detail="Tenant OAuth credential not found")
+        store.delete(credential_key)
+        _invalidate_resolver(request.app.state.execution_resolver, tenant_id)
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            owner,
+            "tenant_oauth_credentials.delete",
+            old_values={
+                "provider_id": provider_id,
+                "source": "pi",
+                "account_id": credentials.account_id,
+            },
+            resource_type="oauth_credential",
+            resource_id=provider_id,
+        )
 
     @router.get(
         "/tenants/{tenant_id}/domains",
@@ -1768,6 +1867,83 @@ def _update_tenant_user_status(
         resource_id=user.id,
     )
     return _tenant_user_response(user)
+
+
+def _tenant_oauth_store(
+    tenant_id: str,
+) -> tuple[SQLiteEncryptedOAuthStore, str, str]:
+    try:
+        store = build_oauth_credential_store_from_env()
+        provider_id = generic_oauth_config_from_env().provider_id
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Encrypted OAuth credential storage is not configured",
+        ) from exc
+    if not isinstance(store, SQLiteEncryptedOAuthStore):
+        raise HTTPException(
+            status_code=503,
+            detail="Encrypted OAuth credential storage is required for tenant imports",
+        )
+    return store, provider_id, tenant_oauth_credential_key(provider_id, tenant_id)
+
+
+def _parse_pi_openai_oauth_credential(payload: dict[str, Any]) -> OAuthCredentials:
+    if payload.get("type") != "oauth":
+        raise HTTPException(status_code=400, detail="Pi openai-codex credential must use OAuth")
+    access_token = _required_pi_credential_string(payload, "access", max_length=131_072)
+    refresh_token = _required_pi_credential_string(payload, "refresh", max_length=131_072)
+    account_id = _required_pi_credential_string(payload, "accountId", max_length=512)
+    expires = payload.get("expires")
+    if isinstance(expires, bool) or not isinstance(expires, int | float):
+        raise HTTPException(status_code=400, detail="Pi OAuth credential has an invalid expiry")
+    expires_at = float(expires)
+    if not math.isfinite(expires_at) or expires_at <= 0:
+        raise HTTPException(status_code=400, detail="Pi OAuth credential has an invalid expiry")
+    if expires_at >= 100_000_000_000:
+        expires_at /= 1000
+    if expires_at > 253_402_300_799:
+        raise HTTPException(status_code=400, detail="Pi OAuth credential has an invalid expiry")
+    return OAuthCredentials(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_at=expires_at,
+        account_id=account_id,
+    )
+
+
+def _required_pi_credential_string(
+    payload: dict[str, Any],
+    field: str,
+    *,
+    max_length: int,
+) -> str:
+    value = payload.get(field)
+    if not isinstance(value, str) or not value or len(value) > max_length:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Pi OAuth credential has an invalid '{field}' field",
+        )
+    return value
+
+
+def _tenant_oauth_credential_response(
+    tenant_id: str,
+    provider_id: str,
+    credentials: OAuthCredentials | None,
+) -> AdminTenantOAuthCredentialResponse:
+    return AdminTenantOAuthCredentialResponse(
+        tenant_id=tenant_id,
+        provider_id=provider_id,
+        source="pi",
+        connected=credentials is not None,
+        account_id=credentials.account_id if credentials is not None else None,
+        expires_at=(
+            datetime.fromtimestamp(credentials.expires_at, timezone.utc)
+            if credentials is not None
+            else None
+        ),
+    )
 
 
 def _protect_last_active_owner(

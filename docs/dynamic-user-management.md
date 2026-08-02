@@ -4,8 +4,9 @@ Status: Partially implemented
 
 Implemented: tenant membership model and SQLite store, global-admin and tenant-owner scoped
 CRUD/list/status-transition APIs and UI, last-active-owner and self-credential lockout protection,
-mutation audit records, optional request-time active-membership enforcement with
-`MINIGENT_TENANT_USER_REGISTRY_REQUIRED`, and membership fields on `TenantContext`.
+tenant-scoped encrypted OpenAI OAuth import from Pi, mutation audit records, optional request-time
+active-membership enforcement with `MINIGENT_TENANT_USER_REGISTRY_REQUIRED`, and membership fields
+on `TenantContext`.
 
 Still pending or partial: invite-token/email delivery workflows, granular tenant-admin RBAC, richer
 identity-provider mapping, service-account modeling, and seat/billing limits.
@@ -44,7 +45,7 @@ full identity-provider scope in the first iteration.
 - Password management.
 - Public signup flows.
 - Email invite delivery.
-- OAuth account linking.
+- General OAuth account linking beyond the tenant-owner Pi credential import.
 - SCIM provisioning.
 - Full organization/team hierarchy.
 - Billing integration and seat enforcement.

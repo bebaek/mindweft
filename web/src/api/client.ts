@@ -400,6 +400,15 @@ export interface AdminTenantUserListResponse {
   offset: number;
 }
 
+export interface TenantOAuthCredentialStatus {
+  tenant_id: string;
+  provider_id: string;
+  source: "pi";
+  connected: boolean;
+  account_id?: string | null;
+  expires_at?: string | null;
+}
+
 export interface AdminCredentialStatus {
   configured: boolean;
   username?: string | null;
@@ -623,6 +632,36 @@ export class MinigentApiClient {
   ): Promise<{ disabled: boolean }> {
     return this.#request<{ disabled: boolean }>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/users/${encodeURIComponent(userRecordId)}/credential`,
+      { method: "DELETE" },
+    );
+  }
+
+  getTenantOpenAIOAuthCredential(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<TenantOAuthCredentialStatus> {
+    return this.#request<TenantOAuthCredentialStatus>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/oauth/openai-codex`,
+      { signal },
+    );
+  }
+
+  importTenantOpenAIOAuthFromPi(
+    tenantId: string,
+    credential: Record<string, unknown>,
+  ): Promise<TenantOAuthCredentialStatus> {
+    return this.#request<TenantOAuthCredentialStatus>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/oauth/openai-codex/import/pi`,
+      {
+        method: "POST",
+        body: JSON.stringify({ credential, acknowledge_transfer: true }),
+      },
+    );
+  }
+
+  deleteTenantOpenAIOAuthCredential(tenantId: string): Promise<void> {
+    return this.#request<void>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/oauth/openai-codex`,
       { method: "DELETE" },
     );
   }
