@@ -4,6 +4,7 @@ import { useAuth } from "./auth/auth-context";
 import { ConnectionDialog } from "./components/ConnectionDialog";
 import { OverviewPage } from "./pages/OverviewPage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { WorkspacePage } from "./pages/WorkspacePage";
 
 type Page = "overview" | "workspace" | "admin";
 
@@ -51,7 +52,7 @@ export function App() {
         </header>
         <main id="main-content">
           {page === "overview" && <OverviewPage />}
-          {page === "workspace" && <PlaceholderPage eyebrow="Conversation workspace" title="A calmer place to run agents." copy="The existing chat behavior will move here without losing streaming, tool activity, context controls, or mobile support." features={["Thread navigation and search", "Streaming messages and run timeline", "Attachments and private-value consent"]} />}
+          {page === "workspace" && <WorkspacePage />}
           {page === "admin" && <PlaceholderPage eyebrow="Administration" title="Operate every tenant with confidence." copy="The admin surface will use Minigent’s existing tenant APIs with explicit validation, auditability, and safe destructive actions." features={["Tenant, user, domain, and entitlement management", "Execution configuration validation", "Thread, attachment, concurrency, and audit inspection"]} />}
         </main>
       </div>

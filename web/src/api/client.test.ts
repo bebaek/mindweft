@@ -44,6 +44,30 @@ describe("MinigentApiClient", () => {
     expect(headers.get("X-Minigent-Admin")).toBe("true");
   });
 
+  it("parses NDJSON run events across stream chunks", async () => {
+    const encoder = new TextEncoder();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"type":"run.started"}\n{"type":"assistant.'));
+            controller.enqueue(encoder.encode('message","content":"Done"}\n'));
+            controller.close();
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/x-ndjson" } },
+      ),
+    );
+    const events: string[] = [];
+
+    await new MinigentApiClient({ mode: "session" }).streamRun(
+      "thread/1",
+      (event) => events.push(event.type),
+    );
+
+    expect(events).toEqual(["run.started", "assistant.message"]);
+  });
+
   it("returns structured API failures", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ detail: "Admin access required" }), {

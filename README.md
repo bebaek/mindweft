@@ -339,8 +339,10 @@ environment variables belong on the external sidecar, not the Minigent process.
 ### Browser
 
 The API serves the new TypeScript/React console at `/console/`. The initial production UI
-foundation includes a responsive, accessible application shell, live readiness checks, typed API
-transport, TanStack Query request lifecycle management, and connection modes for same-origin
+foundation includes a responsive, accessible application shell, live readiness checks, a
+conversation workspace with thread history, message composition, NDJSON run streaming, activity
+inspection, and cancellation controls, typed API transport, TanStack Query request lifecycle
+management, and connection modes for same-origin
 sessions, in-memory bearer tokens, and trusted-local development headers. Session mode is the
 production default but requires a session endpoint backed by the deployment's identity provider;
 the current API authentication modes continue to use bearer tokens or development headers. The
@@ -377,8 +379,8 @@ safety, responsive navigation, and automated axe accessibility checks. Use
 `npm run test:e2e:ui` for interactive debugging. CI environments should install Chromium and its
 system dependencies with `npx playwright install --with-deps chromium`.
 
-The existing dependency-free browser client remains at `/web/` while conversation and admin
-feature parity is implemented. It uses the streaming run
+The existing dependency-free browser client remains at `/web/` while attachment, private-value
+consent, context management, and admin feature parity are implemented. It uses the streaming run
 endpoint to show live LLM, tool, and peer-agent progress, with mobile-friendly run
 controls, a stop action, basic assistant markdown rendering, execution option selectors,
 image file selection, mobile camera capture, drag-and-drop, and clipboard paste with previews and

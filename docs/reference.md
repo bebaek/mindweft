@@ -95,8 +95,9 @@ The production console foundation is served at `/console/`. Its source is in `we
 `npm ci && npm run dev` there for frontend development and `npm run build` to refresh the static
 assets packaged under `app/static/console/`. Run `npm run test:e2e:install` once, then
 `npm run test:e2e` for desktop/mobile Chromium coverage and axe accessibility checks. The console
-currently provides runtime readiness and
-connection setup while workspace and administration feature parity is developed.
+currently provides runtime readiness, connection setup, thread history, message composition,
+streaming run activity, and cancellation. Attachments, private-value consent, context controls, and
+administration remain on the migration roadmap.
 
 The dependency-free development client remains at `/web/` and provides the complete current chat
 workflow.
