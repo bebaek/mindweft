@@ -513,6 +513,63 @@ def test_attachment_upload_stores_reference_and_resolves_for_llm(
     assert delete_response.json()["detail"] == "attachment is referenced by message history"
 
 
+def test_admin_attachment_statistics_are_aggregate_and_tenant_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    app = create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    client = TestClient(app)
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    uploads = [
+        client.post(
+            f"/threads/{thread_id}/attachments",
+            json={"mime_type": "image/png", "data": PNG_1X1_BASE64},
+            headers=AUTH_HEADERS,
+        ).json()
+        for _ in range(2)
+    ]
+    message_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={
+            "content": "describe",
+            "parts": [
+                {"type": "text", "text": "describe"},
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "attachment_id": uploads[0]["attachment_id"],
+                },
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert message_response.status_code == 200
+
+    forbidden = client.get(
+        "/admin/tenants/tenant-1/attachments/statistics",
+        headers=AUTH_HEADERS,
+    )
+    response = client.get(
+        "/admin/tenants/tenant-1/attachments/statistics",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert forbidden.status_code == 403
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["tenant_id"] == "tenant-1"
+    assert payload["total_count"] == 2
+    assert payload["total_bytes"] == sum(upload["size_bytes"] for upload in uploads)
+    assert payload["pending_count"] == 1
+    assert payload["referenced_count"] == 1
+    assert payload["exempt_count"] == 0
+    assert payload["oldest_pending_age_seconds"] >= 0
+    assert payload["max_count"] == 1_000
+    assert payload["max_bytes"] == 1024 * 1024 * 1024
+    assert "attachment_id" not in payload
+    assert "created_by" not in payload
+
+
 def test_unreferenced_attachment_can_be_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
     client = TestClient(

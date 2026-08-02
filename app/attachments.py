@@ -63,6 +63,25 @@ class AttachmentRecord:
 
 
 @dataclass(frozen=True)
+class AttachmentCleanupResult:
+    deleted_count: int = 0
+    deleted_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class AttachmentStatistics:
+    total_count: int = 0
+    total_bytes: int = 0
+    pending_count: int = 0
+    pending_bytes: int = 0
+    referenced_count: int = 0
+    referenced_bytes: int = 0
+    exempt_count: int = 0
+    exempt_bytes: int = 0
+    oldest_pending_created_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class AttachmentStoreSettings:
     db_path: str | None = None
     max_per_thread: int = DEFAULT_ATTACHMENT_MAX_PER_THREAD
@@ -177,6 +196,14 @@ class AttachmentStore(Protocol):
 
     def delete_expired_pending(self, *, now: datetime | None = None) -> int: ...
 
+    def delete_expired_pending_with_stats(
+        self, *, now: datetime | None = None
+    ) -> AttachmentCleanupResult: ...
+
+    def statistics(
+        self, tenant_id: str, *, now: datetime | None = None
+    ) -> AttachmentStatistics: ...
+
     def delete(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool: ...
 
     def delete_thread(self, tenant_id: str, thread_id: str) -> int: ...
@@ -284,6 +311,11 @@ class InMemoryAttachmentStore:
             return True
 
     def delete_expired_pending(self, *, now: datetime | None = None) -> int:
+        return self.delete_expired_pending_with_stats(now=now).deleted_count
+
+    def delete_expired_pending_with_stats(
+        self, *, now: datetime | None = None
+    ) -> AttachmentCleanupResult:
         cutoff = _utc_now() if now is None else _ensure_utc(now)
         with self._lock:
             keys = [
@@ -293,9 +325,53 @@ class InMemoryAttachmentStore:
                 and expires_at is not None
                 and expires_at <= cutoff
             ]
+            deleted_bytes = sum(self._records[key].metadata.size_bytes for key in keys)
             for key in keys:
                 self._delete_key_unlocked(key)
-            return len(keys)
+            return AttachmentCleanupResult(
+                deleted_count=len(keys),
+                deleted_bytes=deleted_bytes,
+            )
+
+    def statistics(self, tenant_id: str, *, now: datetime | None = None) -> AttachmentStatistics:
+        _ = now
+        with self._lock:
+            total_count = total_bytes = 0
+            pending_count = pending_bytes = 0
+            referenced_count = referenced_bytes = 0
+            exempt_count = exempt_bytes = 0
+            oldest_pending_created_at: datetime | None = None
+            for key, record in self._records.items():
+                if key[0] != tenant_id:
+                    continue
+                size_bytes = record.metadata.size_bytes
+                total_count += 1
+                total_bytes += size_bytes
+                reference_count = self._reference_counts[key]
+                expires_at = self._expires_at[key]
+                if reference_count == 0 and expires_at is not None:
+                    pending_count += 1
+                    pending_bytes += size_bytes
+                    created_at = _ensure_utc(record.metadata.created_at)
+                    if oldest_pending_created_at is None or created_at < oldest_pending_created_at:
+                        oldest_pending_created_at = created_at
+                elif reference_count > 0:
+                    referenced_count += 1
+                    referenced_bytes += size_bytes
+                else:
+                    exempt_count += 1
+                    exempt_bytes += size_bytes
+            return AttachmentStatistics(
+                total_count=total_count,
+                total_bytes=total_bytes,
+                pending_count=pending_count,
+                pending_bytes=pending_bytes,
+                referenced_count=referenced_count,
+                referenced_bytes=referenced_bytes,
+                exempt_count=exempt_count,
+                exempt_bytes=exempt_bytes,
+                oldest_pending_created_at=oldest_pending_created_at,
+            )
 
     def _delete_key_unlocked(self, key: tuple[str, str, str]) -> None:
         del self._records[key]
@@ -683,16 +759,83 @@ class SQLiteAttachmentStore:
             return cursor.rowcount > 0
 
     def delete_expired_pending(self, *, now: datetime | None = None) -> int:
+        return self.delete_expired_pending_with_stats(now=now).deleted_count
+
+    def delete_expired_pending_with_stats(
+        self, *, now: datetime | None = None
+    ) -> AttachmentCleanupResult:
         cutoff = _utc_now() if now is None else _ensure_utc(now)
         with self._lock, self._connection() as connection:
-            cursor = connection.execute(
+            connection.execute("BEGIN IMMEDIATE")
+            aggregate = connection.execute(
+                """
+                SELECT COUNT(*), COALESCE(SUM(size_bytes), 0)
+                FROM attachments
+                WHERE reference_count = 0 AND expires_at IS NOT NULL AND expires_at <= ?
+                """,
+                (cutoff.isoformat(),),
+            ).fetchone()
+            connection.execute(
                 """
                 DELETE FROM attachments
                 WHERE reference_count = 0 AND expires_at IS NOT NULL AND expires_at <= ?
                 """,
                 (cutoff.isoformat(),),
             )
-            return cursor.rowcount
+            return AttachmentCleanupResult(
+                deleted_count=int(aggregate[0]),
+                deleted_bytes=int(aggregate[1]),
+            )
+
+    def statistics(self, tenant_id: str, *, now: datetime | None = None) -> AttachmentStatistics:
+        _ = now
+        with self._lock, self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COUNT(*),
+                    COALESCE(SUM(size_bytes), 0),
+                    COALESCE(SUM(CASE
+                        WHEN reference_count = 0 AND expires_at IS NOT NULL THEN 1 ELSE 0
+                    END), 0),
+                    COALESCE(SUM(CASE
+                        WHEN reference_count = 0 AND expires_at IS NOT NULL
+                        THEN size_bytes ELSE 0
+                    END), 0),
+                    COALESCE(SUM(CASE WHEN reference_count > 0 THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE
+                        WHEN reference_count > 0 THEN size_bytes ELSE 0
+                    END), 0),
+                    COALESCE(SUM(CASE
+                        WHEN reference_count = 0 AND expires_at IS NOT NULL THEN 0
+                        WHEN reference_count > 0 THEN 0
+                        ELSE 1
+                    END), 0),
+                    COALESCE(SUM(CASE
+                        WHEN reference_count = 0 AND expires_at IS NOT NULL THEN 0
+                        WHEN reference_count > 0 THEN 0
+                        ELSE size_bytes
+                    END), 0),
+                    MIN(CASE
+                        WHEN reference_count = 0 AND expires_at IS NOT NULL THEN created_at
+                    END)
+                FROM attachments
+                WHERE tenant_id = ?
+                """,
+                (tenant_id,),
+            ).fetchone()
+        oldest = datetime.fromisoformat(row[8]) if row[8] is not None else None
+        return AttachmentStatistics(
+            total_count=int(row[0]),
+            total_bytes=int(row[1]),
+            pending_count=int(row[2]),
+            pending_bytes=int(row[3]),
+            referenced_count=int(row[4]),
+            referenced_bytes=int(row[5]),
+            exempt_count=int(row[6]),
+            exempt_bytes=int(row[7]),
+            oldest_pending_created_at=_ensure_utc(oldest) if oldest is not None else None,
+        )
 
     def delete(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
         with self._lock, self._connection() as connection:

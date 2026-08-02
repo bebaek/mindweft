@@ -1577,6 +1577,7 @@ Admin endpoints:
 - `POST /admin/tenants/{tenant_id}/entitlements/validate`
 - `DELETE /admin/tenants/{tenant_id}/entitlements`
 - `GET /admin/execution-config-tenants`
+- `GET /admin/tenants/{tenant_id}/attachments/statistics`
 - `GET /admin/tenants/{tenant_id}/threads`
 - `GET /admin/tenants/{tenant_id}/threads/{thread_id}`
 - `DELETE /admin/tenants/{tenant_id}/threads/{thread_id}`
@@ -1600,6 +1601,8 @@ Tenant registry endpoints manage durable tenant identity and lifecycle state. Te
 When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, public thread endpoints reject authenticated principals whose `tenant_id` is missing from the registry or not `active`. The default is `false` to preserve local and migration workflows. When `MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true`, request-time tenant context resolution also requires an active tenant membership for `(tenant_id, user_id)` and populates membership fields such as `membership_id`, `user_role`, and `user_status` on `TenantContext`.
 
 Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. Admin deletion removes a thread and its messages and writes an audit record. The prune endpoint deletes matching tenant threads with `updated_at` older than required `updated_before`, with optional `status`, `profile`, and `skill` filters. Add `dry_run=true` to preview `candidate_thread_ids` without deleting threads or writing audit records. The audit endpoint lists deletion/prune records and tenant mutation records with actor, action, affected count, thread IDs, optional `resource_type`/`resource_id`, optional `old_values`/`new_values`, optional metadata, timestamp, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `action`, `actor`, `created_after`, and `created_before` query parameters. Tenant audit payloads redact secret-like keys such as `token`, `secret`, `key`, `authorization`, and `password`. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect and manage persisted threads and audit records after process restarts.
+
+The attachment statistics endpoint returns only tenant-level counts and byte totals split across pending, referenced, and lifecycle-exempt records, plus the oldest pending timestamp and age and the configured tenant quota. It does not read or return attachment contents or per-record metadata.
 
 The packaged CLI can inspect and manage the same tenant registry and thread data when authenticated as an admin:
 

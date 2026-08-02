@@ -5,7 +5,7 @@ import re
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -82,6 +82,22 @@ class AdminTenantListResponse(BaseModel):
     offset: int
     total: int
     next_offset: int | None = None
+
+
+class AdminTenantAttachmentStatisticsResponse(BaseModel):
+    tenant_id: str
+    total_count: int
+    total_bytes: int
+    pending_count: int
+    pending_bytes: int
+    referenced_count: int
+    referenced_bytes: int
+    exempt_count: int
+    exempt_bytes: int
+    oldest_pending_created_at: datetime | None = None
+    oldest_pending_age_seconds: int | None = None
+    max_count: int
+    max_bytes: int
 
 
 class AdminTenantCreateRequest(BaseModel):
@@ -1011,6 +1027,40 @@ def build_admin_router() -> APIRouter:
             deleted=True,
             tenant_id=tenant_id,
             status=TenantStatus.DELETED,
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/attachments/statistics",
+        response_model=AdminTenantAttachmentStatisticsResponse,
+    )
+    async def tenant_attachment_statistics(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantAttachmentStatisticsResponse:
+        _ = admin
+        now = datetime.now(timezone.utc)
+        statistics = request.app.state.attachment_store.statistics(tenant_id, now=now)
+        settings = request.app.state.attachment_store_settings
+        oldest_age = (
+            max(0, int((now - statistics.oldest_pending_created_at).total_seconds()))
+            if statistics.oldest_pending_created_at is not None
+            else None
+        )
+        return AdminTenantAttachmentStatisticsResponse(
+            tenant_id=tenant_id,
+            total_count=statistics.total_count,
+            total_bytes=statistics.total_bytes,
+            pending_count=statistics.pending_count,
+            pending_bytes=statistics.pending_bytes,
+            referenced_count=statistics.referenced_count,
+            referenced_bytes=statistics.referenced_bytes,
+            exempt_count=statistics.exempt_count,
+            exempt_bytes=statistics.exempt_bytes,
+            oldest_pending_created_at=statistics.oldest_pending_created_at,
+            oldest_pending_age_seconds=oldest_age,
+            max_count=settings.max_per_tenant,
+            max_bytes=settings.max_bytes_per_tenant,
         )
 
     @router.get("/tenants/{tenant_id}/threads", response_model=AdminThreadListResponse)

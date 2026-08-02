@@ -440,6 +440,12 @@ marks back if persistence fails, prioritizing preservation of referenced media. 
 lifecycle tracking was introduced remain cleanup-exempt for backward compatibility. Per-thread and
 per-tenant quotas are checked atomically when an attachment is inserted, including across
 SQLite-backed replicas, so concurrent uploads cannot race past the configured storage limits.
+Scheduled cleanup writes a structured completion log with its trigger, deleted record count,
+deleted bytes, and duration; quota rejections log the rejected limit and incoming byte count.
+Admins can inspect tenant-scoped aggregate usage through
+`GET /admin/tenants/{tenant_id}/attachments/statistics`. The response separates pending,
+referenced, and lifecycle-exempt records, reports the oldest pending age and configured tenant
+limits, and never returns attachment IDs, creator identities, filenames, or contents.
 
 Attachment encryption settings are intentionally environment-only so key material is not written to
 `minigent.toml`:

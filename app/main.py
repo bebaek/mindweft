@@ -8,6 +8,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from time import monotonic
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -138,13 +139,35 @@ async def _cleanup_pending_attachments_periodically(
 ) -> None:
     while True:
         await asyncio.sleep(interval_seconds)
+        started_at = monotonic()
         try:
-            deleted = await asyncio.to_thread(store.delete_expired_pending)
+            result = await asyncio.to_thread(store.delete_expired_pending_with_stats)
         except Exception:  # pragma: no cover - defensive background boundary
-            logger.exception("attachment.pending_cleanup_failed")
+            logger.exception(
+                "attachment.pending_cleanup_failed trigger=scheduled duration_ms=%s",
+                round((monotonic() - started_at) * 1000, 3),
+            )
             continue
-        if deleted:
-            logger.info("attachment.pending_cleanup deleted=%s", deleted)
+        logger.info(
+            "attachment.pending_cleanup_completed "
+            "trigger=scheduled deleted_count=%s deleted_bytes=%s duration_ms=%s",
+            result.deleted_count,
+            result.deleted_bytes,
+            round((monotonic() - started_at) * 1000, 3),
+        )
+
+
+def _cleanup_pending_attachments_before_upload(store: AttachmentStore) -> None:
+    started_at = monotonic()
+    result = store.delete_expired_pending_with_stats()
+    if result.deleted_count:
+        logger.info(
+            "attachment.pending_cleanup_completed "
+            "trigger=upload deleted_count=%s deleted_bytes=%s duration_ms=%s",
+            result.deleted_count,
+            result.deleted_bytes,
+            round((monotonic() - started_at) * 1000, 3),
+        )
 
 
 async def _recover_stale_runs_periodically(
@@ -1038,7 +1061,7 @@ def create_app(
         _enforce_image_dimension_limits(data, normalized_mime_type, image_settings)
         attachment_settings = app_request.app.state.attachment_store_settings
         attachment_store = app_request.app.state.attachment_store
-        attachment_store.delete_expired_pending()
+        _cleanup_pending_attachments_before_upload(attachment_store)
         try:
             return attachment_store.put(
                 principal.tenant_id,
@@ -1053,6 +1076,13 @@ def create_app(
                 pending_ttl_seconds=attachment_settings.pending_ttl_seconds,
             )
         except AttachmentLimitExceeded as exc:
+            logger.warning(
+                "attachment.quota_rejected tenant_id=%s thread_id=%s limit=%s incoming_bytes=%s",
+                principal.tenant_id,
+                thread_id,
+                exc.limit,
+                len(data),
+            )
             detail = {
                 "count": "thread attachment count limit exceeded",
                 "bytes": "thread attachment storage limit exceeded",

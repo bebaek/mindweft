@@ -250,6 +250,61 @@ def test_attachment_stores_expire_only_unreferenced_pending_uploads(tmp_path: Pa
         assert store.get("tenant-1", "thread-1", metadata.attachment_id) is None
 
 
+def test_attachment_stores_report_tenant_statistics_and_cleanup_bytes(tmp_path: Path) -> None:
+    stores = [InMemoryAttachmentStore(), SQLiteAttachmentStore(tmp_path / "statistics.db")]
+    for store in stores:
+        pending = store.put(
+            "tenant-1",
+            "thread-1",
+            mime_type="image/png",
+            data=b"pending",
+            created_by="user-1",
+            pending_ttl_seconds=60,
+        )
+        referenced = store.put(
+            "tenant-1",
+            "thread-1",
+            mime_type="image/png",
+            data=b"referenced",
+            created_by="user-1",
+            pending_ttl_seconds=60,
+        )
+        store.put(
+            "tenant-1",
+            "thread-2",
+            mime_type="image/png",
+            data=b"exempt",
+            created_by="user-1",
+        )
+        other_tenant = store.put(
+            "tenant-2",
+            "thread-1",
+            mime_type="image/png",
+            data=b"other-tenant",
+            created_by="user-2",
+            pending_ttl_seconds=60,
+        )
+        assert store.mark_referenced("tenant-1", "thread-1", referenced.attachment_id) is True
+        assert store.mark_referenced("tenant-2", "thread-1", other_tenant.attachment_id) is True
+
+        statistics = store.statistics("tenant-1")
+
+        assert statistics.total_count == 3
+        assert statistics.total_bytes == len(b"pendingreferencedexempt")
+        assert (statistics.pending_count, statistics.pending_bytes) == (1, len(b"pending"))
+        assert (statistics.referenced_count, statistics.referenced_bytes) == (
+            1,
+            len(b"referenced"),
+        )
+        assert (statistics.exempt_count, statistics.exempt_bytes) == (1, len(b"exempt"))
+        assert statistics.oldest_pending_created_at == pending.created_at
+
+        result = store.delete_expired_pending_with_stats(
+            now=pending.created_at + timedelta(seconds=61)
+        )
+        assert (result.deleted_count, result.deleted_bytes) == (1, len(b"pending"))
+
+
 def test_sqlite_pending_cleanup_is_atomic_across_instances(tmp_path: Path) -> None:
     path = tmp_path / "pending-shared.db"
     stores = [SQLiteAttachmentStore(path), SQLiteAttachmentStore(path)]
