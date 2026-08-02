@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field
 
 from app.auth import require_admin_principal
 from app.execution import (
-    TenantExecutionConfig,
     TenantExecutionResolver,
     parse_tenant_execution_config,
     redact_tenant_execution_payload,
@@ -257,6 +256,7 @@ class AdminExecutionConfigTenantListResponse(BaseModel):
 
 class AdminTenantExecutionConfigResponse(BaseModel):
     tenant_id: str
+    version: int
     config: dict[str, Any]
 
 
@@ -1305,8 +1305,14 @@ def build_admin_router() -> APIRouter:
             raise HTTPException(
                 status_code=404, detail=f"Tenant '{tenant_id}' has no execution configuration"
             )
+        version = store.get_config_version(tenant_id)
+        if version is None:  # pragma: no cover - defensive
+            raise HTTPException(
+                status_code=404, detail=f"Tenant '{tenant_id}' has no execution configuration"
+            )
         return AdminTenantExecutionConfigResponse(
             tenant_id=tenant_id,
+            version=version,
             config=redact_tenant_execution_payload(payload),
         )
 
@@ -1320,14 +1326,31 @@ def build_admin_router() -> APIRouter:
         app_request: Request,
         admin: Principal = Depends(require_admin_principal),
     ) -> AdminTenantExecutionConfigResponse:
-        _ = admin
         store = _require_admin_store(app_request)
-        config = parse_tenant_execution_config(tenant_id, request.config)
-        payload = _serialize_config_payload(config)
+        old_payload = store.get_raw_config(tenant_id)
+        payload = _restore_redacted_payload(request.config, old_payload)
+        try:
+            parse_tenant_execution_config(tenant_id, payload)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         store.upsert_raw_config(tenant_id, payload)
+        version = store.get_config_version(tenant_id)
+        if version is None:  # pragma: no cover - defensive
+            raise RuntimeError(f"Execution config for tenant '{tenant_id}' was not saved")
         _invalidate_resolver(app_request.app.state.execution_resolver, tenant_id)
+        _append_tenant_audit(
+            app_request,
+            tenant_id,
+            admin,
+            "tenant_execution_config.put",
+            old_values=(
+                redact_tenant_execution_payload(old_payload) if old_payload is not None else None
+            ),
+            new_values=redact_tenant_execution_payload(payload),
+        )
         return AdminTenantExecutionConfigResponse(
             tenant_id=tenant_id,
+            version=version,
             config=redact_tenant_execution_payload(payload),
         )
 
@@ -1337,11 +1360,14 @@ def build_admin_router() -> APIRouter:
     )
     async def validate_tenant_execution_config_route(
         tenant_id: str,
-        request: AdminTenantExecutionConfigRequest,
+        body: AdminTenantExecutionConfigRequest,
+        request: Request,
         admin: Principal = Depends(require_admin_principal),
     ) -> AdminTenantExecutionConfigValidationResponse:
         _ = admin
-        report = await validate_tenant_execution_config(tenant_id, request.config)
+        store = _require_admin_store(request)
+        payload = _restore_redacted_payload(body.config, store.get_raw_config(tenant_id))
+        report = await validate_tenant_execution_config(tenant_id, payload)
         return AdminTenantExecutionConfigValidationResponse.model_validate(report.to_dict())
 
     @router.delete("/tenants/{tenant_id}/execution-config", status_code=204)
@@ -1350,14 +1376,24 @@ def build_admin_router() -> APIRouter:
         request: Request,
         admin: Principal = Depends(require_admin_principal),
     ) -> None:
-        _ = admin
         store = _require_admin_store(request)
+        old_payload = store.get_raw_config(tenant_id)
         deleted = store.delete_config(tenant_id)
-        _invalidate_resolver(request.app.state.execution_resolver, tenant_id)
         if not deleted:
             raise HTTPException(
                 status_code=404, detail=f"Tenant '{tenant_id}' has no execution configuration"
             )
+        _invalidate_resolver(request.app.state.execution_resolver, tenant_id)
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_execution_config.delete",
+            old_values=(
+                redact_tenant_execution_payload(old_payload) if old_payload is not None else None
+            ),
+            new_values=None,
+        )
 
     return router
 
@@ -1699,84 +1735,38 @@ def _invalidate_resolver(resolver: TenantExecutionResolver, tenant_id: str) -> N
         invalidate(tenant_id)
 
 
-def _serialize_config_payload(config: TenantExecutionConfig) -> dict[str, Any]:
-    return {
-        "llm": {
-            "provider": config.llm.provider,
-            "model": config.llm.model,
-            "base_url": config.llm.base_url,
-            "api_key": config.llm.api_key,
-            "extra_headers": dict(config.llm.extra_headers),
-            "timeout": config.llm.timeout,
-        },
-        "tools": {
-            "allowed_local_tools": config.tools.allowed_local_tools,
-            "mcp_servers": [
-                {
-                    "name": server.name,
-                    "url": server.url,
-                    "headers": dict(server.headers),
-                    "protocolVersion": server.protocol_version,
-                    "allowed_tools": server.allowed_tools,
-                    "path_policy": {
-                        "deny_globs": list(server.path_policy.deny_globs),
-                        "allow_globs": list(server.path_policy.allow_globs),
-                    },
-                    "timeout_seconds": server.timeout_seconds,
-                }
-                for server in config.tools.mcp_servers
-            ],
-        },
-        "quality": {
-            "enabled": config.quality.enabled,
-            "mode": config.quality.mode,
-            "provider": config.quality.provider,
-            "model": config.quality.model,
-            "base_url": config.quality.base_url,
-            "api_key": config.quality.api_key,
-            "extra_headers": dict(config.quality.extra_headers),
-            "timeout": config.quality.timeout,
-            "max_payload_chars": config.quality.max_payload_chars,
-        },
-        "agent_backend": {
-            "type": config.agent_backend.type,
-            "peer": config.agent_backend.peer,
-            "cwd": config.agent_backend.cwd,
-            "timeout_seconds": config.agent_backend.timeout_seconds,
-            "poll_interval_seconds": config.agent_backend.poll_interval_seconds,
-            "mcp_broker_enabled": config.agent_backend.mcp_broker_enabled,
-        },
-        "skills": {
-            "default_skill": config.skills.default_skill,
-            "items": [
-                {
-                    "name": skill.name,
-                    "description": skill.description,
-                    "system_prompt": skill.system_prompt,
-                    "instruction_source": (
-                        {
-                            "type": skill.instruction_source.type,
-                            "path": skill.instruction_source.path,
-                        }
-                        if skill.instruction_source is not None
-                        else None
-                    ),
-                    "allowed_local_tools": skill.allowed_local_tools,
-                    "mcp_server_names": skill.mcp_server_names,
-                }
-                for skill in config.skills.items
-            ],
-        },
-        "capability_profiles": {
-            "default_profile": config.capability_profiles.default_profile,
-            "items": [
-                {
-                    "name": profile.name,
-                    "description": profile.description,
-                    "allowed_local_tools": profile.allowed_local_tools,
-                    "mcp_server_names": profile.mcp_server_names,
-                }
-                for profile in config.capability_profiles.items
-            ],
-        },
-    }
+def _restore_redacted_payload(
+    payload: dict[str, Any],
+    existing: dict[str, Any] | None,
+) -> dict[str, Any]:
+    restored = _restore_redacted_value(payload, existing or {})
+    if not isinstance(restored, dict):  # pragma: no cover - payload is typed as an object
+        raise RuntimeError("Execution config must be an object")
+    return restored
+
+
+def _restore_redacted_value(value: Any, existing: Any) -> Any:
+    if value == "<redacted>":
+        return existing if not isinstance(existing, (dict, list)) else None
+    if isinstance(value, dict):
+        existing_dict = existing if isinstance(existing, dict) else {}
+        return {
+            key: _restore_redacted_value(item, existing_dict.get(key))
+            for key, item in value.items()
+            if key not in {"has_api_key", "has_headers", "has_extra_headers"}
+        }
+    if isinstance(value, list):
+        existing_items = existing if isinstance(existing, list) else []
+        existing_by_name = {
+            item.get("name"): item
+            for item in existing_items
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        restored_items: list[Any] = []
+        for index, item in enumerate(value):
+            previous = existing_items[index] if index < len(existing_items) else None
+            if isinstance(item, dict) and isinstance(item.get("name"), str):
+                previous = existing_by_name.get(item["name"], previous)
+            restored_items.append(_restore_redacted_value(item, previous))
+        return restored_items
+    return value

@@ -183,6 +183,44 @@ export interface AdminTenantEntitlementsValidation {
   limits: { ok: boolean; errors: string[] };
 }
 
+export interface AdminTenantExecutionConfig {
+  tenant_id: string;
+  version: number;
+  config: Record<string, unknown>;
+}
+
+export interface AdminExecutionValidationSection {
+  ok: boolean;
+  errors: string[];
+}
+
+export interface AdminMcpValidation {
+  name: string;
+  url: string;
+  ok: boolean;
+  error?: string | null;
+  tool_count: number;
+  protocol_version?: string | null;
+  session: boolean;
+  server_name?: string | null;
+  server_version?: string | null;
+}
+
+export interface AdminExecutionValidation {
+  valid: boolean;
+  config_shape: AdminExecutionValidationSection;
+  llm: AdminExecutionValidationSection & {
+    provider?: string | null;
+    model?: string | null;
+    base_url?: string | null;
+  };
+  tools: AdminExecutionValidationSection & {
+    local_tools: string[];
+    unknown_local_tools: string[];
+    mcp_servers: AdminMcpValidation[];
+  };
+}
+
 export interface AdminTenant {
   id: string;
   slug: string;
@@ -441,6 +479,43 @@ export class MinigentApiClient {
   deleteAdminTenantEntitlements(tenantId: string): Promise<void> {
     return this.#request<void>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/entitlements`,
+      { method: "DELETE" },
+    );
+  }
+
+  getAdminTenantExecutionConfig(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminTenantExecutionConfig> {
+    return this.#request<AdminTenantExecutionConfig>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/execution-config`,
+      { signal },
+    );
+  }
+
+  validateAdminTenantExecutionConfig(
+    tenantId: string,
+    config: Record<string, unknown>,
+  ): Promise<AdminExecutionValidation> {
+    return this.#request<AdminExecutionValidation>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/execution-config/validate`,
+      { method: "POST", body: JSON.stringify({ config }) },
+    );
+  }
+
+  updateAdminTenantExecutionConfig(
+    tenantId: string,
+    config: Record<string, unknown>,
+  ): Promise<AdminTenantExecutionConfig> {
+    return this.#request<AdminTenantExecutionConfig>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/execution-config`,
+      { method: "PUT", body: JSON.stringify({ config }) },
+    );
+  }
+
+  deleteAdminTenantExecutionConfig(tenantId: string): Promise<void> {
+    return this.#request<void>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/execution-config`,
       { method: "DELETE" },
     );
   }

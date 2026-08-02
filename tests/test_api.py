@@ -5369,14 +5369,20 @@ def test_admin_thread_inspection_requires_admin() -> None:
 def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
     tmp_path: Path,
 ) -> None:
-    client = TestClient(
-        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store")
-    )
+    store = _sqlite_store(tmp_path)
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store"))
     payload = {
         "config": {
             "llm": {
                 "provider": "mock",
                 "api_key": "secret-key",
+                "extra_headers": {"X-LLM-Token": "llm-token"},
+            },
+            "llm_profiles": {"backup": {"provider": "mock", "api_key": "profile-secret"}},
+            "quality": {
+                "enabled": False,
+                "provider": "mock",
+                "api_key": "quality-secret",
             },
             "tools": {
                 "allowed_local_tools": ["echo"],
@@ -5398,12 +5404,33 @@ def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
     )
 
     assert put_response.status_code == 200
+    assert put_response.json()["version"] == 1
     assert put_response.json()["config"]["llm"]["api_key"] == "<redacted>"
     assert put_response.json()["config"]["llm"]["has_api_key"] is True
     assert (
         put_response.json()["config"]["tools"]["mcp_servers"][0]["headers"]["Authorization"]
         == "<redacted>"
     )
+    assert put_response.json()["config"]["llm"]["extra_headers"] == {"X-LLM-Token": "<redacted>"}
+    assert put_response.json()["config"]["llm_profiles"]["backup"]["api_key"] == "<redacted>"
+    assert put_response.json()["config"]["quality"]["api_key"] == "<redacted>"
+
+    round_trip_payload = put_response.json()["config"]
+    round_trip_payload["llm"]["model"] = "updated-model"
+    update_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        json={"config": round_trip_payload},
+        headers=ADMIN_HEADERS,
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["version"] == 2
+    stored = store.get_raw_config("tenant-1")
+    assert stored is not None
+    assert stored["llm"]["api_key"] == "secret-key"
+    assert stored["llm"]["extra_headers"] == {"X-LLM-Token": "llm-token"}
+    assert stored["llm_profiles"]["backup"]["api_key"] == "profile-secret"
+    assert stored["quality"]["api_key"] == "quality-secret"
+    assert stored["llm"]["model"] == "updated-model"
 
     list_response = client.get("/admin/execution-config-tenants", headers=ADMIN_HEADERS)
     assert list_response.status_code == 200
@@ -5414,6 +5441,7 @@ def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
         headers=ADMIN_HEADERS,
     )
     assert get_response.status_code == 200
+    assert get_response.json()["version"] == 2
     assert get_response.json()["config"]["llm"]["api_key"] == "<redacted>"
 
 

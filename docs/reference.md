@@ -99,9 +99,9 @@ currently provides runtime readiness, connection setup, thread history, message 
 streaming run activity, cancellation, context inspection, confirmed context compaction, validated
 image selection, authenticated attachment upload/display, image detail controls, one-time
 private-value approval/denial, pending-consent recovery, uncertain-action reconciliation, tenant
-search/detail views, membership and domain visibility, operational capacity metrics, and confirmed
-tenant lifecycle transitions. Tenant/user creation, entitlements, execution configuration, thread
-administration, and audit views remain on the migration roadmap.
+search/detail views, tenant and user provisioning, domain verification, entitlement and execution
+configuration editing, operational capacity metrics, and confirmed tenant lifecycle transitions.
+Thread administration and audit views remain on the migration roadmap.
 
 The dependency-free development client remains at `/web/` and provides the complete current chat
 workflow.
@@ -1622,7 +1622,25 @@ X-Minigent-Tenant-Id: admin-tenant
 X-Minigent-Admin: true
 ```
 
-Tenant registry endpoints manage durable tenant identity and lifecycle state. Tenant records include `id`, `slug`, `name`, `status`, `plan`, `region`, JSON `metadata`, actor fields, and timestamps. Slugs must be unique and contain lowercase letters, digits, and hyphens. `DELETE /admin/tenants/{tenant_id}` soft-deletes by setting `status` to `deleted`; it does not remove threads or execution config. `GET /admin/tenants` returns tenant objects with pagination metadata and accepts `limit`, `offset`, `status`, `plan`, and `slug` query parameters. `POST /admin/tenants/seed` can create missing registry tenants from existing execution-config tenant IDs; pass `dry_run=true` to preview. Tenant entitlements are stored as `features` and `limits` JSON objects with a monotonically increasing `version`; validation currently checks shape only and does not enforce limits at runtime. `GET /admin/execution-config-tenants` preserves the old execution-config tenant listing by returning tenant IDs that have stored execution config.
+Tenant registry endpoints manage durable tenant identity and lifecycle state. Tenant records include `id`, `slug`, `name`, `status`, `plan`, `region`, JSON `metadata`, actor fields, and timestamps. Slugs must be unique and contain lowercase letters,
+digits, and hyphens. `DELETE /admin/tenants/{tenant_id}` soft-deletes by setting `status` to `deleted`;
+it does not remove threads or execution config. `GET /admin/tenants` returns tenant objects with
+pagination metadata and accepts `limit`, `offset`, `status`, `plan`, and `slug` query parameters.
+`POST /admin/tenants/seed` can create missing registry tenants from existing execution-config tenant
+IDs; pass `dry_run=true` to preview. Tenant entitlements are stored as `features` and `limits` JSON
+objects with a monotonically increasing `version`; validation enforces scalar shape and the runtime's
+known non-negative integer limits, and thread/message/run limits plus MCP/peer-agent feature gates are
+enforced at runtime. `GET /admin/execution-config-tenants` preserves the old execution-config tenant
+listing by returning tenant IDs that have stored execution config.
+
+Execution-config reads and writes return the store's monotonically increasing `version`. API keys and
+header values are returned as `<redacted>` markers with `has_*` metadata; validation and update
+requests can round-trip those markers to preserve the corresponding stored values without
+sending secrets to the browser. Supplying a new value replaces a secret, while explicit `null` clears
+an API key. Updates preserve the submitted supported shape, including LLM profiles, MCP policy,
+skills, capability profiles, and agent presets, rather than collapsing it to a partial normalized
+payload. Successful updates and deletes invalidate the runtime resolver and append redacted tenant
+audit records.
 
 When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, public thread endpoints reject authenticated principals whose `tenant_id` is missing from the registry or not `active`. The default is `false` to preserve local and migration workflows. When `MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true`, request-time tenant context resolution also requires an active tenant membership for `(tenant_id, user_id)` and populates membership fields such as `membership_id`, `user_role`, and `user_status` on `TenantContext`.
 

@@ -2317,18 +2317,30 @@ def build_tool_registry_for_capability_profile(
 
 def redact_tenant_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:
     redacted = json.loads(json.dumps(payload))
-    llm = redacted.get("llm")
-    if isinstance(llm, dict) and llm.get("api_key"):
-        llm["api_key"] = "<redacted>"
-        llm["has_api_key"] = True
-    tools = redacted.get("tools")
-    if isinstance(tools, dict):
-        mcp_servers = tools.get("mcp_servers") or tools.get("mcpServers")
-        if isinstance(mcp_servers, list):
-            for server in mcp_servers:
-                if isinstance(server, dict):
-                    headers = server.get("headers")
-                    if isinstance(headers, dict):
-                        server["headers"] = {key: "<redacted>" for key in headers}
-                        server["has_headers"] = bool(headers)
+    _redact_tenant_execution_secrets(redacted)
     return redacted
+
+
+def _redact_tenant_execution_secrets(value: Any) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _redact_tenant_execution_secrets(item)
+        return
+    if not isinstance(value, dict):
+        return
+    for key, item in list(value.items()):
+        normalized_key = key.replace("-", "_").lower()
+        if normalized_key in {"api_key", "apikey"} and item:
+            value[key] = "<redacted>"
+            value["has_api_key"] = True
+            continue
+        if normalized_key in {"headers", "extra_headers", "extraheaders"} and isinstance(
+            item, dict
+        ):
+            value[key] = {header: "<redacted>" for header in item}
+            if normalized_key == "headers":
+                value["has_headers"] = bool(item)
+            else:
+                value["has_extra_headers"] = bool(item)
+            continue
+        _redact_tenant_execution_secrets(item)

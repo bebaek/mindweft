@@ -709,6 +709,86 @@ test("validates, saves, and resets tenant entitlements", async ({ page }) => {
   await expect(page.getByText("No tenant-specific entitlements")).toBeVisible();
 });
 
+test("validates and applies execution configuration without exposing stored secrets", async ({ page }) => {
+  await installApiMocks(page);
+  await installAdminMocks(page);
+  let stored: Record<string, unknown> | null = {
+    llm: { provider: "mock", model: "initial-model", api_key: "<redacted>", has_api_key: true },
+    tools: { allowed_local_tools: ["echo"], mcp_servers: [] },
+    agent_backend: { type: "native" },
+    skills: { items: [] },
+    capability_profiles: { items: [] },
+    agents: { items: [] },
+  };
+  let version = 1;
+  let lastApplied: Record<string, unknown> | null = null;
+  await page.route("**/admin/tenants/tenant-acme/execution-config**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/validate")) {
+      const body = request.postDataJSON() as { config: Record<string, unknown> };
+      const llm = body.config.llm as Record<string, unknown>;
+      const invalid = llm.model === "invalid-model";
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ valid: !invalid, config_shape: { ok: true, errors: [] }, llm: { ok: !invalid, provider: llm.provider, model: llm.model, base_url: null, errors: invalid ? ["Selected model is not available"] : [] }, tools: { ok: true, errors: [], local_tools: ["echo", "current_time"], unknown_local_tools: [], mcp_servers: [] } }) });
+    } else if (request.method() === "PUT") {
+      const body = request.postDataJSON() as { config: Record<string, unknown> };
+      lastApplied = body.config;
+      stored = body.config;
+      version += 1;
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenant_id: "tenant-acme", version, config: stored }) });
+    } else if (request.method() === "DELETE") {
+      stored = null;
+      await route.fulfill({ status: 204, body: "" });
+    } else if (stored) {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tenant_id: "tenant-acme", version, config: stored }) });
+    } else {
+      await route.fulfill({ status: 404, contentType: "application/json", body: '{"detail":"No execution configuration"}' });
+    }
+  });
+  await page.goto("./");
+  await navigateToAdmin(page);
+
+  await expect(page.getByText("Version 1").last()).toBeVisible();
+  await page.getByRole("button", { name: "Edit configuration" }).click();
+  const dialog = page.getByRole("dialog", { name: "Edit execution configuration" });
+  const apiKeyInput = dialog.getByRole("textbox", { name: "API key", exact: true });
+  await expect(apiKeyInput).toHaveValue("");
+  await expect(apiKeyInput).toHaveAttribute("placeholder", /Stored secret/);
+  await dialog.getByLabel("Model").fill("invalid-model");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  const discard = dialog.getByRole("alertdialog", { name: "Discard execution configuration changes" });
+  await expect(discard).toBeVisible();
+  await discard.getByRole("button", { name: "Keep editing" }).click();
+
+  await dialog.getByRole("button", { name: "Tools" }).click();
+  await dialog.getByLabel("Allowed local tools").fill("echo, current_time");
+  await dialog.getByRole("button", { name: "Skills" }).click();
+  await dialog.getByLabel("Skills configuration").fill(JSON.stringify({ default_skill: "review", items: [{ name: "review", system_prompt: "Review carefully" }] }, null, 2));
+  await dialog.getByRole("button", { name: "Presets" }).click();
+  await dialog.getByRole("textbox", { name: /^Capability profiles/ }).fill(JSON.stringify({ default_profile: "safe", items: [{ name: "safe", allowed_local_tools: ["echo"] }] }, null, 2));
+  await dialog.getByRole("textbox", { name: /^Agent presets/ }).fill(JSON.stringify({ items: [{ name: "reviewer", skill_name: "review", capability_profile: "safe" }] }, null, 2));
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await dialog.getByRole("button", { name: "Validate and apply" }).click();
+  await expect(dialog.getByText("Validation needs attention")).toBeVisible();
+  await expect(dialog.getByText("Selected model is not available")).toBeVisible();
+
+  await dialog.getByRole("button", { name: "LLM" }).click();
+  await dialog.getByLabel("Model").fill("production-model");
+  await dialog.getByRole("button", { name: "Validate and apply" }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByText("Version 2").last()).toBeVisible();
+  const applied = (lastApplied ?? {}) as Record<string, unknown>;
+  expect((applied.llm as Record<string, unknown>).api_key).toBe("<redacted>");
+  expect((applied.skills as { items: unknown[] }).items).toHaveLength(1);
+  expect((applied.agents as { items: unknown[] }).items).toHaveLength(1);
+
+  await page.getByRole("button", { name: "Reset configuration" }).click();
+  const confirmation = page.getByRole("dialog", { name: "Reset execution configuration?" });
+  await confirmation.getByRole("button", { name: "Reset configuration" }).click();
+  await expect(confirmation).not.toBeVisible();
+  await expect(page.getByText("No tenant-specific execution configuration")).toBeVisible();
+});
+
 test("supports mobile navigation", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installApiMocks(page);

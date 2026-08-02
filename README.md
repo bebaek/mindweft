@@ -346,9 +346,11 @@ confirmed compaction, validated image selection, authenticated binary uploads, a
 and per-image detail controls, one-time private-value approval/denial, pending-consent recovery after
 reload, uncertain-action reconciliation, and an administration workspace with tenant provisioning and
 editing, user role/status management, domain verification, typed feature and limit entitlement
-editing with server validation, version visibility and confirmed reset, conflict feedback, confirmed
-removals, tenant search, attachment and run-capacity metrics, confirmed lifecycle transitions, and
-typed API transport, TanStack Query request lifecycle management, and connection modes
+editing with server validation, version visibility and confirmed reset, a sectioned execution
+configuration editor for LLMs, tools, MCP servers, backends, quality review, skills, capability
+profiles, and agent presets with redacted-secret preservation and unsaved-change protection, conflict
+feedback, confirmed removals, tenant search, attachment and run-capacity metrics, confirmed lifecycle
+transitions, typed API transport, TanStack Query request lifecycle management, and connection modes
 for same-origin sessions, in-memory bearer tokens, and trusted-local development headers. Session
 mode is the
 production default but requires a session endpoint backed by the deployment's identity provider;
@@ -387,7 +389,7 @@ safety, responsive navigation, and automated axe accessibility checks. Use
 system dependencies with `npx playwright install --with-deps chromium`.
 
 The existing dependency-free browser client remains at `/web/` while advanced administration flows
-such as execution configuration, thread pruning, and audit inspection are implemented.
+such as thread pruning and audit inspection are implemented.
 It uses the streaming run
 endpoint to show live LLM, tool, and peer-agent progress, with mobile-friendly run
 controls, a stop action, basic assistant markdown rendering, execution option selectors,
