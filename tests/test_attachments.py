@@ -1,3 +1,5 @@
+import base64
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
@@ -10,6 +12,10 @@ from app.attachments import (
     InMemoryAttachmentStore,
     SQLiteAttachmentStore,
 )
+
+
+def _encoded_key(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
 
 def test_attachment_store_settings_from_env() -> None:
@@ -27,6 +33,152 @@ def test_attachment_store_settings_from_env() -> None:
         db_path="/data/attachments.db",
         max_per_thread=12,
         max_bytes_per_thread=3456,
+    )
+
+
+def test_attachment_store_settings_parse_encryption_keyring() -> None:
+    key = b"a" * 32
+    settings = AttachmentStoreSettings.from_env(
+        {
+            "MINIGENT_ATTACHMENT_DB_PATH": "/data/attachments.db",
+            "MINIGENT_ATTACHMENT_ENCRYPTION_KEY": _encoded_key(key),
+            "MINIGENT_ATTACHMENT_KEY_VERSION": "2",
+            "MINIGENT_ATTACHMENT_REENCRYPT_ON_STARTUP": "true",
+        }
+    )
+
+    assert settings.encryption_key == key
+    assert settings.decryption_keys == {2: key}
+    assert settings.key_version == 2
+    assert settings.reencrypt_on_startup is True
+
+    with pytest.raises(RuntimeError, match="requires attachment encryption keys"):
+        AttachmentStoreSettings.from_env(
+            {
+                "MINIGENT_ATTACHMENT_DB_PATH": "/data/attachments.db",
+                "MINIGENT_ATTACHMENT_KEY_VERSION": "2",
+            }
+        )
+
+
+def test_sqlite_attachment_store_migrates_pre_encryption_schema(tmp_path: Path) -> None:
+    path = tmp_path / "legacy-schema.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE attachments (
+                attachment_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                data BLOB NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO attachments (
+                attachment_id, tenant_id, thread_id, mime_type,
+                size_bytes, created_by, created_at, data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-1",
+                "tenant-1",
+                "thread-1",
+                "image/png",
+                len(b"legacy"),
+                "user-1",
+                "2026-01-01T00:00:00+00:00",
+                b"legacy",
+            ),
+        )
+
+    store = SQLiteAttachmentStore(path)
+    record = store.get("tenant-1", "thread-1", "legacy-1")
+
+    assert record is not None
+    assert record.data == b"legacy"
+    with sqlite3.connect(path) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(attachments)")}
+    assert {"nonce", "key_version"} <= columns
+
+
+def test_sqlite_attachment_store_encrypts_and_authenticates_data(tmp_path: Path) -> None:
+    path = tmp_path / "encrypted.db"
+    key = b"a" * 32
+    store = SQLiteAttachmentStore(path, encryption_key=key)
+    metadata = store.put(
+        "tenant-1",
+        "thread-1",
+        mime_type="image/png",
+        data=b"sensitive-image",
+        created_by="user-1",
+    )
+
+    with sqlite3.connect(path) as connection:
+        stored_data, nonce, key_version = connection.execute(
+            "SELECT data, nonce, key_version FROM attachments"
+        ).fetchone()
+    assert bytes(stored_data) != b"sensitive-image"
+    assert len(bytes(nonce)) == 12
+    assert key_version == 1
+    assert (
+        SQLiteAttachmentStore(path, encryption_key=key)
+        .get("tenant-1", "thread-1", metadata.attachment_id)
+        .data
+        == b"sensitive-image"
+    )
+
+    with pytest.raises(RuntimeError, match="authentication failed"):
+        SQLiteAttachmentStore(path, encryption_key=b"b" * 32)
+
+
+def test_sqlite_attachment_store_rotates_keys_and_legacy_plaintext(tmp_path: Path) -> None:
+    path = tmp_path / "rotation.db"
+    legacy = SQLiteAttachmentStore(path)
+    legacy_metadata = legacy.put(
+        "tenant-1",
+        "thread-1",
+        mime_type="image/png",
+        data=b"legacy-image",
+        created_by="user-1",
+    )
+    key_one = b"1" * 32
+    first = SQLiteAttachmentStore(
+        path,
+        encryption_key=key_one,
+        key_version=1,
+        reencrypt_on_startup=True,
+    )
+    assert first.get("tenant-1", "thread-1", legacy_metadata.attachment_id).data == b"legacy-image"
+
+    key_two = b"2" * 32
+    rotated = SQLiteAttachmentStore(
+        path,
+        encryption_key=key_two,
+        key_version=2,
+        decryption_keys={1: key_one},
+        reencrypt_on_startup=True,
+    )
+    assert (
+        rotated.get("tenant-1", "thread-1", legacy_metadata.attachment_id).data == b"legacy-image"
+    )
+    with sqlite3.connect(path) as connection:
+        versions = {row[0] for row in connection.execute("SELECT key_version FROM attachments")}
+    assert versions == {2}
+    assert (
+        SQLiteAttachmentStore(
+            path,
+            encryption_key=key_two,
+            key_version=2,
+        )
+        .get("tenant-1", "thread-1", legacy_metadata.attachment_id)
+        .data
+        == b"legacy-image"
     )
 
 

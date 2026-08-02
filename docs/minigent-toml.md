@@ -423,9 +423,24 @@ Attachment records are scoped by tenant and thread. Provider requests resolve re
 image bytes only in transient model-facing message copies; stored messages retain references.
 Deleting a thread deletes its attachment records. Unreferenced uploads can be deleted explicitly;
 clients clean them up automatically if a later upload or message creation fails. Quotas are checked
-atomically when the attachment is inserted, including across SQLite-backed replicas. Attachment
-SQLite bytes are not encrypted by Minigent, so protect the database volume and backups according
-to the sensitivity of uploaded media.
+atomically when the attachment is inserted, including across SQLite-backed replicas.
+
+Attachment encryption settings are intentionally environment-only so key material is not written to
+`minigent.toml`:
+
+| Variable | Purpose |
+| --- | --- |
+| `MINIGENT_ATTACHMENT_ENCRYPTION_KEY` | URL-safe base64-encoded 32-byte active AES-256-GCM key. |
+| `MINIGENT_ATTACHMENT_ENCRYPTION_KEYS` | JSON object mapping key versions to URL-safe base64 keys, used during rotation. |
+| `MINIGENT_ATTACHMENT_KEY_VERSION` | Positive active key version; defaults to 1. |
+| `MINIGENT_ATTACHMENT_REENCRYPT_ON_STARTUP` | Re-encrypt plaintext and older-version rows with the active key during startup. |
+
+When a key is configured, new attachment bytes are encrypted with AES-256-GCM and their tenant,
+thread, attachment ID, MIME type, size, creator, timestamp, and key version are authenticated as
+associated data. Startup fails closed when an encrypted row requires a missing key or authentication
+fails. Existing plaintext rows remain readable for migration; enable re-encryption on startup after
+provisioning the keyring to encrypt them. Protect encryption keys separately from the database and
+retain old key versions until rotation has completed on every replica.
 
 ### `[coding]`
 
