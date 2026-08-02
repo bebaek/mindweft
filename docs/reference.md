@@ -97,8 +97,9 @@ assets packaged under `app/static/console/`. Run `npm run test:e2e:install` once
 `npm run test:e2e` for desktop/mobile Chromium coverage and axe accessibility checks. The console
 currently provides runtime readiness, connection setup, thread history, message composition,
 streaming run activity, cancellation, context inspection, confirmed context compaction, validated
-image selection, authenticated attachment upload/display, and image detail controls. Private-value
-consent and administration remain on the migration roadmap.
+image selection, authenticated attachment upload/display, image detail controls, one-time
+private-value approval/denial, pending-consent recovery, and uncertain-action reconciliation.
+Administration remains on the migration roadmap.
 
 The dependency-free development client remains at `/web/` and provides the complete current chat
 workflow.

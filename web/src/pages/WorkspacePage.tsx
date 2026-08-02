@@ -1,8 +1,15 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ImagePart, Message, RunEvent, ThreadListItem } from "../api/client";
+import type {
+  ImagePart,
+  Message,
+  PrivateValueConsentRequest,
+  RunEvent,
+  ThreadListItem,
+} from "../api/client";
 import { useAuth } from "../auth/auth-context";
 import { ContextDialog } from "../components/ContextDialog";
+import { ConsentDialog } from "../components/ConsentDialog";
 
 interface PendingImage {
   file: File;
@@ -27,10 +34,20 @@ export function WorkspacePage() {
   const [error, setError] = useState<string | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [consentRequest, setConsentRequest] = useState<PrivateValueConsentRequest | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const activityId = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pendingImagesRef = useRef<PendingImage[]>([]);
+  const pendingConsentRef = useRef<PrivateValueConsentRequest | null>(null);
+
+  const pendingConsents = useQuery({
+    queryKey: ["pending-consents", selectedThreadId, authentication],
+    queryFn: ({ signal }) => api.listPendingPrivateValueConsents(selectedThreadId!, signal),
+    enabled: selectedThreadId !== null && consentRequest === null,
+    retry: false,
+    staleTime: 10_000,
+  });
 
   useEffect(() => {
     pendingImagesRef.current = pendingImages;
@@ -74,6 +91,17 @@ export function WorkspacePage() {
   }
 
   function handleRunEvent(event: RunEvent) {
+    if (event.type === "private_value.consent_required") {
+      const request = privateValueConsentRequest(event.request);
+      if (request) {
+        pendingConsentRef.current = request;
+        setConsentRequest(request);
+        addActivity(`Approval required for ${request.tool_name}`);
+      } else {
+        setError("The private-value consent request was malformed.");
+      }
+      return;
+    }
     if (event.type === "assistant.message") {
       setStreamedReply(event.content ?? "");
       addActivity("Assistant response received", event);
@@ -95,6 +123,8 @@ export function WorkspacePage() {
     setDraft("");
     setStreamedReply(null);
     setActivity([]);
+    pendingConsentRef.current = null;
+    setConsentRequest(null);
     setIsRunning(true);
     const controller = new AbortController();
     abortRef.current = controller;
@@ -132,7 +162,7 @@ export function WorkspacePage() {
         queryClient.invalidateQueries({ queryKey: ["messages", threadId] }),
         queryClient.invalidateQueries({ queryKey: ["threads"] }),
       ]);
-      setStreamedReply(null);
+      if (!pendingConsentRef.current) setStreamedReply(null);
     } catch (caught) {
       if (!messageStored && threadId !== null) {
         await Promise.allSettled(
@@ -192,6 +222,31 @@ export function WorkspacePage() {
       if (removed) URL.revokeObjectURL(removed.previewUrl);
       return images.filter((_, imageIndex) => imageIndex !== index);
     });
+  }
+
+  function resolveConsent(result: { decision: "approved" | "denied" | "discarded"; reply?: string }) {
+    if (selectedThreadId) {
+      queryClient.setQueryData(
+        ["pending-consents", selectedThreadId, authentication],
+        [],
+      );
+    }
+    setConsentRequest(null);
+    pendingConsentRef.current = null;
+    if (result.decision === "approved") {
+      setStreamedReply(result.reply ?? null);
+      addActivity("Private-value disclosure approved; action completed");
+    } else if (result.decision === "denied") {
+      addActivity("Private-value disclosure denied");
+    } else {
+      addActivity("Uncertain private action record discarded");
+    }
+    if (selectedThreadId) {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["messages", selectedThreadId] }),
+        queryClient.invalidateQueries({ queryKey: ["threads"] }),
+      ]).then(() => setStreamedReply(null));
+    }
   }
 
   async function stopRun() {
@@ -326,6 +381,12 @@ export function WorkspacePage() {
         </form>
       </div>
       <ContextDialog threadId={selectedThreadId} open={contextOpen} onClose={() => setContextOpen(false)} />
+      <ConsentDialog
+        threadId={selectedThreadId}
+        request={consentRequest ?? pendingConsents.data?.[0] ?? null}
+        onResolved={resolveConsent}
+        onError={(message) => setError(message)}
+      />
     </section>
   );
 }
@@ -368,6 +429,29 @@ function formatRunEvent(event: RunEvent) {
     "run.completed": "Run completed",
   };
   return labels[event.type] ?? event.type.replaceAll(".", " ");
+}
+
+function privateValueConsentRequest(value: unknown): PrivateValueConsentRequest | null {
+  if (!value || typeof value !== "object") return null;
+  const request = value as Partial<PrivateValueConsentRequest>;
+  if (
+    typeof request.consent_id !== "string" ||
+    typeof request.thread_id !== "string" ||
+    typeof request.tool_name !== "string" ||
+    !Array.isArray(request.disclosures)
+  ) return null;
+  return {
+    consent_id: request.consent_id,
+    thread_id: request.thread_id,
+    tool_name: request.tool_name,
+    argument_fingerprint: typeof request.argument_fingerprint === "string" ? request.argument_fingerprint : "",
+    status: typeof request.status === "string" ? request.status : "pending",
+    one_shot: request.one_shot !== false,
+    expires_at: typeof request.expires_at === "number" ? request.expires_at : 0,
+    disclosures: request.disclosures.filter((item) =>
+      Boolean(item) && typeof item.path === "string" && typeof item.kind === "string" && typeof item.count === "number"
+    ),
+  };
 }
 
 function MessageImages({ message }: { message: Message }) {

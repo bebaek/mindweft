@@ -46,7 +46,10 @@ async function installApiMocks(page: Page, onExecutionOptions?: (route: Route) =
   });
 }
 
-async function installWorkspaceMocks(page: Page) {
+async function installWorkspaceMocks(
+  page: Page,
+  options: { consent?: boolean; uncertainResume?: boolean } = {},
+) {
   const messages = new Map<string, Array<Record<string, unknown>>>([
     [
       "thread-1",
@@ -140,9 +143,98 @@ async function installWorkspaceMocks(page: Page) {
       }
       return;
     }
+    const pendingConsentMatch = path.match(
+      /^\/threads\/([^/]+)\/private-value-consents\/pending$/,
+    );
+    if (pendingConsentMatch) {
+      await route.fulfill({ contentType: "application/json", body: "[]" });
+      return;
+    }
+    const consentMatch = path.match(
+      /^\/threads\/([^/]+)\/private-value-consents\/([^/]+)(\/resume)?$/,
+    );
+    if (consentMatch) {
+      if (consentMatch[3]) {
+        if (options.uncertainResume) {
+          await route.fulfill({
+            status: 500,
+            contentType: "application/json",
+            body: '{"detail":"connection lost after action claim"}',
+          });
+        } else {
+          messages.get(consentMatch[1])?.push({
+            id: "assistant-consent",
+            thread_id: consentMatch[1],
+            role: "assistant",
+            content: "Sent.",
+            created_at: new Date().toISOString(),
+          });
+          await route.fulfill({ contentType: "application/json", body: '{"reply":"Sent."}' });
+        }
+      } else {
+        await route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({ consent_id: consentMatch[2], status: "approved" }),
+        });
+      }
+      return;
+    }
+    const actionsMatch = path.match(/^\/threads\/([^/]+)\/private-value-actions(?:\/([^/]+))?$/);
+    if (actionsMatch) {
+      if (request.method() === "DELETE") {
+        await route.fulfill({ contentType: "application/json", body: '{"discarded":true}' });
+      } else {
+        await route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              consent_id: "consent-1",
+              thread_id: actionsMatch[1],
+              tool_name: "trusted.send",
+              state: "executing",
+              expires_at: Date.now() / 1000 + 600,
+            },
+          ]),
+        });
+      }
+      return;
+    }
     const runMatch = path.match(/^\/threads\/([^/]+)\/run\/stream$/);
     if (runMatch) {
       const threadId = runMatch[1];
+      if (options.consent) {
+        messages.get(threadId)?.push({
+          id: "assistant-approval",
+          thread_id: threadId,
+          role: "assistant",
+          content: "Approval is required.",
+          created_at: new Date().toISOString(),
+        });
+        await route.fulfill({
+          contentType: "application/x-ndjson",
+          body: [
+            JSON.stringify({ type: "run.started" }),
+            JSON.stringify({
+              type: "private_value.consent_required",
+              name: "trusted.send",
+              request: {
+                consent_id: "consent-1",
+                thread_id: threadId,
+                tool_name: "trusted.send",
+                argument_fingerprint: "fingerprint-1",
+                status: "pending",
+                one_shot: true,
+                expires_at: Date.now() / 1000 + 600,
+                disclosures: [{ path: "recipient.email", kind: "email", count: 1 }],
+              },
+            }),
+            JSON.stringify({ type: "assistant.message", content: "Approval is required." }),
+            JSON.stringify({ type: "run.completed" }),
+            "",
+          ].join("\n"),
+        });
+        return;
+      }
       messages.get(threadId)?.push({
         id: "assistant-1",
         thread_id: threadId,
@@ -272,7 +364,7 @@ test("runs a streamed conversation without accessibility violations", async ({ p
   await page.getByLabel("Message Minigent").fill("Prepare the release");
   await page.getByRole("button", { name: "Send message" }).click();
 
-  await expect(page.getByText("The deployment plan is ready.")).toBeVisible();
+  await expect(page.getByText("The deployment plan is ready.").last()).toBeVisible();
   await expect(page.getByRole("img", { name: "User attachment" })).toBeVisible();
   await expect(page.locator(".activity-tray summary").getByText("Run completed")).toBeVisible();
 
@@ -285,6 +377,63 @@ test("runs a streamed conversation without accessibility violations", async ({ p
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("approves one-time private-value disclosure and resumes the action", async ({ page }) => {
+  await installApiMocks(page);
+  await installWorkspaceMocks(page, { consent: true });
+  await page.goto("./");
+  await navigateToWorkspace(page);
+  await page.getByLabel("Message Minigent").fill("Send this to my contact");
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  const consent = page.getByRole("dialog", { name: "Allow this exact tool action?" });
+  await expect(consent.getByText("trusted.send")).toBeVisible();
+  await expect(consent.getByText("recipient.email")).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await consent.getByRole("button", { name: "Approve once and continue" }).click();
+
+  await expect(consent).not.toBeVisible();
+  await expect(page.getByText("Sent.")).toBeVisible();
+  await expect(
+    page.locator(".activity-tray summary").getByText("Private-value disclosure approved; action completed"),
+  ).toBeVisible();
+});
+
+test("denies private-value disclosure without resuming the action", async ({ page }) => {
+  await installApiMocks(page);
+  await installWorkspaceMocks(page, { consent: true });
+  await page.goto("./");
+  await navigateToWorkspace(page);
+  await page.getByLabel("Message Minigent").fill("Do not disclose this");
+  await page.getByRole("button", { name: "Send message" }).click();
+  const consent = page.getByRole("dialog", { name: "Allow this exact tool action?" });
+
+  await consent.getByRole("button", { name: "Deny" }).click();
+
+  await expect(consent).not.toBeVisible();
+  await expect(
+    page.locator(".activity-tray summary").getByText("Private-value disclosure denied"),
+  ).toBeVisible();
+});
+
+test("requires reconciliation when an approved action outcome is unknown", async ({ page }) => {
+  await installApiMocks(page);
+  await installWorkspaceMocks(page, { consent: true, uncertainResume: true });
+  await page.goto("./");
+  await navigateToWorkspace(page);
+  await page.getByLabel("Message Minigent").fill("Send this to my contact");
+  await page.getByRole("button", { name: "Send message" }).click();
+  const consent = page.getByRole("dialog");
+  await consent.getByRole("button", { name: "Approve once and continue" }).click();
+
+  await expect(consent.getByRole("heading", { name: "Check the external system before continuing." })).toBeVisible();
+  await expect(consent.getByText(/does not undo an external action/)).toBeVisible();
+  await consent.getByRole("button", { name: "I checked — discard local record" }).click();
+  await expect(consent).not.toBeVisible();
+  await expect(
+    page.locator(".activity-tray summary").getByText("Uncertain private action record discarded"),
+  ).toBeVisible();
 });
 
 test("supports mobile navigation", async ({ page }) => {

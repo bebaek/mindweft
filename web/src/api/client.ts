@@ -125,6 +125,31 @@ export interface CompactThreadResponse {
   usage: ThreadContextUsage;
 }
 
+export interface PrivateValueDisclosure {
+  path: string;
+  kind: string;
+  count: number;
+}
+
+export interface PrivateValueConsentRequest {
+  consent_id: string;
+  thread_id: string;
+  tool_name: string;
+  argument_fingerprint: string;
+  status: string;
+  one_shot: boolean;
+  expires_at: number;
+  disclosures: PrivateValueDisclosure[];
+}
+
+export interface PrivateValueAction {
+  consent_id: string;
+  thread_id: string;
+  tool_name: string;
+  state: "pending" | "executing";
+  expires_at: number;
+}
+
 export interface RunEvent {
   type: string;
   content?: string;
@@ -251,6 +276,50 @@ export class MinigentApiClient {
     return this.#request<CompactThreadResponse>(
       `/threads/${encodeURIComponent(threadId)}/compact`,
       { method: "POST" },
+    );
+  }
+
+  listPendingPrivateValueConsents(
+    threadId: string,
+    signal?: AbortSignal,
+  ): Promise<PrivateValueConsentRequest[]> {
+    return this.#request<PrivateValueConsentRequest[]>(
+      `/threads/${encodeURIComponent(threadId)}/private-value-consents/pending`,
+      { signal },
+    );
+  }
+
+  decidePrivateValueConsent(
+    threadId: string,
+    consentId: string,
+    approve: boolean,
+  ): Promise<unknown> {
+    return this.#request(
+      `/threads/${encodeURIComponent(threadId)}/private-value-consents/${encodeURIComponent(consentId)}`,
+      { method: "POST", body: JSON.stringify({ approve, one_shot: true }) },
+    );
+  }
+
+  resumePrivateValueConsent(
+    threadId: string,
+    consentId: string,
+  ): Promise<{ reply: string }> {
+    return this.#request<{ reply: string }>(
+      `/threads/${encodeURIComponent(threadId)}/private-value-consents/${encodeURIComponent(consentId)}/resume`,
+      { method: "POST" },
+    );
+  }
+
+  listPrivateValueActions(threadId: string): Promise<PrivateValueAction[]> {
+    return this.#request<PrivateValueAction[]>(
+      `/threads/${encodeURIComponent(threadId)}/private-value-actions`,
+    );
+  }
+
+  discardPrivateValueAction(threadId: string, consentId: string): Promise<unknown> {
+    return this.#request(
+      `/threads/${encodeURIComponent(threadId)}/private-value-actions/${encodeURIComponent(consentId)}`,
+      { method: "DELETE" },
     );
   }
 
