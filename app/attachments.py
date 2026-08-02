@@ -18,6 +18,12 @@ DEFAULT_ATTACHMENT_MAX_PER_THREAD = 100
 DEFAULT_ATTACHMENT_MAX_BYTES_PER_THREAD = 256 * 1024 * 1024
 
 
+class AttachmentLimitExceeded(RuntimeError):
+    def __init__(self, limit: str) -> None:
+        self.limit = limit
+        super().__init__(limit)
+
+
 class UploadAttachmentRequest(BaseModel):
     mime_type: str
     data: str
@@ -70,6 +76,8 @@ class AttachmentStore(Protocol):
         mime_type: str,
         data: bytes,
         created_by: str | None,
+        max_per_thread: int | None = None,
+        max_bytes_per_thread: int | None = None,
     ) -> AttachmentMetadata: ...
 
     def get(
@@ -96,6 +104,8 @@ class InMemoryAttachmentStore:
         mime_type: str,
         data: bytes,
         created_by: str | None,
+        max_per_thread: int | None = None,
+        max_bytes_per_thread: int | None = None,
     ) -> AttachmentMetadata:
         metadata = AttachmentMetadata(
             attachment_id=str(uuid4()),
@@ -105,6 +115,14 @@ class InMemoryAttachmentStore:
             created_by=created_by,
         )
         with self._lock:
+            count, total_bytes = self._usage_unlocked(tenant_id, thread_id)
+            _enforce_limits(
+                count=count,
+                total_bytes=total_bytes,
+                incoming_bytes=len(data),
+                max_per_thread=max_per_thread,
+                max_bytes_per_thread=max_bytes_per_thread,
+            )
             self._records[(tenant_id, thread_id, metadata.attachment_id)] = AttachmentRecord(
                 metadata=metadata,
                 data=bytes(data),
@@ -115,12 +133,15 @@ class InMemoryAttachmentStore:
         with self._lock:
             return self._records.get((tenant_id, thread_id, attachment_id))
 
+    def _usage_unlocked(self, tenant_id: str, thread_id: str) -> tuple[int, int]:
+        records = [
+            record for key, record in self._records.items() if key[:2] == (tenant_id, thread_id)
+        ]
+        return len(records), sum(record.metadata.size_bytes for record in records)
+
     def usage(self, tenant_id: str, thread_id: str) -> tuple[int, int]:
         with self._lock:
-            records = [
-                record for key, record in self._records.items() if key[:2] == (tenant_id, thread_id)
-            ]
-            return len(records), sum(record.metadata.size_bytes for record in records)
+            return self._usage_unlocked(tenant_id, thread_id)
 
     def delete(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
         with self._lock:
@@ -176,6 +197,8 @@ class SQLiteAttachmentStore:
         mime_type: str,
         data: bytes,
         created_by: str | None,
+        max_per_thread: int | None = None,
+        max_bytes_per_thread: int | None = None,
     ) -> AttachmentMetadata:
         metadata = AttachmentMetadata(
             attachment_id=str(uuid4()),
@@ -185,6 +208,15 @@ class SQLiteAttachmentStore:
             created_by=created_by,
         )
         with self._lock, self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            count, total_bytes = self._usage_with_connection(connection, tenant_id, thread_id)
+            _enforce_limits(
+                count=count,
+                total_bytes=total_bytes,
+                incoming_bytes=len(data),
+                max_per_thread=max_per_thread,
+                max_bytes_per_thread=max_bytes_per_thread,
+            )
             connection.execute(
                 """
                 INSERT INTO attachments (
@@ -229,17 +261,25 @@ class SQLiteAttachmentStore:
             data=bytes(row[4]),
         )
 
+    @staticmethod
+    def _usage_with_connection(
+        connection: sqlite3.Connection,
+        tenant_id: str,
+        thread_id: str,
+    ) -> tuple[int, int]:
+        row = connection.execute(
+            """
+            SELECT COUNT(*), COALESCE(SUM(size_bytes), 0)
+            FROM attachments
+            WHERE tenant_id = ? AND thread_id = ?
+            """,
+            (tenant_id, thread_id),
+        ).fetchone()
+        return int(row[0]), int(row[1])
+
     def usage(self, tenant_id: str, thread_id: str) -> tuple[int, int]:
         with self._lock, self._connection() as connection:
-            row = connection.execute(
-                """
-                SELECT COUNT(*), COALESCE(SUM(size_bytes), 0)
-                FROM attachments
-                WHERE tenant_id = ? AND thread_id = ?
-                """,
-                (tenant_id, thread_id),
-            ).fetchone()
-        return int(row[0]), int(row[1])
+            return self._usage_with_connection(connection, tenant_id, thread_id)
 
     def delete(self, tenant_id: str, thread_id: str, attachment_id: str) -> bool:
         with self._lock, self._connection() as connection:
@@ -259,6 +299,20 @@ class SQLiteAttachmentStore:
                 (tenant_id, thread_id),
             )
             return cursor.rowcount
+
+
+def _enforce_limits(
+    *,
+    count: int,
+    total_bytes: int,
+    incoming_bytes: int,
+    max_per_thread: int | None,
+    max_bytes_per_thread: int | None,
+) -> None:
+    if max_per_thread is not None and count >= max_per_thread:
+        raise AttachmentLimitExceeded("count")
+    if max_bytes_per_thread is not None and total_bytes + incoming_bytes > max_bytes_per_thread:
+        raise AttachmentLimitExceeded("bytes")
 
 
 def _positive_int_env(env: Mapping[str, str], name: str, default: int) -> int:

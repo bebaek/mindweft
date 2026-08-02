@@ -489,6 +489,38 @@ def test_attachment_upload_stores_reference_and_resolves_for_llm(
     assert user_message.parts[1].attachment_id is None
     assert user_message.parts[1].data == PNG_1X1_BASE64
 
+    delete_response = client.delete(
+        f"/threads/{thread_id}/attachments/{attachment_id}",
+        headers=AUTH_HEADERS,
+    )
+    assert delete_response.status_code == 409
+    assert delete_response.json()["detail"] == "attachment is referenced by message history"
+
+
+def test_unreferenced_attachment_can_be_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    attachment_id = client.post(
+        f"/threads/{thread_id}/attachments",
+        json={"mime_type": "image/png", "data": PNG_1X1_BASE64},
+        headers=AUTH_HEADERS,
+    ).json()["attachment_id"]
+
+    delete_response = client.delete(
+        f"/threads/{thread_id}/attachments/{attachment_id}",
+        headers=AUTH_HEADERS,
+    )
+    get_response = client.get(
+        f"/threads/{thread_id}/attachments/{attachment_id}",
+        headers=AUTH_HEADERS,
+    )
+
+    assert delete_response.status_code == 204
+    assert get_response.status_code == 404
+
 
 def test_attachment_reference_is_scoped_to_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")

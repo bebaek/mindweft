@@ -205,9 +205,11 @@ elements.composer.addEventListener("submit", async (event) => {
   setStatus("Sending");
 
   let threadId = state.threadId;
+  let uploadedImages = [];
+  let messageStored = false;
   try {
     threadId = await ensureThread();
-    const uploadedImages = await uploadImages(threadId, queuedImages);
+    uploadedImages = await uploadImages(threadId, queuedImages);
     const parts = uploadedImages.length
       ? [
           ...(content ? [{ type: "text", text: content }] : []),
@@ -239,6 +241,7 @@ elements.composer.addEventListener("submit", async (event) => {
       method: "POST",
       body: parts ? { content, parts } : { content },
     });
+    messageStored = true;
     clearPendingImages();
 
     setStatus("Running");
@@ -249,6 +252,9 @@ elements.composer.addEventListener("submit", async (event) => {
     }
     setStatus(`Thread ${threadId}`);
   } catch (error) {
+    if (!messageStored && uploadedImages.length) {
+      await discardUploadedImages(threadId, uploadedImages);
+    }
     if (runState.cancelRequested || error.name === "AbortError") {
       appendNotice("Run cancelled.");
       setRunStatus("Activity", {
@@ -281,8 +287,9 @@ async function uploadImages(threadId, images) {
     return [];
   }
   setStatus("Uploading images");
-  return Promise.all(
-    images.map(async (image) => {
+  const uploaded = [];
+  try {
+    for (const image of images) {
       const attachment = await requestJson(
         `/threads/${encodeURIComponent(threadId)}/attachments`,
         {
@@ -290,8 +297,23 @@ async function uploadImages(threadId, images) {
           body: { mime_type: image.mimeType, data: image.data },
         },
       );
-      return { ...image, attachmentId: attachment.attachment_id };
-    }),
+      uploaded.push({ ...image, attachmentId: attachment.attachment_id });
+    }
+    return uploaded;
+  } catch (error) {
+    await discardUploadedImages(threadId, uploaded);
+    throw error;
+  }
+}
+
+async function discardUploadedImages(threadId, images) {
+  await Promise.allSettled(
+    images.map((image) =>
+      requestJson(
+        `/threads/${encodeURIComponent(threadId)}/attachments/${encodeURIComponent(image.attachmentId)}`,
+        { method: "DELETE" },
+      ),
+    ),
   );
 }
 

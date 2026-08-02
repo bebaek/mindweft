@@ -2134,6 +2134,53 @@ def test_minigent_api_client_exposes_shared_thread_methods(
     }
 
 
+def test_minigent_client_discards_upload_when_message_creation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = MinigentAPIClient(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        )
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_request_json(
+        method: str,
+        url: str,
+        *,
+        payload: dict[str, object] | None = None,
+    ) -> object:
+        del payload
+        calls.append((method, url))
+        if url.endswith("/attachments"):
+            return {"attachment_id": "attachment-1"}
+        if method == "POST" and url.endswith("/messages"):
+            raise MinigentAPIError("message failed", status_code=500)
+        if method == "DELETE" and url.endswith("/attachments/attachment-1"):
+            return None
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    monkeypatch.setattr(client, "request_json", fake_request_json)
+
+    with pytest.raises(MinigentAPIError, match="message failed"):
+        client.add_message(
+            "thread-1",
+            "describe",
+            parts=[
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "data": "aW1hZ2U=",
+                }
+            ],
+        )
+
+    assert [method for method, _url in calls] == ["POST", "POST", "DELETE"]
+    assert calls[-1][1].endswith("/threads/thread-1/attachments/attachment-1")
+
+
 def test_minigent_client_can_run_thread_with_ndjson_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

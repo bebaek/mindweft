@@ -19,6 +19,7 @@ from app.admin_api import build_admin_router
 from app.admin_store import SQLiteTenantConfigStore
 from app.agent_backends import AgentBackendRouter, NativeAgentBackend
 from app.attachments import (
+    AttachmentLimitExceeded,
     AttachmentMetadata,
     AttachmentStore,
     UploadAttachmentRequest,
@@ -974,21 +975,23 @@ def create_app(
                 detail=f"image data does not match declared MIME type: {mime_type}",
             )
         attachment_settings = app_request.app.state.attachment_store_settings
-        attachment_count, attachment_bytes = app_request.app.state.attachment_store.usage(
-            principal.tenant_id,
-            thread_id,
-        )
-        if attachment_count >= attachment_settings.max_per_thread:
-            raise HTTPException(status_code=400, detail="thread attachment count limit exceeded")
-        if attachment_bytes + len(data) > attachment_settings.max_bytes_per_thread:
-            raise HTTPException(status_code=400, detail="thread attachment storage limit exceeded")
-        return app_request.app.state.attachment_store.put(
-            principal.tenant_id,
-            thread_id,
-            mime_type=mime_type,
-            data=data,
-            created_by=principal.user_id,
-        )
+        try:
+            return app_request.app.state.attachment_store.put(
+                principal.tenant_id,
+                thread_id,
+                mime_type=mime_type,
+                data=data,
+                created_by=principal.user_id,
+                max_per_thread=attachment_settings.max_per_thread,
+                max_bytes_per_thread=attachment_settings.max_bytes_per_thread,
+            )
+        except AttachmentLimitExceeded as exc:
+            detail = (
+                "thread attachment count limit exceeded"
+                if exc.limit == "count"
+                else "thread attachment storage limit exceeded"
+            )
+            raise HTTPException(status_code=400, detail=detail) from exc
 
     @app.get("/threads/{thread_id}/attachments/{attachment_id}")
     async def get_attachment(
@@ -1010,6 +1013,31 @@ def create_app(
             media_type=record.metadata.mime_type,
             headers={"Cache-Control": "private, max-age=300"},
         )
+
+    @app.delete("/threads/{thread_id}/attachments/{attachment_id}", status_code=204)
+    async def delete_attachment(
+        thread_id: str,
+        attachment_id: str,
+        app_request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> None:
+        app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        messages = app_request.app.state.store.list_messages(principal.tenant_id, thread_id)
+        if any(
+            part.type == "image" and part.attachment_id == attachment_id
+            for message in messages
+            for part in (message.parts or [])
+        ):
+            raise HTTPException(
+                status_code=409, detail="attachment is referenced by message history"
+            )
+        deleted = app_request.app.state.attachment_store.delete(
+            principal.tenant_id,
+            thread_id,
+            attachment_id,
+        )
+        if not deleted:
+            raise HTTPException(status_code=404, detail="attachment not found")
 
     @app.post("/threads/{thread_id}/messages", response_model=Message)
     async def add_message(

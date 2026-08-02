@@ -199,7 +199,7 @@ def test_web_client_image_picker_uses_native_file_input_overlay() -> None:
 
     assert 'id="attach-image-button"' in html
     assert '<input id="image-input" type="file" accept="image/*" multiple />' in html
-    assert "app.js?v=attachment-refs-1" in html
+    assert "app.js?v=attachment-lifecycle-1" in html
 
 
 def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
@@ -222,6 +222,8 @@ def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
               return {{ ok: true, status: 200, json: async () => payload, text: async () => "" }};
             }}
 
+            let failMessage = false;
+            let uploadCount = 0;
             const harness = createWebClientHarness({{
               storageValue: JSON.stringify({{ baseUrl: "http://ui.test", threadId: "t1" }}),
               async fetchImpl(url, options, path) {{
@@ -240,7 +242,14 @@ def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
                   }});
                 }}
                 if (path === "/threads/t1/attachments" && options.method === "POST") {{
-                  return jsonResponse({{ attachment_id: "attachment-1" }});
+                  uploadCount += 1;
+                  return jsonResponse({{ attachment_id: `attachment-${{uploadCount}}` }});
+                }}
+                if (
+                  path === "/threads/t1/attachments/attachment-1" &&
+                  options.method === "DELETE"
+                ) {{
+                  return {{ ok: true, status: 204, text: async () => "" }};
                 }}
                 if (path === "/threads/t1/attachments/attachment-1") {{
                   return {{
@@ -248,6 +257,18 @@ def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
                     status: 200,
                     blob: async () => "attachment-blob",
                     text: async () => "",
+                  }};
+                }}
+                if (
+                  path === "/threads/t1/messages" &&
+                  options.method === "POST" &&
+                  failMessage
+                ) {{
+                  return {{
+                    ok: false,
+                    status: 500,
+                    statusText: "failed",
+                    text: async () => "message failed",
                   }};
                 }}
                 if (path === "/threads/t1/messages") return jsonResponse([]);
@@ -328,6 +349,22 @@ def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
             await flushAsyncWork();
             const restored = harness.elements.get("messages").children.at(-1);
             assert.equal(restored.children[2].children[0].src, "blob:attachment-1");
+
+            harness.elements.get("image-input").files = [image];
+            await harness.elements.get("image-input").dispatchEvent({{ type: "change" }});
+            await flushAsyncWork();
+            failMessage = true;
+            harness.elements.get("message-input").value = "Fail this message";
+            await harness.elements.get("composer").requestSubmit();
+            await flushAsyncWork();
+            assert.equal(
+              harness.fetchCalls.some(
+                (call) =>
+                  call.method === "DELETE" &&
+                  call.url.endsWith("/threads/t1/attachments/attachment-2"),
+              ),
+              true,
+            );
         """,
     )
 

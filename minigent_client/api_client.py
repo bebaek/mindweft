@@ -485,16 +485,20 @@ class MinigentAPIClient:
         parts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"content": content}
-        uploaded_parts = self._upload_inline_image_parts(thread_id, parts)
+        uploaded_parts, uploaded_attachment_ids = self._upload_inline_image_parts(thread_id, parts)
         if uploaded_parts is not None:
             payload["parts"] = uploaded_parts
         if metadata is not None:
             payload["metadata"] = metadata
-        response = self.request_json(
-            "POST",
-            f"{self._config.base_url}/threads/{thread_id}/messages",
-            payload=payload,
-        )
+        try:
+            response = self.request_json(
+                "POST",
+                f"{self._config.base_url}/threads/{thread_id}/messages",
+                payload=payload,
+            )
+        except Exception:
+            self._discard_uploaded_attachments(thread_id, uploaded_attachment_ids)
+            raise
         if not isinstance(response, dict):
             raise RuntimeError("Minigent add-message response must be an object")
         return cast(dict[str, Any], response)
@@ -524,6 +528,12 @@ class MinigentAPIClient:
             raise RuntimeError("Minigent attachment response must be an object")
         return cast(dict[str, Any], response)
 
+    def delete_attachment(self, thread_id: str, attachment_id: str) -> None:
+        self.request_json(
+            "DELETE",
+            f"{self._config.base_url}/threads/{thread_id}/attachments/{attachment_id}",
+        )
+
     def send_user_message(
         self, content: str, *, parts: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
@@ -542,31 +552,44 @@ class MinigentAPIClient:
         self,
         thread_id: str,
         parts: list[dict[str, Any]] | None,
-    ) -> list[dict[str, Any]] | None:
+    ) -> tuple[list[dict[str, Any]] | None, list[str]]:
         if parts is None:
-            return None
+            return None, []
         uploaded: list[dict[str, Any]] = []
-        for part in parts:
-            clean_part = dict(part)
-            data = clean_part.get("data")
-            if clean_part.get("type") != "image" or not isinstance(data, str) or not data:
+        attachment_ids: list[str] = []
+        try:
+            for part in parts:
+                clean_part = dict(part)
+                data = clean_part.get("data")
+                if clean_part.get("type") != "image" or not isinstance(data, str) or not data:
+                    uploaded.append(clean_part)
+                    continue
+                mime_type = clean_part.get("mime_type")
+                if not isinstance(mime_type, str) or not mime_type:
+                    raise RuntimeError("Image part must include mime_type")
+                attachment = self.upload_attachment(
+                    thread_id,
+                    mime_type=mime_type,
+                    data=data,
+                )
+                attachment_id = attachment.get("attachment_id")
+                if not isinstance(attachment_id, str) or not attachment_id:
+                    raise RuntimeError("Minigent attachment response must include attachment_id")
+                attachment_ids.append(attachment_id)
+                clean_part.pop("data", None)
+                clean_part["attachment_id"] = attachment_id
                 uploaded.append(clean_part)
-                continue
-            mime_type = clean_part.get("mime_type")
-            if not isinstance(mime_type, str) or not mime_type:
-                raise RuntimeError("Image part must include mime_type")
-            attachment = self.upload_attachment(
-                thread_id,
-                mime_type=mime_type,
-                data=data,
-            )
-            attachment_id = attachment.get("attachment_id")
-            if not isinstance(attachment_id, str) or not attachment_id:
-                raise RuntimeError("Minigent attachment response must include attachment_id")
-            clean_part.pop("data", None)
-            clean_part["attachment_id"] = attachment_id
-            uploaded.append(clean_part)
-        return uploaded
+        except Exception:
+            self._discard_uploaded_attachments(thread_id, attachment_ids)
+            raise
+        return uploaded, attachment_ids
+
+    def _discard_uploaded_attachments(self, thread_id: str, attachment_ids: list[str]) -> None:
+        for attachment_id in attachment_ids:
+            try:
+                self.delete_attachment(thread_id, attachment_id)
+            except Exception:
+                pass
 
     def run_thread(
         self, thread_id: str | None = None, *, stream: bool | None = None

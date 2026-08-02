@@ -416,8 +416,11 @@ images first and stores `attachment_id` references in message history.
 
 Attachment records are scoped by tenant and thread. Provider requests resolve references to
 image bytes only in transient model-facing message copies; stored messages retain references.
-Deleting a thread deletes its attachment records. Attachment SQLite bytes are not encrypted by
-Minigent, so protect the database volume and backups according to the sensitivity of uploaded media.
+Deleting a thread deletes its attachment records. Unreferenced uploads can be deleted explicitly;
+clients clean them up automatically if a later upload or message creation fails. Quotas are checked
+atomically when the attachment is inserted, including across SQLite-backed replicas. Attachment
+SQLite bytes are not encrypted by Minigent, so protect the database volume and backups according
+to the sensitivity of uploaded media.
 
 ### `[coding]`
 
