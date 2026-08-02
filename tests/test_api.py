@@ -997,6 +997,18 @@ def test_web_client_static_files_are_served() -> None:
     assert "./app.js" in response.text
 
 
+def test_console_client_static_files_are_served() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    response = client.get("/console/")
+
+    assert response.status_code == 200
+    assert "Minigent Console" in response.text
+    assert "/console/assets/" in response.text
+
+
 def test_list_threads_returns_recent_thread_summaries() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())

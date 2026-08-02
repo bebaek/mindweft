@@ -128,6 +128,7 @@ configure_logging()
 
 logger = logging.getLogger(__name__)
 WEB_CLIENT_DIR = Path(__file__).resolve().parent / "static" / "web"
+CONSOLE_CLIENT_DIR = Path(__file__).resolve().parent / "static" / "console"
 STALE_RUN_RECOVERY_INTERVAL_SECONDS = 5.0
 PEER_TASK_CANCELLATION_CLAIM_SECONDS = 30.0
 PEER_TASK_CANCELLATION_BATCH_SIZE = 10
@@ -867,6 +868,12 @@ def create_app(
         mcp_broker_sessions=app.state.mcp_broker_sessions,
     )
     app.include_router(build_admin_router())
+    if CONSOLE_CLIENT_DIR.exists():
+        app.mount(
+            "/console",
+            StaticFiles(directory=CONSOLE_CLIENT_DIR, html=True),
+            name="console",
+        )
     if WEB_CLIENT_DIR.exists():
         app.mount("/web", StaticFiles(directory=WEB_CLIENT_DIR, html=True), name="web")
 

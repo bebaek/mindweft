@@ -39,7 +39,12 @@ class SecurityHeadersMiddleware:
                 headers["X-Frame-Options"] = "DENY"
                 headers["Permissions-Policy"] = "camera=(self), microphone=(), geolocation=()"
                 headers["X-Permitted-Cross-Domain-Policies"] = "none"
-                if path == "/web" or path.startswith("/web/"):
+                if (
+                    path == "/web"
+                    or path.startswith("/web/")
+                    or path == "/console"
+                    or path.startswith("/console/")
+                ):
                     headers["Content-Security-Policy"] = WEB_CONTENT_SECURITY_POLICY
             await send(message)
 

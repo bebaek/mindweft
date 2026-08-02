@@ -55,7 +55,7 @@ build-backend = "setuptools.build_meta"
 include = ["app*", "minigent_client*"]
 
 [tool.setuptools.package-data]
-app = ["static/web/*"]
+app = ["static/web/*", "static/console/*", "static/console/assets/*"]
 
 [tool.ruff]
 line-length = 100

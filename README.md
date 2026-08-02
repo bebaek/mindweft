@@ -26,7 +26,13 @@ uv sync --dev
 uv run uvicorn app.main:app --reload
 ```
 
-Open the development web client:
+Open the production console foundation:
+
+```text
+http://127.0.0.1:8000/console/
+```
+
+The dependency-free development client remains available during migration:
 
 ```text
 http://127.0.0.1:8000/web/
@@ -332,7 +338,47 @@ environment variables belong on the external sidecar, not the Minigent process.
 
 ### Browser
 
-The API serves a dependency-free browser client at `/web/`. It uses the streaming run
+The API serves the new TypeScript/React console at `/console/`. The initial production UI
+foundation includes a responsive, accessible application shell, live readiness checks, typed API
+transport, TanStack Query request lifecycle management, and connection modes for same-origin
+sessions, in-memory bearer tokens, and trusted-local development headers. Session mode is the
+production default but requires a session endpoint backed by the deployment's identity provider;
+the current API authentication modes continue to use bearer tokens or development headers. The
+console never persists bearer tokens or development principal values in browser storage.
+
+For frontend development, run the API and Vite development server in separate terminals:
+
+```bash
+uv run uvicorn app.main:app --reload
+cd web
+npm ci
+npm run dev
+```
+
+Vite proxies API calls to `http://127.0.0.1:8000`. Validate and rebuild the committed assets served
+by FastAPI with:
+
+```bash
+cd web
+npm run lint
+npm test
+npm run build
+```
+
+Install Chromium once and run the browser suite against the production Vite build:
+
+```bash
+npm run test:e2e:install
+npm run test:e2e
+```
+
+Playwright covers desktop and mobile Chromium, authentication header behavior, browser-storage
+safety, responsive navigation, and automated axe accessibility checks. Use
+`npm run test:e2e:ui` for interactive debugging. CI environments should install Chromium and its
+system dependencies with `npx playwright install --with-deps chromium`.
+
+The existing dependency-free browser client remains at `/web/` while conversation and admin
+feature parity is implemented. It uses the streaming run
 endpoint to show live LLM, tool, and peer-agent progress, with mobile-friendly run
 controls, a stop action, basic assistant markdown rendering, execution option selectors,
 image file selection, mobile camera capture, drag-and-drop, and clipboard paste with previews and

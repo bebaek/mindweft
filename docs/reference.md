@@ -89,7 +89,17 @@ uv sync --dev
 uv run uvicorn app.main:app --reload
 ```
 
-## Dev Web Client
+## Browser clients
+
+The production console foundation is served at `/console/`. Its source is in `web/`; use
+`npm ci && npm run dev` there for frontend development and `npm run build` to refresh the static
+assets packaged under `app/static/console/`. Run `npm run test:e2e:install` once, then
+`npm run test:e2e` for desktop/mobile Chromium coverage and axe accessibility checks. The console
+currently provides runtime readiness and
+connection setup while workspace and administration feature parity is developed.
+
+The dependency-free development client remains at `/web/` and provides the complete current chat
+workflow.
 
 `POST /threads/{thread_id}/run/stream` is also available for clients that want run
 progress without waiting for the final JSON response. It returns newline-delimited JSON

@@ -30,15 +30,18 @@ def test_common_security_headers_apply_to_api_responses() -> None:
     assert "content-security-policy" not in response.headers
 
 
-def test_web_client_uses_restrictive_content_security_policy() -> None:
+def test_browser_clients_use_restrictive_content_security_policy() -> None:
     with _client() as client:
         document = client.get("/web/")
         script = client.get("/web/app.js")
+        console = client.get("/console/")
 
     assert document.status_code == 200
     assert script.status_code == 200
+    assert console.status_code == 200
     assert document.headers["content-security-policy"] == WEB_CONTENT_SECURITY_POLICY
     assert script.headers["content-security-policy"] == WEB_CONTENT_SECURITY_POLICY
+    assert console.headers["content-security-policy"] == WEB_CONTENT_SECURITY_POLICY
     assert "script-src 'self'" in WEB_CONTENT_SECURITY_POLICY
     assert "object-src 'none'" in WEB_CONTENT_SECURITY_POLICY
     assert "frame-ancestors 'none'" in WEB_CONTENT_SECURITY_POLICY
