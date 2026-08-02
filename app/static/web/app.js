@@ -237,7 +237,7 @@ elements.composer.addEventListener("submit", async (event) => {
             type: "image",
             mime_type: image.mimeType,
             attachment_id: image.attachmentId,
-            detail: "auto",
+            detail: image.detail || "auto",
           })),
         ]
       : null;
@@ -249,7 +249,7 @@ elements.composer.addEventListener("submit", async (event) => {
             mime_type: image.mimeType,
             data: image.data,
             attachment_id: image.attachmentId,
-            detail: "auto",
+            detail: image.detail || "auto",
           })),
         ]
       : null;
@@ -386,6 +386,7 @@ async function addImageFiles(files) {
           mimeType: String(file.type).toLowerCase(),
           size: Number(file.size || 0),
           file,
+          detail: "auto",
           data: dataUrl.slice(dataUrl.indexOf(",") + 1),
           dataUrl,
         };
@@ -428,6 +429,23 @@ function renderPendingImages() {
     const thumbnail = document.createElement("img");
     thumbnail.src = image.dataUrl;
     thumbnail.alt = image.name;
+    const detail = document.createElement("select");
+    detail.title = `Image detail for ${image.name}`;
+    detail.ariaLabel = `Image detail for ${image.name}`;
+    for (const [value, label] of [
+      ["auto", "Auto"],
+      ["low", "Low"],
+      ["high", "High"],
+    ]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      detail.append(option);
+    }
+    detail.value = image.detail || "auto";
+    detail.addEventListener("change", () => {
+      pendingImages[index].detail = detail.value;
+    });
     const remove = document.createElement("button");
     remove.type = "button";
     remove.textContent = "×";
@@ -437,7 +455,7 @@ function renderPendingImages() {
       pendingImages.splice(index, 1);
       renderPendingImages();
     });
-    preview.append(thumbnail, remove);
+    preview.append(thumbnail, detail, remove);
     elements.imagePreviewList.append(preview);
   });
   elements.imagePreviewList.hidden = pendingImages.length === 0;

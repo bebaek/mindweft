@@ -204,7 +204,7 @@ def test_web_client_image_picker_uses_native_file_input_overlay() -> None:
 
     assert 'id="attach-image-button"' in html
     assert '<input id="image-input" type="file" accept="image/*" multiple />' in html
-    assert "app.js?v=binary-drop-1" in html
+    assert "app.js?v=image-detail-1" in html
 
 
 def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
@@ -309,6 +309,10 @@ def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
             assert.equal(pasteEvent.defaultPrevented, true);
             assert.equal(harness.elements.get("image-preview-list").hidden, false);
             assert.equal(harness.elements.get("image-preview-list").children.length, 1);
+            const detailSelect = harness.elements.get("image-preview-list").children[0].children[1];
+            assert.equal(detailSelect.value, "auto");
+            detailSelect.value = "high";
+            await detailSelect.dispatchEvent({{ type: "change" }});
             harness.elements.get("message-input").value = "Describe this";
             await harness.elements.get("composer").requestSubmit();
             await flushAsyncWork();
@@ -331,7 +335,7 @@ def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
                   type: "image",
                   mime_type: "image/png",
                   attachment_id: "attachment-1",
-                  detail: "auto",
+                  detail: "high",
                 }},
               ],
             }});

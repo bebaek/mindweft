@@ -406,6 +406,8 @@ Image parts must use exactly one source. Inline `data` must be valid base64 and 
 configured image signatures; remote URLs must be absolute HTTP(S) URLs. The browser streams raw
 image bodies to the binary attachment endpoint first and stores `attachment_id` references in
 message history. The original JSON/base64 upload endpoint remains available for compatibility.
+The browser preview lets users choose `auto`, `low`, or `high` detail per image; providers that
+support image detail receive that value, while other providers use their native/default behavior.
 
 ### `[attachments]`
 
