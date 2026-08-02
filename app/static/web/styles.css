@@ -61,6 +61,12 @@ textarea {
   min-width: 0;
 }
 
+.composer-tools {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+}
+
 .attach-image-button {
   position: relative;
   display: flex;
@@ -467,6 +473,19 @@ textarea {
 
   .desktop-action {
     display: none;
+  }
+
+  .composer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .composer-input,
+  .composer-tools {
+    grid-column: 1 / -1;
+  }
+
+  .composer-tools .composer-actions {
+    flex: 1 1 74px;
   }
 
   .mobile-action {

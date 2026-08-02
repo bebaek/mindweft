@@ -213,6 +213,17 @@ def test_web_client_image_picker_uses_native_file_input_overlay() -> None:
     assert "@media (hover: none) and (pointer: coarse)" in styles
 
 
+def test_web_client_mobile_composer_gives_message_input_its_own_row() -> None:
+    repo_root = Path(__file__).parents[1]
+    html = (repo_root / "app" / "static" / "web" / "index.html").read_text(encoding="utf-8")
+    styles = (repo_root / "app" / "static" / "web" / "styles.css").read_text(encoding="utf-8")
+
+    assert '<div class="composer-tools">' in html
+    mobile_styles = styles.split("@media (max-width: 640px)", maxsplit=1)[1]
+    assert ".composer {\n    grid-template-columns: minmax(0, 1fr);" in mobile_styles
+    assert ".composer-input,\n  .composer-tools {\n    grid-column: 1 / -1;" in mobile_styles
+
+
 def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
     repo_root = Path(__file__).parents[1]
     app_path = repo_root / "app" / "static" / "web" / "app.js"
