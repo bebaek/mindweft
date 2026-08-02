@@ -58,6 +58,34 @@ export interface Message {
   created_at: string;
 }
 
+export interface ThreadContextUsage {
+  estimated: boolean;
+  total_tokens: number;
+  summary_tokens: number;
+  message_tokens: number;
+  message_count: number;
+  summarized_message_count: number;
+  unsummarized_message_count: number;
+}
+
+export interface RawThreadContext {
+  thread_id: string;
+  summary: string;
+  summarized_message_count: number;
+  messages: Message[];
+  rendered: string;
+  usage: ThreadContextUsage;
+}
+
+export interface CompactThreadResponse {
+  thread_id: string;
+  summary: string;
+  compacted_message_count: number;
+  message_count: number;
+  usage_before: ThreadContextUsage;
+  usage: ThreadContextUsage;
+}
+
 export interface RunEvent {
   type: string;
   content?: string;
@@ -121,6 +149,20 @@ export class MinigentApiClient {
       body: JSON.stringify({ content }),
       signal,
     });
+  }
+
+  getThreadContext(threadId: string, signal?: AbortSignal): Promise<RawThreadContext> {
+    return this.#request<RawThreadContext>(
+      `/threads/${encodeURIComponent(threadId)}/context/raw`,
+      { signal },
+    );
+  }
+
+  compactThread(threadId: string): Promise<CompactThreadResponse> {
+    return this.#request<CompactThreadResponse>(
+      `/threads/${encodeURIComponent(threadId)}/compact`,
+      { method: "POST" },
+    );
   }
 
   cancelRun(threadId: string): Promise<unknown> {

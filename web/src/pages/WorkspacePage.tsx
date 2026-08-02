@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RunEvent, ThreadListItem } from "../api/client";
 import { useAuth } from "../auth/auth-context";
+import { ContextDialog } from "../components/ContextDialog";
 
 interface ActivityItem {
   id: number;
@@ -18,6 +19,7 @@ export function WorkspacePage() {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [streamedReply, setStreamedReply] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [contextOpen, setContextOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const activityId = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -150,7 +152,10 @@ export function WorkspacePage() {
       <div className="conversation">
         <header className="conversation-header">
           <div><span className={`run-dot ${isRunning ? "active" : ""}`} /><div><h1>{selectedTitle(threads.data?.threads, selectedThreadId)}</h1><small>{isRunning ? "Agent is working" : selectedThreadId ? "Ready" : "New conversation"}</small></div></div>
-          {activity.length > 0 && <span className="activity-count">{activity.length} event{activity.length === 1 ? "" : "s"}</span>}
+          <div className="conversation-actions">
+            {activity.length > 0 && <span className="activity-count">{activity.length} event{activity.length === 1 ? "" : "s"}</span>}
+            <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => setContextOpen(true)}>Context</button>
+          </div>
         </header>
 
         <div className="message-scroll" aria-live="polite">
@@ -198,6 +203,7 @@ export function WorkspacePage() {
           <small>Enter to send · Shift+Enter for a new line</small>
         </form>
       </div>
+      <ContextDialog threadId={selectedThreadId} open={contextOpen} onClose={() => setContextOpen(false)} />
     </section>
   );
 }

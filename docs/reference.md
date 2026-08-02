@@ -96,8 +96,8 @@ The production console foundation is served at `/console/`. Its source is in `we
 assets packaged under `app/static/console/`. Run `npm run test:e2e:install` once, then
 `npm run test:e2e` for desktop/mobile Chromium coverage and axe accessibility checks. The console
 currently provides runtime readiness, connection setup, thread history, message composition,
-streaming run activity, and cancellation. Attachments, private-value consent, context controls, and
-administration remain on the migration roadmap.
+streaming run activity, cancellation, context inspection, and confirmed context compaction.
+Attachments, private-value consent, and administration remain on the migration roadmap.
 
 The dependency-free development client remains at `/web/` and provides the complete current chat
 workflow.

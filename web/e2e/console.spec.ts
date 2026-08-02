@@ -119,6 +119,46 @@ async function installWorkspaceMocks(page: Page) {
       });
       return;
     }
+    const contextMatch = path.match(/^\/threads\/([^/]+)\/context\/raw$/);
+    if (contextMatch) {
+      const threadId = contextMatch[1];
+      const threadMessages = messages.get(threadId) ?? [];
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          thread_id: threadId,
+          summary: "Release planning and production readiness.",
+          summarized_message_count: 1,
+          messages: threadMessages,
+          rendered: "Thread summary:\nRelease planning and production readiness.",
+          usage: {
+            estimated: true,
+            total_tokens: 1240,
+            summary_tokens: 80,
+            message_tokens: 1160,
+            message_count: threadMessages.length,
+            summarized_message_count: 1,
+            unsummarized_message_count: Math.max(0, threadMessages.length - 1),
+          },
+        }),
+      });
+      return;
+    }
+    const compactMatch = path.match(/^\/threads\/([^/]+)\/compact$/);
+    if (compactMatch) {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          thread_id: compactMatch[1],
+          summary: "Compacted release plan.",
+          compacted_message_count: 2,
+          message_count: 2,
+          usage_before: { total_tokens: 1240 },
+          usage: { total_tokens: 460 },
+        }),
+      });
+      return;
+    }
     await route.fulfill({ contentType: "application/json", body: "{}" });
   });
 }
@@ -181,6 +221,14 @@ test("runs a streamed conversation without accessibility violations", async ({ p
 
   await expect(page.getByText("The deployment plan is ready.")).toBeVisible();
   await expect(page.locator(".activity-tray summary").getByText("Run completed")).toBeVisible();
+
+  await page.getByRole("button", { name: "Context" }).click();
+  const contextDialog = page.getByRole("dialog", { name: "Thread context" });
+  await expect(contextDialog.getByText("1,240")).toBeVisible();
+  await contextDialog.getByRole("button", { name: "Compact thread context" }).click();
+  await contextDialog.getByRole("button", { name: "Confirm compaction" }).click();
+  await expect(contextDialog.getByText("Compacted 2 messages.")).toBeVisible();
+
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
 });
