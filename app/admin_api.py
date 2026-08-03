@@ -50,6 +50,7 @@ from app.session_auth import validate_session_auth_settings
 ADMIN_DB_PATH_ENV = "MINIGENT_ADMIN_DB_PATH"
 ADMIN_ENCRYPTION_KEY_ENV = "MINIGENT_ADMIN_ENCRYPTION_KEY"
 ADMIN_MCP_SERVER_CATALOG_ENV = "MINIGENT_ADMIN_MCP_SERVER_CATALOG"
+ADMIN_MCP_SERVER_CATALOG_SECRET_ENV = "MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET"
 TENANT_SLUG_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 LOGIN_USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._@+-]{0,127}$")
 DOMAIN_PATTERN = re.compile(
@@ -1743,15 +1744,20 @@ def admin_encryption_key_from_env() -> str | None:
 def _parse_mcp_server_catalog(
     env: Mapping[str, str],
 ) -> tuple[AdminMCPServerCatalogItem, ...]:
-    raw = _optional_str_env(env, ADMIN_MCP_SERVER_CATALOG_ENV)
+    env_name = ADMIN_MCP_SERVER_CATALOG_ENV
+    raw = _optional_str_env(env, ADMIN_MCP_SERVER_CATALOG_SECRET_ENV)
+    if raw is not None:
+        env_name = ADMIN_MCP_SERVER_CATALOG_SECRET_ENV
+    else:
+        raw = _optional_str_env(env, ADMIN_MCP_SERVER_CATALOG_ENV)
     if raw is None:
         return ()
     try:
         payload: object = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{ADMIN_MCP_SERVER_CATALOG_ENV} must be valid JSON") from exc
+        raise RuntimeError(f"{env_name} must be valid JSON") from exc
     if not isinstance(payload, list):
-        raise RuntimeError(f"{ADMIN_MCP_SERVER_CATALOG_ENV} must be a JSON array")
+        raise RuntimeError(f"{env_name} must be a JSON array")
 
     items: list[AdminMCPServerCatalogItem] = []
     seen_ids: set[str] = set()
@@ -1760,37 +1766,29 @@ def _parse_mcp_server_catalog(
         try:
             item = AdminMCPServerCatalogItem.model_validate(value)
         except ValidationError as exc:
-            raise RuntimeError(f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}] is invalid") from exc
+            raise RuntimeError(f"{env_name}[{index}] is invalid") from exc
         server_name = item.server.get("name")
         server_url = item.server.get("url")
         if not item.id.strip() or not item.title.strip() or not item.description.strip():
-            raise RuntimeError(
-                f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}] requires id, title, and description"
-            )
+            raise RuntimeError(f"{env_name}[{index}] requires id, title, and description")
         if not isinstance(server_name, str) or not server_name.strip():
-            raise RuntimeError(f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}].server requires name")
+            raise RuntimeError(f"{env_name}[{index}].server requires name")
         if not isinstance(server_url, str) or not server_url.strip():
-            raise RuntimeError(f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}].server requires url")
+            raise RuntimeError(f"{env_name}[{index}].server requires url")
         headers = item.server.get("headers", {})
         if not isinstance(headers, dict) or not all(
             isinstance(name, str) and isinstance(header_value, str)
             for name, header_value in headers.items()
         ):
-            raise RuntimeError(
-                f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}].server.headers must be a string map"
-            )
+            raise RuntimeError(f"{env_name}[{index}].server.headers must be a string map")
         allowed_tools = item.server.get("allowed_tools", item.server.get("allowedTools"))
         if allowed_tools is not None and (
             not isinstance(allowed_tools, list)
             or not all(isinstance(tool, str) and tool for tool in allowed_tools)
         ):
-            raise RuntimeError(
-                f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}].server.allowed_tools must be a string array"
-            )
+            raise RuntimeError(f"{env_name}[{index}].server.allowed_tools must be a string array")
         if item.id in seen_ids or server_name in seen_names:
-            raise RuntimeError(
-                f"{ADMIN_MCP_SERVER_CATALOG_ENV} contains duplicate ids or server names"
-            )
+            raise RuntimeError(f"{env_name} contains duplicate ids or server names")
         seen_ids.add(item.id)
         seen_names.add(server_name)
         items.append(item)

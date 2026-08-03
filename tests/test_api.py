@@ -168,6 +168,38 @@ def test_admin_store_settings_from_env_parses_mcp_server_catalog() -> None:
     }
 
 
+def test_admin_store_settings_prefers_secret_mcp_server_catalog() -> None:
+    public_catalog = [
+        {
+            "id": "public",
+            "title": "Public",
+            "description": "Public catalog.",
+            "server": {"name": "public", "url": "https://public.example/mcp"},
+        }
+    ]
+    secret_catalog = [
+        {
+            "id": "private",
+            "title": "Private",
+            "description": "Secret-backed catalog.",
+            "server": {
+                "name": "private",
+                "url": "https://private.example/mcp",
+                "headers": {"Authorization": "Bearer secret"},
+            },
+        }
+    ]
+
+    settings = AdminStoreSettings.from_env(
+        {
+            "MINIGENT_ADMIN_MCP_SERVER_CATALOG": json.dumps(public_catalog),
+            "MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET": json.dumps(secret_catalog),
+        }
+    )
+
+    assert [item.id for item in settings.mcp_server_catalog] == ["private"]
+
+
 def test_admin_store_settings_rejects_invalid_headers_in_mcp_server_catalog() -> None:
     with pytest.raises(RuntimeError, match="headers must be a string map"):
         AdminStoreSettings.from_env(

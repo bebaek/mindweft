@@ -1798,7 +1798,9 @@ minigent --api-token ADMIN_TOKEN admin threads list --tenant TENANT_ID --json
 Secrets such as LLM API keys and MCP headers are accepted on writes but redacted in read responses. If `MINIGENT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`, `MINIGENT_ADMIN_ENCRYPTION_KEY` is required and those secrets are encrypted before being written to SQLite. Updating or deleting a tenant config invalidates the in-process execution cache for that tenant so new runs pick up the change immediately.
 
 `MINIGENT_ADMIN_MCP_SERVER_CATALOG` optionally configures the internal-service quick-add cards shown
-by the tenant execution editor. It is a JSON array; each item has `id`, `title`, `description`, an
+by the tenant execution editor. `MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET` has the same format and
+takes precedence; use it when catalog templates contain credential headers so secret-management
+systems recognize the value as sensitive. It is a JSON array; each item has `id`, `title`, `description`, an
 optional `detail`, and a `server` object containing the tenant MCP server definition. The catalog is
 deployment-owned and returned to authenticated tenant owners through
 `GET /admin/tenants/{tenant_id}/mcp-server-catalog`. Header values are redacted before catalog
