@@ -169,12 +169,14 @@ class AdminMCPServerCatalogResponse(BaseModel):
 class AdminMCPServerCatalogPolicyRequest(BaseModel):
     item_ids: list[str] = Field(default_factory=list)
     allow_custom_mcp_servers: bool = False
+    require_subject_assignment: bool = False
 
 
 class AdminMCPServerCatalogPolicyResponse(BaseModel):
     tenant_id: str
     item_ids: list[str]
     allow_custom_mcp_servers: bool
+    require_subject_assignment: bool
     version: int
     updated_by: str | None = None
     updated_at: datetime
@@ -197,6 +199,23 @@ class AdminMCPServerCatalogAssignmentResponse(BaseModel):
 class AdminMCPServerCatalogAssignmentListResponse(BaseModel):
     tenant_id: str
     assignments: list[AdminMCPServerCatalogAssignmentResponse]
+
+
+class AdminMCPServerCatalogAccessPreviewEntry(BaseModel):
+    user_id: str
+    display_name: str | None = None
+    email: str | None = None
+    role: TenantUserRole
+    status: TenantUserStatus
+    source: str
+    item_ids: list[str]
+    denied: bool
+
+
+class AdminMCPServerCatalogAccessPreviewResponse(BaseModel):
+    tenant_id: str
+    require_subject_assignment: bool
+    users: list[AdminMCPServerCatalogAccessPreviewEntry]
 
 
 @dataclass(frozen=True)
@@ -1952,6 +1971,7 @@ def build_admin_router() -> APIRouter:
             tenant_id=policy.tenant_id,
             item_ids=list(policy.item_ids),
             allow_custom_mcp_servers=policy.allow_custom_mcp_servers,
+            require_subject_assignment=policy.require_subject_assignment,
             version=policy.version,
             updated_by=policy.updated_by,
             updated_at=policy.updated_at,
@@ -1986,10 +2006,17 @@ def build_admin_router() -> APIRouter:
                 detail=f"Catalog policy references unknown item ids: {', '.join(unknown_ids)}",
             )
         old_policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if body.require_subject_assignment:
+            _validate_break_glass_catalog_assignment(
+                store,
+                tenant_id,
+                tenant_item_ids=set(body.item_ids),
+            )
         policy = store.upsert_tenant_mcp_server_catalog_policy(
             tenant_id,
             item_ids=body.item_ids,
             allow_custom_mcp_servers=body.allow_custom_mcp_servers,
+            require_subject_assignment=body.require_subject_assignment,
             updated_by=admin.user_id,
         )
         _invalidate_resolver(request.app.state.execution_resolver, tenant_id)
@@ -2005,6 +2032,7 @@ def build_admin_router() -> APIRouter:
             tenant_id=policy.tenant_id,
             item_ids=list(policy.item_ids),
             allow_custom_mcp_servers=policy.allow_custom_mcp_servers,
+            require_subject_assignment=policy.require_subject_assignment,
             version=policy.version,
             updated_by=policy.updated_by,
             updated_at=policy.updated_at,
@@ -2031,6 +2059,58 @@ def build_admin_router() -> APIRouter:
             "tenant_mcp_server_catalog_policy.delete",
             old_values=_mcp_server_catalog_policy_audit_values(old_policy),
             new_values=None,
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/mcp-server-catalog-access-preview",
+        response_model=AdminMCPServerCatalogAccessPreviewResponse,
+    )
+    async def preview_mcp_server_catalog_access(
+        tenant_id: str,
+        request: Request,
+        require_subject_assignment: bool | None = None,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminMCPServerCatalogAccessPreviewResponse:
+        _ = admin
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if policy is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Tenant '{tenant_id}' has no managed MCP server catalog policy",
+            )
+        fail_closed = (
+            policy.require_subject_assignment
+            if require_subject_assignment is None
+            else require_subject_assignment
+        )
+        users, _total = store.list_tenant_users(tenant_id, limit=500, offset=0)
+        entries: list[AdminMCPServerCatalogAccessPreviewEntry] = []
+        for user in users:
+            item_ids, source = store.effective_subject_mcp_server_catalog_access(
+                tenant_id, user.user_id
+            )
+            if fail_closed and source == "tenant":
+                item_ids, source = (), "unassigned"
+            elif item_ids is None:
+                item_ids = policy.item_ids
+            entries.append(
+                AdminMCPServerCatalogAccessPreviewEntry(
+                    user_id=user.user_id,
+                    display_name=user.display_name,
+                    email=user.email,
+                    role=user.role,
+                    status=user.status,
+                    source=source,
+                    item_ids=list(item_ids),
+                    denied=not item_ids,
+                )
+            )
+        return AdminMCPServerCatalogAccessPreviewResponse(
+            tenant_id=tenant_id,
+            require_subject_assignment=fail_closed,
+            users=entries,
         )
 
     @router.get(
@@ -2096,6 +2176,13 @@ def build_admin_router() -> APIRouter:
                     "Catalog assignment exceeds the tenant policy: " + ", ".join(disallowed_ids)
                 ),
             )
+        if tenant_policy.require_subject_assignment:
+            _validate_break_glass_catalog_assignment(
+                store,
+                tenant_id,
+                tenant_item_ids=set(tenant_policy.item_ids),
+                override=(subject_type, subject_id, tuple(body.item_ids)),
+            )
         old_assignment = store.get_subject_mcp_server_catalog_assignment(
             tenant_id, subject_type, subject_id
         )
@@ -2131,7 +2218,17 @@ def build_admin_router() -> APIRouter:
         old_assignment = store.get_subject_mcp_server_catalog_assignment(
             tenant_id, subject_type, subject_id
         )
-        if old_assignment is None or not store.delete_subject_mcp_server_catalog_assignment(
+        if old_assignment is None:
+            raise HTTPException(status_code=404, detail="Catalog assignment not found")
+        tenant_policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if tenant_policy is not None and tenant_policy.require_subject_assignment:
+            _validate_break_glass_catalog_assignment(
+                store,
+                tenant_id,
+                tenant_item_ids=set(tenant_policy.item_ids),
+                removed=(subject_type, subject_id),
+            )
+        if not store.delete_subject_mcp_server_catalog_assignment(
             tenant_id, subject_type, subject_id
         ):
             raise HTTPException(status_code=404, detail="Catalog assignment not found")
@@ -2922,6 +3019,53 @@ def _tenant_catalog_policy_errors(
     )
 
 
+def _validate_break_glass_catalog_assignment(
+    store: Any,
+    tenant_id: str,
+    *,
+    tenant_item_ids: set[str],
+    override: tuple[str, str, tuple[str, ...]] | None = None,
+    removed: tuple[str, str] | None = None,
+) -> None:
+    users, _total = store.list_tenant_users(tenant_id, limit=500, offset=0)
+    privileged = [
+        user
+        for user in users
+        if user.status == TenantUserStatus.ACTIVE
+        and user.role in {TenantUserRole.OWNER, TenantUserRole.ADMIN}
+    ]
+    for user in privileged:
+        user_assignment = store.get_subject_mcp_server_catalog_assignment(
+            tenant_id, "user", user.user_id
+        )
+        role_assignment = store.get_subject_mcp_server_catalog_assignment(
+            tenant_id, "role", user.role.value
+        )
+        if removed == ("user", user.user_id):
+            user_assignment = None
+        if removed == ("role", user.role.value):
+            role_assignment = None
+        if override is not None and override[:2] == ("user", user.user_id):
+            selected_item_ids = override[2]
+        elif user_assignment is not None:
+            selected_item_ids = user_assignment.item_ids
+        elif override is not None and override[:2] == ("role", user.role.value):
+            selected_item_ids = override[2]
+        elif role_assignment is not None:
+            selected_item_ids = role_assignment.item_ids
+        else:
+            selected_item_ids = ()
+        if set(selected_item_ids) & tenant_item_ids:
+            return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Fail-closed catalog access requires a non-empty owner or admin assignment "
+            "within the tenant ceiling"
+        ),
+    )
+
+
 def _validate_catalog_assignment_subject(
     store: Any, tenant_id: str, subject_type: str, subject_id: str
 ) -> None:
@@ -2967,6 +3111,7 @@ def _mcp_server_catalog_policy_audit_values(
         "tenant_id": policy.tenant_id,
         "item_ids": list(policy.item_ids),
         "allow_custom_mcp_servers": policy.allow_custom_mcp_servers,
+        "require_subject_assignment": policy.require_subject_assignment,
         "version": policy.version,
         "updated_by": policy.updated_by,
         "updated_at": policy.updated_at.isoformat(),

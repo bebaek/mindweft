@@ -418,6 +418,7 @@ export interface AdminMcpServerCatalogPolicy {
   tenant_id: string;
   item_ids: string[];
   allow_custom_mcp_servers: boolean;
+  require_subject_assignment: boolean;
   version: number;
   updated_by?: string | null;
   updated_at: string;
@@ -426,6 +427,7 @@ export interface AdminMcpServerCatalogPolicy {
 export interface AdminMcpServerCatalogPolicyInput {
   item_ids: string[];
   allow_custom_mcp_servers: boolean;
+  require_subject_assignment: boolean;
 }
 
 export type AdminMcpCatalogSubjectType = "user" | "role";
@@ -443,6 +445,23 @@ export interface AdminMcpServerCatalogAssignment {
 export interface AdminMcpServerCatalogAssignmentList {
   tenant_id: string;
   assignments: AdminMcpServerCatalogAssignment[];
+}
+
+export interface AdminMcpServerCatalogAccessPreviewEntry {
+  user_id: string;
+  display_name?: string | null;
+  email?: string | null;
+  role: TenantUserRole;
+  status: TenantUserStatus;
+  source: string;
+  item_ids: string[];
+  denied: boolean;
+}
+
+export interface AdminMcpServerCatalogAccessPreview {
+  tenant_id: string;
+  require_subject_assignment: boolean;
+  users: AdminMcpServerCatalogAccessPreviewEntry[];
 }
 
 export interface AdminExecutionValidationSection {
@@ -976,6 +995,17 @@ export class MinigentApiClient {
 
   getAdminDeploymentMcpServerCatalog(signal?: AbortSignal): Promise<AdminMcpServerCatalog> {
     return this.#request<AdminMcpServerCatalog>("/admin/mcp-server-catalog", { signal });
+  }
+
+  previewAdminMcpServerCatalogAccess(
+    tenantId: string,
+    requireSubjectAssignment: boolean,
+    signal?: AbortSignal,
+  ): Promise<AdminMcpServerCatalogAccessPreview> {
+    return this.#request<AdminMcpServerCatalogAccessPreview>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-access-preview?require_subject_assignment=${requireSubjectAssignment}`,
+      { signal },
+    );
   }
 
   getAdminMcpServerCatalogPolicy(

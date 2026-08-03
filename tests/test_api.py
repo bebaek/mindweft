@@ -6198,7 +6198,8 @@ def test_admin_can_assign_mcp_catalog_by_role_and_user(
     ]
     monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
     store = _sqlite_store(tmp_path)
-    client = TestClient(create_app(admin_store=store, tenant_config_source="store"))
+    app = create_app(admin_store=store, tenant_config_source="store")
+    client = TestClient(app)
     assert (
         client.post(
             "/admin/tenants",
@@ -6246,7 +6247,6 @@ def test_admin_can_assign_mcp_catalog_by_role_and_user(
     assert user_response.status_code == 200
     assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") == (
         "private-calendar",
-        "web-search",
     )
 
     list_response = client.get(
@@ -6265,9 +6265,7 @@ def test_admin_can_assign_mcp_catalog_by_role_and_user(
         headers=ADMIN_HEADERS,
     )
     assert overreach.status_code == 200
-    assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") == (
-        "web-search",
-    )
+    assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") == ()
 
     delete_response = client.delete(
         "/admin/tenants/tenant-1/mcp-server-catalog-assignments/user/member-1",
@@ -6277,6 +6275,152 @@ def test_admin_can_assign_mcp_catalog_by_role_and_user(
     assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") == (
         "web-search",
     )
+
+
+def test_mcp_catalog_fail_closed_requires_break_glass_and_previews_access(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog = [
+        {
+            "id": "web-search",
+            "title": "Web search",
+            "description": "Search current web content.",
+            "server": {
+                "name": "web-search",
+                "url": "https://tools.example/web/mcp",
+                "allowed_tools": ["web"],
+            },
+        }
+    ]
+    monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
+    store = _sqlite_store(tmp_path)
+    app = create_app(admin_store=store, tenant_config_source="store")
+    client = TestClient(app)
+    assert (
+        client.post(
+            "/admin/tenants",
+            json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    for user_id, role in (("owner-1", "owner"), ("member-1", "member")):
+        assert (
+            client.post(
+                "/admin/tenants/tenant-1/users",
+                json={"user_id": user_id, "role": role, "status": "active"},
+                headers=ADMIN_HEADERS,
+            ).status_code
+            == 201
+        )
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+            json={
+                "item_ids": ["web-search"],
+                "allow_custom_mcp_servers": False,
+                "require_subject_assignment": False,
+            },
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+
+    preview = client.get(
+        "/admin/tenants/tenant-1/mcp-server-catalog-access-preview",
+        params={"require_subject_assignment": "true"},
+        headers=ADMIN_HEADERS,
+    )
+    assert preview.status_code == 200
+    assert {
+        user["user_id"]: (user["source"], user["item_ids"], user["denied"])
+        for user in preview.json()["users"]
+    } == {
+        "owner-1": ("unassigned", [], True),
+        "member-1": ("unassigned", [], True),
+    }
+
+    rejected = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+        json={
+            "item_ids": ["web-search"],
+            "allow_custom_mcp_servers": False,
+            "require_subject_assignment": True,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert rejected.status_code == 409
+    assert "owner or admin assignment" in rejected.json()["detail"]
+
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-assignments/user/owner-1",
+            json={"item_ids": ["web-search"]},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+    enabled = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+        json={
+            "item_ids": ["web-search"],
+            "allow_custom_mcp_servers": False,
+            "require_subject_assignment": True,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert enabled.status_code == 200
+    assert enabled.json()["require_subject_assignment"] is True
+    assert store.effective_subject_mcp_server_catalog_access("tenant-1", "owner-1") == (
+        ("web-search",),
+        "user",
+    )
+    assert store.effective_subject_mcp_server_catalog_access("tenant-1", "member-1") == (
+        (),
+        "unassigned",
+    )
+    authorize = app.state.runtime._mcp_server_name_authorizer
+    assert authorize("tenant-1", "owner-1") == {"web-search"}
+    assert authorize("tenant-1", "member-1") == set()
+    break_glass_empty = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-assignments/user/owner-1",
+        json={"item_ids": []},
+        headers=ADMIN_HEADERS,
+    )
+    assert break_glass_empty.status_code == 409
+    break_glass_delete = client.delete(
+        "/admin/tenants/tenant-1/mcp-server-catalog-assignments/user/owner-1",
+        headers=ADMIN_HEADERS,
+    )
+    assert break_glass_delete.status_code == 409
+
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-assignments/role/member",
+            json={"item_ids": ["web-search"]},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+    assert store.effective_subject_mcp_server_catalog_access("tenant-1", "member-1") == (
+        ("web-search",),
+        "role",
+    )
+    assert authorize("tenant-1", "member-1") == {"web-search"}
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-assignments/user/member-1",
+            json={"item_ids": []},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+    assert store.effective_subject_mcp_server_catalog_access("tenant-1", "member-1") == (
+        (),
+        "user",
+    )
+    assert authorize("tenant-1", "member-1") == set()
 
 
 def test_subject_catalog_assignments_are_inactive_without_tenant_policy(

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
   type AdminMcpCatalogSubjectType,
+  type AdminMcpServerCatalogAccessPreview,
   type AdminMcpServerCatalogItem,
   type AdminMcpServerCatalogPolicyInput,
 } from "../api/client";
@@ -21,6 +22,7 @@ export function McpCatalogPolicyPanel({
   const queryClient = useQueryClient();
   const [itemIds, setItemIds] = useState<string[] | null>(null);
   const [allowCustom, setAllowCustom] = useState<boolean | null>(null);
+  const [requireAssignment, setRequireAssignment] = useState<boolean | null>(null);
   const policy = useQuery({
     queryKey: ["admin-mcp-catalog-policy", tenantId, authentication],
     queryFn: ({ signal }) => api.getAdminMcpServerCatalogPolicy(tenantId, signal),
@@ -38,6 +40,22 @@ export function McpCatalogPolicyPanel({
     missing && catalog.data ? catalog.data.items.map((item) => item.id) : []
   );
   const effectiveAllowCustom = allowCustom ?? policy.data?.allow_custom_mcp_servers ?? missing;
+  const effectiveRequireAssignment = (
+    requireAssignment ?? policy.data?.require_subject_assignment ?? false
+  );
+  const preview = useQuery({
+    queryKey: [
+      "admin-mcp-catalog-access-preview",
+      tenantId,
+      effectiveRequireAssignment,
+      policy.data?.version,
+      authentication,
+    ],
+    queryFn: ({ signal }) => api.previewAdminMcpServerCatalogAccess(
+      tenantId, effectiveRequireAssignment, signal,
+    ),
+    enabled: !readOnly && Boolean(policy.data),
+  });
 
   const save = useMutation({
     mutationFn: (input: AdminMcpServerCatalogPolicyInput) =>
@@ -49,9 +67,11 @@ export function McpCatalogPolicyPanel({
       );
       setItemIds(null);
       setAllowCustom(null);
+      setRequireAssignment(null);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["admin-mcp-server-catalog", tenantId] }),
         queryClient.invalidateQueries({ queryKey: ["admin-mcp-catalog-assignments", tenantId] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-mcp-catalog-access-preview", tenantId] }),
       ]);
     },
   });
@@ -60,6 +80,7 @@ export function McpCatalogPolicyPanel({
     onSuccess: async () => {
       setItemIds(null);
       setAllowCustom(null);
+      setRequireAssignment(null);
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: ["admin-mcp-catalog-policy", tenantId],
@@ -78,6 +99,7 @@ export function McpCatalogPolicyPanel({
     save.mutate({
       item_ids: effectiveItemIds,
       allow_custom_mcp_servers: effectiveAllowCustom,
+      require_subject_assignment: effectiveRequireAssignment,
     });
   }
 
@@ -131,6 +153,19 @@ export function McpCatalogPolicyPanel({
               />
               Allow tenant-defined custom MCP servers
             </label>
+            <label className="execution-checkbox">
+              <input
+                type="checkbox"
+                checked={effectiveRequireAssignment}
+                onChange={(event) => setRequireAssignment(event.target.checked)}
+              />
+              Require an explicit user or role assignment (fail closed)
+            </label>
+            {effectiveRequireAssignment && (
+              <p className="execution-config-empty">
+                Save a non-empty owner or admin assignment before enabling fail-closed mode.
+              </p>
+            )}
             {(save.isError || reset.isError) && (
               <p className="inline-error" role="alert">{message(save.error || reset.error)}</p>
             )}
@@ -145,10 +180,17 @@ export function McpCatalogPolicyPanel({
               </button>
             </div>
           </form>
+          {policy.data && preview.data && (
+            <CatalogAccessPreview preview={preview.data} />
+          )}
+          {preview.isError && (
+            <p className="inline-error" role="alert">{message(preview.error)}</p>
+          )}
           {policy.data && (
             <SubjectCatalogAssignments
               tenantId={tenantId}
               catalogItems={catalog.data.items.filter((item) => effectiveItemIds.includes(item.id))}
+              requireSubjectAssignment={effectiveRequireAssignment}
             />
           )}
         </>
@@ -157,12 +199,42 @@ export function McpCatalogPolicyPanel({
   );
 }
 
+function CatalogAccessPreview({
+  preview,
+}: {
+  preview: AdminMcpServerCatalogAccessPreview;
+}) {
+  return (
+    <div className="execution-editor-section">
+      <h4>Effective access preview</h4>
+      <p>
+        {preview.require_subject_assignment
+          ? "Fail-closed assignment enforcement preview."
+          : "Current assignment and tenant-inheritance preview."}
+      </p>
+      {preview.users.map((user) => (
+        <div className="mcp-server-preset" key={user.user_id}>
+          <span>
+            <strong>{user.display_name || user.email || user.user_id}</strong>
+            <small>{user.role} · {user.status} · source: {user.source}</small>
+          </span>
+          <small className={user.denied && user.status === "active" ? "inline-error" : undefined}>
+            {user.item_ids.length ? user.item_ids.join(", ") : "No managed MCP services"}
+          </small>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SubjectCatalogAssignments({
   tenantId,
   catalogItems,
+  requireSubjectAssignment,
 }: {
   tenantId: string;
   catalogItems: AdminMcpServerCatalogItem[];
+  requireSubjectAssignment: boolean;
 }) {
   const { api, authentication } = useAuth();
   const queryClient = useQueryClient();
@@ -192,9 +264,14 @@ function SubjectCatalogAssignments({
         delete next[subjectKey];
         return next;
       });
-      await queryClient.invalidateQueries({
-        queryKey: ["admin-mcp-catalog-assignments", tenantId],
-      });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["admin-mcp-catalog-assignments", tenantId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["admin-mcp-catalog-access-preview", tenantId],
+        }),
+      ]);
     },
   });
   const remove = useMutation({
@@ -207,9 +284,14 @@ function SubjectCatalogAssignments({
         delete next[subjectKey];
         return next;
       });
-      await queryClient.invalidateQueries({
-        queryKey: ["admin-mcp-catalog-assignments", tenantId],
-      });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["admin-mcp-catalog-assignments", tenantId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["admin-mcp-catalog-access-preview", tenantId],
+        }),
+      ]);
     },
   });
 
@@ -227,7 +309,7 @@ function SubjectCatalogAssignments({
       <div className="execution-config-heading">
         <div>
           <h4>Role and user assignments</h4>
-          <p>Role and user assignments are combined, then intersected with the tenant ceiling.</p>
+          <p>User assignments take precedence over role assignments. Both remain bounded by the tenant ceiling.</p>
         </div>
       </div>
       <label>
@@ -246,7 +328,11 @@ function SubjectCatalogAssignments({
         </select>
       </label>
       {!assignment && drafts[subjectKey] === undefined && (
-        <p className="execution-config-empty">No assignment: this subject inherits tenant access.</p>
+        <p className="execution-config-empty">
+          No assignment: {requireSubjectAssignment
+            ? "this subject receives no managed MCP services."
+            : "this subject inherits tenant access."}
+        </p>
       )}
       <div className="mcp-server-preset-list">
         {catalogItems.map((item) => (

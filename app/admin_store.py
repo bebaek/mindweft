@@ -55,6 +55,7 @@ class TenantMCPServerCatalogPolicy:
     tenant_id: str
     item_ids: tuple[str, ...]
     allow_custom_mcp_servers: bool
+    require_subject_assignment: bool
     version: int
     updated_by: str | None
     updated_at: datetime
@@ -679,6 +680,7 @@ class SQLiteTenantConfigStore:
         *,
         item_ids: list[str],
         allow_custom_mcp_servers: bool,
+        require_subject_assignment: bool,
         updated_by: str | None,
     ) -> TenantMCPServerCatalogPolicy:
         current = self.get_tenant_mcp_server_catalog_policy(tenant_id)
@@ -691,11 +693,12 @@ class SQLiteTenantConfigStore:
                     """
                     INSERT INTO tenant_mcp_server_catalog_policies (
                         tenant_id, item_ids_json, allow_custom_mcp_servers,
-                        version, updated_by, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        require_subject_assignment, version, updated_by, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(tenant_id) DO UPDATE SET
                         item_ids_json = excluded.item_ids_json,
                         allow_custom_mcp_servers = excluded.allow_custom_mcp_servers,
+                        require_subject_assignment = excluded.require_subject_assignment,
                         version = excluded.version,
                         updated_by = excluded.updated_by,
                         updated_at = excluded.updated_at
@@ -704,6 +707,7 @@ class SQLiteTenantConfigStore:
                         tenant_id,
                         json.dumps(normalized_item_ids, ensure_ascii=True),
                         int(allow_custom_mcp_servers),
+                        int(require_subject_assignment),
                         version,
                         updated_by,
                         now,
@@ -810,21 +814,32 @@ class SQLiteTenantConfigStore:
     def effective_subject_mcp_server_catalog_item_ids(
         self, tenant_id: str, user_id: str
     ) -> tuple[str, ...] | None:
+        item_ids, _source = self.effective_subject_mcp_server_catalog_access(tenant_id, user_id)
+        return item_ids
+
+    def effective_subject_mcp_server_catalog_access(
+        self, tenant_id: str, user_id: str
+    ) -> tuple[tuple[str, ...] | None, str]:
         tenant_policy = self.get_tenant_mcp_server_catalog_policy(tenant_id)
         if tenant_policy is None:
-            return None
+            return None, "legacy"
         user = self.get_tenant_user_by_user_id(tenant_id, user_id)
-        assignments = [self.get_subject_mcp_server_catalog_assignment(tenant_id, "user", user_id)]
+        if user is not None and user.status != TenantUserStatus.ACTIVE:
+            return (), "inactive"
+        user_assignment = self.get_subject_mcp_server_catalog_assignment(tenant_id, "user", user_id)
+        if user_assignment is not None:
+            item_ids = set(user_assignment.item_ids) & set(tenant_policy.item_ids)
+            return tuple(sorted(item_ids)), "user"
         if user is not None:
-            assignments.append(
-                self.get_subject_mcp_server_catalog_assignment(tenant_id, "role", user.role.value)
+            role_assignment = self.get_subject_mcp_server_catalog_assignment(
+                tenant_id, "role", user.role.value
             )
-        matched = [assignment for assignment in assignments if assignment is not None]
-        if not matched:
-            return None
-        item_ids = {item_id for assignment in matched for item_id in assignment.item_ids}
-        item_ids &= set(tenant_policy.item_ids)
-        return tuple(sorted(item_ids))
+            if role_assignment is not None:
+                item_ids = set(role_assignment.item_ids) & set(tenant_policy.item_ids)
+                return tuple(sorted(item_ids)), "role"
+        if tenant_policy.require_subject_assignment:
+            return (), "unassigned"
+        return None, "tenant"
 
     def list_tenants(self) -> list[str]:
         with self._connection() as connection:
@@ -1010,6 +1025,7 @@ class SQLiteTenantConfigStore:
                     tenant_id TEXT PRIMARY KEY,
                     item_ids_json TEXT NOT NULL DEFAULT '[]',
                     allow_custom_mcp_servers INTEGER NOT NULL DEFAULT 0,
+                    require_subject_assignment INTEGER NOT NULL DEFAULT 0,
                     version INTEGER NOT NULL DEFAULT 1,
                     updated_by TEXT,
                     updated_at TEXT NOT NULL
@@ -1041,6 +1057,19 @@ class SQLiteTenantConfigStore:
                 )
                 """
             )
+            policy_columns = {
+                str(row[1])
+                for row in connection.execute(
+                    "PRAGMA table_info(tenant_mcp_server_catalog_policies)"
+                )
+            }
+            if "require_subject_assignment" not in policy_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE tenant_mcp_server_catalog_policies
+                    ADD COLUMN require_subject_assignment INTEGER NOT NULL DEFAULT 0
+                    """
+                )
             connection.commit()
             _ensure_tenant_execution_config_columns(connection)
 
@@ -1086,6 +1115,7 @@ def _mcp_server_catalog_policy_from_row(
         tenant_id=str(row["tenant_id"]),
         item_ids=tuple(item_ids),
         allow_custom_mcp_servers=bool(row["allow_custom_mcp_servers"]),
+        require_subject_assignment=bool(row["require_subject_assignment"]),
         version=int(row["version"]),
         updated_by=str(row["updated_by"]) if row["updated_by"] is not None else None,
         updated_at=datetime.fromisoformat(str(row["updated_at"])),
