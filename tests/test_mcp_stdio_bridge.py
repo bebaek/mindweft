@@ -441,6 +441,7 @@ def test_stdio_bridge_reports_exited_subprocess(tmp_path: Path) -> None:
         "MCP stdio server closed stdout",
         "MCP stdio server exited with code 7",
         "MCP stdio server request failed: Connection closed",
+        "MCP stdio server request failed: 502: MCP stdio server exited with code 7",
     }
 
 
