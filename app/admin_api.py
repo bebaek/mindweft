@@ -1611,8 +1611,14 @@ def build_admin_router() -> APIRouter:
     ) -> AdminMCPServerCatalogResponse:
         _ = tenant_id, admin
         settings = getattr(request.app.state, "admin_store_settings", None)
-        items = settings.mcp_server_catalog if isinstance(settings, AdminStoreSettings) else ()
-        return AdminMCPServerCatalogResponse(items=list(items))
+        configured_items = (
+            settings.mcp_server_catalog if isinstance(settings, AdminStoreSettings) else ()
+        )
+        items = [
+            item.model_copy(update={"server": redact_tenant_execution_payload(item.server)})
+            for item in configured_items
+        ]
+        return AdminMCPServerCatalogResponse(items=items)
 
     @router.get(
         "/tenants/{tenant_id}/execution-config",
@@ -1653,7 +1659,8 @@ def build_admin_router() -> APIRouter:
     ) -> AdminTenantExecutionConfigResponse:
         store = _require_admin_store(app_request)
         old_payload = store.get_raw_config(tenant_id)
-        payload = _restore_redacted_payload(request.config, old_payload)
+        secret_source = _execution_config_secret_source(app_request, old_payload)
+        payload = _restore_redacted_payload(request.config, secret_source)
         try:
             parse_tenant_execution_config(tenant_id, payload)
         except RuntimeError as exc:
@@ -1691,7 +1698,9 @@ def build_admin_router() -> APIRouter:
     ) -> AdminTenantExecutionConfigValidationResponse:
         _ = admin
         store = _require_admin_store(request)
-        payload = _restore_redacted_payload(body.config, store.get_raw_config(tenant_id))
+        existing = store.get_raw_config(tenant_id)
+        secret_source = _execution_config_secret_source(request, existing)
+        payload = _restore_redacted_payload(body.config, secret_source)
         report = await validate_tenant_execution_config(tenant_id, payload)
         return AdminTenantExecutionConfigValidationResponse.model_validate(report.to_dict())
 
@@ -1763,10 +1772,12 @@ def _parse_mcp_server_catalog(
         if not isinstance(server_url, str) or not server_url.strip():
             raise RuntimeError(f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}].server requires url")
         headers = item.server.get("headers", {})
-        if not isinstance(headers, dict) or headers:
+        if not isinstance(headers, dict) or not all(
+            isinstance(name, str) and isinstance(header_value, str)
+            for name, header_value in headers.items()
+        ):
             raise RuntimeError(
-                f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}].server.headers must be empty; "
-                "catalog entries are returned to browsers"
+                f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}].server.headers must be a string map"
             )
         allowed_tools = item.server.get("allowed_tools", item.server.get("allowedTools"))
         if allowed_tools is not None and (
@@ -2215,6 +2226,34 @@ def _invalidate_resolver(resolver: TenantExecutionResolver, tenant_id: str) -> N
     invalidate = getattr(resolver, "invalidate", None)
     if callable(invalidate):
         invalidate(tenant_id)
+
+
+def _execution_config_secret_source(
+    request: Request,
+    existing: dict[str, Any] | None,
+) -> dict[str, Any]:
+    settings = getattr(request.app.state, "admin_store_settings", None)
+    catalog = settings.mcp_server_catalog if isinstance(settings, AdminStoreSettings) else ()
+    catalog_servers = {
+        str(item.server["name"]): item.server
+        for item in catalog
+        if isinstance(item.server.get("name"), str)
+    }
+
+    source = json.loads(json.dumps(existing or {}))
+    source_tools = source.get("tools")
+    if not isinstance(source_tools, dict):
+        source_tools = {}
+        source["tools"] = source_tools
+    existing_servers = source_tools.get("mcp_servers", source_tools.get("mcpServers", []))
+    if isinstance(existing_servers, list):
+        for server in existing_servers:
+            if isinstance(server, dict) and isinstance(server.get("name"), str):
+                catalog_servers[str(server["name"])] = server
+    merged_servers = list(catalog_servers.values())
+    source_tools["mcp_servers"] = merged_servers
+    source_tools["mcpServers"] = merged_servers
+    return source
 
 
 def _restore_redacted_payload(

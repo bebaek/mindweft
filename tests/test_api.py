@@ -152,7 +152,7 @@ def test_admin_store_settings_from_env_parses_mcp_server_catalog() -> None:
                         "server": {
                             "name": "web-search",
                             "url": "http://127.0.0.1:8766/mcp",
-                            "headers": {},
+                            "headers": {"Authorization": "Bearer secret-token"},
                             "allowed_tools": ["web", "news", "context"],
                         },
                     }
@@ -163,15 +163,13 @@ def test_admin_store_settings_from_env_parses_mcp_server_catalog() -> None:
 
     assert len(settings.mcp_server_catalog) == 1
     assert settings.mcp_server_catalog[0].id == "web-search"
-    assert settings.mcp_server_catalog[0].server["allowed_tools"] == [
-        "web",
-        "news",
-        "context",
-    ]
+    assert settings.mcp_server_catalog[0].server["headers"] == {
+        "Authorization": "Bearer secret-token"
+    }
 
 
-def test_admin_store_settings_rejects_secrets_in_mcp_server_catalog() -> None:
-    with pytest.raises(RuntimeError, match="headers must be empty"):
+def test_admin_store_settings_rejects_invalid_headers_in_mcp_server_catalog() -> None:
+    with pytest.raises(RuntimeError, match="headers must be a string map"):
         AdminStoreSettings.from_env(
             {
                 "MINIGENT_ADMIN_MCP_SERVER_CATALOG": json.dumps(
@@ -183,7 +181,7 @@ def test_admin_store_settings_rejects_secrets_in_mcp_server_catalog() -> None:
                             "server": {
                                 "name": "private",
                                 "url": "https://example.com/mcp",
-                                "headers": {"Authorization": "Bearer secret"},
+                                "headers": {"Authorization": 42},
                             },
                         }
                     ]
@@ -5071,15 +5069,14 @@ def test_admin_api_returns_configured_mcp_server_catalog(
             "server": {
                 "name": "web-search",
                 "url": "http://127.0.0.1:8766/mcp",
-                "headers": {},
+                "headers": {"Authorization": "Bearer secret-token"},
                 "allowed_tools": ["web", "news", "context"],
             },
         }
     ]
     monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
-    client = TestClient(
-        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store")
-    )
+    store = _sqlite_store(tmp_path)
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store"))
 
     response = client.get(
         "/admin/tenants/tenant-1/mcp-server-catalog",
@@ -5087,7 +5084,25 @@ def test_admin_api_returns_configured_mcp_server_catalog(
     )
 
     assert response.status_code == 200
-    assert response.json() == {"items": catalog}
+    response_item = response.json()["items"][0]
+    assert response_item["server"]["headers"] == {"Authorization": "<redacted>"}
+    assert response_item["server"]["has_headers"] is True
+    assert "secret-token" not in response.text
+
+    put_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+        json={
+            "config": {
+                "llm": {"provider": "mock"},
+                "tools": {"mcp_servers": [response_item["server"]]},
+            }
+        },
+    )
+    assert put_response.status_code == 200
+    stored = store.get_raw_config("tenant-1")
+    assert stored is not None
+    assert stored["tools"]["mcp_servers"][0]["headers"] == {"Authorization": "Bearer secret-token"}
 
 
 def test_admin_api_validates_tenant_execution_config(

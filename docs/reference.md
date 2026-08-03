@@ -1801,8 +1801,11 @@ Secrets such as LLM API keys and MCP headers are accepted on writes but redacted
 by the tenant execution editor. It is a JSON array; each item has `id`, `title`, `description`, an
 optional `detail`, and a `server` object containing the tenant MCP server definition. The catalog is
 deployment-owned and returned to authenticated tenant owners through
-`GET /admin/tenants/{tenant_id}/mcp-server-catalog`. Because catalog entries reach the browser,
-`server.headers` must be empty; add credentials through the tenant editor instead. For example:
+`GET /admin/tenants/{tenant_id}/mcp-server-catalog`. Header values are redacted before catalog
+entries reach the browser. When a quick-add entry is validated or saved, its `<redacted>` header
+placeholders are restored server-side from the deployment catalog; existing tenant values take
+precedence. Therefore catalogs containing credentials must be supplied through a secret manager,
+not committed as plaintext. For example:
 
 ```bash
 MINIGENT_ADMIN_MCP_SERVER_CATALOG='[{"id":"web-search","title":"Web search","description":"Search web, news, and ranked page content.","detail":"Local Brave Search sidecar · 3 tools","server":{"name":"web-search","url":"http://127.0.0.1:8766/mcp","headers":{},"allowed_tools":["brave_web_search","brave_news_search","brave_llm_context"]}}]'
