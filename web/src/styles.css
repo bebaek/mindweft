@@ -551,3 +551,35 @@ html[data-theme="dark"] .message-scroll { scrollbar-color:#526359 #171e19; }
 @media(max-width:620px) { main:has(.admin-page){padding:18px 10px}.admin-heading h1{font-size:34px}.admin-heading>div>p:last-child,.tenant-total{display:none}.admin-heading-actions{gap:0}.admin-primary-action{padding:9px 10px}.admin-layout{grid-template-columns:95px minmax(0,1fr);min-height:600px}.tenant-directory-list>button{grid-template-columns:1fr;justify-items:center;padding:9px 5px}.tenant-directory-list>button>span:nth-child(2){display:none}.tenant-search{padding:9px 6px}.tenant-search input{padding:8px 6px;font-size:8px}.tenant-detail{padding:15px 10px}.tenant-summary .tenant-avatar{display:none}.tenant-summary h2{font-size:23px}.tenant-summary-actions{align-items:flex-end;flex-direction:column}.admin-metrics{gap:6px}.admin-metrics article{min-height:90px;padding:11px}.admin-detail-grid{gap:7px}.admin-user-list li{grid-template-columns:auto minmax(0,1fr) auto}.admin-user-list li>span:last-of-type{display:none}.admin-user-list li>button{grid-column:auto}.domain-list li{grid-template-columns:auto minmax(0,1fr) auto}.domain-list small{display:none}.entitlements-heading,.execution-config-heading,.tenant-operations-heading{align-items:stretch;flex-direction:column}.entitlements-heading-actions,.execution-config-heading-actions{justify-content:space-between}.tenant-operations-heading>button{align-self:flex-start}.entitlements-content{grid-template-columns:1fr}.entitlements-content>footer{grid-column:auto}.execution-summary{grid-template-columns:1fr 1fr}.execution-config-footer{align-items:flex-start;flex-direction:column;gap:8px}.execution-field-grid{grid-template-columns:1fr}.execution-field-grid label.wide{grid-column:auto}.execution-discard-warning{grid-template-columns:1fr 1fr}.execution-discard-warning p{grid-column:1/-1}.operations-filters,.operations-filters.audit{grid-template-columns:1fr 1fr}.operations-filters>button{align-self:end}.thread-table>button{grid-template-columns:10px minmax(90px,1fr) 50px 12px}.thread-table>button>span:nth-of-type(4),.thread-table time{display:none}.audit-row>button{grid-template-columns:26px minmax(110px,1fr) 80px 14px}.audit-row>button>span:nth-of-type(4),.audit-row time{display:none}.thread-detail-metrics{grid-template-columns:1fr 1fr}.thread-delete-confirm{grid-template-columns:1fr 1fr}.thread-delete-confirm div{grid-column:1/-1}.prune-fields{grid-template-columns:1fr}.entitlement-row.feature,.entitlement-row.limit{grid-template-columns:1fr 90px}.entitlement-row.limit label:nth-child(3),.entitlement-row.limit .unlimited-value{grid-column:1/-1}.lifecycle-panel{grid-template-columns:1fr}.lifecycle-actions{flex-wrap:wrap}.admin-form-grid{grid-template-columns:1fr}.admin-form-grid label.wide{grid-column:auto}.admin-dialog>form,.admin-confirm-dialog>div{padding:22px} }
 .admin-heading .eyebrow { color:#56695a; }
 .admin-heading>div>p:last-child,.tenant-total span { color:#5d6861; }
+
+/* Dark tenant and platform administration */
+html[data-theme="dark"] :where(
+  .admin-layout,.admin-panel,.lifecycle-panel,.entitlements-panel,.execution-config-panel,
+  .oauth-import-panel,.tenant-operations,.entitlement-editor-section,.execution-summary article,
+  .tenant-summary-actions>button,.lifecycle-actions button,.transition-confirm button,
+  .oauth-disconnect-confirm button,.domain-add-form button
+) { color:var(--ink); background:var(--white); border-color:var(--line); }
+html[data-theme="dark"] :where(
+  .tenant-detail,.tenant-directory,.entitlement-group,.entitlements-empty,.execution-config-empty,
+  .oauth-credential-summary>div,.admin-empty-state
+) { color:var(--ink); background:#171e19; border-color:var(--line); }
+html[data-theme="dark"] :where(
+  .admin-heading .eyebrow,.admin-heading>div>p:last-child,.tenant-total span,
+  .tenant-summary p:last-child,.admin-metrics span,.admin-metrics small,
+  .admin-user-list small,.admin-user-list li>span:last-of-type,.domain-list small,
+  .admin-form-grid label,.admin-confirm-dialog>div>p:not(.eyebrow,.dialog-error),
+  .entitlements-heading-actions>span,.entitlements-editor-copy,.entitlement-row label,
+  .unlimited-value,.execution-config-heading-actions>span,.execution-editor-copy,
+  .execution-editor-tabs button,.execution-field-grid label,.execution-text-field,
+  .execution-json-field,.oauth-import-instructions ol,.oauth-transfer-warning,
+  .credential-status,.operations-result-heading,.operations-filters label
+) { color:var(--muted); }
+html[data-theme="dark"] :where(
+  .admin-user-list li,.domain-list li,.entitlement-group dl>div,.entitlement-row
+) { border-color:var(--line); }
+html[data-theme="dark"] .tenant-directory-list>button:hover { background:#202a23; }
+html[data-theme="dark"] .tenant-directory-list>button.active { color:var(--ink); background:var(--white); border-color:var(--line); }
+html[data-theme="dark"] .admin-panel-heading>span { color:var(--ink); background:#29332c; }
+html[data-theme="dark"] .execution-editor-tabs button.active { color:#c4ef91; background:#263329; border-color:#49604f; }
+html[data-theme="dark"] .domain-add-form button:disabled,
+html[data-theme="dark"] .tenant-summary-actions>button:disabled { color:#7c8880; opacity:.65; }
