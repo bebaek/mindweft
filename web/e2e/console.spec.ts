@@ -301,7 +301,10 @@ async function installWorkspaceMocks(
 
 async function navigateToWorkspace(page: Page) {
   const menu = page.getByRole("button", { name: "Open navigation" });
-  if (await menu.isVisible()) await menu.click();
+  if (await menu.isVisible()) {
+    await menu.click();
+    await expect(page.locator(".sidebar")).toHaveClass(/is-open/);
+  }
   await page.getByRole("button", { name: "Workspace", exact: true }).click();
 }
 
@@ -373,9 +376,23 @@ async function installAdminMocks(page: Page) {
 }
 
 async function navigateToAdmin(page: Page) {
+  let admin = page.getByRole("button", { name: "Administration", exact: true });
+  if (await admin.count() === 0) {
+    await page.getByRole("button", { name: /Secure session/ }).click();
+    const dialog = page.getByRole("dialog", { name: "Authentication" });
+    await dialog.getByLabel("Development headers").check();
+    await dialog.getByLabel("Tenant ID").fill("tenant-acme");
+    await dialog.getByLabel("User ID").fill("admin-e2e");
+    await dialog.getByLabel("Administrator").check();
+    await dialog.getByRole("button", { name: "Use connection" }).click();
+    admin = page.getByRole("button", { name: "Administration", exact: true });
+  }
   const menu = page.getByRole("button", { name: "Open navigation" });
-  if (await menu.isVisible()) await menu.click();
-  await page.getByRole("button", { name: "Administration", exact: true }).click();
+  if (await menu.isVisible()) {
+    await menu.click();
+    await expect(page.locator(".sidebar")).toHaveClass(/is-open/);
+  }
+  await admin.click();
 }
 
 test("loads the production console and passes an accessibility scan", async ({ page }) => {
@@ -389,6 +406,52 @@ test("loads the production console and passes an accessibility scan", async ({ p
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("keeps overview, authentication, and administration legible in dark mode", async ({ page }) => {
+  await installApiMocks(page);
+  await installAdminMocks(page);
+  await page.addInitScript(() => window.localStorage.setItem("minigent-theme", "dark"));
+  await page.goto("./");
+
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await page.getByRole("button", { name: /Secure session/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Authentication" });
+  await dialog.getByLabel("Development headers").check();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await dialog.getByLabel("Tenant ID").fill("tenant-e2e");
+  await dialog.getByLabel("User ID").fill("admin-e2e");
+  await dialog.getByLabel("Administrator").check();
+  await dialog.getByRole("button", { name: "Use connection" }).click();
+
+  await navigateToAdmin(page);
+  await expect(page.getByRole("heading", { name: "Acme Corporation" })).toBeVisible();
+  await page.waitForTimeout(250);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
+test("keeps workspace dialogs legible in dark mode", async ({ page }) => {
+  await installApiMocks(page);
+  await installWorkspaceMocks(page, { consent: true });
+  await page.addInitScript(() => window.localStorage.setItem("minigent-theme", "dark"));
+  await page.goto("./");
+  await navigateToWorkspace(page);
+
+  await page.getByRole("button", { name: "Review the deployment plan" }).click();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await page.getByRole("button", { name: "Context" }).click();
+  const contextDialog = page.getByRole("dialog", { name: "Thread context" });
+  await expect(contextDialog.getByText("1,240")).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await contextDialog.getByRole("button", { name: "Close context" }).click();
+
+  await page.getByLabel(/^Message /).fill("Send this to my contact");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByRole("dialog", { name: "Allow this exact tool action?" })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });
 
 test("applies development credentials without persisting them", async ({ page }) => {
@@ -413,7 +476,7 @@ test("applies development credentials without persisting them", async ({ page })
     local: Object.keys(localStorage),
     session: Object.keys(sessionStorage),
   }));
-  expect(storage).toEqual({ local: [], session: [] });
+  expect(storage).toEqual({ local: ["minigent-theme"], session: [] });
 });
 
 test("runs a streamed conversation without accessibility violations", async ({ page }) => {
