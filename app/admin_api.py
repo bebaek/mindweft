@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app.admin_store import (
     SubjectMCPServerCatalogAssignment,
     TenantMCPServerCatalogPolicy,
+    UserDeprovisioningEvent,
 )
 from app.auth import require_admin_principal, require_principal
 from app.execution import (
@@ -150,6 +151,34 @@ class AdminExternalGrantUpsertRequest(BaseModel):
     subject_id: str = Field(min_length=1, max_length=255)
     permission: str = Field(min_length=1, max_length=64)
     enabled: bool = True
+
+
+class AdminUserDeprovisioningEventResponse(BaseModel):
+    id: str
+    tenant_id: str
+    user_record_id: str
+    user_id: str
+    target_status: TenantUserStatus
+    actor_user_id: str
+    state: str
+    attempts: int
+    next_attempt_at: datetime
+    claimed_at: datetime | None
+    completed_at: datetime | None
+    last_error: str | None
+    assignment_removed: bool
+    grants_disabled: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminUserDeprovisioningEventListResponse(BaseModel):
+    tenant_id: str
+    events: list[AdminUserDeprovisioningEventResponse]
+    limit: int
+    offset: int
+    total: int
+    next_offset: int | None
 
 
 class AdminMCPServerCatalogItem(BaseModel):
@@ -1758,6 +1787,77 @@ def build_admin_router() -> APIRouter:
         )
 
     @router.get(
+        "/tenants/{tenant_id}/user-deprovisioning-events",
+        response_model=AdminUserDeprovisioningEventListResponse,
+    )
+    async def list_user_deprovisioning_events(
+        tenant_id: str,
+        request: Request,
+        state: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+        admin: Principal = Depends(require_tenant_owner_principal),
+    ) -> AdminUserDeprovisioningEventListResponse:
+        _ = admin
+        _require_tenant(request, tenant_id)
+        if state is not None and state not in {
+            "pending",
+            "processing",
+            "completed",
+            "dead_letter",
+        }:
+            raise HTTPException(status_code=422, detail="Invalid deprovisioning event state")
+        events, total = _require_admin_store(request).list_user_deprovisioning_events(
+            tenant_id,
+            state=state,
+            limit=limit,
+            offset=offset,
+        )
+        return AdminUserDeprovisioningEventListResponse(
+            tenant_id=tenant_id,
+            events=[_user_deprovisioning_event_response(event) for event in events],
+            limit=limit,
+            offset=offset,
+            total=total,
+            next_offset=offset + len(events) if offset + len(events) < total else None,
+        )
+
+    @router.post(
+        "/tenants/{tenant_id}/user-deprovisioning-events/{event_id}/retry",
+        response_model=AdminUserDeprovisioningEventResponse,
+    )
+    async def retry_user_deprovisioning_event(
+        tenant_id: str,
+        event_id: str,
+        request: Request,
+        admin: Principal = Depends(require_tenant_owner_principal),
+    ) -> AdminUserDeprovisioningEventResponse:
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        event = store.get_user_deprovisioning_event(tenant_id, event_id)
+        if event is None:
+            raise HTTPException(status_code=404, detail="Deprovisioning event not found")
+        if not store.retry_user_deprovisioning_event(tenant_id, event_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Only pending or dead-letter deprovisioning events can be retried",
+            )
+        updated = store.get_user_deprovisioning_event(tenant_id, event_id)
+        if updated is None:  # pragma: no cover - defensive
+            raise RuntimeError(f"Deprovisioning event '{event_id}' disappeared")
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_user_deprovisioning.retry",
+            resource_type="user_deprovisioning_event",
+            resource_id=event_id,
+            old_values={"state": event.state, "attempts": event.attempts},
+            new_values={"state": updated.state, "attempts": updated.attempts},
+        )
+        return _user_deprovisioning_event_response(updated)
+
+    @router.get(
         "/tenants/{tenant_id}/external-grants/{provider_id}",
         response_model=AdminExternalGrantListResponse,
     )
@@ -2910,6 +3010,12 @@ def _external_grant_provider_response(
         resource_discovery_available=provider.resources_path is not None,
         audit_available=provider.audit_path is not None,
     )
+
+
+def _user_deprovisioning_event_response(
+    event: UserDeprovisioningEvent,
+) -> AdminUserDeprovisioningEventResponse:
+    return AdminUserDeprovisioningEventResponse(**event.__dict__)
 
 
 def _external_grant_response(grant: ExternalGrant) -> AdminExternalGrantResponse:

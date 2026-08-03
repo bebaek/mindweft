@@ -414,6 +414,36 @@ export interface AdminExternalGrantInput {
   enabled: boolean;
 }
 
+export type AdminUserDeprovisioningState = "pending" | "processing" | "completed" | "dead_letter";
+
+export interface AdminUserDeprovisioningEvent {
+  id: string;
+  tenant_id: string;
+  user_record_id: string;
+  user_id: string;
+  target_status: TenantUserStatus;
+  actor_user_id: string;
+  state: AdminUserDeprovisioningState;
+  attempts: number;
+  next_attempt_at: string;
+  claimed_at: string | null;
+  completed_at: string | null;
+  last_error: string | null;
+  assignment_removed: boolean;
+  grants_disabled: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminUserDeprovisioningEventList {
+  tenant_id: string;
+  events: AdminUserDeprovisioningEvent[];
+  limit: number;
+  offset: number;
+  total: number;
+  next_offset: number | null;
+}
+
 export interface AdminMcpServerCatalogPolicy {
   tenant_id: string;
   item_ids: string[];
@@ -934,6 +964,26 @@ export class MinigentApiClient {
     return this.#request<AdminExternalGrantProviderList>("/admin/external-grant-providers", {
       signal,
     });
+  }
+
+  listAdminUserDeprovisioningEvents(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminUserDeprovisioningEventList> {
+    return this.#request<AdminUserDeprovisioningEventList>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/user-deprovisioning-events`,
+      { signal },
+    );
+  }
+
+  retryAdminUserDeprovisioningEvent(
+    tenantId: string,
+    eventId: string,
+  ): Promise<AdminUserDeprovisioningEvent> {
+    return this.#request<AdminUserDeprovisioningEvent>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/user-deprovisioning-events/${encodeURIComponent(eventId)}/retry`,
+      { method: "POST" },
+    );
   }
 
   listAdminExternalGrants(

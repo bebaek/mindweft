@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Iterator, TypeGuard, cast
+from typing import Any, Iterator, Literal, TypeGuard, cast
+from uuid import uuid4
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -69,6 +70,26 @@ class SubjectMCPServerCatalogAssignment:
     item_ids: tuple[str, ...]
     version: int
     updated_by: str | None
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class UserDeprovisioningEvent:
+    id: str
+    tenant_id: str
+    user_record_id: str
+    user_id: str
+    target_status: TenantUserStatus
+    actor_user_id: str
+    state: Literal["pending", "processing", "completed", "dead_letter"]
+    attempts: int
+    next_attempt_at: datetime
+    claimed_at: datetime | None
+    completed_at: datetime | None
+    last_error: str | None
+    assignment_removed: bool
+    grants_disabled: int
+    created_at: datetime
     updated_at: datetime
 
 
@@ -354,8 +375,209 @@ class SQLiteTenantConfigStore:
                         user_record_id,
                     ),
                 )
+                if (
+                    next_status
+                    in {
+                        TenantUserStatus.SUSPENDED,
+                        TenantUserStatus.DELETED,
+                    }
+                    and next_status != current.status
+                ):
+                    connection.execute(
+                        """
+                        INSERT INTO user_deprovisioning_events (
+                            id, tenant_id, user_record_id, user_id, target_status,
+                            actor_user_id, state, attempts, next_attempt_at,
+                            assignment_removed, grants_disabled, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, 0, 0, ?, ?)
+                        """,
+                        (
+                            str(uuid4()),
+                            tenant_id,
+                            user_record_id,
+                            current.user_id,
+                            next_status.value,
+                            updated_by or "system",
+                            now,
+                            now,
+                            now,
+                        ),
+                    )
                 connection.commit()
         return self.get_tenant_user(tenant_id, user_record_id)
+
+    def list_user_deprovisioning_events(
+        self,
+        tenant_id: str,
+        *,
+        state: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[UserDeprovisioningEvent], int]:
+        clauses = ["tenant_id = ?"]
+        values: list[object] = [tenant_id]
+        if state is not None:
+            clauses.append("state = ?")
+            values.append(state)
+        where = " AND ".join(clauses)
+        with self._connection() as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM user_deprovisioning_events WHERE {where}",
+                    tuple(values),
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                f"""
+                SELECT * FROM user_deprovisioning_events WHERE {where}
+                ORDER BY created_at DESC, id ASC LIMIT ? OFFSET ?
+                """,
+                (*values, limit, offset),
+            ).fetchall()
+        return [_user_deprovisioning_event_from_row(row) for row in rows], total
+
+    def get_user_deprovisioning_event(
+        self, tenant_id: str, event_id: str
+    ) -> UserDeprovisioningEvent | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM user_deprovisioning_events WHERE tenant_id = ? AND id = ?",
+                (tenant_id, event_id),
+            ).fetchone()
+        return _user_deprovisioning_event_from_row(row) if row is not None else None
+
+    def claim_user_deprovisioning_event(
+        self, *, lease_seconds: int = 60
+    ) -> UserDeprovisioningEvent | None:
+        now = datetime.now(timezone.utc)
+        stale_before = datetime.fromtimestamp(now.timestamp() - lease_seconds, timezone.utc)
+        now_iso = now.isoformat()
+        with self._lock:
+            with self._connection() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    """
+                    UPDATE user_deprovisioning_events
+                    SET state = 'pending', claimed_at = NULL, next_attempt_at = ?, updated_at = ?
+                    WHERE state = 'processing' AND claimed_at < ?
+                    """,
+                    (now_iso, now_iso, stale_before.isoformat()),
+                )
+                row = connection.execute(
+                    """
+                    SELECT id FROM user_deprovisioning_events
+                    WHERE state = 'pending' AND next_attempt_at <= ?
+                    ORDER BY next_attempt_at, created_at, id LIMIT 1
+                    """,
+                    (now_iso,),
+                ).fetchone()
+                if row is None:
+                    connection.commit()
+                    return None
+                event_id = str(row["id"])
+                connection.execute(
+                    """
+                    UPDATE user_deprovisioning_events
+                    SET state = 'processing', attempts = attempts + 1,
+                        claimed_at = ?, updated_at = ?
+                    WHERE id = ? AND state = 'pending'
+                    """,
+                    (now_iso, now_iso, event_id),
+                )
+                claimed = connection.execute(
+                    "SELECT * FROM user_deprovisioning_events WHERE id = ?", (event_id,)
+                ).fetchone()
+                connection.commit()
+        return _user_deprovisioning_event_from_row(claimed) if claimed is not None else None
+
+    def heartbeat_user_deprovisioning_event(self, event_id: str) -> bool:
+        now = _utc_now_iso()
+        with self._lock:
+            with self._connection() as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE user_deprovisioning_events
+                    SET claimed_at = ?, updated_at = ?
+                    WHERE id = ? AND state = 'processing'
+                    """,
+                    (now, now, event_id),
+                )
+                connection.commit()
+        return cursor.rowcount == 1
+
+    def complete_user_deprovisioning_event(
+        self,
+        event_id: str,
+        *,
+        assignment_removed: bool,
+        grants_disabled: int,
+    ) -> bool:
+        now = _utc_now_iso()
+        with self._lock:
+            with self._connection() as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE user_deprovisioning_events
+                    SET state = 'completed', completed_at = ?, claimed_at = NULL,
+                        last_error = NULL, assignment_removed = ?, grants_disabled = ?,
+                        updated_at = ?
+                    WHERE id = ? AND state = 'processing'
+                    """,
+                    (now, int(assignment_removed), grants_disabled, now, event_id),
+                )
+                connection.commit()
+        return cursor.rowcount == 1
+
+    def fail_user_deprovisioning_event(
+        self,
+        event_id: str,
+        *,
+        error: str,
+        retry_at: datetime,
+        dead_letter: bool,
+        assignment_removed: bool,
+        grants_disabled: int,
+    ) -> bool:
+        now = _utc_now_iso()
+        state = "dead_letter" if dead_letter else "pending"
+        with self._lock:
+            with self._connection() as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE user_deprovisioning_events
+                    SET state = ?, next_attempt_at = ?, claimed_at = NULL,
+                        last_error = ?, assignment_removed = ?, grants_disabled = ?,
+                        updated_at = ?
+                    WHERE id = ? AND state = 'processing'
+                    """,
+                    (
+                        state,
+                        retry_at.isoformat(),
+                        error[:2000],
+                        int(assignment_removed),
+                        grants_disabled,
+                        now,
+                        event_id,
+                    ),
+                )
+                connection.commit()
+        return cursor.rowcount == 1
+
+    def retry_user_deprovisioning_event(self, tenant_id: str, event_id: str) -> bool:
+        now = _utc_now_iso()
+        with self._lock:
+            with self._connection() as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE user_deprovisioning_events
+                    SET state = 'pending', next_attempt_at = ?, claimed_at = NULL,
+                        completed_at = NULL, last_error = NULL, updated_at = ?
+                    WHERE tenant_id = ? AND id = ? AND state IN ('pending', 'dead_letter')
+                    """,
+                    (now, now, tenant_id, event_id),
+                )
+                connection.commit()
+        return cursor.rowcount == 1
 
     def delete_tenant_user(
         self,
@@ -955,6 +1177,40 @@ class SQLiteTenantConfigStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS user_deprovisioning_events (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    user_record_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    target_status TEXT NOT NULL,
+                    actor_user_id TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK (state IN ('pending', 'processing', 'completed', 'dead_letter')),
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT NOT NULL,
+                    claimed_at TEXT,
+                    completed_at TEXT,
+                    last_error TEXT,
+                    assignment_removed INTEGER NOT NULL DEFAULT 0,
+                    grants_disabled INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_user_deprovisioning_claim
+                ON user_deprovisioning_events(state, next_attempt_at, created_at)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_user_deprovisioning_tenant
+                ON user_deprovisioning_events(tenant_id, created_at DESC)
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS local_identities (
                     username TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
@@ -1168,6 +1424,35 @@ def _tenant_from_row(row: sqlite3.Row) -> Tenant:
         metadata=metadata,
         created_by=str(row["created_by"]) if row["created_by"] is not None else None,
         updated_by=str(row["updated_by"]) if row["updated_by"] is not None else None,
+        created_at=datetime.fromisoformat(str(row["created_at"])),
+        updated_at=datetime.fromisoformat(str(row["updated_at"])),
+    )
+
+
+def _user_deprovisioning_event_from_row(row: sqlite3.Row) -> UserDeprovisioningEvent:
+    return UserDeprovisioningEvent(
+        id=str(row["id"]),
+        tenant_id=str(row["tenant_id"]),
+        user_record_id=str(row["user_record_id"]),
+        user_id=str(row["user_id"]),
+        target_status=TenantUserStatus(str(row["target_status"])),
+        actor_user_id=str(row["actor_user_id"]),
+        state=cast(Literal["pending", "processing", "completed", "dead_letter"], str(row["state"])),
+        attempts=int(row["attempts"]),
+        next_attempt_at=datetime.fromisoformat(str(row["next_attempt_at"])),
+        claimed_at=(
+            datetime.fromisoformat(str(row["claimed_at"]))
+            if row["claimed_at"] is not None
+            else None
+        ),
+        completed_at=(
+            datetime.fromisoformat(str(row["completed_at"]))
+            if row["completed_at"] is not None
+            else None
+        ),
+        last_error=str(row["last_error"]) if row["last_error"] is not None else None,
+        assignment_removed=bool(row["assignment_removed"]),
+        grants_disabled=int(row["grants_disabled"]),
         created_at=datetime.fromisoformat(str(row["created_at"])),
         updated_at=datetime.fromisoformat(str(row["updated_at"])),
     )

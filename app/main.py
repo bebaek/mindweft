@@ -115,6 +115,7 @@ from app.store import (
 )
 from app.tenants import require_active_tenant_principal, require_tenant_context
 from app.tools import ToolRegistry, build_tool_registry_from_env
+from app.user_deprovisioning import UserDeprovisioningProcessor
 
 __all__ = [
     "DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES",
@@ -755,13 +756,26 @@ def create_app(
                 interval_seconds=app.state.attachment_store_settings.cleanup_interval_seconds,
             )
         )
+        deprovisioning_processor = app.state.user_deprovisioning_processor
+        deprovisioning_task = (
+            asyncio.create_task(
+                deprovisioning_processor.run(),
+                name="user-deprovisioning-worker",
+            )
+            if deprovisioning_processor is not None
+            else None
+        )
         try:
             yield
         finally:
             await _drain_active_runs(app)
             stale_recovery_task.cancel()
             attachment_cleanup_task.cancel()
-            for task in (stale_recovery_task, attachment_cleanup_task):
+            if deprovisioning_task is not None:
+                deprovisioning_task.cancel()
+            for task in (stale_recovery_task, attachment_cleanup_task, deprovisioning_task):
+                if task is None:
+                    continue
                 try:
                     await task
                 except asyncio.CancelledError:
@@ -801,6 +815,11 @@ def create_app(
             )
     app.state.admin_store = admin_store
     app.state.external_grant_provider_registry = build_external_grant_provider_registry_from_env()
+    app.state.user_deprovisioning_processor = (
+        UserDeprovisioningProcessor(admin_store, app.state.external_grant_provider_registry)
+        if admin_store is not None
+        else None
+    )
     if execution_resolver is None:
         if llm_adapter is not None or tool_registry is not None:
             adapter = llm_adapter or build_llm_adapter_from_env()

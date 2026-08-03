@@ -20,6 +20,7 @@ import { ExternalGrantPanel } from "../components/ExternalGrantPanel";
 import { McpCatalogPolicyPanel } from "../components/McpCatalogPolicyPanel";
 import { OAuthImportPanel } from "../components/OAuthImportPanel";
 import { TenantOperationsPanel } from "../components/TenantOperationsPanel";
+import { UserDeprovisioningPanel } from "../components/UserDeprovisioningPanel";
 
 type PendingRemoval =
   | { kind: "user"; id: string; label: string }
@@ -240,6 +241,7 @@ export function AdminPage({ tenantId: scopedTenantId }: { tenantId?: string }) {
 
               <EntitlementsPanel key={`entitlements-${tenant.id}`} tenantId={tenant.id} readOnly={tenantScoped} />
               <McpCatalogPolicyPanel key={`mcp-catalog-${tenant.id}`} tenantId={tenant.id} readOnly={tenantScoped} />
+              <UserDeprovisioningPanel key={`deprovisioning-${tenant.id}`} tenantId={tenant.id} />
               <ExternalGrantPanel key={`external-grants-${tenant.id}`} tenantId={tenant.id} readOnly={tenantScoped} />
               <ExecutionConfigPanel key={`execution-${tenant.id}`} tenantId={tenant.id} />
               {tenantScoped && <OAuthImportPanel key={`oauth-${tenant.id}`} tenantId={tenant.id} />}

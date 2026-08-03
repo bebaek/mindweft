@@ -1865,6 +1865,26 @@ panel's reconciliation report and confirmed bulk-disable action to deprovision s
 silently mutating provider state. User labels and emails remain in Minigent's platform-admin UI;
 only canonical user IDs are forwarded to providers.
 
+Changing an existing tenant user to `suspended` or `deleted` atomically appends a durable
+user-deprovisioning event in the admin database. Runtime identity and MCP checks continue to deny
+the inactive user immediately; provider availability is not part of that transaction. A background
+worker claims due events with a SQLite lease so replicas do not process the same event concurrently,
+removes the user's explicit MCP catalog assignment, and disables every enabled exact-subject grant
+returned by each configured provider. Processing is idempotent: retries skip absent assignments and
+already-disabled grants. Reactivating a user does not cancel pending deprovisioning or restore grants
+or assignments; those require explicit administrative action.
+
+Failures use exponential backoff and become `dead_letter` after eight attempts by default. Configure
+polling, retry limits, and stale-claim recovery with
+`MINIGENT_USER_DEPROVISIONING_INTERVAL_SECONDS`,
+`MINIGENT_USER_DEPROVISIONING_MAX_ATTEMPTS`, and
+`MINIGENT_USER_DEPROVISIONING_LEASE_SECONDS`. Tenant owners and platform administrators can inspect
+`GET /admin/tenants/{tenant_id}/user-deprovisioning-events` (optionally filtered by `state`) and
+requeue pending or dead-letter work with
+`POST /admin/tenants/{tenant_id}/user-deprovisioning-events/{event_id}/retry`. Events retain the
+initiating actor, target status, attempt count, redacted failure summary, assignment-cleanup result,
+and count of grants disabled. The outbox is part of normal admin-database backup and restore.
+
 Minigent issues a fresh 30–300 second forwarded-identity token for each provider request and uses
 only the configured read or write scopes. Provider credentials, scopes, and HTTP operations are
 never added to tenant execution configuration or exposed as model tools. Grant state remains
