@@ -1961,6 +1961,36 @@ def test_build_tool_registry_for_skill_can_narrow_mcp_servers(monkeypatch) -> No
     assert subject_registry.mcp_servers() == []
 
 
+def test_capability_profile_preserves_explicit_empty_tool_allowlists() -> None:
+    config = parse_tenant_execution_config(
+        PRINCIPAL.tenant_id,
+        {
+            "tools": {
+                "allowed_local_tools": ["current_time"],
+                "mcp_servers": [{"name": "docs", "url": "https://docs.example/mcp", "headers": {}}],
+            },
+            "capability_profiles": {
+                "default_profile": "safe-default",
+                "items": [
+                    {
+                        "name": "safe-default",
+                        "allowedLocalTools": [],
+                        "mcpServerNames": [],
+                    }
+                ],
+            },
+        },
+    )
+
+    profile = config.capability_profiles.items[0]
+    assert profile.allowed_local_tools == []
+    assert profile.mcp_server_names == []
+
+    registry = build_tool_registry_for_capability_profile(config, "safe-default")
+    assert registry.specs() == []
+    assert registry.mcp_servers() == []
+
+
 def test_runtime_capability_profile_can_narrow_tools_for_thread() -> None:
     config = parse_tenant_execution_config(
         PRINCIPAL.tenant_id,

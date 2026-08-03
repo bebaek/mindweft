@@ -1548,7 +1548,7 @@ def _parse_tenant_skills_config(
             )
         skill_allowed_local_tools = _optional_str_list(
             tenant_id,
-            entry.get("allowed_local_tools") or entry.get("allowedLocalTools"),
+            entry.get("allowed_local_tools", entry.get("allowedLocalTools")),
             f"skill '{name}' allowed_local_tools",
         )
         if skill_allowed_local_tools is not None:
@@ -1567,7 +1567,7 @@ def _parse_tenant_skills_config(
                     )
         mcp_server_names = _optional_str_list(
             tenant_id,
-            entry.get("mcp_server_names") or entry.get("mcpServerNames"),
+            entry.get("mcp_server_names", entry.get("mcpServerNames")),
             f"skill '{name}' mcp_server_names",
         )
         if mcp_server_names is not None:
@@ -1625,7 +1625,10 @@ def _parse_tenant_agent_presets_config(
         skill_name = _optional_str(entry.get("skill_name") or entry.get("skillName"))
         skills = _optional_str_list(
             tenant_id,
-            entry.get("skill_names") or entry.get("skillNames") or entry.get("skills"),
+            entry.get(
+                "skill_names",
+                entry.get("skillNames", entry.get("skills")),
+            ),
             f"agent preset '{name}' skill_names",
         )
         if skill_name is not None and skills is not None:
@@ -1700,7 +1703,7 @@ def _parse_tenant_capability_profiles_config(
         seen_names.add(name)
         profile_allowed_local_tools = _optional_str_list(
             tenant_id,
-            entry.get("allowed_local_tools") or entry.get("allowedLocalTools"),
+            entry.get("allowed_local_tools", entry.get("allowedLocalTools")),
             f"capability profile '{name}' allowed_local_tools",
         )
         if profile_allowed_local_tools is not None:
@@ -1719,7 +1722,7 @@ def _parse_tenant_capability_profiles_config(
                     )
         mcp_server_names = _optional_str_list(
             tenant_id,
-            entry.get("mcp_server_names") or entry.get("mcpServerNames"),
+            entry.get("mcp_server_names", entry.get("mcpServerNames")),
             f"capability profile '{name}' mcp_server_names",
         )
         if mcp_server_names is not None:
@@ -1757,7 +1760,7 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
     )
     allowed_tools = _optional_str_list(
         tenant_id,
-        entry.get("allowed_tools") or entry.get("allowedTools"),
+        entry.get("allowed_tools", entry.get("allowedTools")),
         f"mcp server '{name}' allowed_tools",
     )
     path_policy = _parse_mcp_path_policy(
@@ -1842,12 +1845,12 @@ def _parse_mcp_path_policy(
         )
     deny_globs = _optional_str_list(
         tenant_id,
-        raw.get("deny_globs") or raw.get("denyGlobs"),
+        raw.get("deny_globs", raw.get("denyGlobs")),
         f"mcp server '{server_name}' path_policy.deny_globs",
     )
     allow_globs = _optional_str_list(
         tenant_id,
-        raw.get("allow_globs") or raw.get("allowGlobs"),
+        raw.get("allow_globs", raw.get("allowGlobs")),
         f"mcp server '{server_name}' path_policy.allow_globs",
     )
     return MCPPathPolicy(deny_globs=deny_globs or [], allow_globs=allow_globs or [])
