@@ -326,6 +326,18 @@ export interface AdminTenantExecutionConfig {
   config: Record<string, unknown>;
 }
 
+export interface AdminMcpServerCatalogItem {
+  id: string;
+  title: string;
+  description: string;
+  detail?: string | null;
+  server: Record<string, unknown>;
+}
+
+export interface AdminMcpServerCatalog {
+  items: AdminMcpServerCatalogItem[];
+}
+
 export interface AdminExecutionValidationSection {
   ok: boolean;
   errors: string[];
@@ -788,6 +800,16 @@ export class MinigentApiClient {
   ): Promise<AdminAuditRecordList> {
     return this.#request<AdminAuditRecordList>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/audit-records${queryString(filters)}`,
+      { signal },
+    );
+  }
+
+  getAdminMcpServerCatalog(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminMcpServerCatalog> {
+    return this.#request<AdminMcpServerCatalog>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog`,
       { signal },
     );
   }

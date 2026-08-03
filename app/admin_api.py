@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import re
@@ -13,7 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.auth import require_admin_principal, require_principal
 from app.execution import (
@@ -48,6 +49,7 @@ from app.session_auth import validate_session_auth_settings
 
 ADMIN_DB_PATH_ENV = "MINIGENT_ADMIN_DB_PATH"
 ADMIN_ENCRYPTION_KEY_ENV = "MINIGENT_ADMIN_ENCRYPTION_KEY"
+ADMIN_MCP_SERVER_CATALOG_ENV = "MINIGENT_ADMIN_MCP_SERVER_CATALOG"
 TENANT_SLUG_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 LOGIN_USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._@+-]{0,127}$")
 DOMAIN_PATTERN = re.compile(
@@ -61,10 +63,23 @@ NON_NEGATIVE_INTEGER_ENTITLEMENT_LIMITS = {
 }
 
 
+class AdminMCPServerCatalogItem(BaseModel):
+    id: str
+    title: str
+    description: str
+    detail: str | None = None
+    server: dict[str, Any]
+
+
+class AdminMCPServerCatalogResponse(BaseModel):
+    items: list[AdminMCPServerCatalogItem]
+
+
 @dataclass(frozen=True)
 class AdminStoreSettings:
     db_path: str | None = None
     encryption_key: str | None = None
+    mcp_server_catalog: tuple[AdminMCPServerCatalogItem, ...] = ()
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> AdminStoreSettings:
@@ -72,6 +87,7 @@ class AdminStoreSettings:
         return cls(
             db_path=_optional_str_env(lookup, ADMIN_DB_PATH_ENV),
             encryption_key=_optional_str_env(lookup, ADMIN_ENCRYPTION_KEY_ENV),
+            mcp_server_catalog=_parse_mcp_server_catalog(lookup),
         )
 
 
@@ -1585,6 +1601,20 @@ def build_admin_router() -> APIRouter:
         )
 
     @router.get(
+        "/tenants/{tenant_id}/mcp-server-catalog",
+        response_model=AdminMCPServerCatalogResponse,
+    )
+    async def get_mcp_server_catalog(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_tenant_owner_principal),
+    ) -> AdminMCPServerCatalogResponse:
+        _ = tenant_id, admin
+        settings = getattr(request.app.state, "admin_store_settings", None)
+        items = settings.mcp_server_catalog if isinstance(settings, AdminStoreSettings) else ()
+        return AdminMCPServerCatalogResponse(items=list(items))
+
+    @router.get(
         "/tenants/{tenant_id}/execution-config",
         response_model=AdminTenantExecutionConfigResponse,
     )
@@ -1699,6 +1729,61 @@ def admin_store_path_from_env() -> str | None:
 
 def admin_encryption_key_from_env() -> str | None:
     return AdminStoreSettings.from_env().encryption_key
+
+
+def _parse_mcp_server_catalog(
+    env: Mapping[str, str],
+) -> tuple[AdminMCPServerCatalogItem, ...]:
+    raw = _optional_str_env(env, ADMIN_MCP_SERVER_CATALOG_ENV)
+    if raw is None:
+        return ()
+    try:
+        payload: object = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{ADMIN_MCP_SERVER_CATALOG_ENV} must be valid JSON") from exc
+    if not isinstance(payload, list):
+        raise RuntimeError(f"{ADMIN_MCP_SERVER_CATALOG_ENV} must be a JSON array")
+
+    items: list[AdminMCPServerCatalogItem] = []
+    seen_ids: set[str] = set()
+    seen_names: set[str] = set()
+    for index, value in enumerate(payload):
+        try:
+            item = AdminMCPServerCatalogItem.model_validate(value)
+        except ValidationError as exc:
+            raise RuntimeError(f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}] is invalid") from exc
+        server_name = item.server.get("name")
+        server_url = item.server.get("url")
+        if not item.id.strip() or not item.title.strip() or not item.description.strip():
+            raise RuntimeError(
+                f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}] requires id, title, and description"
+            )
+        if not isinstance(server_name, str) or not server_name.strip():
+            raise RuntimeError(f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}].server requires name")
+        if not isinstance(server_url, str) or not server_url.strip():
+            raise RuntimeError(f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}].server requires url")
+        headers = item.server.get("headers", {})
+        if not isinstance(headers, dict) or headers:
+            raise RuntimeError(
+                f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}].server.headers must be empty; "
+                "catalog entries are returned to browsers"
+            )
+        allowed_tools = item.server.get("allowed_tools", item.server.get("allowedTools"))
+        if allowed_tools is not None and (
+            not isinstance(allowed_tools, list)
+            or not all(isinstance(tool, str) and tool for tool in allowed_tools)
+        ):
+            raise RuntimeError(
+                f"{ADMIN_MCP_SERVER_CATALOG_ENV}[{index}].server.allowed_tools must be a string array"
+            )
+        if item.id in seen_ids or server_name in seen_names:
+            raise RuntimeError(
+                f"{ADMIN_MCP_SERVER_CATALOG_ENV} contains duplicate ids or server names"
+            )
+        seen_ids.add(item.id)
+        seen_names.add(server_name)
+        items.append(item)
+    return tuple(items)
 
 
 def _optional_str_env(env: Mapping[str, str], name: str) -> str | None:

@@ -139,6 +139,59 @@ def test_admin_store_settings_from_env_mapping_treats_blank_as_none() -> None:
     )
 
 
+def test_admin_store_settings_from_env_parses_mcp_server_catalog() -> None:
+    settings = AdminStoreSettings.from_env(
+        {
+            "MINIGENT_ADMIN_MCP_SERVER_CATALOG": json.dumps(
+                [
+                    {
+                        "id": "web-search",
+                        "title": "Web search",
+                        "description": "Search current web content.",
+                        "detail": "Local sidecar · 3 tools",
+                        "server": {
+                            "name": "web-search",
+                            "url": "http://127.0.0.1:8766/mcp",
+                            "headers": {},
+                            "allowed_tools": ["web", "news", "context"],
+                        },
+                    }
+                ]
+            )
+        }
+    )
+
+    assert len(settings.mcp_server_catalog) == 1
+    assert settings.mcp_server_catalog[0].id == "web-search"
+    assert settings.mcp_server_catalog[0].server["allowed_tools"] == [
+        "web",
+        "news",
+        "context",
+    ]
+
+
+def test_admin_store_settings_rejects_secrets_in_mcp_server_catalog() -> None:
+    with pytest.raises(RuntimeError, match="headers must be empty"):
+        AdminStoreSettings.from_env(
+            {
+                "MINIGENT_ADMIN_MCP_SERVER_CATALOG": json.dumps(
+                    [
+                        {
+                            "id": "private",
+                            "title": "Private",
+                            "description": "Private service.",
+                            "server": {
+                                "name": "private",
+                                "url": "https://example.com/mcp",
+                                "headers": {"Authorization": "Bearer secret"},
+                            },
+                        }
+                    ]
+                )
+            }
+        )
+
+
 def test_admin_store_settings_from_env_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIGENT_ADMIN_DB_PATH", ".data/admin.db")
     monkeypatch.setenv("MINIGENT_ADMIN_ENCRYPTION_KEY", "secret-key")
@@ -5003,6 +5056,38 @@ def test_tenant_registry_required_blocks_inactive_tenants(
     client.post("/admin/tenants/tenant-1/suspend", headers=ADMIN_HEADERS)
     suspended_response = client.post("/threads", headers=AUTH_HEADERS)
     assert suspended_response.status_code == 403
+
+
+def test_admin_api_returns_configured_mcp_server_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog = [
+        {
+            "id": "web-search",
+            "title": "Web search",
+            "description": "Search current web content.",
+            "detail": "Local Brave Search sidecar · 3 tools",
+            "server": {
+                "name": "web-search",
+                "url": "http://127.0.0.1:8766/mcp",
+                "headers": {},
+                "allowed_tools": ["web", "news", "context"],
+            },
+        }
+    ]
+    monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store")
+    )
+
+    response = client.get(
+        "/admin/tenants/tenant-1/mcp-server-catalog",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"items": catalog}
 
 
 def test_admin_api_validates_tenant_execution_config(

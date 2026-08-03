@@ -112,6 +112,7 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | `MINIGENT_AUTH_MODE` | Authentication mode: development headers, static tokens, or JWT. |
 | `MINIGENT_SESSION_CREDENTIALS` / `MINIGENT_SESSION_SECRET` | Optional generic username/password-hash console sign-in with secure same-origin sessions. |
 | `MINIGENT_ADMIN_DB_PATH` / `MINIGENT_ADMIN_ENCRYPTION_KEY` | Durable encrypted tenant administration and execution configuration. |
+| `MINIGENT_ADMIN_MCP_SERVER_CATALOG` | Deployment-configured internal MCP quick-add cards for the tenant execution editor. |
 | `MINIGENT_LLM_PROVIDER` | LLM provider such as `mock`, `openai`, `openrouter`, `openai-compatible`, `generic-oauth`, `google`, or `anthropic`. |
 | `MINIGENT_LLM_MODEL` | Model identifier for the selected provider. |
 | `MINIGENT_IMAGE_INPUT_ENABLED` | Enables image attachments from CLI/chat clients; unified config key is `[image_input].enabled`. |
@@ -352,8 +353,8 @@ OpenAI OAuth credential import from Pi, and a separate
 platform administration workspace with tenant provisioning and
 editing, user role/status management, domain verification, typed feature and limit entitlement
 editing with server validation, version visibility and confirmed reset, a sectioned execution
-configuration editor for LLMs, tools, MCP servers (including quick-add cards for hosted internal
-services such as the local web-search sidecar), backends, quality review, skills, capability
+configuration editor for LLMs, tools, MCP servers (including deployment-configured quick-add
+cards for hosted internal services), backends, quality review, skills, capability
 profiles, and agent presets with redacted-secret preservation and unsaved-change protection,
 tenant-scoped thread browsing with runtime filters, retained-message and compacted-context inspection,
 previewed pruning, confirmed deletion, and paginated audit review, conflict feedback, confirmed

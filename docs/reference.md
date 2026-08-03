@@ -1797,6 +1797,17 @@ minigent --api-token ADMIN_TOKEN admin threads list --tenant TENANT_ID --json
 
 Secrets such as LLM API keys and MCP headers are accepted on writes but redacted in read responses. If `MINIGENT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`, `MINIGENT_ADMIN_ENCRYPTION_KEY` is required and those secrets are encrypted before being written to SQLite. Updating or deleting a tenant config invalidates the in-process execution cache for that tenant so new runs pick up the change immediately.
 
+`MINIGENT_ADMIN_MCP_SERVER_CATALOG` optionally configures the internal-service quick-add cards shown
+by the tenant execution editor. It is a JSON array; each item has `id`, `title`, `description`, an
+optional `detail`, and a `server` object containing the tenant MCP server definition. The catalog is
+deployment-owned and returned to authenticated tenant owners through
+`GET /admin/tenants/{tenant_id}/mcp-server-catalog`. Because catalog entries reach the browser,
+`server.headers` must be empty; add credentials through the tenant editor instead. For example:
+
+```bash
+MINIGENT_ADMIN_MCP_SERVER_CATALOG='[{"id":"web-search","title":"Web search","description":"Search web, news, and ranked page content.","detail":"Local Brave Search sidecar · 3 tools","server":{"name":"web-search","url":"http://127.0.0.1:8766/mcp","headers":{},"allowed_tools":["brave_web_search","brave_news_search","brave_llm_context"]}}]'
+```
+
 The admin CLI can bridge the static JSON and DB-backed modes. `admin execution-config import`
 accepts the same top-level tenant map used by `MINIGENT_TENANT_EXECUTION_CONFIGS`; it also
 accepts a bundle with an `execution_configs` object. Imports validate each tenant before any
