@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app.auth import require_admin_principal, require_principal
 from app.execution import (
     TenantExecutionResolver,
+    interpolate_tenant_execution_env_placeholders,
     parse_tenant_execution_config,
     redact_tenant_execution_payload,
     validate_tenant_execution_config,
@@ -1758,11 +1759,14 @@ def _parse_mcp_server_catalog(
         raise RuntimeError(f"{env_name} must be valid JSON") from exc
     if not isinstance(payload, list):
         raise RuntimeError(f"{env_name} must be a JSON array")
+    interpolated_payload = interpolate_tenant_execution_env_placeholders(payload, env)
+    if not isinstance(interpolated_payload, list):  # pragma: no cover - shape is preserved
+        raise RuntimeError(f"{env_name} interpolation changed the catalog shape")
 
     items: list[AdminMCPServerCatalogItem] = []
     seen_ids: set[str] = set()
     seen_names: set[str] = set()
-    for index, value in enumerate(payload):
+    for index, value in enumerate(interpolated_payload):
         try:
             item = AdminMCPServerCatalogItem.model_validate(value)
         except ValidationError as exc:

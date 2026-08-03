@@ -185,7 +185,7 @@ def test_admin_store_settings_prefers_secret_mcp_server_catalog() -> None:
             "server": {
                 "name": "private",
                 "url": "https://private.example/mcp",
-                "headers": {"Authorization": "Bearer secret"},
+                "headers": {"Authorization": "Bearer ${PRIVATE_TOKEN}"},
             },
         }
     ]
@@ -194,10 +194,14 @@ def test_admin_store_settings_prefers_secret_mcp_server_catalog() -> None:
         {
             "MINIGENT_ADMIN_MCP_SERVER_CATALOG": json.dumps(public_catalog),
             "MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET": json.dumps(secret_catalog),
+            "PRIVATE_TOKEN": "secret-token",
         }
     )
 
     assert [item.id for item in settings.mcp_server_catalog] == ["private"]
+    assert settings.mcp_server_catalog[0].server["headers"] == {
+        "Authorization": "Bearer secret-token"
+    }
 
 
 def test_admin_store_settings_rejects_invalid_headers_in_mcp_server_catalog() -> None:

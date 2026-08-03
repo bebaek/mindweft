@@ -1807,7 +1807,9 @@ deployment-owned and returned to authenticated tenant owners through
 entries reach the browser. When a quick-add entry is validated or saved, its `<redacted>` header
 placeholders are restored server-side from the deployment catalog; existing tenant values take
 precedence. Therefore catalogs containing credentials must be supplied through a secret manager,
-not committed as plaintext. For example:
+not committed as plaintext. `${NAME}` placeholders in catalog strings are resolved from the
+process environment at startup, allowing a catalog stored in a secret to reference another secret
+key such as `NETWISE_API_TOKEN`. For example:
 
 ```bash
 MINIGENT_ADMIN_MCP_SERVER_CATALOG='[{"id":"web-search","title":"Web search","description":"Search web, news, and ranked page content.","detail":"Local Brave Search sidecar · 3 tools","server":{"name":"web-search","url":"http://127.0.0.1:8766/mcp","headers":{},"allowed_tools":["brave_web_search","brave_news_search","brave_llm_context"]}}]'
