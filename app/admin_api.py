@@ -16,7 +16,10 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, ValidationError
 
-from app.admin_store import TenantMCPServerCatalogPolicy
+from app.admin_store import (
+    SubjectMCPServerCatalogAssignment,
+    TenantMCPServerCatalogPolicy,
+)
 from app.auth import require_admin_principal, require_principal
 from app.execution import (
     TenantExecutionResolver,
@@ -93,6 +96,25 @@ class AdminMCPServerCatalogPolicyResponse(BaseModel):
     version: int
     updated_by: str | None = None
     updated_at: datetime
+
+
+class AdminMCPServerCatalogAssignmentRequest(BaseModel):
+    item_ids: list[str] = Field(default_factory=list)
+
+
+class AdminMCPServerCatalogAssignmentResponse(BaseModel):
+    tenant_id: str
+    subject_type: str
+    subject_id: str
+    item_ids: list[str]
+    version: int
+    updated_by: str | None = None
+    updated_at: datetime
+
+
+class AdminMCPServerCatalogAssignmentListResponse(BaseModel):
+    tenant_id: str
+    assignments: list[AdminMCPServerCatalogAssignmentResponse]
 
 
 @dataclass(frozen=True)
@@ -1738,6 +1760,117 @@ def build_admin_router() -> APIRouter:
         )
 
     @router.get(
+        "/tenants/{tenant_id}/mcp-server-catalog-assignments",
+        response_model=AdminMCPServerCatalogAssignmentListResponse,
+    )
+    async def list_mcp_server_catalog_assignments(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminMCPServerCatalogAssignmentListResponse:
+        _ = admin
+        _require_tenant(request, tenant_id)
+        assignments = _require_admin_store(request).list_subject_mcp_server_catalog_assignments(
+            tenant_id
+        )
+        return AdminMCPServerCatalogAssignmentListResponse(
+            tenant_id=tenant_id,
+            assignments=[_mcp_server_catalog_assignment_response(item) for item in assignments],
+        )
+
+    @router.put(
+        "/tenants/{tenant_id}/mcp-server-catalog-assignments/{subject_type}/{subject_id}",
+        response_model=AdminMCPServerCatalogAssignmentResponse,
+    )
+    async def put_mcp_server_catalog_assignment(
+        tenant_id: str,
+        subject_type: str,
+        subject_id: str,
+        body: AdminMCPServerCatalogAssignmentRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminMCPServerCatalogAssignmentResponse:
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        _validate_catalog_assignment_subject(store, tenant_id, subject_type, subject_id)
+        tenant_policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if tenant_policy is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Create a managed tenant catalog policy before assigning subjects",
+            )
+        catalog_ids = {item.id for item in _configured_mcp_server_catalog(request)}
+        duplicate_ids = sorted(
+            {item_id for item_id in body.item_ids if body.item_ids.count(item_id) > 1}
+        )
+        unknown_ids = sorted(set(body.item_ids) - catalog_ids)
+        if duplicate_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Catalog assignment contains duplicate item ids: {', '.join(duplicate_ids)}",
+            )
+        if unknown_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Catalog assignment references unknown item ids: {', '.join(unknown_ids)}",
+            )
+        disallowed_ids = sorted(set(body.item_ids) - set(tenant_policy.item_ids))
+        if disallowed_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Catalog assignment exceeds the tenant policy: " + ", ".join(disallowed_ids)
+                ),
+            )
+        old_assignment = store.get_subject_mcp_server_catalog_assignment(
+            tenant_id, subject_type, subject_id
+        )
+        assignment = store.upsert_subject_mcp_server_catalog_assignment(
+            tenant_id,
+            subject_type,
+            subject_id,
+            item_ids=body.item_ids,
+            updated_by=admin.user_id,
+        )
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_mcp_server_catalog_assignment.upsert",
+            old_values=_mcp_server_catalog_assignment_audit_values(old_assignment),
+            new_values=_mcp_server_catalog_assignment_audit_values(assignment),
+        )
+        return _mcp_server_catalog_assignment_response(assignment)
+
+    @router.delete(
+        "/tenants/{tenant_id}/mcp-server-catalog-assignments/{subject_type}/{subject_id}",
+        status_code=204,
+    )
+    async def delete_mcp_server_catalog_assignment(
+        tenant_id: str,
+        subject_type: str,
+        subject_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> None:
+        store = _require_admin_store(request)
+        old_assignment = store.get_subject_mcp_server_catalog_assignment(
+            tenant_id, subject_type, subject_id
+        )
+        if old_assignment is None or not store.delete_subject_mcp_server_catalog_assignment(
+            tenant_id, subject_type, subject_id
+        ):
+            raise HTTPException(status_code=404, detail="Catalog assignment not found")
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_mcp_server_catalog_assignment.delete",
+            old_values=_mcp_server_catalog_assignment_audit_values(old_assignment),
+            new_values=None,
+        )
+
+    @router.get(
         "/tenants/{tenant_id}/mcp-server-catalog",
         response_model=AdminMCPServerCatalogResponse,
     )
@@ -2402,6 +2535,42 @@ def _tenant_catalog_policy_errors(
         policy,
         catalog,
     )
+
+
+def _validate_catalog_assignment_subject(
+    store: Any, tenant_id: str, subject_type: str, subject_id: str
+) -> None:
+    if subject_type == "user":
+        if store.get_tenant_user_by_user_id(tenant_id, subject_id) is None:
+            raise HTTPException(status_code=404, detail=f"Tenant user '{subject_id}' not found")
+        return
+    if subject_type == "role":
+        if subject_id not in {role.value for role in TenantUserRole}:
+            raise HTTPException(status_code=400, detail=f"Unknown tenant role '{subject_id}'")
+        return
+    raise HTTPException(status_code=400, detail="Subject type must be 'user' or 'role'")
+
+
+def _mcp_server_catalog_assignment_response(
+    assignment: SubjectMCPServerCatalogAssignment,
+) -> AdminMCPServerCatalogAssignmentResponse:
+    return AdminMCPServerCatalogAssignmentResponse(
+        tenant_id=assignment.tenant_id,
+        subject_type=assignment.subject_type,
+        subject_id=assignment.subject_id,
+        item_ids=list(assignment.item_ids),
+        version=assignment.version,
+        updated_by=assignment.updated_by,
+        updated_at=assignment.updated_at,
+    )
+
+
+def _mcp_server_catalog_assignment_audit_values(
+    assignment: SubjectMCPServerCatalogAssignment | None,
+) -> dict[str, Any] | None:
+    if assignment is None:
+        return None
+    return _mcp_server_catalog_assignment_response(assignment).model_dump(mode="json")
 
 
 def _mcp_server_catalog_policy_audit_values(

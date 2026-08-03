@@ -6168,3 +6168,190 @@ def test_admin_api_patch_can_clear_optional_tenant_and_user_fields(tmp_path: Pat
     assert tenant_response.json()["region"] is None
     assert user_patch_response.status_code == 200
     assert user_patch_response.json()["display_name"] is None
+
+
+def test_admin_can_assign_mcp_catalog_by_role_and_user(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog = [
+        {
+            "id": "web-search",
+            "title": "Web search",
+            "description": "Search current web content.",
+            "server": {
+                "name": "web-search",
+                "url": "https://tools.example/web/mcp",
+                "allowed_tools": ["web"],
+            },
+        },
+        {
+            "id": "private-calendar",
+            "title": "Private calendar",
+            "description": "Manage private calendars.",
+            "server": {
+                "name": "private-calendar",
+                "url": "http://127.0.0.1:8769/mcp",
+                "allowed_tools": ["calendars_list"],
+            },
+        },
+    ]
+    monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
+    store = _sqlite_store(tmp_path)
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store"))
+    assert (
+        client.post(
+            "/admin/tenants",
+            json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/admin/tenants/tenant-1/users",
+            json={
+                "user_id": "member-1",
+                "email": "member@example.com",
+                "role": "member",
+                "status": "active",
+            },
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+            json={
+                "item_ids": ["web-search", "private-calendar"],
+                "allow_custom_mcp_servers": False,
+            },
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+
+    role_response = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-assignments/role/member",
+        json={"item_ids": ["web-search"]},
+        headers=ADMIN_HEADERS,
+    )
+    assert role_response.status_code == 200
+    user_response = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-assignments/user/member-1",
+        json={"item_ids": ["private-calendar"]},
+        headers=ADMIN_HEADERS,
+    )
+    assert user_response.status_code == 200
+    assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") == (
+        "private-calendar",
+        "web-search",
+    )
+
+    list_response = client.get(
+        "/admin/tenants/tenant-1/mcp-server-catalog-assignments",
+        headers=ADMIN_HEADERS,
+    )
+    assert list_response.status_code == 200
+    assert {
+        (assignment["subject_type"], assignment["subject_id"])
+        for assignment in list_response.json()["assignments"]
+    } == {("role", "member"), ("user", "member-1")}
+
+    overreach = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+        json={"item_ids": ["web-search"], "allow_custom_mcp_servers": False},
+        headers=ADMIN_HEADERS,
+    )
+    assert overreach.status_code == 200
+    assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") == (
+        "web-search",
+    )
+
+    delete_response = client.delete(
+        "/admin/tenants/tenant-1/mcp-server-catalog-assignments/user/member-1",
+        headers=ADMIN_HEADERS,
+    )
+    assert delete_response.status_code == 204
+    assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") == (
+        "web-search",
+    )
+
+
+def test_subject_catalog_assignments_are_inactive_without_tenant_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_ADMIN_MCP_SERVER_CATALOG",
+        json.dumps(
+            [
+                {
+                    "id": "web-search",
+                    "title": "Web search",
+                    "description": "Search the web.",
+                    "server": {
+                        "name": "web-search",
+                        "url": "https://tools.example/web/mcp",
+                        "allowed_tools": ["web"],
+                    },
+                }
+            ]
+        ),
+    )
+    store = _sqlite_store(tmp_path)
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store"))
+    assert (
+        client.post(
+            "/admin/tenants",
+            json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/admin/tenants/tenant-1/users",
+            json={"user_id": "member-1", "role": "member", "status": "active"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-assignments/role/member",
+            json={"item_ids": ["web-search"]},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 409
+    )
+
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+            json={"item_ids": ["web-search"], "allow_custom_mcp_servers": False},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-assignments/role/member",
+            json={"item_ids": ["web-search"]},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+    assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") == (
+        "web-search",
+    )
+
+    assert (
+        client.delete(
+            "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 204
+    )
+    assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") is None

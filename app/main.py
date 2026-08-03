@@ -853,6 +853,25 @@ def create_app(
     runtime_settings = settings.runtime
     app.state.image_input_settings = settings.image_input
     app.state.runtime_settings = runtime_settings
+    mcp_server_name_authorizer = None
+    if admin_store is not None and admin_store_settings.mcp_server_catalog:
+        catalog_server_names = {
+            item.id: str(item.server["name"])
+            for item in admin_store_settings.mcp_server_catalog
+            if isinstance(item.server.get("name"), str)
+        }
+
+        def authorize_mcp_server_names(tenant_id: str, user_id: str) -> set[str] | None:
+            item_ids = admin_store.effective_subject_mcp_server_catalog_item_ids(tenant_id, user_id)
+            if item_ids is None:
+                return None
+            return {
+                catalog_server_names[item_id]
+                for item_id in item_ids
+                if item_id in catalog_server_names
+            }
+
+        mcp_server_name_authorizer = authorize_mcp_server_names
     app.state.runtime = AgentRuntime(
         store=app.state.store,
         execution_resolver=execution_resolver,
@@ -861,6 +880,7 @@ def create_app(
         quality_enhancer=app.state.quality_enhancer,
         context_compaction_enabled=runtime_settings.context_compaction_enabled,
         attachment_store=app.state.attachment_store,
+        mcp_server_name_authorizer=mcp_server_name_authorizer,
     )
     app.state.peer_agent_registry = (
         peer_agent_registry
@@ -875,6 +895,7 @@ def create_app(
         native_backend=NativeAgentBackend(app.state.runtime),
         peer_agent_registry=app.state.peer_agent_registry,
         mcp_broker_sessions=app.state.mcp_broker_sessions,
+        mcp_server_name_authorizer=mcp_server_name_authorizer,
     )
     app.include_router(build_session_auth_router())
     app.include_router(build_admin_router())

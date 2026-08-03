@@ -112,7 +112,7 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | `MINIGENT_AUTH_MODE` | Authentication mode: development headers, static tokens, or JWT. |
 | `MINIGENT_SESSION_CREDENTIALS` / `MINIGENT_SESSION_SECRET` | Optional generic username/password-hash console sign-in with secure same-origin sessions. |
 | `MINIGENT_ADMIN_DB_PATH` / `MINIGENT_ADMIN_ENCRYPTION_KEY` | Durable encrypted tenant administration and execution configuration. |
-| `MINIGENT_ADMIN_MCP_SERVER_CATALOG` / `MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET` | Deployment-owned MCP definitions that platform admins can assign per tenant in the execution editor; use the `_SECRET` variant when entries contain credentials. |
+| `MINIGENT_ADMIN_MCP_SERVER_CATALOG` / `MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET` | Deployment-owned MCP definitions that platform admins can assign as a tenant ceiling and narrow per role or user; use the `_SECRET` variant when entries contain credentials. |
 | `MINIGENT_LLM_PROVIDER` | LLM provider such as `mock`, `openai`, `openrouter`, `openai-compatible`, `generic-oauth`, `google`, or `anthropic`. |
 | `MINIGENT_LLM_MODEL` | Model identifier for the selected provider. |
 | `MINIGENT_IMAGE_INPUT_ENABLED` | Enables image attachments from CLI/chat clients; unified config key is `[image_input].enabled`. |

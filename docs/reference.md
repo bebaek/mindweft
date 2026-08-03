@@ -1802,15 +1802,25 @@ by the tenant execution editor. `MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET` has t
 takes precedence; use it when catalog templates contain credential headers so secret-management
 systems recognize the value as sensitive. It is a JSON array; each item has `id`, `title`,
 `description`, an optional `detail`, and a `server` object containing the tenant MCP server
-definition. The catalog definitions are deployment-owned. Platform administrators can assign a
-different subset
-to each tenant with `PUT /admin/tenants/{tenant_id}/mcp-server-catalog-policy`; the request contains
-`item_ids` and `allow_custom_mcp_servers`. `GET` returns the stored assignment and `DELETE` restores
-the backward-compatible unmanaged behavior. In unmanaged mode, all deployment catalog entries are
-visible and custom MCP servers remain allowed. `GET /admin/mcp-server-catalog` returns the complete
-redacted deployment catalog to platform administrators, while
+definition. The catalog definitions are deployment-owned. Platform administrators set each
+tenant's maximum subset with `PUT /admin/tenants/{tenant_id}/mcp-server-catalog-policy`; the request
+contains `item_ids` and `allow_custom_mcp_servers`. `GET` returns the stored policy and `DELETE`
+restores the backward-compatible unmanaged behavior. In unmanaged mode, all deployment catalog
+entries are visible and custom MCP servers remain allowed. `GET /admin/mcp-server-catalog` returns
+the complete redacted deployment catalog to platform administrators, while
 `GET /admin/tenants/{tenant_id}/mcp-server-catalog` returns only that tenant's assigned entries and
 includes `managed` and `allow_custom_mcp_servers` policy indicators.
+
+Once a tenant policy exists, platform administrators can narrow MCP access by role or individual
+user in the execution editor or through
+`PUT /admin/tenants/{tenant_id}/mcp-server-catalog-assignments/{subject_type}/{subject_id}`. The
+subject type is `role` (`owner`, `admin`, `member`, or `viewer`) or `user` (a tenant `user_id`), and
+the request contains `item_ids`. Role and user assignments are unioned, then intersected with the
+tenant policy. A subject without either assignment inherits tenant access; a saved empty assignment
+revokes every catalog MCP server for that subject. `GET
+/admin/tenants/{tenant_id}/mcp-server-catalog-assignments` lists assignments, and deleting one
+restores inheritance. Assignment writes and deletes are audited. Runtime authorization is evaluated
+for every run, so changes do not depend on rebuilding the tenant execution configuration.
 
 Managed policies are enforced when execution configurations are validated or saved and again when
 the store-backed runtime resolves a tenant. Catalog entries must be assigned, must retain their

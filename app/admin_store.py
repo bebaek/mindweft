@@ -60,6 +60,17 @@ class TenantMCPServerCatalogPolicy:
     updated_at: datetime
 
 
+@dataclass(frozen=True)
+class SubjectMCPServerCatalogAssignment:
+    tenant_id: str
+    subject_type: str
+    subject_id: str
+    item_ids: tuple[str, ...]
+    version: int
+    updated_by: str | None
+    updated_at: datetime
+
+
 class SQLiteTenantConfigStore:
     def __init__(self, db_path: str, *, encryption_key: str | None = None) -> None:
         self._db_path = Path(db_path)
@@ -714,6 +725,107 @@ class SQLiteTenantConfigStore:
                 connection.commit()
         return cursor.rowcount > 0
 
+    def get_subject_mcp_server_catalog_assignment(
+        self, tenant_id: str, subject_type: str, subject_id: str
+    ) -> SubjectMCPServerCatalogAssignment | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM subject_mcp_server_catalog_assignments
+                WHERE tenant_id = ? AND subject_type = ? AND subject_id = ?
+                """,
+                (tenant_id, subject_type, subject_id),
+            ).fetchone()
+        return _subject_mcp_server_catalog_assignment_from_row(row) if row is not None else None
+
+    def list_subject_mcp_server_catalog_assignments(
+        self, tenant_id: str
+    ) -> list[SubjectMCPServerCatalogAssignment]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM subject_mcp_server_catalog_assignments
+                WHERE tenant_id = ? ORDER BY subject_type, subject_id
+                """,
+                (tenant_id,),
+            ).fetchall()
+        return [_subject_mcp_server_catalog_assignment_from_row(row) for row in rows]
+
+    def upsert_subject_mcp_server_catalog_assignment(
+        self,
+        tenant_id: str,
+        subject_type: str,
+        subject_id: str,
+        *,
+        item_ids: list[str],
+        updated_by: str | None,
+    ) -> SubjectMCPServerCatalogAssignment:
+        current = self.get_subject_mcp_server_catalog_assignment(
+            tenant_id, subject_type, subject_id
+        )
+        version = 1 if current is None else current.version + 1
+        now = _utc_now_iso()
+        normalized_item_ids = sorted(set(item_ids))
+        with self._lock:
+            with self._connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO subject_mcp_server_catalog_assignments (
+                        tenant_id, subject_type, subject_id, item_ids_json, version, updated_by, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(tenant_id, subject_type, subject_id) DO UPDATE SET
+                        item_ids_json = excluded.item_ids_json, version = excluded.version,
+                        updated_by = excluded.updated_by, updated_at = excluded.updated_at
+                    """,
+                    (
+                        tenant_id,
+                        subject_type,
+                        subject_id,
+                        json.dumps(normalized_item_ids, ensure_ascii=True),
+                        version,
+                        updated_by,
+                        now,
+                    ),
+                )
+                connection.commit()
+        assignment = self.get_subject_mcp_server_catalog_assignment(
+            tenant_id, subject_type, subject_id
+        )
+        if assignment is None:  # pragma: no cover - defensive
+            raise RuntimeError("MCP server catalog assignment was not saved")
+        return assignment
+
+    def delete_subject_mcp_server_catalog_assignment(
+        self, tenant_id: str, subject_type: str, subject_id: str
+    ) -> bool:
+        with self._lock:
+            with self._connection() as connection:
+                cursor = connection.execute(
+                    "DELETE FROM subject_mcp_server_catalog_assignments WHERE tenant_id = ? AND subject_type = ? AND subject_id = ?",
+                    (tenant_id, subject_type, subject_id),
+                )
+                connection.commit()
+        return cursor.rowcount > 0
+
+    def effective_subject_mcp_server_catalog_item_ids(
+        self, tenant_id: str, user_id: str
+    ) -> tuple[str, ...] | None:
+        tenant_policy = self.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if tenant_policy is None:
+            return None
+        user = self.get_tenant_user_by_user_id(tenant_id, user_id)
+        assignments = [self.get_subject_mcp_server_catalog_assignment(tenant_id, "user", user_id)]
+        if user is not None:
+            assignments.append(
+                self.get_subject_mcp_server_catalog_assignment(tenant_id, "role", user.role.value)
+            )
+        matched = [assignment for assignment in assignments if assignment is not None]
+        if not matched:
+            return None
+        item_ids = {item_id for assignment in matched for item_id in assignment.item_ids}
+        item_ids &= set(tenant_policy.item_ids)
+        return tuple(sorted(item_ids))
+
     def list_tenants(self) -> list[str]:
         with self._connection() as connection:
             rows = connection.execute(
@@ -906,6 +1018,20 @@ class SQLiteTenantConfigStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS subject_mcp_server_catalog_assignments (
+                    tenant_id TEXT NOT NULL,
+                    subject_type TEXT NOT NULL CHECK (subject_type IN ('user', 'role')),
+                    subject_id TEXT NOT NULL,
+                    item_ids_json TEXT NOT NULL DEFAULT '[]',
+                    version INTEGER NOT NULL DEFAULT 1,
+                    updated_by TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (tenant_id, subject_type, subject_id)
+                )
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS tenant_execution_configs (
                     tenant_id TEXT PRIMARY KEY,
                     config_json TEXT NOT NULL,
@@ -931,6 +1057,23 @@ class SQLiteTenantConfigStore:
         connection = sqlite3.connect(self._db_path)
         connection.row_factory = sqlite3.Row
         return connection
+
+
+def _subject_mcp_server_catalog_assignment_from_row(
+    row: sqlite3.Row,
+) -> SubjectMCPServerCatalogAssignment:
+    item_ids = json.loads(str(row["item_ids_json"]))
+    if not isinstance(item_ids, list) or not all(isinstance(item, str) for item in item_ids):
+        raise RuntimeError("Stored MCP server catalog assignment is invalid")
+    return SubjectMCPServerCatalogAssignment(
+        tenant_id=str(row["tenant_id"]),
+        subject_type=str(row["subject_type"]),
+        subject_id=str(row["subject_id"]),
+        item_ids=tuple(item_ids),
+        version=int(row["version"]),
+        updated_by=str(row["updated_by"]) if row["updated_by"] is not None else None,
+        updated_at=datetime.fromisoformat(str(row["updated_at"])),
+    )
 
 
 def _mcp_server_catalog_policy_from_row(

@@ -17,6 +17,7 @@ from app.execution import (
     AGENT_BACKEND_PEER_AGENT,
     TenantExecutionResolver,
     build_tool_registry_for_capability_profile,
+    build_tool_registry_for_mcp_server_names,
     build_tool_registry_for_skill,
     get_capability_profile,
     get_skill_configs,
@@ -47,6 +48,7 @@ _DEFAULT_SAFE_PEER_TOOL_ARG_FIELDS: dict[str, tuple[str, ...]] = {
 _PEER_TOOL_ARG_ALLOW_ALL = "*"
 _PEER_TOOL_ARGUMENT_KEYS = {"arguments", "args", "input", "params"}
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
+MCPServerNameAuthorizer = Callable[[str, str], set[str] | None]
 
 
 @dataclass(frozen=True)
@@ -105,12 +107,14 @@ class AgentBackendRouter(AgentBackend):
         native_backend: NativeAgentBackend,
         peer_agent_registry: PeerAgentRegistry,
         mcp_broker_sessions: MCPBrokerSessionStore | None = None,
+        mcp_server_name_authorizer: MCPServerNameAuthorizer | None = None,
     ) -> None:
         self._store = store
         self._execution_resolver = execution_resolver
         self._native_backend = native_backend
         self._peer_agent_registry = peer_agent_registry
         self._mcp_broker_sessions = mcp_broker_sessions
+        self._mcp_server_name_authorizer = mcp_server_name_authorizer
 
     async def run_thread(
         self,
@@ -326,11 +330,17 @@ class AgentBackendRouter(AgentBackend):
             skill_names = [thread.skill_name]
         skills = get_skill_configs(execution.config, skill_names)
         capability_profile = get_capability_profile(execution.config, thread.capability_profile)
+        allowed_mcp_server_names = (
+            self._mcp_server_name_authorizer(principal.tenant_id, principal.user_id)
+            if self._mcp_server_name_authorizer is not None
+            else None
+        )
         if capability_profile is not None:
             return build_tool_registry_for_capability_profile(
                 execution.config,
                 thread.capability_profile,
                 mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
             )
         if len(skills) == 1 and (
             skills[0].allowed_local_tools is not None or skills[0].mcp_server_names is not None
@@ -339,6 +349,11 @@ class AgentBackendRouter(AgentBackend):
                 execution.config,
                 skills[0].name,
                 mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
+            )
+        if allowed_mcp_server_names is not None:
+            return build_tool_registry_for_mcp_server_names(
+                execution.config, allowed_mcp_server_names, mcp_manager=execution.mcp_manager
             )
         return execution.tool_registry
 

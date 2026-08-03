@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from threading import Lock
 from typing import Any, Literal, Mapping
 
@@ -2351,11 +2351,32 @@ def get_capability_profile(
     )
 
 
+def build_tool_registry_for_mcp_server_names(
+    config: TenantExecutionConfig,
+    allowed_mcp_server_names: set[str],
+    *,
+    mcp_manager: MCPServerManager | None = None,
+) -> ToolRegistry:
+    filtered_config = replace(
+        config,
+        tools=replace(
+            config.tools,
+            mcp_servers=[
+                server
+                for server in config.tools.mcp_servers
+                if server.name in allowed_mcp_server_names
+            ],
+        ),
+    )
+    return _build_registry_for_config(filtered_config, mcp_manager=mcp_manager)[0]
+
+
 def build_tool_registry_for_skill(
     config: TenantExecutionConfig,
     skill_name: str | None = None,
     *,
     mcp_manager: MCPServerManager | None = None,
+    allowed_mcp_server_names: set[str] | None = None,
 ) -> ToolRegistry:
     skill = get_skill_config(config, skill_name)
     allowed_local_tools = config.tools.allowed_local_tools
@@ -2367,6 +2388,8 @@ def build_tool_registry_for_skill(
         else:
             allowed_local_tools = sorted(set(allowed_local_tools) & set(skill.allowed_local_tools))
     mcp_servers = config.tools.mcp_servers
+    if allowed_mcp_server_names is not None:
+        mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
     if skill is not None and skill.mcp_server_names is not None:
         allowed_mcp_server_names = set(skill.mcp_server_names)
         mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
@@ -2388,10 +2411,15 @@ def build_tool_registry_for_capability_profile(
     capability_profile: str | None = None,
     *,
     mcp_manager: MCPServerManager | None = None,
+    allowed_mcp_server_names: set[str] | None = None,
 ) -> ToolRegistry:
     profile = get_capability_profile(config, capability_profile)
     if profile is None:
-        return _build_registry_for_config(config, mcp_manager=mcp_manager)[0]
+        if allowed_mcp_server_names is None:
+            return _build_registry_for_config(config, mcp_manager=mcp_manager)[0]
+        return build_tool_registry_for_mcp_server_names(
+            config, allowed_mcp_server_names, mcp_manager=mcp_manager
+        )
 
     allowed_local_tools = config.tools.allowed_local_tools
     if profile.allowed_local_tools is not None:
@@ -2402,6 +2430,8 @@ def build_tool_registry_for_capability_profile(
                 set(allowed_local_tools) & set(profile.allowed_local_tools)
             )
     mcp_servers = config.tools.mcp_servers
+    if allowed_mcp_server_names is not None:
+        mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
     if profile.mcp_server_names is not None:
         allowed_mcp_server_names = set(profile.mcp_server_names)
         mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]

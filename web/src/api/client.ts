@@ -354,6 +354,23 @@ export interface AdminMcpServerCatalogPolicyInput {
   allow_custom_mcp_servers: boolean;
 }
 
+export type AdminMcpCatalogSubjectType = "user" | "role";
+
+export interface AdminMcpServerCatalogAssignment {
+  tenant_id: string;
+  subject_type: AdminMcpCatalogSubjectType;
+  subject_id: string;
+  item_ids: string[];
+  version: number;
+  updated_by?: string | null;
+  updated_at: string;
+}
+
+export interface AdminMcpServerCatalogAssignmentList {
+  tenant_id: string;
+  assignments: AdminMcpServerCatalogAssignment[];
+}
+
 export interface AdminExecutionValidationSection {
   ok: boolean;
   errors: string[];
@@ -847,6 +864,39 @@ export class MinigentApiClient {
   deleteAdminMcpServerCatalogPolicy(tenantId: string): Promise<void> {
     return this.#request<void>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-policy`,
+      { method: "DELETE" },
+    );
+  }
+
+  listAdminMcpServerCatalogAssignments(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminMcpServerCatalogAssignmentList> {
+    return this.#request<AdminMcpServerCatalogAssignmentList>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-assignments`,
+      { signal },
+    );
+  }
+
+  updateAdminMcpServerCatalogAssignment(
+    tenantId: string,
+    subjectType: AdminMcpCatalogSubjectType,
+    subjectId: string,
+    itemIds: string[],
+  ): Promise<AdminMcpServerCatalogAssignment> {
+    return this.#request<AdminMcpServerCatalogAssignment>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-assignments/${encodeURIComponent(subjectType)}/${encodeURIComponent(subjectId)}`,
+      { method: "PUT", body: JSON.stringify({ item_ids: itemIds }) },
+    );
+  }
+
+  deleteAdminMcpServerCatalogAssignment(
+    tenantId: string,
+    subjectType: AdminMcpCatalogSubjectType,
+    subjectId: string,
+  ): Promise<void> {
+    return this.#request<void>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-assignments/${encodeURIComponent(subjectType)}/${encodeURIComponent(subjectId)}`,
       { method: "DELETE" },
     );
   }

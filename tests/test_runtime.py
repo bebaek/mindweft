@@ -1952,6 +1952,14 @@ def test_build_tool_registry_for_skill_can_narrow_mcp_servers(monkeypatch) -> No
     assert {spec.name for spec in registry.specs()} == {"current_time", "home-assistant.ping"}
     assert [server["name"] for server in registry.mcp_servers()] == ["home-assistant"]
 
+    subject_registry = build_tool_registry_for_skill(
+        config,
+        "home-assistant",
+        allowed_mcp_server_names={"docs"},
+    )
+    assert {spec.name for spec in subject_registry.specs()} == {"current_time"}
+    assert subject_registry.mcp_servers() == []
+
 
 def test_runtime_capability_profile_can_narrow_tools_for_thread() -> None:
     config = parse_tenant_execution_config(

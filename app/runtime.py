@@ -22,6 +22,7 @@ from app.execution import (
     TenantExecutionResolver,
     TenantSkillConfig,
     build_tool_registry_for_capability_profile,
+    build_tool_registry_for_mcp_server_names,
     build_tool_registry_for_skill,
     get_capability_profile,
     get_llm_adapter,
@@ -78,6 +79,7 @@ MAX_ITERATIONS_ENV = "MINIGENT_MAX_ITERATIONS"
 TOOL_TIMEOUT_SECONDS_ENV = "MINIGENT_TOOL_TIMEOUT_SECONDS"
 CONTEXT_COMPACTION_ENABLED_ENV = "MINIGENT_CONTEXT_COMPACTION_ENABLED"
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
+MCPServerNameAuthorizer = Callable[[str, str], set[str] | None]
 
 
 @dataclass(frozen=True)
@@ -176,6 +178,7 @@ class AgentRuntime:
         input_pii_protector: LocalPIIProtector | None = None,
         private_value_consent_store: PrivateValueConsentStore | None = None,
         attachment_store: AttachmentStore | None = None,
+        mcp_server_name_authorizer: MCPServerNameAuthorizer | None = None,
     ) -> None:
         self._store = store
         if execution_resolver is not None:
@@ -204,6 +207,7 @@ class AgentRuntime:
             private_value_consent_store or build_private_value_consent_store_from_env()
         )
         self._attachment_store = attachment_store or InMemoryAttachmentStore()
+        self._mcp_server_name_authorizer = mcp_server_name_authorizer
 
     async def protect_user_content(
         self,
@@ -367,17 +371,24 @@ class AgentRuntime:
         self,
         execution: TenantExecutionContext,
         thread: Thread,
+        principal: Principal,
     ) -> ToolRegistry:
         skill_names = thread.skill_names
         if skill_names is None and thread.skill_name is not None:
             skill_names = [thread.skill_name]
         skills = get_skill_configs(execution.config, skill_names)
         capability_profile = get_capability_profile(execution.config, thread.capability_profile)
+        allowed_mcp_server_names = (
+            self._mcp_server_name_authorizer(principal.tenant_id, principal.user_id)
+            if self._mcp_server_name_authorizer is not None
+            else None
+        )
         if capability_profile is not None:
             return build_tool_registry_for_capability_profile(
                 execution.config,
                 thread.capability_profile,
                 mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
             )
         if len(skills) == 1 and (
             skills[0].allowed_local_tools is not None or skills[0].mcp_server_names is not None
@@ -385,6 +396,13 @@ class AgentRuntime:
             return build_tool_registry_for_skill(
                 execution.config,
                 skills[0].name,
+                mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
+            )
+        if allowed_mcp_server_names is not None:
+            return build_tool_registry_for_mcp_server_names(
+                execution.config,
+                allowed_mcp_server_names,
                 mcp_manager=execution.mcp_manager,
             )
         return execution.tool_registry
@@ -454,7 +472,7 @@ class AgentRuntime:
         if thread.status == ThreadStatus.RUNNING:
             raise HTTPException(status_code=409, detail="Thread is already running")
         execution = self._execution_resolver.resolve(principal.tenant_id)
-        tool_registry = self._tool_registry_for_thread(execution, thread)
+        tool_registry = self._tool_registry_for_thread(execution, thread, principal)
         pending_action = self._private_value_consent_store.get_pending_action(
             tenant_id=principal.tenant_id,
             user_id=principal.user_id,
@@ -549,7 +567,7 @@ class AgentRuntime:
         if skill_names is None and thread.skill_name is not None:
             skill_names = [thread.skill_name]
         skills = get_skill_configs(execution.config, skill_names)
-        tool_registry = self._tool_registry_for_thread(execution, thread)
+        tool_registry = self._tool_registry_for_thread(execution, thread, principal)
         try:
             for iteration in range(1, self._max_iterations + 1):
                 messages = self._messages_for_llm(
