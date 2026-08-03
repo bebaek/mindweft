@@ -9,7 +9,7 @@ from typing import Any, Literal, Mapping
 
 from fastapi import HTTPException
 
-from app.admin_store import SQLiteTenantConfigStore
+from app.admin_store import SQLiteTenantConfigStore, TenantMCPServerCatalogPolicy
 from app.llm import (
     AnthropicMessagesAdapter,
     GenericOAuthResponsesAdapter,
@@ -507,10 +507,14 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
         *,
         fallback_resolver: TenantExecutionResolver | None = None,
         mcp_manager: MCPServerManager | None = None,
+        mcp_server_catalog: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         self._store = store
         self._fallback_resolver = fallback_resolver
         self._mcp_manager = mcp_manager
+        self._mcp_server_catalog = {
+            item_id: dict(server) for item_id, server in (mcp_server_catalog or {}).items()
+        }
         self._contexts: dict[str, TenantExecutionContext] = {}
         self._lock = Lock()
 
@@ -532,6 +536,16 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
                     status_code=403,
                     detail=f"Tenant '{tenant_id}' has no execution configuration",
                 )
+
+            policy = self._store.get_tenant_mcp_server_catalog_policy(tenant_id)
+            policy_errors = tenant_mcp_server_catalog_policy_errors(
+                tenant_id,
+                payload,
+                policy,
+                self._mcp_server_catalog,
+            )
+            if policy_errors:
+                raise HTTPException(status_code=403, detail="; ".join(policy_errors))
 
             config = parse_tenant_execution_config(
                 tenant_id,
@@ -2083,6 +2097,73 @@ def _optional_str_list(tenant_id: str, value: object, label: str) -> list[str] |
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise RuntimeError(f"Tenant '{tenant_id}' {label} must be an array of strings")
     return list(value)
+
+
+def tenant_mcp_server_catalog_policy_errors(
+    tenant_id: str,
+    payload: Mapping[str, Any],
+    policy: TenantMCPServerCatalogPolicy | None,
+    catalog: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    """Return catalog-policy violations without duplicating execution parsing."""
+    if policy is None:
+        return []
+    tools = payload.get("tools")
+    if not isinstance(tools, Mapping):
+        return []
+    servers = tools.get("mcp_servers", tools.get("mcpServers", []))
+    if not isinstance(servers, list):
+        return []
+
+    catalog_by_name: dict[str, tuple[str, Mapping[str, Any]]] = {}
+    for item_id, server in catalog.items():
+        name = server.get("name")
+        if isinstance(name, str) and name:
+            catalog_by_name[name] = (item_id, server)
+    granted_ids = set(policy.item_ids)
+    errors: list[str] = []
+    for server in servers:
+        if not isinstance(server, Mapping):
+            continue
+        name = server.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        catalog_entry = catalog_by_name.get(name)
+        if catalog_entry is None:
+            if not policy.allow_custom_mcp_servers:
+                errors.append(
+                    f"Tenant '{tenant_id}' MCP server '{name}' is not in its assigned catalog"
+                )
+            continue
+        item_id, catalog_server = catalog_entry
+        if item_id not in granted_ids:
+            errors.append(
+                f"Tenant '{tenant_id}' MCP server '{name}' is not granted by its catalog policy"
+            )
+            continue
+        expected_url = catalog_server.get("url")
+        if isinstance(expected_url, str) and server.get("url") != expected_url:
+            errors.append(f"Tenant '{tenant_id}' MCP server '{name}' must use its catalog URL")
+        catalog_allowed = catalog_server.get("allowed_tools", catalog_server.get("allowedTools"))
+        configured_allowed = server.get("allowed_tools", server.get("allowedTools"))
+        if isinstance(catalog_allowed, list):
+            if not isinstance(configured_allowed, list):
+                errors.append(
+                    f"Tenant '{tenant_id}' MCP server '{name}' must define allowed_tools "
+                    "from its catalog grant"
+                )
+                continue
+            extra_tools = sorted(
+                tool
+                for tool in configured_allowed
+                if isinstance(tool, str) and tool not in catalog_allowed
+            )
+            if extra_tools:
+                errors.append(
+                    f"Tenant '{tenant_id}' MCP server '{name}' includes tools outside its "
+                    f"catalog grant: {', '.join(extra_tools)}"
+                )
+    return errors
 
 
 def _validate_local_tool_policy(tenant_id: str, payload: dict[str, Any]) -> list[str]:

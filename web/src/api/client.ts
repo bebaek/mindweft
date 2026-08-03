@@ -336,6 +336,22 @@ export interface AdminMcpServerCatalogItem {
 
 export interface AdminMcpServerCatalog {
   items: AdminMcpServerCatalogItem[];
+  managed: boolean;
+  allow_custom_mcp_servers: boolean;
+}
+
+export interface AdminMcpServerCatalogPolicy {
+  tenant_id: string;
+  item_ids: string[];
+  allow_custom_mcp_servers: boolean;
+  version: number;
+  updated_by?: string | null;
+  updated_at: string;
+}
+
+export interface AdminMcpServerCatalogPolicyInput {
+  item_ids: string[];
+  allow_custom_mcp_servers: boolean;
 }
 
 export interface AdminExecutionValidationSection {
@@ -801,6 +817,37 @@ export class MinigentApiClient {
     return this.#request<AdminAuditRecordList>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/audit-records${queryString(filters)}`,
       { signal },
+    );
+  }
+
+  getAdminDeploymentMcpServerCatalog(signal?: AbortSignal): Promise<AdminMcpServerCatalog> {
+    return this.#request<AdminMcpServerCatalog>("/admin/mcp-server-catalog", { signal });
+  }
+
+  getAdminMcpServerCatalogPolicy(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminMcpServerCatalogPolicy> {
+    return this.#request<AdminMcpServerCatalogPolicy>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-policy`,
+      { signal },
+    );
+  }
+
+  updateAdminMcpServerCatalogPolicy(
+    tenantId: string,
+    input: AdminMcpServerCatalogPolicyInput,
+  ): Promise<AdminMcpServerCatalogPolicy> {
+    return this.#request<AdminMcpServerCatalogPolicy>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-policy`,
+      { method: "PUT", body: JSON.stringify(input) },
+    );
+  }
+
+  deleteAdminMcpServerCatalogPolicy(tenantId: string): Promise<void> {
+    return this.#request<void>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-policy`,
+      { method: "DELETE" },
     );
   }
 

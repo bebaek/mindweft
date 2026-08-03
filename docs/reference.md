@@ -1800,10 +1800,26 @@ Secrets such as LLM API keys and MCP headers are accepted on writes but redacted
 `MINIGENT_ADMIN_MCP_SERVER_CATALOG` optionally configures the internal-service quick-add cards shown
 by the tenant execution editor. `MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET` has the same format and
 takes precedence; use it when catalog templates contain credential headers so secret-management
-systems recognize the value as sensitive. It is a JSON array; each item has `id`, `title`, `description`, an
-optional `detail`, and a `server` object containing the tenant MCP server definition. The catalog is
-deployment-owned and returned to authenticated tenant owners through
-`GET /admin/tenants/{tenant_id}/mcp-server-catalog`. Header values are redacted before catalog
+systems recognize the value as sensitive. It is a JSON array; each item has `id`, `title`,
+`description`, an optional `detail`, and a `server` object containing the tenant MCP server
+definition. The catalog definitions are deployment-owned. Platform administrators can assign a
+different subset
+to each tenant with `PUT /admin/tenants/{tenant_id}/mcp-server-catalog-policy`; the request contains
+`item_ids` and `allow_custom_mcp_servers`. `GET` returns the stored assignment and `DELETE` restores
+the backward-compatible unmanaged behavior. In unmanaged mode, all deployment catalog entries are
+visible and custom MCP servers remain allowed. `GET /admin/mcp-server-catalog` returns the complete
+redacted deployment catalog to platform administrators, while
+`GET /admin/tenants/{tenant_id}/mcp-server-catalog` returns only that tenant's assigned entries and
+includes `managed` and `allow_custom_mcp_servers` policy indicators.
+
+Managed policies are enforced when execution configurations are validated or saved and again when
+the store-backed runtime resolves a tenant. Catalog entries must be assigned, must retain their
+catalog URL, and cannot expand `allowed_tools` beyond the catalog definition. When custom MCP
+servers are disabled, non-catalog servers are rejected. Policy changes are audited and invalidate
+the tenant execution cache, so revoking an entry prevents subsequent runs even if an older stored
+execution configuration still references it.
+
+Header values are redacted before catalog
 entries reach the browser. When a quick-add entry is validated or saved, its `<redacted>` header
 placeholders are restored server-side from the deployment catalog; existing tenant values take
 precedence. Therefore catalogs containing credentials must be supplied through a secret manager,

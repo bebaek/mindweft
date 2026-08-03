@@ -16,12 +16,14 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, ValidationError
 
+from app.admin_store import TenantMCPServerCatalogPolicy
 from app.auth import require_admin_principal, require_principal
 from app.execution import (
     TenantExecutionResolver,
     interpolate_tenant_execution_env_placeholders,
     parse_tenant_execution_config,
     redact_tenant_execution_payload,
+    tenant_mcp_server_catalog_policy_errors,
     validate_tenant_execution_config,
 )
 from app.models import (
@@ -75,6 +77,22 @@ class AdminMCPServerCatalogItem(BaseModel):
 
 class AdminMCPServerCatalogResponse(BaseModel):
     items: list[AdminMCPServerCatalogItem]
+    managed: bool = False
+    allow_custom_mcp_servers: bool = True
+
+
+class AdminMCPServerCatalogPolicyRequest(BaseModel):
+    item_ids: list[str] = Field(default_factory=list)
+    allow_custom_mcp_servers: bool = False
+
+
+class AdminMCPServerCatalogPolicyResponse(BaseModel):
+    tenant_id: str
+    item_ids: list[str]
+    allow_custom_mcp_servers: bool
+    version: int
+    updated_by: str | None = None
+    updated_at: datetime
 
 
 @dataclass(frozen=True)
@@ -1603,6 +1621,123 @@ def build_admin_router() -> APIRouter:
         )
 
     @router.get(
+        "/mcp-server-catalog",
+        response_model=AdminMCPServerCatalogResponse,
+    )
+    async def get_deployment_mcp_server_catalog(
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminMCPServerCatalogResponse:
+        _ = admin
+        items = [
+            item.model_copy(update={"server": redact_tenant_execution_payload(item.server)})
+            for item in _configured_mcp_server_catalog(request)
+        ]
+        return AdminMCPServerCatalogResponse(items=items)
+
+    @router.get(
+        "/tenants/{tenant_id}/mcp-server-catalog-policy",
+        response_model=AdminMCPServerCatalogPolicyResponse,
+    )
+    async def get_mcp_server_catalog_policy(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminMCPServerCatalogPolicyResponse:
+        _ = admin
+        store = _require_admin_store(request)
+        policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if policy is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Tenant '{tenant_id}' has no managed MCP server catalog policy",
+            )
+        return AdminMCPServerCatalogPolicyResponse(
+            tenant_id=policy.tenant_id,
+            item_ids=list(policy.item_ids),
+            allow_custom_mcp_servers=policy.allow_custom_mcp_servers,
+            version=policy.version,
+            updated_by=policy.updated_by,
+            updated_at=policy.updated_at,
+        )
+
+    @router.put(
+        "/tenants/{tenant_id}/mcp-server-catalog-policy",
+        response_model=AdminMCPServerCatalogPolicyResponse,
+    )
+    async def put_mcp_server_catalog_policy(
+        tenant_id: str,
+        body: AdminMCPServerCatalogPolicyRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminMCPServerCatalogPolicyResponse:
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        catalog = _configured_mcp_server_catalog(request)
+        catalog_ids = {item.id for item in catalog}
+        duplicate_ids = sorted(
+            {item_id for item_id in body.item_ids if body.item_ids.count(item_id) > 1}
+        )
+        unknown_ids = sorted(set(body.item_ids) - catalog_ids)
+        if duplicate_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Catalog policy contains duplicate item ids: {', '.join(duplicate_ids)}",
+            )
+        if unknown_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Catalog policy references unknown item ids: {', '.join(unknown_ids)}",
+            )
+        old_policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        policy = store.upsert_tenant_mcp_server_catalog_policy(
+            tenant_id,
+            item_ids=body.item_ids,
+            allow_custom_mcp_servers=body.allow_custom_mcp_servers,
+            updated_by=admin.user_id,
+        )
+        _invalidate_resolver(request.app.state.execution_resolver, tenant_id)
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_mcp_server_catalog_policy.put",
+            old_values=_mcp_server_catalog_policy_audit_values(old_policy),
+            new_values=_mcp_server_catalog_policy_audit_values(policy),
+        )
+        return AdminMCPServerCatalogPolicyResponse(
+            tenant_id=policy.tenant_id,
+            item_ids=list(policy.item_ids),
+            allow_custom_mcp_servers=policy.allow_custom_mcp_servers,
+            version=policy.version,
+            updated_by=policy.updated_by,
+            updated_at=policy.updated_at,
+        )
+
+    @router.delete("/tenants/{tenant_id}/mcp-server-catalog-policy", status_code=204)
+    async def delete_mcp_server_catalog_policy(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> None:
+        store = _require_admin_store(request)
+        old_policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if old_policy is None or not store.delete_tenant_mcp_server_catalog_policy(tenant_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Tenant '{tenant_id}' has no managed MCP server catalog policy",
+            )
+        _invalidate_resolver(request.app.state.execution_resolver, tenant_id)
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_mcp_server_catalog_policy.delete",
+            old_values=_mcp_server_catalog_policy_audit_values(old_policy),
+            new_values=None,
+        )
+
+    @router.get(
         "/tenants/{tenant_id}/mcp-server-catalog",
         response_model=AdminMCPServerCatalogResponse,
     )
@@ -1611,16 +1746,26 @@ def build_admin_router() -> APIRouter:
         request: Request,
         admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminMCPServerCatalogResponse:
-        _ = tenant_id, admin
-        settings = getattr(request.app.state, "admin_store_settings", None)
-        configured_items = (
-            settings.mcp_server_catalog if isinstance(settings, AdminStoreSettings) else ()
+        _ = admin
+        store = getattr(request.app.state, "admin_store", None)
+        configured_items = _configured_mcp_server_catalog(request)
+        policy = (
+            store.get_tenant_mcp_server_catalog_policy(tenant_id) if store is not None else None
         )
+        if policy is not None:
+            granted_ids = set(policy.item_ids)
+            configured_items = tuple(item for item in configured_items if item.id in granted_ids)
         items = [
             item.model_copy(update={"server": redact_tenant_execution_payload(item.server)})
             for item in configured_items
         ]
-        return AdminMCPServerCatalogResponse(items=items)
+        return AdminMCPServerCatalogResponse(
+            items=items,
+            managed=policy is not None,
+            allow_custom_mcp_servers=(
+                policy.allow_custom_mcp_servers if policy is not None else True
+            ),
+        )
 
     @router.get(
         "/tenants/{tenant_id}/execution-config",
@@ -1663,6 +1808,9 @@ def build_admin_router() -> APIRouter:
         old_payload = store.get_raw_config(tenant_id)
         secret_source = _execution_config_secret_source(app_request, old_payload)
         payload = _restore_redacted_payload(request.config, secret_source)
+        policy_errors = _tenant_catalog_policy_errors(app_request, tenant_id, payload)
+        if policy_errors:
+            raise HTTPException(status_code=400, detail="; ".join(policy_errors))
         try:
             parse_tenant_execution_config(tenant_id, payload)
         except RuntimeError as exc:
@@ -1703,6 +1851,9 @@ def build_admin_router() -> APIRouter:
         existing = store.get_raw_config(tenant_id)
         secret_source = _execution_config_secret_source(request, existing)
         payload = _restore_redacted_payload(body.config, secret_source)
+        policy_errors = _tenant_catalog_policy_errors(request, tenant_id, payload)
+        if policy_errors:
+            raise HTTPException(status_code=400, detail="; ".join(policy_errors))
         report = await validate_tenant_execution_config(tenant_id, payload)
         return AdminTenantExecutionConfigValidationResponse.model_validate(report.to_dict())
 
@@ -2230,16 +2381,59 @@ def _invalidate_resolver(resolver: TenantExecutionResolver, tenant_id: str) -> N
         invalidate(tenant_id)
 
 
+def _configured_mcp_server_catalog(
+    request: Request,
+) -> tuple[AdminMCPServerCatalogItem, ...]:
+    settings = getattr(request.app.state, "admin_store_settings", None)
+    return settings.mcp_server_catalog if isinstance(settings, AdminStoreSettings) else ()
+
+
+def _tenant_catalog_policy_errors(
+    request: Request,
+    tenant_id: str,
+    payload: dict[str, Any],
+) -> list[str]:
+    store = _require_admin_store(request)
+    policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+    catalog = {item.id: item.server for item in _configured_mcp_server_catalog(request)}
+    return tenant_mcp_server_catalog_policy_errors(
+        tenant_id,
+        payload,
+        policy,
+        catalog,
+    )
+
+
+def _mcp_server_catalog_policy_audit_values(
+    policy: TenantMCPServerCatalogPolicy | None,
+) -> dict[str, Any] | None:
+    if policy is None:
+        return None
+    return {
+        "tenant_id": policy.tenant_id,
+        "item_ids": list(policy.item_ids),
+        "allow_custom_mcp_servers": policy.allow_custom_mcp_servers,
+        "version": policy.version,
+        "updated_by": policy.updated_by,
+        "updated_at": policy.updated_at.isoformat(),
+    }
+
+
 def _execution_config_secret_source(
     request: Request,
     existing: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    settings = getattr(request.app.state, "admin_store_settings", None)
-    catalog = settings.mcp_server_catalog if isinstance(settings, AdminStoreSettings) else ()
+    catalog = _configured_mcp_server_catalog(request)
+    store = _require_admin_store(request)
+    policy = store.get_tenant_mcp_server_catalog_policy(
+        str(request.path_params.get("tenant_id", ""))
+    )
+    granted_ids = set(policy.item_ids) if policy is not None else None
     catalog_servers = {
         str(item.server["name"]): item.server
         for item in catalog
         if isinstance(item.server.get("name"), str)
+        and (granted_ids is None or item.id in granted_ids)
     }
 
     source = json.loads(json.dumps(existing or {}))

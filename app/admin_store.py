@@ -50,6 +50,16 @@ class PasswordSetup:
     created_at: datetime
 
 
+@dataclass(frozen=True)
+class TenantMCPServerCatalogPolicy:
+    tenant_id: str
+    item_ids: tuple[str, ...]
+    allow_custom_mcp_servers: bool
+    version: int
+    updated_by: str | None
+    updated_at: datetime
+
+
 class SQLiteTenantConfigStore:
     def __init__(self, db_path: str, *, encryption_key: str | None = None) -> None:
         self._db_path = Path(db_path)
@@ -642,6 +652,68 @@ class SQLiteTenantConfigStore:
                 connection.commit()
         return cursor.rowcount > 0
 
+    def get_tenant_mcp_server_catalog_policy(
+        self, tenant_id: str
+    ) -> TenantMCPServerCatalogPolicy | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM tenant_mcp_server_catalog_policies WHERE tenant_id = ?",
+                (tenant_id,),
+            ).fetchone()
+        return _mcp_server_catalog_policy_from_row(row) if row is not None else None
+
+    def upsert_tenant_mcp_server_catalog_policy(
+        self,
+        tenant_id: str,
+        *,
+        item_ids: list[str],
+        allow_custom_mcp_servers: bool,
+        updated_by: str | None,
+    ) -> TenantMCPServerCatalogPolicy:
+        current = self.get_tenant_mcp_server_catalog_policy(tenant_id)
+        version = 1 if current is None else current.version + 1
+        now = _utc_now_iso()
+        normalized_item_ids = sorted(set(item_ids))
+        with self._lock:
+            with self._connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO tenant_mcp_server_catalog_policies (
+                        tenant_id, item_ids_json, allow_custom_mcp_servers,
+                        version, updated_by, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(tenant_id) DO UPDATE SET
+                        item_ids_json = excluded.item_ids_json,
+                        allow_custom_mcp_servers = excluded.allow_custom_mcp_servers,
+                        version = excluded.version,
+                        updated_by = excluded.updated_by,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        tenant_id,
+                        json.dumps(normalized_item_ids, ensure_ascii=True),
+                        int(allow_custom_mcp_servers),
+                        version,
+                        updated_by,
+                        now,
+                    ),
+                )
+                connection.commit()
+        policy = self.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if policy is None:  # pragma: no cover - defensive
+            raise RuntimeError(f"MCP server catalog policy for tenant '{tenant_id}' was not saved")
+        return policy
+
+    def delete_tenant_mcp_server_catalog_policy(self, tenant_id: str) -> bool:
+        with self._lock:
+            with self._connection() as connection:
+                cursor = connection.execute(
+                    "DELETE FROM tenant_mcp_server_catalog_policies WHERE tenant_id = ?",
+                    (tenant_id,),
+                )
+                connection.commit()
+        return cursor.rowcount > 0
+
     def list_tenants(self) -> list[str]:
         with self._connection() as connection:
             rows = connection.execute(
@@ -822,6 +894,18 @@ class SQLiteTenantConfigStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS tenant_mcp_server_catalog_policies (
+                    tenant_id TEXT PRIMARY KEY,
+                    item_ids_json TEXT NOT NULL DEFAULT '[]',
+                    allow_custom_mcp_servers INTEGER NOT NULL DEFAULT 0,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    updated_by TEXT,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS tenant_execution_configs (
                     tenant_id TEXT PRIMARY KEY,
                     config_json TEXT NOT NULL,
@@ -847,6 +931,22 @@ class SQLiteTenantConfigStore:
         connection = sqlite3.connect(self._db_path)
         connection.row_factory = sqlite3.Row
         return connection
+
+
+def _mcp_server_catalog_policy_from_row(
+    row: sqlite3.Row,
+) -> TenantMCPServerCatalogPolicy:
+    item_ids = json.loads(str(row["item_ids_json"]))
+    if not isinstance(item_ids, list) or not all(isinstance(item, str) for item in item_ids):
+        raise RuntimeError("Stored MCP server catalog policy is invalid")
+    return TenantMCPServerCatalogPolicy(
+        tenant_id=str(row["tenant_id"]),
+        item_ids=tuple(item_ids),
+        allow_custom_mcp_servers=bool(row["allow_custom_mcp_servers"]),
+        version=int(row["version"]),
+        updated_by=str(row["updated_by"]) if row["updated_by"] is not None else None,
+        updated_at=datetime.fromisoformat(str(row["updated_at"])),
+    )
 
 
 def _utc_now_iso() -> str:

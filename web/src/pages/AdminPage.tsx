@@ -16,6 +16,7 @@ import { useAuth } from "../auth/auth-context";
 import { CredentialSetupDialog } from "../components/CredentialSetupDialog";
 import { EntitlementsPanel } from "../components/EntitlementsPanel";
 import { ExecutionConfigPanel } from "../components/ExecutionConfigPanel";
+import { McpCatalogPolicyPanel } from "../components/McpCatalogPolicyPanel";
 import { OAuthImportPanel } from "../components/OAuthImportPanel";
 import { TenantOperationsPanel } from "../components/TenantOperationsPanel";
 
@@ -237,6 +238,7 @@ export function AdminPage({ tenantId: scopedTenantId }: { tenantId?: string }) {
               </section>
 
               <EntitlementsPanel key={`entitlements-${tenant.id}`} tenantId={tenant.id} readOnly={tenantScoped} />
+              <McpCatalogPolicyPanel key={`mcp-catalog-${tenant.id}`} tenantId={tenant.id} readOnly={tenantScoped} />
               <ExecutionConfigPanel key={`execution-${tenant.id}`} tenantId={tenant.id} />
               {tenantScoped && <OAuthImportPanel key={`oauth-${tenant.id}`} tenantId={tenant.id} />}
               {!tenantScoped && <TenantOperationsPanel key={`operations-${tenant.id}`} tenantId={tenant.id} />}

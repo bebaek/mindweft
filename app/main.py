@@ -823,6 +823,9 @@ def create_app(
                 execution_resolver = StoreBackedTenantExecutionResolver(
                     admin_store,
                     mcp_manager=mcp_manager,
+                    mcp_server_catalog={
+                        item.id: item.server for item in admin_store_settings.mcp_server_catalog
+                    },
                 )
             elif config_source == TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS:
                 if admin_store is None:
@@ -839,6 +842,9 @@ def create_app(
                     admin_store,
                     fallback_resolver=fallback_resolver,
                     mcp_manager=mcp_manager,
+                    mcp_server_catalog={
+                        item.id: item.server for item in admin_store_settings.mcp_server_catalog
+                    },
                 )
             else:
                 raise RuntimeError(f"Unhandled tenant config source '{config_source}'")

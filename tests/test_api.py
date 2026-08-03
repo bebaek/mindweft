@@ -5141,6 +5141,170 @@ def test_admin_api_returns_configured_mcp_server_catalog(
     assert stored["tools"]["mcp_servers"][0]["headers"] == {"Authorization": "Bearer secret-token"}
 
 
+def test_admin_can_assign_mcp_catalog_per_tenant_and_policy_is_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog = [
+        {
+            "id": "web-search",
+            "title": "Web search",
+            "description": "Search current web content.",
+            "server": {
+                "name": "web-search",
+                "url": "https://tools.example/web/mcp",
+                "allowed_tools": ["web", "news"],
+            },
+        },
+        {
+            "id": "internal-crm",
+            "title": "Internal CRM",
+            "description": "Read CRM records.",
+            "server": {
+                "name": "internal-crm",
+                "url": "https://tools.example/crm/mcp",
+                "allowed_tools": ["contacts"],
+            },
+        },
+    ]
+    monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
+    store = _sqlite_store(tmp_path)
+    app = create_app(admin_store=store, tenant_config_source="store")
+    client = TestClient(app)
+    assert (
+        client.post(
+            "/admin/tenants",
+            json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+
+    legacy_catalog = client.get("/admin/tenants/tenant-1/mcp-server-catalog", headers=ADMIN_HEADERS)
+    assert legacy_catalog.status_code == 200
+    assert legacy_catalog.json()["managed"] is False
+    assert {item["id"] for item in legacy_catalog.json()["items"]} == {
+        "web-search",
+        "internal-crm",
+    }
+
+    policy_response = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+        headers=ADMIN_HEADERS,
+        json={"item_ids": ["web-search"], "allow_custom_mcp_servers": False},
+    )
+    assert policy_response.status_code == 200
+    assert policy_response.json()["item_ids"] == ["web-search"]
+    assert policy_response.json()["version"] == 1
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+            headers=AUTH_HEADERS,
+            json={"item_ids": [], "allow_custom_mcp_servers": False},
+        ).status_code
+        == 403
+    )
+    deployment_catalog = client.get("/admin/mcp-server-catalog", headers=ADMIN_HEADERS)
+    assert deployment_catalog.status_code == 200
+    assert {item["id"] for item in deployment_catalog.json()["items"]} == {
+        "web-search",
+        "internal-crm",
+    }
+
+    assigned_catalog = client.get(
+        "/admin/tenants/tenant-1/mcp-server-catalog", headers=ADMIN_HEADERS
+    )
+    assert assigned_catalog.status_code == 200
+    assert assigned_catalog.json()["managed"] is True
+    assert assigned_catalog.json()["allow_custom_mcp_servers"] is False
+    assert [item["id"] for item in assigned_catalog.json()["items"]] == ["web-search"]
+
+    custom_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+        json={
+            "config": {
+                "llm": {"provider": "mock"},
+                "tools": {"mcp_servers": [{"name": "custom", "url": "https://custom.example/mcp"}]},
+            }
+        },
+    )
+    assert custom_response.status_code == 400
+    assert "not in its assigned catalog" in custom_response.json()["detail"]
+
+    ungranted_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+        json={
+            "config": {
+                "llm": {"provider": "mock"},
+                "tools": {"mcp_servers": [catalog[1]["server"]]},
+            }
+        },
+    )
+    assert ungranted_response.status_code == 400
+    assert "not granted" in ungranted_response.json()["detail"]
+
+    unrestricted_catalog_server = dict(catalog[0]["server"])
+    unrestricted_catalog_server.pop("allowed_tools")
+    unrestricted_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+        json={
+            "config": {
+                "llm": {"provider": "mock"},
+                "tools": {"mcp_servers": [unrestricted_catalog_server]},
+            }
+        },
+    )
+    assert unrestricted_response.status_code == 400
+    assert "must define allowed_tools" in unrestricted_response.json()["detail"]
+
+    wrong_url_server = {**catalog[0]["server"], "url": "https://attacker.example/mcp"}
+    wrong_url_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+        json={
+            "config": {
+                "llm": {"provider": "mock"},
+                "tools": {"mcp_servers": [wrong_url_server]},
+            }
+        },
+    )
+    assert wrong_url_response.status_code == 400
+    assert "must use its catalog URL" in wrong_url_response.json()["detail"]
+
+    granted_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+        json={
+            "config": {
+                "llm": {"provider": "mock"},
+                "tools": {"mcp_servers": [catalog[0]["server"]]},
+            }
+        },
+    )
+    assert granted_response.status_code == 200
+
+    revoke_response = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+        headers=ADMIN_HEADERS,
+        json={"item_ids": [], "allow_custom_mcp_servers": False},
+    )
+    assert revoke_response.status_code == 200
+    with pytest.raises(HTTPException) as exc_info:
+        app.state.execution_resolver.resolve("tenant-1")
+    assert exc_info.value.status_code == 403
+    assert "not granted" in str(exc_info.value.detail)
+
+    audit_response = client.get("/admin/tenants/tenant-1/audit-records", headers=ADMIN_HEADERS)
+    assert audit_response.status_code == 200
+    assert any(
+        item["action"] == "tenant_mcp_server_catalog_policy.put"
+        for item in audit_response.json()["audit_records"]
+    )
+
+
 def test_admin_api_validates_tenant_execution_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
