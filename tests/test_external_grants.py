@@ -15,6 +15,8 @@ from app.admin_store import SQLiteTenantConfigStore
 from app.external_grants import (
     EXTERNAL_GRANT_PROVIDERS_ENV,
     ExternalGrant,
+    ExternalGrantAudit,
+    ExternalGrantAuditState,
     ExternalGrantProviderRegistry,
     HTTPExternalGrantProvider,
     build_external_grant_provider_registry_from_env,
@@ -46,6 +48,7 @@ def test_external_grant_provider_settings_are_optional_and_validated() -> None:
                     "read_scopes": ["grants:read"],
                     "write_scopes": ["grants:write"],
                     "allowed_permissions": ["read", "read_write"],
+                    "audit_path": "/v1/resource-grant-audit",
                 }
             ]
         ),
@@ -57,6 +60,7 @@ def test_external_grant_provider_settings_are_optional_and_validated() -> None:
     assert provider is not None
     assert provider.base_url == "http://127.0.0.1:8769"
     assert provider.allowed_permissions == ("read", "read_write")
+    assert provider.audit_path == "/v1/resource-grant-audit"
     assert "test-private-key" not in repr(provider)
 
 
@@ -123,6 +127,25 @@ def test_http_external_grant_provider_uses_short_lived_scoped_identity(
                 "permission": "read_write",
                 "enabled": True,
             }
+            if method == "GET" and url.endswith("/audit?limit=25&before_id=42"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "entries": [
+                            {
+                                "audit_id": 41,
+                                "resource_id": "resource:one",
+                                "user_id": "user-1",
+                                "actor_id": "admin-user",
+                                "operation": "resource_grant.disable",
+                                "previous": {"permission": "read_write", "enabled": True},
+                                "resulting": {"permission": "read_write", "enabled": False},
+                                "created_at": "2026-01-01T00:00:00Z",
+                            }
+                        ],
+                        "next_cursor": 41,
+                    },
+                )
             if method == "GET":
                 return httpx.Response(200, json={"grants": [grant]})
             if method == "PUT":
@@ -148,6 +171,7 @@ def test_http_external_grant_provider_uses_short_lived_scoped_identity(
             private_key=private_pem,
             key_id="test-key",
         ),
+        audit_path="/audit",
     )
 
     asyncio.run(provider.list_grants(tenant_id="tenant-1", actor_user_id="admin-user"))
@@ -170,7 +194,21 @@ def test_http_external_grant_provider_uses_short_lived_scoped_identity(
         )
     )
 
-    assert [item[0] for item in seen] == ["GET", "PUT", "DELETE"]
+    audit_entries, next_cursor = asyncio.run(
+        provider.list_audit(
+            tenant_id="tenant-1",
+            actor_user_id="admin-user",
+            limit=25,
+            before_id=42,
+        )
+    )
+    assert audit_entries[0].operation == "resource_grant.disable"
+    assert audit_entries[0].resulting == ExternalGrantAuditState(
+        permission="read_write", enabled=False
+    )
+    assert next_cursor == 41
+
+    assert [item[0] for item in seen] == ["GET", "PUT", "DELETE", "GET"]
     assert seen[0][2]["scope"] == "grants:read"
     assert seen[1][2]["scope"] == "grants:write"
     assert seen[2][2]["scope"] == "grants:write"
@@ -238,6 +276,36 @@ def test_admin_external_grant_api_is_optional_audited_and_provider_neutral(
             if (item.resource_id, item.subject_id) != (resource_id, subject_id)
         ]
 
+    async def list_audit(
+        self,
+        *,
+        tenant_id: str,
+        actor_user_id: str,
+        limit: int,
+        before_id: int | None = None,
+    ):
+        _ = self
+        assert tenant_id == "tenant-1"
+        assert actor_user_id == "admin-user"
+        assert limit == 100
+        assert before_id is None
+        return (
+            [
+                ExternalGrantAudit(
+                    audit_id=7,
+                    resource_id="resource:one",
+                    subject_id="user-1",
+                    actor_id="admin-user",
+                    operation="resource_grant.permission_change",
+                    previous=ExternalGrantAuditState(permission="read", enabled=True),
+                    resulting=ExternalGrantAuditState(permission="read_write", enabled=True),
+                    created_at="2026-01-01T00:00:00Z",
+                )
+            ],
+            None,
+        )
+
+    monkeypatch.setattr(HTTPExternalGrantProvider, "list_audit", list_audit)
     monkeypatch.setattr(HTTPExternalGrantProvider, "list_grants", list_grants)
     monkeypatch.setattr(HTTPExternalGrantProvider, "upsert_grant", upsert_grant)
     monkeypatch.setattr(HTTPExternalGrantProvider, "delete_grant", delete_grant)
@@ -258,6 +326,7 @@ def test_admin_external_grant_api_is_optional_audited_and_provider_neutral(
             private_key="unused",
             key_id="test",
         ),
+        audit_path="/audit",
     )
     store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
     app = create_app(admin_store=store, tenant_config_source="store-with-defaults")
@@ -275,9 +344,20 @@ def test_admin_external_grant_api_is_optional_audited_and_provider_neutral(
     providers = client.get("/admin/external-grant-providers", headers=ADMIN_HEADERS)
     assert providers.status_code == 200
     assert providers.json()["providers"][0]["id"] == "example"
+    assert providers.json()["providers"][0]["audit_available"] is True
     listed = client.get("/admin/tenants/tenant-1/external-grants/example", headers=ADMIN_HEADERS)
     assert listed.status_code == 200
     assert listed.json()["grants"][0]["resource_id"] == "resource:one"
+    provider_audit = client.get(
+        "/admin/tenants/tenant-1/external-grants/example/audit",
+        headers=ADMIN_HEADERS,
+    )
+    assert provider_audit.status_code == 200
+    assert provider_audit.json()["entries"][0]["operation"] == ("resource_grant.permission_change")
+    assert provider_audit.json()["entries"][0]["previous"] == {
+        "permission": "read",
+        "enabled": True,
+    }
 
     updated = client.put(
         "/admin/tenants/tenant-1/external-grants/example",

@@ -33,6 +33,24 @@ class ExternalGrant:
     updated_at: str | None = None
 
 
+@dataclass(frozen=True)
+class ExternalGrantAuditState:
+    permission: str
+    enabled: bool
+
+
+@dataclass(frozen=True)
+class ExternalGrantAudit:
+    audit_id: int
+    resource_id: str
+    subject_id: str
+    actor_id: str
+    operation: str
+    previous: ExternalGrantAuditState | None
+    resulting: ExternalGrantAuditState | None
+    created_at: str
+
+
 @dataclass(frozen=True, repr=False)
 class HTTPExternalGrantProvider:
     provider_id: str
@@ -46,6 +64,7 @@ class HTTPExternalGrantProvider:
     read_scopes: tuple[str, ...]
     write_scopes: tuple[str, ...]
     token_issuer: MCPIdentityTokenIssuer
+    audit_path: str | None = None
     timeout_seconds: float = 10.0
 
     async def list_grants(self, *, tenant_id: str, actor_user_id: str) -> list[ExternalGrant]:
@@ -108,6 +127,38 @@ class HTTPExternalGrantProvider:
             scopes=self.write_scopes,
             expect_json=False,
         )
+
+    async def list_audit(
+        self,
+        *,
+        tenant_id: str,
+        actor_user_id: str,
+        limit: int,
+        before_id: int | None = None,
+    ) -> tuple[list[ExternalGrantAudit], int | None]:
+        if self.audit_path is None:
+            raise ExternalGrantProviderError(404, "Grant provider does not expose audit history")
+        separator = "&" if "?" in self.audit_path else "?"
+        query: dict[str, int] = {"limit": limit}
+        if before_id is not None:
+            query["before_id"] = before_id
+        payload = await self._request(
+            "GET",
+            f"{self.audit_path}{separator}{urlencode(query)}",
+            tenant_id=tenant_id,
+            actor_user_id=actor_user_id,
+            scopes=self.read_scopes,
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("entries"), list):
+            raise ExternalGrantProviderError(
+                502, "Grant provider returned an invalid audit response"
+            )
+        next_cursor = payload.get("next_cursor")
+        if next_cursor is not None and (not isinstance(next_cursor, int) or next_cursor < 1):
+            raise ExternalGrantProviderError(
+                502, "Grant provider returned an invalid audit response"
+            )
+        return ([_parse_grant_audit(item) for item in payload["entries"]], next_cursor)
 
     async def _request(
         self,
@@ -194,6 +245,10 @@ def build_external_grant_provider_registry_from_env(
             "delete_path",
             index,
         )
+        audit_path_value = item.get("audit_path")
+        audit_path = (
+            _path(audit_path_value, "audit_path", index) if audit_path_value is not None else None
+        )
         if "{resource_id}" not in delete_path:
             raise RuntimeError(f"Grant provider entry {index} delete_path requires {{resource_id}}")
         providers.append(
@@ -209,6 +264,7 @@ def build_external_grant_provider_registry_from_env(
                 read_scopes=read_scopes,
                 write_scopes=write_scopes,
                 token_issuer=MCPIdentityTokenIssuer.from_env(audience=audience, env=lookup),
+                audit_path=audit_path,
                 timeout_seconds=_timeout_seconds(item.get("timeout_seconds", 10.0), index),
             )
         )
@@ -241,6 +297,54 @@ def _parse_grant(value: Any, allowed_permissions: tuple[str, ...]) -> ExternalGr
         created_at=str(value["created_at"]) if value.get("created_at") is not None else None,
         updated_at=str(value["updated_at"]) if value.get("updated_at") is not None else None,
     )
+
+
+def _parse_grant_audit(value: Any) -> ExternalGrantAudit:
+    if not isinstance(value, dict):
+        raise ExternalGrantProviderError(502, "Grant provider returned an invalid audit entry")
+    audit_id = value.get("audit_id")
+    resource_id = value.get("resource_id")
+    subject_id = value.get("user_id", value.get("subject_id"))
+    actor_id = value.get("actor_id")
+    operation = value.get("operation")
+    created_at = value.get("created_at")
+    if (
+        not isinstance(audit_id, int)
+        or audit_id < 1
+        or not isinstance(resource_id, str)
+        or not resource_id
+        or not isinstance(subject_id, str)
+        or not subject_id
+        or not isinstance(actor_id, str)
+        or not actor_id
+        or not isinstance(operation, str)
+        or not operation
+        or not isinstance(created_at, str)
+        or not created_at
+    ):
+        raise ExternalGrantProviderError(502, "Grant provider returned an invalid audit entry")
+    return ExternalGrantAudit(
+        audit_id=audit_id,
+        resource_id=resource_id,
+        subject_id=subject_id,
+        actor_id=actor_id,
+        operation=operation,
+        previous=_parse_grant_audit_state(value.get("previous")),
+        resulting=_parse_grant_audit_state(value.get("resulting")),
+        created_at=created_at,
+    )
+
+
+def _parse_grant_audit_state(value: Any) -> ExternalGrantAuditState | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ExternalGrantProviderError(502, "Grant provider returned an invalid audit entry")
+    permission = value.get("permission")
+    enabled = value.get("enabled")
+    if not isinstance(permission, str) or not permission or not isinstance(enabled, bool):
+        raise ExternalGrantProviderError(502, "Grant provider returned an invalid audit entry")
+    return ExternalGrantAuditState(permission=permission, enabled=enabled)
 
 
 def _required_string(item: dict[str, Any], key: str, index: int) -> str:

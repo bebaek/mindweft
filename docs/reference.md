@@ -1835,11 +1835,14 @@ The setting is a JSON array whose entries define `id`, `title`, optional `descri
 forwarded-identity `audience`, non-empty `read_scopes` and `write_scopes`, and
 `allowed_permissions`. Generic endpoint defaults are `GET/PUT /v1/resource-grants` and
 `DELETE /v1/resource-grants/{resource_id}?user_id=...`; deployments can override `list_path`,
-`upsert_path`, and `delete_path`. URLs are deployment-owned and reject embedded credentials,
-query strings, and non-HTTP schemes.
+`upsert_path`, and `delete_path`. Providers with an immutable audit API can also set optional
+`audit_path`; Minigent forwards `limit` and `before_id`, reads the provider history with the
+configured read scopes, and displays it alongside current grants. URLs are deployment-owned and
+reject embedded credentials, query strings, and non-HTTP schemes.
 
 The platform-admin-only routes are `GET /admin/external-grant-providers`,
-`GET/PUT /admin/tenants/{tenant_id}/external-grants/{provider_id}`, and
+`GET/PUT /admin/tenants/{tenant_id}/external-grants/{provider_id}`,
+`GET /admin/tenants/{tenant_id}/external-grants/{provider_id}/audit`, and
 `DELETE /admin/tenants/{tenant_id}/external-grants/{provider_id}/{resource_id}?subject_id=...`.
 Minigent issues a fresh 30–300 second forwarded-identity token for each provider request and uses
 only the configured read or write scopes. Provider credentials, scopes, and HTTP operations are
@@ -1851,7 +1854,7 @@ and tool discovery, so an outage affects only grant-administration requests.
 Example:
 
 ```bash
-MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS='[{"id":"example-grants","title":"Example grants","description":"Manage authoritative external grants.","base_url":"http://127.0.0.1:8769","audience":"example-grants","read_scopes":["grants:read"],"write_scopes":["grants:write"],"allowed_permissions":["read","read_write"]}]'
+MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS='[{"id":"example-grants","title":"Example grants","description":"Manage authoritative external grants.","base_url":"http://127.0.0.1:8769","audience":"example-grants","read_scopes":["grants:read"],"write_scopes":["grants:write"],"allowed_permissions":["read","read_write"],"audit_path":"/v1/resource-grant-audit"}]'
 ```
 
 Header values are redacted before catalog

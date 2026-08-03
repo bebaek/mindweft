@@ -345,6 +345,7 @@ export interface AdminExternalGrantProvider {
   title: string;
   description: string;
   allowed_permissions: string[];
+  audit_available: boolean;
 }
 
 export interface AdminExternalGrantProviderList {
@@ -365,6 +366,29 @@ export interface AdminExternalGrantList {
   tenant_id: string;
   provider_id: string;
   grants: AdminExternalGrant[];
+}
+
+export interface AdminExternalGrantAuditState {
+  permission: string;
+  enabled: boolean;
+}
+
+export interface AdminExternalGrantAudit {
+  audit_id: number;
+  resource_id: string;
+  subject_id: string;
+  actor_id: string;
+  operation: string;
+  previous: AdminExternalGrantAuditState | null;
+  resulting: AdminExternalGrantAuditState | null;
+  created_at: string;
+}
+
+export interface AdminExternalGrantAuditList {
+  tenant_id: string;
+  provider_id: string;
+  entries: AdminExternalGrantAudit[];
+  next_cursor: number | null;
 }
 
 export interface AdminExternalGrantInput {
@@ -884,6 +908,18 @@ export class MinigentApiClient {
   ): Promise<AdminExternalGrantList> {
     return this.#request<AdminExternalGrantList>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/external-grants/${encodeURIComponent(providerId)}`,
+      { signal },
+    );
+  }
+
+  listAdminExternalGrantAudit(
+    tenantId: string,
+    providerId: string,
+    options: { limit?: number; before_id?: number } = {},
+    signal?: AbortSignal,
+  ): Promise<AdminExternalGrantAuditList> {
+    return this.#request<AdminExternalGrantAuditList>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/external-grants/${encodeURIComponent(providerId)}/audit${queryString(options)}`,
       { signal },
     );
   }

@@ -31,6 +31,7 @@ from app.execution import (
 )
 from app.external_grants import (
     ExternalGrant,
+    ExternalGrantAudit,
     ExternalGrantProviderError,
     ExternalGrantProviderRegistry,
     HTTPExternalGrantProvider,
@@ -81,6 +82,7 @@ class AdminExternalGrantProviderResponse(BaseModel):
     title: str
     description: str
     allowed_permissions: list[str]
+    audit_available: bool
 
 
 class AdminExternalGrantProviderListResponse(BaseModel):
@@ -101,6 +103,29 @@ class AdminExternalGrantListResponse(BaseModel):
     tenant_id: str
     provider_id: str
     grants: list[AdminExternalGrantResponse]
+
+
+class AdminExternalGrantAuditStateResponse(BaseModel):
+    permission: str
+    enabled: bool
+
+
+class AdminExternalGrantAuditResponse(BaseModel):
+    audit_id: int
+    resource_id: str
+    subject_id: str
+    actor_id: str
+    operation: str
+    previous: AdminExternalGrantAuditStateResponse | None
+    resulting: AdminExternalGrantAuditStateResponse | None
+    created_at: str
+
+
+class AdminExternalGrantAuditListResponse(BaseModel):
+    tenant_id: str
+    provider_id: str
+    entries: list[AdminExternalGrantAuditResponse]
+    next_cursor: int | None
 
 
 class AdminExternalGrantUpsertRequest(BaseModel):
@@ -1718,6 +1743,40 @@ def build_admin_router() -> APIRouter:
             grants=[_external_grant_response(grant) for grant in grants],
         )
 
+    @router.get(
+        "/tenants/{tenant_id}/external-grants/{provider_id}/audit",
+        response_model=AdminExternalGrantAuditListResponse,
+    )
+    async def list_external_grant_audit(
+        tenant_id: str,
+        provider_id: str,
+        request: Request,
+        limit: int = 100,
+        before_id: int | None = None,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminExternalGrantAuditListResponse:
+        _require_tenant(request, tenant_id)
+        if limit < 1 or limit > 500:
+            raise HTTPException(status_code=422, detail="Limit must be between 1 and 500")
+        if before_id is not None and before_id < 1:
+            raise HTTPException(status_code=422, detail="Audit cursor must be positive")
+        provider = _external_grant_provider(request, provider_id)
+        try:
+            entries, next_cursor = await provider.list_audit(
+                tenant_id=tenant_id,
+                actor_user_id=admin.user_id,
+                limit=limit,
+                before_id=before_id,
+            )
+        except ExternalGrantProviderError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return AdminExternalGrantAuditListResponse(
+            tenant_id=tenant_id,
+            provider_id=provider_id,
+            entries=[_external_grant_audit_response(entry) for entry in entries],
+            next_cursor=next_cursor,
+        )
+
     @router.put(
         "/tenants/{tenant_id}/external-grants/{provider_id}",
         response_model=AdminExternalGrantResponse,
@@ -2702,6 +2761,7 @@ def _external_grant_provider_response(
         title=provider.title,
         description=provider.description,
         allowed_permissions=list(provider.allowed_permissions),
+        audit_available=provider.audit_path is not None,
     )
 
 
@@ -2714,6 +2774,35 @@ def _external_grant_response(grant: ExternalGrant) -> AdminExternalGrantResponse
         updated_by=grant.updated_by,
         created_at=grant.created_at,
         updated_at=grant.updated_at,
+    )
+
+
+def _external_grant_audit_response(
+    entry: ExternalGrantAudit,
+) -> AdminExternalGrantAuditResponse:
+    return AdminExternalGrantAuditResponse(
+        audit_id=entry.audit_id,
+        resource_id=entry.resource_id,
+        subject_id=entry.subject_id,
+        actor_id=entry.actor_id,
+        operation=entry.operation,
+        previous=(
+            AdminExternalGrantAuditStateResponse(
+                permission=entry.previous.permission,
+                enabled=entry.previous.enabled,
+            )
+            if entry.previous is not None
+            else None
+        ),
+        resulting=(
+            AdminExternalGrantAuditStateResponse(
+                permission=entry.resulting.permission,
+                enabled=entry.resulting.enabled,
+            )
+            if entry.resulting is not None
+            else None
+        ),
+        created_at=entry.created_at,
     )
 
 

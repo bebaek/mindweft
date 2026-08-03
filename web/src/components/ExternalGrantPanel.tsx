@@ -24,6 +24,14 @@ export function ExternalGrantPanel({ tenantId, readOnly = false }: { tenantId: s
     enabled: !readOnly && Boolean(selectedProvider),
   });
 
+  const audit = useQuery({
+    queryKey: ["admin-external-grant-audit", tenantId, selectedProvider?.id, authentication],
+    queryFn: ({ signal }) => api.listAdminExternalGrantAudit(
+      tenantId, selectedProvider!.id, { limit: 25 }, signal,
+    ),
+    enabled: !readOnly && Boolean(selectedProvider?.audit_available),
+  });
+
   if (readOnly) return null;
   if (providers.isPending) return <p>Loading external grant providers…</p>;
   if (providers.isError) return <p className="inline-error" role="alert">{message(providers.error)}</p>;
@@ -72,6 +80,30 @@ export function ExternalGrantPanel({ tenantId, readOnly = false }: { tenantId: s
             )}
           </div>
           <NewGrantForm tenantId={tenantId} provider={selectedProvider} />
+          {selectedProvider.audit_available && (
+            <div className="execution-editor-section">
+              <h4>Provider audit history</h4>
+              <p>Immutable grant mutations reported by the authoritative provider.</p>
+              {audit.isPending && <p>Loading provider audit…</p>}
+              {audit.isError && <p className="inline-error" role="alert">{message(audit.error)}</p>}
+              {audit.data?.entries.map((entry) => (
+                <div className="mcp-server-preset" key={entry.audit_id}>
+                  <span>
+                    <strong>{operationLabel(entry.operation)}</strong>
+                    <small>{entry.resource_id} · {entry.subject_id}</small>
+                    <small>Actor: {entry.actor_id} · {new Date(entry.created_at).toLocaleString()}</small>
+                  </span>
+                  <span>
+                    <small>Before: {grantStateLabel(entry.previous)}</small>
+                    <small>After: {grantStateLabel(entry.resulting)}</small>
+                  </span>
+                </div>
+              ))}
+              {audit.data?.entries.length === 0 && (
+                <p className="execution-config-empty">No provider audit records are available.</p>
+              )}
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -91,9 +123,16 @@ function GrantRow({
   const queryClient = useQueryClient();
   const [permission, setPermission] = useState(grant.permission);
   const [enabled, setEnabled] = useState(grant.enabled);
-  const invalidate = () => queryClient.invalidateQueries({
-    queryKey: ["admin-external-grants", tenantId, provider.id],
-  });
+  const invalidate = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["admin-external-grants", tenantId, provider.id],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["admin-external-grant-audit", tenantId, provider.id],
+      }),
+    ]);
+  };
   const save = useMutation({
     mutationFn: (input: AdminExternalGrantInput) =>
       api.updateAdminExternalGrant(tenantId, provider.id, input),
@@ -172,9 +211,14 @@ function NewGrantForm({
     onSuccess: async () => {
       setResourceId("");
       setSubjectId("");
-      await queryClient.invalidateQueries({
-        queryKey: ["admin-external-grants", tenantId, provider.id],
-      });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["admin-external-grants", tenantId, provider.id],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["admin-external-grant-audit", tenantId, provider.id],
+        }),
+      ]);
     },
   });
 
@@ -213,6 +257,15 @@ function NewGrantForm({
       </div>
     </form>
   );
+}
+
+function operationLabel(operation: string): string {
+  return operation.replace(/^resource_grant\./, "").replaceAll("_", " ");
+}
+
+function grantStateLabel(state: { permission: string; enabled: boolean } | null): string {
+  if (!state) return "none";
+  return `${state.permission}, ${state.enabled ? "enabled" : "disabled"}`;
 }
 
 function message(error: unknown): string {
