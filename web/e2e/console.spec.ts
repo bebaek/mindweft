@@ -415,6 +415,39 @@ test("loads the production console and passes an accessibility scan", async ({ p
   expect(accessibility.violations).toEqual([]);
 });
 
+test("uses readable typography tokens for chat and controls", async ({ page }) => {
+  await installApiMocks(page);
+  await installWorkspaceMocks(page);
+  await page.goto("./");
+  await navigateToWorkspace(page);
+  await page.getByRole("button", { name: "Review the deployment plan" }).click();
+  await expect(page.getByRole("heading", { name: "Deployment review" })).toBeVisible();
+
+  const typography = await page.locator("html").evaluate((element) => {
+    const styles = getComputedStyle(element);
+    return {
+      xs: styles.getPropertyValue("--text-xs").trim(),
+      control: styles.getPropertyValue("--text-control").trim(),
+      body: styles.getPropertyValue("--text-body").trim(),
+      chat: styles.getPropertyValue("--text-chat").trim(),
+    };
+  });
+  expect(typography).toEqual({ xs: "12px", control: "14px", body: "15px", chat: "16px" });
+  await expect(page.locator(".chat-message.assistant .message-content").first()).toHaveCSS("font-size", "16px");
+  await expect(page.locator(".message-author").first()).toHaveCSS("font-size", "13px");
+  await expect(page.locator(".markdown-content code")).toHaveCSS("font-size", "13px");
+
+  const undersizedControls = await page.locator("button:visible, input:visible, textarea:visible, select:visible").evaluateAll((elements) => elements.flatMap((element) => {
+    const size = Number.parseFloat(getComputedStyle(element).fontSize);
+    return size < 13 ? [`${element.tagName.toLowerCase()}.${element.className}: ${String(size)}px`] : [];
+  }));
+  expect(undersizedControls).toEqual([]);
+
+  if ((page.viewportSize()?.width ?? 0) <= 620) {
+    await expect(page.getByLabel(/^Message /)).toHaveCSS("font-size", "16px");
+  }
+});
+
 test("keeps overview, authentication, and administration legible in dark mode", async ({ page }) => {
   await installApiMocks(page);
   await installAdminMocks(page);
