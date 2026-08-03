@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   ImagePart,
@@ -10,6 +10,11 @@ import type {
 import { useAuth } from "../auth/auth-context";
 import { ContextDialog } from "../components/ContextDialog";
 import { ConsentDialog } from "../components/ConsentDialog";
+
+const AssistantMarkdown = lazy(async () => {
+  const module = await import("../components/AssistantMarkdown");
+  return { default: module.AssistantMarkdown };
+});
 
 interface PendingImage {
   file: File;
@@ -313,11 +318,11 @@ export function WorkspacePage() {
           {messages.data?.filter((message) => message.role === "user" || message.role === "assistant").map((message) => (
             <article className={`chat-message ${message.role}`} key={message.id}>
               <span className="message-author">{message.role === "user" ? "You" : "Minigent"}</span>
-              {message.content && <p>{message.content}</p>}
+              {message.content && (message.role === "assistant" ? <RenderedAssistantMessage content={message.content} /> : <div className="message-content plain-message-content">{message.content}</div>)}
               <MessageImages message={message} />
             </article>
           ))}
-          {streamedReply !== null && <article className="chat-message assistant streaming"><span className="message-author">Minigent</span><p>{streamedReply}</p></article>}
+          {streamedReply !== null && <article className="chat-message assistant streaming"><span className="message-author">Minigent</span><RenderedAssistantMessage content={streamedReply} /></article>}
           {isRunning && streamedReply === null && <div className="thinking-row"><i /><i /><i /><span>Working</span></div>}
           {error && <div className="conversation-error" role="alert">{error}</div>}
           <div ref={messagesEndRef} />
@@ -398,6 +403,10 @@ function ThreadButton({ thread, active, onClick }: { thread: ThreadListItem; act
       <span><small>{thread.message_count} message{thread.message_count === 1 ? "" : "s"}</small><time dateTime={thread.updated_at}>{relativeTime(thread.updated_at)}</time></span>
     </button>
   );
+}
+
+function RenderedAssistantMessage({ content }: { content: string }) {
+  return <Suspense fallback={<div className="message-content plain-message-content">{content}</div>}><AssistantMarkdown>{content}</AssistantMarkdown></Suspense>;
 }
 
 function Welcome() {

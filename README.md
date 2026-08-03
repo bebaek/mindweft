@@ -32,6 +32,10 @@ Open the production console foundation:
 http://127.0.0.1:8000/console/
 ```
 
+Assistant responses in the production console render safe GitHub Flavored Markdown, including
+headings, lists, tables, task lists, links, blockquotes, and fenced code. Raw HTML is disabled;
+user and tool-authored content remains plain text by default.
+
 The dependency-free development client remains available during migration:
 
 ```text

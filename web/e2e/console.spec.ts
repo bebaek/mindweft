@@ -62,6 +62,13 @@ async function installWorkspaceMocks(
           content: "Review the deployment plan",
           created_at: "2026-01-01T00:00:00Z",
         },
+        {
+          id: "message-2",
+          thread_id: "thread-1",
+          role: "assistant",
+          content: "## Deployment review\n\n| Item | Status |\n| --- | --- |\n| Tests | Passing |\n\nRun `make test` before deployment.",
+          created_at: "2026-01-01T00:01:00Z",
+        },
       ],
     ],
   ]);
@@ -240,7 +247,7 @@ async function installWorkspaceMocks(
         id: "assistant-1",
         thread_id: threadId,
         role: "assistant",
-        content: "The deployment plan is ready.",
+        content: "## Deployment ready\n\nThe deployment plan is ready.\n\n- Review changes\n- Deploy safely",
         created_at: new Date().toISOString(),
       });
       await route.fulfill({
@@ -248,7 +255,7 @@ async function installWorkspaceMocks(
         body: [
           JSON.stringify({ type: "run.started" }),
           JSON.stringify({ type: "llm.request" }),
-          JSON.stringify({ type: "assistant.message", content: "The deployment plan is ready." }),
+          JSON.stringify({ type: "assistant.message", content: "## Deployment ready\n\nThe deployment plan is ready.\n\n- Review changes\n- Deploy safely" }),
           JSON.stringify({ type: "run.completed" }),
           "",
         ].join("\n"),
@@ -468,6 +475,8 @@ test("keeps workspace dialogs legible in dark mode", async ({ page }) => {
   await navigateToWorkspace(page);
 
   await page.getByRole("button", { name: "Review the deployment plan" }).click();
+  await expect(page.getByRole("heading", { name: "Deployment review" })).toBeVisible();
+  await expect(page.getByRole("table")).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 
   await page.getByRole("button", { name: "Context" }).click();
@@ -530,6 +539,8 @@ test("runs a streamed conversation without accessibility violations", async ({ p
   await page.getByRole("button", { name: "Send message" }).click();
 
   await expect(page.getByText("The deployment plan is ready.").last()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Deployment ready" })).toBeVisible();
+  await expect(page.getByText("Review changes")).toBeVisible();
   await expect(page.getByRole("img", { name: "User attachment" })).toBeVisible();
   await expect(page.locator(".activity-tray summary").getByText("Run completed")).toBeVisible();
 
