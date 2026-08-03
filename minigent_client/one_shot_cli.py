@@ -371,6 +371,12 @@ def build_parser() -> argparse.ArgumentParser:
     admin_tenants_create_parser.add_argument("--plan", default=None)
     admin_tenants_create_parser.add_argument("--region", default=None)
     admin_tenants_create_parser.add_argument(
+        "--provisioning-profile",
+        choices=["none", "generic-v1"],
+        default=None,
+        help="Optionally create a starter execution configuration with the tenant.",
+    )
+    admin_tenants_create_parser.add_argument(
         "--metadata-json",
         default=None,
         help="Tenant metadata as a JSON object.",
@@ -1397,6 +1403,8 @@ def _tenant_payload(args: argparse.Namespace, *, create: bool) -> dict[str, Any]
         value = getattr(args, key, None)
         if value is not None:
             payload[key] = value
+    if create and getattr(args, "provisioning_profile", None) is not None:
+        payload["provisioning_profile"] = args.provisioning_profile
     metadata = _metadata_from_arg(args.metadata_json)
     if metadata is not None:
         payload["metadata"] = metadata

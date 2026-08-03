@@ -208,6 +208,7 @@ class ThreadListResponse(BaseModel):
 
 class CreateThreadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    agent_name: str | None = None
     skill_name: str | None = None
     skill_names: list[str] | None = None
     capability_profile: str | None = None
@@ -233,6 +234,7 @@ class ExecutionAgentOptionItem(BaseModel):
 
 
 class ExecutionAgentOptionSection(BaseModel):
+    default: str | None = None
     items: list[ExecutionAgentOptionItem] = Field(default_factory=list)
 
 

@@ -1570,7 +1570,7 @@ Supported fields:
 - `tools.mcp_servers`: per-tenant MCP server definitions
 - `skills.default_skill`, `skills.items`: available prompt-overlay skills
 - `capability_profiles.default_profile`, `capability_profiles.items`: explicit tool/MCP narrowing profiles
-- `agents.items`: named server-side presets that combine skills and capability profiles for clients
+- `agents.default_agent`, `agents.items`: named server-side presets that combine skills and capability profiles for clients; the default agent supplies missing skill/profile selections when a thread is created
 
 String values in `MINIGENT_TENANT_EXECUTION_CONFIGS` can reference environment values with
 `${NAME}` placeholders. Placeholder replacement is recursive across nested objects and arrays,
@@ -2397,6 +2397,7 @@ MINIGENT_TENANT_EXECUTION_CONFIGS={
       ]
     },
     "agents":{
+      "default_agent":"support",
       "items":[
         {
           "name":"support",

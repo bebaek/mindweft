@@ -147,7 +147,12 @@ class SQLiteTenantConfigStore:
             row = connection.execute("SELECT * FROM tenants WHERE slug = ?", (slug,)).fetchone()
         return _tenant_from_row(row) if row is not None else None
 
-    def create_tenant(self, tenant: Tenant) -> Tenant:
+    def create_tenant(
+        self,
+        tenant: Tenant,
+        *,
+        execution_config: dict[str, Any] | None = None,
+    ) -> Tenant:
         now = _utc_now_iso()
         created_at = tenant.created_at.isoformat() if tenant.created_at else now
         updated_at = tenant.updated_at.isoformat() if tenant.updated_at else now
@@ -174,6 +179,19 @@ class SQLiteTenantConfigStore:
                         updated_at,
                     ),
                 )
+                if execution_config is not None:
+                    serialized_config = json.dumps(
+                        _encrypt_payload(execution_config, self._fernet),
+                        ensure_ascii=True,
+                        sort_keys=True,
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO tenant_execution_configs (tenant_id, config_json, version)
+                        VALUES (?, ?, 1)
+                        """,
+                        (tenant.id, serialized_config),
+                    )
                 connection.commit()
         created = self.get_tenant(tenant.id)
         if created is None:  # pragma: no cover - defensive

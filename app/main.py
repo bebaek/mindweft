@@ -43,6 +43,7 @@ from app.execution import (
     StoreBackedTenantExecutionResolver,
     TenantExecutionResolver,
     build_execution_resolver_from_env,
+    get_agent_preset,
     get_capability_profile,
     get_llm_config,
     get_skill_config,
@@ -1013,6 +1014,7 @@ def create_app(
                 items=[ExecutionOptionItem(name=name) for name in config.llm_profiles],
             ),
             agents=ExecutionAgentOptionSection(
+                default=config.agents.default_agent,
                 items=[
                     ExecutionAgentOptionItem(
                         name=agent.name,
@@ -1178,6 +1180,7 @@ def create_app(
         body: CreateThreadRequest | None = None,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> CreateThreadResponse:
+        agent_name = body.agent_name if body is not None else None
         skill_name = body.skill_name if body is not None else None
         skill_names = body.skill_names if body is not None else None
         capability_profile = body.capability_profile if body is not None else None
@@ -1191,6 +1194,7 @@ def create_app(
             context=tenant_context_from_request_state(request.state),
             execution=execution,
         )
+        agent = get_agent_preset(execution.config, agent_name)
         if skill_name is not None and skill_names is not None:
             raise HTTPException(
                 status_code=400,
@@ -1207,9 +1211,16 @@ def create_app(
         elif skill_name is not None:
             get_skill_config(execution.config, skill_name)
             skill_names = [skill_name]
+        elif agent is not None and agent.skill_name is not None:
+            skill_name = agent.skill_name
+            skill_names = [agent.skill_name]
+        elif agent is not None and agent.skills is not None:
+            skill_names = list(agent.skills)
         elif execution.config.skills.default_skill is not None:
             skill_names = [execution.config.skills.default_skill]
             skill_name = execution.config.skills.default_skill
+        if capability_profile is None and agent is not None:
+            capability_profile = agent.capability_profile
         if capability_profile is not None:
             get_capability_profile(execution.config, capability_profile)
         if llm_profile is None:

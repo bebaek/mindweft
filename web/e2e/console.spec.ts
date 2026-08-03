@@ -603,10 +603,12 @@ test("creates a tenant and reports provisioning conflicts", async ({ page }) => 
   const now = new Date().toISOString();
   const created = { id: "tenant-northwind", slug: "northwind", name: "Northwind", status: "provisioning", plan: "growth", region: "us-west", metadata: {}, created_at: now, updated_at: now };
   let includeCreated = false;
+  let createRequest: Record<string, unknown> | null = null;
   await page.route("**/admin/tenants**", async (route) => {
     const request = route.request();
     if (request.method() === "POST") {
-      const body = request.postDataJSON() as { slug: string };
+      const body = request.postDataJSON() as Record<string, unknown>;
+      createRequest = body;
       if (body.slug === "acme") {
         await route.fulfill({ status: 409, contentType: "application/json", body: '{"detail":"Tenant id or slug already exists"}' });
       } else {
@@ -626,6 +628,7 @@ test("creates a tenant and reports provisioning conflicts", async ({ page }) => 
 
   await page.getByRole("button", { name: "New tenant" }).click();
   const dialog = page.getByRole("dialog", { name: "Create tenant" });
+  await expect(dialog.getByText("Starter agent included")).toBeVisible();
   await dialog.getByLabel("Slug").fill("acme");
   await dialog.getByLabel("Name").fill("Duplicate Acme");
   await dialog.getByRole("button", { name: "Create tenant" }).click();
@@ -638,6 +641,11 @@ test("creates a tenant and reports provisioning conflicts", async ({ page }) => 
   await dialog.getByRole("button", { name: "Create tenant" }).click();
   await expect(dialog).not.toBeVisible();
   expect(includeCreated).toBe(true);
+  expect(createRequest).toMatchObject({
+    slug: "northwind",
+    name: "Northwind",
+    provisioning_profile: "generic-v1",
+  });
 });
 
 test("manages tenant users and domains with destructive confirmations", async ({ page }) => {

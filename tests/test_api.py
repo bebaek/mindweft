@@ -3404,6 +3404,7 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
                         ],
                     },
                     "agents": {
+                        "defaultAgent": "support",
                         "items": [
                             {
                                 "name": "support",
@@ -3445,6 +3446,7 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
         },
         "llm_profiles": {"default": None, "items": []},
         "agents": {
+            "default": "support",
             "items": [
                 {
                     "name": "support",
@@ -3465,6 +3467,30 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
     }
     assert "system_prompt" not in response.text
     assert "allowed_local_tools" not in response.text
+
+    default_thread = client.post("/threads", headers=AUTH_HEADERS)
+    selected_thread = client.post("/threads", json={"agent_name": "math"}, headers=AUTH_HEADERS)
+    overridden_thread = client.post(
+        "/threads",
+        json={"agent_name": "math", "skill_name": "support", "capability_profile": "inspect"},
+        headers=AUTH_HEADERS,
+    )
+    unknown_agent = client.post("/threads", json={"agent_name": "missing"}, headers=AUTH_HEADERS)
+
+    assert default_thread.status_code == 200
+    assert selected_thread.status_code == 200
+    assert overridden_thread.status_code == 200
+    assert unknown_agent.status_code == 400
+    threads = {
+        item["thread_id"]: item
+        for item in client.get("/threads", headers=AUTH_HEADERS).json()["threads"]
+    }
+    assert threads[default_thread.json()["thread_id"]]["skill_names"] == ["support"]
+    assert threads[default_thread.json()["thread_id"]]["capability_profile"] == "inspect"
+    assert threads[selected_thread.json()["thread_id"]]["skill_names"] == ["coding"]
+    assert threads[selected_thread.json()["thread_id"]]["capability_profile"] == "math"
+    assert threads[overridden_thread.json()["thread_id"]]["skill_names"] == ["support"]
+    assert threads[overridden_thread.json()["thread_id"]]["capability_profile"] == "inspect"
 
 
 def test_threads_bind_named_llm_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4020,6 +4046,74 @@ def test_admin_api_can_manage_tenant_registry(tmp_path: Path) -> None:
     assert audit_record["old_values"]["slug"] == "tenant-one"
     assert audit_record["new_values"]["slug"] == "tenant-renamed"
     assert audit_record["new_values"]["metadata"]["api_token"] == "<redacted>"
+
+
+def test_admin_api_can_provision_generic_tenant_execution_defaults(tmp_path: Path) -> None:
+    store = _sqlite_store(tmp_path)
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store"))
+
+    response = client.post(
+        "/admin/tenants",
+        json={
+            "id": "tenant-1",
+            "slug": "tenant-one",
+            "name": "Tenant One",
+            "status": "active",
+            "provisioning_profile": "generic-v1",
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 201
+    config = store.get_raw_config("tenant-1")
+    assert config is not None
+    assert config["tools"]["allowed_local_tools"] == ["current_time", "calculator"]
+    assert config["skills"]["default_skill"] == "general"
+    assert config["capability_profiles"]["default_profile"] == "safe-default"
+    assert config["agents"]["default_agent"] == "general"
+
+    options = client.get("/execution-options", headers=AUTH_HEADERS)
+    assert options.status_code == 200
+    assert options.json()["agents"]["default"] == "general"
+    thread_response = client.post("/threads", headers=AUTH_HEADERS)
+    assert thread_response.status_code == 200
+    thread = client.get("/threads", headers=AUTH_HEADERS).json()["threads"][0]
+    assert thread["skill_names"] == ["general"]
+    assert thread["capability_profile"] == "safe-default"
+
+    duplicate = client.post(
+        "/admin/tenants",
+        json={
+            "id": "tenant-2",
+            "slug": "tenant-one",
+            "name": "Duplicate",
+            "provisioning_profile": "generic-v1",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert duplicate.status_code == 409
+    assert store.get_raw_config("tenant-2") is None
+
+    unsupported = client.post(
+        "/admin/tenants",
+        json={
+            "id": "tenant-3",
+            "slug": "tenant-three",
+            "name": "Tenant Three",
+            "provisioning_profile": "unknown",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert unsupported.status_code == 422
+
+    invalid_default = client.post(
+        "/admin/tenants/tenant-1/execution-config/validate",
+        json={"config": {"agents": {"default_agent": "missing", "items": []}}},
+        headers=ADMIN_HEADERS,
+    )
+    assert invalid_default.status_code == 200
+    assert invalid_default.json()["valid"] is False
+    assert "agents.default_agent" in invalid_default.json()["config_shape"]["errors"][0]
 
 
 def test_admin_store_can_manage_tenant_users(tmp_path: Path) -> None:

@@ -231,6 +231,7 @@ class TenantAgentPresetConfig:
 
 @dataclass(frozen=True)
 class TenantAgentPresetsConfig:
+    default_agent: str | None = None
     items: list[TenantAgentPresetConfig] = field(default_factory=list)
 
 
@@ -871,6 +872,8 @@ def _tenant_capability_profile_public_dict(
 
 def _tenant_agent_presets_public_dict(config: TenantAgentPresetsConfig) -> dict[str, object]:
     exported: dict[str, object] = {}
+    if config.default_agent is not None:
+        exported["default_agent"] = config.default_agent
     if config.items:
         exported["items"] = [_tenant_agent_preset_public_dict(agent) for agent in config.items]
     return exported
@@ -1601,6 +1604,7 @@ def _parse_tenant_agent_presets_config(
     skills_config: TenantSkillsConfig,
     capability_profiles_config: TenantCapabilityProfilesConfig,
 ) -> TenantAgentPresetsConfig:
+    default_agent = _optional_str(payload.get("default_agent") or payload.get("defaultAgent"))
     items_raw = payload.get("items") or []
     if not isinstance(items_raw, list):
         raise RuntimeError(f"Tenant '{tenant_id}' agents.items must be an array")
@@ -1656,7 +1660,11 @@ def _parse_tenant_agent_presets_config(
                 capability_profile=capability_profile,
             )
         )
-    return TenantAgentPresetsConfig(items=items)
+    if default_agent is not None and default_agent not in seen_names:
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' agents.default_agent must reference a configured agent preset"
+        )
+    return TenantAgentPresetsConfig(default_agent=default_agent, items=items)
 
 
 def _parse_tenant_capability_profiles_config(
@@ -2298,6 +2306,22 @@ async def _validate_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
             "server_name": None,
             "server_version": None,
         }
+
+
+def get_agent_preset(
+    config: TenantExecutionConfig,
+    agent_name: str | None = None,
+) -> TenantAgentPresetConfig | None:
+    resolved_agent_name = agent_name or config.agents.default_agent
+    if resolved_agent_name is None:
+        return None
+    for agent in config.agents.items:
+        if agent.name == resolved_agent_name:
+            return agent
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unknown agent preset '{resolved_agent_name}' for tenant '{config.tenant_id}'",
+    )
 
 
 def get_skill_config(

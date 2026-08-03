@@ -292,9 +292,38 @@ function TenantEditor({ tenant, tenantScoped, defaultId, pending, error, onClose
     const common = tenantScoped
       ? { slug: slug.trim(), name: name.trim() }
       : { slug: slug.trim(), name: name.trim(), plan: optional(plan), region: optional(region) };
-    onSave(tenant ? common : { ...common, ...(id.trim() ? { id: id.trim() } : {}), status });
+    onSave(tenant ? common : {
+      ...common,
+      ...(id.trim() ? { id: id.trim() } : {}),
+      status,
+      provisioning_profile: "generic-v1",
+    });
   }
-  return <dialog ref={dialogRef} className="admin-dialog" aria-labelledby="tenant-editor-title" onCancel={onClose} onClose={onClose}><form onSubmit={submit}><DialogHeading id="tenant-editor-title" title={tenant ? "Edit tenant" : "Create tenant"} onClose={onClose} /><div className="admin-form-grid">{!tenant && <label>Tenant ID <input value={id} onChange={(event) => setId(event.target.value)} placeholder="Generated when blank" /></label>}<label>Slug <input required pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?" value={slug} onChange={(event) => setSlug(event.target.value)} placeholder="acme-corp" /></label><label className="wide">Name <input required value={name} onChange={(event) => setName(event.target.value)} /></label>{!tenantScoped && <><label>Plan <input value={plan} onChange={(event) => setPlan(event.target.value)} placeholder="enterprise" /></label><label>Region <input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="us-east" /></label>{!tenant && <label>Status <select value={status} onChange={(event) => setStatus(event.target.value as TenantStatus)}><option value="provisioning">Provisioning</option><option value="active">Active</option></select></label>}</>}</div>{error && <p className="dialog-error" role="alert">{error}</p>}<DialogActions pending={pending} submitLabel={tenant ? "Save tenant" : "Create tenant"} onClose={onClose} /></form></dialog>;
+  return (
+    <dialog ref={dialogRef} className="admin-dialog" aria-labelledby="tenant-editor-title" onCancel={onClose} onClose={onClose}>
+      <form onSubmit={submit}>
+        <DialogHeading id="tenant-editor-title" title={tenant ? "Edit tenant" : "Create tenant"} onClose={onClose} />
+        <div className="admin-form-grid">
+          {!tenant && <label>Tenant ID <input value={id} onChange={(event) => setId(event.target.value)} placeholder="Generated when blank" /></label>}
+          <label>Slug <input required pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?" value={slug} onChange={(event) => setSlug(event.target.value)} placeholder="acme-corp" /></label>
+          <label className="wide">Name <input required value={name} onChange={(event) => setName(event.target.value)} /></label>
+          {!tenant && (
+            <div className="admin-form-note wide">
+              <strong>Starter agent included</strong>
+              <span>Creates a general-purpose default skill and agent with the safe baseline capability profile.</span>
+            </div>
+          )}
+          {!tenantScoped && <>
+            <label>Plan <input value={plan} onChange={(event) => setPlan(event.target.value)} placeholder="enterprise" /></label>
+            <label>Region <input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="us-east" /></label>
+            {!tenant && <label>Status <select value={status} onChange={(event) => setStatus(event.target.value as TenantStatus)}><option value="provisioning">Provisioning</option><option value="active">Active</option></select></label>}
+          </>}
+        </div>
+        {error && <p className="dialog-error" role="alert">{error}</p>}
+        <DialogActions pending={pending} submitLabel={tenant ? "Save tenant" : "Create tenant"} onClose={onClose} />
+      </form>
+    </dialog>
+  );
 }
 
 function UserEditor({ user, defaultUserId, pending, error, onClose, onSave }: { user: AdminTenantUser | null; defaultUserId?: string; pending: boolean; error: string | null; onClose: () => void; onSave: (input: AdminTenantUserInput) => void }) {

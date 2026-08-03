@@ -10,7 +10,7 @@ import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -77,6 +77,51 @@ NON_NEGATIVE_INTEGER_ENTITLEMENT_LIMITS = {
     "max_messages",
     "max_thread_runs",
 }
+GENERIC_TENANT_PROVISIONING_PROFILE = "generic-v1"
+
+
+def _tenant_provisioning_execution_config(profile: str | None) -> dict[str, Any] | None:
+    if profile is None or profile == "none":
+        return None
+    if profile != GENERIC_TENANT_PROVISIONING_PROFILE:  # pragma: no cover - Pydantic validates
+        raise ValueError(f"Unsupported tenant provisioning profile: {profile}")
+    return {
+        "tools": {"allowed_local_tools": ["current_time", "calculator"]},
+        "skills": {
+            "default_skill": "general",
+            "items": [
+                {
+                    "name": "general",
+                    "description": "General-purpose assistant",
+                    "system_prompt": (
+                        "Be helpful, accurate, concise, and transparent about uncertainty."
+                    ),
+                }
+            ],
+        },
+        "capability_profiles": {
+            "default_profile": "safe-default",
+            "items": [
+                {
+                    "name": "safe-default",
+                    "description": "Safe baseline capabilities",
+                    "allowed_local_tools": ["current_time", "calculator"],
+                    "mcp_server_names": [],
+                }
+            ],
+        },
+        "agents": {
+            "default_agent": "general",
+            "items": [
+                {
+                    "name": "general",
+                    "description": "General-purpose assistant",
+                    "skill_name": "general",
+                    "capability_profile": "safe-default",
+                }
+            ],
+        },
+    }
 
 
 class AdminExternalGrantProviderResponse(BaseModel):
@@ -324,6 +369,7 @@ class AdminTenantCreateRequest(BaseModel):
     plan: str | None = None
     region: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    provisioning_profile: Literal["none", "generic-v1"] | None = None
 
 
 class AdminTenantPatchRequest(BaseModel):
@@ -715,8 +761,9 @@ def build_admin_router() -> APIRouter:
             created_by=admin.user_id,
             updated_by=admin.user_id,
         )
+        execution_config = _tenant_provisioning_execution_config(request.provisioning_profile)
         try:
-            created = store.create_tenant(tenant)
+            created = store.create_tenant(tenant, execution_config=execution_config)
         except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="Tenant id or slug already exists") from exc
         _append_tenant_audit(
@@ -725,6 +772,7 @@ def build_admin_router() -> APIRouter:
             admin,
             "tenants.create",
             new_values=_tenant_audit_values(created),
+            metadata={"provisioning_profile": request.provisioning_profile or "none"},
         )
         return _tenant_response(created)
 

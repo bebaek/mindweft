@@ -179,6 +179,7 @@ export interface AdminTenantInput {
   plan?: string | null;
   region?: string | null;
   metadata?: Record<string, unknown>;
+  provisioning_profile?: "none" | "generic-v1";
 }
 
 export interface AdminTenantPatch {
