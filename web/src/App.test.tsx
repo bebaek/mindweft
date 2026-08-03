@@ -7,9 +7,12 @@ import { AuthProvider } from "./auth/AuthProvider";
 afterEach(() => {
   cleanup();
   window.history.replaceState(null, "", "/");
+  delete document.documentElement.dataset.theme;
+  document.documentElement.style.removeProperty("color-scheme");
 });
 
 beforeEach(() => {
+  window.localStorage.clear();
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
@@ -141,4 +144,10 @@ it("renders the production console shell and readiness status", async () => {
   expect(await screen.findByText("Build, observe, and govern your agents.")).toBeInTheDocument();
   expect(await screen.findByText("Ready")).toBeInTheDocument();
   expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeInTheDocument();
+
+  const themeToggle = screen.getByRole("button", { name: "Switch to dark mode" });
+  fireEvent.click(themeToggle);
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  expect(window.localStorage.getItem("minigent-theme")).toBe("dark");
+  expect(screen.getByRole("button", { name: "Switch to light mode" })).toBeInTheDocument();
 });

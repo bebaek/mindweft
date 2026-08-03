@@ -342,7 +342,8 @@ environment variables belong on the external sidecar, not the Minigent process.
 ### Browser
 
 The API serves the new TypeScript/React console at `/console/`. The initial production UI
-foundation includes a responsive, accessible application shell, live readiness checks, a
+foundation includes a responsive, accessible application shell with persistent light/dark theme
+selection, live readiness checks, a
 conversation workspace with thread history, message composition, NDJSON run streaming, activity
 inspection, cancellation controls, context usage inspection, raw model-context previews, and
 confirmed compaction, validated image selection, authenticated binary uploads, attachment previews,

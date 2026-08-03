@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "./auth/auth-context";
 import { ConnectionDialog } from "./components/ConnectionDialog";
@@ -9,6 +9,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { PasswordSetupPage } from "./pages/PasswordSetupPage";
 
 type Page = "overview" | "workspace" | "settings" | "admin";
+type Theme = "light" | "dark";
 
 const pages: Record<Page, { label: string; description: string }> = {
   overview: { label: "Overview", description: "Runtime health and delivery status" },
@@ -21,6 +22,7 @@ export function App() {
   const [page, setPage] = useState<Page>("overview");
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [theme, setTheme] = useState<Theme>(initialTheme);
   const { api, authentication, setAuthentication, session, logout } = useAuth();
   const queryClient = useQueryClient();
   const setupToken = passwordSetupToken();
@@ -37,6 +39,16 @@ export function App() {
   const visiblePages = (Object.keys(pages) as Page[]).filter((key) =>
     key !== "admin" || platformAdmin,
   ).filter((key) => key !== "settings" || tenantOwner);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    try {
+      window.localStorage.setItem("minigent-theme", theme);
+    } catch {
+      // Theme persistence is optional when browser storage is unavailable.
+    }
+  }, [theme]);
 
   if (setupToken) return <PasswordSetupPage token={setupToken} />;
   if (authentication.mode === "session" && session.loading) {
@@ -72,6 +84,13 @@ export function App() {
           <button className="menu-button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation">☰</button>
           <div><strong>{pages[page].label}</strong><small>{pages[page].description}</small></div>
           <button
+            type="button"
+            className="theme-toggle"
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+          ><span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span></button>
+          <button
             className="connection-button"
             onClick={() => {
               if (authentication.mode === "session" && session.authenticated) {
@@ -105,6 +124,16 @@ export function App() {
       />
     </div>
   );
+}
+
+function initialTheme(): Theme {
+  try {
+    const stored = window.localStorage.getItem("minigent-theme");
+    if (stored === "light" || stored === "dark") return stored;
+  } catch {
+    // Fall through to the system preference.
+  }
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 function passwordSetupToken(): string | null {
