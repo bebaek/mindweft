@@ -411,6 +411,26 @@ test("loads the production console and passes an accessibility scan", async ({ p
 test("keeps overview, authentication, and administration legible in dark mode", async ({ page }) => {
   await installApiMocks(page);
   await installAdminMocks(page);
+  await page.route("**/admin/tenants/tenant-acme/execution-config", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        tenant_id: "tenant-acme",
+        version: 1,
+        config: {
+          llm: { provider: "mock", model: "test-model" },
+          tools: { allowed_local_tools: ["echo"], mcp_servers: [{ name: "docs", url: "https://docs.example/mcp" }, { name: "search", url: "https://search.example/mcp" }] },
+          agent_backend: { type: "native" },
+          skills: { items: [] },
+          capability_profiles: { default_profile: "safe", items: [{ name: "safe", mcp_server_names: ["docs"] }] },
+          agents: { items: [] },
+        },
+      }),
+    });
+  });
+  await page.route("**/admin/tenants/tenant-acme/mcp-server-catalog", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], managed: false, allow_custom_mcp_servers: true }) });
+  });
   await page.addInitScript(() => window.localStorage.setItem("minigent-theme", "dark"));
   await page.goto("./");
 
@@ -430,6 +450,14 @@ test("keeps overview, authentication, and administration legible in dark mode", 
   await expect(page.getByRole("heading", { name: "Acme Corporation" })).toBeVisible();
   await page.waitForTimeout(250);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await page.getByRole("button", { name: "Edit configuration" }).click();
+  const executionDialog = page.getByRole("dialog", { name: "Edit execution configuration" });
+  await expect(executionDialog).toBeVisible();
+  for (const tab of ["LLM", "Tools", "Runtime", "Skills", "Presets", "Advanced"]) {
+    await executionDialog.getByRole("button", { name: tab, exact: true }).click();
+    expect((await new AxeBuilder({ page }).include(".execution-config-dialog").analyze()).violations).toEqual([]);
+  }
 });
 
 test("keeps workspace dialogs legible in dark mode", async ({ page }) => {
