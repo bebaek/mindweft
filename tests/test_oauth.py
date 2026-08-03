@@ -35,7 +35,11 @@ from app.tools import build_local_tool_registry
 
 
 def _token(account_id: str) -> str:
-    return jwt.encode({"auth": {"account_id": account_id}}, "secret", algorithm="HS256")
+    return jwt.encode(
+        {"auth": {"account_id": account_id}},
+        "oauth-test-signing-key-not-for-production",
+        algorithm="HS256",
+    )
 
 
 def test_generic_oauth_provider_supports_tenant_credential_key(tmp_path: Path) -> None:
