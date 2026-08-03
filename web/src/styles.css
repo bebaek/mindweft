@@ -40,9 +40,9 @@ html[data-theme="dark"] {
 * { box-sizing: border-box; }
 html { min-width: 320px; min-height: 100%; background: #eef0eb; }
 body { margin: 0; min-width: 320px; min-height: 100vh; font-size:var(--text-body); }
-button, input { font: inherit; }
+button, input, textarea, select { font: inherit; }
 button { color: inherit; }
-button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid rgba(77, 133, 94, 0.35); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible { outline: 3px solid rgba(77, 133, 94, 0.35); outline-offset: 2px; }
 
 .skip-link { position: fixed; z-index: 100; top: 8px; left: 8px; padding: 10px 14px; color: white; background: var(--forest); border-radius: 8px; transform: translateY(-150%); }
 .skip-link:focus { transform: translateY(0); }
@@ -198,7 +198,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 34px 56px; }
 .thread-button { display:grid; gap:9px; width:100%; padding:13px 12px; overflow:hidden; border:1px solid transparent; border-radius:10px; background:transparent; cursor:pointer; text-align:left; }
 .thread-button:hover { background:rgba(255,255,255,.7); }
 .thread-button.active { border-color:#d9dfd8; background:var(--white); box-shadow:0 5px 16px rgba(28,41,32,.05); }
-.thread-button strong { overflow:hidden; font-size:var(--text-control); font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
+.thread-button strong { overflow:hidden; color:var(--ink); font-size:var(--text-control); font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
 .thread-button>span { display:flex; justify-content:space-between; color:var(--muted); font-size:var(--text-sm); }
 .thread-button small { font-size:inherit; }
 .thread-button time { font-variant-numeric:tabular-nums; }
@@ -239,6 +239,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 34px 56px; }
 .markdown-content :where(ul,ol) { padding-left:22px; }
 .markdown-content li + li { margin-top:4px; }
 .markdown-content li > p { margin:0; }
+.markdown-content strong { font-weight:650; }
 .markdown-content blockquote { padding:2px 0 2px 12px; border-left:3px solid #91aa96; color:var(--muted); }
 .markdown-content code { padding:2px 4px; border-radius:4px; background:#edf1ec; font:var(--text-code)/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
 .markdown-content pre { overflow-x:auto; padding:12px 13px; border:1px solid var(--line); border-radius:8px; background:#f4f6f2; }

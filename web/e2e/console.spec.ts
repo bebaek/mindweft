@@ -66,7 +66,7 @@ async function installWorkspaceMocks(
           id: "message-2",
           thread_id: "thread-1",
           role: "assistant",
-          content: "## Deployment review\n\n| Item | Status |\n| --- | --- |\n| Tests | Passing |\n\nRun `make test` before deployment.",
+          content: "## Deployment review\n\n| Item | Status |\n| --- | --- |\n| Tests | Passing |\n\n**Run** `make test` before deployment.",
           created_at: "2026-01-01T00:01:00Z",
         },
       ],
@@ -436,6 +436,16 @@ test("uses readable typography tokens for chat and controls", async ({ page }) =
   await expect(page.locator(".chat-message.assistant .message-content").first()).toHaveCSS("font-size", "16px");
   await expect(page.locator(".message-author").first()).toHaveCSS("font-size", "13px");
   await expect(page.locator(".markdown-content code")).toHaveCSS("font-size", "13px");
+  await expect(page.locator(".markdown-content strong")).toHaveCSS("font-weight", "650");
+  await expect(page.locator(".thread-button strong").first()).toHaveCSS("color", "rgb(23, 33, 27)");
+  const fontFamilies = await page.evaluate(() => {
+    const composer = document.querySelector<HTMLTextAreaElement>(".chat-composer textarea");
+    return {
+      body: getComputedStyle(document.body).fontFamily,
+      composer: composer ? getComputedStyle(composer).fontFamily : "",
+    };
+  });
+  expect(fontFamilies.composer).toBe(fontFamilies.body);
 
   const undersizedControls = await page.locator("button:visible, input:visible, textarea:visible, select:visible").evaluateAll((elements) => elements.flatMap((element) => {
     const size = Number.parseFloat(getComputedStyle(element).fontSize);
