@@ -480,6 +480,34 @@ def test_admin_external_grant_api_is_optional_audited_and_provider_neutral(
     assert missing_subject.status_code == 404
     assert "not found" in missing_subject.json()["detail"]
 
+    grants.append(
+        ExternalGrant(
+            resource_id="resource:orphan",
+            subject_id="deleted-user",
+            permission="read",
+            enabled=True,
+            updated_by="seed",
+        )
+    )
+    orphan_disable = client.put(
+        "/admin/tenants/tenant-1/external-grants/example",
+        headers=ADMIN_HEADERS,
+        json={
+            "resource_id": "resource:orphan",
+            "subject_id": "deleted-user",
+            "permission": "read",
+            "enabled": False,
+        },
+    )
+    assert orphan_disable.status_code == 200
+    assert orphan_disable.json()["enabled"] is False
+
+    orphan_deleted = client.delete(
+        "/admin/tenants/tenant-1/external-grants/example/resource%3Aorphan?subject_id=deleted-user",
+        headers=ADMIN_HEADERS,
+    )
+    assert orphan_deleted.status_code == 204
+
     deleted = client.delete(
         "/admin/tenants/tenant-1/external-grants/example/resource%3Aone?subject_id=user-1",
         headers=ADMIN_HEADERS,
