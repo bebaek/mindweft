@@ -20,7 +20,7 @@ html[data-theme="dark"] {
   color: #e7ede8;
   background: #101411;
   --ink: #e7ede8;
-  --muted: #a4b0a7;
+  --muted: #b5c0b7;
   --line: #364139;
   --paper: #151a16;
   --white: #1d241f;
@@ -582,4 +582,37 @@ html[data-theme="dark"] .tenant-directory-list>button.active { color:var(--ink);
 html[data-theme="dark"] .admin-panel-heading>span { color:var(--ink); background:#29332c; }
 html[data-theme="dark"] .execution-editor-tabs button.active { color:#c4ef91; background:#263329; border-color:#49604f; }
 html[data-theme="dark"] .domain-add-form button:disabled,
-html[data-theme="dark"] .tenant-summary-actions>button:disabled { color:#7c8880; opacity:.65; }
+html[data-theme="dark"] .tenant-summary-actions>button:disabled { color:#94a098; opacity:.75; }
+
+/* Readable administration typography */
+.admin-page { font-size:14px; }
+.admin-page :is(p,input,select,textarea,label,button) { font-size:12px!important; line-height:1.5; }
+.admin-page small { font-size:11px!important; line-height:1.45; }
+.admin-page :where(.eyebrow) { font-size:11px; line-height:1.4; }
+.admin-page :where(
+  .admin-metrics span,.admin-user-list strong,.domain-list strong,
+  .entitlement-group h4,.execution-summary span,.execution-config-footer span,
+  .oauth-credential-summary span,.operations-result-heading,.thread-table strong,
+  .audit-row strong,.credential-status
+) { font-size:11px; line-height:1.45; }
+.admin-page :where(
+  .tenant-summary p:last-child,.entitlements-heading>div:first-child>p:last-child,
+  .execution-config-heading>div:first-child>p:last-child,
+  .oauth-import-heading>div>p:last-child,.tenant-operations-heading>div>p:last-child,
+  .lifecycle-panel>div>p:last-child
+) { font-size:12px!important; line-height:1.55; }
+html[data-theme="dark"] .admin-page { color:#edf2ee; }
+html[data-theme="dark"] .admin-page :where(
+  p,small,label,.admin-metrics span,.execution-summary span,
+  .admin-user-list li>span:last-of-type,.entitlements-heading-actions>span,
+  .execution-config-heading-actions>span
+) { color:#b8c4bb; }
+html[data-theme="dark"] .admin-page :where(
+  .admin-user-list li>button,.domain-list li>button,.execution-config-footer button,
+  .entitlements-content>footer button
+) { color:#a9d6b6; }
+html[data-theme="dark"] .admin-page :where(
+  .admin-user-list li>button.danger-link,.domain-list li>button.danger-link,
+  .execution-config-footer button,.entitlements-content>footer button
+) { color:#ff9d94; }
+html[data-theme="dark"] .oauth-credential-summary>p { color:#e8ae70; }
