@@ -53,6 +53,8 @@ TENANT_CONFIG_SOURCE_STORE = "store"
 TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS = "store-with-defaults"
 TENANT_ENV_PLACEHOLDER_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 AGENT_BACKEND_ENV = "MINIGENT_AGENT_BACKEND"
+CODING_TENANT_ID_ENV = "MINIGENT_CODING_TENANT_ID"
+CODING_OAUTH_GLOBAL_FALLBACK_ENV = "MINIGENT_CODING_OAUTH_GLOBAL_FALLBACK"
 AGENT_BACKEND_PEER_ENV = "MINIGENT_AGENT_BACKEND_PEER"
 AGENT_BACKEND_CWD_ENV = "MINIGENT_AGENT_BACKEND_CWD"
 AGENT_BACKEND_TIMEOUT_ENV = "MINIGENT_AGENT_BACKEND_TIMEOUT_SECONDS"
@@ -1883,7 +1885,16 @@ def _build_llm_adapter(
             raise RuntimeError("Tenant LLM provider 'generic-oauth' requires model")
         if not config.base_url:
             raise RuntimeError("Tenant LLM provider 'generic-oauth' requires base_url")
-        oauth_provider = GenericOAuthProvider(credential_tenant_id=tenant_id)
+        allow_global_credential_fallback = (
+            tenant_id is not None
+            and tenant_id == os.environ.get(CODING_TENANT_ID_ENV)
+            and os.environ.get(CODING_OAUTH_GLOBAL_FALLBACK_ENV, "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        oauth_provider = GenericOAuthProvider(
+            credential_tenant_id=tenant_id,
+            allow_global_credential_fallback=allow_global_credential_fallback,
+        )
         return GenericOAuthResponsesAdapter(
             url=config.base_url,
             model=config.model,

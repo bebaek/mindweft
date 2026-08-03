@@ -58,9 +58,56 @@ def test_generic_oauth_provider_supports_tenant_credential_key(tmp_path: Path) -
         config=config,
         store=store,
         credential_tenant_id="tenant-1",
+        allow_global_credential_fallback=True,
     )
 
     assert asyncio.run(provider.get_credentials()) == tenant_credentials
+
+
+def test_generic_oauth_provider_keeps_global_fallback_opt_in(tmp_path: Path) -> None:
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    config = GenericOAuthConfig(
+        provider_id="openai",
+        client_id="client",
+        authorize_url="https://example.com/authorize",
+        token_url="https://example.com/token",
+        redirect_uri="http://localhost/callback",
+        scope="openid",
+        auth_params={},
+    )
+    store.set("openai", OAuthCredentials("global-access", "global-refresh", time.time() + 3600))
+
+    provider = GenericOAuthProvider(
+        config=config,
+        store=store,
+        credential_tenant_id="tenant-1",
+    )
+
+    assert asyncio.run(provider.get_credentials()) is None
+
+
+def test_generic_oauth_provider_can_fall_back_to_global_credential(tmp_path: Path) -> None:
+    store = FileOAuthCredentialStore(tmp_path / "oauth.json")
+    config = GenericOAuthConfig(
+        provider_id="openai",
+        client_id="client",
+        authorize_url="https://example.com/authorize",
+        token_url="https://example.com/token",
+        redirect_uri="http://localhost/callback",
+        scope="openid",
+        auth_params={},
+    )
+    global_credentials = OAuthCredentials("global-access", "global-refresh", time.time() + 3600)
+    store.set("openai", global_credentials)
+
+    provider = GenericOAuthProvider(
+        config=config,
+        store=store,
+        credential_tenant_id="demo-tenant",
+        allow_global_credential_fallback=True,
+    )
+
+    assert asyncio.run(provider.get_credentials()) == global_credentials
 
 
 def test_generic_oauth_export_settings_from_env_mapping(tmp_path: Path) -> None:

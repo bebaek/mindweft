@@ -576,7 +576,10 @@ shell for trusted local workspaces or run the bridge/server inside a separate sa
 
 `.env.coding.template` also includes a commented Generic OAuth LLM example for coding profiles.
 Uncomment it, fill in the OAuth/provider values, start the runner, then open
-`http://127.0.0.1:8000/oauth/generic/open` to authorize the LLM provider.
+`http://127.0.0.1:8000/oauth/generic/open` to authorize the LLM provider. The trusted-local coding
+runner first looks for its tenant-scoped credential and then falls back to the global credential
+created by this login route. This fallback is enabled only by the coding-workspace runner for its
+configured coding tenant; normal tenant execution remains strictly tenant-scoped.
 
 ## Smoke test
 
