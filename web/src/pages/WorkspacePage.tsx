@@ -307,7 +307,7 @@ export function WorkspacePage() {
           </div>
         </header>
 
-        <div className="message-scroll" aria-live="polite">
+        <div className="message-scroll" aria-live="polite" tabIndex={0}>
           {!selectedThreadId && !isRunning && <Welcome />}
           {messages.isPending && selectedThreadId && <p className="loading-messages">Loading conversation…</p>}
           {messages.data?.filter((message) => message.role === "user" || message.role === "assistant").map((message) => (
