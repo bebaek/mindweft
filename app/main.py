@@ -49,6 +49,7 @@ from app.execution import (
     get_skill_configs,
     resolve_tenant_config_source,
 )
+from app.external_grants import build_external_grant_provider_registry_from_env
 from app.health import database_readiness_checks
 from app.image_validation import ImageDimensionError, enforce_image_dimensions
 from app.llm import LLMAdapter, build_llm_adapter_from_env
@@ -799,6 +800,7 @@ def create_app(
                 encryption_key=admin_encryption_key,
             )
     app.state.admin_store = admin_store
+    app.state.external_grant_provider_registry = build_external_grant_provider_registry_from_env()
     if execution_resolver is None:
         if llm_adapter is not None or tool_registry is not None:
             adapter = llm_adapter or build_llm_adapter_from_env()

@@ -340,6 +340,40 @@ export interface AdminMcpServerCatalog {
   allow_custom_mcp_servers: boolean;
 }
 
+export interface AdminExternalGrantProvider {
+  id: string;
+  title: string;
+  description: string;
+  allowed_permissions: string[];
+}
+
+export interface AdminExternalGrantProviderList {
+  providers: AdminExternalGrantProvider[];
+}
+
+export interface AdminExternalGrant {
+  resource_id: string;
+  subject_id: string;
+  permission: string;
+  enabled: boolean;
+  updated_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AdminExternalGrantList {
+  tenant_id: string;
+  provider_id: string;
+  grants: AdminExternalGrant[];
+}
+
+export interface AdminExternalGrantInput {
+  resource_id: string;
+  subject_id: string;
+  permission: string;
+  enabled: boolean;
+}
+
 export interface AdminMcpServerCatalogPolicy {
   tenant_id: string;
   item_ids: string[];
@@ -834,6 +868,46 @@ export class MinigentApiClient {
     return this.#request<AdminAuditRecordList>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/audit-records${queryString(filters)}`,
       { signal },
+    );
+  }
+
+  listAdminExternalGrantProviders(signal?: AbortSignal): Promise<AdminExternalGrantProviderList> {
+    return this.#request<AdminExternalGrantProviderList>("/admin/external-grant-providers", {
+      signal,
+    });
+  }
+
+  listAdminExternalGrants(
+    tenantId: string,
+    providerId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminExternalGrantList> {
+    return this.#request<AdminExternalGrantList>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/external-grants/${encodeURIComponent(providerId)}`,
+      { signal },
+    );
+  }
+
+  updateAdminExternalGrant(
+    tenantId: string,
+    providerId: string,
+    input: AdminExternalGrantInput,
+  ): Promise<AdminExternalGrant> {
+    return this.#request<AdminExternalGrant>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/external-grants/${encodeURIComponent(providerId)}`,
+      { method: "PUT", body: JSON.stringify(input) },
+    );
+  }
+
+  deleteAdminExternalGrant(
+    tenantId: string,
+    providerId: string,
+    resourceId: string,
+    subjectId: string,
+  ): Promise<void> {
+    return this.#request<void>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/external-grants/${encodeURIComponent(providerId)}/${encodeURIComponent(resourceId)}?subject_id=${encodeURIComponent(subjectId)}`,
+      { method: "DELETE" },
     );
   }
 

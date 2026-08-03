@@ -1829,6 +1829,31 @@ servers are disabled, non-catalog servers are rejected. Policy changes are audit
 the tenant execution cache, so revoking an entry prevents subsequent runs even if an older stored
 execution configuration still references it.
 
+`MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS` optionally enables a provider-neutral external grant
+control plane for platform administrators. When unset, no providers or grant panels are registered.
+The setting is a JSON array whose entries define `id`, `title`, optional `description`, `base_url`,
+forwarded-identity `audience`, non-empty `read_scopes` and `write_scopes`, and
+`allowed_permissions`. Generic endpoint defaults are `GET/PUT /v1/resource-grants` and
+`DELETE /v1/resource-grants/{resource_id}?user_id=...`; deployments can override `list_path`,
+`upsert_path`, and `delete_path`. URLs are deployment-owned and reject embedded credentials,
+query strings, and non-HTTP schemes.
+
+The platform-admin-only routes are `GET /admin/external-grant-providers`,
+`GET/PUT /admin/tenants/{tenant_id}/external-grants/{provider_id}`, and
+`DELETE /admin/tenants/{tenant_id}/external-grants/{provider_id}/{resource_id}?subject_id=...`.
+Minigent issues a fresh 30–300 second forwarded-identity token for each provider request and uses
+only the configured read or write scopes. Provider credentials, scopes, and HTTP operations are
+never added to tenant execution configuration or exposed as model tools. Grant state remains
+authoritative at the provider; Minigent stores only its normal redacted administrative audit
+record. Provider availability is deliberately excluded from startup, readiness, chat execution,
+and tool discovery, so an outage affects only grant-administration requests.
+
+Example:
+
+```bash
+MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS='[{"id":"example-grants","title":"Example grants","description":"Manage authoritative external grants.","base_url":"http://127.0.0.1:8769","audience":"example-grants","read_scopes":["grants:read"],"write_scopes":["grants:write"],"allowed_permissions":["read","read_write"]}]'
+```
+
 Header values are redacted before catalog
 entries reach the browser. When a quick-add entry is validated or saved, its `<redacted>` header
 placeholders are restored server-side from the deployment catalog; existing tenant values take

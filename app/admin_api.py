@@ -29,6 +29,12 @@ from app.execution import (
     tenant_mcp_server_catalog_policy_errors,
     validate_tenant_execution_config,
 )
+from app.external_grants import (
+    ExternalGrant,
+    ExternalGrantProviderError,
+    ExternalGrantProviderRegistry,
+    HTTPExternalGrantProvider,
+)
 from app.models import (
     AuditRecord,
     Message,
@@ -68,6 +74,40 @@ NON_NEGATIVE_INTEGER_ENTITLEMENT_LIMITS = {
     "max_messages",
     "max_thread_runs",
 }
+
+
+class AdminExternalGrantProviderResponse(BaseModel):
+    id: str
+    title: str
+    description: str
+    allowed_permissions: list[str]
+
+
+class AdminExternalGrantProviderListResponse(BaseModel):
+    providers: list[AdminExternalGrantProviderResponse]
+
+
+class AdminExternalGrantResponse(BaseModel):
+    resource_id: str
+    subject_id: str
+    permission: str
+    enabled: bool
+    updated_by: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class AdminExternalGrantListResponse(BaseModel):
+    tenant_id: str
+    provider_id: str
+    grants: list[AdminExternalGrantResponse]
+
+
+class AdminExternalGrantUpsertRequest(BaseModel):
+    resource_id: str = Field(min_length=1, max_length=512)
+    subject_id: str = Field(min_length=1, max_length=255)
+    permission: str = Field(min_length=1, max_length=64)
+    enabled: bool = True
 
 
 class AdminMCPServerCatalogItem(BaseModel):
@@ -1643,6 +1683,132 @@ def build_admin_router() -> APIRouter:
         )
 
     @router.get(
+        "/external-grant-providers",
+        response_model=AdminExternalGrantProviderListResponse,
+    )
+    async def list_external_grant_providers(
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminExternalGrantProviderListResponse:
+        _ = admin
+        registry = _external_grant_provider_registry(request)
+        return AdminExternalGrantProviderListResponse(
+            providers=[_external_grant_provider_response(provider) for provider in registry.list()]
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/external-grants/{provider_id}",
+        response_model=AdminExternalGrantListResponse,
+    )
+    async def list_external_grants(
+        tenant_id: str,
+        provider_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminExternalGrantListResponse:
+        _require_tenant(request, tenant_id)
+        provider = _external_grant_provider(request, provider_id)
+        try:
+            grants = await provider.list_grants(tenant_id=tenant_id, actor_user_id=admin.user_id)
+        except ExternalGrantProviderError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return AdminExternalGrantListResponse(
+            tenant_id=tenant_id,
+            provider_id=provider_id,
+            grants=[_external_grant_response(grant) for grant in grants],
+        )
+
+    @router.put(
+        "/tenants/{tenant_id}/external-grants/{provider_id}",
+        response_model=AdminExternalGrantResponse,
+    )
+    async def put_external_grant(
+        tenant_id: str,
+        provider_id: str,
+        body: AdminExternalGrantUpsertRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminExternalGrantResponse:
+        _require_tenant(request, tenant_id)
+        provider = _external_grant_provider(request, provider_id)
+        try:
+            existing = await provider.list_grants(tenant_id=tenant_id, actor_user_id=admin.user_id)
+            old_grant = next(
+                (
+                    grant
+                    for grant in existing
+                    if grant.resource_id == body.resource_id and grant.subject_id == body.subject_id
+                ),
+                None,
+            )
+            grant = await provider.upsert_grant(
+                tenant_id=tenant_id,
+                actor_user_id=admin.user_id,
+                resource_id=body.resource_id,
+                subject_id=body.subject_id,
+                permission=body.permission,
+                enabled=body.enabled,
+            )
+        except ExternalGrantProviderError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "external_grant.upsert",
+            resource_type="external_grant",
+            resource_id=f"{provider_id}:{body.resource_id}:{body.subject_id}",
+            old_values=_external_grant_audit_values(old_grant),
+            new_values=_external_grant_audit_values(grant),
+            metadata={"provider_id": provider_id},
+        )
+        return _external_grant_response(grant)
+
+    @router.delete(
+        "/tenants/{tenant_id}/external-grants/{provider_id}/{resource_id}",
+        status_code=204,
+    )
+    async def delete_external_grant(
+        tenant_id: str,
+        provider_id: str,
+        resource_id: str,
+        subject_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> None:
+        _require_tenant(request, tenant_id)
+        provider = _external_grant_provider(request, provider_id)
+        try:
+            existing = await provider.list_grants(tenant_id=tenant_id, actor_user_id=admin.user_id)
+            old_grant = next(
+                (
+                    grant
+                    for grant in existing
+                    if grant.resource_id == resource_id and grant.subject_id == subject_id
+                ),
+                None,
+            )
+            await provider.delete_grant(
+                tenant_id=tenant_id,
+                actor_user_id=admin.user_id,
+                resource_id=resource_id,
+                subject_id=subject_id,
+            )
+        except ExternalGrantProviderError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "external_grant.delete",
+            resource_type="external_grant",
+            resource_id=f"{provider_id}:{resource_id}:{subject_id}",
+            old_values=_external_grant_audit_values(old_grant),
+            new_values=None,
+            metadata={"provider_id": provider_id},
+        )
+
+    @router.get(
         "/mcp-server-catalog",
         response_model=AdminMCPServerCatalogResponse,
     )
@@ -2512,6 +2678,49 @@ def _invalidate_resolver(resolver: TenantExecutionResolver, tenant_id: str) -> N
     invalidate = getattr(resolver, "invalidate", None)
     if callable(invalidate):
         invalidate(tenant_id)
+
+
+def _external_grant_provider_registry(request: Request) -> ExternalGrantProviderRegistry:
+    registry = getattr(request.app.state, "external_grant_provider_registry", None)
+    if not isinstance(registry, ExternalGrantProviderRegistry):
+        return ExternalGrantProviderRegistry()
+    return registry
+
+
+def _external_grant_provider(request: Request, provider_id: str) -> HTTPExternalGrantProvider:
+    provider = _external_grant_provider_registry(request).get(provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail=f"Grant provider '{provider_id}' not found")
+    return provider
+
+
+def _external_grant_provider_response(
+    provider: HTTPExternalGrantProvider,
+) -> AdminExternalGrantProviderResponse:
+    return AdminExternalGrantProviderResponse(
+        id=provider.provider_id,
+        title=provider.title,
+        description=provider.description,
+        allowed_permissions=list(provider.allowed_permissions),
+    )
+
+
+def _external_grant_response(grant: ExternalGrant) -> AdminExternalGrantResponse:
+    return AdminExternalGrantResponse(
+        resource_id=grant.resource_id,
+        subject_id=grant.subject_id,
+        permission=grant.permission,
+        enabled=grant.enabled,
+        updated_by=grant.updated_by,
+        created_at=grant.created_at,
+        updated_at=grant.updated_at,
+    )
+
+
+def _external_grant_audit_values(grant: ExternalGrant | None) -> dict[str, Any] | None:
+    if grant is None:
+        return None
+    return _external_grant_response(grant).model_dump(mode="json")
 
 
 def _configured_mcp_server_catalog(
