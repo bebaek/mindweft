@@ -290,6 +290,36 @@ def test_sdk_http_client_interoperates_with_sdk_text_server_through_bridge(
     asyncio.run(run())
 
 
+def test_stdio_bridge_keeps_multiple_legacy_sessions_valid(tmp_path: Path) -> None:
+    client = _client(tmp_path, "ok")
+
+    with client:
+        first_initialize = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        second_initialize = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {}},
+        )
+        first_tools = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": first_initialize.headers["mcp-session-id"]},
+            json={"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}},
+        )
+        second_tools = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": second_initialize.headers["mcp-session-id"]},
+            json={"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}},
+        )
+
+    assert first_initialize.status_code == 200
+    assert second_initialize.status_code == 200
+    assert first_initialize.headers["mcp-session-id"] != second_initialize.headers["mcp-session-id"]
+    assert first_tools.status_code == 200
+    assert second_tools.status_code == 200
+
+
 def test_stdio_bridge_requires_session_after_initialize(tmp_path: Path) -> None:
     client = _client(tmp_path, "ok")
 
