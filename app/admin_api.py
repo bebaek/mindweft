@@ -34,6 +34,7 @@ from app.external_grants import (
     ExternalGrantAudit,
     ExternalGrantProviderError,
     ExternalGrantProviderRegistry,
+    ExternalGrantResource,
     HTTPExternalGrantProvider,
 )
 from app.models import (
@@ -82,6 +83,7 @@ class AdminExternalGrantProviderResponse(BaseModel):
     title: str
     description: str
     allowed_permissions: list[str]
+    resource_discovery_available: bool
     audit_available: bool
 
 
@@ -103,6 +105,21 @@ class AdminExternalGrantListResponse(BaseModel):
     tenant_id: str
     provider_id: str
     grants: list[AdminExternalGrantResponse]
+
+
+class AdminExternalGrantResourceResponse(BaseModel):
+    resource_id: str
+    kind: str
+    label: str
+    allowed_permissions: list[str]
+    configured: bool
+    enabled: bool
+
+
+class AdminExternalGrantResourceListResponse(BaseModel):
+    tenant_id: str
+    provider_id: str
+    resources: list[AdminExternalGrantResourceResponse]
 
 
 class AdminExternalGrantAuditStateResponse(BaseModel):
@@ -1744,6 +1761,31 @@ def build_admin_router() -> APIRouter:
         )
 
     @router.get(
+        "/tenants/{tenant_id}/external-grants/{provider_id}/resources",
+        response_model=AdminExternalGrantResourceListResponse,
+    )
+    async def list_external_grant_resources(
+        tenant_id: str,
+        provider_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminExternalGrantResourceListResponse:
+        _require_tenant(request, tenant_id)
+        provider = _external_grant_provider(request, provider_id)
+        try:
+            resources = await provider.list_resources(
+                tenant_id=tenant_id,
+                actor_user_id=admin.user_id,
+            )
+        except ExternalGrantProviderError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return AdminExternalGrantResourceListResponse(
+            tenant_id=tenant_id,
+            provider_id=provider_id,
+            resources=[_external_grant_resource_response(resource) for resource in resources],
+        )
+
+    @router.get(
         "/tenants/{tenant_id}/external-grants/{provider_id}/audit",
         response_model=AdminExternalGrantAuditListResponse,
     )
@@ -2761,6 +2803,7 @@ def _external_grant_provider_response(
         title=provider.title,
         description=provider.description,
         allowed_permissions=list(provider.allowed_permissions),
+        resource_discovery_available=provider.resources_path is not None,
         audit_available=provider.audit_path is not None,
     )
 
@@ -2774,6 +2817,19 @@ def _external_grant_response(grant: ExternalGrant) -> AdminExternalGrantResponse
         updated_by=grant.updated_by,
         created_at=grant.created_at,
         updated_at=grant.updated_at,
+    )
+
+
+def _external_grant_resource_response(
+    resource: ExternalGrantResource,
+) -> AdminExternalGrantResourceResponse:
+    return AdminExternalGrantResourceResponse(
+        resource_id=resource.resource_id,
+        kind=resource.kind,
+        label=resource.label,
+        allowed_permissions=list(resource.allowed_permissions),
+        configured=resource.configured,
+        enabled=resource.enabled,
     )
 
 

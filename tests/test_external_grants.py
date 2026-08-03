@@ -18,6 +18,7 @@ from app.external_grants import (
     ExternalGrantAudit,
     ExternalGrantAuditState,
     ExternalGrantProviderRegistry,
+    ExternalGrantResource,
     HTTPExternalGrantProvider,
     build_external_grant_provider_registry_from_env,
 )
@@ -48,6 +49,7 @@ def test_external_grant_provider_settings_are_optional_and_validated() -> None:
                     "read_scopes": ["grants:read"],
                     "write_scopes": ["grants:write"],
                     "allowed_permissions": ["read", "read_write"],
+                    "resources_path": "/v1/resources",
                     "audit_path": "/v1/resource-grant-audit",
                 }
             ]
@@ -60,6 +62,7 @@ def test_external_grant_provider_settings_are_optional_and_validated() -> None:
     assert provider is not None
     assert provider.base_url == "http://127.0.0.1:8769"
     assert provider.allowed_permissions == ("read", "read_write")
+    assert provider.resources_path == "/v1/resources"
     assert provider.audit_path == "/v1/resource-grant-audit"
     assert "test-private-key" not in repr(provider)
 
@@ -127,6 +130,22 @@ def test_http_external_grant_provider_uses_short_lived_scoped_identity(
                 "permission": "read_write",
                 "enabled": True,
             }
+            if method == "GET" and url.endswith("/resources"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "resources": [
+                            {
+                                "resource_id": "resource:one",
+                                "kind": "caldav",
+                                "label": "Personal calendar",
+                                "allowed_permissions": ["read", "read_write"],
+                                "configured": True,
+                                "enabled": True,
+                            }
+                        ]
+                    },
+                )
             if method == "GET" and url.endswith("/audit?limit=25&before_id=42"):
                 return httpx.Response(
                     200,
@@ -171,6 +190,7 @@ def test_http_external_grant_provider_uses_short_lived_scoped_identity(
             private_key=private_pem,
             key_id="test-key",
         ),
+        resources_path="/resources",
         audit_path="/audit",
     )
 
@@ -194,6 +214,19 @@ def test_http_external_grant_provider_uses_short_lived_scoped_identity(
         )
     )
 
+    resources = asyncio.run(
+        provider.list_resources(tenant_id="tenant-1", actor_user_id="admin-user")
+    )
+    assert resources == [
+        ExternalGrantResource(
+            resource_id="resource:one",
+            kind="caldav",
+            label="Personal calendar",
+            allowed_permissions=("read", "read_write"),
+            configured=True,
+            enabled=True,
+        )
+    ]
     audit_entries, next_cursor = asyncio.run(
         provider.list_audit(
             tenant_id="tenant-1",
@@ -208,7 +241,7 @@ def test_http_external_grant_provider_uses_short_lived_scoped_identity(
     )
     assert next_cursor == 41
 
-    assert [item[0] for item in seen] == ["GET", "PUT", "DELETE", "GET"]
+    assert [item[0] for item in seen] == ["GET", "PUT", "DELETE", "GET", "GET"]
     assert seen[0][2]["scope"] == "grants:read"
     assert seen[1][2]["scope"] == "grants:write"
     assert seen[2][2]["scope"] == "grants:write"
@@ -276,6 +309,21 @@ def test_admin_external_grant_api_is_optional_audited_and_provider_neutral(
             if (item.resource_id, item.subject_id) != (resource_id, subject_id)
         ]
 
+    async def list_resources(self, *, tenant_id: str, actor_user_id: str):
+        _ = self
+        assert tenant_id == "tenant-1"
+        assert actor_user_id == "admin-user"
+        return [
+            ExternalGrantResource(
+                resource_id="resource:one",
+                kind="caldav",
+                label="Personal calendar",
+                allowed_permissions=("read", "read_write"),
+                configured=True,
+                enabled=True,
+            )
+        ]
+
     async def list_audit(
         self,
         *,
@@ -305,6 +353,7 @@ def test_admin_external_grant_api_is_optional_audited_and_provider_neutral(
             None,
         )
 
+    monkeypatch.setattr(HTTPExternalGrantProvider, "list_resources", list_resources)
     monkeypatch.setattr(HTTPExternalGrantProvider, "list_audit", list_audit)
     monkeypatch.setattr(HTTPExternalGrantProvider, "list_grants", list_grants)
     monkeypatch.setattr(HTTPExternalGrantProvider, "upsert_grant", upsert_grant)
@@ -326,6 +375,7 @@ def test_admin_external_grant_api_is_optional_audited_and_provider_neutral(
             private_key="unused",
             key_id="test",
         ),
+        resources_path="/resources",
         audit_path="/audit",
     )
     store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
@@ -344,10 +394,26 @@ def test_admin_external_grant_api_is_optional_audited_and_provider_neutral(
     providers = client.get("/admin/external-grant-providers", headers=ADMIN_HEADERS)
     assert providers.status_code == 200
     assert providers.json()["providers"][0]["id"] == "example"
+    assert providers.json()["providers"][0]["resource_discovery_available"] is True
     assert providers.json()["providers"][0]["audit_available"] is True
     listed = client.get("/admin/tenants/tenant-1/external-grants/example", headers=ADMIN_HEADERS)
     assert listed.status_code == 200
     assert listed.json()["grants"][0]["resource_id"] == "resource:one"
+    provider_resources = client.get(
+        "/admin/tenants/tenant-1/external-grants/example/resources",
+        headers=ADMIN_HEADERS,
+    )
+    assert provider_resources.status_code == 200
+    assert provider_resources.json()["resources"] == [
+        {
+            "resource_id": "resource:one",
+            "kind": "caldav",
+            "label": "Personal calendar",
+            "allowed_permissions": ["read", "read_write"],
+            "configured": True,
+            "enabled": True,
+        }
+    ]
     provider_audit = client.get(
         "/admin/tenants/tenant-1/external-grants/example/audit",
         headers=ADMIN_HEADERS,

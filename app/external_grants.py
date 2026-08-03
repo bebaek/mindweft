@@ -34,6 +34,16 @@ class ExternalGrant:
 
 
 @dataclass(frozen=True)
+class ExternalGrantResource:
+    resource_id: str
+    kind: str
+    label: str
+    allowed_permissions: tuple[str, ...]
+    configured: bool
+    enabled: bool
+
+
+@dataclass(frozen=True)
 class ExternalGrantAuditState:
     permission: str
     enabled: bool
@@ -64,6 +74,7 @@ class HTTPExternalGrantProvider:
     read_scopes: tuple[str, ...]
     write_scopes: tuple[str, ...]
     token_issuer: MCPIdentityTokenIssuer
+    resources_path: str | None = None
     audit_path: str | None = None
     timeout_seconds: float = 10.0
 
@@ -127,6 +138,31 @@ class HTTPExternalGrantProvider:
             scopes=self.write_scopes,
             expect_json=False,
         )
+
+    async def list_resources(
+        self,
+        *,
+        tenant_id: str,
+        actor_user_id: str,
+    ) -> list[ExternalGrantResource]:
+        if self.resources_path is None:
+            raise ExternalGrantProviderError(
+                404, "Grant provider does not expose resource discovery"
+            )
+        payload = await self._request(
+            "GET",
+            self.resources_path,
+            tenant_id=tenant_id,
+            actor_user_id=actor_user_id,
+            scopes=self.read_scopes,
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("resources"), list):
+            raise ExternalGrantProviderError(
+                502, "Grant provider returned an invalid resource response"
+            )
+        return [
+            _parse_grant_resource(item, self.allowed_permissions) for item in payload["resources"]
+        ]
 
     async def list_audit(
         self,
@@ -249,6 +285,12 @@ def build_external_grant_provider_registry_from_env(
         audit_path = (
             _path(audit_path_value, "audit_path", index) if audit_path_value is not None else None
         )
+        resources_path_value = item.get("resources_path")
+        resources_path = (
+            _path(resources_path_value, "resources_path", index)
+            if resources_path_value is not None
+            else None
+        )
         if "{resource_id}" not in delete_path:
             raise RuntimeError(f"Grant provider entry {index} delete_path requires {{resource_id}}")
         providers.append(
@@ -264,6 +306,7 @@ def build_external_grant_provider_registry_from_env(
                 read_scopes=read_scopes,
                 write_scopes=write_scopes,
                 token_issuer=MCPIdentityTokenIssuer.from_env(audience=audience, env=lookup),
+                resources_path=resources_path,
                 audit_path=audit_path,
                 timeout_seconds=_timeout_seconds(item.get("timeout_seconds", 10.0), index),
             )
@@ -296,6 +339,45 @@ def _parse_grant(value: Any, allowed_permissions: tuple[str, ...]) -> ExternalGr
         updated_by=str(value["updated_by"]) if value.get("updated_by") is not None else None,
         created_at=str(value["created_at"]) if value.get("created_at") is not None else None,
         updated_at=str(value["updated_at"]) if value.get("updated_at") is not None else None,
+    )
+
+
+def _parse_grant_resource(
+    value: Any,
+    provider_permissions: tuple[str, ...],
+) -> ExternalGrantResource:
+    if not isinstance(value, dict):
+        raise ExternalGrantProviderError(502, "Grant provider returned an invalid resource")
+    resource_id = value.get("resource_id")
+    kind = value.get("kind")
+    label = value.get("label")
+    allowed_permissions = value.get("allowed_permissions")
+    configured = value.get("configured")
+    enabled = value.get("enabled")
+    if (
+        not isinstance(resource_id, str)
+        or not resource_id
+        or not isinstance(kind, str)
+        or not kind
+        or not isinstance(label, str)
+        or not label
+        or not isinstance(allowed_permissions, list)
+        or not allowed_permissions
+        or not all(
+            isinstance(permission, str) and permission in provider_permissions
+            for permission in allowed_permissions
+        )
+        or not isinstance(configured, bool)
+        or not isinstance(enabled, bool)
+    ):
+        raise ExternalGrantProviderError(502, "Grant provider returned an invalid resource")
+    return ExternalGrantResource(
+        resource_id=resource_id,
+        kind=kind,
+        label=label,
+        allowed_permissions=tuple(dict.fromkeys(allowed_permissions)),
+        configured=configured,
+        enabled=enabled,
     )
 
 

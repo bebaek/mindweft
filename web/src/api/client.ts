@@ -345,6 +345,7 @@ export interface AdminExternalGrantProvider {
   title: string;
   description: string;
   allowed_permissions: string[];
+  resource_discovery_available: boolean;
   audit_available: boolean;
 }
 
@@ -366,6 +367,21 @@ export interface AdminExternalGrantList {
   tenant_id: string;
   provider_id: string;
   grants: AdminExternalGrant[];
+}
+
+export interface AdminExternalGrantResource {
+  resource_id: string;
+  kind: string;
+  label: string;
+  allowed_permissions: string[];
+  configured: boolean;
+  enabled: boolean;
+}
+
+export interface AdminExternalGrantResourceList {
+  tenant_id: string;
+  provider_id: string;
+  resources: AdminExternalGrantResource[];
 }
 
 export interface AdminExternalGrantAuditState {
@@ -908,6 +924,17 @@ export class MinigentApiClient {
   ): Promise<AdminExternalGrantList> {
     return this.#request<AdminExternalGrantList>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/external-grants/${encodeURIComponent(providerId)}`,
+      { signal },
+    );
+  }
+
+  listAdminExternalGrantResources(
+    tenantId: string,
+    providerId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminExternalGrantResourceList> {
+    return this.#request<AdminExternalGrantResourceList>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/external-grants/${encodeURIComponent(providerId)}/resources`,
       { signal },
     );
   }
