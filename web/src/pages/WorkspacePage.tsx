@@ -397,10 +397,11 @@ export function WorkspacePage() {
 }
 
 function ThreadButton({ thread, active, onClick }: { thread: ThreadListItem; active: boolean; onClick: () => void }) {
+  const title = thread.title?.trim() || "New conversation";
   return (
-    <button className={`thread-button ${active ? "active" : ""}`} type="button" onClick={onClick}>
-      <strong>{thread.title || "New conversation"}</strong>
-      <span><small>{thread.message_count} message{thread.message_count === 1 ? "" : "s"}</small><time dateTime={thread.updated_at}>{relativeTime(thread.updated_at)}</time></span>
+    <button className={`thread-button ${active ? "active" : ""}`} type="button" onClick={onClick} title={title}>
+      <span className="thread-title">{title}</span>
+      <span className="thread-meta"><small>{thread.message_count} message{thread.message_count === 1 ? "" : "s"}</small><time dateTime={thread.updated_at}>{relativeTime(thread.updated_at)}</time></span>
     </button>
   );
 }

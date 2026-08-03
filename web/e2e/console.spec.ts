@@ -437,7 +437,12 @@ test("uses readable typography tokens for chat and controls", async ({ page }) =
   await expect(page.locator(".message-author").first()).toHaveCSS("font-size", "13px");
   await expect(page.locator(".markdown-content code")).toHaveCSS("font-size", "13px");
   await expect(page.locator(".markdown-content strong")).toHaveCSS("font-weight", "650");
-  await expect(page.locator(".thread-button strong").first()).toHaveCSS("color", "rgb(23, 33, 27)");
+  const threadTitle = page.locator(".thread-title").first();
+  await expect(threadTitle).toHaveText("Review the deployment plan");
+  await expect(threadTitle).toHaveCSS("color", "rgb(23, 33, 27)");
+  const titleBox = await threadTitle.boundingBox();
+  expect(titleBox?.width ?? 0).toBeGreaterThan(40);
+  expect(titleBox?.height ?? 0).toBeGreaterThan(10);
   const fontFamilies = await page.evaluate(() => {
     const composer = document.querySelector<HTMLTextAreaElement>(".chat-composer textarea");
     return {
