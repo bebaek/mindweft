@@ -352,7 +352,8 @@ OpenAI OAuth credential import from Pi, and a separate
 platform administration workspace with tenant provisioning and
 editing, user role/status management, domain verification, typed feature and limit entitlement
 editing with server validation, version visibility and confirmed reset, a sectioned execution
-configuration editor for LLMs, tools, MCP servers, backends, quality review, skills, capability
+configuration editor for LLMs, tools, MCP servers (including quick-add cards for hosted internal
+services such as the local web-search sidecar), backends, quality review, skills, capability
 profiles, and agent presets with redacted-secret preservation and unsaved-change protection,
 tenant-scoped thread browsing with runtime filters, retained-message and compacted-context inspection,
 previewed pruning, confirmed deletion, and paginated audit review, conflict feedback, confirmed
