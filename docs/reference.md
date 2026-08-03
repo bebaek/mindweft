@@ -1847,6 +1847,14 @@ The platform-admin-only routes are `GET /admin/external-grant-providers`,
 `GET /admin/tenants/{tenant_id}/external-grants/{provider_id}/resources`,
 `GET /admin/tenants/{tenant_id}/external-grants/{provider_id}/audit`, and
 `DELETE /admin/tenants/{tenant_id}/external-grants/{provider_id}/{resource_id}?subject_id=...`.
+The browser grant panel joins provider resources and grants with Minigent's tenant-user directory.
+New exact-subject grants can target only active tenant users; `*` is presented explicitly as
+"Everyone in tenant." The API independently rejects enabled grants for missing or inactive tenant
+users. Existing grants for missing or inactive users may still be disabled or deleted, allowing the
+panel's reconciliation report and confirmed bulk-disable action to deprovision stale access without
+silently mutating provider state. User labels and emails remain in Minigent's platform-admin UI;
+only canonical user IDs are forwarded to providers.
+
 Minigent issues a fresh 30–300 second forwarded-identity token for each provider request and uses
 only the configured read or write scopes. Provider credentials, scopes, and HTTP operations are
 never added to tenant execution configuration or exposed as model tools. Grant state remains

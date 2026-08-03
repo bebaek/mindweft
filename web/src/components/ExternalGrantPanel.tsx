@@ -5,6 +5,7 @@ import type {
   AdminExternalGrantInput,
   AdminExternalGrantProvider,
   AdminExternalGrantResource,
+  AdminTenantUser,
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
 
@@ -21,6 +22,12 @@ export function ExternalGrantPanel({ tenantId, readOnly = false }: { tenantId: s
   const selectedProvider = providers.data?.providers.find(
     (provider) => provider.id === providerId,
   ) ?? providers.data?.providers[0];
+  const users = useQuery({
+    queryKey: ["admin-tenant-users", tenantId, authentication],
+    queryFn: ({ signal }) => api.listAdminTenantUsers(tenantId, signal),
+    enabled: !readOnly,
+  });
+  const userById = new Map(users.data?.users.map((user) => [user.user_id, user]) ?? []);
   const grants = useQuery({
     queryKey: ["admin-external-grants", tenantId, selectedProvider?.id, authentication],
     queryFn: ({ signal }) => api.listAdminExternalGrants(tenantId, selectedProvider!.id, signal),
@@ -94,6 +101,8 @@ export function ExternalGrantPanel({ tenantId, readOnly = false }: { tenantId: s
         </label>
       )}
       <p>{selectedProvider.description}</p>
+      {users.isPending && <p>Loading tenant users…</p>}
+      {users.isError && <p className="inline-error" role="alert">{message(users.error)}</p>}
       {grants.isPending && <p>Loading grants…</p>}
       {grants.isError && <p className="inline-error" role="alert">{message(grants.error)}</p>}
       {resources.isError && (
@@ -107,6 +116,7 @@ export function ExternalGrantPanel({ tenantId, readOnly = false }: { tenantId: s
                 tenantId={tenantId}
                 provider={selectedProvider}
                 resource={resourceById.get(grant.resource_id)}
+                subject={userById.get(grant.subject_id)}
                 grant={grant}
                 key={`${grant.resource_id}:${grant.subject_id}:${grant.permission}:${grant.enabled}`}
               />
@@ -118,11 +128,20 @@ export function ExternalGrantPanel({ tenantId, readOnly = false }: { tenantId: s
           {selectedProvider.resource_discovery_available && resources.isPending && (
             <p>Loading resource catalog…</p>
           )}
-          {(!selectedProvider.resource_discovery_available || resources.data) && (
+          {(!selectedProvider.resource_discovery_available || resources.data) && users.data && (
             <NewGrantForm
               tenantId={tenantId}
               provider={selectedProvider}
               resources={resources.data?.resources}
+              users={users.data.users}
+            />
+          )}
+          {users.data && (
+            <GrantReconciliationReport
+              tenantId={tenantId}
+              provider={selectedProvider}
+              grants={grants.data.grants}
+              users={users.data.users}
             />
           )}
           {selectedProvider.audit_available && (
@@ -145,7 +164,7 @@ export function ExternalGrantPanel({ tenantId, readOnly = false }: { tenantId: s
                   <span>
                     <strong>{operationLabel(entry.operation)}</strong>
                     <small>
-                      {resourceLabel(resourceById.get(entry.resource_id), entry.resource_id)} · {entry.subject_id}
+                      {resourceLabel(resourceById.get(entry.resource_id), entry.resource_id)} · {subjectLabel(userById.get(entry.subject_id), entry.subject_id)}
                     </small>
                     <small>Actor: {entry.actor_id} · {new Date(entry.created_at).toLocaleString()}</small>
                   </span>
@@ -183,11 +202,13 @@ function GrantRow({
   tenantId,
   provider,
   resource,
+  subject,
   grant,
 }: {
   tenantId: string;
   provider: AdminExternalGrantProvider;
   resource?: AdminExternalGrantResource;
+  subject?: AdminTenantUser;
   grant: AdminExternalGrant;
 }) {
   const { api } = useAuth();
@@ -222,7 +243,12 @@ function GrantRow({
       <span>
         <strong>{resource?.label ?? grant.resource_id}</strong>
         {resource && <small>{grant.resource_id} · {resource.kind.toUpperCase()}</small>}
-        <small>Subject: {grant.subject_id}</small>
+        <small>Subject: {subjectLabel(subject, grant.subject_id)}</small>
+        {grant.subject_id !== "*" && (!subject || subject.status !== "active") && (
+          <small className="inline-error">
+            {subject ? `Inactive subject: ${subject.status}` : "Subject is missing from this tenant"}
+          </small>
+        )}
       </span>
       <label>
         Permission
@@ -266,19 +292,105 @@ function GrantRow({
   );
 }
 
+function GrantReconciliationReport({
+  tenantId,
+  provider,
+  grants,
+  users,
+}: {
+  tenantId: string;
+  provider: AdminExternalGrantProvider;
+  grants: AdminExternalGrant[];
+  users: AdminTenantUser[];
+}) {
+  const { api } = useAuth();
+  const queryClient = useQueryClient();
+  const userById = new Map(users.map((user) => [user.user_id, user]));
+  const issues = grants.filter((grant) => {
+    if (grant.subject_id === "*") return false;
+    const user = userById.get(grant.subject_id);
+    return !user || user.status !== "active";
+  });
+  const enabledIssues = issues.filter((grant) => grant.enabled);
+  const disable = useMutation({
+    mutationFn: () => Promise.all(
+      enabledIssues.map((grant) => api.updateAdminExternalGrant(tenantId, provider.id, {
+        resource_id: grant.resource_id,
+        subject_id: grant.subject_id,
+        permission: grant.permission,
+        enabled: false,
+      })),
+    ),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["admin-external-grants", tenantId, provider.id],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["admin-external-grant-audit", tenantId, provider.id],
+        }),
+      ]);
+    },
+  });
+
+  return (
+    <div className="execution-editor-section">
+      <h4>Subject reconciliation</h4>
+      {issues.length === 0 ? (
+        <p className="execution-config-empty">All exact-subject grants reference active tenant users.</p>
+      ) : (
+        <>
+          <p className="inline-error" role="status">
+            {issues.length} grant{issues.length === 1 ? "" : "s"} reference missing or inactive users.
+          </p>
+          {issues.map((grant) => {
+            const user = userById.get(grant.subject_id);
+            return (
+              <div className="mcp-server-preset" key={`${grant.resource_id}:${grant.subject_id}`}>
+                <span>
+                  <strong>{grant.resource_id}</strong>
+                  <small>{subjectLabel(user, grant.subject_id)}</small>
+                </span>
+                <small>{grant.enabled ? "Enabled" : "Already disabled"}</small>
+              </div>
+            );
+          })}
+          {disable.isError && <p className="inline-error" role="alert">{message(disable.error)}</p>}
+          {enabledIssues.length > 0 && (
+            <button
+              type="button"
+              className="button button-secondary"
+              disabled={disable.isPending}
+              onClick={() => {
+                if (window.confirm(`Disable ${enabledIssues.length} inactive-subject grant(s)?`)) {
+                  disable.mutate();
+                }
+              }}
+            >
+              {disable.isPending ? "Disabling…" : `Disable affected grants (${enabledIssues.length})`}
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function NewGrantForm({
   tenantId,
   provider,
   resources,
+  users,
 }: {
   tenantId: string;
   provider: AdminExternalGrantProvider;
   resources?: AdminExternalGrantResource[];
+  users: AdminTenantUser[];
 }) {
   const { api } = useAuth();
   const queryClient = useQueryClient();
   const [resourceId, setResourceId] = useState("");
-  const [subjectId, setSubjectId] = useState("");
+  const [subjectId, setSubjectId] = useState("*");
   const availableResources = resources?.filter((resource) => resource.configured && resource.enabled);
   const [permission, setPermission] = useState(
     availableResources?.[0]?.allowed_permissions[0] ?? provider.allowed_permissions[0] ?? "read",
@@ -292,7 +404,7 @@ function NewGrantForm({
       api.updateAdminExternalGrant(tenantId, provider.id, input),
     onSuccess: async () => {
       setResourceId("");
-      setSubjectId("");
+      setSubjectId("*");
       setPermission(
         availableResources?.[0]?.allowed_permissions[0] ?? provider.allowed_permissions[0] ?? "read",
       );
@@ -351,8 +463,13 @@ function NewGrantForm({
         )}
       </label>
       <label>
-        Subject ID
-        <input required value={subjectId} onChange={(event) => setSubjectId(event.target.value)} />
+        Subject
+        <select required value={subjectId} onChange={(event) => setSubjectId(event.target.value)}>
+          <option value="*">Everyone in tenant</option>
+          {users.filter((user) => user.status === "active").map((user) => (
+            <option value={user.user_id} key={user.id}>{subjectLabel(user, user.user_id)}</option>
+          ))}
+        </select>
       </label>
       <label>
         Permission
@@ -368,6 +485,14 @@ function NewGrantForm({
       </div>
     </form>
   );
+}
+
+function subjectLabel(user: AdminTenantUser | undefined, subjectId: string): string {
+  if (subjectId === "*") return "Everyone in tenant";
+  if (!user) return `${subjectId} (missing)`;
+  const name = user.display_name || user.email || user.user_id;
+  const email = user.email && user.email !== name ? ` · ${user.email}` : "";
+  return `${name}${email} · ${user.role} · ${user.status}`;
 }
 
 function resourceLabel(resource: AdminExternalGrantResource | undefined, resourceId: string): string {

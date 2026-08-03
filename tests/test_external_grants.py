@@ -391,6 +391,21 @@ def test_admin_external_grant_api_is_optional_audited_and_provider_neutral(
         == 201
     )
 
+    assert (
+        client.post(
+            "/admin/tenants/tenant-1/users",
+            headers=ADMIN_HEADERS,
+            json={
+                "user_id": "user-1",
+                "email": "user-1@example.test",
+                "display_name": "User One",
+                "role": "member",
+                "status": "suspended",
+            },
+        ).status_code
+        == 201
+    )
+
     providers = client.get("/admin/external-grant-providers", headers=ADMIN_HEADERS)
     assert providers.status_code == 200
     assert providers.json()["providers"][0]["id"] == "example"
@@ -438,6 +453,32 @@ def test_admin_external_grant_api_is_optional_audited_and_provider_neutral(
     assert updated.status_code == 200
     assert updated.json()["permission"] == "read_write"
     assert updated.json()["enabled"] is False
+
+    inactive_enable = client.put(
+        "/admin/tenants/tenant-1/external-grants/example",
+        headers=ADMIN_HEADERS,
+        json={
+            "resource_id": "resource:one",
+            "subject_id": "user-1",
+            "permission": "read_write",
+            "enabled": True,
+        },
+    )
+    assert inactive_enable.status_code == 409
+    assert "must be active" in inactive_enable.json()["detail"]
+
+    missing_subject = client.put(
+        "/admin/tenants/tenant-1/external-grants/example",
+        headers=ADMIN_HEADERS,
+        json={
+            "resource_id": "resource:two",
+            "subject_id": "missing-user",
+            "permission": "read",
+            "enabled": True,
+        },
+    )
+    assert missing_subject.status_code == 404
+    assert "not found" in missing_subject.json()["detail"]
 
     deleted = client.delete(
         "/admin/tenants/tenant-1/external-grants/example/resource%3Aone?subject_id=user-1",

@@ -1842,6 +1842,13 @@ def build_admin_router() -> APIRouter:
                 ),
                 None,
             )
+            _validate_external_grant_subject(
+                request,
+                tenant_id,
+                body.subject_id,
+                enabled=body.enabled,
+                existing=old_grant is not None,
+            )
             grant = await provider.upsert_grant(
                 tenant_id=tenant_id,
                 actor_user_id=admin.user_id,
@@ -2866,6 +2873,30 @@ def _external_grant_audit_values(grant: ExternalGrant | None) -> dict[str, Any] 
     if grant is None:
         return None
     return _external_grant_response(grant).model_dump(mode="json")
+
+
+def _validate_external_grant_subject(
+    request: Request,
+    tenant_id: str,
+    subject_id: str,
+    *,
+    enabled: bool,
+    existing: bool,
+) -> None:
+    if subject_id == "*":
+        return
+    user = _require_admin_store(request).get_tenant_user_by_user_id(tenant_id, subject_id)
+    if user is None:
+        if existing and not enabled:
+            return
+        raise HTTPException(status_code=404, detail=f"Tenant user '{subject_id}' not found")
+    if user.status != TenantUserStatus.ACTIVE:
+        if existing and not enabled:
+            return
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tenant user '{subject_id}' must be active before enabling a grant",
+        )
 
 
 def _configured_mcp_server_catalog(
