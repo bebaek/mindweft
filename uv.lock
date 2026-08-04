@@ -878,7 +878,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cryptography", specifier = ">=43,<47" },
+    { name = "cryptography", specifier = ">=43,<50" },
     { name = "fastapi", specifier = ">=0.115,<1.0" },
     { name = "faster-whisper", marker = "extra == 'voice'", specifier = ">=1.1,<2.0" },
     { name = "httpx", specifier = ">=0.28,<1.0" },
