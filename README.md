@@ -117,7 +117,7 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | --- | --- |
 | `MINIGENT_AUTH_MODE` | Authentication mode: development headers, static tokens, or JWT. |
 | `MINIGENT_SESSION_CREDENTIALS` / `MINIGENT_SESSION_SECRET` | Optional generic username/password-hash console sign-in with secure same-origin sessions. |
-| `MINIGENT_ADMIN_DB_PATH` / `MINIGENT_ADMIN_ENCRYPTION_KEY` | Durable encrypted tenant administration and execution configuration. |
+| `MINIGENT_ADMIN_DB_PATH` / `MINIGENT_ADMIN_ENCRYPTION_KEY` | Durable encrypted tenant administration, execution configuration, and write-only user MCP credential headers. The encryption key is required before personal credentials can be stored or used. |
 | `MINIGENT_ADMIN_MCP_SERVER_CATALOG` / `MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET` | Deployment-owned MCP definitions that platform admins can assign as a tenant ceiling and narrow per role or user; use the `_SECRET` variant when entries contain credentials. |
 | `MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS` | Optional provider-neutral administrative HTTP grant integrations; disabled when unset and excluded from runtime readiness and model tooling. Suspended/deleted users are durably queued for assignment cleanup and grant disabling. |
 | `MINIGENT_USER_DEPROVISIONING_INTERVAL_SECONDS` / `MINIGENT_USER_DEPROVISIONING_MAX_ATTEMPTS` | Poll interval and retry limit for durable user lifecycle deprovisioning (defaults: 5 seconds and 8 attempts). |
@@ -129,7 +129,7 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | `MINIGENT_RATE_LIMIT_DB_PATH` | Optional shared SQLite token-bucket state for upload and run rate limits. |
 | `MINIGENT_THREAD_DB_PATH` | Optional SQLite path for persistent thread/message storage plus atomic cross-replica run leases and cancellation. |
 | `MINIGENT_OAUTH_STORE_PATH` / `MINIGENT_OAUTH_ENCRYPTION_KEYS` | Shared encrypted SQLite OAuth credentials, login-flow state, and coordinated multi-replica token refresh. |
-| `MINIGENT_TENANT_EXECUTION_CONFIGS` | Optional per-tenant LLM, tool, skill, capability, backend, and quality config. Tenant execution config supplies shared resources; the partially implemented [user execution overlay](docs/user-execution-extensibility.md) adds personal agents, live personal skills, narrowing-only capability profiles, and policy-gated public HTTPS personal MCP servers without tenant config edits. Encrypted personal credential runtime support remains pending. |
+| `MINIGENT_TENANT_EXECUTION_CONFIGS` | Optional per-tenant LLM, tool, skill, capability, backend, and quality config. Tenant execution config supplies shared resources; the partially implemented [user execution overlay](docs/user-execution-extensibility.md) adds personal agents, live personal skills, narrowing-only capability profiles, and policy-gated public HTTPS personal MCP servers without tenant config edits. Encrypted static credential headers are supported; interactive OAuth connection and refresh flows remain pending. |
 | `MINIGENT_MCP_BROKER_ENABLED` | Enables the peer-agent MCP broker path when using peer backends. |
 | `MINIGENT_MCP_BROKER_DB_PATH` | Optional shared SQLite path for cross-replica MCP broker sessions; bearer tokens are stored only as SHA-256 hashes. |
 | `MINIGENT_TOOL_TIMEOUT_SECONDS` | Default wall-clock limit for each runtime tool call before returning a structured timeout error. |

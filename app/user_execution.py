@@ -33,6 +33,19 @@ from app.tools import DEFAULT_LOCAL_TOOL_NAMES
 
 _USER_RESOURCE_ID_PATTERN = re.compile(r"^user:[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$")
 _RESOURCE_REF_PATTERN = re.compile(r"^(?:user|shared):[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$")
+_CREDENTIAL_REF_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$")
+_FORBIDDEN_CREDENTIAL_HEADER_NAMES = frozenset(
+    {
+        "host",
+        "connection",
+        "content-length",
+        "transfer-encoding",
+        "forwarded",
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "proxy-authorization",
+    }
+)
 _SENSITIVE_HEADER_NAMES = frozenset(
     {
         "authorization",
@@ -169,6 +182,13 @@ class UserMCPServerDefinition(UserExecutionModel):
             raise ValueError(
                 "reusable credential headers must use credential_ref: " + ", ".join(sensitive)
             )
+        return value
+
+    @field_validator("credential_ref")
+    @classmethod
+    def validate_credential_ref(cls, value: str | None) -> str | None:
+        if value is not None and not _CREDENTIAL_REF_PATTERN.fullmatch(value):
+            raise ValueError("credential_ref contains unsupported characters")
         return value
 
     @field_validator("allowed_tools", "trusted_input_preprocessor_tools")
@@ -432,6 +452,9 @@ class EffectiveExecutionCatalog:
     user_config: UserExecutionConfig | None = None
     user_config_version: int | None = None
     personal_mcp_servers_allowed: bool = False
+    credential_source: Any | None = None
+    credential_tenant_id: str | None = None
+    credential_user_id: str | None = None
 
     @property
     def default_agent_ref(self) -> str | None:
@@ -640,12 +663,16 @@ class EffectiveExecutionCatalog:
                 server = user_servers.get(ref)
                 if server is None:
                     raise UserExecutionResolutionError(f"Unknown personal MCP server '{ref}'")
+                credential_headers: dict[str, str] = {}
                 if server.credential_ref is not None:
-                    raise UserExecutionUnsupportedError(
-                        f"Personal MCP server '{ref}' requires credential '{server.credential_ref}', "
-                        "but encrypted personal credential runtime support is pending"
+                    credential_headers = self._personal_credential_headers(
+                        server.credential_ref,
+                        server_id=server.id,
+                        static_headers=server.headers,
                     )
-                personal_mcp_servers.append(_personal_mcp_server_config(server))
+                personal_mcp_servers.append(
+                    _personal_mcp_server_config(server, credential_headers=credential_headers)
+                )
                 continue
             server_name = ref.removeprefix("shared:")
             if server_name not in tenant_mcp_server_names:
@@ -662,6 +689,40 @@ class EffectiveExecutionCatalog:
             shared_mcp_server_names=shared_mcp_server_names,
             personal_mcp_servers=personal_mcp_servers,
         )
+
+    def _personal_credential_headers(
+        self,
+        credential_ref: str,
+        *,
+        server_id: str,
+        static_headers: dict[str, str],
+    ) -> dict[str, str]:
+        getter = getattr(self.credential_source, "get_user_execution_credential", None)
+        if (
+            not callable(getter)
+            or self.credential_tenant_id is None
+            or self.credential_user_id is None
+        ):
+            raise UserExecutionUnsupportedError(
+                "Encrypted personal credential storage is not configured"
+            )
+        credential = getter(
+            self.credential_tenant_id,
+            self.credential_user_id,
+            credential_ref,
+        )
+        if credential is None:
+            raise UserExecutionResolutionError(
+                f"Personal MCP server '{server_id}' credential '{credential_ref}' was not found"
+            )
+        header_name = str(getattr(credential, "header_name", ""))
+        header_value = str(getattr(credential, "header_value", ""))
+        _validate_runtime_credential_header(header_name, header_value)
+        if header_name.lower() in {name.lower() for name in static_headers}:
+            raise UserExecutionResolutionError(
+                f"Personal MCP server '{server_id}' credential header conflicts with a static header"
+            )
+        return {header_name: header_value}
 
     def _shared_agent(self, agent: TenantAgentPresetConfig) -> EffectiveAgent:
         skill_refs: list[str] = []
@@ -711,10 +772,17 @@ def effective_execution_catalog(
         user_config=report.config,
         user_config_version=record.version,
         personal_mcp_servers_allowed=allow_personal_mcp_servers,
+        credential_source=source,
+        credential_tenant_id=tenant_id,
+        credential_user_id=user_id,
     )
 
 
-def _personal_mcp_server_config(server: UserMCPServerDefinition) -> MCPServerConfig:
+def _personal_mcp_server_config(
+    server: UserMCPServerDefinition,
+    *,
+    credential_headers: dict[str, str] | None = None,
+) -> MCPServerConfig:
     try:
         validate_public_https_url(server.url)
     except ValueError as exc:
@@ -740,10 +808,13 @@ def _personal_mcp_server_config(server: UserMCPServerDefinition) -> MCPServerCon
         )
     except (RuntimeError, ValueError) as exc:
         raise UserExecutionResolutionError(str(exc)) from exc
+    headers = dict(server.headers)
+    if credential_headers:
+        headers.update(credential_headers)
     return MCPServerConfig(
         name=server.id,
         url=server.url,
-        headers=dict(server.headers),
+        headers=headers,
         protocol_version=server.protocol_version or DEFAULT_MCP_PROTOCOL_VERSION,
         allowed_tools=(list(server.allowed_tools) if server.allowed_tools is not None else None),
         result_redaction_policy=result_redaction,
@@ -753,6 +824,17 @@ def _personal_mcp_server_config(server: UserMCPServerDefinition) -> MCPServerCon
         timeout_seconds=server.timeout_seconds,
         public_network_only=True,
     )
+
+
+def _validate_runtime_credential_header(header_name: str, header_value: str) -> None:
+    if (
+        not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", header_name)
+        or header_name.lower() in _FORBIDDEN_CREDENTIAL_HEADER_NAMES
+        or not header_value
+        or "\r" in header_value
+        or "\n" in header_value
+    ):
+        raise UserExecutionResolutionError("Stored personal MCP credential header is invalid")
 
 
 def has_personal_execution_refs(

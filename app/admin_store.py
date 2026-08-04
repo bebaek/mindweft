@@ -94,6 +94,39 @@ class UserExecutionConfigConflictError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class UserExecutionCredentialRecord:
+    tenant_id: str
+    user_id: str
+    credential_ref: str
+    header_name: str
+    header_value: str
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class UserExecutionCredentialMetadata:
+    tenant_id: str
+    user_id: str
+    credential_ref: str
+    header_name: str
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserExecutionCredentialConflictError(RuntimeError):
+    def __init__(self, *, expected_version: int, actual_version: int | None) -> None:
+        self.expected_version = expected_version
+        self.actual_version = actual_version
+        actual = "missing" if actual_version is None else str(actual_version)
+        super().__init__(
+            f"User execution credential version conflict: expected {expected_version}, found {actual}"
+        )
+
+
+@dataclass(frozen=True)
 class UserDeprovisioningEvent:
     id: str
     tenant_id: str
@@ -1226,6 +1259,190 @@ class SQLiteTenantConfigStore:
                 connection.commit()
         return cursor.rowcount > 0
 
+    @property
+    def user_execution_credentials_encrypted(self) -> bool:
+        return self._fernet is not None
+
+    def get_user_execution_credential(
+        self,
+        tenant_id: str,
+        user_id: str,
+        credential_ref: str,
+    ) -> UserExecutionCredentialRecord | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT tenant_id, user_id, credential_ref, header_name, value_cipher,
+                       version, created_at, updated_at
+                FROM user_execution_credentials
+                WHERE tenant_id = ? AND user_id = ? AND credential_ref = ?
+                """,
+                (tenant_id, user_id, credential_ref),
+            ).fetchone()
+        if row is None:
+            return None
+        return _user_execution_credential_from_row(row, self._fernet)
+
+    def list_user_execution_credentials(
+        self,
+        tenant_id: str,
+        user_id: str,
+    ) -> list[UserExecutionCredentialMetadata]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT tenant_id, user_id, credential_ref, header_name,
+                       version, created_at, updated_at
+                FROM user_execution_credentials
+                WHERE tenant_id = ? AND user_id = ?
+                ORDER BY credential_ref
+                """,
+                (tenant_id, user_id),
+            ).fetchall()
+        return [_user_execution_credential_metadata_from_row(row) for row in rows]
+
+    def upsert_user_execution_credential(
+        self,
+        tenant_id: str,
+        user_id: str,
+        credential_ref: str,
+        *,
+        header_name: str,
+        header_value: str,
+        expected_version: int | None = None,
+    ) -> UserExecutionCredentialRecord:
+        if self._fernet is None:
+            raise RuntimeError("Admin encryption is required for user execution credentials")
+        value_cipher = _encrypt_user_execution_credential_value(
+            tenant_id,
+            user_id,
+            credential_ref,
+            header_name,
+            header_value,
+            self._fernet,
+        )
+        now = _utc_now_iso()
+        with self._lock:
+            with self._connection() as connection:
+                if expected_version is None:
+                    connection.execute(
+                        """
+                        INSERT INTO user_execution_credentials (
+                            tenant_id, user_id, credential_ref, header_name, value_cipher,
+                            version, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                        ON CONFLICT(tenant_id, user_id, credential_ref) DO UPDATE SET
+                            header_name = excluded.header_name,
+                            value_cipher = excluded.value_cipher,
+                            version = user_execution_credentials.version + 1,
+                            updated_at = excluded.updated_at
+                        """,
+                        (
+                            tenant_id,
+                            user_id,
+                            credential_ref,
+                            header_name,
+                            value_cipher,
+                            now,
+                            now,
+                        ),
+                    )
+                elif expected_version == 0:
+                    try:
+                        connection.execute(
+                            """
+                            INSERT INTO user_execution_credentials (
+                                tenant_id, user_id, credential_ref, header_name, value_cipher,
+                                version, created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                            """,
+                            (
+                                tenant_id,
+                                user_id,
+                                credential_ref,
+                                header_name,
+                                value_cipher,
+                                now,
+                                now,
+                            ),
+                        )
+                    except sqlite3.IntegrityError as exc:
+                        actual_version = _user_execution_credential_version(
+                            connection, tenant_id, user_id, credential_ref
+                        )
+                        raise UserExecutionCredentialConflictError(
+                            expected_version=expected_version,
+                            actual_version=actual_version,
+                        ) from exc
+                else:
+                    cursor = connection.execute(
+                        """
+                        UPDATE user_execution_credentials SET
+                            header_name = ?, value_cipher = ?, version = version + 1, updated_at = ?
+                        WHERE tenant_id = ? AND user_id = ? AND credential_ref = ? AND version = ?
+                        """,
+                        (
+                            header_name,
+                            value_cipher,
+                            now,
+                            tenant_id,
+                            user_id,
+                            credential_ref,
+                            expected_version,
+                        ),
+                    )
+                    if cursor.rowcount == 0:
+                        actual_version = _user_execution_credential_version(
+                            connection, tenant_id, user_id, credential_ref
+                        )
+                        raise UserExecutionCredentialConflictError(
+                            expected_version=expected_version,
+                            actual_version=actual_version,
+                        )
+                connection.commit()
+        record = self.get_user_execution_credential(tenant_id, user_id, credential_ref)
+        if record is None:  # pragma: no cover - defensive
+            raise RuntimeError("User execution credential disappeared after upsert")
+        return record
+
+    def delete_user_execution_credential(
+        self,
+        tenant_id: str,
+        user_id: str,
+        credential_ref: str,
+        *,
+        expected_version: int | None = None,
+    ) -> bool:
+        with self._lock:
+            with self._connection() as connection:
+                if expected_version is None:
+                    cursor = connection.execute(
+                        """
+                        DELETE FROM user_execution_credentials
+                        WHERE tenant_id = ? AND user_id = ? AND credential_ref = ?
+                        """,
+                        (tenant_id, user_id, credential_ref),
+                    )
+                else:
+                    cursor = connection.execute(
+                        """
+                        DELETE FROM user_execution_credentials
+                        WHERE tenant_id = ? AND user_id = ? AND credential_ref = ? AND version = ?
+                        """,
+                        (tenant_id, user_id, credential_ref, expected_version),
+                    )
+                    if cursor.rowcount == 0:
+                        actual_version = _user_execution_credential_version(
+                            connection, tenant_id, user_id, credential_ref
+                        )
+                        if actual_version is not None or expected_version != 0:
+                            raise UserExecutionCredentialConflictError(
+                                expected_version=expected_version,
+                                actual_version=actual_version,
+                            )
+                connection.commit()
+        return cursor.rowcount > 0
+
     def list_tenants(self) -> list[str]:
         with self._connection() as connection:
             rows = connection.execute(
@@ -1486,6 +1703,27 @@ class SQLiteTenantConfigStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS user_execution_credentials (
+                    tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    credential_ref TEXT NOT NULL,
+                    header_name TEXT NOT NULL,
+                    value_cipher BLOB NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (tenant_id, user_id, credential_ref)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_user_execution_credentials_updated
+                ON user_execution_credentials(tenant_id, user_id, updated_at DESC)
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS tenant_execution_configs (
                     tenant_id TEXT PRIMARY KEY,
                     config_json TEXT NOT NULL,
@@ -1717,6 +1955,92 @@ def _entitlements_from_row(row: sqlite3.Row) -> TenantEntitlements:
         features={str(key): value for key, value in features.items()},
         limits={str(key): value for key, value in limits.items()},
         version=int(row["version"]),
+        updated_at=datetime.fromisoformat(str(row["updated_at"])),
+    )
+
+
+def _user_execution_credential_version(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    user_id: str,
+    credential_ref: str,
+) -> int | None:
+    row = connection.execute(
+        """
+        SELECT version FROM user_execution_credentials
+        WHERE tenant_id = ? AND user_id = ? AND credential_ref = ?
+        """,
+        (tenant_id, user_id, credential_ref),
+    ).fetchone()
+    return int(row[0]) if row is not None else None
+
+
+def _encrypt_user_execution_credential_value(
+    tenant_id: str,
+    user_id: str,
+    credential_ref: str,
+    header_name: str,
+    header_value: str,
+    fernet: Fernet,
+) -> bytes:
+    payload = json.dumps(
+        {
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "credential_ref": credential_ref,
+            "header_name": header_name,
+            "header_value": header_value,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return fernet.encrypt(payload)
+
+
+def _user_execution_credential_from_row(
+    row: sqlite3.Row,
+    fernet: Fernet | None,
+) -> UserExecutionCredentialRecord:
+    if fernet is None:
+        raise RuntimeError("Admin encryption key is required to read user execution credentials")
+    try:
+        decrypted = fernet.decrypt(bytes(row["value_cipher"]))
+        payload = json.loads(decrypted)
+    except (InvalidToken, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise RuntimeError("Stored user execution credential could not be decrypted") from exc
+    expected_scope = {
+        "tenant_id": str(row["tenant_id"]),
+        "user_id": str(row["user_id"]),
+        "credential_ref": str(row["credential_ref"]),
+        "header_name": str(row["header_name"]),
+    }
+    if not isinstance(payload, dict) or any(
+        payload.get(key) != value for key, value in expected_scope.items()
+    ):
+        raise RuntimeError("Stored user execution credential scope authentication failed")
+    header_value = payload.get("header_value")
+    if not isinstance(header_value, str) or not header_value:
+        raise RuntimeError("Stored user execution credential is invalid")
+    return UserExecutionCredentialRecord(
+        **expected_scope,
+        header_value=header_value,
+        version=int(row["version"]),
+        created_at=datetime.fromisoformat(str(row["created_at"])),
+        updated_at=datetime.fromisoformat(str(row["updated_at"])),
+    )
+
+
+def _user_execution_credential_metadata_from_row(
+    row: sqlite3.Row,
+) -> UserExecutionCredentialMetadata:
+    return UserExecutionCredentialMetadata(
+        tenant_id=str(row["tenant_id"]),
+        user_id=str(row["user_id"]),
+        credential_ref=str(row["credential_ref"]),
+        header_name=str(row["header_name"]),
+        version=int(row["version"]),
+        created_at=datetime.fromisoformat(str(row["created_at"])),
         updated_at=datetime.fromisoformat(str(row["updated_at"])),
     )
 

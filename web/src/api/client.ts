@@ -83,6 +83,26 @@ export interface ExecutionOptionsResponse {
   agents: ExecutionAgentOptionSection;
 }
 
+export interface UserExecutionCredential {
+  tenant_id: string;
+  user_id: string;
+  credential_ref: string;
+  header_name: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserExecutionCredentialListResponse {
+  items: UserExecutionCredential[];
+}
+
+export interface UserExecutionCredentialInput {
+  header_name: string;
+  header_value: string;
+  expected_version?: number | null;
+}
+
 export type ThreadStatus = "idle" | "running" | "error";
 
 export interface ThreadListItem {
@@ -731,6 +751,35 @@ export class MinigentApiClient {
 
   getExecutionOptions(signal?: AbortSignal): Promise<ExecutionOptionsResponse> {
     return this.#request<ExecutionOptionsResponse>("/execution-options", { signal });
+  }
+
+  listUserExecutionCredentials(signal?: AbortSignal): Promise<UserExecutionCredentialListResponse> {
+    return this.#request<UserExecutionCredentialListResponse>("/me/execution-credentials", {
+      signal,
+    });
+  }
+
+  updateUserExecutionCredential(
+    credentialRef: string,
+    input: UserExecutionCredentialInput,
+  ): Promise<UserExecutionCredential> {
+    return this.#request<UserExecutionCredential>(
+      `/me/execution-credentials/${encodeURIComponent(credentialRef)}`,
+      { method: "PUT", body: JSON.stringify(input) },
+    );
+  }
+
+  deleteUserExecutionCredential(
+    credentialRef: string,
+    expectedVersion?: number,
+  ): Promise<void> {
+    const query = expectedVersion === undefined
+      ? ""
+      : `?expected_version=${encodeURIComponent(String(expectedVersion))}`;
+    return this.#request<void>(
+      `/me/execution-credentials/${encodeURIComponent(credentialRef)}${query}`,
+      { method: "DELETE" },
+    );
   }
 
   getTenantContext(signal?: AbortSignal): Promise<TenantContextResponse> {

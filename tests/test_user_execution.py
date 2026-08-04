@@ -1,8 +1,13 @@
+import sqlite3
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.admin_store import SQLiteTenantConfigStore, UserExecutionConfigConflictError
+from app.admin_store import (
+    SQLiteTenantConfigStore,
+    UserExecutionConfigConflictError,
+    UserExecutionCredentialConflictError,
+)
 from app.execution import FixedTenantExecutionResolver, parse_tenant_execution_config
 from app.llm import LLMAdapter
 from app.main import create_app
@@ -269,6 +274,143 @@ def test_user_execution_store_is_scoped_and_versioned(tmp_path: Path) -> None:
         assert exc.actual_version == 2
     else:  # pragma: no cover - assertion guard
         raise AssertionError("Expected a version conflict")
+
+
+def test_user_execution_credential_store_is_encrypted_scoped_and_versioned(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "admin.db"
+    store = SQLiteTenantConfigStore(str(db_path), encryption_key="credential-test-key")
+
+    created = store.upsert_user_execution_credential(
+        "tenant-1",
+        "user-1",
+        "oauth:linear",
+        header_name="Authorization",
+        header_value="Bearer top-secret-token",
+        expected_version=0,
+    )
+    updated = store.upsert_user_execution_credential(
+        "tenant-1",
+        "user-1",
+        "oauth:linear",
+        header_name="Authorization",
+        header_value="Bearer rotated-token",
+        expected_version=created.version,
+    )
+
+    assert created.version == 1
+    assert updated.version == 2
+    assert updated.header_value == "Bearer rotated-token"
+    assert store.get_user_execution_credential("tenant-1", "user-2", "oauth:linear") is None
+    assert store.get_user_execution_credential("tenant-2", "user-1", "oauth:linear") is None
+    metadata = store.list_user_execution_credentials("tenant-1", "user-1")
+    assert [(item.credential_ref, item.header_name, item.version) for item in metadata] == [
+        ("oauth:linear", "Authorization", 2)
+    ]
+
+    with sqlite3.connect(db_path) as connection:
+        ciphertext = bytes(
+            connection.execute("SELECT value_cipher FROM user_execution_credentials").fetchone()[0]
+        )
+    assert b"top-secret-token" not in ciphertext
+    assert b"rotated-token" not in ciphertext
+
+    try:
+        store.upsert_user_execution_credential(
+            "tenant-1",
+            "user-1",
+            "oauth:linear",
+            header_name="Authorization",
+            header_value="Bearer stale",
+            expected_version=1,
+        )
+    except UserExecutionCredentialConflictError as exc:
+        assert exc.actual_version == 2
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("Expected a credential version conflict")
+
+
+def test_user_execution_credential_store_requires_encryption(tmp_path: Path) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+
+    try:
+        store.upsert_user_execution_credential(
+            "tenant-1",
+            "user-1",
+            "oauth:linear",
+            header_name="Authorization",
+            header_value="Bearer secret",
+        )
+    except RuntimeError as exc:
+        assert "encryption is required" in str(exc).lower()
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("Expected encrypted credential storage to be required")
+
+
+def test_user_execution_credential_api_is_write_only_and_principal_scoped(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteTenantConfigStore(
+        str(tmp_path / "admin.db"), encryption_key="credential-test-key"
+    )
+    app = create_app(admin_store=store)
+
+    with TestClient(app) as client:
+        created = client.put(
+            "/me/execution-credentials/oauth:linear",
+            headers=AUTH_HEADERS,
+            json={
+                "header_name": "Authorization",
+                "header_value": "Bearer api-only-secret",
+                "expected_version": 0,
+            },
+        )
+        listed = client.get("/me/execution-credentials", headers=AUTH_HEADERS)
+        other_user = client.get("/me/execution-credentials", headers=OTHER_USER_HEADERS)
+        conflict = client.put(
+            "/me/execution-credentials/oauth:linear",
+            headers=AUTH_HEADERS,
+            json={
+                "header_name": "Authorization",
+                "header_value": "Bearer stale",
+                "expected_version": 0,
+            },
+        )
+        deleted = client.delete(
+            "/me/execution-credentials/oauth:linear?expected_version=1",
+            headers=AUTH_HEADERS,
+        )
+
+    assert created.status_code == 200
+    assert created.json()["credential_ref"] == "oauth:linear"
+    assert created.json()["version"] == 1
+    assert "api-only-secret" not in created.text
+    assert "header_value" not in created.text
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["credential_ref"] == "oauth:linear"
+    assert "api-only-secret" not in listed.text
+    assert other_user.json() == {"items": []}
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["actual_version"] == 1
+    assert deleted.status_code == 204
+
+
+def test_user_execution_credential_api_requires_encryption(tmp_path: Path) -> None:
+    app = create_app(admin_store=SQLiteTenantConfigStore(str(tmp_path / "admin.db")))
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/me/execution-credentials/oauth:linear",
+            headers=AUTH_HEADERS,
+            json={
+                "header_name": "Authorization",
+                "header_value": "Bearer secret",
+            },
+        )
+
+    assert response.status_code == 503
+    assert "Encrypted user execution credential storage" in response.json()["detail"]
 
 
 def test_user_execution_config_api_round_trip_is_principal_scoped(tmp_path: Path) -> None:
@@ -749,9 +891,111 @@ def test_personal_mcp_server_rejects_private_network_targets(tmp_path: Path) -> 
     assert "cannot access local or private network hosts" in response.json()["detail"]
 
 
-def test_personal_mcp_server_selection_reports_secure_runtime_pending(
+def test_encrypted_personal_mcp_credential_is_resolved_live_at_runtime(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    seen_headers: list[dict[str, str]] = []
+
+    class FakeMCPClient:
+        def __init__(self, config: MCPServerConfig) -> None:
+            self._config = config
+
+        async def list_tools(self) -> list[ToolSpec]:
+            seen_headers.append(dict(self._config.headers))
+            return [
+                ToolSpec(
+                    name=f"{self._config.name}.ping",
+                    description="Ping credential-backed server",
+                    input_schema={"type": "object"},
+                )
+            ]
+
+        async def call_tool(self, tool_name: str, arguments: dict[str, object]) -> object:
+            return {"tool": tool_name, "arguments": arguments}
+
+        def server_info(self) -> MCPServerInfo:
+            return MCPServerInfo(
+                name=self._config.name,
+                url=self._config.url,
+                protocol_version=self._config.protocol_version,
+                session_id="credential-session",
+                server_name="credential-server",
+                server_version="1.0",
+            )
+
+    monkeypatch.setattr("app.tools.MCPHTTPClient", FakeMCPClient)
+    store = SQLiteTenantConfigStore(
+        str(tmp_path / "admin.db"), encryption_key="credential-test-key"
+    )
+    initial = store.upsert_user_execution_credential(
+        "tenant-1",
+        "user-1",
+        "oauth:third-party",
+        header_name="Authorization",
+        header_value="Bearer initial-secret",
+        expected_version=0,
+    )
+    store.upsert_user_execution_config(
+        "tenant-1",
+        "user-1",
+        {
+            "mcp_servers": {
+                "items": [
+                    {
+                        "id": "user:third-party",
+                        "name": "third-party",
+                        "url": "https://1.1.1.1/mcp",
+                        "credential_ref": "oauth:third-party",
+                    }
+                ]
+            },
+            "capability_profiles": {
+                "items": [
+                    {
+                        "id": "user:tools",
+                        "name": "tools",
+                        "mcp_server_refs": ["user:third-party"],
+                    }
+                ]
+            },
+        },
+    )
+    adapter = RecordingLLMAdapter()
+    app = _runtime_app(store, adapter)
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/threads",
+            headers=AUTH_HEADERS,
+            json={"capability_profile": "user:tools"},
+        )
+        assert created.status_code == 200
+        thread_id = created.json()["thread_id"]
+        store.upsert_user_execution_credential(
+            "tenant-1",
+            "user-1",
+            "oauth:third-party",
+            header_name="Authorization",
+            header_value="Bearer rotated-secret",
+            expected_version=initial.version,
+        )
+        message = client.post(
+            f"/threads/{thread_id}/messages",
+            headers=AUTH_HEADERS,
+            json={"content": "Use the authenticated service."},
+        )
+        assert message.status_code == 200
+        run = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert run.status_code == 200
+    assert seen_headers
+    assert seen_headers[-1]["Authorization"] == "Bearer rotated-secret"
+    assert "initial-secret" not in run.text
+    assert "rotated-secret" not in run.text
+
+
+def test_personal_mcp_server_reports_missing_credential(tmp_path: Path) -> None:
     store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
     store.upsert_user_execution_config(
         "tenant-1",
@@ -788,7 +1032,7 @@ def test_personal_mcp_server_selection_reports_secure_runtime_pending(
         )
 
     assert response.status_code == 400
-    assert "encrypted personal credential runtime support is pending" in response.json()["detail"]
+    assert "credential 'oauth:third-party' was not found" in response.json()["detail"]
 
 
 def test_user_execution_config_storage_endpoint_requires_configured_store() -> None:

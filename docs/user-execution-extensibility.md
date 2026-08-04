@@ -10,12 +10,12 @@ prompt resolution, personal agent composition/defaults, and personal-resource ow
 also implemented. Shared resources expose qualified `shared:` IDs while legacy unqualified shared
 names remain accepted.
 
-Still pending: encrypted personal credential storage and connection flows, resource-specific APIs
-and console editors, immutable thread resource version metadata and pinning, lifecycle cleanup, and
+Still pending: interactive OAuth connection and refresh flows, resource-specific config APIs and
+console editors, immutable thread resource version metadata and pinning, lifecycle cleanup, and
 sharing. Personal capability profiles can use tenant-approved tools and user-owned MCP servers.
 User-owned servers are restricted to public HTTPS destinations, revalidated on every request, and
-gated by the tenant custom-MCP policy. Servers requiring credentials remain blocked with an
-explicit pending-runtime message.
+gated by the tenant custom-MCP policy. Static authorization or API-key headers can be stored in the
+write-only encrypted personal credential store and are resolved live for each thread run.
 
 This document defines the first design direction for user-owned agents, skills, capability
 profiles, and third-party MCP tools. It intentionally documents the product and runtime model
@@ -85,8 +85,20 @@ chooses definitions for a thread. Personal defaults are preferences, not authori
 ### Credentials are references
 
 Saved user execution config may contain a credential reference but must not contain reusable
-plaintext credentials. OAuth tokens, API keys, and sensitive headers belong in an encrypted,
-user-scoped credential store.
+plaintext credentials. Static credential headers are stored in encrypted, tenant-and-user-scoped
+rows under `MINIGENT_ADMIN_DB_PATH`; `MINIGENT_ADMIN_ENCRYPTION_KEY` is mandatory for credential
+APIs and runtime resolution. The write-only API is:
+
+```text
+GET    /me/execution-credentials
+PUT    /me/execution-credentials/{credential_ref}
+DELETE /me/execution-credentials/{credential_ref}
+```
+
+PUT accepts `header_name`, `header_value`, and optional `expected_version`. Responses and list
+results expose metadata and versions but never return `header_value`. Runtime resolution reloads
+the current value for every run, so rotation does not require rewriting the execution config or
+thread. Interactive OAuth tokens and refresh coordination remain a future connection-flow layer.
 
 ### Shared and personal names are unambiguous
 
@@ -521,15 +533,17 @@ local tools and shared MCP servers in native and peer/broker runtimes. They may 
 user-owned MCP servers when tenant custom-server policy allows it. Personal servers must use public
 HTTPS endpoints; local/private network destinations are rejected at selection and every outbound
 request, environment proxies are disabled, sensitive static headers are forbidden, and tenant/user
-resource ownership remains enforced. Encrypted credentials and connection flows remain pending, so
-credential-backed servers are still blocked.
+resource ownership remains enforced. Static credential headers are encrypted at rest, exposed only
+through write-only principal-scoped APIs, and resolved live without appearing in execution options,
+thread records, or API responses. Interactive OAuth connection and refresh flows remain pending.
 
 - Add user-owned MCP server and capability-profile models. Implemented.
 - Execute personal capability profiles over approved local tools and shared MCP servers.
   Implemented.
-- Add encrypted credential references and connection flows.
-- Build per-principal/per-thread MCP registries that include unauthenticated personal servers.
-  Implemented.
+- Add encrypted static credential references and write-only connection APIs. Implemented.
+- Add interactive OAuth authorization and refresh flows.
+- Build per-principal/per-thread MCP registries that include credential-free and static-credential
+  personal servers. Implemented.
 - Add server probing, diagnostics, redacted audit events, and deprovisioning cleanup.
 
 ### Phase 4: Version visibility and lifecycle UX
