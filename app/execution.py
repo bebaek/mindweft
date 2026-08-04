@@ -2438,6 +2438,7 @@ def build_tool_registry_for_constraints(
     *,
     profile_allowed_local_tools: list[str] | None,
     profile_mcp_server_names: set[str] | None,
+    personal_mcp_servers: list[MCPServerConfig] | None = None,
     mcp_manager: MCPServerManager | None = None,
     allowed_mcp_server_names: set[str] | None = None,
 ) -> ToolRegistry:
@@ -2455,6 +2456,8 @@ def build_tool_registry_for_constraints(
         mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
     if profile_mcp_server_names is not None:
         mcp_servers = [server for server in mcp_servers if server.name in profile_mcp_server_names]
+    if personal_mcp_servers:
+        mcp_servers = [*mcp_servers, *personal_mcp_servers]
 
     constrained_config = replace(
         config,

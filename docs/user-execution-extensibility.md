@@ -10,11 +10,12 @@ prompt resolution, personal agent composition/defaults, and personal-resource ow
 also implemented. Shared resources expose qualified `shared:` IDs while legacy unqualified shared
 names remain accepted.
 
-Still pending: personal credential storage and user-owned MCP execution, resource-specific APIs and
-console editors, immutable thread resource version metadata and pinning, lifecycle cleanup, and
-sharing. Personal capability profiles can now narrow tenant-approved local tools and shared MCP
-servers; references to user-owned MCP servers remain blocked with an explicit pending-runtime
-message.
+Still pending: encrypted personal credential storage and connection flows, resource-specific APIs
+and console editors, immutable thread resource version metadata and pinning, lifecycle cleanup, and
+sharing. Personal capability profiles can use tenant-approved tools and user-owned MCP servers.
+User-owned servers are restricted to public HTTPS destinations, revalidated on every request, and
+gated by the tenant custom-MCP policy. Servers requiring credentials remain blocked with an
+explicit pending-runtime message.
 
 This document defines the first design direction for user-owned agents, skills, capability
 profiles, and third-party MCP tools. It intentionally documents the product and runtime model
@@ -505,8 +506,7 @@ Status: implemented for the coarse user execution-config document and self-servi
 
 Status: implemented for principal-aware options, thread creation, native and peer prompt loading,
 live personal-skill resolution, personal defaults, and personal-resource ownership enforcement.
-Personal agents may compose shared and personal skills plus shared capability profiles. Agents
-that reference personal capability profiles remain blocked until Phase 3.
+Personal agents may compose shared and personal skills plus shared or personal capability profiles.
 
 - Merge personal skills and agents into principal execution options.
 - Resolve shared and personal skill references during thread creation and runs.
@@ -516,17 +516,20 @@ that reference personal capability profiles remain blocked until Phase 3.
 ### Phase 3: Personal MCP and capabilities
 
 Status: partially implemented. User-owned MCP server and capability-profile models are stored and
-validated. Personal capability profiles now execute as narrowing-only overlays over tenant-approved
-local tools and shared MCP servers in native and peer/broker runtimes. Tenant tool permissions and
-per-user MCP entitlements are intersected, so a personal profile cannot broaden access. Personal
-MCP server references remain blocked until encrypted credentials and safe connection controls are
-available.
+validated. Personal capability profiles execute as narrowing-only overlays over tenant-approved
+local tools and shared MCP servers in native and peer/broker runtimes. They may also connect to
+user-owned MCP servers when tenant custom-server policy allows it. Personal servers must use public
+HTTPS endpoints; local/private network destinations are rejected at selection and every outbound
+request, environment proxies are disabled, sensitive static headers are forbidden, and tenant/user
+resource ownership remains enforced. Encrypted credentials and connection flows remain pending, so
+credential-backed servers are still blocked.
 
 - Add user-owned MCP server and capability-profile models. Implemented.
 - Execute personal capability profiles over approved local tools and shared MCP servers.
   Implemented.
 - Add encrypted credential references and connection flows.
-- Build per-principal/per-thread MCP registries that include personal servers.
+- Build per-principal/per-thread MCP registries that include unauthenticated personal servers.
+  Implemented.
 - Add server probing, diagnostics, redacted audit events, and deprovisioning cleanup.
 
 ### Phase 4: Version visibility and lifecycle UX

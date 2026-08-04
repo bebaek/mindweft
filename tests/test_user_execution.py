@@ -6,6 +6,7 @@ from app.admin_store import SQLiteTenantConfigStore, UserExecutionConfigConflict
 from app.execution import FixedTenantExecutionResolver, parse_tenant_execution_config
 from app.llm import LLMAdapter
 from app.main import create_app
+from app.mcp import MCPServerConfig, MCPServerInfo
 from app.models import LLMResponse, Message, MessageRole, ToolSpec
 from app.tools import ToolRegistry
 from app.user_execution import effective_execution_catalog, validate_user_execution_config
@@ -583,9 +584,37 @@ def test_personal_capability_profile_resolves_tenant_shared_mcp_servers(
     assert constraints.shared_mcp_server_names == {"docs"}
 
 
-def test_personal_mcp_server_selection_reports_secure_runtime_pending(
+def test_unauthenticated_personal_mcp_server_runs_when_tenant_allows_custom_servers(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    class FakeMCPClient:
+        def __init__(self, config: MCPServerConfig) -> None:
+            self._config = config
+
+        async def list_tools(self) -> list[ToolSpec]:
+            return [
+                ToolSpec(
+                    name=f"{self._config.name}.ping",
+                    description="Ping personal server",
+                    input_schema={"type": "object"},
+                )
+            ]
+
+        async def call_tool(self, tool_name: str, arguments: dict[str, object]) -> object:
+            return {"tool": tool_name, "arguments": arguments}
+
+        def server_info(self) -> MCPServerInfo:
+            return MCPServerInfo(
+                name=self._config.name,
+                url=self._config.url,
+                protocol_version=self._config.protocol_version,
+                session_id="personal-session",
+                server_name="personal-server",
+                server_version="1.0",
+            )
+
+    monkeypatch.setattr("app.tools.MCPHTTPClient", FakeMCPClient)
     store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
     store.upsert_user_execution_config(
         "tenant-1",
@@ -596,7 +625,64 @@ def test_personal_mcp_server_selection_reports_secure_runtime_pending(
                     {
                         "id": "user:third-party",
                         "name": "third-party",
-                        "url": "https://tools.example/mcp",
+                        "url": "https://1.1.1.1/mcp",
+                    }
+                ]
+            },
+            "capability_profiles": {
+                "items": [
+                    {
+                        "id": "user:tools",
+                        "name": "tools",
+                        "mcp_server_refs": ["user:third-party"],
+                    }
+                ]
+            },
+        },
+    )
+    adapter = RecordingLLMAdapter()
+    app = _runtime_app(store, adapter)
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/threads",
+            headers=AUTH_HEADERS,
+            json={"capability_profile": "user:tools"},
+        )
+        assert created.status_code == 200
+        thread_id = created.json()["thread_id"]
+        message = client.post(
+            f"/threads/{thread_id}/messages",
+            headers=AUTH_HEADERS,
+            json={"content": "Use the personal service."},
+        )
+        assert message.status_code == 200
+        run = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert run.status_code == 200
+    assert adapter.tool_requests
+    assert "user:third-party.ping" in {tool.name for tool in adapter.tool_requests[-1]}
+
+
+def test_tenant_policy_can_block_personal_mcp_servers(tmp_path: Path) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    store.upsert_tenant_mcp_server_catalog_policy(
+        "tenant-1",
+        item_ids=[],
+        allow_custom_mcp_servers=False,
+        require_subject_assignment=False,
+        updated_by="admin",
+    )
+    store.upsert_user_execution_config(
+        "tenant-1",
+        "user-1",
+        {
+            "mcp_servers": {
+                "items": [
+                    {
+                        "id": "user:third-party",
+                        "name": "third-party",
+                        "url": "https://1.1.1.1/mcp",
                     }
                 ]
             },
@@ -621,9 +707,88 @@ def test_personal_mcp_server_selection_reports_secure_runtime_pending(
         )
 
     assert response.status_code == 400
-    assert (
-        "secure personal credential and MCP runtime support is pending" in response.json()["detail"]
+    assert response.json()["detail"] == "Tenant policy does not allow user-owned MCP servers"
+
+
+def test_personal_mcp_server_rejects_private_network_targets(tmp_path: Path) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    store.upsert_user_execution_config(
+        "tenant-1",
+        "user-1",
+        {
+            "mcp_servers": {
+                "items": [
+                    {
+                        "id": "user:internal",
+                        "name": "internal",
+                        "url": "https://127.0.0.1/mcp",
+                    }
+                ]
+            },
+            "capability_profiles": {
+                "items": [
+                    {
+                        "id": "user:tools",
+                        "name": "tools",
+                        "mcp_server_refs": ["user:internal"],
+                    }
+                ]
+            },
+        },
     )
+    app = _runtime_app(store, RecordingLLMAdapter())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/threads",
+            headers=AUTH_HEADERS,
+            json={"capability_profile": "user:tools"},
+        )
+
+    assert response.status_code == 400
+    assert "cannot access local or private network hosts" in response.json()["detail"]
+
+
+def test_personal_mcp_server_selection_reports_secure_runtime_pending(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    store.upsert_user_execution_config(
+        "tenant-1",
+        "user-1",
+        {
+            "mcp_servers": {
+                "items": [
+                    {
+                        "id": "user:third-party",
+                        "name": "third-party",
+                        "url": "https://tools.example/mcp",
+                        "credential_ref": "oauth:third-party",
+                    }
+                ]
+            },
+            "capability_profiles": {
+                "items": [
+                    {
+                        "id": "user:tools",
+                        "name": "tools",
+                        "mcp_server_refs": ["user:third-party"],
+                    }
+                ]
+            },
+        },
+    )
+    app = _runtime_app(store, RecordingLLMAdapter())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/threads",
+            headers=AUTH_HEADERS,
+            json={"capability_profile": "user:tools"},
+        )
+
+    assert response.status_code == 400
+    assert "encrypted personal credential runtime support is pending" in response.json()["detail"]
 
 
 def test_user_execution_config_storage_endpoint_requires_configured_store() -> None:

@@ -367,6 +367,7 @@ class AgentBackendRouter(AgentBackend):
                 execution.config,
                 profile_allowed_local_tools=personal_capability_constraints.allowed_local_tools,
                 profile_mcp_server_names=(personal_capability_constraints.shared_mcp_server_names),
+                personal_mcp_servers=personal_capability_constraints.personal_mcp_servers,
                 mcp_manager=execution.mcp_manager,
                 allowed_mcp_server_names=allowed_mcp_server_names,
             )

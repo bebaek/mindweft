@@ -21,6 +21,14 @@ from app.execution import (
     TenantExecutionConfig,
     TenantSkillConfig,
 )
+from app.mcp import (
+    DEFAULT_MCP_PROTOCOL_VERSION,
+    MCPServerConfig,
+    parse_mcp_private_value_policy,
+    parse_mcp_private_value_tool_policies,
+)
+from app.network_policy import validate_public_https_url
+from app.redaction import parse_tool_result_redaction_policy
 from app.tools import DEFAULT_LOCAL_TOOL_NAMES
 
 _USER_RESOURCE_ID_PATTERN = re.compile(r"^user:[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$")
@@ -32,6 +40,15 @@ _SENSITIVE_HEADER_NAMES = frozenset(
         "x-api-key",
         "api-key",
         "x-auth-token",
+        "cookie",
+        "set-cookie",
+        "host",
+        "connection",
+        "content-length",
+        "transfer-encoding",
+        "forwarded",
+        "x-forwarded-for",
+        "x-forwarded-host",
     }
 )
 
@@ -136,6 +153,17 @@ class UserMCPServerDefinition(UserExecutionModel):
     @field_validator("headers")
     @classmethod
     def validate_headers(cls, value: dict[str, str]) -> dict[str, str]:
+        malformed = sorted(
+            name
+            for name, header_value in value.items()
+            if not name.strip()
+            or "\r" in name
+            or "\n" in name
+            or "\r" in header_value
+            or "\n" in header_value
+        )
+        if malformed:
+            raise ValueError("header names and values must not be empty or contain newlines")
         sensitive = sorted(name for name in value if name.lower() in _SENSITIVE_HEADER_NAMES)
         if sensitive:
             raise ValueError(
@@ -395,6 +423,7 @@ class UserExecutionUnsupportedError(UserExecutionResolutionError):
 class PersonalCapabilityConstraints:
     allowed_local_tools: list[str] | None
     shared_mcp_server_names: set[str]
+    personal_mcp_servers: list[MCPServerConfig]
 
 
 @dataclass(frozen=True)
@@ -402,6 +431,7 @@ class EffectiveExecutionCatalog:
     tenant_config: TenantExecutionConfig
     user_config: UserExecutionConfig | None = None
     user_config_version: int | None = None
+    personal_mcp_servers_allowed: bool = False
 
     @property
     def default_agent_ref(self) -> str | None:
@@ -595,12 +625,28 @@ class EffectiveExecutionCatalog:
 
         tenant_mcp_server_names = {server.name for server in self.tenant_config.tools.mcp_servers}
         shared_mcp_server_names: set[str] = set()
+        personal_mcp_servers: list[MCPServerConfig] = []
+        user_servers = (
+            {server.id: server for server in self.user_config.mcp_servers.items}
+            if self.user_config is not None
+            else {}
+        )
         for ref in profile.mcp_server_refs:
             if ref.startswith("user:"):
-                raise UserExecutionUnsupportedError(
-                    f"Personal MCP server '{ref}' cannot run yet; secure personal credential "
-                    "and MCP runtime support is pending"
-                )
+                if not self.personal_mcp_servers_allowed:
+                    raise UserExecutionUnsupportedError(
+                        "Tenant policy does not allow user-owned MCP servers"
+                    )
+                server = user_servers.get(ref)
+                if server is None:
+                    raise UserExecutionResolutionError(f"Unknown personal MCP server '{ref}'")
+                if server.credential_ref is not None:
+                    raise UserExecutionUnsupportedError(
+                        f"Personal MCP server '{ref}' requires credential '{server.credential_ref}', "
+                        "but encrypted personal credential runtime support is pending"
+                    )
+                personal_mcp_servers.append(_personal_mcp_server_config(server))
+                continue
             server_name = ref.removeprefix("shared:")
             if server_name not in tenant_mcp_server_names:
                 raise UserExecutionResolutionError(
@@ -614,6 +660,7 @@ class EffectiveExecutionCatalog:
                 else None
             ),
             shared_mcp_server_names=shared_mcp_server_names,
+            personal_mcp_servers=personal_mcp_servers,
         )
 
     def _shared_agent(self, agent: TenantAgentPresetConfig) -> EffectiveAgent:
@@ -652,10 +699,59 @@ def effective_execution_catalog(
             f"Stored user execution config for '{tenant_id}/{user_id}' is invalid: "
             + "; ".join(report.errors)
         )
+    allow_personal_mcp_servers = False
+    policy_getter = getattr(source, "get_tenant_mcp_server_catalog_policy", None)
+    if callable(policy_getter):
+        policy = policy_getter(tenant_id)
+        allow_personal_mcp_servers = policy is None or bool(
+            getattr(policy, "allow_custom_mcp_servers", False)
+        )
     return EffectiveExecutionCatalog(
         tenant_config=tenant_config,
         user_config=report.config,
         user_config_version=record.version,
+        personal_mcp_servers_allowed=allow_personal_mcp_servers,
+    )
+
+
+def _personal_mcp_server_config(server: UserMCPServerDefinition) -> MCPServerConfig:
+    try:
+        validate_public_https_url(server.url)
+    except ValueError as exc:
+        raise UserExecutionUnsupportedError(f"User-owned MCP server URL {exc}") from exc
+    if server.allowed_tools is not None and not set(server.trusted_input_preprocessor_tools) <= set(
+        server.allowed_tools
+    ):
+        raise UserExecutionResolutionError(
+            f"Personal MCP server '{server.id}' trusted input preprocessors must be allowed tools"
+        )
+    try:
+        result_redaction = parse_tool_result_redaction_policy(
+            server.result_redaction,
+            context=f"Personal MCP server '{server.id}'",
+        )
+        private_value_policy = parse_mcp_private_value_policy(
+            server.private_value_policy,
+            context=f"Personal MCP server '{server.id}'",
+        )
+        private_value_tool_policies = parse_mcp_private_value_tool_policies(
+            server.private_value_tool_policies,
+            context=f"Personal MCP server '{server.id}'",
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise UserExecutionResolutionError(str(exc)) from exc
+    return MCPServerConfig(
+        name=server.id,
+        url=server.url,
+        headers=dict(server.headers),
+        protocol_version=server.protocol_version or DEFAULT_MCP_PROTOCOL_VERSION,
+        allowed_tools=(list(server.allowed_tools) if server.allowed_tools is not None else None),
+        result_redaction_policy=result_redaction,
+        private_value_policy=private_value_policy,
+        private_value_tool_policies=private_value_tool_policies,
+        trusted_input_preprocessor_tools=frozenset(server.trusted_input_preprocessor_tools),
+        timeout_seconds=server.timeout_seconds,
+        public_network_only=True,
     )
 
 

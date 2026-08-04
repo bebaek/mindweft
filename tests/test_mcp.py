@@ -41,6 +41,31 @@ def _legacy_mcp_server_config(**kwargs: Any) -> MCPServerConfig:
     return MCPServerConfig(protocol_version=LEGACY_MCP_PROTOCOL_VERSION, **kwargs)
 
 
+def test_public_network_only_mcp_client_rejects_private_request_target() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(500)
+
+    client = MCPHTTPClient(
+        MCPServerConfig(
+            name="personal",
+            url="https://127.0.0.1/mcp",
+            headers={},
+            public_network_only=True,
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(client.list_tools())
+
+    assert exc_info.value.status_code == 502
+    assert "cannot access local or private network hosts" in str(exc_info.value.detail)
+    assert requests == []
+
+
 def test_mcp_jsonrpc_helpers_use_sdk_models_and_normalize_invalid_ids() -> None:
     assert mcp_jsonrpc_result("request-1", {"ok": True}) == {
         "jsonrpc": "2.0",
