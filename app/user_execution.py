@@ -1,0 +1,368 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any
+from urllib.parse import urlsplit
+
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+
+_USER_RESOURCE_ID_PATTERN = re.compile(r"^user:[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$")
+_RESOURCE_REF_PATTERN = re.compile(r"^(?:user|shared):[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$")
+_SENSITIVE_HEADER_NAMES = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "x-api-key",
+        "api-key",
+        "x-auth-token",
+    }
+)
+
+
+class UserExecutionModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class UserSkillDefinition(UserExecutionModel):
+    id: str
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=2000)
+    system_prompt: str | None = Field(
+        default=None,
+        max_length=200_000,
+        validation_alias=AliasChoices("system_prompt", "systemPrompt"),
+    )
+    workspace_scope: str | None = Field(
+        default=None,
+        max_length=128,
+        validation_alias=AliasChoices("workspace_scope", "workspaceScope"),
+    )
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return _validate_user_resource_id(value)
+
+
+class UserMCPServerDefinition(UserExecutionModel):
+    id: str
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=2000)
+    url: str = Field(min_length=1, max_length=4096)
+    credential_ref: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=512,
+        validation_alias=AliasChoices("credential_ref", "credentialRef"),
+    )
+    headers: dict[str, str] = Field(default_factory=dict)
+    protocol_version: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        validation_alias=AliasChoices("protocol_version", "protocolVersion"),
+    )
+    allowed_tools: list[str] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("allowed_tools", "allowedTools"),
+    )
+    timeout_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        le=600,
+        validation_alias=AliasChoices("timeout_seconds", "timeoutSeconds"),
+    )
+    path_policy: dict[str, Any] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("path_policy", "pathPolicy"),
+    )
+    result_redaction: dict[str, Any] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("result_redaction", "resultRedaction"),
+    )
+    private_value_policy: str | dict[str, Any] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("private_value_policy", "privateValuePolicy"),
+    )
+    private_value_tool_policies: dict[str, dict[str, Any]] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("private_value_tool_policies", "privateValueToolPolicies"),
+    )
+    trusted_input_preprocessor_tools: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices(
+            "trusted_input_preprocessor_tools", "trustedInputPreprocessorTools"
+        ),
+    )
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return _validate_user_resource_id(value)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("url must be an absolute HTTP or HTTPS URL")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("url must not contain embedded credentials")
+        return value
+
+    @field_validator("headers")
+    @classmethod
+    def validate_headers(cls, value: dict[str, str]) -> dict[str, str]:
+        sensitive = sorted(name for name in value if name.lower() in _SENSITIVE_HEADER_NAMES)
+        if sensitive:
+            raise ValueError(
+                "reusable credential headers must use credential_ref: " + ", ".join(sensitive)
+            )
+        return value
+
+    @field_validator("allowed_tools", "trusted_input_preprocessor_tools")
+    @classmethod
+    def validate_tool_names(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        if any(not item.strip() for item in value):
+            raise ValueError("tool names must be non-empty")
+        if len(value) != len(set(value)):
+            raise ValueError("tool names must not contain duplicates")
+        return value
+
+
+class UserCapabilityProfileDefinition(UserExecutionModel):
+    id: str
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=2000)
+    mcp_server_refs: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("mcp_server_refs", "mcpServerRefs"),
+    )
+    allowed_local_tools: list[str] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("allowed_local_tools", "allowedLocalTools"),
+    )
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return _validate_user_resource_id(value)
+
+    @field_validator("mcp_server_refs")
+    @classmethod
+    def validate_server_refs(cls, value: list[str]) -> list[str]:
+        return _validate_resource_refs(value, "mcp_server_refs")
+
+    @field_validator("allowed_local_tools")
+    @classmethod
+    def validate_local_tools(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        if any(not item.strip() for item in value):
+            raise ValueError("allowed_local_tools entries must be non-empty")
+        if len(value) != len(set(value)):
+            raise ValueError("allowed_local_tools must not contain duplicates")
+        return value
+
+
+class UserAgentDefinition(UserExecutionModel):
+    id: str
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=2000)
+    skill_refs: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("skill_refs", "skillRefs"),
+    )
+    capability_profile_ref: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("capability_profile_ref", "capabilityProfileRef"),
+    )
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return _validate_user_resource_id(value)
+
+    @field_validator("skill_refs")
+    @classmethod
+    def validate_skill_refs(cls, value: list[str]) -> list[str]:
+        return _validate_resource_refs(value, "skill_refs")
+
+    @field_validator("capability_profile_ref")
+    @classmethod
+    def validate_profile_ref(cls, value: str | None) -> str | None:
+        if value is not None:
+            _validate_resource_ref(value)
+        return value
+
+
+class UserExecutionDefaults(UserExecutionModel):
+    agent_ref: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("agent_ref", "agentRef"),
+    )
+    skill_refs: list[str] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("skill_refs", "skillRefs"),
+    )
+    capability_profile_ref: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("capability_profile_ref", "capabilityProfileRef"),
+    )
+
+    @field_validator("agent_ref", "capability_profile_ref")
+    @classmethod
+    def validate_optional_ref(cls, value: str | None) -> str | None:
+        if value is not None:
+            _validate_resource_ref(value)
+        return value
+
+    @field_validator("skill_refs")
+    @classmethod
+    def validate_default_skill_refs(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return _validate_resource_refs(value, "skill_refs")
+
+
+class UserSkillCollection(UserExecutionModel):
+    items: list[UserSkillDefinition] = Field(default_factory=list)
+
+
+class UserMCPServerCollection(UserExecutionModel):
+    items: list[UserMCPServerDefinition] = Field(default_factory=list)
+
+
+class UserCapabilityProfileCollection(UserExecutionModel):
+    items: list[UserCapabilityProfileDefinition] = Field(default_factory=list)
+
+
+class UserAgentCollection(UserExecutionModel):
+    items: list[UserAgentDefinition] = Field(default_factory=list)
+
+
+class UserExecutionConfig(UserExecutionModel):
+    defaults: UserExecutionDefaults = Field(default_factory=UserExecutionDefaults)
+    skills: UserSkillCollection = Field(default_factory=UserSkillCollection)
+    mcp_servers: UserMCPServerCollection = Field(
+        default_factory=UserMCPServerCollection,
+        validation_alias=AliasChoices("mcp_servers", "mcpServers"),
+    )
+    capability_profiles: UserCapabilityProfileCollection = Field(
+        default_factory=UserCapabilityProfileCollection,
+        validation_alias=AliasChoices("capability_profiles", "capabilityProfiles"),
+    )
+    agents: UserAgentCollection = Field(default_factory=UserAgentCollection)
+
+    @model_validator(mode="after")
+    def validate_catalog(self) -> UserExecutionConfig:
+        collections: tuple[tuple[str, list[Any]], ...] = (
+            ("skill", self.skills.items),
+            ("MCP server", self.mcp_servers.items),
+            ("capability profile", self.capability_profiles.items),
+            ("agent", self.agents.items),
+        )
+        for label, items in collections:
+            _validate_unique_resources(label, items)
+
+        personal_skills = {item.id for item in self.skills.items}
+        personal_servers = {item.id for item in self.mcp_servers.items}
+        personal_profiles = {item.id for item in self.capability_profiles.items}
+        personal_agents = {item.id for item in self.agents.items}
+
+        for profile in self.capability_profiles.items:
+            _validate_personal_refs_exist(
+                profile.mcp_server_refs,
+                personal_servers,
+                f"capability profile '{profile.id}'",
+            )
+        for agent in self.agents.items:
+            _validate_personal_refs_exist(
+                agent.skill_refs,
+                personal_skills,
+                f"agent '{agent.id}'",
+            )
+            if agent.capability_profile_ref is not None:
+                _validate_personal_refs_exist(
+                    [agent.capability_profile_ref],
+                    personal_profiles,
+                    f"agent '{agent.id}'",
+                )
+
+        if self.defaults.agent_ref is not None:
+            _validate_personal_refs_exist([self.defaults.agent_ref], personal_agents, "defaults")
+        if self.defaults.skill_refs is not None:
+            _validate_personal_refs_exist(self.defaults.skill_refs, personal_skills, "defaults")
+        if self.defaults.capability_profile_ref is not None:
+            _validate_personal_refs_exist(
+                [self.defaults.capability_profile_ref], personal_profiles, "defaults"
+            )
+        return self
+
+
+@dataclass(frozen=True)
+class UserExecutionConfigValidationReport:
+    valid: bool
+    config: UserExecutionConfig | None
+    errors: list[str]
+
+
+def validate_user_execution_config(payload: object) -> UserExecutionConfigValidationReport:
+    try:
+        config = UserExecutionConfig.model_validate(payload)
+    except ValidationError as exc:
+        errors = []
+        for error in exc.errors(include_url=False):
+            location = ".".join(str(part) for part in error["loc"])
+            prefix = f"{location}: " if location else ""
+            errors.append(prefix + str(error["msg"]))
+        return UserExecutionConfigValidationReport(valid=False, config=None, errors=errors)
+    return UserExecutionConfigValidationReport(valid=True, config=config, errors=[])
+
+
+def _validate_user_resource_id(value: str) -> str:
+    if not _USER_RESOURCE_ID_PATTERN.fullmatch(value):
+        raise ValueError("id must use the 'user:' namespace followed by a lowercase resource name")
+    return value
+
+
+def _validate_resource_ref(value: str) -> str:
+    if not _RESOURCE_REF_PATTERN.fullmatch(value):
+        raise ValueError("resource reference must use a valid 'user:' or 'shared:' qualified ID")
+    return value
+
+
+def _validate_resource_refs(values: list[str], field_name: str) -> list[str]:
+    for value in values:
+        _validate_resource_ref(value)
+    if len(values) != len(set(values)):
+        raise ValueError(f"{field_name} must not contain duplicates")
+    return values
+
+
+def _validate_unique_resources(label: str, items: list[Any]) -> None:
+    ids = [item.id for item in items]
+    duplicate_ids = sorted({item_id for item_id in ids if ids.count(item_id) > 1})
+    if duplicate_ids:
+        raise ValueError(f"duplicate {label} ids: {', '.join(duplicate_ids)}")
+    names = [item.name for item in items]
+    duplicate_names = sorted({name for name in names if names.count(name) > 1})
+    if duplicate_names:
+        raise ValueError(f"duplicate {label} names: {', '.join(duplicate_names)}")
+
+
+def _validate_personal_refs_exist(refs: list[str], known: set[str], context: str) -> None:
+    missing = sorted(ref for ref in refs if ref.startswith("user:") and ref not in known)
+    if missing:
+        raise ValueError(f"{context} references unknown personal resources: {', '.join(missing)}")

@@ -117,6 +117,7 @@ from app.store import (
 from app.tenants import require_active_tenant_principal, require_tenant_context
 from app.tools import ToolRegistry, build_tool_registry_from_env
 from app.user_deprovisioning import UserDeprovisioningProcessor
+from app.user_execution_api import build_user_execution_router
 
 __all__ = [
     "DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES",
@@ -921,6 +922,7 @@ def create_app(
     )
     app.include_router(build_session_auth_router())
     app.include_router(build_admin_router())
+    app.include_router(build_user_execution_router())
     if CONSOLE_CLIENT_DIR.exists():
         app.mount(
             "/console",

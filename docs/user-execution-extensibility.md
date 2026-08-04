@@ -1,6 +1,15 @@
 # User execution extensibility
 
-Status: Proposed
+Status: Partially implemented
+
+Implemented foundation: versioned SQLite storage scoped by tenant and user, typed validation for
+personal skills, MCP servers, capability profiles, agents, defaults, and qualified references,
+optimistic concurrency, and principal-scoped coarse read/update/validate/delete APIs under
+`/me/execution-config`.
+
+Still pending: merging the overlay into thread creation and runtime resolution, personal
+credential storage and MCP execution, resource-specific APIs and console editors, thread resource
+version metadata, lifecycle cleanup, and sharing.
 
 This document defines the first design direction for user-owned agents, skills, capability
 profiles, and third-party MCP tools. It intentionally documents the product and runtime model
@@ -358,6 +367,27 @@ DELETE /me/agents/{resource_id}
 A coarse config endpoint is enough for the first backend iteration; resource-specific routes can
 follow when the web console needs granular editing and conflict handling.
 
+The implemented coarse API uses this update envelope:
+
+```json
+{
+  "config": {
+    "skills": {"items": []},
+    "mcp_servers": {"items": []},
+    "capability_profiles": {"items": []},
+    "agents": {"items": []}
+  },
+  "expected_version": 0
+}
+```
+
+`expected_version` is optional. Zero means that no record is expected; subsequent updates use the
+version returned by the prior read or write. A mismatch returns HTTP 409. Validation returns a
+normalized config and errors without writing. Reads return HTTP 404 until a config exists, and
+deletes accept `expected_version` as an optional query parameter. Storage endpoints return a
+service-unavailable response when the admin SQLite store is not configured; validation remains
+available because it does not require storage.
+
 Existing execution discovery should become principal-aware:
 
 ```text
@@ -452,6 +482,8 @@ publication requires a separately configured shared credential or identity model
 ## Implementation phases
 
 ### Phase 1: Storage and validation
+
+Status: implemented for the coarse user execution-config document and self-service API.
 
 - Add versioned user execution-config storage.
 - Define personal resource models and qualified references.

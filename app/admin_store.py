@@ -74,6 +74,26 @@ class SubjectMCPServerCatalogAssignment:
 
 
 @dataclass(frozen=True)
+class UserExecutionConfigRecord:
+    tenant_id: str
+    user_id: str
+    config: dict[str, Any]
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserExecutionConfigConflictError(RuntimeError):
+    def __init__(self, *, expected_version: int, actual_version: int | None) -> None:
+        self.expected_version = expected_version
+        self.actual_version = actual_version
+        actual = "missing" if actual_version is None else str(actual_version)
+        super().__init__(
+            f"User execution config version conflict: expected {expected_version}, found {actual}"
+        )
+
+
+@dataclass(frozen=True)
 class UserDeprovisioningEvent:
     id: str
     tenant_id: str
@@ -1081,6 +1101,131 @@ class SQLiteTenantConfigStore:
             return (), "unassigned"
         return None, "tenant"
 
+    def get_user_execution_config(
+        self, tenant_id: str, user_id: str
+    ) -> UserExecutionConfigRecord | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT tenant_id, user_id, config_json, version, created_at, updated_at
+                FROM user_execution_configs
+                WHERE tenant_id = ? AND user_id = ?
+                """,
+                (tenant_id, user_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return _user_execution_config_from_row(row, self._fernet)
+
+    def upsert_user_execution_config(
+        self,
+        tenant_id: str,
+        user_id: str,
+        payload: dict[str, Any],
+        *,
+        expected_version: int | None = None,
+    ) -> UserExecutionConfigRecord:
+        serialized = json.dumps(
+            _encrypt_payload(payload, self._fernet),
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+        now = _utc_now_iso()
+        with self._lock:
+            with self._connection() as connection:
+                if expected_version is None:
+                    connection.execute(
+                        """
+                        INSERT INTO user_execution_configs (
+                            tenant_id, user_id, config_json, version, created_at, updated_at
+                        ) VALUES (?, ?, ?, 1, ?, ?)
+                        ON CONFLICT(tenant_id, user_id) DO UPDATE SET
+                            config_json = excluded.config_json,
+                            version = user_execution_configs.version + 1,
+                            updated_at = excluded.updated_at
+                        """,
+                        (tenant_id, user_id, serialized, now, now),
+                    )
+                elif expected_version == 0:
+                    try:
+                        connection.execute(
+                            """
+                            INSERT INTO user_execution_configs (
+                                tenant_id, user_id, config_json, version, created_at, updated_at
+                            ) VALUES (?, ?, ?, 1, ?, ?)
+                            """,
+                            (tenant_id, user_id, serialized, now, now),
+                        )
+                    except sqlite3.IntegrityError as exc:
+                        actual_version = _user_execution_config_version(
+                            connection, tenant_id, user_id
+                        )
+                        raise UserExecutionConfigConflictError(
+                            expected_version=expected_version,
+                            actual_version=actual_version,
+                        ) from exc
+                else:
+                    cursor = connection.execute(
+                        """
+                        UPDATE user_execution_configs SET
+                            config_json = ?,
+                            version = version + 1,
+                            updated_at = ?
+                        WHERE tenant_id = ? AND user_id = ? AND version = ?
+                        """,
+                        (serialized, now, tenant_id, user_id, expected_version),
+                    )
+                    if cursor.rowcount == 0:
+                        actual_version = _user_execution_config_version(
+                            connection, tenant_id, user_id
+                        )
+                        raise UserExecutionConfigConflictError(
+                            expected_version=expected_version,
+                            actual_version=actual_version,
+                        )
+                connection.commit()
+        record = self.get_user_execution_config(tenant_id, user_id)
+        if record is None:  # pragma: no cover - defensive
+            raise RuntimeError("User execution config disappeared after upsert")
+        return record
+
+    def delete_user_execution_config(
+        self,
+        tenant_id: str,
+        user_id: str,
+        *,
+        expected_version: int | None = None,
+    ) -> bool:
+        with self._lock:
+            with self._connection() as connection:
+                if expected_version is None:
+                    cursor = connection.execute(
+                        """
+                        DELETE FROM user_execution_configs
+                        WHERE tenant_id = ? AND user_id = ?
+                        """,
+                        (tenant_id, user_id),
+                    )
+                else:
+                    cursor = connection.execute(
+                        """
+                        DELETE FROM user_execution_configs
+                        WHERE tenant_id = ? AND user_id = ? AND version = ?
+                        """,
+                        (tenant_id, user_id, expected_version),
+                    )
+                    if cursor.rowcount == 0:
+                        actual_version = _user_execution_config_version(
+                            connection, tenant_id, user_id
+                        )
+                        if actual_version is not None or expected_version != 0:
+                            raise UserExecutionConfigConflictError(
+                                expected_version=expected_version,
+                                actual_version=actual_version,
+                            )
+                connection.commit()
+        return cursor.rowcount > 0
+
     def list_tenants(self) -> list[str]:
         with self._connection() as connection:
             rows = connection.execute(
@@ -1322,6 +1467,25 @@ class SQLiteTenantConfigStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS user_execution_configs (
+                    tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    config_json TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (tenant_id, user_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_user_execution_configs_updated
+                ON user_execution_configs(tenant_id, updated_at DESC)
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS tenant_execution_configs (
                     tenant_id TEXT PRIMARY KEY,
                     config_json TEXT NOT NULL,
@@ -1360,6 +1524,39 @@ class SQLiteTenantConfigStore:
         connection = sqlite3.connect(self._db_path)
         connection.row_factory = sqlite3.Row
         return connection
+
+
+def _user_execution_config_version(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    user_id: str,
+) -> int | None:
+    row = connection.execute(
+        """
+        SELECT version FROM user_execution_configs
+        WHERE tenant_id = ? AND user_id = ?
+        """,
+        (tenant_id, user_id),
+    ).fetchone()
+    return int(row[0]) if row is not None else None
+
+
+def _user_execution_config_from_row(
+    row: sqlite3.Row,
+    fernet: Fernet | None,
+) -> UserExecutionConfigRecord:
+    payload = json.loads(str(row["config_json"]))
+    if not isinstance(payload, dict):
+        raise RuntimeError("Stored user execution config is invalid")
+    config = _decrypt_payload(payload, fernet)
+    return UserExecutionConfigRecord(
+        tenant_id=str(row["tenant_id"]),
+        user_id=str(row["user_id"]),
+        config=config,
+        version=int(row["version"]),
+        created_at=datetime.fromisoformat(str(row["created_at"])),
+        updated_at=datetime.fromisoformat(str(row["updated_at"])),
+    )
 
 
 def _subject_mcp_server_catalog_assignment_from_row(
