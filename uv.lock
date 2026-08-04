@@ -892,7 +892,7 @@ requires-dist = [
     { name = "opentelemetry-sdk", specifier = ">=1.33,<2.0" },
     { name = "piper-tts", marker = "extra == 'voice'", specifier = ">=1.4,<2.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.52,<4.0" },
-    { name = "pvporcupine", marker = "extra == 'voice'", specifier = ">=3.0,<4.0" },
+    { name = "pvporcupine", marker = "extra == 'voice'", specifier = ">=3.0,<5.0" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3.0" },
     { name = "pyopen-wakeword", marker = "extra == 'voice'", specifier = ">=1.1.0,<2.0" },
     { name = "python-dotenv", specifier = ">=1.0,<2.0" },
