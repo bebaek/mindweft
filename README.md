@@ -358,9 +358,10 @@ confirmed compaction. On narrow screens, the conversation rail is collapsed by d
 from the Conversations menu so the active chat retains the screen space. The console also supports
 validated image selection, authenticated binary uploads, attachment previews,
 and per-image detail controls, one-time private-value approval/denial, pending-consent recovery after
-reload, uncertain-action reconciliation, a tenant-owner settings workspace for profile, membership,
-password onboarding, domains, read-only entitlements, execution configuration, and tenant-scoped
-OpenAI OAuth credential import from Pi, and a separate
+reload, uncertain-action reconciliation, a personal setup workspace for versioned execution-overlay
+JSON plus write-only encrypted MCP credential creation, rotation, and deletion, a tenant-owner
+settings workspace for profile, membership, password onboarding, domains, read-only entitlements,
+execution configuration, and tenant-scoped OpenAI OAuth credential import from Pi, and a separate
 platform administration workspace with tenant provisioning and
 editing, user role/status management, domain verification, typed feature and limit entitlement
 editing with server validation, version visibility and confirmed reset, a sectioned execution

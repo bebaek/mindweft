@@ -688,3 +688,47 @@ html[data-theme="dark"] .admin-page .admin-user-list li>button.danger-link,
 html[data-theme="dark"] .admin-page .domain-list li>button.danger-link { color:#ff9d94; }
 html[data-theme="dark"] .admin-page .tenant-operations-tabs button.active { color:#c4ef91; border-color:#c4ef91; }
 html[data-theme="dark"] .admin-page .lifecycle-actions .archive { color:#ff9d94; border-color:#89534e; }
+
+/* Personal execution setup */
+.personalization-page { display:grid; gap:24px; }
+.personalization-heading { padding:8px 2px; }
+.personalization-heading h1 { margin:0; font-family:Georgia,"Times New Roman",serif; font-size:clamp(34px,4vw,48px); font-weight:500; letter-spacing:-.03em; }
+.personalization-heading>div>p:last-child { max-width:760px; margin:12px 0 0; color:var(--muted); line-height:1.6; }
+.personalization-grid { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(320px,.85fr); align-items:start; gap:18px; }
+.personalization-panel { min-width:0; padding:24px; border:1px solid var(--line); border-radius:16px; background:var(--white); box-shadow:var(--shadow); }
+.personalization-panel-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; margin-bottom:20px; }
+.personalization-panel-heading h2 { margin:0; font-family:Georgia,"Times New Roman",serif; font-size:25px; font-weight:500; }
+.personalization-panel-heading p:last-child { max-width:620px; margin:7px 0 0; color:var(--muted); line-height:1.5; }
+.personalization-panel-heading>span { flex:none; padding:5px 9px; border-radius:999px; color:var(--muted); background:var(--paper); font-size:var(--text-sm); }
+.personal-config-editor { display:grid; gap:8px; color:var(--muted); font-weight:650; }
+.personal-config-editor textarea { width:100%; min-height:430px; resize:vertical; padding:14px 16px; border:1px solid var(--line); border-radius:10px; color:var(--ink); background:var(--paper); font-family:"SFMono-Regular",Consolas,monospace; font-size:var(--text-code); line-height:1.55; tab-size:2; }
+.personalization-help,.personal-credential-form>p { margin:9px 0 0; color:var(--muted); font-size:var(--text-sm); line-height:1.5; }
+.personal-validation { margin-top:14px; padding:12px 14px; border:1px solid; border-radius:10px; }
+.personal-validation.valid { color:#24583d; border-color:#a8cfb7; background:#edf8f0; }
+.personal-validation.invalid { color:#873b35; border-color:#e2b5b1; background:#fff2f1; }
+.personal-validation ul { margin:8px 0 0; padding-left:20px; }
+.personalization-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:9px; margin-top:18px; }
+.personalization-actions .button-danger { margin-right:auto; }
+.personalization-status,.personalization-empty { color:var(--muted); }
+.personal-credential-list { display:grid; gap:0; margin:0 0 22px; padding:0; list-style:none; }
+.personal-credential-list li { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:9px; padding:13px 0; border-bottom:1px solid var(--line); }
+.personal-credential-list li>div { display:grid; min-width:0; gap:4px; }
+.personal-credential-list strong,.personal-credential-list small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.personal-credential-list small { color:var(--muted); }
+.personal-credential-list button,.personal-credential-form-heading button { padding:5px; border:0; color:var(--green); background:none; cursor:pointer; }
+.personal-credential-list .danger-link { color:var(--danger); }
+.personal-credential-list li.personalization-empty { display:block; padding:18px 0; }
+.personal-credential-form { display:grid; gap:13px; padding-top:20px; border-top:1px solid var(--line); }
+.personal-credential-form-heading { display:flex; justify-content:space-between; gap:12px; }
+.personal-credential-form label { display:grid; gap:6px; color:var(--muted); font-size:var(--text-control); font-weight:650; }
+.personal-credential-form input { width:100%; padding:10px 11px; border:1px solid var(--line); border-radius:9px; color:var(--ink); background:var(--paper); }
+.personal-credential-form>button { justify-self:end; }
+.credential-delete-confirm,.personal-reset-confirm { display:grid; gap:11px; margin:14px 0 18px; padding:14px; border:1px solid #e2b5b1; border-radius:10px; background:#fff2f1; }
+.credential-delete-confirm p,.personal-reset-confirm p { margin:0; }
+.credential-delete-confirm>div,.personal-reset-confirm>div { display:flex; justify-content:flex-end; gap:8px; }
+.credential-delete-confirm button,.personal-reset-confirm button { padding:7px 10px; border:1px solid var(--line); border-radius:8px; background:var(--white); cursor:pointer; }
+.credential-delete-confirm .button-danger,.personal-reset-confirm .button-danger { color:white; border-color:var(--danger); background:var(--danger); }
+html[data-theme="dark"] .personal-validation.valid { color:#bde5c9; border-color:#426b50; background:#17271c; }
+html[data-theme="dark"] .personal-validation.invalid,html[data-theme="dark"] .credential-delete-confirm,html[data-theme="dark"] .personal-reset-confirm { color:#ffb0a9; border-color:#70443f; background:#2a1918; }
+@media(max-width:980px) { .personalization-grid{grid-template-columns:1fr}.personal-config-editor textarea{min-height:360px} }
+@media(max-width:620px) { main:has(.personalization-page){padding:20px 12px 42px}.personalization-panel{padding:18px 14px}.personalization-panel-heading{align-items:stretch;flex-direction:column}.personalization-panel-heading>span{align-self:flex-start}.personal-config-editor textarea{min-height:320px}.personalization-actions{display:grid;grid-template-columns:1fr 1fr}.personalization-actions .button-danger{grid-column:1/-1;margin:0}.personal-credential-list li{grid-template-columns:minmax(0,1fr) auto}.personal-credential-list li>button:last-child{grid-column:2}.personal-credential-form>button{justify-self:stretch} }

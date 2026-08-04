@@ -4,14 +4,16 @@ Status: Partially implemented
 
 Implemented foundation: versioned SQLite storage scoped by tenant and user, typed validation for
 personal skills, MCP servers, capability profiles, agents, defaults, and qualified references,
-optimistic concurrency, and principal-scoped coarse read/update/validate/delete APIs under
-`/me/execution-config`. Principal-aware execution options, thread creation, live personal-skill
+optimistic concurrency, principal-scoped coarse read/update/validate/delete APIs under
+`/me/execution-config`, and a console JSON editor with validation, save, and reset controls.
+Principal-aware execution options, thread creation, live personal-skill
 prompt resolution, personal agent composition/defaults, and personal-resource ownership checks are
 also implemented. Shared resources expose qualified `shared:` IDs while legacy unqualified shared
-names remain accepted.
+names remain accepted. The console also manages write-only static MCP credential headers with
+create, rotation, and confirmed deletion flows.
 
-Still pending: interactive OAuth connection and refresh flows, resource-specific config APIs and
-console editors, immutable thread resource version metadata and pinning, lifecycle cleanup, and
+Still pending: interactive OAuth connection and refresh flows, guided resource-specific config APIs
+and console editors, immutable thread resource version metadata and pinning, lifecycle cleanup, and
 sharing. Personal capability profiles can use tenant-approved tools and user-owned MCP servers.
 User-owned servers are restricted to public HTTPS destinations, revalidated on every request, and
 gated by the tenant custom-MCP policy. Static authorization or API-key headers can be stored in the

@@ -144,6 +144,7 @@ it("renders the production console shell and readiness status", async () => {
   expect(await screen.findByText("Build, observe, and govern your agents.")).toBeInTheDocument();
   expect(await screen.findByText("Ready")).toBeInTheDocument();
   expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Personal setup" })).toBeInTheDocument();
 
   const themeToggle = screen.getByRole("button", { name: "Switch to dark mode" });
   fireEvent.click(themeToggle);

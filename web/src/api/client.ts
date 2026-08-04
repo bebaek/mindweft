@@ -83,6 +83,21 @@ export interface ExecutionOptionsResponse {
   agents: ExecutionAgentOptionSection;
 }
 
+export interface UserExecutionConfig {
+  tenant_id: string;
+  user_id: string;
+  config: Record<string, unknown>;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserExecutionConfigValidation {
+  valid: boolean;
+  errors: string[];
+  normalized_config?: Record<string, unknown> | null;
+}
+
 export interface UserExecutionCredential {
   tenant_id: string;
   user_id: string;
@@ -751,6 +766,34 @@ export class MinigentApiClient {
 
   getExecutionOptions(signal?: AbortSignal): Promise<ExecutionOptionsResponse> {
     return this.#request<ExecutionOptionsResponse>("/execution-options", { signal });
+  }
+
+  getUserExecutionConfig(signal?: AbortSignal): Promise<UserExecutionConfig> {
+    return this.#request<UserExecutionConfig>("/me/execution-config", { signal });
+  }
+
+  validateUserExecutionConfig(config: Record<string, unknown>): Promise<UserExecutionConfigValidation> {
+    return this.#request<UserExecutionConfigValidation>("/me/execution-config/validate", {
+      method: "POST",
+      body: JSON.stringify({ config }),
+    });
+  }
+
+  updateUserExecutionConfig(
+    config: Record<string, unknown>,
+    expectedVersion?: number,
+  ): Promise<UserExecutionConfig> {
+    return this.#request<UserExecutionConfig>("/me/execution-config", {
+      method: "PUT",
+      body: JSON.stringify({ config, expected_version: expectedVersion }),
+    });
+  }
+
+  deleteUserExecutionConfig(expectedVersion?: number): Promise<void> {
+    const query = expectedVersion === undefined
+      ? ""
+      : `?expected_version=${encodeURIComponent(String(expectedVersion))}`;
+    return this.#request<void>(`/me/execution-config${query}`, { method: "DELETE" });
   }
 
   listUserExecutionCredentials(signal?: AbortSignal): Promise<UserExecutionCredentialListResponse> {

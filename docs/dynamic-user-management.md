@@ -10,8 +10,8 @@ on `TenantContext`.
 
 Still pending or partial: invite-token/email delivery workflows, granular tenant-admin RBAC, richer
 identity-provider mapping, service-account modeling, seat/billing limits, interactive personal MCP
-OAuth flows and credential lifecycle cleanup, and dedicated console editors for the partially
-implemented user-owned execution overlay.
+OAuth flows and credential lifecycle cleanup, and guided console editors for the user-owned
+execution overlay (a complete JSON editor and static credential manager are available).
 See [User execution extensibility](user-execution-extensibility.md) for that design.
 
 Focus: tenant user and membership management, not full identity management.

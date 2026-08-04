@@ -7,13 +7,15 @@ import { WorkspacePage } from "./pages/WorkspacePage";
 import { AdminPage } from "./pages/AdminPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PasswordSetupPage } from "./pages/PasswordSetupPage";
+import { PersonalizationPage } from "./pages/PersonalizationPage";
 
-type Page = "overview" | "workspace" | "settings" | "admin";
+type Page = "overview" | "workspace" | "personal" | "settings" | "admin";
 type Theme = "light" | "dark";
 
 const pages: Record<Page, { label: string; description: string }> = {
   overview: { label: "Overview", description: "Runtime health and delivery status" },
   workspace: { label: "Workspace", description: "Threads and agent runs" },
+  personal: { label: "Personal setup", description: "Private agents, tools, and credentials" },
   settings: { label: "Tenant settings", description: "Members, domains, and runtime configuration" },
   admin: { label: "Administration", description: "Tenant operations and governance" },
 };
@@ -108,6 +110,7 @@ export function App() {
         <main id="main-content">
           {page === "overview" && <OverviewPage />}
           {page === "workspace" && <WorkspacePage />}
+          {page === "personal" && <PersonalizationPage />}
           {page === "settings" && tenantOwner && tenantContext.data && <AdminPage tenantId={tenantContext.data.tenant_id} />}
           {page === "admin" && platformAdmin && <AdminPage />}
         </main>
@@ -159,6 +162,7 @@ function authLabel(mode: "session" | "development" | "bearer") {
 
 function NavIcon({ page }: { page: Page }) {
   if (page === "workspace") return <span aria-hidden="true">◇</span>;
+  if (page === "personal") return <span aria-hidden="true">✦</span>;
   if (page === "settings") return <span aria-hidden="true">⚙</span>;
   if (page === "admin") return <span aria-hidden="true">⌘</span>;
   return <span aria-hidden="true">◫</span>;
