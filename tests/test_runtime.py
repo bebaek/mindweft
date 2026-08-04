@@ -14,6 +14,7 @@ from app.execution import (
     TenantExecutionContext,
     TenantQualityConfig,
     build_tool_registry_for_capability_profile,
+    build_tool_registry_for_constraints,
     build_tool_registry_for_skill,
     parse_tenant_execution_config,
 )
@@ -1951,6 +1952,15 @@ def test_build_tool_registry_for_skill_can_narrow_mcp_servers(monkeypatch) -> No
 
     assert {spec.name for spec in registry.specs()} == {"current_time", "home-assistant.ping"}
     assert [server["name"] for server in registry.mcp_servers()] == ["home-assistant"]
+
+    personal_registry = build_tool_registry_for_constraints(
+        config,
+        profile_allowed_local_tools=["current_time"],
+        profile_mcp_server_names={"home-assistant"},
+        allowed_mcp_server_names={"docs"},
+    )
+    assert {spec.name for spec in personal_registry.specs()} == {"current_time"}
+    assert personal_registry.mcp_servers() == []
 
     subject_registry = build_tool_registry_for_skill(
         config,

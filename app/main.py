@@ -1300,13 +1300,10 @@ def create_app(
         except UserExecutionResolutionError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if resolved_capability is not None and resolved_capability.source == "user":
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Personal capability profile '{resolved_capability.id}' cannot be selected "
-                    "yet; personal MCP runtime support is pending"
-                ),
-            )
+            try:
+                catalog.personal_capability_constraints(resolved_capability)
+            except UserExecutionResolutionError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         capability_profile = (
             resolved_capability.stored_ref if resolved_capability is not None else None
         )

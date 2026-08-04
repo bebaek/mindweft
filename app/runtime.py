@@ -22,6 +22,7 @@ from app.execution import (
     TenantExecutionResolver,
     TenantSkillConfig,
     build_tool_registry_for_capability_profile,
+    build_tool_registry_for_constraints,
     build_tool_registry_for_mcp_server_names,
     build_tool_registry_for_skill,
     get_llm_adapter,
@@ -395,21 +396,26 @@ class AgentRuntime:
             capability_profile = catalog.resolve_capability_profile(
                 thread.capability_profile, use_default=thread.execution_user_id is None
             )
+            personal_capability_constraints = (
+                catalog.personal_capability_constraints(capability_profile)
+                if capability_profile is not None and capability_profile.source == "user"
+                else None
+            )
         except UserExecutionResolutionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if capability_profile is not None and capability_profile.source == "user":
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Personal capability profile '{capability_profile.id}' cannot run yet; "
-                    "personal MCP runtime support is pending"
-                ),
-            )
         allowed_mcp_server_names = (
             self._mcp_server_name_authorizer(principal.tenant_id, principal.user_id)
             if self._mcp_server_name_authorizer is not None
             else None
         )
+        if personal_capability_constraints is not None:
+            return build_tool_registry_for_constraints(
+                execution.config,
+                profile_allowed_local_tools=personal_capability_constraints.allowed_local_tools,
+                profile_mcp_server_names=(personal_capability_constraints.shared_mcp_server_names),
+                mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
+            )
         if capability_profile is not None:
             return build_tool_registry_for_capability_profile(
                 execution.config,

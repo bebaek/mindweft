@@ -2433,6 +2433,40 @@ def build_tool_registry_for_skill(
     return _build_registry_for_config(skill_config, mcp_manager=mcp_manager)[0]
 
 
+def build_tool_registry_for_constraints(
+    config: TenantExecutionConfig,
+    *,
+    profile_allowed_local_tools: list[str] | None,
+    profile_mcp_server_names: set[str] | None,
+    mcp_manager: MCPServerManager | None = None,
+    allowed_mcp_server_names: set[str] | None = None,
+) -> ToolRegistry:
+    """Build a registry by intersecting profile constraints with tenant permissions."""
+    allowed_local_tools = config.tools.allowed_local_tools
+    if profile_allowed_local_tools is not None:
+        if allowed_local_tools is None:
+            allowed_local_tools = list(profile_allowed_local_tools)
+        else:
+            allowed_local_tools = sorted(
+                set(allowed_local_tools) & set(profile_allowed_local_tools)
+            )
+    mcp_servers = config.tools.mcp_servers
+    if allowed_mcp_server_names is not None:
+        mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
+    if profile_mcp_server_names is not None:
+        mcp_servers = [server for server in mcp_servers if server.name in profile_mcp_server_names]
+
+    constrained_config = replace(
+        config,
+        tools=replace(
+            config.tools,
+            allowed_local_tools=allowed_local_tools,
+            mcp_servers=mcp_servers,
+        ),
+    )
+    return _build_registry_for_config(constrained_config, mcp_manager=mcp_manager)[0]
+
+
 def build_tool_registry_for_capability_profile(
     config: TenantExecutionConfig,
     capability_profile: str | None = None,
@@ -2448,33 +2482,15 @@ def build_tool_registry_for_capability_profile(
             config, allowed_mcp_server_names, mcp_manager=mcp_manager
         )
 
-    allowed_local_tools = config.tools.allowed_local_tools
-    if profile.allowed_local_tools is not None:
-        if allowed_local_tools is None:
-            allowed_local_tools = list(profile.allowed_local_tools)
-        else:
-            allowed_local_tools = sorted(
-                set(allowed_local_tools) & set(profile.allowed_local_tools)
-            )
-    mcp_servers = config.tools.mcp_servers
-    if allowed_mcp_server_names is not None:
-        mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
-    if profile.mcp_server_names is not None:
-        allowed_mcp_server_names = set(profile.mcp_server_names)
-        mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
-
-    profile_config = TenantExecutionConfig(
-        tenant_id=config.tenant_id,
-        llm=config.llm,
-        tools=TenantToolConfig(
-            allowed_local_tools=allowed_local_tools,
-            mcp_servers=mcp_servers,
-            result_redaction_policy=config.tools.result_redaction_policy,
+    return build_tool_registry_for_constraints(
+        config,
+        profile_allowed_local_tools=profile.allowed_local_tools,
+        profile_mcp_server_names=(
+            set(profile.mcp_server_names) if profile.mcp_server_names is not None else None
         ),
-        skills=config.skills,
-        capability_profiles=config.capability_profiles,
+        mcp_manager=mcp_manager,
+        allowed_mcp_server_names=allowed_mcp_server_names,
     )
-    return _build_registry_for_config(profile_config, mcp_manager=mcp_manager)[0]
 
 
 def redact_tenant_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:

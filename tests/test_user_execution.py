@@ -8,12 +8,13 @@ from app.llm import LLMAdapter
 from app.main import create_app
 from app.models import LLMResponse, Message, MessageRole, ToolSpec
 from app.tools import ToolRegistry
-from app.user_execution import validate_user_execution_config
+from app.user_execution import effective_execution_catalog, validate_user_execution_config
 
 
 class RecordingLLMAdapter(LLMAdapter):
     def __init__(self) -> None:
         self.requests: list[list[Message]] = []
+        self.tool_requests: list[list[ToolSpec]] = []
 
     async def generate(
         self,
@@ -22,6 +23,7 @@ class RecordingLLMAdapter(LLMAdapter):
     ) -> LLMResponse:
         _ = tools
         self.requests.append(list(messages))
+        self.tool_requests.append(list(tools))
         return LLMResponse(content="personal skill reply")
 
     def describe(self) -> dict[str, object]:
@@ -66,12 +68,22 @@ def _personal_skill_payload(prompt: str) -> dict[str, object]:
                 }
             ]
         },
+        "capability_profiles": {
+            "items": [
+                {
+                    "id": "user:personal-tools",
+                    "name": "personal-tools",
+                    "allowed_local_tools": ["echo"],
+                }
+            ]
+        },
         "agents": {
             "items": [
                 {
                     "id": "user:personal-agent",
                     "name": "personal-agent",
                     "skill_refs": ["shared:shared-style", "user:python-style"],
+                    "capability_profile_ref": "user:personal-tools",
                 }
             ]
         },
@@ -367,6 +379,7 @@ def test_personal_agent_default_materializes_and_skill_updates_resolve_live(
             "shared-style",
             "user:python-style",
         ]
+        assert listed.json()["threads"][0]["capability_profile"] == "user:personal-tools"
 
         store.upsert_user_execution_config(
             "tenant-1",
@@ -453,12 +466,65 @@ def test_deleted_personal_skill_fails_existing_thread_without_fallback(tmp_path:
     assert "Unknown skill 'user:python-style'" in run.json()["detail"]
 
 
-def test_personal_capability_profile_selection_reports_runtime_pending(tmp_path: Path) -> None:
+def test_personal_capability_profile_narrows_runtime_tools(tmp_path: Path) -> None:
     store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
     store.upsert_user_execution_config(
         "tenant-1",
         "user-1",
-        {"capability_profiles": {"items": [{"id": "user:tools", "name": "tools"}]}},
+        {
+            "capability_profiles": {
+                "items": [
+                    {
+                        "id": "user:tools",
+                        "name": "tools",
+                        "allowed_local_tools": ["echo"],
+                    }
+                ]
+            }
+        },
+    )
+    adapter = RecordingLLMAdapter()
+    app = _runtime_app(store, adapter)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/threads",
+            headers=AUTH_HEADERS,
+            json={"capability_profile": "user:tools"},
+        )
+        assert response.status_code == 200
+        thread_id = response.json()["thread_id"]
+        message = client.post(
+            f"/threads/{thread_id}/messages",
+            headers=AUTH_HEADERS,
+            json={"content": "Use an allowed tool."},
+        )
+        assert message.status_code == 200
+        run = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert run.status_code == 200
+    assert adapter.tool_requests
+    assert {tool.name for tool in adapter.tool_requests[-1]} == {"echo"}
+
+
+def test_personal_capability_profile_cannot_broaden_tenant_local_tools(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    store.upsert_user_execution_config(
+        "tenant-1",
+        "user-1",
+        {
+            "capability_profiles": {
+                "items": [
+                    {
+                        "id": "user:tools",
+                        "name": "tools",
+                        "allowed_local_tools": ["retrieve_knowledge"],
+                    }
+                ]
+            }
+        },
     )
     app = _runtime_app(store, RecordingLLMAdapter())
 
@@ -470,7 +536,94 @@ def test_personal_capability_profile_selection_reports_runtime_pending(tmp_path:
         )
 
     assert response.status_code == 400
-    assert "personal MCP runtime support is pending" in response.json()["detail"]
+    assert "tenant-unavailable local tools: retrieve_knowledge" in response.json()["detail"]
+
+
+def test_personal_capability_profile_resolves_tenant_shared_mcp_servers(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    store.upsert_user_execution_config(
+        "tenant-1",
+        "user-1",
+        {
+            "capability_profiles": {
+                "items": [
+                    {
+                        "id": "user:docs",
+                        "name": "docs",
+                        "mcp_server_refs": ["shared:docs"],
+                    }
+                ]
+            }
+        },
+    )
+    tenant_config = parse_tenant_execution_config(
+        "tenant-1",
+        {
+            "tools": {
+                "mcp_servers": [
+                    {"name": "docs", "url": "https://docs.example/mcp"},
+                    {"name": "other", "url": "https://other.example/mcp"},
+                ]
+            }
+        },
+    )
+    catalog = effective_execution_catalog(
+        tenant_config,
+        store,
+        tenant_id="tenant-1",
+        user_id="user-1",
+    )
+    capability = catalog.resolve_capability_profile("user:docs", use_default=False)
+
+    assert capability is not None
+    constraints = catalog.personal_capability_constraints(capability)
+    assert constraints.allowed_local_tools is None
+    assert constraints.shared_mcp_server_names == {"docs"}
+
+
+def test_personal_mcp_server_selection_reports_secure_runtime_pending(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    store.upsert_user_execution_config(
+        "tenant-1",
+        "user-1",
+        {
+            "mcp_servers": {
+                "items": [
+                    {
+                        "id": "user:third-party",
+                        "name": "third-party",
+                        "url": "https://tools.example/mcp",
+                    }
+                ]
+            },
+            "capability_profiles": {
+                "items": [
+                    {
+                        "id": "user:tools",
+                        "name": "tools",
+                        "mcp_server_refs": ["user:third-party"],
+                    }
+                ]
+            },
+        },
+    )
+    app = _runtime_app(store, RecordingLLMAdapter())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/threads",
+            headers=AUTH_HEADERS,
+            json={"capability_profile": "user:tools"},
+        )
+
+    assert response.status_code == 400
+    assert (
+        "secure personal credential and MCP runtime support is pending" in response.json()["detail"]
+    )
 
 
 def test_user_execution_config_storage_endpoint_requires_configured_store() -> None:

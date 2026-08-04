@@ -10,10 +10,11 @@ prompt resolution, personal agent composition/defaults, and personal-resource ow
 also implemented. Shared resources expose qualified `shared:` IDs while legacy unqualified shared
 names remain accepted.
 
-Still pending: personal credential storage and MCP/capability execution, resource-specific APIs and
+Still pending: personal credential storage and user-owned MCP execution, resource-specific APIs and
 console editors, immutable thread resource version metadata and pinning, lifecycle cleanup, and
-sharing. Personal capability profiles are discoverable but thread creation rejects selecting them
-with an explicit pending-runtime message.
+sharing. Personal capability profiles can now narrow tenant-approved local tools and shared MCP
+servers; references to user-owned MCP servers remain blocked with an explicit pending-runtime
+message.
 
 This document defines the first design direction for user-owned agents, skills, capability
 profiles, and third-party MCP tools. It intentionally documents the product and runtime model
@@ -514,9 +515,18 @@ that reference personal capability profiles remain blocked until Phase 3.
 
 ### Phase 3: Personal MCP and capabilities
 
-- Add user-owned MCP server and capability-profile models.
+Status: partially implemented. User-owned MCP server and capability-profile models are stored and
+validated. Personal capability profiles now execute as narrowing-only overlays over tenant-approved
+local tools and shared MCP servers in native and peer/broker runtimes. Tenant tool permissions and
+per-user MCP entitlements are intersected, so a personal profile cannot broaden access. Personal
+MCP server references remain blocked until encrypted credentials and safe connection controls are
+available.
+
+- Add user-owned MCP server and capability-profile models. Implemented.
+- Execute personal capability profiles over approved local tools and shared MCP servers.
+  Implemented.
 - Add encrypted credential references and connection flows.
-- Build per-principal/per-thread MCP registries from shared and personal servers.
+- Build per-principal/per-thread MCP registries that include personal servers.
 - Add server probing, diagnostics, redacted audit events, and deprovisioning cleanup.
 
 ### Phase 4: Version visibility and lifecycle UX
