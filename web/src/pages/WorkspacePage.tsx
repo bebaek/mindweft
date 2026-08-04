@@ -38,6 +38,7 @@ export function WorkspacePage() {
   const [streamedReply, setStreamedReply] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
+  const [mobileThreadRailOpen, setMobileThreadRailOpen] = useState(false);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [consentRequest, setConsentRequest] = useState<PrivateValueConsentRequest | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -265,6 +266,7 @@ export function WorkspacePage() {
 
   function newThread() {
     if (isRunning) return;
+    setMobileThreadRailOpen(false);
     setSelectedThreadId(null);
     setStreamedReply(null);
     setActivity([]);
@@ -275,7 +277,7 @@ export function WorkspacePage() {
 
   return (
     <section className="workspace-page">
-      <aside className="thread-rail" aria-label="Conversations">
+      <aside className={`thread-rail ${mobileThreadRailOpen ? "is-open" : ""}`} aria-label="Conversations">
         <div className="thread-rail-heading">
           <div><p className="eyebrow">Workspace</p><h2>Conversations</h2></div>
           <button type="button" onClick={newThread} aria-label="New conversation">+</button>
@@ -289,6 +291,7 @@ export function WorkspacePage() {
               active={thread.thread_id === selectedThreadId}
               onClick={() => {
                 if (!isRunning) {
+                  setMobileThreadRailOpen(false);
                   setSelectedThreadId(thread.thread_id);
                   setStreamedReply(null);
                   setActivity([]);
@@ -302,9 +305,11 @@ export function WorkspacePage() {
           )}
         </div>
       </aside>
+      {mobileThreadRailOpen && <button type="button" className="thread-rail-backdrop" aria-label="Close conversations" onClick={() => setMobileThreadRailOpen(false)} />}
 
       <div className="conversation">
         <header className="conversation-header">
+          <button type="button" className="thread-rail-toggle" aria-label="Show conversations" onClick={() => setMobileThreadRailOpen(true)}>☰</button>
           <div><span className={`run-dot ${isRunning ? "active" : ""}`} /><div><h1>{selectedTitle(threads.data?.threads, selectedThreadId)}</h1><small>{isRunning ? "Agent is working" : selectedThreadId ? "Ready" : "New conversation"}</small></div></div>
           <div className="conversation-actions">
             {activity.length > 0 && <span className="activity-count">{activity.length} event{activity.length === 1 ? "" : "s"}</span>}

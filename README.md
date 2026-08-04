@@ -354,7 +354,9 @@ foundation includes a responsive, accessible application shell with persistent l
 selection, live readiness checks, a
 conversation workspace with thread history, message composition, NDJSON run streaming, activity
 inspection, cancellation controls, context usage inspection, raw model-context previews, and
-confirmed compaction, validated image selection, authenticated binary uploads, attachment previews,
+confirmed compaction. On narrow screens, the conversation rail is collapsed by default and available
+from the Conversations menu so the active chat retains the screen space. The console also supports
+validated image selection, authenticated binary uploads, attachment previews,
 and per-image detail controls, one-time private-value approval/denial, pending-consent recovery after
 reload, uncertain-action reconciliation, a tenant-owner settings workspace for profile, membership,
 password onboarding, domains, read-only entitlements, execution configuration, and tenant-scoped

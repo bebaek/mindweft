@@ -308,11 +308,20 @@ async function installWorkspaceMocks(
 
 async function navigateToWorkspace(page: Page) {
   const menu = page.getByRole("button", { name: "Open navigation" });
-  if (await menu.isVisible()) {
+  if ((page.viewportSize()?.width ?? Infinity) <= 900) {
+    await expect(menu).toBeVisible();
     await menu.click();
     await expect(page.locator(".sidebar")).toHaveClass(/is-open/);
   }
   await page.getByRole("button", { name: "Workspace", exact: true }).click();
+}
+
+async function openConversations(page: Page) {
+  const conversations = page.getByRole("button", { name: "Show conversations" });
+  if (await conversations.isVisible()) {
+    await conversations.click();
+    await expect(page.locator(".thread-rail")).toHaveClass(/is-open/);
+  }
 }
 
 async function installAdminMocks(page: Page) {
@@ -420,6 +429,7 @@ test("uses readable typography tokens for chat and controls", async ({ page }) =
   await installWorkspaceMocks(page);
   await page.goto("./");
   await navigateToWorkspace(page);
+  await openConversations(page);
   await page.getByRole("button", { name: "Review the deployment plan" }).click();
   await expect(page.getByRole("heading", { name: "Deployment review" })).toBeVisible();
 
@@ -522,6 +532,7 @@ test("keeps workspace dialogs legible in dark mode", async ({ page }) => {
   await page.goto("./");
   await navigateToWorkspace(page);
 
+  await openConversations(page);
   await page.getByRole("button", { name: "Review the deployment plan" }).click();
   await expect(page.getByRole("heading", { name: "Deployment review" })).toBeVisible();
   await expect(page.getByRole("table")).toBeVisible();
@@ -570,8 +581,10 @@ test("runs a streamed conversation without accessibility violations", async ({ p
   await page.goto("./");
   await navigateToWorkspace(page);
 
+  await openConversations(page);
   await page.getByRole("button", { name: "Review the deployment plan" }).click();
   await expect(page.getByText("Review the deployment plan", { exact: true }).last()).toBeVisible();
+  await openConversations(page);
   await page.getByRole("button", { name: "New conversation" }).click();
   await page.getByLabel("Attach images").setInputFiles({
     name: "release-diagram.png",
@@ -1059,4 +1072,10 @@ test("supports mobile navigation", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "What are we working on?" })).toBeVisible();
   await expect(page.locator(".sidebar")).not.toHaveClass(/is-open/);
+  await expect(page.locator(".thread-rail")).not.toHaveClass(/is-open/);
+
+  await page.getByRole("button", { name: "Show conversations" }).click();
+  await expect(page.locator(".thread-rail")).toHaveClass(/is-open/);
+  await page.getByRole("button", { name: "Close conversations" }).click();
+  await expect(page.locator(".thread-rail")).not.toHaveClass(/is-open/);
 });
