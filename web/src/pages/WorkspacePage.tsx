@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   ImagePart,
@@ -10,6 +10,11 @@ import type {
 import { useAuth } from "../auth/auth-context";
 import { ContextDialog } from "../components/ContextDialog";
 import { ConsentDialog } from "../components/ConsentDialog";
+
+const AssistantMarkdown = lazy(async () => {
+  const module = await import("../components/AssistantMarkdown");
+  return { default: module.AssistantMarkdown };
+});
 
 interface PendingImage {
   file: File;
@@ -33,6 +38,7 @@ export function WorkspacePage() {
   const [streamedReply, setStreamedReply] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
+  const [mobileThreadRailOpen, setMobileThreadRailOpen] = useState(false);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [consentRequest, setConsentRequest] = useState<PrivateValueConsentRequest | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -260,6 +266,7 @@ export function WorkspacePage() {
 
   function newThread() {
     if (isRunning) return;
+    setMobileThreadRailOpen(false);
     setSelectedThreadId(null);
     setStreamedReply(null);
     setActivity([]);
@@ -270,7 +277,7 @@ export function WorkspacePage() {
 
   return (
     <section className="workspace-page">
-      <aside className="thread-rail" aria-label="Conversations">
+      <aside className={`thread-rail ${mobileThreadRailOpen ? "is-open" : ""}`} aria-label="Conversations">
         <div className="thread-rail-heading">
           <div><p className="eyebrow">Workspace</p><h2>Conversations</h2></div>
           <button type="button" onClick={newThread} aria-label="New conversation">+</button>
@@ -284,6 +291,7 @@ export function WorkspacePage() {
               active={thread.thread_id === selectedThreadId}
               onClick={() => {
                 if (!isRunning) {
+                  setMobileThreadRailOpen(false);
                   setSelectedThreadId(thread.thread_id);
                   setStreamedReply(null);
                   setActivity([]);
@@ -297,9 +305,11 @@ export function WorkspacePage() {
           )}
         </div>
       </aside>
+      {mobileThreadRailOpen && <button type="button" className="thread-rail-backdrop" aria-label="Close conversations" onClick={() => setMobileThreadRailOpen(false)} />}
 
       <div className="conversation">
         <header className="conversation-header">
+          <button type="button" className="thread-rail-toggle" aria-label="Show conversations" onClick={() => setMobileThreadRailOpen(true)}>☰</button>
           <div><span className={`run-dot ${isRunning ? "active" : ""}`} /><div><h1>{selectedTitle(threads.data?.threads, selectedThreadId)}</h1><small>{isRunning ? "Agent is working" : selectedThreadId ? "Ready" : "New conversation"}</small></div></div>
           <div className="conversation-actions">
             {activity.length > 0 && <span className="activity-count">{activity.length} event{activity.length === 1 ? "" : "s"}</span>}
@@ -313,11 +323,11 @@ export function WorkspacePage() {
           {messages.data?.filter((message) => message.role === "user" || message.role === "assistant").map((message) => (
             <article className={`chat-message ${message.role}`} key={message.id}>
               <span className="message-author">{message.role === "user" ? "You" : "Minigent"}</span>
-              {message.content && <p>{message.content}</p>}
+              {message.content && (message.role === "assistant" ? <RenderedAssistantMessage content={message.content} /> : <div className="message-content plain-message-content">{message.content}</div>)}
               <MessageImages message={message} />
             </article>
           ))}
-          {streamedReply !== null && <article className="chat-message assistant streaming"><span className="message-author">Minigent</span><p>{streamedReply}</p></article>}
+          {streamedReply !== null && <article className="chat-message assistant streaming"><span className="message-author">Minigent</span><RenderedAssistantMessage content={streamedReply} /></article>}
           {isRunning && streamedReply === null && <div className="thinking-row"><i /><i /><i /><span>Working</span></div>}
           {error && <div className="conversation-error" role="alert">{error}</div>}
           <div ref={messagesEndRef} />
@@ -392,12 +402,17 @@ export function WorkspacePage() {
 }
 
 function ThreadButton({ thread, active, onClick }: { thread: ThreadListItem; active: boolean; onClick: () => void }) {
+  const title = thread.title?.trim() || "New conversation";
   return (
-    <button className={`thread-button ${active ? "active" : ""}`} type="button" onClick={onClick}>
-      <strong>{thread.title || "New conversation"}</strong>
-      <span><small>{thread.message_count} message{thread.message_count === 1 ? "" : "s"}</small><time dateTime={thread.updated_at}>{relativeTime(thread.updated_at)}</time></span>
+    <button className={`thread-button ${active ? "active" : ""}`} type="button" onClick={onClick} title={title}>
+      <span className="thread-title">{title}</span>
+      <span className="thread-meta"><small>{thread.message_count} message{thread.message_count === 1 ? "" : "s"}</small><time dateTime={thread.updated_at}>{relativeTime(thread.updated_at)}</time></span>
     </button>
   );
+}
+
+function RenderedAssistantMessage({ content }: { content: string }) {
+  return <Suspense fallback={<div className="message-content plain-message-content">{content}</div>}><AssistantMarkdown>{content}</AssistantMarkdown></Suspense>;
 }
 
 function Welcome() {

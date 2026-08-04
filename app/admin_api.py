@@ -10,19 +10,33 @@ import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, ValidationError
 
+from app.admin_store import (
+    SubjectMCPServerCatalogAssignment,
+    TenantMCPServerCatalogPolicy,
+    UserDeprovisioningEvent,
+)
 from app.auth import require_admin_principal, require_principal
 from app.execution import (
     TenantExecutionResolver,
     interpolate_tenant_execution_env_placeholders,
     parse_tenant_execution_config,
     redact_tenant_execution_payload,
+    tenant_mcp_server_catalog_policy_errors,
     validate_tenant_execution_config,
+)
+from app.external_grants import (
+    ExternalGrant,
+    ExternalGrantAudit,
+    ExternalGrantProviderError,
+    ExternalGrantProviderRegistry,
+    ExternalGrantResource,
+    HTTPExternalGrantProvider,
 )
 from app.models import (
     AuditRecord,
@@ -63,6 +77,153 @@ NON_NEGATIVE_INTEGER_ENTITLEMENT_LIMITS = {
     "max_messages",
     "max_thread_runs",
 }
+GENERIC_TENANT_PROVISIONING_PROFILE = "generic-v1"
+
+
+def _tenant_provisioning_execution_config(profile: str | None) -> dict[str, Any] | None:
+    if profile is None or profile == "none":
+        return None
+    if profile != GENERIC_TENANT_PROVISIONING_PROFILE:  # pragma: no cover - Pydantic validates
+        raise ValueError(f"Unsupported tenant provisioning profile: {profile}")
+    return {
+        "tools": {"allowed_local_tools": ["current_time", "calculator"]},
+        "skills": {
+            "default_skill": "general",
+            "items": [
+                {
+                    "name": "general",
+                    "description": "General-purpose assistant",
+                    "system_prompt": (
+                        "Be helpful, accurate, concise, and transparent about uncertainty."
+                    ),
+                }
+            ],
+        },
+        "capability_profiles": {
+            "default_profile": "safe-default",
+            "items": [
+                {
+                    "name": "safe-default",
+                    "description": "Safe baseline capabilities",
+                    "allowed_local_tools": ["current_time", "calculator"],
+                    "mcp_server_names": [],
+                }
+            ],
+        },
+        "agents": {
+            "default_agent": "general",
+            "items": [
+                {
+                    "name": "general",
+                    "description": "General-purpose assistant",
+                    "skill_name": "general",
+                    "capability_profile": "safe-default",
+                }
+            ],
+        },
+    }
+
+
+class AdminExternalGrantProviderResponse(BaseModel):
+    id: str
+    title: str
+    description: str
+    allowed_permissions: list[str]
+    resource_discovery_available: bool
+    audit_available: bool
+
+
+class AdminExternalGrantProviderListResponse(BaseModel):
+    providers: list[AdminExternalGrantProviderResponse]
+
+
+class AdminExternalGrantResponse(BaseModel):
+    resource_id: str
+    subject_id: str
+    permission: str
+    enabled: bool
+    updated_by: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class AdminExternalGrantListResponse(BaseModel):
+    tenant_id: str
+    provider_id: str
+    grants: list[AdminExternalGrantResponse]
+
+
+class AdminExternalGrantResourceResponse(BaseModel):
+    resource_id: str
+    kind: str
+    label: str
+    allowed_permissions: list[str]
+    configured: bool
+    enabled: bool
+
+
+class AdminExternalGrantResourceListResponse(BaseModel):
+    tenant_id: str
+    provider_id: str
+    resources: list[AdminExternalGrantResourceResponse]
+
+
+class AdminExternalGrantAuditStateResponse(BaseModel):
+    permission: str
+    enabled: bool
+
+
+class AdminExternalGrantAuditResponse(BaseModel):
+    audit_id: int
+    resource_id: str
+    subject_id: str
+    actor_id: str
+    operation: str
+    previous: AdminExternalGrantAuditStateResponse | None
+    resulting: AdminExternalGrantAuditStateResponse | None
+    created_at: str
+
+
+class AdminExternalGrantAuditListResponse(BaseModel):
+    tenant_id: str
+    provider_id: str
+    entries: list[AdminExternalGrantAuditResponse]
+    next_cursor: int | None
+
+
+class AdminExternalGrantUpsertRequest(BaseModel):
+    resource_id: str = Field(min_length=1, max_length=512)
+    subject_id: str = Field(min_length=1, max_length=255)
+    permission: str = Field(min_length=1, max_length=64)
+    enabled: bool = True
+
+
+class AdminUserDeprovisioningEventResponse(BaseModel):
+    id: str
+    tenant_id: str
+    user_record_id: str
+    user_id: str
+    target_status: TenantUserStatus
+    actor_user_id: str
+    state: str
+    attempts: int
+    next_attempt_at: datetime
+    claimed_at: datetime | None
+    completed_at: datetime | None
+    last_error: str | None
+    assignment_removed: bool
+    grants_disabled: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminUserDeprovisioningEventListResponse(BaseModel):
+    tenant_id: str
+    events: list[AdminUserDeprovisioningEventResponse]
+    limit: int
+    offset: int
+    total: int
+    next_offset: int | None
 
 
 class AdminMCPServerCatalogItem(BaseModel):
@@ -75,6 +236,60 @@ class AdminMCPServerCatalogItem(BaseModel):
 
 class AdminMCPServerCatalogResponse(BaseModel):
     items: list[AdminMCPServerCatalogItem]
+    managed: bool = False
+    allow_custom_mcp_servers: bool = True
+
+
+class AdminMCPServerCatalogPolicyRequest(BaseModel):
+    item_ids: list[str] = Field(default_factory=list)
+    allow_custom_mcp_servers: bool = False
+    require_subject_assignment: bool = False
+
+
+class AdminMCPServerCatalogPolicyResponse(BaseModel):
+    tenant_id: str
+    item_ids: list[str]
+    allow_custom_mcp_servers: bool
+    require_subject_assignment: bool
+    version: int
+    updated_by: str | None = None
+    updated_at: datetime
+
+
+class AdminMCPServerCatalogAssignmentRequest(BaseModel):
+    item_ids: list[str] = Field(default_factory=list)
+
+
+class AdminMCPServerCatalogAssignmentResponse(BaseModel):
+    tenant_id: str
+    subject_type: str
+    subject_id: str
+    item_ids: list[str]
+    version: int
+    updated_by: str | None = None
+    updated_at: datetime
+
+
+class AdminMCPServerCatalogAssignmentListResponse(BaseModel):
+    tenant_id: str
+    assignments: list[AdminMCPServerCatalogAssignmentResponse]
+
+
+class AdminMCPServerCatalogAccessPreviewEntry(BaseModel):
+    user_id: str
+    display_name: str | None = None
+    email: str | None = None
+    role: TenantUserRole
+    status: TenantUserStatus
+    source: str
+    item_ids: list[str]
+    denied: bool
+
+
+class AdminMCPServerCatalogAccessPreviewResponse(BaseModel):
+    tenant_id: str
+    require_subject_assignment: bool
+    users: list[AdminMCPServerCatalogAccessPreviewEntry]
 
 
 @dataclass(frozen=True)
@@ -154,6 +369,7 @@ class AdminTenantCreateRequest(BaseModel):
     plan: str | None = None
     region: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    provisioning_profile: Literal["none", "generic-v1"] | None = None
 
 
 class AdminTenantPatchRequest(BaseModel):
@@ -545,8 +761,9 @@ def build_admin_router() -> APIRouter:
             created_by=admin.user_id,
             updated_by=admin.user_id,
         )
+        execution_config = _tenant_provisioning_execution_config(request.provisioning_profile)
         try:
-            created = store.create_tenant(tenant)
+            created = store.create_tenant(tenant, execution_config=execution_config)
         except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="Tenant id or slug already exists") from exc
         _append_tenant_audit(
@@ -555,6 +772,7 @@ def build_admin_router() -> APIRouter:
             admin,
             "tenants.create",
             new_values=_tenant_audit_values(created),
+            metadata={"provisioning_profile": request.provisioning_profile or "none"},
         )
         return _tenant_response(created)
 
@@ -1603,6 +1821,575 @@ def build_admin_router() -> APIRouter:
         )
 
     @router.get(
+        "/external-grant-providers",
+        response_model=AdminExternalGrantProviderListResponse,
+    )
+    async def list_external_grant_providers(
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminExternalGrantProviderListResponse:
+        _ = admin
+        registry = _external_grant_provider_registry(request)
+        return AdminExternalGrantProviderListResponse(
+            providers=[_external_grant_provider_response(provider) for provider in registry.list()]
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/user-deprovisioning-events",
+        response_model=AdminUserDeprovisioningEventListResponse,
+    )
+    async def list_user_deprovisioning_events(
+        tenant_id: str,
+        request: Request,
+        state: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+        admin: Principal = Depends(require_tenant_owner_principal),
+    ) -> AdminUserDeprovisioningEventListResponse:
+        _ = admin
+        _require_tenant(request, tenant_id)
+        if state is not None and state not in {
+            "pending",
+            "processing",
+            "completed",
+            "dead_letter",
+        }:
+            raise HTTPException(status_code=422, detail="Invalid deprovisioning event state")
+        events, total = _require_admin_store(request).list_user_deprovisioning_events(
+            tenant_id,
+            state=state,
+            limit=limit,
+            offset=offset,
+        )
+        return AdminUserDeprovisioningEventListResponse(
+            tenant_id=tenant_id,
+            events=[_user_deprovisioning_event_response(event) for event in events],
+            limit=limit,
+            offset=offset,
+            total=total,
+            next_offset=offset + len(events) if offset + len(events) < total else None,
+        )
+
+    @router.post(
+        "/tenants/{tenant_id}/user-deprovisioning-events/{event_id}/retry",
+        response_model=AdminUserDeprovisioningEventResponse,
+    )
+    async def retry_user_deprovisioning_event(
+        tenant_id: str,
+        event_id: str,
+        request: Request,
+        admin: Principal = Depends(require_tenant_owner_principal),
+    ) -> AdminUserDeprovisioningEventResponse:
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        event = store.get_user_deprovisioning_event(tenant_id, event_id)
+        if event is None:
+            raise HTTPException(status_code=404, detail="Deprovisioning event not found")
+        if not store.retry_user_deprovisioning_event(tenant_id, event_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Only pending or dead-letter deprovisioning events can be retried",
+            )
+        updated = store.get_user_deprovisioning_event(tenant_id, event_id)
+        if updated is None:  # pragma: no cover - defensive
+            raise RuntimeError(f"Deprovisioning event '{event_id}' disappeared")
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_user_deprovisioning.retry",
+            resource_type="user_deprovisioning_event",
+            resource_id=event_id,
+            old_values={"state": event.state, "attempts": event.attempts},
+            new_values={"state": updated.state, "attempts": updated.attempts},
+        )
+        return _user_deprovisioning_event_response(updated)
+
+    @router.get(
+        "/tenants/{tenant_id}/external-grants/{provider_id}",
+        response_model=AdminExternalGrantListResponse,
+    )
+    async def list_external_grants(
+        tenant_id: str,
+        provider_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminExternalGrantListResponse:
+        _require_tenant(request, tenant_id)
+        provider = _external_grant_provider(request, provider_id)
+        try:
+            grants = await provider.list_grants(tenant_id=tenant_id, actor_user_id=admin.user_id)
+        except ExternalGrantProviderError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return AdminExternalGrantListResponse(
+            tenant_id=tenant_id,
+            provider_id=provider_id,
+            grants=[_external_grant_response(grant) for grant in grants],
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/external-grants/{provider_id}/resources",
+        response_model=AdminExternalGrantResourceListResponse,
+    )
+    async def list_external_grant_resources(
+        tenant_id: str,
+        provider_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminExternalGrantResourceListResponse:
+        _require_tenant(request, tenant_id)
+        provider = _external_grant_provider(request, provider_id)
+        try:
+            resources = await provider.list_resources(
+                tenant_id=tenant_id,
+                actor_user_id=admin.user_id,
+            )
+        except ExternalGrantProviderError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return AdminExternalGrantResourceListResponse(
+            tenant_id=tenant_id,
+            provider_id=provider_id,
+            resources=[_external_grant_resource_response(resource) for resource in resources],
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/external-grants/{provider_id}/audit",
+        response_model=AdminExternalGrantAuditListResponse,
+    )
+    async def list_external_grant_audit(
+        tenant_id: str,
+        provider_id: str,
+        request: Request,
+        limit: int = 100,
+        before_id: int | None = None,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminExternalGrantAuditListResponse:
+        _require_tenant(request, tenant_id)
+        if limit < 1 or limit > 500:
+            raise HTTPException(status_code=422, detail="Limit must be between 1 and 500")
+        if before_id is not None and before_id < 1:
+            raise HTTPException(status_code=422, detail="Audit cursor must be positive")
+        provider = _external_grant_provider(request, provider_id)
+        try:
+            entries, next_cursor = await provider.list_audit(
+                tenant_id=tenant_id,
+                actor_user_id=admin.user_id,
+                limit=limit,
+                before_id=before_id,
+            )
+        except ExternalGrantProviderError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return AdminExternalGrantAuditListResponse(
+            tenant_id=tenant_id,
+            provider_id=provider_id,
+            entries=[_external_grant_audit_response(entry) for entry in entries],
+            next_cursor=next_cursor,
+        )
+
+    @router.put(
+        "/tenants/{tenant_id}/external-grants/{provider_id}",
+        response_model=AdminExternalGrantResponse,
+    )
+    async def put_external_grant(
+        tenant_id: str,
+        provider_id: str,
+        body: AdminExternalGrantUpsertRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminExternalGrantResponse:
+        _require_tenant(request, tenant_id)
+        provider = _external_grant_provider(request, provider_id)
+        try:
+            existing = await provider.list_grants(tenant_id=tenant_id, actor_user_id=admin.user_id)
+            old_grant = next(
+                (
+                    grant
+                    for grant in existing
+                    if grant.resource_id == body.resource_id and grant.subject_id == body.subject_id
+                ),
+                None,
+            )
+            _validate_external_grant_subject(
+                request,
+                tenant_id,
+                body.subject_id,
+                enabled=body.enabled,
+                existing=old_grant is not None,
+            )
+            grant = await provider.upsert_grant(
+                tenant_id=tenant_id,
+                actor_user_id=admin.user_id,
+                resource_id=body.resource_id,
+                subject_id=body.subject_id,
+                permission=body.permission,
+                enabled=body.enabled,
+            )
+        except ExternalGrantProviderError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "external_grant.upsert",
+            resource_type="external_grant",
+            resource_id=f"{provider_id}:{body.resource_id}:{body.subject_id}",
+            old_values=_external_grant_audit_values(old_grant),
+            new_values=_external_grant_audit_values(grant),
+            metadata={"provider_id": provider_id},
+        )
+        return _external_grant_response(grant)
+
+    @router.delete(
+        "/tenants/{tenant_id}/external-grants/{provider_id}/{resource_id}",
+        status_code=204,
+    )
+    async def delete_external_grant(
+        tenant_id: str,
+        provider_id: str,
+        resource_id: str,
+        subject_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> None:
+        _require_tenant(request, tenant_id)
+        provider = _external_grant_provider(request, provider_id)
+        try:
+            existing = await provider.list_grants(tenant_id=tenant_id, actor_user_id=admin.user_id)
+            old_grant = next(
+                (
+                    grant
+                    for grant in existing
+                    if grant.resource_id == resource_id and grant.subject_id == subject_id
+                ),
+                None,
+            )
+            await provider.delete_grant(
+                tenant_id=tenant_id,
+                actor_user_id=admin.user_id,
+                resource_id=resource_id,
+                subject_id=subject_id,
+            )
+        except ExternalGrantProviderError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "external_grant.delete",
+            resource_type="external_grant",
+            resource_id=f"{provider_id}:{resource_id}:{subject_id}",
+            old_values=_external_grant_audit_values(old_grant),
+            new_values=None,
+            metadata={"provider_id": provider_id},
+        )
+
+    @router.get(
+        "/mcp-server-catalog",
+        response_model=AdminMCPServerCatalogResponse,
+    )
+    async def get_deployment_mcp_server_catalog(
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminMCPServerCatalogResponse:
+        _ = admin
+        items = [
+            item.model_copy(update={"server": redact_tenant_execution_payload(item.server)})
+            for item in _configured_mcp_server_catalog(request)
+        ]
+        return AdminMCPServerCatalogResponse(items=items)
+
+    @router.get(
+        "/tenants/{tenant_id}/mcp-server-catalog-policy",
+        response_model=AdminMCPServerCatalogPolicyResponse,
+    )
+    async def get_mcp_server_catalog_policy(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminMCPServerCatalogPolicyResponse:
+        _ = admin
+        store = _require_admin_store(request)
+        policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if policy is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Tenant '{tenant_id}' has no managed MCP server catalog policy",
+            )
+        return AdminMCPServerCatalogPolicyResponse(
+            tenant_id=policy.tenant_id,
+            item_ids=list(policy.item_ids),
+            allow_custom_mcp_servers=policy.allow_custom_mcp_servers,
+            require_subject_assignment=policy.require_subject_assignment,
+            version=policy.version,
+            updated_by=policy.updated_by,
+            updated_at=policy.updated_at,
+        )
+
+    @router.put(
+        "/tenants/{tenant_id}/mcp-server-catalog-policy",
+        response_model=AdminMCPServerCatalogPolicyResponse,
+    )
+    async def put_mcp_server_catalog_policy(
+        tenant_id: str,
+        body: AdminMCPServerCatalogPolicyRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminMCPServerCatalogPolicyResponse:
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        catalog = _configured_mcp_server_catalog(request)
+        catalog_ids = {item.id for item in catalog}
+        duplicate_ids = sorted(
+            {item_id for item_id in body.item_ids if body.item_ids.count(item_id) > 1}
+        )
+        unknown_ids = sorted(set(body.item_ids) - catalog_ids)
+        if duplicate_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Catalog policy contains duplicate item ids: {', '.join(duplicate_ids)}",
+            )
+        if unknown_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Catalog policy references unknown item ids: {', '.join(unknown_ids)}",
+            )
+        old_policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if body.require_subject_assignment:
+            _validate_break_glass_catalog_assignment(
+                store,
+                tenant_id,
+                tenant_item_ids=set(body.item_ids),
+            )
+        policy = store.upsert_tenant_mcp_server_catalog_policy(
+            tenant_id,
+            item_ids=body.item_ids,
+            allow_custom_mcp_servers=body.allow_custom_mcp_servers,
+            require_subject_assignment=body.require_subject_assignment,
+            updated_by=admin.user_id,
+        )
+        _invalidate_resolver(request.app.state.execution_resolver, tenant_id)
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_mcp_server_catalog_policy.put",
+            old_values=_mcp_server_catalog_policy_audit_values(old_policy),
+            new_values=_mcp_server_catalog_policy_audit_values(policy),
+        )
+        return AdminMCPServerCatalogPolicyResponse(
+            tenant_id=policy.tenant_id,
+            item_ids=list(policy.item_ids),
+            allow_custom_mcp_servers=policy.allow_custom_mcp_servers,
+            require_subject_assignment=policy.require_subject_assignment,
+            version=policy.version,
+            updated_by=policy.updated_by,
+            updated_at=policy.updated_at,
+        )
+
+    @router.delete("/tenants/{tenant_id}/mcp-server-catalog-policy", status_code=204)
+    async def delete_mcp_server_catalog_policy(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> None:
+        store = _require_admin_store(request)
+        old_policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if old_policy is None or not store.delete_tenant_mcp_server_catalog_policy(tenant_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Tenant '{tenant_id}' has no managed MCP server catalog policy",
+            )
+        _invalidate_resolver(request.app.state.execution_resolver, tenant_id)
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_mcp_server_catalog_policy.delete",
+            old_values=_mcp_server_catalog_policy_audit_values(old_policy),
+            new_values=None,
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/mcp-server-catalog-access-preview",
+        response_model=AdminMCPServerCatalogAccessPreviewResponse,
+    )
+    async def preview_mcp_server_catalog_access(
+        tenant_id: str,
+        request: Request,
+        require_subject_assignment: bool | None = None,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminMCPServerCatalogAccessPreviewResponse:
+        _ = admin
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if policy is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Tenant '{tenant_id}' has no managed MCP server catalog policy",
+            )
+        fail_closed = (
+            policy.require_subject_assignment
+            if require_subject_assignment is None
+            else require_subject_assignment
+        )
+        users, _total = store.list_tenant_users(tenant_id, limit=500, offset=0)
+        entries: list[AdminMCPServerCatalogAccessPreviewEntry] = []
+        for user in users:
+            item_ids, source = store.effective_subject_mcp_server_catalog_access(
+                tenant_id, user.user_id
+            )
+            if fail_closed and source == "tenant":
+                item_ids, source = (), "unassigned"
+            elif item_ids is None:
+                item_ids = policy.item_ids
+            entries.append(
+                AdminMCPServerCatalogAccessPreviewEntry(
+                    user_id=user.user_id,
+                    display_name=user.display_name,
+                    email=user.email,
+                    role=user.role,
+                    status=user.status,
+                    source=source,
+                    item_ids=list(item_ids),
+                    denied=not item_ids,
+                )
+            )
+        return AdminMCPServerCatalogAccessPreviewResponse(
+            tenant_id=tenant_id,
+            require_subject_assignment=fail_closed,
+            users=entries,
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/mcp-server-catalog-assignments",
+        response_model=AdminMCPServerCatalogAssignmentListResponse,
+    )
+    async def list_mcp_server_catalog_assignments(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminMCPServerCatalogAssignmentListResponse:
+        _ = admin
+        _require_tenant(request, tenant_id)
+        assignments = _require_admin_store(request).list_subject_mcp_server_catalog_assignments(
+            tenant_id
+        )
+        return AdminMCPServerCatalogAssignmentListResponse(
+            tenant_id=tenant_id,
+            assignments=[_mcp_server_catalog_assignment_response(item) for item in assignments],
+        )
+
+    @router.put(
+        "/tenants/{tenant_id}/mcp-server-catalog-assignments/{subject_type}/{subject_id}",
+        response_model=AdminMCPServerCatalogAssignmentResponse,
+    )
+    async def put_mcp_server_catalog_assignment(
+        tenant_id: str,
+        subject_type: str,
+        subject_id: str,
+        body: AdminMCPServerCatalogAssignmentRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminMCPServerCatalogAssignmentResponse:
+        store = _require_admin_store(request)
+        _require_tenant(request, tenant_id)
+        _validate_catalog_assignment_subject(store, tenant_id, subject_type, subject_id)
+        tenant_policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if tenant_policy is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Create a managed tenant catalog policy before assigning subjects",
+            )
+        catalog_ids = {item.id for item in _configured_mcp_server_catalog(request)}
+        duplicate_ids = sorted(
+            {item_id for item_id in body.item_ids if body.item_ids.count(item_id) > 1}
+        )
+        unknown_ids = sorted(set(body.item_ids) - catalog_ids)
+        if duplicate_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Catalog assignment contains duplicate item ids: {', '.join(duplicate_ids)}",
+            )
+        if unknown_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Catalog assignment references unknown item ids: {', '.join(unknown_ids)}",
+            )
+        disallowed_ids = sorted(set(body.item_ids) - set(tenant_policy.item_ids))
+        if disallowed_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Catalog assignment exceeds the tenant policy: " + ", ".join(disallowed_ids)
+                ),
+            )
+        if tenant_policy.require_subject_assignment:
+            _validate_break_glass_catalog_assignment(
+                store,
+                tenant_id,
+                tenant_item_ids=set(tenant_policy.item_ids),
+                override=(subject_type, subject_id, tuple(body.item_ids)),
+            )
+        old_assignment = store.get_subject_mcp_server_catalog_assignment(
+            tenant_id, subject_type, subject_id
+        )
+        assignment = store.upsert_subject_mcp_server_catalog_assignment(
+            tenant_id,
+            subject_type,
+            subject_id,
+            item_ids=body.item_ids,
+            updated_by=admin.user_id,
+        )
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_mcp_server_catalog_assignment.upsert",
+            old_values=_mcp_server_catalog_assignment_audit_values(old_assignment),
+            new_values=_mcp_server_catalog_assignment_audit_values(assignment),
+        )
+        return _mcp_server_catalog_assignment_response(assignment)
+
+    @router.delete(
+        "/tenants/{tenant_id}/mcp-server-catalog-assignments/{subject_type}/{subject_id}",
+        status_code=204,
+    )
+    async def delete_mcp_server_catalog_assignment(
+        tenant_id: str,
+        subject_type: str,
+        subject_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> None:
+        store = _require_admin_store(request)
+        old_assignment = store.get_subject_mcp_server_catalog_assignment(
+            tenant_id, subject_type, subject_id
+        )
+        if old_assignment is None:
+            raise HTTPException(status_code=404, detail="Catalog assignment not found")
+        tenant_policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if tenant_policy is not None and tenant_policy.require_subject_assignment:
+            _validate_break_glass_catalog_assignment(
+                store,
+                tenant_id,
+                tenant_item_ids=set(tenant_policy.item_ids),
+                removed=(subject_type, subject_id),
+            )
+        if not store.delete_subject_mcp_server_catalog_assignment(
+            tenant_id, subject_type, subject_id
+        ):
+            raise HTTPException(status_code=404, detail="Catalog assignment not found")
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_mcp_server_catalog_assignment.delete",
+            old_values=_mcp_server_catalog_assignment_audit_values(old_assignment),
+            new_values=None,
+        )
+
+    @router.get(
         "/tenants/{tenant_id}/mcp-server-catalog",
         response_model=AdminMCPServerCatalogResponse,
     )
@@ -1611,16 +2398,26 @@ def build_admin_router() -> APIRouter:
         request: Request,
         admin: Principal = Depends(require_tenant_owner_principal),
     ) -> AdminMCPServerCatalogResponse:
-        _ = tenant_id, admin
-        settings = getattr(request.app.state, "admin_store_settings", None)
-        configured_items = (
-            settings.mcp_server_catalog if isinstance(settings, AdminStoreSettings) else ()
+        _ = admin
+        store = getattr(request.app.state, "admin_store", None)
+        configured_items = _configured_mcp_server_catalog(request)
+        policy = (
+            store.get_tenant_mcp_server_catalog_policy(tenant_id) if store is not None else None
         )
+        if policy is not None:
+            granted_ids = set(policy.item_ids)
+            configured_items = tuple(item for item in configured_items if item.id in granted_ids)
         items = [
             item.model_copy(update={"server": redact_tenant_execution_payload(item.server)})
             for item in configured_items
         ]
-        return AdminMCPServerCatalogResponse(items=items)
+        return AdminMCPServerCatalogResponse(
+            items=items,
+            managed=policy is not None,
+            allow_custom_mcp_servers=(
+                policy.allow_custom_mcp_servers if policy is not None else True
+            ),
+        )
 
     @router.get(
         "/tenants/{tenant_id}/execution-config",
@@ -1663,6 +2460,9 @@ def build_admin_router() -> APIRouter:
         old_payload = store.get_raw_config(tenant_id)
         secret_source = _execution_config_secret_source(app_request, old_payload)
         payload = _restore_redacted_payload(request.config, secret_source)
+        policy_errors = _tenant_catalog_policy_errors(app_request, tenant_id, payload)
+        if policy_errors:
+            raise HTTPException(status_code=400, detail="; ".join(policy_errors))
         try:
             parse_tenant_execution_config(tenant_id, payload)
         except RuntimeError as exc:
@@ -1703,6 +2503,9 @@ def build_admin_router() -> APIRouter:
         existing = store.get_raw_config(tenant_id)
         secret_source = _execution_config_secret_source(request, existing)
         payload = _restore_redacted_payload(body.config, secret_source)
+        policy_errors = _tenant_catalog_policy_errors(request, tenant_id, payload)
+        if policy_errors:
+            raise HTTPException(status_code=400, detail="; ".join(policy_errors))
         report = await validate_tenant_execution_config(tenant_id, payload)
         return AdminTenantExecutionConfigValidationResponse.model_validate(report.to_dict())
 
@@ -2230,16 +3033,260 @@ def _invalidate_resolver(resolver: TenantExecutionResolver, tenant_id: str) -> N
         invalidate(tenant_id)
 
 
+def _external_grant_provider_registry(request: Request) -> ExternalGrantProviderRegistry:
+    registry = getattr(request.app.state, "external_grant_provider_registry", None)
+    if not isinstance(registry, ExternalGrantProviderRegistry):
+        return ExternalGrantProviderRegistry()
+    return registry
+
+
+def _external_grant_provider(request: Request, provider_id: str) -> HTTPExternalGrantProvider:
+    provider = _external_grant_provider_registry(request).get(provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail=f"Grant provider '{provider_id}' not found")
+    return provider
+
+
+def _external_grant_provider_response(
+    provider: HTTPExternalGrantProvider,
+) -> AdminExternalGrantProviderResponse:
+    return AdminExternalGrantProviderResponse(
+        id=provider.provider_id,
+        title=provider.title,
+        description=provider.description,
+        allowed_permissions=list(provider.allowed_permissions),
+        resource_discovery_available=provider.resources_path is not None,
+        audit_available=provider.audit_path is not None,
+    )
+
+
+def _user_deprovisioning_event_response(
+    event: UserDeprovisioningEvent,
+) -> AdminUserDeprovisioningEventResponse:
+    return AdminUserDeprovisioningEventResponse(**event.__dict__)
+
+
+def _external_grant_response(grant: ExternalGrant) -> AdminExternalGrantResponse:
+    return AdminExternalGrantResponse(
+        resource_id=grant.resource_id,
+        subject_id=grant.subject_id,
+        permission=grant.permission,
+        enabled=grant.enabled,
+        updated_by=grant.updated_by,
+        created_at=grant.created_at,
+        updated_at=grant.updated_at,
+    )
+
+
+def _external_grant_resource_response(
+    resource: ExternalGrantResource,
+) -> AdminExternalGrantResourceResponse:
+    return AdminExternalGrantResourceResponse(
+        resource_id=resource.resource_id,
+        kind=resource.kind,
+        label=resource.label,
+        allowed_permissions=list(resource.allowed_permissions),
+        configured=resource.configured,
+        enabled=resource.enabled,
+    )
+
+
+def _external_grant_audit_response(
+    entry: ExternalGrantAudit,
+) -> AdminExternalGrantAuditResponse:
+    return AdminExternalGrantAuditResponse(
+        audit_id=entry.audit_id,
+        resource_id=entry.resource_id,
+        subject_id=entry.subject_id,
+        actor_id=entry.actor_id,
+        operation=entry.operation,
+        previous=(
+            AdminExternalGrantAuditStateResponse(
+                permission=entry.previous.permission,
+                enabled=entry.previous.enabled,
+            )
+            if entry.previous is not None
+            else None
+        ),
+        resulting=(
+            AdminExternalGrantAuditStateResponse(
+                permission=entry.resulting.permission,
+                enabled=entry.resulting.enabled,
+            )
+            if entry.resulting is not None
+            else None
+        ),
+        created_at=entry.created_at,
+    )
+
+
+def _external_grant_audit_values(grant: ExternalGrant | None) -> dict[str, Any] | None:
+    if grant is None:
+        return None
+    return _external_grant_response(grant).model_dump(mode="json")
+
+
+def _validate_external_grant_subject(
+    request: Request,
+    tenant_id: str,
+    subject_id: str,
+    *,
+    enabled: bool,
+    existing: bool,
+) -> None:
+    if subject_id == "*":
+        return
+    user = _require_admin_store(request).get_tenant_user_by_user_id(tenant_id, subject_id)
+    if user is None:
+        if existing and not enabled:
+            return
+        raise HTTPException(status_code=404, detail=f"Tenant user '{subject_id}' not found")
+    if user.status != TenantUserStatus.ACTIVE:
+        if existing and not enabled:
+            return
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tenant user '{subject_id}' must be active before enabling a grant",
+        )
+
+
+def _configured_mcp_server_catalog(
+    request: Request,
+) -> tuple[AdminMCPServerCatalogItem, ...]:
+    settings = getattr(request.app.state, "admin_store_settings", None)
+    return settings.mcp_server_catalog if isinstance(settings, AdminStoreSettings) else ()
+
+
+def _tenant_catalog_policy_errors(
+    request: Request,
+    tenant_id: str,
+    payload: dict[str, Any],
+) -> list[str]:
+    store = _require_admin_store(request)
+    policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+    catalog = {item.id: item.server for item in _configured_mcp_server_catalog(request)}
+    return tenant_mcp_server_catalog_policy_errors(
+        tenant_id,
+        payload,
+        policy,
+        catalog,
+    )
+
+
+def _validate_break_glass_catalog_assignment(
+    store: Any,
+    tenant_id: str,
+    *,
+    tenant_item_ids: set[str],
+    override: tuple[str, str, tuple[str, ...]] | None = None,
+    removed: tuple[str, str] | None = None,
+) -> None:
+    users, _total = store.list_tenant_users(tenant_id, limit=500, offset=0)
+    privileged = [
+        user
+        for user in users
+        if user.status == TenantUserStatus.ACTIVE
+        and user.role in {TenantUserRole.OWNER, TenantUserRole.ADMIN}
+    ]
+    for user in privileged:
+        user_assignment = store.get_subject_mcp_server_catalog_assignment(
+            tenant_id, "user", user.user_id
+        )
+        role_assignment = store.get_subject_mcp_server_catalog_assignment(
+            tenant_id, "role", user.role.value
+        )
+        if removed == ("user", user.user_id):
+            user_assignment = None
+        if removed == ("role", user.role.value):
+            role_assignment = None
+        if override is not None and override[:2] == ("user", user.user_id):
+            selected_item_ids = override[2]
+        elif user_assignment is not None:
+            selected_item_ids = user_assignment.item_ids
+        elif override is not None and override[:2] == ("role", user.role.value):
+            selected_item_ids = override[2]
+        elif role_assignment is not None:
+            selected_item_ids = role_assignment.item_ids
+        else:
+            selected_item_ids = ()
+        if set(selected_item_ids) & tenant_item_ids:
+            return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Fail-closed catalog access requires a non-empty owner or admin assignment "
+            "within the tenant ceiling"
+        ),
+    )
+
+
+def _validate_catalog_assignment_subject(
+    store: Any, tenant_id: str, subject_type: str, subject_id: str
+) -> None:
+    if subject_type == "user":
+        if store.get_tenant_user_by_user_id(tenant_id, subject_id) is None:
+            raise HTTPException(status_code=404, detail=f"Tenant user '{subject_id}' not found")
+        return
+    if subject_type == "role":
+        if subject_id not in {role.value for role in TenantUserRole}:
+            raise HTTPException(status_code=400, detail=f"Unknown tenant role '{subject_id}'")
+        return
+    raise HTTPException(status_code=400, detail="Subject type must be 'user' or 'role'")
+
+
+def _mcp_server_catalog_assignment_response(
+    assignment: SubjectMCPServerCatalogAssignment,
+) -> AdminMCPServerCatalogAssignmentResponse:
+    return AdminMCPServerCatalogAssignmentResponse(
+        tenant_id=assignment.tenant_id,
+        subject_type=assignment.subject_type,
+        subject_id=assignment.subject_id,
+        item_ids=list(assignment.item_ids),
+        version=assignment.version,
+        updated_by=assignment.updated_by,
+        updated_at=assignment.updated_at,
+    )
+
+
+def _mcp_server_catalog_assignment_audit_values(
+    assignment: SubjectMCPServerCatalogAssignment | None,
+) -> dict[str, Any] | None:
+    if assignment is None:
+        return None
+    return _mcp_server_catalog_assignment_response(assignment).model_dump(mode="json")
+
+
+def _mcp_server_catalog_policy_audit_values(
+    policy: TenantMCPServerCatalogPolicy | None,
+) -> dict[str, Any] | None:
+    if policy is None:
+        return None
+    return {
+        "tenant_id": policy.tenant_id,
+        "item_ids": list(policy.item_ids),
+        "allow_custom_mcp_servers": policy.allow_custom_mcp_servers,
+        "require_subject_assignment": policy.require_subject_assignment,
+        "version": policy.version,
+        "updated_by": policy.updated_by,
+        "updated_at": policy.updated_at.isoformat(),
+    }
+
+
 def _execution_config_secret_source(
     request: Request,
     existing: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    settings = getattr(request.app.state, "admin_store_settings", None)
-    catalog = settings.mcp_server_catalog if isinstance(settings, AdminStoreSettings) else ()
+    catalog = _configured_mcp_server_catalog(request)
+    store = _require_admin_store(request)
+    policy = store.get_tenant_mcp_server_catalog_policy(
+        str(request.path_params.get("tenant_id", ""))
+    )
+    granted_ids = set(policy.item_ids) if policy is not None else None
     catalog_servers = {
         str(item.server["name"]): item.server
         for item in catalog
         if isinstance(item.server.get("name"), str)
+        and (granted_ids is None or item.id in granted_ids)
     }
 
     source = json.loads(json.dumps(existing or {}))

@@ -9,7 +9,10 @@ active-membership enforcement with `MINIGENT_TENANT_USER_REGISTRY_REQUIRED`, and
 on `TenantContext`.
 
 Still pending or partial: invite-token/email delivery workflows, granular tenant-admin RBAC, richer
-identity-provider mapping, service-account modeling, and seat/billing limits.
+identity-provider mapping, service-account modeling, seat/billing limits, interactive personal MCP
+OAuth flows and credential lifecycle cleanup, and guided console editors for the user-owned
+execution overlay (a complete JSON editor and static credential manager are available).
+See [User execution extensibility](user-execution-extensibility.md) for that design.
 
 Focus: tenant user and membership management, not full identity management.
 
@@ -39,6 +42,8 @@ full identity-provider scope in the first iteration.
 - Preserve current auth behavior during migration.
 - Optionally require active tenant membership before business logic runs.
 - Keep identity-provider concerns decoupled from Minigent membership state.
+- Support a first-class, principal-scoped execution overlay for personal agents, skills,
+  capability profiles, and third-party tools without requiring tenant config edits.
 
 ## Non-goals for the first iteration
 

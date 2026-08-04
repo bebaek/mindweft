@@ -172,6 +172,37 @@ describe("MinigentApiClient", () => {
     }));
   });
 
+  it("sends versioned personal execution configuration and credentials", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) =>
+      Promise.resolve(new Response(
+        init?.method === "DELETE" ? null : JSON.stringify({ version: 4 }),
+        { status: init?.method === "DELETE" ? 204 : 200, headers: { "content-type": "application/json" } },
+      )),
+    );
+    const client = new MinigentApiClient({ mode: "session" });
+
+    await client.updateUserExecutionConfig({ defaults: {} }, 3);
+    await client.updateUserExecutionCredential("api:linear.main", {
+      header_name: "Authorization",
+      header_value: "Bearer secret",
+      expected_version: 2,
+    });
+    await client.deleteUserExecutionCredential("api:linear.main", 3);
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/me/execution-config");
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ config: { defaults: {} }, expected_version: 3 }),
+    }));
+    expect(fetchMock.mock.calls[1][0]).toBe("/me/execution-credentials/api%3Alinear.main");
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ header_name: "Authorization", header_value: "Bearer secret", expected_version: 2 }),
+    }));
+    expect(fetchMock.mock.calls[2][0]).toBe("/me/execution-credentials/api%3Alinear.main?expected_version=3");
+    expect(fetchMock.mock.calls[2][1]?.method).toBe("DELETE");
+  });
+
   it("returns structured API failures", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ detail: "Admin access required" }), {

@@ -1570,7 +1570,7 @@ Supported fields:
 - `tools.mcp_servers`: per-tenant MCP server definitions
 - `skills.default_skill`, `skills.items`: available prompt-overlay skills
 - `capability_profiles.default_profile`, `capability_profiles.items`: explicit tool/MCP narrowing profiles
-- `agents.items`: named server-side presets that combine skills and capability profiles for clients
+- `agents.default_agent`, `agents.items`: named server-side presets that combine skills and capability profiles for clients; the default agent supplies missing skill/profile selections when a thread is created
 
 String values in `MINIGENT_TENANT_EXECUTION_CONFIGS` can reference environment values with
 `${NAME}` placeholders. Placeholder replacement is recursive across nested objects and arrays,
@@ -1800,10 +1800,105 @@ Secrets such as LLM API keys and MCP headers are accepted on writes but redacted
 `MINIGENT_ADMIN_MCP_SERVER_CATALOG` optionally configures the internal-service quick-add cards shown
 by the tenant execution editor. `MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET` has the same format and
 takes precedence; use it when catalog templates contain credential headers so secret-management
-systems recognize the value as sensitive. It is a JSON array; each item has `id`, `title`, `description`, an
-optional `detail`, and a `server` object containing the tenant MCP server definition. The catalog is
-deployment-owned and returned to authenticated tenant owners through
-`GET /admin/tenants/{tenant_id}/mcp-server-catalog`. Header values are redacted before catalog
+systems recognize the value as sensitive. It is a JSON array; each item has `id`, `title`,
+`description`, an optional `detail`, and a `server` object containing the tenant MCP server
+definition. The catalog definitions are deployment-owned. Platform administrators set each
+tenant's maximum subset with `PUT /admin/tenants/{tenant_id}/mcp-server-catalog-policy`; the request
+contains `item_ids`, `allow_custom_mcp_servers`, and optional `require_subject_assignment`.
+`GET` returns the stored policy and `DELETE` restores the backward-compatible unmanaged behavior.
+In unmanaged mode, all deployment catalog entries are visible and custom MCP servers remain
+allowed. `GET /admin/mcp-server-catalog` returns the complete redacted deployment catalog to
+platform administrators, while
+`GET /admin/tenants/{tenant_id}/mcp-server-catalog` returns only that tenant's assigned entries and
+includes `managed` and `allow_custom_mcp_servers` policy indicators.
+
+Once a tenant policy exists, platform administrators can narrow MCP access by role or individual
+user in the execution editor or through
+`PUT /admin/tenants/{tenant_id}/mcp-server-catalog-assignments/{subject_type}/{subject_id}`. The
+subject type is `role` (`owner`, `admin`, `member`, or `viewer`) or `user` (a tenant `user_id`), and
+the request contains `item_ids`. An individual user assignment takes precedence over a role
+assignment, and the selected assignment is intersected with the tenant policy. By default, a subject
+without either assignment inherits tenant access; a saved empty assignment revokes every catalog
+MCP server for that subject. When `require_subject_assignment=true`, an unassigned subject receives
+no managed MCP servers. Suspended and deleted users always receive none. Enabling fail-closed mode
+requires a non-empty active owner or admin user/role assignment within the tenant ceiling, preventing
+accidental removal of all break-glass access.
+
+`GET /admin/tenants/{tenant_id}/mcp-server-catalog-access-preview` reports each tenant user's
+prospective effective source and item IDs; pass `require_subject_assignment=true` to dry-run
+fail-closed enforcement before saving it. `GET
+/admin/tenants/{tenant_id}/mcp-server-catalog-assignments` lists assignments, and deleting one
+restores inheritance when fail-closed mode is disabled or denies access when it is enabled.
+Assignment writes and deletes are audited. Runtime authorization is evaluated for every run, so
+changes do not depend on rebuilding the tenant execution configuration.
+
+Managed policies are enforced when execution configurations are validated or saved and again when
+the store-backed runtime resolves a tenant. Catalog entries must be assigned, must retain their
+catalog URL, and cannot expand `allowed_tools` beyond the catalog definition. When custom MCP
+servers are disabled, non-catalog servers are rejected. Policy changes are audited and invalidate
+the tenant execution cache, so revoking an entry prevents subsequent runs even if an older stored
+execution configuration still references it.
+
+`MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS` optionally enables a provider-neutral external grant
+control plane for platform administrators. When unset, no providers or grant panels are registered.
+The setting is a JSON array whose entries define `id`, `title`, optional `description`, `base_url`,
+forwarded-identity `audience`, non-empty `read_scopes` and `write_scopes`, and
+`allowed_permissions`. Generic endpoint defaults are `GET/PUT /v1/resource-grants` and
+`DELETE /v1/resource-grants/{resource_id}?user_id=...`; deployments can override `list_path`,
+`upsert_path`, and `delete_path`. Providers with a safe administrative resource catalog can set
+optional `resources_path`; Minigent uses it to show labels and resource-specific permissions while
+preserving free-form entry for providers without discovery. Providers with an immutable audit API
+can also set optional `audit_path`; Minigent forwards `limit` and `before_id`, reads the provider
+history with the configured read scopes, and displays it alongside current grants. URLs are
+deployment-owned and reject embedded credentials, query strings, and non-HTTP schemes.
+
+The platform-admin-only routes are `GET /admin/external-grant-providers`,
+`GET/PUT /admin/tenants/{tenant_id}/external-grants/{provider_id}`,
+`GET /admin/tenants/{tenant_id}/external-grants/{provider_id}/resources`,
+`GET /admin/tenants/{tenant_id}/external-grants/{provider_id}/audit`, and
+`DELETE /admin/tenants/{tenant_id}/external-grants/{provider_id}/{resource_id}?subject_id=...`.
+The browser grant panel joins provider resources and grants with Minigent's tenant-user directory.
+New exact-subject grants can target only active tenant users; `*` is presented explicitly as
+"Everyone in tenant." The API independently rejects enabled grants for missing or inactive tenant
+users. Existing grants for missing or inactive users may still be disabled or deleted, allowing the
+panel's reconciliation report and confirmed bulk-disable action to deprovision stale access without
+silently mutating provider state. User labels and emails remain in Minigent's platform-admin UI;
+only canonical user IDs are forwarded to providers.
+
+Changing an existing tenant user to `suspended` or `deleted` atomically appends a durable
+user-deprovisioning event in the admin database. Runtime identity and MCP checks continue to deny
+the inactive user immediately; provider availability is not part of that transaction. A background
+worker claims due events with a SQLite lease so replicas do not process the same event concurrently,
+removes the user's explicit MCP catalog assignment, and disables every enabled exact-subject grant
+returned by each configured provider. Processing is idempotent: retries skip absent assignments and
+already-disabled grants. Reactivating a user does not cancel pending deprovisioning or restore grants
+or assignments; those require explicit administrative action.
+
+Failures use exponential backoff and become `dead_letter` after eight attempts by default. Configure
+polling, retry limits, and stale-claim recovery with
+`MINIGENT_USER_DEPROVISIONING_INTERVAL_SECONDS`,
+`MINIGENT_USER_DEPROVISIONING_MAX_ATTEMPTS`, and
+`MINIGENT_USER_DEPROVISIONING_LEASE_SECONDS`. Tenant owners and platform administrators can inspect
+`GET /admin/tenants/{tenant_id}/user-deprovisioning-events` (optionally filtered by `state`) and
+requeue pending or dead-letter work with
+`POST /admin/tenants/{tenant_id}/user-deprovisioning-events/{event_id}/retry`. Events retain the
+initiating actor, target status, attempt count, redacted failure summary, assignment-cleanup result,
+and count of grants disabled. The outbox is part of normal admin-database backup and restore.
+
+Minigent issues a fresh 30–300 second forwarded-identity token for each provider request and uses
+only the configured read or write scopes. Provider credentials, scopes, and HTTP operations are
+never added to tenant execution configuration or exposed as model tools. Grant state remains
+authoritative at the provider; Minigent stores only its normal redacted administrative audit
+record. Provider availability is deliberately excluded from startup, readiness, chat execution,
+and tool discovery, so an outage affects only grant-administration requests.
+
+Example:
+
+```bash
+MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS='[{"id":"example-grants","title":"Example grants","description":"Manage authoritative external grants.","base_url":"http://127.0.0.1:8769","audience":"example-grants","read_scopes":["grants:read"],"write_scopes":["grants:write"],"allowed_permissions":["read","read_write"],"resources_path":"/v1/resources","audit_path":"/v1/resource-grant-audit"}]'
+```
+
+Header values are redacted before catalog
 entries reach the browser. When a quick-add entry is validated or saved, its `<redacted>` header
 placeholders are restored server-side from the deployment catalog; existing tenant values take
 precedence. Therefore catalogs containing credentials must be supplied through a secret manager,
@@ -2302,6 +2397,7 @@ MINIGENT_TENANT_EXECUTION_CONFIGS={
       ]
     },
     "agents":{
+      "default_agent":"support",
       "items":[
         {
           "name":"support",

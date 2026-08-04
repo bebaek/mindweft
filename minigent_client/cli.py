@@ -464,6 +464,7 @@ class RememberingMinigentAPIClient:
     def create_thread(
         self,
         *,
+        agent_name: str | None = None,
         skill_name: str | None = None,
         skills: list[str] | None = None,
         capability_profile: str | None = None,
@@ -474,6 +475,8 @@ class RememberingMinigentAPIClient:
             "skills": skills,
             "capability_profile": capability_profile,
         }
+        if agent_name is not None:
+            create_kwargs["agent_name"] = agent_name
         if llm_profile is not None:
             create_kwargs["llm_profile"] = llm_profile
         response = self._client.create_thread(**create_kwargs)  # type: ignore[attr-defined]

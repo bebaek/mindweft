@@ -171,7 +171,7 @@ reservation and settlement, admin aggregates, and operational rollout is recorde
 | Operation | Status | Notes |
 | --- | --- | --- |
 | List tenants | Implemented | Supports `status`, `plan`, `slug`, `limit`, and `offset`. |
-| Create tenant | Implemented | Optional explicit ID; otherwise generated UUID. |
+| Create tenant | Implemented | Optional explicit ID; otherwise generated UUID. Optional `generic-v1` provisioning profile atomically creates a conservative starter execution config; the web administration UI applies this profile to new tenants automatically. |
 | Read tenant | Implemented | `GET /admin/tenants/{tenant_id}`. |
 | Update tenant fields | Implemented | Supports slug, name, plan, region, metadata. |
 | Activate tenant | Implemented | Status transition to `active`. |
@@ -195,7 +195,7 @@ Implemented tenant registry and control-plane routes include:
 
 ```text
 GET    /admin/tenants
-POST   /admin/tenants
+POST   /admin/tenants                         # accepts optional provisioning_profile: none | generic-v1
 POST   /admin/tenants/seed
 GET    /admin/tenants/{tenant_id}
 PATCH  /admin/tenants/{tenant_id}
@@ -229,6 +229,12 @@ GET /admin/execution-config-tenants
 
 Existing admin thread-inspection and audit-listing endpoints remain tenant-scoped under
 `/admin/tenants/{tenant_id}`.
+
+Execution configurations can define `agents.default_agent` (or `defaultAgent`) to reference a
+configured preset. Thread creation accepts an optional `agent_name`; explicit thread skill or
+capability fields override the selected/default agent, while unspecified fields are materialized
+from the agent preset onto the thread. If no agent applies, the existing default skill and
+capability-profile behavior remains in effect.
 
 ## Storage and caching
 

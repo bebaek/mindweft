@@ -22,10 +22,10 @@ from app.execution import (
     TenantExecutionResolver,
     TenantSkillConfig,
     build_tool_registry_for_capability_profile,
+    build_tool_registry_for_constraints,
+    build_tool_registry_for_mcp_server_names,
     build_tool_registry_for_skill,
-    get_capability_profile,
     get_llm_adapter,
-    get_skill_configs,
 )
 from app.llm import (
     RESPONSES_OUTPUT_ITEMS_METADATA_KEY,
@@ -62,6 +62,12 @@ from app.private_values import (
 from app.quality import QualityEnhancer
 from app.store import ThreadStore
 from app.tools import ToolExecutionContext, ToolRegistry
+from app.user_execution import (
+    UserExecutionConfigSource,
+    UserExecutionResolutionError,
+    effective_execution_catalog,
+    has_personal_execution_refs,
+)
 
 RUNTIME_SYSTEM_PROMPT = (
     "Use tools when they are relevant and ground claims in tool results. "
@@ -78,6 +84,7 @@ MAX_ITERATIONS_ENV = "MINIGENT_MAX_ITERATIONS"
 TOOL_TIMEOUT_SECONDS_ENV = "MINIGENT_TOOL_TIMEOUT_SECONDS"
 CONTEXT_COMPACTION_ENABLED_ENV = "MINIGENT_CONTEXT_COMPACTION_ENABLED"
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
+MCPServerNameAuthorizer = Callable[[str, str], set[str] | None]
 
 
 @dataclass(frozen=True)
@@ -149,7 +156,7 @@ def _parse_tool_timeout_seconds(env: Mapping[str, str]) -> float:
     return value
 
 
-def _load_active_skill_instructions(skill: TenantSkillConfig) -> str:
+def load_active_skill_instructions(skill: TenantSkillConfig) -> str:
     if skill.system_prompt is not None:
         return skill.system_prompt
     if skill.instruction_source is not None and skill.instruction_source.type == "agent_skill":
@@ -176,6 +183,8 @@ class AgentRuntime:
         input_pii_protector: LocalPIIProtector | None = None,
         private_value_consent_store: PrivateValueConsentStore | None = None,
         attachment_store: AttachmentStore | None = None,
+        mcp_server_name_authorizer: MCPServerNameAuthorizer | None = None,
+        user_execution_config_source: UserExecutionConfigSource | None = None,
     ) -> None:
         self._store = store
         if execution_resolver is not None:
@@ -204,6 +213,8 @@ class AgentRuntime:
             private_value_consent_store or build_private_value_consent_store_from_env()
         )
         self._attachment_store = attachment_store or InMemoryAttachmentStore()
+        self._mcp_server_name_authorizer = mcp_server_name_authorizer
+        self._user_execution_config_source = user_execution_config_source
 
     async def protect_user_content(
         self,
@@ -367,27 +378,83 @@ class AgentRuntime:
         self,
         execution: TenantExecutionContext,
         thread: Thread,
+        principal: Principal,
     ) -> ToolRegistry:
         skill_names = thread.skill_names
         if skill_names is None and thread.skill_name is not None:
             skill_names = [thread.skill_name]
-        skills = get_skill_configs(execution.config, skill_names)
-        capability_profile = get_capability_profile(execution.config, thread.capability_profile)
+        catalog = effective_execution_catalog(
+            execution.config,
+            self._user_execution_config_source if thread.execution_user_id is not None else None,
+            tenant_id=principal.tenant_id,
+            user_id=thread.execution_user_id or principal.user_id,
+        )
+        try:
+            skills = catalog.resolve_skill_refs(
+                skill_names, use_defaults=thread.execution_user_id is None
+            )
+            capability_profile = catalog.resolve_capability_profile(
+                thread.capability_profile, use_default=thread.execution_user_id is None
+            )
+            personal_capability_constraints = (
+                catalog.personal_capability_constraints(capability_profile)
+                if capability_profile is not None and capability_profile.source == "user"
+                else None
+            )
+        except UserExecutionResolutionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        allowed_mcp_server_names = (
+            self._mcp_server_name_authorizer(principal.tenant_id, principal.user_id)
+            if self._mcp_server_name_authorizer is not None
+            else None
+        )
+        if personal_capability_constraints is not None:
+            return build_tool_registry_for_constraints(
+                execution.config,
+                profile_allowed_local_tools=personal_capability_constraints.allowed_local_tools,
+                profile_mcp_server_names=(personal_capability_constraints.shared_mcp_server_names),
+                personal_mcp_servers=personal_capability_constraints.personal_mcp_servers,
+                mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
+            )
         if capability_profile is not None:
             return build_tool_registry_for_capability_profile(
                 execution.config,
-                thread.capability_profile,
+                capability_profile.stored_ref,
                 mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
             )
         if len(skills) == 1 and (
-            skills[0].allowed_local_tools is not None or skills[0].mcp_server_names is not None
+            skills[0].config.allowed_local_tools is not None
+            or skills[0].config.mcp_server_names is not None
         ):
             return build_tool_registry_for_skill(
                 execution.config,
-                skills[0].name,
+                skills[0].stored_ref,
+                mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
+            )
+        if allowed_mcp_server_names is not None:
+            return build_tool_registry_for_mcp_server_names(
+                execution.config,
+                allowed_mcp_server_names,
                 mcp_manager=execution.mcp_manager,
             )
         return execution.tool_registry
+
+    @staticmethod
+    def _enforce_personal_execution_owner(
+        principal: Principal,
+        thread: Thread,
+        skill_names: list[str] | None,
+    ) -> None:
+        if not has_personal_execution_refs(skill_names, thread.capability_profile):
+            return
+        if thread.execution_user_id is None or thread.execution_user_id != principal.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Personal execution resources belong to a different user",
+            )
 
     def _private_tool_execution_context(
         self,
@@ -454,7 +521,7 @@ class AgentRuntime:
         if thread.status == ThreadStatus.RUNNING:
             raise HTTPException(status_code=409, detail="Thread is already running")
         execution = self._execution_resolver.resolve(principal.tenant_id)
-        tool_registry = self._tool_registry_for_thread(execution, thread)
+        tool_registry = self._tool_registry_for_thread(execution, thread, principal)
         pending_action = self._private_value_consent_store.get_pending_action(
             tenant_id=principal.tenant_id,
             user_id=principal.user_id,
@@ -544,18 +611,33 @@ class AgentRuntime:
         execution = self._execution_resolver.resolve(principal.tenant_id)
         thread = self._store.get_thread(principal.tenant_id, thread_id)
         llm_adapter = get_llm_adapter(execution, thread.llm_profile)
-        self._store.start_run(principal.tenant_id, thread_id)
         skill_names = thread.skill_names
         if skill_names is None and thread.skill_name is not None:
             skill_names = [thread.skill_name]
-        skills = get_skill_configs(execution.config, skill_names)
-        tool_registry = self._tool_registry_for_thread(execution, thread)
+        self._enforce_personal_execution_owner(principal, thread, skill_names)
+        catalog = effective_execution_catalog(
+            execution.config,
+            self._user_execution_config_source if thread.execution_user_id is not None else None,
+            tenant_id=principal.tenant_id,
+            user_id=thread.execution_user_id or principal.user_id,
+        )
+        try:
+            skills = [
+                skill.config
+                for skill in catalog.resolve_skill_refs(
+                    skill_names, use_defaults=thread.execution_user_id is None
+                )
+            ]
+        except UserExecutionResolutionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        tool_registry = self._tool_registry_for_thread(execution, thread, principal)
+        self._store.start_run(principal.tenant_id, thread_id)
         try:
             for iteration in range(1, self._max_iterations + 1):
                 messages = self._messages_for_llm(
                     principal,
                     thread_id,
-                    skill_prompts=[_load_active_skill_instructions(skill) for skill in skills],
+                    skill_prompts=[load_active_skill_instructions(skill) for skill in skills],
                     skill_names=[skill.name for skill in skills],
                 )
                 is_preprocessor = getattr(

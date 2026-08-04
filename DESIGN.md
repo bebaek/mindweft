@@ -101,4 +101,6 @@ handling, tool execution capability, and clean separation of concerns. It is int
 simple to validate core ideas before scaling complexity.
 
 For detailed configuration, API reference, and setup guides, see the
-[full reference](docs/reference.md) and [CLI reference](docs/cli.md).
+[full reference](docs/reference.md) and [CLI reference](docs/cli.md). The proposed model for
+principal-scoped personal agents, skills, capability profiles, and third-party MCP servers is
+specified in [User execution extensibility](docs/user-execution-extensibility.md).

@@ -457,6 +457,8 @@ def main(argv: list[str] | None = None) -> int:
 
     env.setdefault("MINIGENT_AUTH_MODE", "dev-headers")
     env.setdefault("MINIGENT_LLM_PROVIDER", "mock")
+    env["MINIGENT_CODING_TENANT_ID"] = tenant_id
+    env.setdefault("MINIGENT_CODING_OAUTH_GLOBAL_FALLBACK", "true")
     if "MINIGENT_TENANT_EXECUTION_CONFIGS" not in env:
         env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = json.dumps(
             default_tenant_config_from_servers(

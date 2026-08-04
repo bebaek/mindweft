@@ -62,6 +62,13 @@ async function installWorkspaceMocks(
           content: "Review the deployment plan",
           created_at: "2026-01-01T00:00:00Z",
         },
+        {
+          id: "message-2",
+          thread_id: "thread-1",
+          role: "assistant",
+          content: "## Deployment review\n\n| Item | Status |\n| --- | --- |\n| Tests | Passing |\n\n**Run** `make test` before deployment.",
+          created_at: "2026-01-01T00:01:00Z",
+        },
       ],
     ],
   ]);
@@ -240,7 +247,7 @@ async function installWorkspaceMocks(
         id: "assistant-1",
         thread_id: threadId,
         role: "assistant",
-        content: "The deployment plan is ready.",
+        content: "## Deployment ready\n\nThe deployment plan is ready.\n\n- Review changes\n- Deploy safely",
         created_at: new Date().toISOString(),
       });
       await route.fulfill({
@@ -248,7 +255,7 @@ async function installWorkspaceMocks(
         body: [
           JSON.stringify({ type: "run.started" }),
           JSON.stringify({ type: "llm.request" }),
-          JSON.stringify({ type: "assistant.message", content: "The deployment plan is ready." }),
+          JSON.stringify({ type: "assistant.message", content: "## Deployment ready\n\nThe deployment plan is ready.\n\n- Review changes\n- Deploy safely" }),
           JSON.stringify({ type: "run.completed" }),
           "",
         ].join("\n"),
@@ -301,8 +308,20 @@ async function installWorkspaceMocks(
 
 async function navigateToWorkspace(page: Page) {
   const menu = page.getByRole("button", { name: "Open navigation" });
-  if (await menu.isVisible()) await menu.click();
+  if ((page.viewportSize()?.width ?? Infinity) <= 900) {
+    await expect(menu).toBeVisible();
+    await menu.click();
+    await expect(page.locator(".sidebar")).toHaveClass(/is-open/);
+  }
   await page.getByRole("button", { name: "Workspace", exact: true }).click();
+}
+
+async function openConversations(page: Page) {
+  const conversations = page.getByRole("button", { name: "Show conversations" });
+  if (await conversations.isVisible()) {
+    await conversations.click();
+    await expect(page.locator(".thread-rail")).toHaveClass(/is-open/);
+  }
 }
 
 async function installAdminMocks(page: Page) {
@@ -373,9 +392,23 @@ async function installAdminMocks(page: Page) {
 }
 
 async function navigateToAdmin(page: Page) {
+  let admin = page.getByRole("button", { name: "Administration", exact: true });
+  if (await admin.count() === 0) {
+    await page.getByRole("button", { name: /Secure session/ }).click();
+    const dialog = page.getByRole("dialog", { name: "Authentication" });
+    await dialog.getByLabel("Development headers").check();
+    await dialog.getByLabel("Tenant ID").fill("tenant-acme");
+    await dialog.getByLabel("User ID").fill("admin-e2e");
+    await dialog.getByLabel("Administrator").check();
+    await dialog.getByRole("button", { name: "Use connection" }).click();
+    admin = page.getByRole("button", { name: "Administration", exact: true });
+  }
   const menu = page.getByRole("button", { name: "Open navigation" });
-  if (await menu.isVisible()) await menu.click();
-  await page.getByRole("button", { name: "Administration", exact: true }).click();
+  if (await menu.isVisible()) {
+    await menu.click();
+    await expect(page.locator(".sidebar")).toHaveClass(/is-open/);
+  }
+  await admin.click();
 }
 
 test("loads the production console and passes an accessibility scan", async ({ page }) => {
@@ -389,6 +422,132 @@ test("loads the production console and passes an accessibility scan", async ({ p
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("uses readable typography tokens for chat and controls", async ({ page }) => {
+  await installApiMocks(page);
+  await installWorkspaceMocks(page);
+  await page.goto("./");
+  await navigateToWorkspace(page);
+  await openConversations(page);
+  await page.getByRole("button", { name: "Review the deployment plan" }).click();
+  await expect(page.getByRole("heading", { name: "Deployment review" })).toBeVisible();
+
+  const typography = await page.locator("html").evaluate((element) => {
+    const styles = getComputedStyle(element);
+    return {
+      xs: styles.getPropertyValue("--text-xs").trim(),
+      control: styles.getPropertyValue("--text-control").trim(),
+      body: styles.getPropertyValue("--text-body").trim(),
+      chat: styles.getPropertyValue("--text-chat").trim(),
+    };
+  });
+  expect(typography).toEqual({ xs: "12px", control: "14px", body: "15px", chat: "16px" });
+  await expect(page.locator(".chat-message.assistant .message-content").first()).toHaveCSS("font-size", "16px");
+  await expect(page.locator(".message-author").first()).toHaveCSS("font-size", "13px");
+  await expect(page.locator(".markdown-content code")).toHaveCSS("font-size", "13px");
+  await expect(page.locator(".markdown-content strong")).toHaveCSS("font-weight", "650");
+  const threadTitle = page.locator(".thread-title").first();
+  await expect(threadTitle).toHaveText("Review the deployment plan");
+  await expect(threadTitle).toHaveCSS("color", "rgb(23, 33, 27)");
+  const titleBox = await threadTitle.boundingBox();
+  expect(titleBox?.width ?? 0).toBeGreaterThan(40);
+  expect(titleBox?.height ?? 0).toBeGreaterThan(10);
+  const fontFamilies = await page.evaluate(() => {
+    const composer = document.querySelector<HTMLTextAreaElement>(".chat-composer textarea");
+    return {
+      body: getComputedStyle(document.body).fontFamily,
+      composer: composer ? getComputedStyle(composer).fontFamily : "",
+    };
+  });
+  expect(fontFamilies.composer).toBe(fontFamilies.body);
+
+  const undersizedControls = await page.locator("button:visible, input:visible, textarea:visible, select:visible").evaluateAll((elements) => elements.flatMap((element) => {
+    const size = Number.parseFloat(getComputedStyle(element).fontSize);
+    return size < 13 ? [`${element.tagName.toLowerCase()}.${element.className}: ${String(size)}px`] : [];
+  }));
+  expect(undersizedControls).toEqual([]);
+
+  if ((page.viewportSize()?.width ?? 0) <= 620) {
+    await expect(page.getByLabel(/^Message /)).toHaveCSS("font-size", "16px");
+  }
+});
+
+test("keeps overview, authentication, and administration legible in dark mode", async ({ page }) => {
+  await installApiMocks(page);
+  await installAdminMocks(page);
+  await page.route("**/admin/tenants/tenant-acme/execution-config", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        tenant_id: "tenant-acme",
+        version: 1,
+        config: {
+          llm: { provider: "mock", model: "test-model" },
+          tools: { allowed_local_tools: ["echo"], mcp_servers: [{ name: "docs", url: "https://docs.example/mcp" }, { name: "search", url: "https://search.example/mcp" }] },
+          agent_backend: { type: "native" },
+          skills: { items: [] },
+          capability_profiles: { default_profile: "safe", items: [{ name: "safe", mcp_server_names: ["docs"] }] },
+          agents: { items: [] },
+        },
+      }),
+    });
+  });
+  await page.route("**/admin/tenants/tenant-acme/mcp-server-catalog", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], managed: false, allow_custom_mcp_servers: true }) });
+  });
+  await page.addInitScript(() => window.localStorage.setItem("minigent-theme", "dark"));
+  await page.goto("./");
+
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await page.getByRole("button", { name: /Secure session/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Authentication" });
+  await dialog.getByLabel("Development headers").check();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await dialog.getByLabel("Tenant ID").fill("tenant-e2e");
+  await dialog.getByLabel("User ID").fill("admin-e2e");
+  await dialog.getByLabel("Administrator").check();
+  await dialog.getByRole("button", { name: "Use connection" }).click();
+
+  await navigateToAdmin(page);
+  await expect(page.getByRole("heading", { name: "Acme Corporation" })).toBeVisible();
+  await page.waitForTimeout(250);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await page.getByRole("button", { name: "Edit configuration" }).click();
+  const executionDialog = page.getByRole("dialog", { name: "Edit execution configuration" });
+  await expect(executionDialog).toBeVisible();
+  for (const tab of ["LLM", "Tools", "Runtime", "Skills", "Presets", "Advanced"]) {
+    await executionDialog.getByRole("button", { name: tab, exact: true }).click();
+    expect((await new AxeBuilder({ page }).include(".execution-config-dialog").analyze()).violations).toEqual([]);
+  }
+});
+
+test("keeps workspace dialogs legible in dark mode", async ({ page }) => {
+  await installApiMocks(page);
+  await installWorkspaceMocks(page, { consent: true });
+  await page.addInitScript(() => window.localStorage.setItem("minigent-theme", "dark"));
+  await page.goto("./");
+  await navigateToWorkspace(page);
+
+  await openConversations(page);
+  await page.getByRole("button", { name: "Review the deployment plan" }).click();
+  await expect(page.getByRole("heading", { name: "Deployment review" })).toBeVisible();
+  await expect(page.getByRole("table")).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await page.getByRole("button", { name: "Context" }).click();
+  const contextDialog = page.getByRole("dialog", { name: "Thread context" });
+  await expect(contextDialog.getByText("1,240")).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await contextDialog.getByRole("button", { name: "Close context" }).click();
+
+  await page.getByLabel(/^Message /).fill("Send this to my contact");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByRole("dialog", { name: "Allow this exact tool action?" })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });
 
 test("applies development credentials without persisting them", async ({ page }) => {
@@ -413,7 +572,7 @@ test("applies development credentials without persisting them", async ({ page })
     local: Object.keys(localStorage),
     session: Object.keys(sessionStorage),
   }));
-  expect(storage).toEqual({ local: [], session: [] });
+  expect(storage).toEqual({ local: ["minigent-theme"], session: [] });
 });
 
 test("runs a streamed conversation without accessibility violations", async ({ page }) => {
@@ -422,8 +581,10 @@ test("runs a streamed conversation without accessibility violations", async ({ p
   await page.goto("./");
   await navigateToWorkspace(page);
 
+  await openConversations(page);
   await page.getByRole("button", { name: "Review the deployment plan" }).click();
   await expect(page.getByText("Review the deployment plan", { exact: true }).last()).toBeVisible();
+  await openConversations(page);
   await page.getByRole("button", { name: "New conversation" }).click();
   await page.getByLabel("Attach images").setInputFiles({
     name: "release-diagram.png",
@@ -439,6 +600,8 @@ test("runs a streamed conversation without accessibility violations", async ({ p
   await page.getByRole("button", { name: "Send message" }).click();
 
   await expect(page.getByText("The deployment plan is ready.").last()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Deployment ready" })).toBeVisible();
+  await expect(page.getByText("Review changes")).toBeVisible();
   await expect(page.getByRole("img", { name: "User attachment" })).toBeVisible();
   await expect(page.locator(".activity-tray summary").getByText("Run completed")).toBeVisible();
 
@@ -540,10 +703,12 @@ test("creates a tenant and reports provisioning conflicts", async ({ page }) => 
   const now = new Date().toISOString();
   const created = { id: "tenant-northwind", slug: "northwind", name: "Northwind", status: "provisioning", plan: "growth", region: "us-west", metadata: {}, created_at: now, updated_at: now };
   let includeCreated = false;
+  let createRequest: Record<string, unknown> | null = null;
   await page.route("**/admin/tenants**", async (route) => {
     const request = route.request();
     if (request.method() === "POST") {
-      const body = request.postDataJSON() as { slug: string };
+      const body = request.postDataJSON() as Record<string, unknown>;
+      createRequest = body;
       if (body.slug === "acme") {
         await route.fulfill({ status: 409, contentType: "application/json", body: '{"detail":"Tenant id or slug already exists"}' });
       } else {
@@ -563,6 +728,7 @@ test("creates a tenant and reports provisioning conflicts", async ({ page }) => 
 
   await page.getByRole("button", { name: "New tenant" }).click();
   const dialog = page.getByRole("dialog", { name: "Create tenant" });
+  await expect(dialog.getByText("Starter agent included")).toBeVisible();
   await dialog.getByLabel("Slug").fill("acme");
   await dialog.getByLabel("Name").fill("Duplicate Acme");
   await dialog.getByRole("button", { name: "Create tenant" }).click();
@@ -575,6 +741,11 @@ test("creates a tenant and reports provisioning conflicts", async ({ page }) => 
   await dialog.getByRole("button", { name: "Create tenant" }).click();
   await expect(dialog).not.toBeVisible();
   expect(includeCreated).toBe(true);
+  expect(createRequest).toMatchObject({
+    slug: "northwind",
+    name: "Northwind",
+    provisioning_profile: "generic-v1",
+  });
 });
 
 test("manages tenant users and domains with destructive confirmations", async ({ page }) => {
@@ -901,4 +1072,10 @@ test("supports mobile navigation", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "What are we working on?" })).toBeVisible();
   await expect(page.locator(".sidebar")).not.toHaveClass(/is-open/);
+  await expect(page.locator(".thread-rail")).not.toHaveClass(/is-open/);
+
+  await page.getByRole("button", { name: "Show conversations" }).click();
+  await expect(page.locator(".thread-rail")).toHaveClass(/is-open/);
+  await page.getByRole("button", { name: "Close conversations" }).click();
+  await expect(page.locator(".thread-rail")).not.toHaveClass(/is-open/);
 });

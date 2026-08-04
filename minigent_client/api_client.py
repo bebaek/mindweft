@@ -318,12 +318,14 @@ class MinigentAPIClient:
     def create_thread(
         self,
         *,
+        agent_name: str | None = None,
         skill_name: str | None = None,
         skills: list[str] | None = None,
         capability_profile: str | None = None,
         llm_profile: str | None = None,
     ) -> dict[str, Any]:
         payload = _build_thread_create_payload(
+            agent_name=agent_name,
             skill_name=skill_name,
             skills=skills,
             capability_profile=capability_profile,
@@ -994,6 +996,7 @@ def _build_query(params: dict[str, object | None]) -> str:
 
 def _build_thread_create_payload(
     *,
+    agent_name: str | None,
     skill_name: str | None,
     skills: list[str] | None,
     capability_profile: str | None,
@@ -1002,6 +1005,8 @@ def _build_thread_create_payload(
     if skill_name is not None and skills is not None:
         raise ValueError("Provide either skill_name or skills, not both.")
     payload: dict[str, Any] = {}
+    if agent_name is not None:
+        payload["agent_name"] = agent_name
     if skill_name is not None:
         payload["skill_name"] = skill_name
     if skills is not None:

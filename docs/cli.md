@@ -214,7 +214,7 @@ state:
 
 ```bash
 minigent --admin admin tenants list --status active
-minigent --admin admin tenants create --id <tenant-id> --slug <slug> --name "Tenant Name" --status active
+minigent --admin admin tenants create --id <tenant-id> --slug <slug> --name "Tenant Name" --status active --provisioning-profile generic-v1
 minigent --admin admin tenants show <tenant-id>
 minigent --admin admin tenants update <tenant-id> --plan pro --metadata-json '{"owner":"support"}'
 minigent --admin admin tenants suspend <tenant-id>
@@ -228,6 +228,11 @@ minigent --admin admin tenants entitlements set <tenant-id> --features-json '{"m
 minigent --admin admin tenants entitlements validate <tenant-id> --features-json '{"mcp":true}'
 minigent --admin admin tenants entitlements delete <tenant-id>
 ```
+
+`--provisioning-profile generic-v1` atomically creates a conservative starter execution
+configuration with the tenant: a `general` default agent and skill, a `safe-default`
+capability profile, and only the `current_time` and `calculator` local tools. Omit the option
+(or pass `none`) to preserve execution-config provisioning as a separate operation.
 
 Thread and audit admin commands use `--tenant` to select the target tenant:
 

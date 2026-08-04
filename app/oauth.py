@@ -611,6 +611,7 @@ class GenericOAuthProvider:
         client: httpx.AsyncClient | None = None,
         credential_key: str | None = None,
         credential_tenant_id: str | None = None,
+        allow_global_credential_fallback: bool = False,
     ) -> None:
         self._config = config or generic_oauth_config_from_env()
         self._store = store or build_oauth_credential_store_from_env()
@@ -621,6 +622,11 @@ class GenericOAuthProvider:
             tenant_oauth_credential_key(self._config.provider_id, credential_tenant_id)
             if credential_tenant_id is not None
             else self._config.provider_id
+        )
+        self._fallback_credential_key = (
+            self._config.provider_id
+            if allow_global_credential_fallback and self._credential_key != self._config.provider_id
+            else None
         )
 
     @property
@@ -667,31 +673,39 @@ class GenericOAuthProvider:
         return credentials
 
     async def get_credentials(self) -> OAuthCredentials | None:
-        if isinstance(self._store, CoordinatedOAuthCredentialStore):
-            return await self._get_coordinated_credentials(self._store)
-        credentials = self._store.get(self._credential_key)
-        if credentials is None:
-            return None
-        if time.time() < credentials.expires_at - 60:
-            return credentials
-        refreshed = await self.refresh(credentials)
-        self._store.set(self._credential_key, refreshed)
-        return refreshed
+        credential_keys = [self._credential_key]
+        if self._fallback_credential_key is not None:
+            credential_keys.append(self._fallback_credential_key)
+        for credential_key in credential_keys:
+            if isinstance(self._store, CoordinatedOAuthCredentialStore):
+                credentials = await self._get_coordinated_credentials(self._store, credential_key)
+                if credentials is not None:
+                    return credentials
+                continue
+            credentials = self._store.get(credential_key)
+            if credentials is None:
+                continue
+            if time.time() < credentials.expires_at - 60:
+                return credentials
+            refreshed = await self.refresh(credentials)
+            self._store.set(credential_key, refreshed)
+            return refreshed
+        return None
 
     async def _get_coordinated_credentials(
-        self, store: CoordinatedOAuthCredentialStore
+        self, store: CoordinatedOAuthCredentialStore, credential_key: str
     ) -> OAuthCredentials | None:
         owner = uuid4().hex
         deadline = time.monotonic() + OAUTH_REFRESH_WAIT_SECONDS
         while True:
-            versioned = store.get_versioned(self._credential_key)
+            versioned = store.get_versioned(credential_key)
             if versioned is None:
                 return None
             credentials, version = versioned
             if time.time() < credentials.expires_at - 60:
                 return credentials
             claimed = store.try_claim_refresh(
-                self._credential_key,
+                credential_key,
                 version=version,
                 owner=owner,
                 lease_seconds=OAUTH_REFRESH_LEASE_SECONDS,
@@ -700,14 +714,14 @@ class GenericOAuthProvider:
                 try:
                     refreshed = await self.refresh(credentials)
                     if store.complete_refresh(
-                        self._credential_key,
+                        credential_key,
                         version=version,
                         owner=owner,
                         credentials=refreshed,
                     ):
                         return refreshed
                 except BaseException:
-                    store.release_refresh(self._credential_key, version=version, owner=owner)
+                    store.release_refresh(credential_key, version=version, owner=owner)
                     raise
             if time.monotonic() >= deadline:
                 raise RuntimeError("Timed out waiting for coordinated OAuth token refresh")

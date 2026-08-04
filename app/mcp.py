@@ -22,6 +22,7 @@ from mcp.types import DiscoverResult, ErrorData, Implementation, JSONRPCError, J
 
 from app.mcp_identity import MCPIdentityTokenIssuer
 from app.models import ToolSpec
+from app.network_policy import validate_public_https_url
 from app.redaction import (
     ToolResultRedactionPolicy,
     parse_tool_result_redaction_policy,
@@ -97,6 +98,7 @@ class MCPServerConfig:
     identity_audience: str = "private-dav"
     identity_scopes: tuple[str, ...] = ()
     timeout_seconds: float = DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS
+    public_network_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -266,11 +268,23 @@ class MCPHTTPClient:
             ):
                 self._invalid_session_detail = detail
 
+        request_hooks: list[Any] = []
+        if self._config.public_network_only:
+
+            async def enforce_public_network(request: httpx.Request) -> None:
+                try:
+                    validate_public_https_url(str(request.url))
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=f"MCP request URL {exc}") from exc
+
+            request_hooks.append(enforce_public_network)
+
         http_client = httpx.AsyncClient(
             headers=headers,
             timeout=self._timeout,
             transport=self._transport,
-            event_hooks={"response": [capture_session]},
+            trust_env=not self._config.public_network_only,
+            event_hooks={"request": request_hooks, "response": [capture_session]},
         )
         transport = _tool_only_streamable_http_client(
             self._config.url,

@@ -43,6 +43,7 @@ DEFAULT_PORT = 8765
 DEFAULT_PATH = "/mcp"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_STDIO_STREAM_LIMIT_BYTES = 16 * 1024 * 1024
+MAX_LEGACY_SESSIONS = 256
 
 
 class BridgeSettings(BaseModel):
@@ -65,7 +66,7 @@ class StdioMCPBridge:
         self._process: asyncio.subprocess.Process | None = None
         self._request_lock = asyncio.Lock()
         self._stderr_task: asyncio.Task[None] | None = None
-        self._session_id: str | None = None
+        self._session_ids: dict[str, None] = {}
         self._sdk_worker_task: asyncio.Task[None] | None = None
         self._sdk_queue: (
             asyncio.Queue[tuple[dict[str, Any], bool, asyncio.Future[dict[str, Any]]] | None] | None
@@ -165,8 +166,11 @@ class StdioMCPBridge:
         response_payload = self._filter_response_payload(method, response_payload, payload)
         response_headers = {"content-type": "application/json"}
         if method == "initialize" and "result" in response_payload:
-            self._session_id = secrets.token_urlsafe(24)
-            response_headers["MCP-Session-Id"] = self._session_id
+            session_id = secrets.token_urlsafe(24)
+            self._session_ids[session_id] = None
+            if len(self._session_ids) > MAX_LEGACY_SESSIONS:
+                del self._session_ids[next(iter(self._session_ids))]
+            response_headers["MCP-Session-Id"] = session_id
         return Response(
             content=json.dumps(response_payload, ensure_ascii=True),
             media_type="application/json",
@@ -492,10 +496,10 @@ class StdioMCPBridge:
         return {**payload, "result": {**result, "content": filtered_content}}
 
     def _require_session(self, headers: dict[str, str]) -> None:
-        if self._session_id is None:
+        if not self._session_ids:
             raise HTTPException(status_code=400, detail="MCP session has not been initialized")
         session_id = headers.get("mcp-session-id")
-        if session_id != self._session_id:
+        if session_id not in self._session_ids:
             raise HTTPException(status_code=400, detail="No valid MCP session ID provided")
 
     async def _write_json(self, payload: dict[str, Any]) -> None:

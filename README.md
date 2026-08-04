@@ -32,6 +32,12 @@ Open the production console foundation:
 http://127.0.0.1:8000/console/
 ```
 
+Assistant responses in the production console render safe GitHub Flavored Markdown, including
+headings, lists, tables, task lists, links, blockquotes, and fenced code. Raw HTML is disabled;
+user and tool-authored content remains plain text by default. The console typography baseline is
+15px for body text, 16px for chat, 14px for controls, 13px for labels and code, and 12px for
+tertiary metadata; mobile form controls remain 16px to avoid browser input zoom.
+
 The dependency-free development client remains available during migration:
 
 ```text
@@ -111,8 +117,10 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | --- | --- |
 | `MINIGENT_AUTH_MODE` | Authentication mode: development headers, static tokens, or JWT. |
 | `MINIGENT_SESSION_CREDENTIALS` / `MINIGENT_SESSION_SECRET` | Optional generic username/password-hash console sign-in with secure same-origin sessions. |
-| `MINIGENT_ADMIN_DB_PATH` / `MINIGENT_ADMIN_ENCRYPTION_KEY` | Durable encrypted tenant administration and execution configuration. |
-| `MINIGENT_ADMIN_MCP_SERVER_CATALOG` / `MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET` | Deployment-configured internal MCP quick-add cards for the tenant execution editor; use the `_SECRET` variant when entries contain credentials. |
+| `MINIGENT_ADMIN_DB_PATH` / `MINIGENT_ADMIN_ENCRYPTION_KEY` | Durable encrypted tenant administration, execution configuration, and write-only user MCP credential headers. The encryption key is required before personal credentials can be stored or used. |
+| `MINIGENT_ADMIN_MCP_SERVER_CATALOG` / `MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET` | Deployment-owned MCP definitions that platform admins can assign as a tenant ceiling and narrow per role or user; use the `_SECRET` variant when entries contain credentials. |
+| `MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS` | Optional provider-neutral administrative HTTP grant integrations; disabled when unset and excluded from runtime readiness and model tooling. Suspended/deleted users are durably queued for assignment cleanup and grant disabling. |
+| `MINIGENT_USER_DEPROVISIONING_INTERVAL_SECONDS` / `MINIGENT_USER_DEPROVISIONING_MAX_ATTEMPTS` | Poll interval and retry limit for durable user lifecycle deprovisioning (defaults: 5 seconds and 8 attempts). |
 | `MINIGENT_LLM_PROVIDER` | LLM provider such as `mock`, `openai`, `openrouter`, `openai-compatible`, `generic-oauth`, `google`, or `anthropic`. |
 | `MINIGENT_LLM_MODEL` | Model identifier for the selected provider. |
 | `MINIGENT_IMAGE_INPUT_ENABLED` | Enables image attachments from CLI/chat clients; unified config key is `[image_input].enabled`. |
@@ -121,7 +129,7 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | `MINIGENT_RATE_LIMIT_DB_PATH` | Optional shared SQLite token-bucket state for upload and run rate limits. |
 | `MINIGENT_THREAD_DB_PATH` | Optional SQLite path for persistent thread/message storage plus atomic cross-replica run leases and cancellation. |
 | `MINIGENT_OAUTH_STORE_PATH` / `MINIGENT_OAUTH_ENCRYPTION_KEYS` | Shared encrypted SQLite OAuth credentials, login-flow state, and coordinated multi-replica token refresh. |
-| `MINIGENT_TENANT_EXECUTION_CONFIGS` | Optional per-tenant LLM, tool, skill, capability, backend, and quality config. |
+| `MINIGENT_TENANT_EXECUTION_CONFIGS` | Optional per-tenant LLM, tool, skill, capability, backend, and quality config. Tenant execution config supplies shared resources; the partially implemented [user execution overlay](docs/user-execution-extensibility.md) adds personal agents, live personal skills, narrowing-only capability profiles, and policy-gated public HTTPS personal MCP servers without tenant config edits. Encrypted static credential headers are supported; interactive OAuth connection and refresh flows remain pending. |
 | `MINIGENT_MCP_BROKER_ENABLED` | Enables the peer-agent MCP broker path when using peer backends. |
 | `MINIGENT_MCP_BROKER_DB_PATH` | Optional shared SQLite path for cross-replica MCP broker sessions; bearer tokens are stored only as SHA-256 hashes. |
 | `MINIGENT_TOOL_TIMEOUT_SECONDS` | Default wall-clock limit for each runtime tool call before returning a structured timeout error. |
@@ -346,11 +354,14 @@ foundation includes a responsive, accessible application shell with persistent l
 selection, live readiness checks, a
 conversation workspace with thread history, message composition, NDJSON run streaming, activity
 inspection, cancellation controls, context usage inspection, raw model-context previews, and
-confirmed compaction, validated image selection, authenticated binary uploads, attachment previews,
+confirmed compaction. On narrow screens, the conversation rail is collapsed by default and available
+from the Conversations menu so the active chat retains the screen space. The console also supports
+validated image selection, authenticated binary uploads, attachment previews,
 and per-image detail controls, one-time private-value approval/denial, pending-consent recovery after
-reload, uncertain-action reconciliation, a tenant-owner settings workspace for profile, membership,
-password onboarding, domains, read-only entitlements, execution configuration, and tenant-scoped
-OpenAI OAuth credential import from Pi, and a separate
+reload, uncertain-action reconciliation, a personal setup workspace for versioned execution-overlay
+JSON plus write-only encrypted MCP credential creation, rotation, and deletion, a tenant-owner
+settings workspace for profile, membership, password onboarding, domains, read-only entitlements,
+execution configuration, and tenant-scoped OpenAI OAuth credential import from Pi, and a separate
 platform administration workspace with tenant provisioning and
 editing, user role/status management, domain verification, typed feature and limit entitlement
 editing with server validation, version visibility and confirmed reset, a sectioned execution

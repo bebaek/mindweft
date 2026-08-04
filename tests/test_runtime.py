@@ -14,6 +14,7 @@ from app.execution import (
     TenantExecutionContext,
     TenantQualityConfig,
     build_tool_registry_for_capability_profile,
+    build_tool_registry_for_constraints,
     build_tool_registry_for_skill,
     parse_tenant_execution_config,
 )
@@ -1951,6 +1952,53 @@ def test_build_tool_registry_for_skill_can_narrow_mcp_servers(monkeypatch) -> No
 
     assert {spec.name for spec in registry.specs()} == {"current_time", "home-assistant.ping"}
     assert [server["name"] for server in registry.mcp_servers()] == ["home-assistant"]
+
+    personal_registry = build_tool_registry_for_constraints(
+        config,
+        profile_allowed_local_tools=["current_time"],
+        profile_mcp_server_names={"home-assistant"},
+        allowed_mcp_server_names={"docs"},
+    )
+    assert {spec.name for spec in personal_registry.specs()} == {"current_time"}
+    assert personal_registry.mcp_servers() == []
+
+    subject_registry = build_tool_registry_for_skill(
+        config,
+        "home-assistant",
+        allowed_mcp_server_names={"docs"},
+    )
+    assert {spec.name for spec in subject_registry.specs()} == {"current_time"}
+    assert subject_registry.mcp_servers() == []
+
+
+def test_capability_profile_preserves_explicit_empty_tool_allowlists() -> None:
+    config = parse_tenant_execution_config(
+        PRINCIPAL.tenant_id,
+        {
+            "tools": {
+                "allowed_local_tools": ["current_time"],
+                "mcp_servers": [{"name": "docs", "url": "https://docs.example/mcp", "headers": {}}],
+            },
+            "capability_profiles": {
+                "default_profile": "safe-default",
+                "items": [
+                    {
+                        "name": "safe-default",
+                        "allowedLocalTools": [],
+                        "mcpServerNames": [],
+                    }
+                ],
+            },
+        },
+    )
+
+    profile = config.capability_profiles.items[0]
+    assert profile.allowed_local_tools == []
+    assert profile.mcp_server_names == []
+
+    registry = build_tool_registry_for_capability_profile(config, "safe-default")
+    assert registry.specs() == []
+    assert registry.mcp_servers() == []
 
 
 def test_runtime_capability_profile_can_narrow_tools_for_thread() -> None:

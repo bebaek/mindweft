@@ -1544,6 +1544,8 @@ def test_admin_tenants_create_json_sends_payload(monkeypatch: Any, capsys: Any) 
             "pro",
             "--region",
             "us",
+            "--provisioning-profile",
+            "generic-v1",
             "--metadata-json",
             '{"owner":"ops"}',
         ]
@@ -1561,6 +1563,7 @@ def test_admin_tenants_create_json_sends_payload(monkeypatch: Any, capsys: Any) 
                 "status": "active",
                 "plan": "pro",
                 "region": "us",
+                "provisioning_profile": "generic-v1",
                 "metadata": {"owner": "ops"},
             },
         )

@@ -2105,7 +2105,10 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "capability_profiles": {"default": None, "items": []},
     }
     assert client.create_thread(
-        skills=["coding", "review"], capability_profile="dev", llm_profile="claude"
+        agent_name="reviewer",
+        skills=["coding", "review"],
+        capability_profile="dev",
+        llm_profile="claude",
     ) == {"thread_id": "thread-1"}
     assert client.add_message("thread-1", "hello") == {"id": "message-1"}
     assert client.get_thread("thread-1") == {
@@ -2128,6 +2131,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "DELETE",
     ]
     assert requests[3]["payload"] == {
+        "agent_name": "reviewer",
         "skill_names": ["coding", "review"],
         "capability_profile": "dev",
         "llm_profile": "claude",

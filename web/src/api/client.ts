@@ -52,11 +52,27 @@ export interface ReadinessResponse {
 export interface ExecutionOptionItem {
   name: string;
   description?: string | null;
+  id?: string | null;
+  display_name?: string | null;
+  source?: "shared" | "user" | null;
+  version?: number | null;
 }
 
 export interface ExecutionOptionSection {
   default?: string | null;
+  defaults?: string[] | null;
   items: ExecutionOptionItem[];
+}
+
+export interface ExecutionAgentOptionItem extends ExecutionOptionItem {
+  skill_name?: string | null;
+  skills?: string[] | null;
+  capability_profile?: string | null;
+}
+
+export interface ExecutionAgentOptionSection {
+  default?: string | null;
+  items: ExecutionAgentOptionItem[];
 }
 
 export interface ExecutionOptionsResponse {
@@ -64,6 +80,42 @@ export interface ExecutionOptionsResponse {
   skills: ExecutionOptionSection;
   capability_profiles: ExecutionOptionSection;
   llm_profiles: ExecutionOptionSection;
+  agents: ExecutionAgentOptionSection;
+}
+
+export interface UserExecutionConfig {
+  tenant_id: string;
+  user_id: string;
+  config: Record<string, unknown>;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserExecutionConfigValidation {
+  valid: boolean;
+  errors: string[];
+  normalized_config?: Record<string, unknown> | null;
+}
+
+export interface UserExecutionCredential {
+  tenant_id: string;
+  user_id: string;
+  credential_ref: string;
+  header_name: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserExecutionCredentialListResponse {
+  items: UserExecutionCredential[];
+}
+
+export interface UserExecutionCredentialInput {
+  header_name: string;
+  header_value: string;
+  expected_version?: number | null;
 }
 
 export type ThreadStatus = "idle" | "running" | "error";
@@ -179,6 +231,7 @@ export interface AdminTenantInput {
   plan?: string | null;
   region?: string | null;
   metadata?: Record<string, unknown>;
+  provisioning_profile?: "none" | "generic-v1";
 }
 
 export interface AdminTenantPatch {
@@ -336,6 +389,162 @@ export interface AdminMcpServerCatalogItem {
 
 export interface AdminMcpServerCatalog {
   items: AdminMcpServerCatalogItem[];
+  managed: boolean;
+  allow_custom_mcp_servers: boolean;
+}
+
+export interface AdminExternalGrantProvider {
+  id: string;
+  title: string;
+  description: string;
+  allowed_permissions: string[];
+  resource_discovery_available: boolean;
+  audit_available: boolean;
+}
+
+export interface AdminExternalGrantProviderList {
+  providers: AdminExternalGrantProvider[];
+}
+
+export interface AdminExternalGrant {
+  resource_id: string;
+  subject_id: string;
+  permission: string;
+  enabled: boolean;
+  updated_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AdminExternalGrantList {
+  tenant_id: string;
+  provider_id: string;
+  grants: AdminExternalGrant[];
+}
+
+export interface AdminExternalGrantResource {
+  resource_id: string;
+  kind: string;
+  label: string;
+  allowed_permissions: string[];
+  configured: boolean;
+  enabled: boolean;
+}
+
+export interface AdminExternalGrantResourceList {
+  tenant_id: string;
+  provider_id: string;
+  resources: AdminExternalGrantResource[];
+}
+
+export interface AdminExternalGrantAuditState {
+  permission: string;
+  enabled: boolean;
+}
+
+export interface AdminExternalGrantAudit {
+  audit_id: number;
+  resource_id: string;
+  subject_id: string;
+  actor_id: string;
+  operation: string;
+  previous: AdminExternalGrantAuditState | null;
+  resulting: AdminExternalGrantAuditState | null;
+  created_at: string;
+}
+
+export interface AdminExternalGrantAuditList {
+  tenant_id: string;
+  provider_id: string;
+  entries: AdminExternalGrantAudit[];
+  next_cursor: number | null;
+}
+
+export interface AdminExternalGrantInput {
+  resource_id: string;
+  subject_id: string;
+  permission: string;
+  enabled: boolean;
+}
+
+export type AdminUserDeprovisioningState = "pending" | "processing" | "completed" | "dead_letter";
+
+export interface AdminUserDeprovisioningEvent {
+  id: string;
+  tenant_id: string;
+  user_record_id: string;
+  user_id: string;
+  target_status: TenantUserStatus;
+  actor_user_id: string;
+  state: AdminUserDeprovisioningState;
+  attempts: number;
+  next_attempt_at: string;
+  claimed_at: string | null;
+  completed_at: string | null;
+  last_error: string | null;
+  assignment_removed: boolean;
+  grants_disabled: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminUserDeprovisioningEventList {
+  tenant_id: string;
+  events: AdminUserDeprovisioningEvent[];
+  limit: number;
+  offset: number;
+  total: number;
+  next_offset: number | null;
+}
+
+export interface AdminMcpServerCatalogPolicy {
+  tenant_id: string;
+  item_ids: string[];
+  allow_custom_mcp_servers: boolean;
+  require_subject_assignment: boolean;
+  version: number;
+  updated_by?: string | null;
+  updated_at: string;
+}
+
+export interface AdminMcpServerCatalogPolicyInput {
+  item_ids: string[];
+  allow_custom_mcp_servers: boolean;
+  require_subject_assignment: boolean;
+}
+
+export type AdminMcpCatalogSubjectType = "user" | "role";
+
+export interface AdminMcpServerCatalogAssignment {
+  tenant_id: string;
+  subject_type: AdminMcpCatalogSubjectType;
+  subject_id: string;
+  item_ids: string[];
+  version: number;
+  updated_by?: string | null;
+  updated_at: string;
+}
+
+export interface AdminMcpServerCatalogAssignmentList {
+  tenant_id: string;
+  assignments: AdminMcpServerCatalogAssignment[];
+}
+
+export interface AdminMcpServerCatalogAccessPreviewEntry {
+  user_id: string;
+  display_name?: string | null;
+  email?: string | null;
+  role: TenantUserRole;
+  status: TenantUserStatus;
+  source: string;
+  item_ids: string[];
+  denied: boolean;
+}
+
+export interface AdminMcpServerCatalogAccessPreview {
+  tenant_id: string;
+  require_subject_assignment: boolean;
+  users: AdminMcpServerCatalogAccessPreviewEntry[];
 }
 
 export interface AdminExecutionValidationSection {
@@ -557,6 +766,63 @@ export class MinigentApiClient {
 
   getExecutionOptions(signal?: AbortSignal): Promise<ExecutionOptionsResponse> {
     return this.#request<ExecutionOptionsResponse>("/execution-options", { signal });
+  }
+
+  getUserExecutionConfig(signal?: AbortSignal): Promise<UserExecutionConfig> {
+    return this.#request<UserExecutionConfig>("/me/execution-config", { signal });
+  }
+
+  validateUserExecutionConfig(config: Record<string, unknown>): Promise<UserExecutionConfigValidation> {
+    return this.#request<UserExecutionConfigValidation>("/me/execution-config/validate", {
+      method: "POST",
+      body: JSON.stringify({ config }),
+    });
+  }
+
+  updateUserExecutionConfig(
+    config: Record<string, unknown>,
+    expectedVersion?: number,
+  ): Promise<UserExecutionConfig> {
+    return this.#request<UserExecutionConfig>("/me/execution-config", {
+      method: "PUT",
+      body: JSON.stringify({ config, expected_version: expectedVersion }),
+    });
+  }
+
+  deleteUserExecutionConfig(expectedVersion?: number): Promise<void> {
+    const query = expectedVersion === undefined
+      ? ""
+      : `?expected_version=${encodeURIComponent(String(expectedVersion))}`;
+    return this.#request<void>(`/me/execution-config${query}`, { method: "DELETE" });
+  }
+
+  listUserExecutionCredentials(signal?: AbortSignal): Promise<UserExecutionCredentialListResponse> {
+    return this.#request<UserExecutionCredentialListResponse>("/me/execution-credentials", {
+      signal,
+    });
+  }
+
+  updateUserExecutionCredential(
+    credentialRef: string,
+    input: UserExecutionCredentialInput,
+  ): Promise<UserExecutionCredential> {
+    return this.#request<UserExecutionCredential>(
+      `/me/execution-credentials/${encodeURIComponent(credentialRef)}`,
+      { method: "PUT", body: JSON.stringify(input) },
+    );
+  }
+
+  deleteUserExecutionCredential(
+    credentialRef: string,
+    expectedVersion?: number,
+  ): Promise<void> {
+    const query = expectedVersion === undefined
+      ? ""
+      : `?expected_version=${encodeURIComponent(String(expectedVersion))}`;
+    return this.#request<void>(
+      `/me/execution-credentials/${encodeURIComponent(credentialRef)}${query}`,
+      { method: "DELETE" },
+    );
   }
 
   getTenantContext(signal?: AbortSignal): Promise<TenantContextResponse> {
@@ -801,6 +1067,164 @@ export class MinigentApiClient {
     return this.#request<AdminAuditRecordList>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/audit-records${queryString(filters)}`,
       { signal },
+    );
+  }
+
+  listAdminExternalGrantProviders(signal?: AbortSignal): Promise<AdminExternalGrantProviderList> {
+    return this.#request<AdminExternalGrantProviderList>("/admin/external-grant-providers", {
+      signal,
+    });
+  }
+
+  listAdminUserDeprovisioningEvents(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminUserDeprovisioningEventList> {
+    return this.#request<AdminUserDeprovisioningEventList>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/user-deprovisioning-events`,
+      { signal },
+    );
+  }
+
+  retryAdminUserDeprovisioningEvent(
+    tenantId: string,
+    eventId: string,
+  ): Promise<AdminUserDeprovisioningEvent> {
+    return this.#request<AdminUserDeprovisioningEvent>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/user-deprovisioning-events/${encodeURIComponent(eventId)}/retry`,
+      { method: "POST" },
+    );
+  }
+
+  listAdminExternalGrants(
+    tenantId: string,
+    providerId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminExternalGrantList> {
+    return this.#request<AdminExternalGrantList>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/external-grants/${encodeURIComponent(providerId)}`,
+      { signal },
+    );
+  }
+
+  listAdminExternalGrantResources(
+    tenantId: string,
+    providerId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminExternalGrantResourceList> {
+    return this.#request<AdminExternalGrantResourceList>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/external-grants/${encodeURIComponent(providerId)}/resources`,
+      { signal },
+    );
+  }
+
+  listAdminExternalGrantAudit(
+    tenantId: string,
+    providerId: string,
+    options: { limit?: number; before_id?: number } = {},
+    signal?: AbortSignal,
+  ): Promise<AdminExternalGrantAuditList> {
+    return this.#request<AdminExternalGrantAuditList>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/external-grants/${encodeURIComponent(providerId)}/audit${queryString(options)}`,
+      { signal },
+    );
+  }
+
+  updateAdminExternalGrant(
+    tenantId: string,
+    providerId: string,
+    input: AdminExternalGrantInput,
+  ): Promise<AdminExternalGrant> {
+    return this.#request<AdminExternalGrant>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/external-grants/${encodeURIComponent(providerId)}`,
+      { method: "PUT", body: JSON.stringify(input) },
+    );
+  }
+
+  deleteAdminExternalGrant(
+    tenantId: string,
+    providerId: string,
+    resourceId: string,
+    subjectId: string,
+  ): Promise<void> {
+    return this.#request<void>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/external-grants/${encodeURIComponent(providerId)}/${encodeURIComponent(resourceId)}?subject_id=${encodeURIComponent(subjectId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  getAdminDeploymentMcpServerCatalog(signal?: AbortSignal): Promise<AdminMcpServerCatalog> {
+    return this.#request<AdminMcpServerCatalog>("/admin/mcp-server-catalog", { signal });
+  }
+
+  previewAdminMcpServerCatalogAccess(
+    tenantId: string,
+    requireSubjectAssignment: boolean,
+    signal?: AbortSignal,
+  ): Promise<AdminMcpServerCatalogAccessPreview> {
+    return this.#request<AdminMcpServerCatalogAccessPreview>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-access-preview?require_subject_assignment=${requireSubjectAssignment}`,
+      { signal },
+    );
+  }
+
+  getAdminMcpServerCatalogPolicy(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminMcpServerCatalogPolicy> {
+    return this.#request<AdminMcpServerCatalogPolicy>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-policy`,
+      { signal },
+    );
+  }
+
+  updateAdminMcpServerCatalogPolicy(
+    tenantId: string,
+    input: AdminMcpServerCatalogPolicyInput,
+  ): Promise<AdminMcpServerCatalogPolicy> {
+    return this.#request<AdminMcpServerCatalogPolicy>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-policy`,
+      { method: "PUT", body: JSON.stringify(input) },
+    );
+  }
+
+  deleteAdminMcpServerCatalogPolicy(tenantId: string): Promise<void> {
+    return this.#request<void>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-policy`,
+      { method: "DELETE" },
+    );
+  }
+
+  listAdminMcpServerCatalogAssignments(
+    tenantId: string,
+    signal?: AbortSignal,
+  ): Promise<AdminMcpServerCatalogAssignmentList> {
+    return this.#request<AdminMcpServerCatalogAssignmentList>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-assignments`,
+      { signal },
+    );
+  }
+
+  updateAdminMcpServerCatalogAssignment(
+    tenantId: string,
+    subjectType: AdminMcpCatalogSubjectType,
+    subjectId: string,
+    itemIds: string[],
+  ): Promise<AdminMcpServerCatalogAssignment> {
+    return this.#request<AdminMcpServerCatalogAssignment>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-assignments/${encodeURIComponent(subjectType)}/${encodeURIComponent(subjectId)}`,
+      { method: "PUT", body: JSON.stringify({ item_ids: itemIds }) },
+    );
+  }
+
+  deleteAdminMcpServerCatalogAssignment(
+    tenantId: string,
+    subjectType: AdminMcpCatalogSubjectType,
+    subjectId: string,
+  ): Promise<void> {
+    return this.#request<void>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog-assignments/${encodeURIComponent(subjectType)}/${encodeURIComponent(subjectId)}`,
+      { method: "DELETE" },
     );
   }
 

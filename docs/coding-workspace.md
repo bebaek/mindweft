@@ -238,8 +238,9 @@ server entries default to MCP `2026-07-28`: Minigent's official SDK v2 client pr
 `2025-11-25` initialization/session flow for older servers. Minigent applies tool and path
 policy around the SDK client. The stdio bridge and shared gateway translate both HTTP-facing
 forms through an SDK v2 client connected to each stdio subprocess, so modern requests do not
-need bridge-issued `MCP-Session-Id` headers while legacy requests remain session-checked. Each
-server entry can define:
+need bridge-issued `MCP-Session-Id` headers while legacy requests remain session-checked. The
+bridge keeps multiple bounded legacy sessions valid concurrently, so one client's initialize
+request does not invalidate another active client. Each server entry can define:
 
 - `name`: MCP server name registered in tenant config.
 - `transport`: `stdio` to start it behind the stdio bridge/gateway, or `http` to register an
@@ -576,7 +577,10 @@ shell for trusted local workspaces or run the bridge/server inside a separate sa
 
 `.env.coding.template` also includes a commented Generic OAuth LLM example for coding profiles.
 Uncomment it, fill in the OAuth/provider values, start the runner, then open
-`http://127.0.0.1:8000/oauth/generic/open` to authorize the LLM provider.
+`http://127.0.0.1:8000/oauth/generic/open` to authorize the LLM provider. The trusted-local coding
+runner first looks for its tenant-scoped credential and then falls back to the global credential
+created by this login route. This fallback is enabled only by the coding-workspace runner for its
+configured coding tenant; normal tenant execution remains strictly tenant-scoped.
 
 ## Smoke test
 
