@@ -110,6 +110,7 @@ context_compaction_enabled = true
 [llm]
 provider = "openrouter"
 model = "openai/gpt-test"
+input_modalities = ["text", "image"]
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://example.com/openrouter/v1"
 extra_headers = { "X-Test" = "yes" }
@@ -118,7 +119,35 @@ account_id_header = "X-Account-ID"
 [image_input]
 enabled = true
 max_bytes = 1234
+max_images = 3
+max_total_bytes = 2468
+max_pixels = 4000000
+max_dimension = 4096
 allowed_mime_types = ["image/png", "image/webp"]
+
+[attachments]
+db_path = "attachments.db"
+max_per_thread = 12
+max_bytes_per_thread = 3456
+max_per_tenant = 78
+max_bytes_per_tenant = 9012
+pending_ttl_seconds = 34
+cleanup_interval_seconds = 56
+
+[rate_limits]
+db_path = "rate-limits.db"
+upload_tenant_capacity = 30
+upload_tenant_refill_per_second = 0.5
+upload_user_capacity = 10
+upload_user_refill_per_second = 0.2
+run_tenant_capacity = 15
+run_tenant_refill_per_second = 0.3
+run_user_capacity = 5
+run_user_refill_per_second = 0.1
+concurrent_run_tenant_capacity = 4
+concurrent_run_user_capacity = 2
+concurrent_run_lease_seconds = 60
+concurrent_run_heartbeat_seconds = 20
 
 [mcp]
 servers = [{ name = "filesystem", url = "http://127.0.0.1:8765/mcp", headers = {} }]
@@ -221,6 +250,7 @@ max_payload_chars = 4096
     }
     assert settings.tenant_execution.default_llm.provider == "openrouter"
     assert settings.tenant_execution.default_llm.model == "openai/gpt-test"
+    assert settings.tenant_execution.default_llm.input_modalities == frozenset({"text", "image"})
     assert settings.quality.enabled is True
     assert settings.quality.provider == "openai-compatible"
     assert settings.quality.model == "quality-model"
@@ -231,7 +261,31 @@ max_payload_chars = 4096
     assert settings.quality.max_payload_chars == 4096
     assert settings.image_input.enabled is True
     assert settings.image_input.max_bytes == 1234
+    assert settings.image_input.max_images == 3
+    assert settings.image_input.max_total_bytes == 2468
+    assert settings.image_input.max_pixels == 4_000_000
+    assert settings.image_input.max_dimension == 4096
     assert settings.image_input.allowed_mime_types == frozenset({"image/png", "image/webp"})
+    assert settings.attachment_store.db_path == "attachments.db"
+    assert settings.attachment_store.max_per_thread == 12
+    assert settings.attachment_store.max_bytes_per_thread == 3456
+    assert settings.attachment_store.max_per_tenant == 78
+    assert settings.attachment_store.max_bytes_per_tenant == 9012
+    assert settings.attachment_store.pending_ttl_seconds == 34
+    assert settings.attachment_store.cleanup_interval_seconds == 56
+    assert settings.rate_limits.db_path == "rate-limits.db"
+    assert settings.rate_limits.uploads.tenant_capacity == 30
+    assert settings.rate_limits.uploads.tenant_refill_per_second == 0.5
+    assert settings.rate_limits.uploads.user_capacity == 10
+    assert settings.rate_limits.uploads.user_refill_per_second == 0.2
+    assert settings.rate_limits.runs.tenant_capacity == 15
+    assert settings.rate_limits.runs.tenant_refill_per_second == 0.3
+    assert settings.rate_limits.runs.user_capacity == 5
+    assert settings.rate_limits.runs.user_refill_per_second == 0.1
+    assert settings.rate_limits.concurrent_runs.tenant_capacity == 4
+    assert settings.rate_limits.concurrent_runs.user_capacity == 2
+    assert settings.rate_limits.concurrent_runs.lease_seconds == 60
+    assert settings.rate_limits.concurrent_runs.heartbeat_seconds == 20
     assert settings.mcp.servers[0].name == "filesystem"
     assert settings.peer_agents.agents[0].name == "local-agent"
     assert settings.logging.level == "DEBUG"
@@ -534,6 +588,7 @@ def test_load_environment_precedence_real_env_then_dotenv_then_minigent_toml(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     config_path = tmp_path / "minigent.toml"
     config_path.write_text(
@@ -569,6 +624,7 @@ def test_load_environment_supports_custom_dotenv_file(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     (tmp_path / "minigent.toml").write_text(
         """
 [llm]
@@ -749,6 +805,7 @@ def test_coding_runner_env_applies_minigent_toml_then_env_file_override(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CODING_WORKSPACES", raising=False)
     monkeypatch.delenv("MINIGENT_CODING_SHELL_ENABLED", raising=False)

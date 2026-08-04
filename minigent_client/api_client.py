@@ -318,12 +318,14 @@ class MinigentAPIClient:
     def create_thread(
         self,
         *,
+        agent_name: str | None = None,
         skill_name: str | None = None,
         skills: list[str] | None = None,
         capability_profile: str | None = None,
         llm_profile: str | None = None,
     ) -> dict[str, Any]:
         payload = _build_thread_create_payload(
+            agent_name=agent_name,
             skill_name=skill_name,
             skills=skills,
             capability_profile=capability_profile,
@@ -485,15 +487,20 @@ class MinigentAPIClient:
         parts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"content": content}
-        if parts is not None:
-            payload["parts"] = parts
+        uploaded_parts, uploaded_attachment_ids = self._upload_inline_image_parts(thread_id, parts)
+        if uploaded_parts is not None:
+            payload["parts"] = uploaded_parts
         if metadata is not None:
             payload["metadata"] = metadata
-        response = self.request_json(
-            "POST",
-            f"{self._config.base_url}/threads/{thread_id}/messages",
-            payload=payload,
-        )
+        try:
+            response = self.request_json(
+                "POST",
+                f"{self._config.base_url}/threads/{thread_id}/messages",
+                payload=payload,
+            )
+        except Exception:
+            self._discard_uploaded_attachments(thread_id, uploaded_attachment_ids)
+            raise
         if not isinstance(response, dict):
             raise RuntimeError("Minigent add-message response must be an object")
         return cast(dict[str, Any], response)
@@ -506,6 +513,28 @@ class MinigentAPIClient:
         if not isinstance(thread_id, str) or not thread_id:
             raise RuntimeError("Minigent create-thread response must include thread_id")
         return thread_id
+
+    def upload_attachment(
+        self,
+        thread_id: str,
+        *,
+        mime_type: str,
+        data: str,
+    ) -> dict[str, Any]:
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/threads/{thread_id}/attachments",
+            payload={"mime_type": mime_type, "data": data},
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent attachment response must be an object")
+        return cast(dict[str, Any], response)
+
+    def delete_attachment(self, thread_id: str, attachment_id: str) -> None:
+        self.request_json(
+            "DELETE",
+            f"{self._config.base_url}/threads/{thread_id}/attachments/{attachment_id}",
+        )
 
     def send_user_message(
         self, content: str, *, parts: list[dict[str, Any]] | None = None
@@ -520,6 +549,49 @@ class MinigentAPIClient:
             metadata={"raw_user_prompt": content},
             parts=formatted_parts,
         )
+
+    def _upload_inline_image_parts(
+        self,
+        thread_id: str,
+        parts: list[dict[str, Any]] | None,
+    ) -> tuple[list[dict[str, Any]] | None, list[str]]:
+        if parts is None:
+            return None, []
+        uploaded: list[dict[str, Any]] = []
+        attachment_ids: list[str] = []
+        try:
+            for part in parts:
+                clean_part = dict(part)
+                data = clean_part.get("data")
+                if clean_part.get("type") != "image" or not isinstance(data, str) or not data:
+                    uploaded.append(clean_part)
+                    continue
+                mime_type = clean_part.get("mime_type")
+                if not isinstance(mime_type, str) or not mime_type:
+                    raise RuntimeError("Image part must include mime_type")
+                attachment = self.upload_attachment(
+                    thread_id,
+                    mime_type=mime_type,
+                    data=data,
+                )
+                attachment_id = attachment.get("attachment_id")
+                if not isinstance(attachment_id, str) or not attachment_id:
+                    raise RuntimeError("Minigent attachment response must include attachment_id")
+                attachment_ids.append(attachment_id)
+                clean_part.pop("data", None)
+                clean_part["attachment_id"] = attachment_id
+                uploaded.append(clean_part)
+        except Exception:
+            self._discard_uploaded_attachments(thread_id, attachment_ids)
+            raise
+        return uploaded, attachment_ids
+
+    def _discard_uploaded_attachments(self, thread_id: str, attachment_ids: list[str]) -> None:
+        for attachment_id in attachment_ids:
+            try:
+                self.delete_attachment(thread_id, attachment_id)
+            except Exception:
+                pass
 
     def run_thread(
         self, thread_id: str | None = None, *, stream: bool | None = None
@@ -538,6 +610,76 @@ class MinigentAPIClient:
         if not isinstance(reply, str):
             raise RuntimeError("Minigent reply must be a string")
         return reply, None
+
+    def list_pending_private_value_consents(
+        self, thread_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        resolved_thread_id = thread_id or self.ensure_thread()
+        response = self.request_json(
+            "GET",
+            f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-consents/pending",
+        )
+        if not isinstance(response, list) or not all(isinstance(item, dict) for item in response):
+            raise RuntimeError("Minigent pending-consent response must be an array of objects")
+        return cast(list[dict[str, Any]], response)
+
+    def decide_private_value_consent(
+        self,
+        consent_id: str,
+        *,
+        approve: bool,
+        one_shot: bool = True,
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_thread_id = thread_id or self.ensure_thread()
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-consents/{consent_id}",
+            payload={"approve": approve, "one_shot": one_shot},
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent consent-decision response must be an object")
+        return cast(dict[str, Any], response)
+
+    def resume_private_value_consent(
+        self,
+        consent_id: str,
+        *,
+        thread_id: str | None = None,
+    ) -> tuple[str, dict[str, Any] | None]:
+        resolved_thread_id = thread_id or self.ensure_thread()
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-consents/{consent_id}/resume",
+        )
+        if not isinstance(response, dict) or not isinstance(response.get("reply"), str):
+            raise RuntimeError("Minigent consent-resume response must include a reply")
+        return response["reply"], None
+
+    def list_private_value_actions(self, thread_id: str | None = None) -> list[dict[str, Any]]:
+        resolved_thread_id = thread_id or self.ensure_thread()
+        response = self.request_json(
+            "GET",
+            f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-actions",
+        )
+        if not isinstance(response, list) or not all(isinstance(item, dict) for item in response):
+            raise RuntimeError("Minigent private-value action response must be an array of objects")
+        return cast(list[dict[str, Any]], response)
+
+    def discard_private_value_action(
+        self,
+        consent_id: str,
+        *,
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_thread_id = thread_id or self.ensure_thread()
+        response = self.request_json(
+            "DELETE",
+            f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-actions/{consent_id}",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent discarded-action response must be an object")
+        return cast(dict[str, Any], response)
 
     def compact_thread(self, thread_id: str) -> dict[str, Any]:
         response = self.request_json(
@@ -854,6 +996,7 @@ def _build_query(params: dict[str, object | None]) -> str:
 
 def _build_thread_create_payload(
     *,
+    agent_name: str | None,
     skill_name: str | None,
     skills: list[str] | None,
     capability_profile: str | None,
@@ -862,6 +1005,8 @@ def _build_thread_create_payload(
     if skill_name is not None and skills is not None:
         raise ValueError("Provide either skill_name or skills, not both.")
     payload: dict[str, Any] = {}
+    if agent_name is not None:
+        payload["agent_name"] = agent_name
     if skill_name is not None:
         payload["skill_name"] = skill_name
     if skills is not None:

@@ -9,10 +9,11 @@ from typing import Any
 
 import httpx
 import jwt
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from jwt import InvalidTokenError, PyJWK
 
 from app.models import Principal
+from app.session_auth import SESSION_COOKIE_NAME, principal_from_session_request
 
 USER_HEADER = "X-Minigent-User-Id"
 TENANT_HEADER = "X-Minigent-Tenant-Id"
@@ -96,12 +97,18 @@ def validate_auth_settings() -> AuthSettings:
 
 
 async def require_principal(
+    request: Request,
     authorization: str | None = Header(default=None),
     x_minigent_user_id: str | None = Header(default=None),
     x_minigent_tenant_id: str | None = Header(default=None),
     x_minigent_admin: str | None = Header(default=None),
 ) -> Principal:
     settings = validate_auth_settings()
+
+    if authorization is None and request.cookies.get(SESSION_COOKIE_NAME):
+        session_principal = principal_from_session_request(request)
+        if session_principal is not None:
+            return session_principal
 
     if settings.mode == AUTH_MODE_DEV_HEADERS:
         return _principal_from_headers(

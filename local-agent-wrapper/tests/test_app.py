@@ -18,6 +18,7 @@ def test_agent_card() -> None:
 
         assert response.status_code == 200
         assert response.json()["name"] == "pi-coding-agent"
+        assert "task.idempotent_create" in response.json()["capabilities"]
 
 
 def test_task_captures_stdout_and_stderr(tmp_path: Path) -> None:
@@ -51,6 +52,90 @@ def test_task_captures_stdout_and_stderr(tmp_path: Path) -> None:
         }
         assert "stdout: hello" in result["stdout_tail"]
         assert "stderr: warning" in result["stderr_tail"]
+
+
+def test_task_create_with_client_id_is_idempotent(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    launches = tmp_path / "launches.txt"
+    fake_agent.write_text(
+        f"open({str(launches)!r}, 'a', encoding='utf-8').write('launched\\n')\nprint('done')\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+    )
+    task_id = "task_0123456789abcdef0123456789abcdef"
+    request = {"task_id": task_id, "cwd": str(tmp_path), "prompt": "hello"}
+
+    with TestClient(create_app(settings)) as client:
+        first = client.post("/tasks", json=request)
+        second = client.post("/tasks", json=request)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["task_id"] == task_id
+        assert second.json()["task_id"] == task_id
+        _wait_for_terminal_task(client, task_id)
+
+    assert launches.read_text(encoding="utf-8").splitlines() == ["launched"]
+
+
+def test_task_create_rejects_conflicting_client_id_reuse(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    fake_agent.write_text("print('done')\n", encoding="utf-8")
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+    )
+    task_id = "task_0123456789abcdef0123456789abcdef"
+
+    with TestClient(create_app(settings)) as client:
+        first = client.post(
+            "/tasks", json={"task_id": task_id, "cwd": str(tmp_path), "prompt": "first"}
+        )
+        conflict = client.post(
+            "/tasks", json={"task_id": task_id, "cwd": str(tmp_path), "prompt": "second"}
+        )
+
+    assert first.status_code == 200
+    assert conflict.status_code == 409
+    assert conflict.json() == {
+        "detail": f"Task '{task_id}' already exists with a different request"
+    }
+
+
+def test_cancel_before_create_leaves_tombstone_that_blocks_process_start(tmp_path: Path) -> None:
+    fake_agent = tmp_path / "fake_agent.py"
+    marker = tmp_path / "started.txt"
+    fake_agent.write_text(f"open({str(marker)!r}, 'w').write('started')\n", encoding="utf-8")
+    settings = Settings(
+        agent_command=(sys.executable, str(fake_agent)),
+        allowed_workspaces=(tmp_path,),
+    )
+    task_id = "task_0123456789abcdef0123456789abcdef"
+
+    with TestClient(create_app(settings)) as client:
+        canceled = client.post(f"/tasks/{task_id}/cancel")
+        created = client.post(
+            "/tasks", json={"task_id": task_id, "cwd": str(tmp_path), "prompt": "hello"}
+        )
+
+    assert canceled.status_code == 200
+    assert canceled.json()["status"] == "canceled"
+    assert created.status_code == 200
+    assert created.json()["task_id"] == task_id
+    assert created.json()["status"] == "canceled"
+    assert not marker.exists()
+
+
+def test_task_create_rejects_invalid_client_id(tmp_path: Path) -> None:
+    with TestClient(create_app(Settings(allowed_workspaces=(tmp_path,)))) as client:
+        response = client.post(
+            "/tasks", json={"task_id": "predictable", "cwd": str(tmp_path), "prompt": "hello"}
+        )
+
+    assert response.status_code == 422
 
 
 def test_create_task_response_includes_links_and_artifacts(tmp_path: Path) -> None:

@@ -19,28 +19,63 @@ default = "mock"
 
 [llm.providers.mock]
 provider = "mock"
+input_modalities = ["text"]
 
 # Add named profiles here, then select one with `minigent chat --llm openrouter`,
 # `minigent run --llm openrouter`, or the browser settings panel.
 # [llm.providers.openrouter]
 # provider = "openrouter"
 # model = "anthropic/claude-sonnet-4.5"
+# input_modalities = ["text", "image"]
 # api_key_env = "OPENROUTER_API_KEY"
 # base_url = "https://openrouter.ai/api/v1"
 #
 # [llm.providers.anthropic]
 # provider = "anthropic"
 # model = "claude-opus-5"
+# input_modalities = ["text", "image"]
 # api_key_env = "ANTHROPIC_API_KEY"
 # base_url = "https://api.anthropic.com/v1"
 # thinking_enabled = true
 # thinking_effort = "high"
 
 [image_input]
-# Enable attaching images with --image or /image when using a vision-capable model/provider.
+# Enable image attachments from the CLI and browser when using a vision-capable model/provider.
 enabled = false
 # max_bytes = 5242880
+# max_images = 8
+# max_total_bytes = 20971520
+# max_pixels = 64000000
+# max_dimension = 16384
 # allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
+
+[attachments]
+# Use persistent SQLite in multi-replica or restart-safe deployments.
+# db_path = "/data/minigent-attachments.db"
+# max_per_thread = 100
+# max_bytes_per_thread = 268435456
+# max_per_tenant = 1000
+# max_bytes_per_tenant = 1073741824
+# pending_ttl_seconds = 86400
+# cleanup_interval_seconds = 900
+# Encryption keys are environment-only; see MINIGENT_ATTACHMENT_ENCRYPTION_KEYS.
+
+[rate_limits]
+# Set a shared SQLite path when enabling limits across multiple replicas.
+# db_path = "/data/minigent-rate-limits.db"
+# A capacity of 0 disables that tenant or user bucket.
+# upload_tenant_capacity = 0
+# upload_tenant_refill_per_second = 0.0166666667
+# upload_user_capacity = 0
+# upload_user_refill_per_second = 0.0166666667
+# run_tenant_capacity = 0
+# run_tenant_refill_per_second = 0.0166666667
+# run_user_capacity = 0
+# run_user_refill_per_second = 0.0166666667
+# concurrent_run_tenant_capacity = 0
+# concurrent_run_user_capacity = 0
+# concurrent_run_lease_seconds = 60
+# concurrent_run_heartbeat_seconds = 20
 
 [coding]
 enabled = true
@@ -59,8 +94,10 @@ shell_enabled = false
 # dirs = ["./skills", "~/.claude/skills"]
 
 [mcp]
+# Private placeholders are denied at tool boundaries by default. For an explicitly trusted
+# server/tool, allow only the argument paths that may be resolved after model generation:
 # servers = [
-#   { name = "filesystem", url = "http://127.0.0.1:8765/mcp", headers = {} },
+#   { name = "trusted-mail", url = "http://127.0.0.1:8765/mcp", headers = {}, allowed_tools = ["send"], private_value_policy = "deny", private_value_tool_policies = { send = { mode = "resolve_selected", argument_paths = ["recipient.email", "cc[*].email"] } } },
 # ]
 
 [voice]

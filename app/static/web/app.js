@@ -19,6 +19,9 @@ const runState = {
   currentThreadId: "",
 };
 
+const pendingImages = [];
+let imageInputConfigPromise = null;
+
 const elements = {
   status: document.querySelector("#status"),
   threadsButton: document.querySelector("#threads-button"),
@@ -74,6 +77,11 @@ const elements = {
   threadsRefreshButton: document.querySelector("#threads-refresh-button"),
   composer: document.querySelector("#composer"),
   messageInput: document.querySelector("#message-input"),
+  imagePreviewList: document.querySelector("#image-preview-list"),
+  attachImageButton: document.querySelector("#attach-image-button"),
+  imageInput: document.querySelector("#image-input"),
+  cameraImageButton: document.querySelector("#camera-image-button"),
+  cameraImageInput: document.querySelector("#camera-image-input"),
   sendButton: document.querySelector("#send-button"),
   stopButton: document.querySelector("#stop-button"),
 };
@@ -121,6 +129,14 @@ elements.contextClose.addEventListener("click", closeContextSheet);
 elements.contextBackdrop.addEventListener("click", closeContextSheet);
 elements.compactContextButton.addEventListener("click", compactThreadContext);
 elements.stopButton.addEventListener("click", cancelActiveRun);
+elements.imageInput.addEventListener("change", async () => {
+  await addImageFiles(elements.imageInput.files || []);
+  elements.imageInput.value = "";
+});
+elements.cameraImageInput.addEventListener("change", async () => {
+  await addImageFiles(elements.cameraImageInput.files || []);
+  elements.cameraImageInput.value = "";
+});
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
@@ -138,6 +154,7 @@ for (const input of [elements.skill, elements.capabilityProfile, elements.llmPro
 
 for (const input of [elements.baseUrl, elements.apiToken, elements.userId, elements.tenantId]) {
   input.addEventListener("change", () => {
+    imageInputConfigPromise = null;
     saveFormState();
     loadExecutionOptions();
   });
@@ -146,6 +163,37 @@ for (const input of [elements.baseUrl, elements.apiToken, elements.userId, eleme
 elements.messageInput.addEventListener("input", () => {
   elements.messageInput.style.height = "auto";
   elements.messageInput.style.height = `${elements.messageInput.scrollHeight}px`;
+});
+
+elements.messageInput.addEventListener("paste", async (event) => {
+  const files = [...(event.clipboardData?.files || [])].filter((file) =>
+    String(file.type || "").toLowerCase().startsWith("image/"),
+  );
+  if (!files.length) {
+    return;
+  }
+  event.preventDefault();
+  await addImageFiles(files);
+});
+
+for (const eventName of ["dragenter", "dragover"]) {
+  elements.composer.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    elements.composer.classList.add("drag-active");
+  });
+}
+
+elements.composer.addEventListener("dragleave", () => {
+  elements.composer.classList.remove("drag-active");
+});
+
+elements.composer.addEventListener("drop", async (event) => {
+  event.preventDefault();
+  elements.composer.classList.remove("drag-active");
+  const files = [...(event.dataTransfer?.files || [])].filter((file) =>
+    String(file.type || "").toLowerCase().startsWith("image/"),
+  );
+  await addImageFiles(files);
 });
 
 window.visualViewport?.addEventListener("resize", syncViewportHeight);
@@ -173,8 +221,13 @@ elements.messageInput.addEventListener("keydown", (event) => {
 elements.composer.addEventListener("submit", async (event) => {
   event.preventDefault();
   const content = elements.messageInput.value.trim();
-  if (!content) {
+  if (!content && !pendingImages.length) {
     return;
+  }
+  const queuedImages = [...pendingImages];
+  const dismissKeyboard = usesOnScreenKeyboard();
+  if (dismissKeyboard) {
+    elements.messageInput.blur();
   }
 
   saveFormState();
@@ -182,16 +235,44 @@ elements.composer.addEventListener("submit", async (event) => {
   setStatus("Sending");
 
   let threadId = state.threadId;
+  let uploadedImages = [];
+  let messageStored = false;
   try {
     threadId = await ensureThread();
-    appendMessage({ role: "user", content });
+    uploadedImages = await uploadImages(threadId, queuedImages);
+    const parts = uploadedImages.length
+      ? [
+          ...(content ? [{ type: "text", text: content }] : []),
+          ...uploadedImages.map((image) => ({
+            type: "image",
+            mime_type: image.mimeType,
+            attachment_id: image.attachmentId,
+            detail: image.detail || "auto",
+          })),
+        ]
+      : null;
+    const displayParts = uploadedImages.length
+      ? [
+          ...(content ? [{ type: "text", text: content }] : []),
+          ...uploadedImages.map((image) => ({
+            type: "image",
+            mime_type: image.mimeType,
+            data: image.data,
+            attachment_id: image.attachmentId,
+            detail: image.detail || "auto",
+          })),
+        ]
+      : null;
+    appendMessage({ role: "user", content, ...(displayParts ? { parts: displayParts } : {}) });
     elements.messageInput.value = "";
     elements.messageInput.style.height = "auto";
 
     await requestJson(`/threads/${encodeURIComponent(threadId)}/messages`, {
       method: "POST",
-      body: { content },
+      body: parts ? { content, parts } : { content },
     });
+    messageStored = true;
+    clearPendingImages();
 
     setStatus("Running");
     await streamRun(threadId);
@@ -201,6 +282,9 @@ elements.composer.addEventListener("submit", async (event) => {
     }
     setStatus(`Thread ${threadId}`);
   } catch (error) {
+    if (!messageStored && uploadedImages.length) {
+      await discardUploadedImages(threadId, uploadedImages);
+    }
     if (runState.cancelRequested || error.name === "AbortError") {
       appendNotice("Run cancelled.");
       setRunStatus("Activity", {
@@ -224,9 +308,175 @@ elements.composer.addEventListener("submit", async (event) => {
     runState.cancelRequested = false;
     runState.currentThreadId = "";
     setBusy(false);
-    elements.messageInput.focus();
+    if (!dismissKeyboard) {
+      elements.messageInput.focus();
+    }
   }
 });
+
+async function uploadImages(threadId, images) {
+  if (!images.length) {
+    return [];
+  }
+  setStatus("Uploading images");
+  const uploaded = [];
+  try {
+    for (const image of images) {
+      const attachment = await uploadImageAttachment(threadId, image);
+      uploaded.push({ ...image, attachmentId: attachment.attachment_id });
+    }
+    return uploaded;
+  } catch (error) {
+    await discardUploadedImages(threadId, uploaded);
+    throw error;
+  }
+}
+
+async function uploadImageAttachment(threadId, image) {
+  const response = await fetch(
+    `${state.baseUrl}/threads/${encodeURIComponent(threadId)}/attachments/binary`,
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        "Content-Type": image.mimeType,
+      },
+      body: image.file,
+    },
+  );
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`${response.status} ${detail || response.statusText}`);
+  }
+  return response.json();
+}
+
+async function discardUploadedImages(threadId, images) {
+  await Promise.allSettled(
+    images.map((image) =>
+      requestJson(
+        `/threads/${encodeURIComponent(threadId)}/attachments/${encodeURIComponent(image.attachmentId)}`,
+        { method: "DELETE" },
+      ),
+    ),
+  );
+}
+
+async function addImageFiles(files) {
+  const candidates = [...files];
+  if (!candidates.length) {
+    return;
+  }
+  try {
+    const config = await getImageInputConfig();
+    if (!config.enabled) {
+      throw new Error("Image input is disabled on this server");
+    }
+    if (pendingImages.length + candidates.length > config.max_images) {
+      throw new Error(`A message can include at most ${config.max_images} images`);
+    }
+    const allowedMimeTypes = new Set(config.allowed_mime_types || []);
+    const currentBytes = pendingImages.reduce((total, image) => total + image.size, 0);
+    const candidateBytes = candidates.reduce((total, file) => total + Number(file.size || 0), 0);
+    if (currentBytes + candidateBytes > config.max_total_bytes) {
+      throw new Error("Selected images exceed the total size limit");
+    }
+    for (const file of candidates) {
+      const mimeType = String(file.type || "").toLowerCase();
+      if (!allowedMimeTypes.has(mimeType)) {
+        throw new Error(`Unsupported image type: ${mimeType || file.name || "unknown"}`);
+      }
+      if (Number(file.size || 0) > config.max_bytes) {
+        throw new Error(`Image exceeds the per-image size limit: ${file.name || "image"}`);
+      }
+    }
+    const encoded = await Promise.all(
+      candidates.map(async (file) => {
+        const dataUrl = await readFileAsDataUrl(file);
+        return {
+          name: file.name || "image",
+          mimeType: String(file.type).toLowerCase(),
+          size: Number(file.size || 0),
+          file,
+          detail: "auto",
+          data: dataUrl.slice(dataUrl.indexOf(",") + 1),
+          dataUrl,
+        };
+      }),
+    );
+    pendingImages.push(...encoded);
+    renderPendingImages();
+    setStatus(`${pendingImages.length} image(s) ready`);
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+function getImageInputConfig() {
+  if (!imageInputConfigPromise) {
+    imageInputConfigPromise = requestJson("/config")
+      .then((config) => config.image_input || { enabled: false })
+      .catch((error) => {
+        imageInputConfigPromise = null;
+        throw error;
+      });
+  }
+  return imageInputConfigPromise;
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(String(reader.result || "")));
+    reader.addEventListener("error", () => reject(new Error(`Could not read ${file.name || "image"}`)));
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderPendingImages() {
+  elements.imagePreviewList.replaceChildren();
+  pendingImages.forEach((image, index) => {
+    const preview = document.createElement("div");
+    preview.className = "image-preview";
+    const thumbnail = document.createElement("img");
+    thumbnail.src = image.dataUrl;
+    thumbnail.alt = image.name;
+    const detail = document.createElement("select");
+    detail.title = `Image detail for ${image.name}`;
+    detail.ariaLabel = `Image detail for ${image.name}`;
+    for (const [value, label] of [
+      ["auto", "Auto"],
+      ["low", "Low"],
+      ["high", "High"],
+    ]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      detail.append(option);
+    }
+    detail.value = image.detail || "auto";
+    detail.addEventListener("change", () => {
+      pendingImages[index].detail = detail.value;
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.title = `Remove ${image.name}`;
+    remove.ariaLabel = `Remove ${image.name}`;
+    remove.addEventListener("click", () => {
+      pendingImages.splice(index, 1);
+      renderPendingImages();
+    });
+    preview.append(thumbnail, detail, remove);
+    elements.imagePreviewList.append(preview);
+  });
+  elements.imagePreviewList.hidden = pendingImages.length === 0;
+}
+
+function clearPendingImages() {
+  pendingImages.splice(0, pendingImages.length);
+  renderPendingImages();
+}
 
 function openSettingsPanel() {
   elements.settingsPanel.classList.add("open");
@@ -283,6 +533,7 @@ function startNewThread() {
   state.threadId = "";
   saveFormState();
   renderMessages([]);
+  clearPendingImages();
   clearActivity();
   clearContext();
   updateThreadControls();
@@ -441,6 +692,7 @@ async function streamRun(threadId) {
   let assistantMessage = null;
   let runFailed = false;
   let runErrorMessage = "Run failed";
+  let pendingConsent = null;
   const peerTaskStatuses = new Map();
   const seenProgressLabels = new Set();
   runState.abortController = new AbortController();
@@ -466,6 +718,12 @@ async function streamRun(threadId) {
         setStatus(event.detail || "Run failed", true);
         return;
       }
+      if (event.type === "private_value.consent_required") {
+        pendingConsent = event.request || null;
+        addActivityEvent("Private-value consent required", event);
+        setRunStatus("Consent required", { forceVisible: true });
+        return;
+      }
       const label = formatRunEvent(event, peerTaskStatuses);
       if (label && !seenProgressLabels.has(label)) {
         seenProgressLabels.add(label);
@@ -483,9 +741,95 @@ async function streamRun(threadId) {
   if (runFailed) {
     throw new Error(runErrorMessage);
   }
+  if (pendingConsent) {
+    await handlePrivateValueConsent(threadId, pendingConsent);
+    return;
+  }
   if (!assistantMessage && !runState.cancelRequested) {
     throw new Error("Run stream ended without an assistant message.");
   }
+}
+
+async function handlePrivateValueConsent(threadId, consent) {
+  const disclosures = Array.isArray(consent.disclosures) ? consent.disclosures : [];
+  const summary = disclosures
+    .map((item) => `${item.count || 1} ${item.kind || "private value"} at ${item.path || "unknown path"}`)
+    .join("\n");
+  const prompt = disclosures.length
+    ? `Allow ${consent.tool_name || "this tool"} to receive:\n\n${summary}\n\nThis approval applies only to this exact tool call.`
+    : `Approve the exact ${consent.tool_name || "tool"} action?\n\nNo private values will be disclosed. This approval applies only to this exact tool call.`;
+  const approved = window.confirm(prompt);
+  const consentId = consent.consent_id;
+  if (!consentId) {
+    throw new Error("Consent request did not include an ID.");
+  }
+  await requestJson(
+    `/threads/${encodeURIComponent(threadId)}/private-value-consents/${encodeURIComponent(consentId)}`,
+    {
+      method: "POST",
+      body: { approve: approved, one_shot: true },
+    },
+  );
+  if (!approved) {
+    appendNotice("Private-value disclosure denied.");
+    setRunStatus("Consent denied", { completed: true, forceVisible: true });
+    return;
+  }
+  setRunStatus("Resuming approved action…");
+  addActivityEvent("Private-value disclosure approved; resuming exact tool call");
+  try {
+    await requestJson(
+      `/threads/${encodeURIComponent(threadId)}/private-value-consents/${encodeURIComponent(consentId)}/resume`,
+      { method: "POST" },
+    );
+  } catch (error) {
+    const discarded = await offerPrivateValueActionReconciliation(threadId, consentId);
+    if (discarded) {
+      return;
+    }
+    throw error;
+  }
+  await refreshMessages();
+  setRunStatus("Activity", { completed: true, hint: "Approved action completed" });
+}
+
+async function offerPrivateValueActionReconciliation(threadId, consentId) {
+  let actions;
+  try {
+    actions = await requestJson(`/threads/${encodeURIComponent(threadId)}/private-value-actions`);
+  } catch (error) {
+    addActivityEvent(`Could not inspect private action state: ${error.message}`, null, true);
+    return false;
+  }
+  const action = Array.isArray(actions)
+    ? actions.find((item) => item && item.consent_id === consentId)
+    : null;
+  if (!action || action.state !== "executing") {
+    return false;
+  }
+  const toolName = action.tool_name || "tool";
+  appendNotice(
+    `${toolName} may have completed, but Minigent could not confirm the outcome. ` +
+      "Check the external system before retrying.",
+  );
+  setRunStatus("Action outcome unknown", { completed: true, forceVisible: true });
+  addActivityEvent("Private action outcome unknown; automatic replay blocked", action, true);
+  const discard = window.confirm(
+    `${toolName} was already claimed and may have completed.\n\n` +
+      "First check the external system. Discard the local action record now?\n\n" +
+      "Discarding does not undo an external side effect.",
+  );
+  if (!discard) {
+    return false;
+  }
+  await requestJson(
+    `/threads/${encodeURIComponent(threadId)}/private-value-actions/${encodeURIComponent(consentId)}`,
+    { method: "DELETE" },
+  );
+  appendNotice("Discarded the reconciled private action record. No automatic retry was attempted.");
+  setRunStatus("Action record discarded", { completed: true, forceVisible: true });
+  addActivityEvent("Discarded reconciled private action record");
+  return true;
 }
 
 async function requestJson(path, options = {}) {
@@ -602,9 +946,50 @@ function appendMessage(message) {
   content.className = "content";
   renderMessageContent(content, message.content || "", message.role || "assistant");
   item.append(role, content);
+  appendMessageImages(item, message.parts || []);
   elements.messages.append(item);
   scrollMessagesToBottom();
   return item;
+}
+
+function appendMessageImages(item, parts) {
+  const imageParts = parts.filter(
+    (part) => part?.type === "image" && (part.data || part.attachment_id),
+  );
+  if (!imageParts.length) {
+    return;
+  }
+  const images = document.createElement("div");
+  images.className = "message-images";
+  for (const part of imageParts) {
+    const image = document.createElement("img");
+    if (part.data) {
+      image.src = `data:${part.mime_type};base64,${part.data}`;
+    } else {
+      loadAttachmentUrl(state.threadId, part.attachment_id)
+        .then((url) => {
+          image.src = url;
+        })
+        .catch(() => {
+          image.alt = "Attached image unavailable";
+        });
+    }
+    image.alt = "Attached image";
+    image.loading = "lazy";
+    images.append(image);
+  }
+  item.append(images);
+}
+
+async function loadAttachmentUrl(threadId, attachmentId) {
+  const response = await fetch(
+    `${state.baseUrl}/threads/${encodeURIComponent(threadId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    { headers: authHeaders() },
+  );
+  if (!response.ok) {
+    throw new Error(`Attachment fetch failed: ${response.status}`);
+  }
+  return URL.createObjectURL(await response.blob());
 }
 
 function renderMessageContent(target, text, role) {
@@ -1192,6 +1577,10 @@ function scrollMessagesToBottom() {
   });
 }
 
+function usesOnScreenKeyboard() {
+  return window.matchMedia?.("(hover: none) and (pointer: coarse)")?.matches || false;
+}
+
 function shouldSubmitOnEnter(event) {
   if (event.shiftKey || event.isComposing) {
     return false;
@@ -1208,6 +1597,13 @@ function setBusy(isBusy) {
   elements.contextButton.disabled = isBusy || !state.threadId;
   elements.moreContextButton.disabled = isBusy || !state.threadId;
   elements.threadsButton.disabled = isBusy;
+  elements.messageInput.disabled = isBusy;
+  elements.attachImageButton.classList.toggle("disabled", isBusy);
+  elements.attachImageButton.ariaDisabled = String(isBusy);
+  elements.imageInput.disabled = isBusy;
+  elements.cameraImageButton.classList.toggle("disabled", isBusy);
+  elements.cameraImageButton.ariaDisabled = String(isBusy);
+  elements.cameraImageInput.disabled = isBusy;
 }
 
 function setStatus(message, isError = false) {

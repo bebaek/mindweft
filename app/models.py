@@ -145,6 +145,7 @@ class Message(BaseModel):
 class Thread(BaseModel):
     thread_id: str = Field(default_factory=lambda: str(uuid4()))
     tenant_id: str
+    execution_user_id: str | None = None
     skill_name: str | None = None
     skill_names: list[str] | None = None
     capability_profile: str | None = None
@@ -208,6 +209,7 @@ class ThreadListResponse(BaseModel):
 
 class CreateThreadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    agent_name: str | None = None
     skill_name: str | None = None
     skill_names: list[str] | None = None
     capability_profile: str | None = None
@@ -217,22 +219,32 @@ class CreateThreadRequest(BaseModel):
 class ExecutionOptionItem(BaseModel):
     name: str
     description: str | None = None
+    id: str | None = None
+    display_name: str | None = None
+    source: str | None = None
+    version: int | None = None
 
 
 class ExecutionOptionSection(BaseModel):
     default: str | None = None
+    defaults: list[str] | None = None
     items: list[ExecutionOptionItem] = Field(default_factory=list)
 
 
 class ExecutionAgentOptionItem(BaseModel):
     name: str
     description: str | None = None
+    id: str | None = None
+    display_name: str | None = None
+    source: str | None = None
+    version: int | None = None
     skill_name: str | None = None
     skills: list[str] | None = None
     capability_profile: str | None = None
 
 
 class ExecutionAgentOptionSection(BaseModel):
+    default: str | None = None
     items: list[ExecutionAgentOptionItem] = Field(default_factory=list)
 
 
@@ -248,6 +260,11 @@ class AddMessageRequest(BaseModel):
     content: str = ""
     parts: list[MessagePart] | None = None
     metadata: dict[str, Any] | None = None
+
+
+class PrivateValueConsentDecisionRequest(BaseModel):
+    approve: bool
+    one_shot: bool = True
 
 
 class RunThreadResponse(BaseModel):

@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from threading import Lock
 from typing import Any, Literal, Mapping
 
 from fastapi import HTTPException
 
-from app.admin_store import SQLiteTenantConfigStore
+from app.admin_store import SQLiteTenantConfigStore, TenantMCPServerCatalogPolicy
 from app.llm import (
     AnthropicMessagesAdapter,
     GenericOAuthResponsesAdapter,
@@ -19,7 +19,15 @@ from app.llm import (
     OpenAICompatibleAdapter,
     build_llm_adapter_from_env,
 )
-from app.mcp import MCPHTTPClient, MCPPathPolicy, MCPServerConfig, load_mcp_server_configs_from_env
+from app.mcp import (
+    DEFAULT_MCP_PROTOCOL_VERSION,
+    MCPHTTPClient,
+    MCPPathPolicy,
+    MCPServerConfig,
+    load_mcp_server_configs_from_env,
+    parse_mcp_private_value_policy,
+    parse_mcp_private_value_tool_policies,
+)
 from app.mcp_manager import MCPServerManager
 from app.oauth import (
     GENERIC_OAUTH_PROVIDER,
@@ -32,6 +40,7 @@ from app.oauth import (
     OAUTH_SCOPE_ENV,
     OAUTH_STORE_PATH_ENV,
     OAUTH_TOKEN_URL_ENV,
+    GenericOAuthProvider,
 )
 from app.redaction import ToolResultRedactionPolicy, parse_tool_result_redaction_policy
 from app.tools import DEFAULT_LOCAL_TOOL_NAMES, LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry
@@ -44,6 +53,8 @@ TENANT_CONFIG_SOURCE_STORE = "store"
 TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS = "store-with-defaults"
 TENANT_ENV_PLACEHOLDER_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 AGENT_BACKEND_ENV = "MINIGENT_AGENT_BACKEND"
+CODING_TENANT_ID_ENV = "MINIGENT_CODING_TENANT_ID"
+CODING_OAUTH_GLOBAL_FALLBACK_ENV = "MINIGENT_CODING_OAUTH_GLOBAL_FALLBACK"
 AGENT_BACKEND_PEER_ENV = "MINIGENT_AGENT_BACKEND_PEER"
 AGENT_BACKEND_CWD_ENV = "MINIGENT_AGENT_BACKEND_CWD"
 AGENT_BACKEND_TIMEOUT_ENV = "MINIGENT_AGENT_BACKEND_TIMEOUT_SECONDS"
@@ -61,6 +72,8 @@ QUALITY_TIMEOUT_ENV = "MINIGENT_REMOTE_QUALITY_TIMEOUT"
 QUALITY_MAX_PAYLOAD_CHARS_ENV = "MINIGENT_REMOTE_QUALITY_MAX_PAYLOAD_CHARS"
 LLM_PROFILES_ENV = "MINIGENT_LLM_PROFILES"
 LLM_DEFAULT_PROFILE_ENV = "MINIGENT_LLM_DEFAULT_PROFILE"
+LLM_INPUT_MODALITIES_ENV = "MINIGENT_LLM_INPUT_MODALITIES"
+SUPPORTED_INPUT_MODALITIES = frozenset({"text", "image", "audio", "video", "document"})
 
 
 @dataclass(frozen=True)
@@ -76,6 +89,7 @@ class TenantLLMConfig:
     thinking_budget_tokens: int | None = None
     thinking_effort: str = "high"
     prompt_cache_enabled: bool = True
+    input_modalities: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -217,6 +231,7 @@ class TenantAgentPresetConfig:
 
 @dataclass(frozen=True)
 class TenantAgentPresetsConfig:
+    default_agent: str | None = None
     items: list[TenantAgentPresetConfig] = field(default_factory=list)
 
 
@@ -431,10 +446,10 @@ class InMemoryTenantExecutionResolver(TenantExecutionResolver):
                 mcp_manager=self._mcp_manager,
             )
             context = TenantExecutionContext(
-                llm_adapter=_build_llm_adapter(config.llm),
+                llm_adapter=_build_llm_adapter(config.llm, tenant_id=tenant_id),
                 tool_registry=registry,
                 config=config,
-                llm_adapters=_build_llm_adapters(config.llm_profiles),
+                llm_adapters=_build_llm_adapters(config.llm_profiles, tenant_id=tenant_id),
                 mcp_generation=generation,
                 mcp_manager=self._mcp_manager,
             )
@@ -493,10 +508,14 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
         *,
         fallback_resolver: TenantExecutionResolver | None = None,
         mcp_manager: MCPServerManager | None = None,
+        mcp_server_catalog: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         self._store = store
         self._fallback_resolver = fallback_resolver
         self._mcp_manager = mcp_manager
+        self._mcp_server_catalog = {
+            item_id: dict(server) for item_id, server in (mcp_server_catalog or {}).items()
+        }
         self._contexts: dict[str, TenantExecutionContext] = {}
         self._lock = Lock()
 
@@ -519,6 +538,16 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
                     detail=f"Tenant '{tenant_id}' has no execution configuration",
                 )
 
+            policy = self._store.get_tenant_mcp_server_catalog_policy(tenant_id)
+            policy_errors = tenant_mcp_server_catalog_policy_errors(
+                tenant_id,
+                payload,
+                policy,
+                self._mcp_server_catalog,
+            )
+            if policy_errors:
+                raise HTTPException(status_code=403, detail="; ".join(policy_errors))
+
             config = parse_tenant_execution_config(
                 tenant_id,
                 payload,
@@ -529,10 +558,10 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
                 mcp_manager=self._mcp_manager,
             )
             context = TenantExecutionContext(
-                llm_adapter=_build_llm_adapter(config.llm),
+                llm_adapter=_build_llm_adapter(config.llm, tenant_id=tenant_id),
                 tool_registry=registry,
                 config=config,
-                llm_adapters=_build_llm_adapters(config.llm_profiles),
+                llm_adapters=_build_llm_adapters(config.llm_profiles, tenant_id=tenant_id),
                 mcp_generation=generation,
                 mcp_manager=self._mcp_manager,
             )
@@ -674,6 +703,8 @@ def _llm_export_public_dict(
         exported["url" if provider == GENERIC_OAUTH_PROVIDER else "base_url"] = url
     if config.extra_headers:
         exported["extra_headers"] = dict(config.extra_headers)
+    if config.input_modalities is not None:
+        exported["input_modalities"] = sorted(config.input_modalities)
     return exported
 
 
@@ -841,6 +872,8 @@ def _tenant_capability_profile_public_dict(
 
 def _tenant_agent_presets_public_dict(config: TenantAgentPresetsConfig) -> dict[str, object]:
     exported: dict[str, object] = {}
+    if config.default_agent is not None:
+        exported["default_agent"] = config.default_agent
     if config.items:
         exported["items"] = [_tenant_agent_preset_public_dict(agent) for agent in config.items]
     return exported
@@ -1187,12 +1220,14 @@ def _tenant_llm_config_from_env(env: Mapping[str, str] | None = None) -> TenantL
     lookup = os.environ if env is None else env
     provider = lookup.get("MINIGENT_LLM_PROVIDER", "mock").strip().lower()
     extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS", lookup)
+    input_modalities = _input_modalities_from_env(lookup)
     if provider == GENERIC_OAUTH_PROVIDER:
         return TenantLLMConfig(
             provider=provider,
             model=_optional_str(lookup.get("MINIGENT_LLM_MODEL")),
             base_url=_optional_str(lookup.get("MINIGENT_LLM_URL")),
             extra_headers=extra_headers,
+            input_modalities=input_modalities,
         )
     if provider in {"google", "google-generative-ai", "gemini"}:
         return TenantLLMConfig(
@@ -1205,6 +1240,7 @@ def _tenant_llm_config_from_env(env: Mapping[str, str] | None = None) -> TenantL
             base_url=_optional_str(lookup.get("GOOGLE_BASE_URL")),
             api_key=_optional_str(lookup.get("GEMINI_API_KEY") or lookup.get("GOOGLE_API_KEY")),
             extra_headers=extra_headers,
+            input_modalities=input_modalities,
         )
     if provider == "openai":
         return TenantLLMConfig(
@@ -1213,6 +1249,7 @@ def _tenant_llm_config_from_env(env: Mapping[str, str] | None = None) -> TenantL
             base_url=_optional_str(lookup.get("OPENAI_BASE_URL")),
             api_key=_optional_str(lookup.get("OPENAI_API_KEY")),
             extra_headers=extra_headers,
+            input_modalities=input_modalities,
         )
     if provider == "openrouter":
         return TenantLLMConfig(
@@ -1221,8 +1258,13 @@ def _tenant_llm_config_from_env(env: Mapping[str, str] | None = None) -> TenantL
             base_url=_optional_str(lookup.get("OPENROUTER_BASE_URL")),
             api_key=_optional_str(lookup.get("OPENROUTER_API_KEY")),
             extra_headers=extra_headers,
+            input_modalities=input_modalities,
         )
-    return TenantLLMConfig(provider=provider or "mock", extra_headers=extra_headers)
+    return TenantLLMConfig(
+        provider=provider or "mock",
+        extra_headers=extra_headers,
+        input_modalities=input_modalities,
+    )
 
 
 def _json_string_map_env(name: str, env: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -1241,6 +1283,40 @@ def _json_string_map_env(name: str, env: Mapping[str, str] | None = None) -> dic
     return dict(parsed)
 
 
+def _input_modalities_from_env(
+    env: Mapping[str, str] | None = None,
+) -> frozenset[str] | None:
+    lookup = os.environ if env is None else env
+    raw = lookup.get(LLM_INPUT_MODALITIES_ENV, "").strip()
+    if not raw:
+        return None
+    modalities = frozenset(item.strip().lower() for item in raw.split(",") if item.strip())
+    invalid = modalities - SUPPORTED_INPUT_MODALITIES
+    if not modalities or invalid:
+        supported = ", ".join(sorted(SUPPORTED_INPUT_MODALITIES))
+        raise RuntimeError(
+            f"{LLM_INPUT_MODALITIES_ENV} must be a comma-separated subset of: {supported}"
+        )
+    return modalities
+
+
+def _parse_input_modalities(tenant_id: str, value: object) -> frozenset[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value or not all(isinstance(item, str) for item in value):
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' LLM input_modalities must be a non-empty array of strings"
+        )
+    modalities = frozenset(item.strip().lower() for item in value if item.strip())
+    invalid = modalities - SUPPORTED_INPUT_MODALITIES
+    if not modalities or invalid:
+        supported = ", ".join(sorted(SUPPORTED_INPUT_MODALITIES))
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' LLM input_modalities must be a subset of: {supported}"
+        )
+    return modalities
+
+
 def _parse_tenant_llm_config(tenant_id: str, payload: dict[str, Any]) -> TenantLLMConfig:
     provider = str(payload.get("provider", "mock")).strip().lower()
     extra_headers = payload.get("extra_headers") or payload.get("extraHeaders") or {}
@@ -1248,6 +1324,10 @@ def _parse_tenant_llm_config(tenant_id: str, payload: dict[str, Any]) -> TenantL
         isinstance(key, str) and isinstance(value, str) for key, value in extra_headers.items()
     ):
         raise RuntimeError(f"Tenant '{tenant_id}' LLM extra_headers must be an object of strings")
+    input_modalities = _parse_input_modalities(
+        tenant_id,
+        payload.get("input_modalities", payload.get("inputModalities")),
+    )
     timeout_value = payload.get("timeout", 30.0)
     try:
         timeout = float(timeout_value)
@@ -1311,6 +1391,7 @@ def _parse_tenant_llm_config(tenant_id: str, payload: dict[str, Any]) -> TenantL
         thinking_budget_tokens=thinking_budget_tokens,
         thinking_effort=thinking_effort,
         prompt_cache_enabled=prompt_cache_enabled,
+        input_modalities=input_modalities,
     )
 
 
@@ -1467,7 +1548,7 @@ def _parse_tenant_skills_config(
             )
         skill_allowed_local_tools = _optional_str_list(
             tenant_id,
-            entry.get("allowed_local_tools") or entry.get("allowedLocalTools"),
+            entry.get("allowed_local_tools", entry.get("allowedLocalTools")),
             f"skill '{name}' allowed_local_tools",
         )
         if skill_allowed_local_tools is not None:
@@ -1486,7 +1567,7 @@ def _parse_tenant_skills_config(
                     )
         mcp_server_names = _optional_str_list(
             tenant_id,
-            entry.get("mcp_server_names") or entry.get("mcpServerNames"),
+            entry.get("mcp_server_names", entry.get("mcpServerNames")),
             f"skill '{name}' mcp_server_names",
         )
         if mcp_server_names is not None:
@@ -1523,6 +1604,7 @@ def _parse_tenant_agent_presets_config(
     skills_config: TenantSkillsConfig,
     capability_profiles_config: TenantCapabilityProfilesConfig,
 ) -> TenantAgentPresetsConfig:
+    default_agent = _optional_str(payload.get("default_agent") or payload.get("defaultAgent"))
     items_raw = payload.get("items") or []
     if not isinstance(items_raw, list):
         raise RuntimeError(f"Tenant '{tenant_id}' agents.items must be an array")
@@ -1543,7 +1625,10 @@ def _parse_tenant_agent_presets_config(
         skill_name = _optional_str(entry.get("skill_name") or entry.get("skillName"))
         skills = _optional_str_list(
             tenant_id,
-            entry.get("skill_names") or entry.get("skillNames") or entry.get("skills"),
+            entry.get(
+                "skill_names",
+                entry.get("skillNames", entry.get("skills")),
+            ),
             f"agent preset '{name}' skill_names",
         )
         if skill_name is not None and skills is not None:
@@ -1578,7 +1663,11 @@ def _parse_tenant_agent_presets_config(
                 capability_profile=capability_profile,
             )
         )
-    return TenantAgentPresetsConfig(items=items)
+    if default_agent is not None and default_agent not in seen_names:
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' agents.default_agent must reference a configured agent preset"
+        )
+    return TenantAgentPresetsConfig(default_agent=default_agent, items=items)
 
 
 def _parse_tenant_capability_profiles_config(
@@ -1614,7 +1703,7 @@ def _parse_tenant_capability_profiles_config(
         seen_names.add(name)
         profile_allowed_local_tools = _optional_str_list(
             tenant_id,
-            entry.get("allowed_local_tools") or entry.get("allowedLocalTools"),
+            entry.get("allowed_local_tools", entry.get("allowedLocalTools")),
             f"capability profile '{name}' allowed_local_tools",
         )
         if profile_allowed_local_tools is not None:
@@ -1633,7 +1722,7 @@ def _parse_tenant_capability_profiles_config(
                     )
         mcp_server_names = _optional_str_list(
             tenant_id,
-            entry.get("mcp_server_names") or entry.get("mcpServerNames"),
+            entry.get("mcp_server_names", entry.get("mcpServerNames")),
             f"capability profile '{name}' mcp_server_names",
         )
         if mcp_server_names is not None:
@@ -1664,10 +1753,14 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
     name = entry.get("name")
     url = entry.get("url")
     headers = entry.get("headers") or {}
-    protocol_version = entry.get("protocolVersion") or entry.get("protocol_version") or "2025-11-25"
+    protocol_version = (
+        entry.get("protocolVersion")
+        or entry.get("protocol_version")
+        or DEFAULT_MCP_PROTOCOL_VERSION
+    )
     allowed_tools = _optional_str_list(
         tenant_id,
-        entry.get("allowed_tools") or entry.get("allowedTools"),
+        entry.get("allowed_tools", entry.get("allowedTools")),
         f"mcp server '{name}' allowed_tools",
     )
     path_policy = _parse_mcp_path_policy(
@@ -1678,6 +1771,24 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
     result_redaction_policy = parse_tool_result_redaction_policy(
         entry.get("result_redaction", entry.get("resultRedaction")),
         context=f"Tenant '{tenant_id}' mcp server '{name}'",
+    )
+    private_value_policy = parse_mcp_private_value_policy(
+        entry.get("private_value_policy", entry.get("privateValuePolicy")),
+        context=f"Tenant '{tenant_id}' mcp server '{name}'",
+    )
+    private_value_tool_policies = parse_mcp_private_value_tool_policies(
+        entry.get("private_value_tool_policies", entry.get("privateValueToolPolicies")),
+        context=f"Tenant '{tenant_id}' mcp server '{name}'",
+    )
+    forward_identity = entry.get("forward_identity", entry.get("forwardIdentity", False))
+    identity_audience = entry.get("identity_audience", entry.get("identityAudience", "private-dav"))
+    identity_scopes = (
+        _optional_str_list(
+            tenant_id,
+            entry.get("identity_scopes", entry.get("identityScopes")),
+            f"mcp server '{name}' identity_scopes",
+        )
+        or []
     )
     timeout_seconds = _positive_float_config(
         tenant_id,
@@ -1692,6 +1803,18 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         isinstance(key, str) and isinstance(value, str) for key, value in headers.items()
     ):
         raise RuntimeError(f"Tenant '{tenant_id}' mcp server headers must be a string map")
+    if not isinstance(forward_identity, bool):
+        raise RuntimeError(f"Tenant '{tenant_id}' mcp server forward_identity must be a boolean")
+    if not isinstance(identity_audience, str) or not identity_audience:
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' mcp server identity_audience must be a non-empty string"
+        )
+    if len(set(identity_scopes)) != len(identity_scopes):
+        raise RuntimeError(f"Tenant '{tenant_id}' mcp server identity_scopes contains duplicates")
+    if forward_identity and any(key.lower() == "authorization" for key in headers):
+        raise RuntimeError(
+            f"Tenant '{tenant_id}' mcp server cannot combine forward_identity with Authorization header"
+        )
     return MCPServerConfig(
         name=name,
         url=url,
@@ -1700,6 +1823,11 @@ def _parse_mcp_server_config(tenant_id: str, entry: Any) -> MCPServerConfig:
         allowed_tools=allowed_tools,
         path_policy=path_policy,
         result_redaction_policy=result_redaction_policy,
+        private_value_policy=private_value_policy,
+        private_value_tool_policies=private_value_tool_policies,
+        forward_identity=forward_identity,
+        identity_audience=identity_audience,
+        identity_scopes=tuple(identity_scopes),
         timeout_seconds=timeout_seconds,
     )
 
@@ -1717,19 +1845,41 @@ def _parse_mcp_path_policy(
         )
     deny_globs = _optional_str_list(
         tenant_id,
-        raw.get("deny_globs") or raw.get("denyGlobs"),
+        raw.get("deny_globs", raw.get("denyGlobs")),
         f"mcp server '{server_name}' path_policy.deny_globs",
     )
     allow_globs = _optional_str_list(
         tenant_id,
-        raw.get("allow_globs") or raw.get("allowGlobs"),
+        raw.get("allow_globs", raw.get("allowGlobs")),
         f"mcp server '{server_name}' path_policy.allow_globs",
     )
     return MCPPathPolicy(deny_globs=deny_globs or [], allow_globs=allow_globs or [])
 
 
-def _build_llm_adapters(configs: Mapping[str, TenantLLMConfig]) -> dict[str, LLMAdapter]:
-    return {name: _build_llm_adapter(config) for name, config in configs.items()}
+def _build_llm_adapters(
+    configs: Mapping[str, TenantLLMConfig],
+    *,
+    tenant_id: str | None = None,
+) -> dict[str, LLMAdapter]:
+    return {
+        name: _build_llm_adapter(config, tenant_id=tenant_id) for name, config in configs.items()
+    }
+
+
+def get_llm_config(
+    context: TenantExecutionContext,
+    profile_name: str | None,
+) -> TenantLLMConfig:
+    resolved = profile_name or context.config.default_llm_profile
+    if resolved is None:
+        return context.config.llm
+    config = context.config.llm_profiles.get(resolved)
+    if config is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown LLM profile '{resolved}' for tenant '{context.config.tenant_id}'",
+        )
+    return config
 
 
 def get_llm_adapter(
@@ -1748,7 +1898,11 @@ def get_llm_adapter(
     return adapter
 
 
-def _build_llm_adapter(config: TenantLLMConfig) -> LLMAdapter:
+def _build_llm_adapter(
+    config: TenantLLMConfig,
+    *,
+    tenant_id: str | None = None,
+) -> LLMAdapter:
     if config.provider == "mock":
         return MockLLMAdapter()
     if config.provider == "generic-oauth":
@@ -1756,9 +1910,20 @@ def _build_llm_adapter(config: TenantLLMConfig) -> LLMAdapter:
             raise RuntimeError("Tenant LLM provider 'generic-oauth' requires model")
         if not config.base_url:
             raise RuntimeError("Tenant LLM provider 'generic-oauth' requires base_url")
+        allow_global_credential_fallback = (
+            tenant_id is not None
+            and tenant_id == os.environ.get(CODING_TENANT_ID_ENV)
+            and os.environ.get(CODING_OAUTH_GLOBAL_FALLBACK_ENV, "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        oauth_provider = GenericOAuthProvider(
+            credential_tenant_id=tenant_id,
+            allow_global_credential_fallback=allow_global_credential_fallback,
+        )
         return GenericOAuthResponsesAdapter(
             url=config.base_url,
             model=config.model,
+            oauth_provider=oauth_provider,
             extra_headers=config.extra_headers,
             timeout=config.timeout,
         )
@@ -1945,6 +2110,73 @@ def _optional_str_list(tenant_id: str, value: object, label: str) -> list[str] |
     return list(value)
 
 
+def tenant_mcp_server_catalog_policy_errors(
+    tenant_id: str,
+    payload: Mapping[str, Any],
+    policy: TenantMCPServerCatalogPolicy | None,
+    catalog: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    """Return catalog-policy violations without duplicating execution parsing."""
+    if policy is None:
+        return []
+    tools = payload.get("tools")
+    if not isinstance(tools, Mapping):
+        return []
+    servers = tools.get("mcp_servers", tools.get("mcpServers", []))
+    if not isinstance(servers, list):
+        return []
+
+    catalog_by_name: dict[str, tuple[str, Mapping[str, Any]]] = {}
+    for item_id, server in catalog.items():
+        name = server.get("name")
+        if isinstance(name, str) and name:
+            catalog_by_name[name] = (item_id, server)
+    granted_ids = set(policy.item_ids)
+    errors: list[str] = []
+    for server in servers:
+        if not isinstance(server, Mapping):
+            continue
+        name = server.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        catalog_entry = catalog_by_name.get(name)
+        if catalog_entry is None:
+            if not policy.allow_custom_mcp_servers:
+                errors.append(
+                    f"Tenant '{tenant_id}' MCP server '{name}' is not in its assigned catalog"
+                )
+            continue
+        item_id, catalog_server = catalog_entry
+        if item_id not in granted_ids:
+            errors.append(
+                f"Tenant '{tenant_id}' MCP server '{name}' is not granted by its catalog policy"
+            )
+            continue
+        expected_url = catalog_server.get("url")
+        if isinstance(expected_url, str) and server.get("url") != expected_url:
+            errors.append(f"Tenant '{tenant_id}' MCP server '{name}' must use its catalog URL")
+        catalog_allowed = catalog_server.get("allowed_tools", catalog_server.get("allowedTools"))
+        configured_allowed = server.get("allowed_tools", server.get("allowedTools"))
+        if isinstance(catalog_allowed, list):
+            if not isinstance(configured_allowed, list):
+                errors.append(
+                    f"Tenant '{tenant_id}' MCP server '{name}' must define allowed_tools "
+                    "from its catalog grant"
+                )
+                continue
+            extra_tools = sorted(
+                tool
+                for tool in configured_allowed
+                if isinstance(tool, str) and tool not in catalog_allowed
+            )
+            if extra_tools:
+                errors.append(
+                    f"Tenant '{tenant_id}' MCP server '{name}' includes tools outside its "
+                    f"catalog grant: {', '.join(extra_tools)}"
+                )
+    return errors
+
+
 def _validate_local_tool_policy(tenant_id: str, payload: dict[str, Any]) -> list[str]:
     tools_payload = payload.get("tools") or {}
     if not isinstance(tools_payload, dict):
@@ -2079,6 +2311,22 @@ async def _validate_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
         }
 
 
+def get_agent_preset(
+    config: TenantExecutionConfig,
+    agent_name: str | None = None,
+) -> TenantAgentPresetConfig | None:
+    resolved_agent_name = agent_name or config.agents.default_agent
+    if resolved_agent_name is None:
+        return None
+    for agent in config.agents.items:
+        if agent.name == resolved_agent_name:
+            return agent
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unknown agent preset '{resolved_agent_name}' for tenant '{config.tenant_id}'",
+    )
+
+
 def get_skill_config(
     config: TenantExecutionConfig,
     skill_name: str | None = None,
@@ -2130,11 +2378,32 @@ def get_capability_profile(
     )
 
 
+def build_tool_registry_for_mcp_server_names(
+    config: TenantExecutionConfig,
+    allowed_mcp_server_names: set[str],
+    *,
+    mcp_manager: MCPServerManager | None = None,
+) -> ToolRegistry:
+    filtered_config = replace(
+        config,
+        tools=replace(
+            config.tools,
+            mcp_servers=[
+                server
+                for server in config.tools.mcp_servers
+                if server.name in allowed_mcp_server_names
+            ],
+        ),
+    )
+    return _build_registry_for_config(filtered_config, mcp_manager=mcp_manager)[0]
+
+
 def build_tool_registry_for_skill(
     config: TenantExecutionConfig,
     skill_name: str | None = None,
     *,
     mcp_manager: MCPServerManager | None = None,
+    allowed_mcp_server_names: set[str] | None = None,
 ) -> ToolRegistry:
     skill = get_skill_config(config, skill_name)
     allowed_local_tools = config.tools.allowed_local_tools
@@ -2146,6 +2415,8 @@ def build_tool_registry_for_skill(
         else:
             allowed_local_tools = sorted(set(allowed_local_tools) & set(skill.allowed_local_tools))
     mcp_servers = config.tools.mcp_servers
+    if allowed_mcp_server_names is not None:
+        mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
     if skill is not None and skill.mcp_server_names is not None:
         allowed_mcp_server_names = set(skill.mcp_server_names)
         mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
@@ -2162,57 +2433,95 @@ def build_tool_registry_for_skill(
     return _build_registry_for_config(skill_config, mcp_manager=mcp_manager)[0]
 
 
+def build_tool_registry_for_constraints(
+    config: TenantExecutionConfig,
+    *,
+    profile_allowed_local_tools: list[str] | None,
+    profile_mcp_server_names: set[str] | None,
+    personal_mcp_servers: list[MCPServerConfig] | None = None,
+    mcp_manager: MCPServerManager | None = None,
+    allowed_mcp_server_names: set[str] | None = None,
+) -> ToolRegistry:
+    """Build a registry by intersecting profile constraints with tenant permissions."""
+    allowed_local_tools = config.tools.allowed_local_tools
+    if profile_allowed_local_tools is not None:
+        if allowed_local_tools is None:
+            allowed_local_tools = list(profile_allowed_local_tools)
+        else:
+            allowed_local_tools = sorted(
+                set(allowed_local_tools) & set(profile_allowed_local_tools)
+            )
+    mcp_servers = config.tools.mcp_servers
+    if allowed_mcp_server_names is not None:
+        mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
+    if profile_mcp_server_names is not None:
+        mcp_servers = [server for server in mcp_servers if server.name in profile_mcp_server_names]
+    if personal_mcp_servers:
+        mcp_servers = [*mcp_servers, *personal_mcp_servers]
+
+    constrained_config = replace(
+        config,
+        tools=replace(
+            config.tools,
+            allowed_local_tools=allowed_local_tools,
+            mcp_servers=mcp_servers,
+        ),
+    )
+    return _build_registry_for_config(constrained_config, mcp_manager=mcp_manager)[0]
+
+
 def build_tool_registry_for_capability_profile(
     config: TenantExecutionConfig,
     capability_profile: str | None = None,
     *,
     mcp_manager: MCPServerManager | None = None,
+    allowed_mcp_server_names: set[str] | None = None,
 ) -> ToolRegistry:
     profile = get_capability_profile(config, capability_profile)
     if profile is None:
-        return _build_registry_for_config(config, mcp_manager=mcp_manager)[0]
+        if allowed_mcp_server_names is None:
+            return _build_registry_for_config(config, mcp_manager=mcp_manager)[0]
+        return build_tool_registry_for_mcp_server_names(
+            config, allowed_mcp_server_names, mcp_manager=mcp_manager
+        )
 
-    allowed_local_tools = config.tools.allowed_local_tools
-    if profile.allowed_local_tools is not None:
-        if allowed_local_tools is None:
-            allowed_local_tools = list(profile.allowed_local_tools)
-        else:
-            allowed_local_tools = sorted(
-                set(allowed_local_tools) & set(profile.allowed_local_tools)
-            )
-    mcp_servers = config.tools.mcp_servers
-    if profile.mcp_server_names is not None:
-        allowed_mcp_server_names = set(profile.mcp_server_names)
-        mcp_servers = [server for server in mcp_servers if server.name in allowed_mcp_server_names]
-
-    profile_config = TenantExecutionConfig(
-        tenant_id=config.tenant_id,
-        llm=config.llm,
-        tools=TenantToolConfig(
-            allowed_local_tools=allowed_local_tools,
-            mcp_servers=mcp_servers,
-            result_redaction_policy=config.tools.result_redaction_policy,
+    return build_tool_registry_for_constraints(
+        config,
+        profile_allowed_local_tools=profile.allowed_local_tools,
+        profile_mcp_server_names=(
+            set(profile.mcp_server_names) if profile.mcp_server_names is not None else None
         ),
-        skills=config.skills,
-        capability_profiles=config.capability_profiles,
+        mcp_manager=mcp_manager,
+        allowed_mcp_server_names=allowed_mcp_server_names,
     )
-    return _build_registry_for_config(profile_config, mcp_manager=mcp_manager)[0]
 
 
 def redact_tenant_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:
     redacted = json.loads(json.dumps(payload))
-    llm = redacted.get("llm")
-    if isinstance(llm, dict) and llm.get("api_key"):
-        llm["api_key"] = "<redacted>"
-        llm["has_api_key"] = True
-    tools = redacted.get("tools")
-    if isinstance(tools, dict):
-        mcp_servers = tools.get("mcp_servers") or tools.get("mcpServers")
-        if isinstance(mcp_servers, list):
-            for server in mcp_servers:
-                if isinstance(server, dict):
-                    headers = server.get("headers")
-                    if isinstance(headers, dict):
-                        server["headers"] = {key: "<redacted>" for key in headers}
-                        server["has_headers"] = bool(headers)
+    _redact_tenant_execution_secrets(redacted)
     return redacted
+
+
+def _redact_tenant_execution_secrets(value: Any) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _redact_tenant_execution_secrets(item)
+        return
+    if not isinstance(value, dict):
+        return
+    for key, item in list(value.items()):
+        normalized_key = key.replace("-", "_").lower()
+        if normalized_key in {"api_key", "apikey"} and item:
+            value[key] = "<redacted>"
+            value["has_api_key"] = True
+            continue
+        if normalized_key in {"headers", "extra_headers", "extraheaders"} and isinstance(
+            item, dict
+        ):
+            value[key] = {header: "<redacted>" for header in item}
+            if normalized_key == "headers":
+                value["has_headers"] = bool(item)
+            else:
+                value["has_extra_headers"] = bool(item)
+            continue
+        _redact_tenant_execution_secrets(item)

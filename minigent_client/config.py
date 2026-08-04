@@ -319,8 +319,12 @@ WAKEWORD_CONFIG_FIELD_ALIASES: dict[str, str] = {
 
 
 def default_client_config_paths() -> tuple[Path, ...]:
+    configured_home = os.getenv("XDG_CONFIG_HOME", "").strip()
+    config_home = Path(configured_home).expanduser() if configured_home else None
+    if config_home is None or not config_home.is_absolute():
+        config_home = Path.home() / ".config"
     return (
-        Path.home() / ".config" / "minigent" / "client.toml",
+        config_home / "minigent" / "client.toml",
         Path.home() / ".minigent" / "client.toml",
         Path.cwd() / ".minigent-client.toml",
     )

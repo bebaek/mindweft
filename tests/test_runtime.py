@@ -1,8 +1,10 @@
 import asyncio
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 from fastapi import HTTPException
 
 from app.execution import (
@@ -12,11 +14,12 @@ from app.execution import (
     TenantExecutionContext,
     TenantQualityConfig,
     build_tool_registry_for_capability_profile,
+    build_tool_registry_for_constraints,
     build_tool_registry_for_skill,
     parse_tenant_execution_config,
 )
 from app.llm import LLMAdapter, MockLLMAdapter
-from app.mcp import MCPServerConfig, MCPServerInfo
+from app.mcp import MCPPrivateToolResult, MCPPrivateValuePolicy, MCPServerConfig, MCPServerInfo
 from app.models import (
     LLMResponse,
     Message,
@@ -27,6 +30,8 @@ from app.models import (
     ToolSpec,
 )
 from app.peer_agents import PeerAgentConfig, PeerAgentRegistry
+from app.private_consents import InMemoryPrivateValueConsentStore, PrivateValueDisclosure
+from app.private_values import PII_PLACEHOLDER_PATTERN, InMemoryPrivateValueStore
 from app.quality import QualityEnhancer
 from app.runtime import (
     DEFAULT_MAX_ITERATIONS,
@@ -184,6 +189,440 @@ def test_runtime_uses_redacted_tool_results_for_stream_store_and_llm_context() -
             "result": expected_result,
         }
     ]
+
+
+def test_runtime_keeps_private_mcp_values_out_of_model_history_and_events() -> None:
+    placeholder = "{{pii:email:email-ref}}"
+    seen_tool_content: str | None = None
+
+    class PrivateContactThenReplyLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            nonlocal seen_tool_content
+            if messages[-1].role == MessageRole.TOOL:
+                seen_tool_content = messages[-1].content
+                return LLMResponse(content=f"The contact email is {placeholder}.")
+            return LLMResponse(
+                tool_call=ToolCall(id="call-contact", name="contacts.list", arguments={})
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    registry = ToolRegistry()
+    registry.register(
+        name="contacts.list",
+        description="List contacts with private values represented by placeholders.",
+        input_schema={"type": "object", "properties": {}},
+        handler=lambda arguments, context=None: MCPPrivateToolResult(
+            model_content={"email": placeholder},
+            private_values={"email-ref": "alice@example.com"},
+        ),
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=PrivateContactThenReplyLLM(),
+        tool_registry=registry,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="list contacts"),
+    )
+    events: list[dict[str, object]] = []
+
+    async def event_sink(event: dict[str, object]) -> None:
+        events.append(event)
+
+    reply, _metadata = asyncio.run(
+        runtime.run_thread(PRINCIPAL, thread.thread_id, event_sink=event_sink)
+    )
+
+    assert reply == "The contact email is alice@example.com."
+    assert seen_tool_content is not None
+    assert placeholder in seen_tool_content
+    assert "alice@example.com" not in seen_tool_content
+    messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    stored_messages = json.dumps([message.content for message in messages])
+    assert placeholder in stored_messages
+    assert "alice@example.com" not in stored_messages
+    rendered_messages = runtime.render_messages_for_user(
+        PRINCIPAL,
+        thread.thread_id,
+        messages,
+    )
+    assert "alice@example.com" in json.dumps([message.content for message in rendered_messages])
+    same_tenant_other_user = Principal(user_id="user-2", tenant_id=PRINCIPAL.tenant_id)
+    other_user_messages = runtime.render_messages_for_user(
+        same_tenant_other_user,
+        thread.thread_id,
+        messages,
+    )
+    assert "alice@example.com" not in json.dumps(
+        [message.content for message in other_user_messages]
+    )
+    assert placeholder in json.dumps([message.content for message in other_user_messages])
+    serialized_events = json.dumps(events)
+    assert placeholder in serialized_events
+    assert "alice@example.com" not in serialized_events
+
+
+def test_runtime_protects_user_content_before_model_use() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        name="private-contacts.contacts_protect_text",
+        description="Protect contact names.",
+        input_schema={"type": "object"},
+        handler=lambda arguments, context=None: MCPPrivateToolResult(
+            model_content={
+                "text": arguments["text"].replace("Alice Smith", "{{pii:contact:contact-ref}}"),
+                "protected_contact_count": 1,
+            },
+            private_values={"contact-ref": "Alice Smith"},
+        ),
+        trusted_input_preprocessor=True,
+    )
+    runtime = AgentRuntime(
+        store=InMemoryThreadStore(),
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=registry,
+    )
+
+    protected = asyncio.run(
+        runtime.protect_user_content(
+            PRINCIPAL,
+            "thread-1",
+            "What is Alice Smith's email?",
+        )
+    )
+
+    assert protected == "What is {{pii:contact:contact-ref}}'s email?"
+    rendered = runtime.render_messages_for_user(
+        PRINCIPAL,
+        "thread-1",
+        [Message(thread_id="thread-1", role=MessageRole.USER, content=protected)],
+    )
+    assert rendered[0].content == "What is Alice Smith's email?"
+
+
+def test_runtime_hides_private_contact_preprocessor_from_model_tools() -> None:
+    seen_tool_names: list[str] = []
+
+    class InspectToolsLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            seen_tool_names.extend(tool.name for tool in tools)
+            return LLMResponse(content="ok")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    registry = ToolRegistry()
+    registry.register(
+        name="private-contacts.contacts_protect_text",
+        description="Protect contact names.",
+        input_schema={"type": "object"},
+        handler=lambda arguments, context=None: MCPPrivateToolResult(
+            model_content={"text": arguments["text"], "protected_contact_count": 0},
+            private_values={},
+        ),
+        trusted_input_preprocessor=True,
+    )
+    registry.register(
+        name="private-contacts.contacts_list",
+        description="List contacts.",
+        input_schema={"type": "object"},
+        handler=lambda arguments, context=None: {"contacts": []},
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=InspectToolsLLM(),
+        tool_registry=registry,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    protected = asyncio.run(
+        runtime.protect_user_content(PRINCIPAL, thread.thread_id, "list contacts")
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content=protected),
+    )
+
+    asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert seen_tool_names == ["private-contacts.contacts_list"]
+
+
+def test_runtime_resolves_selected_private_values_only_at_trusted_tool_boundary() -> None:
+    received: list[dict[str, object]] = []
+    model_inputs: list[list[Message]] = []
+
+    class SendThenReplyLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            model_inputs.append(messages)
+            if messages[-1].role == MessageRole.TOOL:
+                assert "private@example.com" not in json.dumps(
+                    [message.model_dump(mode="json") for message in messages]
+                )
+                return LLMResponse(content="sent")
+            placeholder = next(
+                part for part in messages[-1].content.split() if part.startswith("{{pii:email:")
+            )
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="send-1",
+                        name="trusted.send",
+                        arguments={"recipient": {"email": placeholder}},
+                    )
+                ]
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    registry = ToolRegistry()
+    registry.register(
+        "trusted.send",
+        "Send a message.",
+        {"type": "object"},
+        lambda arguments, context=None: (
+            received.append(arguments) or {"recipient": arguments["recipient"]}
+        ),
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email",),
+        ),
+    )
+    store = InMemoryThreadStore()
+    consent_store = InMemoryPrivateValueConsentStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=SendThenReplyLLM(),
+        tool_registry=registry,
+        private_value_consent_store=consent_store,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    protected = asyncio.run(
+        runtime.protect_user_content(
+            PRINCIPAL,
+            thread.thread_id,
+            "Email private@example.com",
+        )
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content=protected),
+    )
+    placeholder_match = PII_PLACEHOLDER_PATTERN.search(protected)
+    assert placeholder_match is not None
+    disclosure = PrivateValueDisclosure(
+        path="recipient.email",
+        kind=placeholder_match.group("kind"),
+        reference=placeholder_match.group("reference"),
+    )
+    tool_arguments = {
+        "recipient": {"email": placeholder_match.group(0)},
+    }
+    argument_fingerprint = hashlib.sha256(
+        json.dumps(
+            tool_arguments,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    try:
+        consent_store.authorize_or_request(
+            tenant_id=PRINCIPAL.tenant_id,
+            user_id=PRINCIPAL.user_id,
+            thread_id=thread.thread_id,
+            tool_name="trusted.send",
+            argument_fingerprint=argument_fingerprint,
+            disclosures=(disclosure,),
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 428
+    pending = runtime.pending_private_value_consents(PRINCIPAL, thread.thread_id)
+    assert len(pending) == 1
+    runtime.decide_private_value_consent(
+        PRINCIPAL,
+        thread.thread_id,
+        str(pending[0]["consent_id"]),
+        approve=True,
+        one_shot=True,
+    )
+
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert reply == "sent"
+    assert received == [{"recipient": {"email": "private@example.com"}}]
+    stored = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
+    assert "private@example.com" not in json.dumps(
+        [message.model_dump(mode="json") for message in stored]
+    )
+    rendered = runtime.render_messages_for_user(PRINCIPAL, thread.thread_id, stored)
+    assert "private@example.com" in json.dumps(
+        [message.model_dump(mode="json") for message in rendered]
+    )
+    assert len(model_inputs) == 2
+    audit = runtime.private_value_disclosure_audit(PRINCIPAL, thread.thread_id)
+    assert [record["event"] for record in audit] == [
+        "requested",
+        "approved",
+        "disclosed",
+    ]
+    assert "private@example.com" not in json.dumps(audit)
+
+
+def test_runtime_rejects_relabelled_private_placeholder_before_consent() -> None:
+    received: list[dict[str, object]] = []
+
+    class RelabelThenReplyLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            if messages[-1].role == MessageRole.TOOL:
+                assert "kind does not match placeholder" in messages[-1].content
+                return LLMResponse(content="blocked")
+            placeholder = next(
+                part for part in messages[-1].content.split() if part.startswith("{{pii:email:")
+            )
+            relabelled = placeholder.replace("{{pii:email:", "{{pii:phone:", 1)
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="send-invalid-kind",
+                        name="trusted.send",
+                        arguments={"recipient": {"email": relabelled}},
+                    )
+                ]
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    registry = ToolRegistry()
+    registry.register(
+        "trusted.send",
+        "Send a message.",
+        {"type": "object"},
+        lambda arguments, context=None: received.append(arguments),
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email",),
+        ),
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=RelabelThenReplyLLM(),
+        tool_registry=registry,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    protected = asyncio.run(
+        runtime.protect_user_content(
+            PRINCIPAL,
+            thread.thread_id,
+            "Email private@example.com",
+        )
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content=protected),
+    )
+
+    reply, _metadata = asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    assert reply == "blocked"
+    assert received == []
+    assert runtime.pending_private_value_consents(PRINCIPAL, thread.thread_id) == []
+    assert runtime.private_value_action_statuses(PRINCIPAL, thread.thread_id) == []
+    assert runtime.private_value_disclosure_audit(PRINCIPAL, thread.thread_id) == []
+
+
+def test_runtime_validates_expired_private_values_before_claiming_resumed_action() -> None:
+    received: list[dict[str, object]] = []
+    now = [100.0]
+
+    class SendThenWaitLLM(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            if messages[-1].role == MessageRole.TOOL:
+                return LLMResponse(content="approval required")
+            placeholder = next(
+                part for part in messages[-1].content.split() if part.startswith("{{pii:email:")
+            )
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="send-expiring",
+                        name="trusted.send",
+                        arguments={"recipient": {"email": placeholder}},
+                    )
+                ]
+            )
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "test"}
+
+    registry = ToolRegistry()
+    registry.register(
+        "trusted.send",
+        "Send a message.",
+        {"type": "object"},
+        lambda arguments, context=None: received.append(arguments),
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email",),
+        ),
+    )
+    store = InMemoryThreadStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=SendThenWaitLLM(),
+        tool_registry=registry,
+        private_value_store=InMemoryPrivateValueStore(
+            ttl_seconds=5,
+            clock=lambda: now[0],
+        ),
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    protected = asyncio.run(
+        runtime.protect_user_content(
+            PRINCIPAL,
+            thread.thread_id,
+            "Email private@example.com",
+        )
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content=protected),
+    )
+    asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+    pending = runtime.pending_private_value_consents(PRINCIPAL, thread.thread_id)
+    assert len(pending) == 1
+    consent_id = str(pending[0]["consent_id"])
+    runtime.decide_private_value_consent(
+        PRINCIPAL,
+        thread.thread_id,
+        consent_id,
+        approve=True,
+        one_shot=True,
+    )
+    now[0] = 106.0
+
+    with pytest.raises(HTTPException, match="missing or expired") as exc_info:
+        asyncio.run(runtime.resume_private_value_consent(PRINCIPAL, thread.thread_id, consent_id))
+
+    assert exc_info.value.status_code == 409
+    assert received == []
+    statuses = runtime.private_value_action_statuses(PRINCIPAL, thread.thread_id)
+    assert len(statuses) == 1
+    assert statuses[0]["consent_id"] == consent_id
+    assert statuses[0]["tool_name"] == "trusted.send"
+    assert statuses[0]["state"] == "pending"
+    assert [
+        record["event"]
+        for record in runtime.private_value_disclosure_audit(PRINCIPAL, thread.thread_id)
+    ] == ["requested", "approved"]
 
 
 def test_runtime_runs_multiple_tool_calls_concurrently() -> None:
@@ -1194,6 +1633,9 @@ def test_parse_tenant_execution_config_supports_tool_result_redaction_policy() -
                         "url": "https://docs.example/mcp",
                         "headers": {},
                         "result_redaction": {"enabled": False},
+                        "forward_identity": True,
+                        "identity_audience": "private-dav",
+                        "identity_scopes": ["dav:calendar:read"],
                     }
                 ],
             },
@@ -1204,6 +1646,9 @@ def test_parse_tenant_execution_config_supports_tool_result_redaction_policy() -
     assert config.tools.result_redaction_policy.mode == "full"
     assert config.tools.result_redaction_policy.sensitive_tools == frozenset({"echo"})
     assert config.tools.mcp_servers[0].result_redaction_policy.enabled is False
+    assert config.tools.mcp_servers[0].forward_identity is True
+    assert config.tools.mcp_servers[0].identity_audience == "private-dav"
+    assert config.tools.mcp_servers[0].identity_scopes == ("dav:calendar:read",)
 
 
 def test_runtime_appends_skill_prompt_to_system_prompt() -> None:
@@ -1507,6 +1952,53 @@ def test_build_tool_registry_for_skill_can_narrow_mcp_servers(monkeypatch) -> No
 
     assert {spec.name for spec in registry.specs()} == {"current_time", "home-assistant.ping"}
     assert [server["name"] for server in registry.mcp_servers()] == ["home-assistant"]
+
+    personal_registry = build_tool_registry_for_constraints(
+        config,
+        profile_allowed_local_tools=["current_time"],
+        profile_mcp_server_names={"home-assistant"},
+        allowed_mcp_server_names={"docs"},
+    )
+    assert {spec.name for spec in personal_registry.specs()} == {"current_time"}
+    assert personal_registry.mcp_servers() == []
+
+    subject_registry = build_tool_registry_for_skill(
+        config,
+        "home-assistant",
+        allowed_mcp_server_names={"docs"},
+    )
+    assert {spec.name for spec in subject_registry.specs()} == {"current_time"}
+    assert subject_registry.mcp_servers() == []
+
+
+def test_capability_profile_preserves_explicit_empty_tool_allowlists() -> None:
+    config = parse_tenant_execution_config(
+        PRINCIPAL.tenant_id,
+        {
+            "tools": {
+                "allowed_local_tools": ["current_time"],
+                "mcp_servers": [{"name": "docs", "url": "https://docs.example/mcp", "headers": {}}],
+            },
+            "capability_profiles": {
+                "default_profile": "safe-default",
+                "items": [
+                    {
+                        "name": "safe-default",
+                        "allowedLocalTools": [],
+                        "mcpServerNames": [],
+                    }
+                ],
+            },
+        },
+    )
+
+    profile = config.capability_profiles.items[0]
+    assert profile.allowed_local_tools == []
+    assert profile.mcp_server_names == []
+
+    registry = build_tool_registry_for_capability_profile(config, "safe-default")
+    assert registry.specs() == []
+    assert registry.mcp_servers() == []
 
 
 def test_runtime_capability_profile_can_narrow_tools_for_thread() -> None:

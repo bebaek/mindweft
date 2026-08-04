@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import inspect
 import json
 import os
@@ -9,20 +10,22 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import HTTPException
 
 from app.agent_skills import load_agent_skill_body
+from app.attachments import AttachmentStore, InMemoryAttachmentStore
 from app.execution import (
     FixedTenantExecutionResolver,
+    TenantExecutionContext,
     TenantExecutionResolver,
     TenantSkillConfig,
     build_tool_registry_for_capability_profile,
+    build_tool_registry_for_constraints,
+    build_tool_registry_for_mcp_server_names,
     build_tool_registry_for_skill,
-    get_capability_profile,
     get_llm_adapter,
-    get_skill_configs,
 )
 from app.llm import (
     RESPONSES_OUTPUT_ITEMS_METADATA_KEY,
@@ -31,24 +34,49 @@ from app.llm import (
     llm_progress_sink,
     serialize_tool_result,
 )
+from app.mcp import MCPPrivateToolResult
 from app.models import (
+    ImagePart,
     LLMResponse,
     Message,
     MessageRole,
     Principal,
+    TextPart,
+    Thread,
     ThreadContext,
     ThreadStatus,
     ToolCall,
 )
+from app.private_consents import (
+    PendingPrivateToolAction,
+    PrivateValueConsentStore,
+    PrivateValueDisclosure,
+    build_private_value_consent_store_from_env,
+)
+from app.private_values import (
+    PII_PLACEHOLDER_PATTERN,
+    LocalPIIProtector,
+    PrivateValueStore,
+    build_private_value_store_from_env,
+)
 from app.quality import QualityEnhancer
 from app.store import ThreadStore
 from app.tools import ToolExecutionContext, ToolRegistry
+from app.user_execution import (
+    UserExecutionConfigSource,
+    UserExecutionResolutionError,
+    effective_execution_catalog,
+    has_personal_execution_refs,
+)
 
 RUNTIME_SYSTEM_PROMPT = (
     "Use tools when they are relevant and ground claims in tool results. "
     "Distinguish clearly between direct verification and inference. "
     "Do not claim a live status, current availability, or real-time confirmation unless a tool result directly confirms it. "
-    "If tool results fail, are indirect, or are insufficient, say that you could not directly verify the answer and explain what you were able to infer."
+    "If tool results fail, are indirect, or are insufficient, say that you could not "
+    "directly verify the answer and explain what you were able to infer. "
+    "If tool results contain placeholders in the form {{pii:kind:reference}}, preserve "
+    "those placeholders exactly in the final response."
 )
 DEFAULT_MAX_ITERATIONS = 16
 DEFAULT_TOOL_TIMEOUT_SECONDS = 60.0
@@ -56,6 +84,7 @@ MAX_ITERATIONS_ENV = "MINIGENT_MAX_ITERATIONS"
 TOOL_TIMEOUT_SECONDS_ENV = "MINIGENT_TOOL_TIMEOUT_SECONDS"
 CONTEXT_COMPACTION_ENABLED_ENV = "MINIGENT_CONTEXT_COMPACTION_ENABLED"
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
+MCPServerNameAuthorizer = Callable[[str, str], set[str] | None]
 
 
 @dataclass(frozen=True)
@@ -127,7 +156,7 @@ def _parse_tool_timeout_seconds(env: Mapping[str, str]) -> float:
     return value
 
 
-def _load_active_skill_instructions(skill: TenantSkillConfig) -> str:
+def load_active_skill_instructions(skill: TenantSkillConfig) -> str:
     if skill.system_prompt is not None:
         return skill.system_prompt
     if skill.instruction_source is not None and skill.instruction_source.type == "agent_skill":
@@ -150,6 +179,12 @@ class AgentRuntime:
         target_prompt_tokens: int = 3000,
         quality_enhancer: QualityEnhancer | None = None,
         context_compaction_enabled: bool = True,
+        private_value_store: PrivateValueStore | None = None,
+        input_pii_protector: LocalPIIProtector | None = None,
+        private_value_consent_store: PrivateValueConsentStore | None = None,
+        attachment_store: AttachmentStore | None = None,
+        mcp_server_name_authorizer: MCPServerNameAuthorizer | None = None,
+        user_execution_config_source: UserExecutionConfigSource | None = None,
     ) -> None:
         self._store = store
         if execution_resolver is not None:
@@ -172,6 +207,398 @@ class AgentRuntime:
         self._target_prompt_tokens = max(256, target_prompt_tokens)
         self._quality_enhancer = quality_enhancer
         self._context_compaction_enabled = context_compaction_enabled
+        self._private_value_store = private_value_store or build_private_value_store_from_env()
+        self._input_pii_protector = input_pii_protector or LocalPIIProtector.from_env()
+        self._private_value_consent_store = (
+            private_value_consent_store or build_private_value_consent_store_from_env()
+        )
+        self._attachment_store = attachment_store or InMemoryAttachmentStore()
+        self._mcp_server_name_authorizer = mcp_server_name_authorizer
+        self._user_execution_config_source = user_execution_config_source
+
+    async def protect_user_content(
+        self,
+        principal: Principal,
+        thread_id: str,
+        content: str,
+    ) -> str:
+        execution = self._execution_resolver.resolve(principal.tenant_id)
+        protected_content = content
+        registry = execution.tool_registry
+        preprocessor_names = getattr(registry, "trusted_input_preprocessor_names", None)
+        protectors = (
+            cast(tuple[str, ...], preprocessor_names()) if callable(preprocessor_names) else ()
+        )
+        for protector in protectors:
+            result = await asyncio.wait_for(
+                execution.tool_registry.execute(
+                    protector,
+                    {"text": protected_content},
+                    context=ToolExecutionContext(
+                        tenant_id=principal.tenant_id,
+                        user_id=principal.user_id,
+                        thread_id=thread_id,
+                    ),
+                ),
+                timeout=self._tool_timeout_seconds,
+            )
+            if not isinstance(result, MCPPrivateToolResult):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Trusted input preprocessor returned no private metadata envelope",
+                )
+            model_content = result.model_content
+            if not isinstance(model_content, dict) or not isinstance(
+                model_content.get("text"), str
+            ):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Trusted input preprocessor returned invalid model content",
+                )
+            self._private_value_store.add(
+                principal.tenant_id,
+                thread_id,
+                result.private_values,
+                user_id=principal.user_id,
+                kinds=_private_value_kinds(result.model_content),
+            )
+            protected_content = model_content["text"]
+
+        locally_protected = self._input_pii_protector.protect(protected_content)
+        self._private_value_store.add(
+            principal.tenant_id,
+            thread_id,
+            locally_protected.private_values,
+            user_id=principal.user_id,
+            kinds=locally_protected.private_value_kinds,
+        )
+        return locally_protected.text
+
+    def render_messages_for_user(
+        self,
+        principal: Principal,
+        thread_id: str,
+        messages: list[Message],
+    ) -> list[Message]:
+        rendered: list[Message] = []
+        for message in messages:
+            parts = None
+            if message.parts is not None:
+                parts = [
+                    part.model_copy(
+                        update={
+                            "text": self._private_value_store.render_for_user(
+                                principal.tenant_id,
+                                thread_id,
+                                part.text,
+                                user_id=principal.user_id,
+                            )
+                        }
+                    )
+                    if isinstance(part, TextPart)
+                    else part
+                    for part in message.parts
+                ]
+            rendered.append(
+                message.model_copy(
+                    update={
+                        "content": self._private_value_store.render_for_user(
+                            principal.tenant_id,
+                            thread_id,
+                            message.content,
+                            user_id=principal.user_id,
+                        ),
+                        "parts": parts,
+                    }
+                )
+            )
+        return rendered
+
+    def clear_private_values(self, principal: Principal, thread_id: str) -> None:
+        self._private_value_store.clear_thread(principal.tenant_id, thread_id)
+        self._private_value_consent_store.clear_thread(principal.tenant_id, thread_id)
+
+    def pending_private_value_consents(
+        self, principal: Principal, thread_id: str
+    ) -> list[dict[str, object]]:
+        return self._private_value_consent_store.pending(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+        )
+
+    def decide_private_value_consent(
+        self,
+        principal: Principal,
+        thread_id: str,
+        consent_id: str,
+        *,
+        approve: bool,
+        one_shot: bool,
+    ) -> dict[str, object]:
+        result = self._private_value_consent_store.decide(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+            consent_id=consent_id,
+            approve=approve,
+            one_shot=one_shot,
+        )
+        return result
+
+    def private_value_disclosure_audit(
+        self, principal: Principal, thread_id: str
+    ) -> list[dict[str, object]]:
+        return self._private_value_consent_store.audit_records(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+        )
+
+    def private_value_action_statuses(
+        self, principal: Principal, thread_id: str
+    ) -> list[dict[str, object]]:
+        return self._private_value_consent_store.action_statuses(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+        )
+
+    def discard_private_value_action(
+        self, principal: Principal, thread_id: str, consent_id: str
+    ) -> dict[str, object]:
+        return self._private_value_consent_store.discard_action(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+            consent_id=consent_id,
+        )
+
+    def _tool_registry_for_thread(
+        self,
+        execution: TenantExecutionContext,
+        thread: Thread,
+        principal: Principal,
+    ) -> ToolRegistry:
+        skill_names = thread.skill_names
+        if skill_names is None and thread.skill_name is not None:
+            skill_names = [thread.skill_name]
+        catalog = effective_execution_catalog(
+            execution.config,
+            self._user_execution_config_source if thread.execution_user_id is not None else None,
+            tenant_id=principal.tenant_id,
+            user_id=thread.execution_user_id or principal.user_id,
+        )
+        try:
+            skills = catalog.resolve_skill_refs(
+                skill_names, use_defaults=thread.execution_user_id is None
+            )
+            capability_profile = catalog.resolve_capability_profile(
+                thread.capability_profile, use_default=thread.execution_user_id is None
+            )
+            personal_capability_constraints = (
+                catalog.personal_capability_constraints(capability_profile)
+                if capability_profile is not None and capability_profile.source == "user"
+                else None
+            )
+        except UserExecutionResolutionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        allowed_mcp_server_names = (
+            self._mcp_server_name_authorizer(principal.tenant_id, principal.user_id)
+            if self._mcp_server_name_authorizer is not None
+            else None
+        )
+        if personal_capability_constraints is not None:
+            return build_tool_registry_for_constraints(
+                execution.config,
+                profile_allowed_local_tools=personal_capability_constraints.allowed_local_tools,
+                profile_mcp_server_names=(personal_capability_constraints.shared_mcp_server_names),
+                personal_mcp_servers=personal_capability_constraints.personal_mcp_servers,
+                mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
+            )
+        if capability_profile is not None:
+            return build_tool_registry_for_capability_profile(
+                execution.config,
+                capability_profile.stored_ref,
+                mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
+            )
+        if len(skills) == 1 and (
+            skills[0].config.allowed_local_tools is not None
+            or skills[0].config.mcp_server_names is not None
+        ):
+            return build_tool_registry_for_skill(
+                execution.config,
+                skills[0].stored_ref,
+                mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
+            )
+        if allowed_mcp_server_names is not None:
+            return build_tool_registry_for_mcp_server_names(
+                execution.config,
+                allowed_mcp_server_names,
+                mcp_manager=execution.mcp_manager,
+            )
+        return execution.tool_registry
+
+    @staticmethod
+    def _enforce_personal_execution_owner(
+        principal: Principal,
+        thread: Thread,
+        skill_names: list[str] | None,
+    ) -> None:
+        if not has_personal_execution_refs(skill_names, thread.capability_profile):
+            return
+        if thread.execution_user_id is None or thread.execution_user_id != principal.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Personal execution resources belong to a different user",
+            )
+
+    def _private_tool_execution_context(
+        self,
+        principal: Principal,
+        thread_id: str,
+    ) -> ToolExecutionContext:
+        return ToolExecutionContext(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+            private_value_resolver=lambda text: self._private_value_store.resolve_for_tool(
+                principal.tenant_id,
+                thread_id,
+                text,
+                user_id=principal.user_id,
+            ),
+            private_value_validator=lambda text: self._private_value_store.validate_for_tool(
+                principal.tenant_id,
+                thread_id,
+                text,
+                user_id=principal.user_id,
+            ),
+            private_value_authorizer=lambda name, fingerprint, disclosures: (
+                self._authorize_private_value_disclosure(
+                    principal,
+                    thread_id,
+                    name,
+                    fingerprint,
+                    disclosures,
+                )
+            ),
+        )
+
+    def _validate_private_tool_arguments(
+        self,
+        principal: Principal,
+        thread_id: str,
+        arguments: object,
+    ) -> None:
+        if isinstance(arguments, str):
+            if PII_PLACEHOLDER_PATTERN.search(arguments) is not None:
+                self._private_value_store.validate_for_tool(
+                    principal.tenant_id,
+                    thread_id,
+                    arguments,
+                    user_id=principal.user_id,
+                )
+            return
+        if isinstance(arguments, dict):
+            for value in arguments.values():
+                self._validate_private_tool_arguments(principal, thread_id, value)
+            return
+        if isinstance(arguments, list):
+            for value in arguments:
+                self._validate_private_tool_arguments(principal, thread_id, value)
+
+    async def resume_private_value_consent(
+        self,
+        principal: Principal,
+        thread_id: str,
+        consent_id: str,
+    ) -> tuple[str, dict[str, Any] | None]:
+        thread = self._store.get_thread(principal.tenant_id, thread_id)
+        if thread.status == ThreadStatus.RUNNING:
+            raise HTTPException(status_code=409, detail="Thread is already running")
+        execution = self._execution_resolver.resolve(principal.tenant_id)
+        tool_registry = self._tool_registry_for_thread(execution, thread, principal)
+        pending_action = self._private_value_consent_store.get_pending_action(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+            consent_id=consent_id,
+        )
+        if pending_action is None:
+            raise HTTPException(status_code=404, detail="Pending private tool action not found")
+        self._validate_private_tool_arguments(
+            principal,
+            thread_id,
+            pending_action.tool_call.arguments,
+        )
+        action = self._private_value_consent_store.claim_pending_action(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+            consent_id=consent_id,
+        )
+        if action is None:
+            raise HTTPException(status_code=404, detail="Pending private tool action not found")
+        try:
+            result = await asyncio.wait_for(
+                tool_registry.execute(
+                    action.tool_call.name,
+                    action.tool_call.arguments,
+                    context=self._private_tool_execution_context(principal, thread_id),
+                ),
+                timeout=self._tool_timeout_seconds,
+            )
+        except HTTPException as exc:
+            if exc.status_code == 428 and isinstance(exc.detail, dict):
+                replacement_consent_id = exc.detail.get("consent_id")
+                if isinstance(replacement_consent_id, str):
+                    self._private_value_consent_store.save_pending_action(
+                        replacement_consent_id, action
+                    )
+                    if replacement_consent_id != consent_id:
+                        self._private_value_consent_store.delete_pending_action(consent_id)
+            raise
+        if isinstance(result, MCPPrivateToolResult):
+            self._private_value_store.add(
+                principal.tenant_id,
+                thread_id,
+                result.private_values,
+                user_id=principal.user_id,
+                kinds=_private_value_kinds(result.model_content),
+            )
+            result = result.model_content
+        normalized_error = _normalize_tool_error_result(action.tool_call.name, result)
+        if normalized_error is not None:
+            result = normalized_error
+        result = self._protect_tool_result(principal, thread_id, result)
+        resumed_call_id = f"resume-{consent_id}"
+        self._store.append_message(
+            principal.tenant_id,
+            Message(
+                thread_id=thread_id,
+                role=MessageRole.ASSISTANT,
+                content="",
+                tool_name=action.tool_call.name,
+                tool_call_id=resumed_call_id,
+                tool_arguments=action.tool_call.arguments,
+            ),
+        )
+        self._store.append_message(
+            principal.tenant_id,
+            Message(
+                thread_id=thread_id,
+                role=MessageRole.TOOL,
+                content=serialize_tool_result(result),
+                tool_name=action.tool_call.name,
+                tool_call_id=resumed_call_id,
+            ),
+        )
+        self._private_value_consent_store.delete_pending_action(consent_id)
+        return await self.run_thread(principal, thread_id)
 
     async def run_thread(
         self,
@@ -184,37 +611,45 @@ class AgentRuntime:
         execution = self._execution_resolver.resolve(principal.tenant_id)
         thread = self._store.get_thread(principal.tenant_id, thread_id)
         llm_adapter = get_llm_adapter(execution, thread.llm_profile)
-        self._store.start_run(principal.tenant_id, thread_id)
         skill_names = thread.skill_names
         if skill_names is None and thread.skill_name is not None:
             skill_names = [thread.skill_name]
-        skills = get_skill_configs(execution.config, skill_names)
-        capability_profile = get_capability_profile(execution.config, thread.capability_profile)
-        if capability_profile is not None:
-            tool_registry = build_tool_registry_for_capability_profile(
-                execution.config,
-                thread.capability_profile,
-                mcp_manager=execution.mcp_manager,
-            )
-        elif len(skills) == 1 and (
-            skills[0].allowed_local_tools is not None or skills[0].mcp_server_names is not None
-        ):
-            tool_registry = build_tool_registry_for_skill(
-                execution.config,
-                skills[0].name,
-                mcp_manager=execution.mcp_manager,
-            )
-        else:
-            tool_registry = execution.tool_registry
+        self._enforce_personal_execution_owner(principal, thread, skill_names)
+        catalog = effective_execution_catalog(
+            execution.config,
+            self._user_execution_config_source if thread.execution_user_id is not None else None,
+            tenant_id=principal.tenant_id,
+            user_id=thread.execution_user_id or principal.user_id,
+        )
+        try:
+            skills = [
+                skill.config
+                for skill in catalog.resolve_skill_refs(
+                    skill_names, use_defaults=thread.execution_user_id is None
+                )
+            ]
+        except UserExecutionResolutionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        tool_registry = self._tool_registry_for_thread(execution, thread, principal)
+        self._store.start_run(principal.tenant_id, thread_id)
         try:
             for iteration in range(1, self._max_iterations + 1):
                 messages = self._messages_for_llm(
                     principal,
                     thread_id,
-                    skill_prompts=[_load_active_skill_instructions(skill) for skill in skills],
+                    skill_prompts=[load_active_skill_instructions(skill) for skill in skills],
                     skill_names=[skill.name for skill in skills],
                 )
-                tool_specs = tool_registry.specs()
+                is_preprocessor = getattr(
+                    tool_registry,
+                    "is_trusted_input_preprocessor",
+                    None,
+                )
+                tool_specs = [
+                    spec
+                    for spec in tool_registry.specs()
+                    if not (callable(is_preprocessor) and is_preprocessor(spec.name))
+                ]
                 response = None
                 if not isinstance(llm_adapter, MockLLMAdapter):
                     response = _direct_tool_command_response(messages, tool_specs)
@@ -296,17 +731,24 @@ class AgentRuntime:
                             "content": reasoning_content,
                         },
                     )
+                stored_content = final_content
                 self._store.append_message(
                     principal.tenant_id,
                     Message(
                         thread_id=thread_id,
                         role=MessageRole.ASSISTANT,
-                        content=final_content,
+                        content=stored_content,
                         metadata=response.metadata,
                     ),
                 )
                 self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
-                return final_content, response.metadata
+                user_content = self._private_value_store.render_for_user(
+                    principal.tenant_id,
+                    thread_id,
+                    stored_content,
+                    user_id=principal.user_id,
+                )
+                return user_content, response.metadata
         except asyncio.CancelledError:
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
             raise
@@ -435,9 +877,9 @@ class AgentRuntime:
                         tool_registry.execute(
                             tool_call.name,
                             tool_call.arguments,
-                            context=ToolExecutionContext(
-                                tenant_id=principal.tenant_id,
-                                thread_id=thread_id,
+                            context=self._private_tool_execution_context(
+                                principal,
+                                thread_id,
                             ),
                         ),
                         timeout=self._tool_timeout_seconds,
@@ -454,12 +896,43 @@ class AgentRuntime:
                 )
             except HTTPException as exc:
                 failed_tool_calls.add(tool_call_signature)
+                if exc.status_code == 428:
+                    detail = exc.detail if isinstance(exc.detail, dict) else {}
+                    consent_id = detail.get("consent_id")
+                    if isinstance(consent_id, str):
+                        self._private_value_consent_store.save_pending_action(
+                            consent_id,
+                            PendingPrivateToolAction(
+                                tenant_id=principal.tenant_id,
+                                user_id=principal.user_id,
+                                thread_id=thread_id,
+                                tool_call=tool_call.model_copy(deep=True),
+                            ),
+                        )
+                    await _emit_run_event(
+                        event_sink,
+                        {
+                            "type": "private_value.consent_required",
+                            "tool_call_id": tool_call.id,
+                            "name": tool_call.name,
+                            "request": exc.detail,
+                        },
+                    )
                 return _serialize_tool_error(tool_call.name, exc)
+            if isinstance(result, MCPPrivateToolResult):
+                self._private_value_store.add(
+                    principal.tenant_id,
+                    thread_id,
+                    result.private_values,
+                    user_id=principal.user_id,
+                    kinds=_private_value_kinds(result.model_content),
+                )
+                result = result.model_content
             normalized_error = _normalize_tool_error_result(tool_call.name, result)
             if normalized_error is not None:
                 failed_tool_calls.add(tool_call_signature)
-                return normalized_error
-            return result
+                result = normalized_error
+            return self._protect_tool_result(principal, thread_id, result)
 
         # Minimal POC: execute all calls from one model response concurrently. The next
         # LLM turn still receives deterministic message ordering matching the provider's
@@ -504,6 +977,56 @@ class AgentRuntime:
                     "result": result,
                 },
             )
+
+    def _authorize_private_value_disclosure(
+        self,
+        principal: Principal,
+        thread_id: str,
+        tool_name: str,
+        argument_fingerprint: str,
+        disclosures: tuple[PrivateValueDisclosure, ...],
+    ) -> None:
+        self._private_value_consent_store.authorize_or_request(
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            thread_id=thread_id,
+            tool_name=tool_name,
+            argument_fingerprint=argument_fingerprint,
+            disclosures=disclosures,
+        )
+
+    def _protect_tool_result(
+        self,
+        principal: Principal,
+        thread_id: str,
+        result: object,
+    ) -> object:
+        private_values: dict[str, str] = {}
+        private_value_kinds: dict[str, str] = {}
+
+        def protect(value: object) -> object:
+            if isinstance(value, str):
+                protected = self._input_pii_protector.protect(value)
+                private_values.update(protected.private_values)
+                private_value_kinds.update(protected.private_value_kinds)
+                return protected.text
+            if isinstance(value, dict):
+                return {str(protect(str(key))): protect(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [protect(item) for item in value]
+            if isinstance(value, tuple):
+                return tuple(protect(item) for item in value)
+            return value
+
+        protected_result = protect(result)
+        self._private_value_store.add(
+            principal.tenant_id,
+            thread_id,
+            private_values,
+            user_id=principal.user_id,
+            kinds=private_value_kinds,
+        )
+        return protected_result
 
     async def _handle_tool_call(
         self,
@@ -555,12 +1078,47 @@ class AgentRuntime:
                     content=f"Thread summary:\n{context.summary}",
                 )
             )
+        stored_messages = self._store.list_messages(principal.tenant_id, thread_id)[
+            context.summarized_message_count :
+        ]
         prompt_messages.extend(
-            self._store.list_messages(principal.tenant_id, thread_id)[
-                context.summarized_message_count :
-            ]
+            self._resolve_attachment_parts(principal.tenant_id, thread_id, stored_messages)
         )
         return prompt_messages
+
+    def _resolve_attachment_parts(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        messages: list[Message],
+    ) -> list[Message]:
+        resolved_messages: list[Message] = []
+        for message in messages:
+            if not message.parts:
+                resolved_messages.append(message)
+                continue
+            resolved_parts = []
+            for part in message.parts:
+                if not isinstance(part, ImagePart) or not part.attachment_id:
+                    resolved_parts.append(part)
+                    continue
+                record = self._attachment_store.get(tenant_id, thread_id, part.attachment_id)
+                if record is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"image attachment is unavailable: {part.attachment_id}",
+                    )
+                resolved_parts.append(
+                    part.model_copy(
+                        update={
+                            "mime_type": record.metadata.mime_type,
+                            "data": base64.b64encode(record.data).decode("ascii"),
+                            "attachment_id": None,
+                        }
+                    )
+                )
+            resolved_messages.append(message.model_copy(update={"parts": resolved_parts}))
+        return resolved_messages
 
     def _refresh_thread_context(self, principal: Principal, thread_id: str) -> ThreadContext:
         messages = self._store.list_messages(principal.tenant_id, thread_id)
@@ -582,7 +1140,14 @@ class AgentRuntime:
             summary=new_summary,
             summarized_message_count=summarize_upto,
         )
-        return self._store.compact_thread_messages(principal.tenant_id, thread_id)
+        compacted = self._store.compact_thread_messages(principal.tenant_id, thread_id)
+        self._delete_compacted_attachments(
+            principal.tenant_id,
+            thread_id,
+            messages,
+            summarize_upto,
+        )
+        return compacted
 
     def compact_thread(self, principal: Principal, thread_id: str) -> ThreadContext:
         messages = self._store.list_messages(principal.tenant_id, thread_id)
@@ -609,7 +1174,26 @@ class AgentRuntime:
             summary=new_summary,
             summarized_message_count=summarize_upto,
         )
-        return self._store.compact_thread_messages(principal.tenant_id, thread_id)
+        compacted = self._store.compact_thread_messages(principal.tenant_id, thread_id)
+        self._delete_compacted_attachments(
+            principal.tenant_id,
+            thread_id,
+            messages,
+            summarize_upto,
+        )
+        return compacted
+
+    def _delete_compacted_attachments(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        messages: list[Message],
+        summarize_upto: int,
+    ) -> None:
+        removed_ids = _attachment_ids(messages[:summarize_upto])
+        retained_ids = _attachment_ids(messages[summarize_upto:])
+        for attachment_id in removed_ids - retained_ids:
+            self._attachment_store.delete(tenant_id, thread_id, attachment_id)
 
     def _compute_summarize_upto(self, messages: list[Message], context: ThreadContext) -> int:
         max_summarize_upto = max(0, len(messages) - self._min_recent_message_limit)
@@ -634,6 +1218,15 @@ class AgentRuntime:
             summarize_upto,
             min_boundary=context.summarized_message_count,
         )
+
+
+def _attachment_ids(messages: list[Message]) -> set[str]:
+    return {
+        part.attachment_id
+        for message in messages
+        for part in (message.parts or [])
+        if isinstance(part, ImagePart) and part.attachment_id
+    }
 
 
 async def _emit_run_event(
@@ -967,6 +1560,17 @@ def estimate_thread_context_usage(
         "summarized_message_count": summarized_message_count,
         "unsummarized_message_count": len(unsummarized_messages),
     }
+
+
+def _private_value_kinds(content: object) -> dict[str, str]:
+    serialized = json.dumps(content, ensure_ascii=True, default=str)
+    kinds: dict[str, str] = {}
+    for match in PII_PLACEHOLDER_PATTERN.finditer(serialized):
+        reference = match.group("reference")
+        kind = match.group("kind")
+        existing = kinds.get(reference)
+        kinds[reference] = kind if existing in {None, kind} else "unknown"
+    return kinds
 
 
 def _estimate_prompt_tokens(messages: list[Message], *, summary: str = "") -> int:

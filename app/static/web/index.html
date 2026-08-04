@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>Minigent Web Client</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=composer-mobile-1" />
   </head>
   <body>
     <main class="shell">
@@ -93,15 +93,43 @@
       </button>
 
       <form id="composer" class="composer">
-        <textarea
-          id="message-input"
-          rows="1"
+        <div id="image-preview-list" class="image-preview-list" hidden></div>
+        <div class="composer-input">
+          <textarea
+            id="message-input"
+            rows="1"
           placeholder="Message Minigent"
-          autocomplete="off"
-        ></textarea>
-        <div class="composer-actions">
-          <button id="send-button" type="submit">Send</button>
-          <button id="stop-button" class="stop-button" type="button" hidden>Stop</button>
+            autocomplete="off"
+          ></textarea>
+        </div>
+        <div class="composer-tools">
+          <label
+            id="attach-image-button"
+            class="attach-image-button"
+            aria-label="Attach images"
+            title="Attach images"
+          >
+            Image
+            <input id="image-input" type="file" accept="image/*" multiple />
+          </label>
+          <label
+            id="camera-image-button"
+            class="attach-image-button camera-image-button"
+            aria-label="Take a photo"
+            title="Take a photo"
+          >
+            Camera
+            <input
+              id="camera-image-input"
+              type="file"
+              accept="image/*"
+              capture="environment"
+            />
+          </label>
+          <div class="composer-actions">
+            <button id="send-button" type="submit">Send</button>
+            <button id="stop-button" class="stop-button" type="button" hidden>Stop</button>
+          </div>
         </div>
       </form>
     </main>
@@ -221,6 +249,6 @@
       </div>
     </aside>
 
-    <script src="./app.js"></script>
+    <script src="./app.js?v=keyboard-dismiss-1"></script>
   </body>
 </html>

@@ -252,10 +252,17 @@ model = "anthropic/claude-sonnet-4.5"
 api_key_env = "OPENROUTER_API_KEY"
 
 [image_input]
-# Enable --image and /image attachments when using a vision-capable model/provider.
+# Enable CLI and browser image attachments when using a vision-capable model/provider.
 enabled = true
 # max_bytes = 5242880
+# max_images = 8
+# max_total_bytes = 20971520
 # allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
+
+[attachments]
+db_path = ".data/minigent-attachments.db"
+# max_per_thread = 100
+# max_bytes_per_thread = 268435456
 
 [coding]
 enabled = true
@@ -364,6 +371,7 @@ Use the tables below as the supported key reference.
 | `url` | `MINIGENT_LLM_URL` | Useful for `generic-oauth` / compatible endpoints. |
 | `base_url` | provider base URL env or `MINIGENT_LLM_URL` | Maps to `OPENAI_BASE_URL`, `OPENROUTER_BASE_URL`, or `GOOGLE_BASE_URL` for known providers. |
 | `extra_headers` | `MINIGENT_LLM_EXTRA_HEADERS` | Serialized as compact JSON. |
+| `input_modalities` | `MINIGENT_LLM_INPUT_MODALITIES` | Optional declared inputs: `text`, `image`, `audio`, `video`, or `document`. Image messages fail early when the selected profile omits `image`. |
 | `account_id_header` | `MINIGENT_LLM_ACCOUNT_ID_HEADER` | Generic OAuth/account routing. |
 | `api_key_env` | provider API key env | Copies the named env value into the provider-specific key env when present. |
 | `api_key` | provider API key env | Convenience only; prefer `api_key_env`. |
@@ -371,7 +379,9 @@ Use the tables below as the supported key reference.
 When `tenant_execution_configs` is present, this top-level `[llm]` is also projected
 internally as the default tenant LLM for any tenant that does not define its own
 `tenant_execution_configs.<tenant>.llm` block. This keeps exported unified configs
-restartable while preserving explicit tenant-level LLM overrides.
+restartable while preserving explicit tenant-level LLM overrides. `input_modalities` is
+optional for backward compatibility; when omitted, Minigent leaves provider capability
+validation to the provider.
 
 Provider key targets:
 
@@ -386,9 +396,104 @@ Provider key targets:
 
 | Key | Maps to | Notes |
 | --- | --- | --- |
-| `enabled` | `MINIGENT_IMAGE_INPUT_ENABLED` | Enables image parts from `--image` and `/image`; requires a vision-capable model/provider. |
-| `max_bytes` | `MINIGENT_IMAGE_INPUT_MAX_BYTES` | Maximum base64-decoded image size in bytes. |
+| `enabled` | `MINIGENT_IMAGE_INPUT_ENABLED` | Enables image parts from the CLI and browser client; requires a vision-capable model/provider. |
+| `max_bytes` | `MINIGENT_IMAGE_INPUT_MAX_BYTES` | Maximum base64-decoded size of each inline image in bytes. |
+| `max_images` | `MINIGENT_IMAGE_INPUT_MAX_IMAGES` | Maximum number of image parts in one message; defaults to 8. |
+| `max_total_bytes` | `MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES` | Maximum combined decoded size of inline images in one message; defaults to 20 MiB. |
+| `max_pixels` | `MINIGENT_IMAGE_INPUT_MAX_PIXELS` | Maximum width × height for PNG, JPEG, GIF, and WebP images; defaults to 64 million pixels. |
+| `max_dimension` | `MINIGENT_IMAGE_INPUT_MAX_DIMENSION` | Maximum width or height for PNG, JPEG, GIF, and WebP images; defaults to 16,384 pixels. |
 | `allowed_mime_types` | `MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES` | String or list of image MIME types; lists are converted to comma-separated env strings. |
+
+Image parts must use exactly one source. Inline `data` must be valid base64 and match known
+configured image signatures; uploaded and inline PNG, JPEG, GIF, and WebP images must also contain
+readable dimensions within the configured pixel and edge limits. These header checks reject
+pathological dimensions before bytes are persisted or sent to a model provider. Explicitly
+configured formats without a built-in parser and remote HTTP(S) URLs remain subject to provider-side
+validation. The browser streams raw image bodies to the binary attachment endpoint first and stores
+`attachment_id` references in message history. The original JSON/base64 upload endpoint remains
+available for compatibility. The browser preview lets users choose `auto`, `low`, or `high` detail;
+providers that support image detail receive that value, while other providers use their
+native/default behavior.
+The dedicated camera action is shown only on coarse-pointer touch devices; desktop browsers retain
+the regular image picker because they commonly ignore the HTML camera-capture hint.
+
+### `[attachments]`
+
+| Key | Maps to | Notes |
+| --- | --- | --- |
+| `db_path` | `MINIGENT_ATTACHMENT_DB_PATH` | Optional SQLite store for attachment bytes. Without it, attachments are process-local and disappear on restart. Use a shared path for multiple replicas. |
+| `max_per_thread` | `MINIGENT_ATTACHMENT_MAX_PER_THREAD` | Maximum stored attachment records per thread; defaults to 100. |
+| `max_bytes_per_thread` | `MINIGENT_ATTACHMENT_MAX_BYTES_PER_THREAD` | Maximum aggregate attachment bytes per thread; defaults to 256 MiB. |
+| `max_per_tenant` | `MINIGENT_ATTACHMENT_MAX_PER_TENANT` | Maximum stored attachment records across all of one tenant's threads; defaults to 1,000. |
+| `max_bytes_per_tenant` | `MINIGENT_ATTACHMENT_MAX_BYTES_PER_TENANT` | Maximum aggregate attachment bytes across one tenant; defaults to 1 GiB. |
+| `pending_ttl_seconds` | `MINIGENT_ATTACHMENT_PENDING_TTL_SECONDS` | Time before an uploaded attachment that was never referenced by a message is eligible for deletion; defaults to 24 hours. |
+| `cleanup_interval_seconds` | `MINIGENT_ATTACHMENT_CLEANUP_INTERVAL_SECONDS` | Interval between background pending-upload cleanup passes; defaults to 15 minutes. |
+
+Attachment records are scoped by tenant and thread. Provider requests resolve references to
+image bytes only in transient model-facing message copies; stored messages retain references.
+Deleting a thread deletes its attachment records. Unreferenced uploads can be deleted explicitly;
+clients clean them up automatically if a later upload or message creation fails. New uploads are
+pending until a message claims them. Pending uploads that outlive the configured TTL are removed by
+a periodic multi-replica-safe cleanup pass and immediately before new uploads, releasing their
+thread and tenant quota. Message creation marks references before storing history and rolls those
+marks back if persistence fails, prioritizing preservation of referenced media. Rows created before
+lifecycle tracking was introduced remain cleanup-exempt for backward compatibility. Per-thread and
+per-tenant quotas are checked atomically when an attachment is inserted, including across
+SQLite-backed replicas, so concurrent uploads cannot race past the configured storage limits.
+Scheduled cleanup writes a structured completion log with its trigger, deleted record count,
+deleted bytes, and duration; quota rejections log the rejected limit and incoming byte count.
+Admins can inspect tenant-scoped aggregate usage through
+`GET /admin/tenants/{tenant_id}/attachments/statistics`. The response separates pending,
+referenced, and lifecycle-exempt records, reports the oldest pending age and configured tenant
+limits, and never returns attachment IDs, creator identities, filenames, or contents.
+
+Attachment encryption settings are intentionally environment-only so key material is not written to
+`minigent.toml`:
+
+| Variable | Purpose |
+| --- | --- |
+| `MINIGENT_ATTACHMENT_ENCRYPTION_KEY` | URL-safe base64-encoded 32-byte active AES-256-GCM key. |
+| `MINIGENT_ATTACHMENT_ENCRYPTION_KEYS` | JSON object mapping key versions to URL-safe base64 keys, used during rotation. |
+| `MINIGENT_ATTACHMENT_KEY_VERSION` | Positive active key version; defaults to 1. |
+| `MINIGENT_ATTACHMENT_REENCRYPT_ON_STARTUP` | Re-encrypt plaintext and older-version rows with the active key during startup. |
+
+When a key is configured, new attachment bytes are encrypted with AES-256-GCM and their tenant,
+thread, attachment ID, MIME type, size, creator, timestamp, and key version are authenticated as
+associated data. Startup fails closed when an encrypted row requires a missing key or authentication
+fails. Existing plaintext rows remain readable for migration; enable re-encryption on startup after
+provisioning the keyring to encrypt them. Protect encryption keys separately from the database and
+retain old key versions until rotation has completed on every replica.
+
+### `[rate_limits]`
+
+| Key | Maps to | Notes |
+| --- | --- | --- |
+| `db_path` | `MINIGENT_RATE_LIMIT_DB_PATH` | Optional SQLite token-bucket store. Use one shared path for multi-replica enforcement. |
+| `upload_tenant_capacity` | `MINIGENT_UPLOAD_RATE_LIMIT_TENANT_CAPACITY` | Upload burst shared by a tenant; `0` disables this bucket. |
+| `upload_tenant_refill_per_second` | `MINIGENT_UPLOAD_RATE_LIMIT_TENANT_REFILL_PER_SECOND` | Tenant upload tokens restored per second. |
+| `upload_user_capacity` | `MINIGENT_UPLOAD_RATE_LIMIT_USER_CAPACITY` | Upload burst per tenant/user pair; `0` disables this bucket. |
+| `upload_user_refill_per_second` | `MINIGENT_UPLOAD_RATE_LIMIT_USER_REFILL_PER_SECOND` | User upload tokens restored per second. |
+| `run_tenant_capacity` | `MINIGENT_RUN_RATE_LIMIT_TENANT_CAPACITY` | Run burst shared by a tenant; `0` disables this bucket. |
+| `run_tenant_refill_per_second` | `MINIGENT_RUN_RATE_LIMIT_TENANT_REFILL_PER_SECOND` | Tenant run tokens restored per second. |
+| `run_user_capacity` | `MINIGENT_RUN_RATE_LIMIT_USER_CAPACITY` | Run burst per tenant/user pair; `0` disables this bucket. |
+| `run_user_refill_per_second` | `MINIGENT_RUN_RATE_LIMIT_USER_REFILL_PER_SECOND` | User run tokens restored per second. |
+| `concurrent_run_tenant_capacity` | `MINIGENT_RUN_CONCURRENCY_TENANT_CAPACITY` | Maximum active leased runs across a tenant; `0` disables this scope. |
+| `concurrent_run_user_capacity` | `MINIGENT_RUN_CONCURRENCY_USER_CAPACITY` | Maximum active leased runs per tenant/user pair; `0` disables this scope. |
+| `concurrent_run_lease_seconds` | `MINIGENT_RUN_CONCURRENCY_LEASE_SECONDS` | Crash-recovery lease duration; defaults to 60 seconds. |
+| `concurrent_run_heartbeat_seconds` | `MINIGENT_RUN_CONCURRENCY_HEARTBEAT_SECONDS` | Renewal interval, which must be shorter than the lease; defaults to 20 seconds. |
+
+Upload limits cover both attachment upload endpoints. Run limits cover standard and NDJSON-streamed
+runs, and both variants consume the same run bucket. Every accepted request atomically consumes the
+applicable tenant and user tokens; a rejection consumes neither. Rejections return HTTP 429 with a
+bounded integer `Retry-After` header and a structured body, and logs contain category, tenant,
+rejected scope, and retry delay without request contents. Limits default to disabled. When enabling
+limits on more than one replica, configure a shared SQLite path rather than process-local state.
+Concurrent-run leases use the same store and cover standard runs, streamed runs, and resumed private
+consent actions. Leases are renewed while work is active and released on completion, failure,
+cancellation, streaming disconnect, or shutdown. An expired lease is removed atomically during the
+next acquisition or admin statistics read, so a crashed replica cannot reserve capacity forever.
+Admins can inspect aggregate active-run and active-user counts without user IDs or lease IDs at
+`GET /admin/tenants/{tenant_id}/run-concurrency`.
 
 ### `[coding]`
 

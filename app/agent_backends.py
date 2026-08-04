@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -16,9 +17,9 @@ from app.execution import (
     AGENT_BACKEND_PEER_AGENT,
     TenantExecutionResolver,
     build_tool_registry_for_capability_profile,
+    build_tool_registry_for_constraints,
+    build_tool_registry_for_mcp_server_names,
     build_tool_registry_for_skill,
-    get_capability_profile,
-    get_skill_configs,
 )
 from app.mcp_broker import (
     MINIGENT_MCP_BROKER_BASE_URL_ENV,
@@ -27,11 +28,18 @@ from app.mcp_broker import (
     MINIGENT_MCP_BROKER_URL_ENV,
     MCPBrokerSessionStore,
 )
-from app.models import Message, MessageRole, Principal, ThreadStatus
+from app.models import Message, MessageRole, Principal, Thread, ThreadStatus
 from app.peer_agents import PeerAgentRegistry
 from app.redaction import sanitize_value_for_logging
-from app.runtime import AgentRuntime
+from app.runtime import AgentRuntime, load_active_skill_instructions
 from app.store import ThreadStore
+from app.tools import ToolRegistry
+from app.user_execution import (
+    UserExecutionConfigSource,
+    UserExecutionResolutionError,
+    effective_execution_catalog,
+    has_personal_execution_refs,
+)
 
 _TERMINAL_PEER_STATUSES = {"completed", "failed", "canceled"}
 PEER_TOOL_ARG_ALLOWLIST_ENV = "MINIGENT_PEER_TOOL_ARG_ALLOWLIST"
@@ -45,6 +53,7 @@ _DEFAULT_SAFE_PEER_TOOL_ARG_FIELDS: dict[str, tuple[str, ...]] = {
 _PEER_TOOL_ARG_ALLOW_ALL = "*"
 _PEER_TOOL_ARGUMENT_KEYS = {"arguments", "args", "input", "params"}
 RunEventSink = Callable[[dict[str, object]], Awaitable[None]]
+MCPServerNameAuthorizer = Callable[[str, str], set[str] | None]
 
 
 @dataclass(frozen=True)
@@ -103,12 +112,16 @@ class AgentBackendRouter(AgentBackend):
         native_backend: NativeAgentBackend,
         peer_agent_registry: PeerAgentRegistry,
         mcp_broker_sessions: MCPBrokerSessionStore | None = None,
+        mcp_server_name_authorizer: MCPServerNameAuthorizer | None = None,
+        user_execution_config_source: UserExecutionConfigSource | None = None,
     ) -> None:
         self._store = store
         self._execution_resolver = execution_resolver
         self._native_backend = native_backend
         self._peer_agent_registry = peer_agent_registry
         self._mcp_broker_sessions = mcp_broker_sessions
+        self._mcp_server_name_authorizer = mcp_server_name_authorizer
+        self._user_execution_config_source = user_execution_config_source
 
     async def run_thread(
         self,
@@ -118,6 +131,8 @@ class AgentBackendRouter(AgentBackend):
         event_sink: RunEventSink | None = None,
     ) -> tuple[str, dict[str, Any] | None]:
         execution = self._execution_resolver.resolve(principal.tenant_id)
+        thread = self._store.get_thread(principal.tenant_id, thread_id)
+        self._enforce_personal_execution_owner(principal, thread)
         backend = execution.config.agent_backend
         if backend.type == AGENT_BACKEND_NATIVE:
             return await self._native_backend.run_thread(
@@ -126,6 +141,11 @@ class AgentBackendRouter(AgentBackend):
         if backend.type == AGENT_BACKEND_PEER_AGENT:
             if backend.peer is None or backend.cwd is None:
                 raise HTTPException(status_code=500, detail="peer_agent backend is incomplete")
+            if _thread_has_image_input(self._store, principal.tenant_id, thread_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail="peer_agent backend does not support image input",
+                )
             return await self._run_peer_agent_thread(
                 principal,
                 thread_id,
@@ -153,6 +173,7 @@ class AgentBackendRouter(AgentBackend):
         self._store.start_run(principal.tenant_id, thread_id)
         broker_session_id: str | None = None
         task_id: str | None = None
+        peer_task_terminal = False
         try:
             prompt = self._prompt_for_peer_agent(principal, thread_id)
             payload: dict[str, object] = {"cwd": cwd, "prompt": prompt}
@@ -169,8 +190,24 @@ class AgentBackendRouter(AgentBackend):
                 broker_session_id = broker_env[MINIGENT_MCP_BROKER_SESSION_ENV]
                 payload["env"] = broker_env
                 payload["prompt"] = prompt + _mcp_broker_prompt_suffix()
+            task_id = f"task_{uuid4().hex}"
+            payload["task_id"] = task_id
+            attached = self._store.attach_peer_task(
+                principal.tenant_id,
+                thread_id,
+                peer_name=peer,
+                peer_base_url=self._peer_agent_registry.agent_base_url(peer),
+                task_id=task_id,
+            )
+            if not attached:
+                raise HTTPException(status_code=409, detail="Thread run lease was lost")
             task = await self._peer_agent_registry.create_task(peer, payload)
-            task_id = str(task.get("task_id", "")).strip()
+            returned_task_id = str(task.get("task_id", "")).strip()
+            if returned_task_id != task_id:
+                raise HTTPException(
+                    status_code=502,
+                    detail="peer_agent backend returned an unexpected task_id",
+                )
             await _emit_run_event(
                 event_sink,
                 {
@@ -180,11 +217,6 @@ class AgentBackendRouter(AgentBackend):
                     "status": str(task.get("status", "")),
                 },
             )
-            if not task_id:
-                raise HTTPException(
-                    status_code=502,
-                    detail="peer_agent backend returned task response without task_id",
-                )
             last_peer_event_index = None
             if event_sink is not None:
                 last_peer_event_index = await self._emit_peer_task_events(
@@ -198,7 +230,6 @@ class AgentBackendRouter(AgentBackend):
             deadline = time.monotonic() + timeout_seconds
             while str(task.get("status", "")) not in _TERMINAL_PEER_STATUSES:
                 if time.monotonic() >= deadline:
-                    await self._cancel_peer_agent_task(peer, task_id)
                     raise HTTPException(
                         status_code=504,
                         detail=f"peer_agent backend task '{task_id}' timed out",
@@ -223,6 +254,7 @@ class AgentBackendRouter(AgentBackend):
                         task_id=task_id,
                         after=last_peer_event_index,
                     )
+            peer_task_terminal = True
             if event_sink is not None:
                 last_peer_event_index = await self._emit_peer_task_events(
                     event_sink,
@@ -258,14 +290,18 @@ class AgentBackendRouter(AgentBackend):
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
             return reply, None
         except asyncio.CancelledError:
-            if task_id:
-                await self._cancel_peer_agent_task(peer, task_id)
+            if task_id and not peer_task_terminal:
+                await self._cancel_or_enqueue_peer_agent_task(principal, thread_id, peer, task_id)
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.IDLE)
             raise
         except HTTPException:
+            if task_id and not peer_task_terminal:
+                await self._cancel_or_enqueue_peer_agent_task(principal, thread_id, peer, task_id)
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.ERROR)
             raise
         except Exception as exc:  # pragma: no cover - defensive boundary
+            if task_id and not peer_task_terminal:
+                await self._cancel_or_enqueue_peer_agent_task(principal, thread_id, peer, task_id)
             self._store.set_thread_status(principal.tenant_id, thread_id, ThreadStatus.ERROR)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         finally:
@@ -281,29 +317,7 @@ class AgentBackendRouter(AgentBackend):
     ) -> dict[str, str]:
         if self._mcp_broker_sessions is None:
             return {}
-        execution = self._execution_resolver.resolve(principal.tenant_id)
-        thread = self._store.get_thread(principal.tenant_id, thread_id)
-        skill_names = thread.skill_names
-        if skill_names is None and thread.skill_name is not None:
-            skill_names = [thread.skill_name]
-        skills = get_skill_configs(execution.config, skill_names)
-        capability_profile = get_capability_profile(execution.config, thread.capability_profile)
-        if capability_profile is not None:
-            tool_registry = build_tool_registry_for_capability_profile(
-                execution.config,
-                thread.capability_profile,
-                mcp_manager=execution.mcp_manager,
-            )
-        elif len(skills) == 1 and (
-            skills[0].allowed_local_tools is not None or skills[0].mcp_server_names is not None
-        ):
-            tool_registry = build_tool_registry_for_skill(
-                execution.config,
-                skills[0].name,
-                mcp_manager=execution.mcp_manager,
-            )
-        else:
-            tool_registry = execution.tool_registry
+        tool_registry = self.tool_registry_for_thread(principal, thread_id)
         session = self._mcp_broker_sessions.create_session(
             principal=principal,
             thread_id=thread_id,
@@ -317,6 +331,82 @@ class AgentBackendRouter(AgentBackend):
             MINIGENT_MCP_BROKER_SESSION_ENV: session.session_id,
         }
 
+    def tool_registry_for_thread(self, principal: Principal, thread_id: str) -> ToolRegistry:
+        execution = self._execution_resolver.resolve(principal.tenant_id)
+        thread = self._store.get_thread(principal.tenant_id, thread_id)
+        skill_names = thread.skill_names
+        if skill_names is None and thread.skill_name is not None:
+            skill_names = [thread.skill_name]
+        catalog = effective_execution_catalog(
+            execution.config,
+            self._user_execution_config_source if thread.execution_user_id is not None else None,
+            tenant_id=principal.tenant_id,
+            user_id=thread.execution_user_id or principal.user_id,
+        )
+        try:
+            skills = catalog.resolve_skill_refs(
+                skill_names, use_defaults=thread.execution_user_id is None
+            )
+            capability_profile = catalog.resolve_capability_profile(
+                thread.capability_profile, use_default=thread.execution_user_id is None
+            )
+            personal_capability_constraints = (
+                catalog.personal_capability_constraints(capability_profile)
+                if capability_profile is not None and capability_profile.source == "user"
+                else None
+            )
+        except UserExecutionResolutionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        allowed_mcp_server_names = (
+            self._mcp_server_name_authorizer(principal.tenant_id, principal.user_id)
+            if self._mcp_server_name_authorizer is not None
+            else None
+        )
+        if personal_capability_constraints is not None:
+            return build_tool_registry_for_constraints(
+                execution.config,
+                profile_allowed_local_tools=personal_capability_constraints.allowed_local_tools,
+                profile_mcp_server_names=(personal_capability_constraints.shared_mcp_server_names),
+                personal_mcp_servers=personal_capability_constraints.personal_mcp_servers,
+                mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
+            )
+        if capability_profile is not None:
+            return build_tool_registry_for_capability_profile(
+                execution.config,
+                capability_profile.stored_ref,
+                mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
+            )
+        if len(skills) == 1 and (
+            skills[0].config.allowed_local_tools is not None
+            or skills[0].config.mcp_server_names is not None
+        ):
+            return build_tool_registry_for_skill(
+                execution.config,
+                skills[0].stored_ref,
+                mcp_manager=execution.mcp_manager,
+                allowed_mcp_server_names=allowed_mcp_server_names,
+            )
+        if allowed_mcp_server_names is not None:
+            return build_tool_registry_for_mcp_server_names(
+                execution.config, allowed_mcp_server_names, mcp_manager=execution.mcp_manager
+            )
+        return execution.tool_registry
+
+    @staticmethod
+    def _enforce_personal_execution_owner(principal: Principal, thread: Thread) -> None:
+        skill_names = thread.skill_names
+        if skill_names is None and thread.skill_name is not None:
+            skill_names = [thread.skill_name]
+        if not has_personal_execution_refs(skill_names, thread.capability_profile):
+            return
+        if thread.execution_user_id is None or thread.execution_user_id != principal.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Personal execution resources belong to a different user",
+            )
+
     def _prompt_for_peer_agent(self, principal: Principal, thread_id: str) -> str:
         messages = self._store.list_messages(principal.tenant_id, thread_id)
         context = self._store.get_thread_context(principal.tenant_id, thread_id)
@@ -324,6 +414,31 @@ class AgentBackendRouter(AgentBackend):
             "You are running as the execution backend for a Minigent thread.",
             "Use the provided conversation as context and return the final assistant reply for the latest user request.",
         ]
+        thread = self._store.get_thread(principal.tenant_id, thread_id)
+        skill_names = thread.skill_names
+        if skill_names is None and thread.skill_name is not None:
+            skill_names = [thread.skill_name]
+        execution = self._execution_resolver.resolve(principal.tenant_id)
+        catalog = effective_execution_catalog(
+            execution.config,
+            self._user_execution_config_source if thread.execution_user_id is not None else None,
+            tenant_id=principal.tenant_id,
+            user_id=thread.execution_user_id or principal.user_id,
+        )
+        try:
+            skills = catalog.resolve_skill_refs(
+                skill_names, use_defaults=thread.execution_user_id is None
+            )
+        except UserExecutionResolutionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if skills:
+            sections.append(
+                "Active skill instructions:\n"
+                + "\n\n".join(
+                    f"[{skill.config.name}]\n{load_active_skill_instructions(skill.config)}"
+                    for skill in skills
+                )
+            )
         if context.summary:
             sections.append(f"Thread summary:\n{context.summary}")
         rendered_messages = [_render_peer_context_message(message) for message in messages]
@@ -479,11 +594,23 @@ class AgentBackendRouter(AgentBackend):
         detail = final_output or str(task.get("stderr_tail") or "").strip() or status
         raise HTTPException(status_code=502, detail=f"peer_agent backend task {status}: {detail}")
 
-    async def _cancel_peer_agent_task(self, peer: str, task_id: str) -> None:
+    async def _cancel_or_enqueue_peer_agent_task(
+        self,
+        principal: Principal,
+        thread_id: str,
+        peer: str,
+        task_id: str,
+    ) -> None:
+        if await self._cancel_peer_agent_task(peer, task_id):
+            return
+        self._store.enqueue_owned_peer_task_cancellation(principal.tenant_id, thread_id)
+
+    async def _cancel_peer_agent_task(self, peer: str, task_id: str) -> bool:
         try:
             await self._peer_agent_registry.cancel_task(peer, task_id)
         except HTTPException:
-            return
+            return False
+        return True
 
 
 def _render_peer_context_message(message: Message) -> str:
@@ -508,6 +635,14 @@ def _render_peer_context_message(message: Message) -> str:
         lines.append(message.content)
         return "\n".join(lines)
     return f"[{message.role.value}]\n{message.content}"
+
+
+def _thread_has_image_input(store: ThreadStore, tenant_id: str, thread_id: str) -> bool:
+    return any(
+        part.type == "image"
+        for message in store.list_messages(tenant_id, thread_id)
+        for part in (message.parts or [])
+    )
 
 
 def _usage_from_peer_task(task: dict[str, object]) -> dict[str, int] | None:

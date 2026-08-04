@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_PLAINTEXT_FORMAT = "%(levelname)s %(name)s: %(message)s"
 _TRACING_INITIALIZED = False
-_HEALTHCHECK_PATHS = frozenset({"/health"})
+_HEALTHCHECK_PATHS = frozenset({"/health", "/health/live", "/health/ready"})
 
 
 @dataclass(frozen=True)

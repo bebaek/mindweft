@@ -83,7 +83,11 @@ async def require_tenant_context(
     if tenant is None:
         if required:
             raise HTTPException(status_code=403, detail="Tenant is not active")
-        membership = _require_active_membership(store, principal) if user_required else None
+        membership = (
+            _require_active_membership(store, principal)
+            if user_required
+            else _active_membership(store, principal)
+        )
         context = _apply_membership(
             TenantContext(principal=principal, tenant_id=principal.tenant_id),
             membership,
@@ -96,7 +100,11 @@ async def require_tenant_context(
 
     entitlements = store.get_tenant_entitlements(principal.tenant_id)
     execution_config_version = store.get_config_version(principal.tenant_id)
-    membership = _require_active_membership(store, principal) if user_required else None
+    membership = (
+        _require_active_membership(store, principal)
+        if user_required
+        else _active_membership(store, principal)
+    )
     context = _tenant_context_from_records(
         principal,
         tenant,
@@ -143,6 +151,13 @@ def _require_active_membership(store: Any, principal: Principal) -> TenantUser:
     if not isinstance(membership, TenantUser) or membership.status != TenantUserStatus.ACTIVE:
         raise HTTPException(status_code=403, detail="Tenant user is not active")
     return membership
+
+
+def _active_membership(store: Any, principal: Principal) -> TenantUser | None:
+    membership = store.get_tenant_user_by_user_id(principal.tenant_id, principal.user_id)
+    if isinstance(membership, TenantUser) and membership.status == TenantUserStatus.ACTIVE:
+        return membership
+    return None
 
 
 def _apply_membership(context: TenantContext, membership: TenantUser | None) -> TenantContext:

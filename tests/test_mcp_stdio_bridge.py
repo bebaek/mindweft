@@ -1,10 +1,12 @@
+import asyncio
 import sys
 import time
 from pathlib import Path
 
+import httpx2
 from fastapi.testclient import TestClient
 
-from app.mcp import MCPPathPolicy
+from app.mcp import MCPHTTPClient, MCPPathPolicy, MCPServerConfig
 from app.mcp_stdio_bridge import BridgeSettings, build_parser, create_bridge_app
 
 FAKE_STDIO_MCP_SERVER = r"""
@@ -27,11 +29,18 @@ for line in sys.stdin:
         print("not json", flush=True)
         continue
     if mode == "delayed-tools-list" and method == "tools/list":
-        time.sleep(0.25)
+        time.sleep(0.75)
     if mode == "large-line" and method == "tools/list":
-        print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": {"content": "x" * 200000}}), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": {"tools": [{"name": "large", "description": "x" * 200000, "inputSchema": {"type": "object"}}], "resultType": "complete", "ttlMs": 0, "cacheScope": "private"}}), flush=True)
         continue
-    if method == "initialize":
+    if method == "server/discover":
+        result = {
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {"tools": {}},
+            "resultType": "complete",
+            "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "fake-stdio", "version": "2.0.0"}},
+        }
+    elif method == "initialize":
         result = {
             "protocolVersion": "2025-11-25",
             "serverInfo": {"name": "fake-stdio", "version": "1.0.0"},
@@ -93,6 +102,9 @@ for line in sys.stdin:
     else:
         print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "error": {"code": -32601, "message": "not found"}}), flush=True)
         continue
+    metadata = payload.get("params", {}).get("_meta", {})
+    if metadata.get("io.modelcontextprotocol/protocolVersion") == "2026-07-28":
+        result.update({"resultType": "complete", "ttlMs": 0, "cacheScope": "private"})
     print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": result}), flush=True)
 """
 
@@ -142,8 +154,170 @@ def test_stdio_bridge_initializes_lists_tools_and_calls_tool(tmp_path: Path) -> 
     assert notification.status_code == 202
     assert tools.status_code == 200
     assert tools.json()["result"]["tools"][0]["name"] == "echo"
+    assert "resultType" not in tools.json()["result"]
+    assert "_meta" not in tools.json()["result"]
     assert call.status_code == 200
     assert call.json()["result"]["structuredContent"] == {"echo": "hello"}
+    assert "resultType" not in call.json()["result"]
+    assert "_meta" not in call.json()["result"]
+
+
+def test_stdio_bridge_allows_modern_stateless_requests_without_session(tmp_path: Path) -> None:
+    client = _client(tmp_path, "ok")
+    metadata = {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1.0.0"},
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }
+
+    with client:
+        discover = client.post(
+            "/mcp",
+            headers={
+                "MCP-Protocol-Version": "2026-07-28",
+                "MCP-Method": "server/discover",
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "server/discover",
+                "params": {"_meta": metadata},
+            },
+        )
+        tools = client.post(
+            "/mcp",
+            headers={
+                "MCP-Protocol-Version": "2026-07-28",
+                "MCP-Method": "tools/list",
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {"_meta": metadata},
+            },
+        )
+
+    assert discover.status_code == 200
+    assert discover.json()["result"]["supportedVersions"] == ["2026-07-28"]
+    assert "mcp-session-id" not in discover.headers
+    assert tools.status_code == 200
+    assert tools.json()["result"]["tools"][0]["name"] == "echo"
+
+
+def test_stdio_bridge_interoperates_with_sdk_v2_text_server(tmp_path: Path) -> None:
+    client = TestClient(
+        create_bridge_app(
+            BridgeSettings(
+                name="text-sdk",
+                command=[
+                    sys.executable,
+                    "-m",
+                    "app.text_mcp_server",
+                    "--workspace",
+                    str(tmp_path),
+                ],
+            )
+        )
+    )
+    metadata = {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1.0.0"},
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }
+
+    with client:
+        discover = client.post(
+            "/mcp",
+            headers={"MCP-Protocol-Version": "2026-07-28"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "server/discover",
+                "params": {"_meta": metadata},
+            },
+        )
+        modern_tools = client.post(
+            "/mcp",
+            headers={"MCP-Protocol-Version": "2026-07-28"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {"_meta": metadata},
+            },
+        )
+
+    assert discover.json()["result"]["supportedVersions"] == ["2026-07-28"]
+    assert "mcp-session-id" not in discover.headers
+    assert modern_tools.status_code == 200
+    assert modern_tools.json()["result"]["resultType"] == "complete"
+    assert modern_tools.json()["result"]["tools"][0]["name"] == "read_text_file_lines"
+
+
+def test_sdk_http_client_interoperates_with_sdk_text_server_through_bridge(
+    tmp_path: Path,
+) -> None:
+    bridge_app = create_bridge_app(
+        BridgeSettings(
+            name="text-sdk",
+            command=[
+                sys.executable,
+                "-m",
+                "app.text_mcp_server",
+                "--workspace",
+                str(tmp_path),
+            ],
+        )
+    )
+
+    async def run() -> None:
+        async with bridge_app.router.lifespan_context(bridge_app):
+            client = MCPHTTPClient(
+                MCPServerConfig(name="text", url="http://testserver/mcp", headers={}),
+                transport=httpx2.ASGITransport(app=bridge_app),
+            )
+            tools = await client.list_tools()
+
+        assert [tool.name for tool in tools] == [
+            "text.read_text_file_lines",
+            "text.read_text_file_around",
+            "text.search_text_file",
+        ]
+        assert client.server_info().protocol_version == "2026-07-28"
+        assert client.server_info().server_name == "minigent-text-mcp"
+
+    asyncio.run(run())
+
+
+def test_stdio_bridge_keeps_multiple_legacy_sessions_valid(tmp_path: Path) -> None:
+    client = _client(tmp_path, "ok")
+
+    with client:
+        first_initialize = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        second_initialize = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {}},
+        )
+        first_tools = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": first_initialize.headers["mcp-session-id"]},
+            json={"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}},
+        )
+        second_tools = client.post(
+            "/mcp",
+            headers={"MCP-Session-Id": second_initialize.headers["mcp-session-id"]},
+            json={"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}},
+        )
+
+    assert first_initialize.status_code == 200
+    assert second_initialize.status_code == 200
+    assert first_initialize.headers["mcp-session-id"] != second_initialize.headers["mcp-session-id"]
+    assert first_tools.status_code == 200
+    assert second_tools.status_code == 200
 
 
 def test_stdio_bridge_requires_session_after_initialize(tmp_path: Path) -> None:
@@ -198,7 +372,7 @@ def test_stdio_bridge_reads_large_subprocess_response_lines(tmp_path: Path) -> N
         )
 
     assert response.status_code == 200
-    assert len(response.json()["result"]["content"]) == 200000
+    assert len(response.json()["result"]["tools"][0]["description"]) == 200000
 
 
 def test_stdio_bridge_reports_oversized_subprocess_response_lines(tmp_path: Path) -> None:
@@ -220,7 +394,7 @@ def test_stdio_bridge_reports_oversized_subprocess_response_lines(tmp_path: Path
 
 
 def test_stdio_bridge_skips_stale_response_after_timeout(tmp_path: Path) -> None:
-    client = _client(tmp_path, "delayed-tools-list", request_timeout=0.1)
+    client = _client(tmp_path, "delayed-tools-list", request_timeout=0.3)
 
     with client:
         initialize = client.post(
@@ -233,7 +407,7 @@ def test_stdio_bridge_skips_stale_response_after_timeout(tmp_path: Path) -> None
             headers={"MCP-Session-Id": session_id},
             json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         )
-        time.sleep(0.3)
+        time.sleep(0.8)
         response = client.post(
             "/mcp",
             headers={"MCP-Session-Id": session_id},
@@ -252,7 +426,7 @@ def test_stdio_bridge_skips_stale_response_after_timeout(tmp_path: Path) -> None
 
 
 def test_stdio_bridge_can_restart_subprocess_after_timeout(tmp_path: Path) -> None:
-    client = _client(tmp_path, "delayed-tools-list", request_timeout=0.1, restart_on_timeout=True)
+    client = _client(tmp_path, "delayed-tools-list", request_timeout=0.3, restart_on_timeout=True)
 
     with client:
         initialize = client.post(
@@ -296,6 +470,8 @@ def test_stdio_bridge_reports_exited_subprocess(tmp_path: Path) -> None:
         "MCP stdio server closed stdin",
         "MCP stdio server closed stdout",
         "MCP stdio server exited with code 7",
+        "MCP stdio server request failed: Connection closed",
+        "MCP stdio server request failed: 502: MCP stdio server exited with code 7",
     }
 
 

@@ -17,7 +17,12 @@ from app.models import ToolSpec
 class MCPClientProtocol(Protocol):
     async def list_tools(self) -> list[ToolSpec]: ...
 
-    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any: ...
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        context: Any | None = None,
+    ) -> Any: ...
 
     def server_info(self) -> MCPServerInfo: ...
 
@@ -47,6 +52,12 @@ class MCPServerRuntimeState:
             "server_version": info.server_version if info is not None else None,
             "tool_count": len(self.tools),
             "allowed_tools": self.config.allowed_tools,
+            "trusted_input_preprocessor_tools": sorted(
+                self.config.trusted_input_preprocessor_tools
+            ),
+            "forward_identity": self.config.forward_identity,
+            "identity_audience": self.config.identity_audience,
+            "identity_scopes": list(self.config.identity_scopes),
             "path_policy": {
                 "deny_globs": list(self.config.path_policy.deny_globs),
                 "allow_globs": list(self.config.path_policy.allow_globs),
@@ -55,6 +66,19 @@ class MCPServerRuntimeState:
                 "enabled": self.config.result_redaction_policy.enabled,
                 "mode": self.config.result_redaction_policy.mode,
                 "sensitive_tools": sorted(self.config.result_redaction_policy.sensitive_tools),
+            },
+            "private_value_policy": {
+                "mode": self.config.private_value_policy.mode,
+                "argument_paths": list(self.config.private_value_policy.argument_paths),
+                "requires_approval": self.config.private_value_policy.requires_approval,
+                "tool_overrides": {
+                    tool_name: {
+                        "mode": policy.mode,
+                        "argument_paths": list(policy.argument_paths),
+                        "requires_approval": policy.requires_approval,
+                    }
+                    for tool_name, policy in self.config.private_value_tool_policies.items()
+                },
             },
             "status": self.status,
             "last_error": self.last_error,
@@ -232,6 +256,7 @@ def _state_key(config: MCPServerConfig) -> str:
             config.result_redaction_policy.mode,
             config.result_redaction_policy.sensitive_tools,
             config.timeout_seconds,
+            config.public_network_only,
         )
     )
 

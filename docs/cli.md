@@ -21,9 +21,14 @@ lookup order is:
 
 1. `--config <path>`
 2. `MINIGENT_CLIENT_CONFIG`
-3. `~/.config/minigent/client.toml`
-4. `~/.minigent/client.toml`
+3. `$XDG_CONFIG_HOME/minigent/client.toml` when `XDG_CONFIG_HOME` is absolute, otherwise
+   `~/.config/minigent/client.toml`
+4. `~/.minigent/client.toml` (legacy compatibility)
 5. `./.minigent-client.toml`
+
+Mutable client state and prompt history are stored under `$XDG_STATE_HOME/minigent`, falling
+back to `~/.local/state/minigent`. Existing files under `~/.minigent` are read and migrated
+when their XDG-state equivalents do not exist.
 
 Environment variables still override file values, and CLI flags override both. Prefer
 keeping secrets such as API tokens and provider keys in environment variables rather than in
@@ -209,7 +214,7 @@ state:
 
 ```bash
 minigent --admin admin tenants list --status active
-minigent --admin admin tenants create --id <tenant-id> --slug <slug> --name "Tenant Name" --status active
+minigent --admin admin tenants create --id <tenant-id> --slug <slug> --name "Tenant Name" --status active --provisioning-profile generic-v1
 minigent --admin admin tenants show <tenant-id>
 minigent --admin admin tenants update <tenant-id> --plan pro --metadata-json '{"owner":"support"}'
 minigent --admin admin tenants suspend <tenant-id>
@@ -223,6 +228,11 @@ minigent --admin admin tenants entitlements set <tenant-id> --features-json '{"m
 minigent --admin admin tenants entitlements validate <tenant-id> --features-json '{"mcp":true}'
 minigent --admin admin tenants entitlements delete <tenant-id>
 ```
+
+`--provisioning-profile generic-v1` atomically creates a conservative starter execution
+configuration with the tenant: a `general` default agent and skill, a `safe-default`
+capability profile, and only the `current_time` and `calculator` local tools. Omit the option
+(or pass `none`) to preserve execution-config provisioning as a separate operation.
 
 Thread and audit admin commands use `--tenant` to select the target tenant:
 
@@ -252,6 +262,8 @@ history, and multiline input.
 
 Set `MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter` or pass `--chat-submit-mode alt-enter`
 to switch modes. Use `/editor` to compose a long prompt in `$VISUAL` or `$EDITOR`.
+After submission, interactive prompts are redrawn with normal terminal wrapping so tmux and
+terminal scrollback can reflow and copy long prompts without pane-width line breaks.
 
 ### Chat flags
 

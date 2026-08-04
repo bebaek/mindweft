@@ -110,6 +110,10 @@ def test_run_sends_image_parts(monkeypatch: Any, tmp_path: Path, capsys: Any) ->
     def urlopen(request: Any) -> _Response:
         if request.full_url.endswith("/threads"):
             return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/attachments"):
+            body = json.loads(request.data.decode("utf-8"))
+            assert body == {"mime_type": "image/png", "data": "aGk="}
+            return _Response(body={"attachment_id": "attachment-1"})
         if request.full_url.endswith("/threads/thread-1/messages"):
             body = json.loads(request.data.decode("utf-8"))
             assert body == {
@@ -119,7 +123,7 @@ def test_run_sends_image_parts(monkeypatch: Any, tmp_path: Path, capsys: Any) ->
                     {
                         "type": "image",
                         "mime_type": "image/png",
-                        "data": "aGk=",
+                        "attachment_id": "attachment-1",
                         "detail": "high",
                     },
                 ],
@@ -762,6 +766,7 @@ def test_config_print_resolved_masks_secrets(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
@@ -1112,6 +1117,7 @@ def test_config_print_resolved_uses_custom_env_file(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
@@ -1142,6 +1148,7 @@ def test_config_doctor_reports_unified_config_checks(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_URL", raising=False)
@@ -1194,6 +1201,7 @@ def test_config_doctor_blocks_on_invalid_unified_config(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     (tmp_path / "minigent.toml").write_text('[llm\nprovider = "mock"\n', encoding="utf-8")
 
     exit_code = cli.main(["config", "doctor"])
@@ -1210,6 +1218,7 @@ def test_config_doctor_blocks_when_provider_key_missing(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
@@ -1236,6 +1245,7 @@ def test_config_doctor_blocks_on_malformed_mcp_servers(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     (tmp_path / "minigent.toml").write_text(
         """
 [llm]
@@ -1534,6 +1544,8 @@ def test_admin_tenants_create_json_sends_payload(monkeypatch: Any, capsys: Any) 
             "pro",
             "--region",
             "us",
+            "--provisioning-profile",
+            "generic-v1",
             "--metadata-json",
             '{"owner":"ops"}',
         ]
@@ -1551,6 +1563,7 @@ def test_admin_tenants_create_json_sends_payload(monkeypatch: Any, capsys: Any) 
                 "status": "active",
                 "plan": "pro",
                 "region": "us",
+                "provisioning_profile": "generic-v1",
                 "metadata": {"owner": "ops"},
             },
         )

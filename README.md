@@ -26,7 +26,19 @@ uv sync --dev
 uv run uvicorn app.main:app --reload
 ```
 
-Open the development web client:
+Open the production console foundation:
+
+```text
+http://127.0.0.1:8000/console/
+```
+
+Assistant responses in the production console render safe GitHub Flavored Markdown, including
+headings, lists, tables, task lists, links, blockquotes, and fenced code. Raw HTML is disabled;
+user and tool-authored content remains plain text by default. The console typography baseline is
+15px for body text, 16px for chat, 14px for controls, 13px for labels and code, and 12px for
+tertiary metadata; mobile form controls remain 16px to avoid browser input zoom.
+
+The dependency-free development client remains available during migration:
 
 ```text
 http://127.0.0.1:8000/web/
@@ -104,12 +116,22 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | Setting | Purpose |
 | --- | --- |
 | `MINIGENT_AUTH_MODE` | Authentication mode: development headers, static tokens, or JWT. |
+| `MINIGENT_SESSION_CREDENTIALS` / `MINIGENT_SESSION_SECRET` | Optional generic username/password-hash console sign-in with secure same-origin sessions. |
+| `MINIGENT_ADMIN_DB_PATH` / `MINIGENT_ADMIN_ENCRYPTION_KEY` | Durable encrypted tenant administration, execution configuration, and write-only user MCP credential headers. The encryption key is required before personal credentials can be stored or used. |
+| `MINIGENT_ADMIN_MCP_SERVER_CATALOG` / `MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET` | Deployment-owned MCP definitions that platform admins can assign as a tenant ceiling and narrow per role or user; use the `_SECRET` variant when entries contain credentials. |
+| `MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS` | Optional provider-neutral administrative HTTP grant integrations; disabled when unset and excluded from runtime readiness and model tooling. Suspended/deleted users are durably queued for assignment cleanup and grant disabling. |
+| `MINIGENT_USER_DEPROVISIONING_INTERVAL_SECONDS` / `MINIGENT_USER_DEPROVISIONING_MAX_ATTEMPTS` | Poll interval and retry limit for durable user lifecycle deprovisioning (defaults: 5 seconds and 8 attempts). |
 | `MINIGENT_LLM_PROVIDER` | LLM provider such as `mock`, `openai`, `openrouter`, `openai-compatible`, `generic-oauth`, `google`, or `anthropic`. |
 | `MINIGENT_LLM_MODEL` | Model identifier for the selected provider. |
 | `MINIGENT_IMAGE_INPUT_ENABLED` | Enables image attachments from CLI/chat clients; unified config key is `[image_input].enabled`. |
-| `MINIGENT_THREAD_DB_PATH` | Optional SQLite path for persistent thread/message storage. |
-| `MINIGENT_TENANT_EXECUTION_CONFIGS` | Optional per-tenant LLM, tool, skill, capability, backend, and quality config. |
+| `MINIGENT_ATTACHMENT_DB_PATH` | Optional SQLite store for uploaded attachment bytes; unified config key is `[attachments].db_path`. |
+| `MINIGENT_ATTACHMENT_ENCRYPTION_KEY` / `MINIGENT_ATTACHMENT_ENCRYPTION_KEYS` | Optional AES-256-GCM key or versioned keyring for attachment bytes at rest. |
+| `MINIGENT_RATE_LIMIT_DB_PATH` | Optional shared SQLite token-bucket state for upload and run rate limits. |
+| `MINIGENT_THREAD_DB_PATH` | Optional SQLite path for persistent thread/message storage plus atomic cross-replica run leases and cancellation. |
+| `MINIGENT_OAUTH_STORE_PATH` / `MINIGENT_OAUTH_ENCRYPTION_KEYS` | Shared encrypted SQLite OAuth credentials, login-flow state, and coordinated multi-replica token refresh. |
+| `MINIGENT_TENANT_EXECUTION_CONFIGS` | Optional per-tenant LLM, tool, skill, capability, backend, and quality config. Tenant execution config supplies shared resources; the partially implemented [user execution overlay](docs/user-execution-extensibility.md) adds personal agents, live personal skills, narrowing-only capability profiles, and policy-gated public HTTPS personal MCP servers without tenant config edits. Encrypted static credential headers are supported; interactive OAuth connection and refresh flows remain pending. |
 | `MINIGENT_MCP_BROKER_ENABLED` | Enables the peer-agent MCP broker path when using peer backends. |
+| `MINIGENT_MCP_BROKER_DB_PATH` | Optional shared SQLite path for cross-replica MCP broker sessions; bearer tokens are stored only as SHA-256 hashes. |
 | `MINIGENT_TOOL_TIMEOUT_SECONDS` | Default wall-clock limit for each runtime tool call before returning a structured timeout error. |
 | `MINIGENT_RESPONSES_REASONING_ONLY_RETRIES` | Bounded generic OAuth Responses continuations after reasoning-only output before reporting a retryable provider stall. |
 
@@ -140,16 +162,265 @@ basis; it is not a substitute for avoiding unnecessary access to credentials. Te
 MCP server configs can override the tool-result redaction policy with `result_redaction`
 / `resultRedaction` (`mode`: `best_effort`, `full`, or `none`).
 
+As an experimental local privacy convention, an MCP tool can return model-safe
+`{{pii:kind:reference}}` placeholders in `structuredContent` and place the corresponding
+string values under `_meta["io.minigent/private-values"]`. Minigent removes that metadata
+before model context, thread history, and run events, and resolves placeholders in
+replies sent to the authenticated user. This is a proof of concept rather than a standard MCP
+confidential channel: other MCP clients may log or expose `_meta`. Stored messages retain
+placeholders, while authenticated message reads rehydrate values that have not expired.
+Private values expire after 30 minutes by default and are bounded to 1,000 references per
+user/thread scope and 10,000 characters per value; override those limits with
+`MINIGENT_PRIVATE_VALUE_TTL_SECONDS`, `MINIGENT_PRIVATE_VALUE_MAX_REFS_PER_THREAD`, and
+`MINIGENT_PRIVATE_VALUE_MAX_CHARS`.
+
+The legacy `_meta["io.minigent/carddav-private-values"]` key remains accepted during the DAV
+sidecar migration, but new MCP servers should emit the protocol-neutral key. Tools that inspect
+raw user text before model use must be explicitly trusted and hidden with the MCP server's
+`trusted_input_preprocessor_tools` list; Minigent does not trust server-provided descriptions for
+this boundary.
+
+Private values remain in memory by default. To make private values, consent grants, audit
+records, and resumable pending tool actions restart-safe, configure encrypted SQLite storage.
+The consent tables may share the private-value database file and key; they remain separate
+from the thread database:
+
+```bash
+PRIVATE_DATA_KEY="$(python -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')"
+export MINIGENT_PRIVATE_VALUE_DB_PATH="$PWD/.data/private-data.db"
+export MINIGENT_PRIVATE_VALUE_ENCRYPTION_KEY="$PRIVATE_DATA_KEY"
+export MINIGENT_PRIVATE_CONSENT_DB_PATH="$PWD/.data/private-data.db"
+export MINIGENT_PRIVATE_CONSENT_ENCRYPTION_KEY="$PRIVATE_DATA_KEY"
+# Active key versions; see the rotation workflow below before changing them:
+export MINIGENT_PRIVATE_VALUE_KEY_VERSION=1
+export MINIGENT_PRIVATE_CONSENT_KEY_VERSION=1
+```
+
+The SQLite stores encrypt each private value and each consent/action payload independently with
+AES-256-GCM and a fresh 96-bit nonce. Private-value tenant/user/thread/reference metadata and
+the declared PII kind, plus consent/action tenant/user/thread/consent metadata, are authenticated
+as associated data. A known reference resolves only when its placeholder retains that declared
+kind; relabeled placeholders remain unresolved for display and fail closed for tool disclosure.
+Private values are resolvable only by the user who created or received them, even when another
+user in the same tenant can access the thread's placeholder-bearing messages. The database
+contains ciphertext, nonces, scoped metadata, statuses, and expiry timestamps but not keys or
+plaintext values/tool arguments. Keys must come from the process environment or an external
+secret manager; do not commit them or place them beside the database. Startup fails
+closed when a database path is configured without a valid corresponding key. Back up keys
+separately: losing all copies of a required version makes its existing records unrecoverable.
+Consent requests default to a ten-minute TTL and grants to five minutes; override them with
+`MINIGENT_PRIVATE_CONSENT_REQUEST_TTL_SECONDS` and
+`MINIGENT_PRIVATE_CONSENT_GRANT_TTL_SECONDS`. Redacted disclosure audit records are retained for
+30 days by default and bounded to the newest 1,000 records per tenant/user/thread scope in both
+memory and SQLite. Configure those bounds with
+`MINIGENT_PRIVATE_CONSENT_AUDIT_TTL_SECONDS` and
+`MINIGENT_PRIVATE_CONSENT_MAX_AUDIT_RECORDS_PER_SCOPE`. Expired and over-limit records are
+pruned during consent activity, audit reads, and encrypted-store startup.
+
+Upgrading a private-value database created before user scoping intentionally drops its
+short-lived `private_values` rows on first startup. Those legacy rows cannot be attributed to a
+specific user safely; thread messages retain unresolved placeholders until new values are
+captured. Consent requests, action records, disclosure audits, and thread history are not removed.
+
+For key rotation, both encrypted stores accept a JSON keyring whose keys are positive version
+numbers and whose values are base64-encoded 32-byte keys. New writes use the version selected by
+`*_KEY_VERSION`; older versions are decryption-only. To rotate a shared private-data key from
+version 1 to version 2:
+
+```bash
+OLD_PRIVATE_DATA_KEY='...version-1 key from the secret manager...'
+NEW_PRIVATE_DATA_KEY="$(python -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')"
+PRIVATE_DATA_KEYS="{\"1\":\"$OLD_PRIVATE_DATA_KEY\",\"2\":\"$NEW_PRIVATE_DATA_KEY\"}"
+
+unset MINIGENT_PRIVATE_VALUE_ENCRYPTION_KEY MINIGENT_PRIVATE_CONSENT_ENCRYPTION_KEY
+export MINIGENT_PRIVATE_VALUE_ENCRYPTION_KEYS="$PRIVATE_DATA_KEYS"
+export MINIGENT_PRIVATE_CONSENT_ENCRYPTION_KEYS="$PRIVATE_DATA_KEYS"
+export MINIGENT_PRIVATE_VALUE_KEY_VERSION=2
+export MINIGENT_PRIVATE_CONSENT_KEY_VERSION=2
+export MINIGENT_PRIVATE_VALUE_REENCRYPT_ON_STARTUP=true
+export MINIGENT_PRIVATE_CONSENT_REENCRYPT_ON_STARTUP=true
+```
+
+Start Minigent once with both keys available. On startup, each store transactionally
+re-encrypts its surviving rows: private values in one transaction, then consent requests,
+pending actions, and disclosure audit records in another. Then stop it, remove version 1 from
+both keyrings, disable both `*_REENCRYPT_ON_STARTUP` flags, and restart. A successful restart
+with only version 2 verifies that no stored row still requires the retired key. Keep a protected
+backup until that verification succeeds. Rotation fails closed and rolls back if any required
+old key is missing or any ciphertext fails authentication. The legacy singular
+`*_ENCRYPTION_KEY` settings remain supported and represent the active `*_KEY_VERSION`; they can
+also be combined with a keyring when their key agrees with its active version.
+
+User-authored message text is locally preprocessed before storage or model use. The default
+conservative detector masks email addresses, phone-number-like values, street addresses, and
+person names in explicit contexts such as `Email Jane Doe`, `Dr. Jane Doe`, or
+`Jane Doe's`. Existing private placeholders are preserved. This regex-based detector is not a
+complete PII classifier: it can miss unfamiliar formats, single names without a contextual
+cue, non-US-style addresses, and other identifiers, and it can produce false positives.
+Set `MINIGENT_INPUT_PII_PROTECTION_ENABLED=false` to disable it explicitly.
+
+Private placeholders are denied at every tool boundary by default. An explicitly trusted MCP
+tool can receive selected values only when its server configuration opts into
+`resolve_selected` and allowlists the exact JSON argument paths. Resolution happens after the
+model creates the tool call and after placeholder-only argument logging, immediately before
+the trusted handler runs; the handler receives resolved arguments but never receives the
+private-value resolver capability itself. Unapproved paths fail with HTTP 403, and missing or
+expired values fail closed. Array paths use `[*]`, for example:
+
+```json
+{
+  "name": "trusted-mail",
+  "url": "http://127.0.0.1:9000/mcp",
+  "allowed_tools": ["send"],
+  "private_value_policy": "deny",
+  "private_value_tool_policies": {
+    "send": {
+      "mode": "resolve_selected",
+      "argument_paths": ["recipient.email", "cc[*].email"],
+      "requires_approval": true
+    }
+  }
+}
+```
+
+`pass_through` is also available for tools designed to consume opaque placeholders directly;
+it never resolves their values. Set `requires_approval` on a per-tool policy to require the same
+one-shot approval flow even when a call has no private placeholders, such as a destructive delete.
+Tool results are run back through local PII protection before storage, run events, or another
+model turn.
+
+A selected disclosure now requires a user-scoped consent grant in addition to administrator
+policy. Before requesting consent, Minigent validates every selected placeholder against its
+user/thread scope, expiry, reference, and declared PII kind without exposing the plaintext to the
+tool layer. Missing, expired, or relabeled placeholders fail with HTTP 409 and create no consent
+request, pending action, or disclosure audit record. The first valid attempt creates a redacted
+pending request, emits a `private_value.consent_required` run event, and fails the tool call with
+HTTP 428. The request contains only the tool name, an argument fingerprint, and PII kinds, counts,
+and argument paths. Clients can inspect and decide it through:
+
+```text
+GET  /threads/{thread_id}/private-value-consents/pending
+POST /threads/{thread_id}/private-value-consents/{consent_id}
+POST   /threads/{thread_id}/private-value-consents/{consent_id}/resume
+GET    /threads/{thread_id}/private-value-actions
+DELETE /threads/{thread_id}/private-value-actions/{consent_id}
+GET    /threads/{thread_id}/private-value-disclosures/audit
+```
+
+The decision body is `{"approve": true, "one_shot": true}` or `{"approve": false}`. The
+`resume` endpoint validates that the private values are still available before atomically claiming
+and executing the exact placeholder-bearing tool call that originally requested consent, then
+continues the agent loop from its protected result; the model does not need to reconstruct the
+call. An expired value therefore leaves the action pending rather than incorrectly marking its
+external outcome as uncertain. Claiming is atomic and durable: concurrent or post-restart
+attempts to claim the same action fail with HTTP 409 instead of invoking a potentially
+side-effecting tool twice. If the process crashes, times out, or loses its connection after the
+claim, the action remains in an `executing` state and is not automatically replayed because the
+external outcome may be unknown. The claimed record is retained only until its consent grant
+expires (five minutes from the decision by default), then removed during consent activity or
+encrypted-store startup. `GET /private-value-actions` returns only consent ID, tool name, state,
+and expiry—never tool arguments or private values. After reconciling an uncertain external
+outcome, clients can `DELETE` the action record; discarding also revokes an unconsumed approval
+and appends a redacted `discarded` audit event. Interactive `minigent chat` sessions expose the
+`/actions` and `/discard-action <consent-id>`. Reconcile the tool's external state before creating
+a replacement action; tools should still support idempotency keys where possible. Grants are
+fingerprint of the complete placeholder-bearing argument object, so changing the body or any
+other argument requires new consent. Non-one-shot grants remain usable for five minutes; pending
+requests expire after ten minutes.
+Denials block the identical disclosure until they expire. Consent state is scoped by tenant,
+user, and thread. Audit records contain opaque references, paths, and kinds, but never raw
+values. The browser displays a confirmation dialog and automatically resumes an approved
+action. If that resume has an uncertain outcome, it detects the durable `executing` state,
+blocks automatic replay, warns the user to check the external system, and offers to discard the
+reconciled action record. Interactive `minigent chat` sessions show the same redacted consent
+summary and prompt for a one-shot approval. Consent grants, audit records, and exact
+placeholder-bearing pending actions survive restarts when encrypted consent storage is
+configured; otherwise they remain in memory.
+
+Private CardDAV and CalDAV server implementations live in the separate
+[`private-dav-mcp`](https://github.com/bebaek/private-dav-mcp) project. Minigent retains only the
+generic private-value envelope, trusted-preprocessor, selective-disclosure, approval, audit, and
+rehydration machinery. Configure DAV servers as ordinary MCP endpoints and explicitly list any
+runtime-only input tool under `trusted_input_preprocessor_tools`; keep mutation approval and
+selected argument paths in `private_value_tool_policies`. DAV credentials and protocol-specific
+environment variables belong on the external sidecar, not the Minigent process.
+
 ## Clients
 
 ### Browser
 
-The API serves a dependency-free browser client at `/web/`. It uses the streaming run
+The API serves the new TypeScript/React console at `/console/`. The initial production UI
+foundation includes a responsive, accessible application shell with persistent light/dark theme
+selection, live readiness checks, a
+conversation workspace with thread history, message composition, NDJSON run streaming, activity
+inspection, cancellation controls, context usage inspection, raw model-context previews, and
+confirmed compaction. On narrow screens, the conversation rail is collapsed by default and available
+from the Conversations menu so the active chat retains the screen space. The console also supports
+validated image selection, authenticated binary uploads, attachment previews,
+and per-image detail controls, one-time private-value approval/denial, pending-consent recovery after
+reload, uncertain-action reconciliation, a personal setup workspace for versioned execution-overlay
+JSON plus write-only encrypted MCP credential creation, rotation, and deletion, a tenant-owner
+settings workspace for profile, membership, password onboarding, domains, read-only entitlements,
+execution configuration, and tenant-scoped OpenAI OAuth credential import from Pi, and a separate
+platform administration workspace with tenant provisioning and
+editing, user role/status management, domain verification, typed feature and limit entitlement
+editing with server validation, version visibility and confirmed reset, a sectioned execution
+configuration editor for LLMs, tools, MCP servers (including deployment-configured quick-add
+cards for hosted internal services), backends, quality review, skills, capability
+profiles, and agent presets with redacted-secret preservation and unsaved-change protection,
+tenant-scoped thread browsing with runtime filters, retained-message and compacted-context inspection,
+previewed pruning, confirmed deletion, and paginated audit review, conflict feedback, confirmed
+removals, tenant search, attachment and run-capacity metrics, confirmed lifecycle
+transitions, typed API transport, TanStack Query request lifecycle management, and connection modes
+for same-origin sessions, in-memory bearer tokens, and trusted-local development headers. Session
+mode is the
+production default but requires a session endpoint backed by the deployment's identity provider;
+the current API authentication modes continue to use bearer tokens or development headers. The
+console never persists bearer tokens or development principal values in browser storage.
+
+For frontend development, run the API and Vite development server in separate terminals:
+
+```bash
+uv run uvicorn app.main:app --reload
+cd web
+npm ci
+npm run dev
+```
+
+Vite proxies API calls to `http://127.0.0.1:8000`. Validate and rebuild the committed assets served
+by FastAPI with:
+
+```bash
+cd web
+npm run lint
+npm test
+npm run build
+```
+
+Install Chromium once and run the browser suite against the production Vite build:
+
+```bash
+npm run test:e2e:install
+npm run test:e2e
+```
+
+Playwright covers desktop and mobile Chromium, authentication header behavior, browser-storage
+safety, responsive navigation, and automated axe accessibility checks. Use
+`npm run test:e2e:ui` for interactive debugging. CI environments should install Chromium and its
+system dependencies with `npx playwright install --with-deps chromium`.
+
+The existing dependency-free browser client remains at `/web/` as a lightweight development fallback.
+It uses the streaming run
 endpoint to show live LLM, tool, and peer-agent progress, with mobile-friendly run
 controls, a stop action, basic assistant markdown rendering, execution option selectors,
-a mobile More menu for secondary actions, a thread context sheet with compaction controls,
-a thread drawer backed by `GET /threads`, thread refresh/delete actions, and a collapsible
-activity sheet for run details.
+image file selection, mobile camera capture, drag-and-drop, and clipboard paste with previews and
+per-image detail controls when server image input is enabled; the browser streams binary image
+bodies to thread-scoped attachment storage instead of base64-wrapping them, then keeps references
+in message history. Browser responses include MIME-sniffing, framing, referrer, permissions, and
+Content Security Policy headers; the CSP limits scripts and network requests to the Minigent origin
+while allowing same-origin, blob, and data image previews. A mobile More menu provides secondary
+actions, alongside a thread context sheet with compaction controls, a thread drawer backed by
+`GET /threads`, thread refresh/delete actions, and a collapsible activity sheet for run details.
 
 #### Mobile UI demo
 
@@ -259,6 +530,7 @@ it deliberately.
 - [Coding workspace setup](docs/coding-workspace.md)
 - [Dynamic tenant management](docs/dynamic-tenant-management.md)
 - [Dynamic user management](docs/dynamic-user-management.md)
+- [Deferred usage accounting and budget design](docs/usage-accounting-and-budgets.md)
 - [Layered MCP tool stack](docs/layered-mcp-tool-stack.md)
 - [Full reference](docs/reference.md)
 

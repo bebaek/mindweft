@@ -3,9 +3,11 @@ from __future__ import annotations
 import ast
 import asyncio
 import concurrent.futures
+import hashlib
 import importlib
 import inspect
 import ipaddress
+import json
 import logging
 import operator
 import os
@@ -19,10 +21,17 @@ from typing import Any
 import httpx
 from fastapi import HTTPException
 
-from app.mcp import MCPHTTPClient, MCPServerConfig, load_mcp_server_configs_from_env
+from app.mcp import (
+    MCPHTTPClient,
+    MCPPrivateValuePolicy,
+    MCPServerConfig,
+    load_mcp_server_configs_from_env,
+)
 from app.mcp_manager import MCPRegistrySnapshot
 from app.models import ToolSpec
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry_from_env
+from app.private_consents import PrivateValueDisclosure
+from app.private_values import PII_PLACEHOLDER_PATTERN
 from app.redaction import (
     ToolResultRedactionPolicy,
     sanitize_tool_result,
@@ -81,7 +90,13 @@ _PEER_AGENT_PREVIEW_CHARS = 500
 @dataclass(frozen=True)
 class ToolExecutionContext:
     tenant_id: str | None = None
+    user_id: str | None = None
     thread_id: str | None = None
+    private_value_resolver: Callable[[str], str] | None = None
+    private_value_validator: Callable[[str], None] | None = None
+    private_value_authorizer: (
+        Callable[[str, str, tuple[PrivateValueDisclosure, ...]], None] | None
+    ) = None
 
 
 class ToolRegistry:
@@ -99,6 +114,8 @@ class ToolRegistry:
                 ToolResultRedactionPolicy | None,
             ],
         ] = {}
+        self._private_value_policies: dict[str, MCPPrivateValuePolicy] = {}
+        self._trusted_input_preprocessors: set[str] = set()
         self._mcp_servers: list[dict[str, Any]] = []
 
     def register(
@@ -109,15 +126,30 @@ class ToolRegistry:
         handler: Callable[[dict[str, Any], ToolExecutionContext | None], Any],
         *,
         result_redaction_policy: ToolResultRedactionPolicy | None = None,
+        private_value_policy: MCPPrivateValuePolicy | None = None,
+        trusted_input_preprocessor: bool = False,
     ) -> None:
         self._tools[name] = (
             ToolSpec(name=name, description=description, input_schema=input_schema),
             handler,
             result_redaction_policy,
         )
+        self._private_value_policies[name] = private_value_policy or MCPPrivateValuePolicy()
+        if trusted_input_preprocessor:
+            self._trusted_input_preprocessors.add(name)
+        else:
+            self._trusted_input_preprocessors.discard(name)
 
     def specs(self) -> list[ToolSpec]:
         return [tool[0] for tool in self._tools.values()]
+
+    def trusted_input_preprocessor_names(self) -> tuple[str, ...]:
+        return tuple(
+            spec.name for spec in self.specs() if spec.name in self._trusted_input_preprocessors
+        )
+
+    def is_trusted_input_preprocessor(self, name: str) -> bool:
+        return name in self._trusted_input_preprocessors
 
     async def execute(
         self,
@@ -129,15 +161,36 @@ class ToolRegistry:
         tool = self._tools.get(name)
         if tool is None:
             raise HTTPException(status_code=400, detail=f"Unknown tool '{name}'")
-        sanitized_arguments = _sanitize_tool_arguments(arguments)
+        sanitized_arguments = _sanitize_tool_arguments(
+            name,
+            arguments,
+            redact_text=self.is_trusted_input_preprocessor(name),
+        )
         started_at = time.perf_counter()
         logger.info("tool.start name=%s arguments=%s", name, sanitized_arguments)
         try:
             handler = tool[1]
+            handler_arguments = _prepare_private_tool_arguments(
+                arguments,
+                policy=self._private_value_policies[name],
+                resolver=context.private_value_resolver if context is not None else None,
+                validator=context.private_value_validator if context is not None else None,
+                authorizer=context.private_value_authorizer if context is not None else None,
+                tool_name=name,
+            )
+            handler_context = (
+                ToolExecutionContext(
+                    tenant_id=context.tenant_id,
+                    user_id=context.user_id,
+                    thread_id=context.thread_id,
+                )
+                if context is not None
+                else None
+            )
             if inspect.iscoroutinefunction(handler):
-                result = handler(arguments, context)
+                result = handler(handler_arguments, handler_context)
             else:
-                result = await asyncio.to_thread(handler, arguments, context)
+                result = await asyncio.to_thread(handler, handler_arguments, handler_context)
             if inspect.isawaitable(result):
                 result = await result
         except asyncio.CancelledError:
@@ -488,9 +541,16 @@ def build_tool_registry(
                         description=spec.description,
                         input_schema=spec.input_schema,
                         handler=lambda arguments, context=None, c=state.client, tool_name=raw_tool_name: (
-                            c.call_tool(tool_name, arguments)
+                            c.call_tool(tool_name, arguments, context=context)
                         ),
                         result_redaction_policy=state.config.result_redaction_policy,
+                        private_value_policy=state.config.private_value_tool_policies.get(
+                            raw_tool_name,
+                            state.config.private_value_policy,
+                        ),
+                        trusted_input_preprocessor=(
+                            raw_tool_name in state.config.trusted_input_preprocessor_tools
+                        ),
                     )
             mcp_servers.append(state.public_dict())
         registry.set_mcp_servers(mcp_servers)
@@ -507,9 +567,16 @@ def build_tool_registry(
                     description=spec.description,
                     input_schema=spec.input_schema,
                     handler=lambda arguments, context=None, c=client, tool_name=raw_tool_name: (
-                        c.call_tool(tool_name, arguments)
+                        c.call_tool(tool_name, arguments, context=context)
                     ),
                     result_redaction_policy=config.result_redaction_policy,
+                    private_value_policy=config.private_value_tool_policies.get(
+                        raw_tool_name,
+                        config.private_value_policy,
+                    ),
+                    trusted_input_preprocessor=(
+                        raw_tool_name in config.trusted_input_preprocessor_tools
+                    ),
                 )
             server_info = client.server_info()
             mcp_servers.append(
@@ -522,6 +589,12 @@ def build_tool_registry(
                     "server_version": server_info.server_version,
                     "tool_count": len(specs),
                     "allowed_tools": config.allowed_tools,
+                    "trusted_input_preprocessor_tools": sorted(
+                        config.trusted_input_preprocessor_tools
+                    ),
+                    "forward_identity": config.forward_identity,
+                    "identity_audience": config.identity_audience,
+                    "identity_scopes": list(config.identity_scopes),
                     "path_policy": {
                         "deny_globs": list(config.path_policy.deny_globs),
                         "allow_globs": list(config.path_policy.allow_globs),
@@ -530,6 +603,19 @@ def build_tool_registry(
                         "enabled": config.result_redaction_policy.enabled,
                         "mode": config.result_redaction_policy.mode,
                         "sensitive_tools": sorted(config.result_redaction_policy.sensitive_tools),
+                    },
+                    "private_value_policy": {
+                        "mode": config.private_value_policy.mode,
+                        "argument_paths": list(config.private_value_policy.argument_paths),
+                        "requires_approval": config.private_value_policy.requires_approval,
+                        "tool_overrides": {
+                            tool_name: {
+                                "mode": policy.mode,
+                                "argument_paths": list(policy.argument_paths),
+                                "requires_approval": policy.requires_approval,
+                            }
+                            for tool_name, policy in config.private_value_tool_policies.items()
+                        },
                     },
                     "status": "connected",
                     "last_error": None,
@@ -549,6 +635,12 @@ def build_tool_registry(
                     "server_version": None,
                     "tool_count": 0,
                     "allowed_tools": config.allowed_tools,
+                    "trusted_input_preprocessor_tools": sorted(
+                        config.trusted_input_preprocessor_tools
+                    ),
+                    "forward_identity": config.forward_identity,
+                    "identity_audience": config.identity_audience,
+                    "identity_scopes": list(config.identity_scopes),
                     "path_policy": {
                         "deny_globs": list(config.path_policy.deny_globs),
                         "allow_globs": list(config.path_policy.allow_globs),
@@ -991,7 +1083,156 @@ def _execute_retrieve_knowledge(
     return retrieve_knowledge(rag, query=query, tenant_id=context.tenant_id, top_k=top_k)
 
 
-def _sanitize_tool_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+def _prepare_private_tool_arguments(
+    arguments: dict[str, Any],
+    *,
+    policy: MCPPrivateValuePolicy,
+    resolver: Callable[[str], str] | None,
+    validator: Callable[[str], None] | None,
+    authorizer: (Callable[[str, str, tuple[PrivateValueDisclosure, ...]], None] | None),
+    tool_name: str,
+) -> dict[str, Any]:
+    if policy.mode == "pass_through" and not policy.requires_approval:
+        return arguments
+
+    disclosures: list[PrivateValueDisclosure] = []
+
+    def discover(value: Any, path: str) -> None:
+        if isinstance(value, str):
+            disclosures.extend(
+                PrivateValueDisclosure(
+                    path=path,
+                    kind=match.group("kind"),
+                    reference=match.group("reference"),
+                )
+                for match in PII_PLACEHOLDER_PATTERN.finditer(value)
+            )
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                key_text = str(key)
+                if PII_PLACEHOLDER_PATTERN.search(key_text) is not None:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Tool private-value disclosure is not allowed in argument keys",
+                    )
+                discover(item, f"{path}.{key_text}" if path else key_text)
+            return
+        if isinstance(value, list):
+            for item in value:
+                discover(item, f"{path}[*]")
+
+    discover(arguments, "")
+    if not disclosures and not policy.requires_approval:
+        return arguments
+    if disclosures and policy.mode == "deny":
+        raise HTTPException(
+            status_code=403,
+            detail="Tool private-value disclosure is denied by policy",
+        )
+    allowed_paths = set(policy.argument_paths)
+    disallowed_path = (
+        next(
+            (item.path for item in disclosures if item.path not in allowed_paths),
+            None,
+        )
+        if policy.mode == "resolve_selected"
+        else None
+    )
+    if disallowed_path is not None:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Tool private-value disclosure is not allowed for argument path "
+                f"'{disallowed_path}'"
+            ),
+        )
+    if disclosures and resolver is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Private-value resolution is unavailable for this tool execution",
+        )
+    if authorizer is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Private-value consent is unavailable for this tool execution",
+        )
+
+    def preflight(value: Any) -> None:
+        if isinstance(value, str):
+            if PII_PLACEHOLDER_PATTERN.search(value) is not None:
+                if validator is not None:
+                    validator(value)
+                else:
+                    # Backward-compatible fallback for custom execution contexts. Runtime
+                    # contexts provide a non-disclosing validator.
+                    if resolver is None:
+                        raise HTTPException(
+                            status_code=500,
+                            detail="Private-value resolution is unavailable for this tool execution",
+                        )
+                    resolver(value)
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                preflight(item)
+            return
+        if isinstance(value, list):
+            for item in value:
+                preflight(item)
+
+    if policy.mode == "resolve_selected":
+        preflight(arguments)
+    argument_fingerprint = hashlib.sha256(
+        json.dumps(
+            arguments,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
+    authorizer(
+        tool_name,
+        argument_fingerprint,
+        tuple(sorted(set(disclosures))),
+    )
+
+    def resolve(value: Any) -> Any:
+        if policy.mode != "resolve_selected":
+            return value
+        if isinstance(value, str):
+            if PII_PLACEHOLDER_PATTERN.search(value) is None:
+                return value
+            if resolver is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Private-value resolution is unavailable for this tool execution",
+                )
+            return resolver(value)
+        if isinstance(value, dict):
+            return {str(key): resolve(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [resolve(item) for item in value]
+        return value
+
+    prepared = resolve(arguments)
+    if not isinstance(prepared, dict):
+        raise HTTPException(status_code=500, detail="Tool arguments must remain an object")
+    return prepared
+
+
+def _sanitize_tool_arguments(
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    redact_text: bool = False,
+) -> dict[str, Any]:
+    if redact_text:
+        return {
+            key: "<redacted>" if key == "text" else sanitize_value_for_logging(key, value)
+            for key, value in arguments.items()
+        }
     return {key: sanitize_value_for_logging(key, value) for key, value in arguments.items()}
 
 

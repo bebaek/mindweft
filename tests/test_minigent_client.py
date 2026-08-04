@@ -41,6 +41,7 @@ from minigent_client.config import (
     AgentPreset,
     ClientConfig,
     PrincipalConfig,
+    default_client_config_paths,
     parse_agent_presets,
 )
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
@@ -161,6 +162,19 @@ class FakeAmbientVolumeController:
         self.close_calls += 1
 
 
+def test_default_client_config_paths_honor_xdg_config_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config_home = tmp_path / "xdg-config"
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    paths = default_client_config_paths()
+
+    assert paths[0] == config_home / "minigent" / "client.toml"
+    assert paths[1] == tmp_path / "home" / ".minigent" / "client.toml"
+
+
 def test_persistent_client_state_round_trips_last_thread(tmp_path: Path) -> None:
     state_path = tmp_path / "cli-state.json"
     key = state_scope_key(
@@ -189,6 +203,24 @@ def test_persistent_client_state_round_trips_last_thread(tmp_path: Path) -> None
     assert loaded.forget_last_thread(key, "thread-1") is True
     assert loaded.get_last_thread(key) is None
     assert loaded.list_threads(key) == []
+
+
+def test_persistent_client_state_migrates_legacy_default_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
+    legacy_path = tmp_path / ".minigent" / "cli-state.json"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text(
+        json.dumps({"recent_threads": {"scope": "legacy-thread"}}), encoding="utf-8"
+    )
+
+    state = PersistentClientState.load()
+
+    assert state.get_last_thread("scope") == "legacy-thread"
+    assert state.path == tmp_path / "xdg-state" / "minigent" / "cli-state.json"
+    assert state.path.exists()
 
 
 def test_persistent_client_state_round_trips_prompt_commands(tmp_path: Path) -> None:
@@ -2073,7 +2105,10 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "capability_profiles": {"default": None, "items": []},
     }
     assert client.create_thread(
-        skills=["coding", "review"], capability_profile="dev", llm_profile="claude"
+        agent_name="reviewer",
+        skills=["coding", "review"],
+        capability_profile="dev",
+        llm_profile="claude",
     ) == {"thread_id": "thread-1"}
     assert client.add_message("thread-1", "hello") == {"id": "message-1"}
     assert client.get_thread("thread-1") == {
@@ -2096,10 +2131,58 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "DELETE",
     ]
     assert requests[3]["payload"] == {
+        "agent_name": "reviewer",
         "skill_names": ["coding", "review"],
         "capability_profile": "dev",
         "llm_profile": "claude",
     }
+
+
+def test_minigent_client_discards_upload_when_message_creation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = MinigentAPIClient(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        )
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_request_json(
+        method: str,
+        url: str,
+        *,
+        payload: dict[str, object] | None = None,
+    ) -> object:
+        del payload
+        calls.append((method, url))
+        if url.endswith("/attachments"):
+            return {"attachment_id": "attachment-1"}
+        if method == "POST" and url.endswith("/messages"):
+            raise MinigentAPIError("message failed", status_code=500)
+        if method == "DELETE" and url.endswith("/attachments/attachment-1"):
+            return None
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    monkeypatch.setattr(client, "request_json", fake_request_json)
+
+    with pytest.raises(MinigentAPIError, match="message failed"):
+        client.add_message(
+            "thread-1",
+            "describe",
+            parts=[
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "data": "aW1hZ2U=",
+                }
+            ],
+        )
+
+    assert [method for method, _url in calls] == ["POST", "POST", "DELETE"]
+    assert calls[-1][1].endswith("/threads/thread-1/attachments/attachment-1")
 
 
 def test_minigent_client_can_run_thread_with_ndjson_stream(
@@ -3796,6 +3879,48 @@ def test_run_chat_loop_expands_custom_slash_command(
     ]
 
 
+def test_run_chat_loop_reconciles_private_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("/actions\n/discard-action consent-1\n")
+    discarded: list[tuple[str, str | None]] = []
+
+    class FakeChatClient:
+        thread_id = "thread-1"
+
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def list_private_value_actions(self, thread_id: str) -> list[dict[str, object]]:
+            assert thread_id == "thread-1"
+            return [
+                {
+                    "consent_id": "consent-1",
+                    "state": "executing",
+                    "tool_name": "trusted.send",
+                    "expires_at": 700.0,
+                }
+            ]
+
+        def discard_private_value_action(
+            self, consent_id: str, *, thread_id: str | None = None
+        ) -> dict[str, object]:
+            discarded.append((consent_id, thread_id))
+            return {"consent_id": consent_id, "state": "executing", "discarded": True}
+
+    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    assert (
+        run_chat_loop(ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"))
+        == 0
+    )
+    assert discarded == [("consent-1", "thread-1")]
+    output = output_stream.getvalue()
+    assert "consent-1  executing  trusted.send  expires=700.0" in output
+    assert "discarded executing private action consent-1" in output
+
+
 def test_run_chat_loop_handles_multiple_turns_and_blank_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4020,6 +4145,7 @@ def test_build_chat_prompt_session_for_tty_streams(
     assert isinstance(session_kwargs["key_bindings"], FakeKeyBindings)
     assert session_kwargs["multiline"] is True
     assert session_kwargs["prompt_continuation"] == ""
+    assert session_kwargs["erase_when_done"] is True
 
 
 def test_build_chat_prompt_session_uses_thread_scoped_history(
@@ -4067,6 +4193,7 @@ def test_build_chat_prompt_session_uses_thread_scoped_history(
         raise ImportError(name)
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / ".local" / "state"))
     monkeypatch.setattr(voice_cli, "import_module", fake_import)
 
     session = voice_cli._build_chat_prompt_session(
@@ -4081,8 +4208,25 @@ def test_build_chat_prompt_session_uses_thread_scoped_history(
     assert len(history_calls) == 1
     history_path = history_calls[0][1]
     assert isinstance(history_path, str)
-    assert history_path.startswith(str(tmp_path / ".minigent" / "client-chat-history.d"))
+    assert history_path.startswith(
+        str(tmp_path / ".local" / "state" / "minigent" / "client-chat-history.d")
+    )
     assert history_path.endswith("thread_one")
+
+
+def test_chat_history_file_path_migrates_legacy_history(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
+    legacy_path = tmp_path / ".minigent" / "client-chat-history"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text("legacy prompt history\n", encoding="utf-8")
+
+    path = voice_cli.chat_history_file_path()
+
+    assert path == tmp_path / "xdg-state" / "minigent" / "client-chat-history"
+    assert path.read_text(encoding="utf-8") == "legacy prompt history\n"
 
 
 def test_append_missing_user_messages_to_chat_history_seeds_resumed_thread(
@@ -4213,6 +4357,7 @@ def test_build_chat_prompt_session_uses_thread_history_dir_when_legacy_history_f
         raise ImportError(name)
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / ".local" / "state"))
     monkeypatch.setattr(voice_cli, "import_module", fake_import)
     legacy_history_path = tmp_path / ".minigent" / "client-chat-history"
     legacy_history_path.parent.mkdir(parents=True)
@@ -4230,7 +4375,9 @@ def test_build_chat_prompt_session_uses_thread_history_dir_when_legacy_history_f
     assert len(history_calls) == 1
     history_path = history_calls[0][1]
     assert isinstance(history_path, str)
-    assert history_path.startswith(str(tmp_path / ".minigent" / "client-chat-history.d"))
+    assert history_path.startswith(
+        str(tmp_path / ".local" / "state" / "minigent" / "client-chat-history.d")
+    )
     assert history_path.endswith("thread-one")
 
 
@@ -4339,10 +4486,11 @@ def test_read_chat_line_uses_interactive_input_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prompts: list[str] = []
+    output_stream = StringIO()
 
     line = voice_cli._read_chat_line(
         input_stream=StringIO(),
-        output_stream=StringIO(),
+        output_stream=output_stream,
         prompt_session=type(
             "FakePromptSession",
             (),
@@ -4352,6 +4500,7 @@ def test_read_chat_line_uses_interactive_input_when_enabled(
 
     assert line == "hello"
     assert prompts == ["[user] "]
+    assert output_stream.getvalue() == "[user] hello\n"
 
 
 def test_read_chat_line_wraps_colored_interactive_prompt_as_ansi(
@@ -4371,9 +4520,10 @@ def test_read_chat_line_wraps_colored_interactive_prompt_as_ansi(
 
     monkeypatch.setattr(voice_cli, "import_module", fake_import)
 
+    output_stream = TtyStringIO()
     line = voice_cli._read_chat_line(
         input_stream=StringIO(),
-        output_stream=TtyStringIO(),
+        output_stream=output_stream,
         prompt_session=type(
             "FakePromptSession",
             (),
@@ -4385,6 +4535,7 @@ def test_read_chat_line_wraps_colored_interactive_prompt_as_ansi(
     assert len(prompts) == 1
     assert isinstance(prompts[0], FakeAnsi)
     assert prompts[0].value == "\033[34m[user]\033[0m "
+    assert output_stream.getvalue() == "\033[34m[user]\033[0m hello\n"
 
 
 def test_read_chat_line_uses_plain_readline_when_not_interactive() -> None:
@@ -4712,11 +4863,14 @@ def test_run_chat_loop_ignores_blank_interactive_submit(
     assert exit_code == 0
     assert messages == ["real question"]
     assert prompts == ["[user] ", "[user] ", "[user] "]
-    assert output_stream.getvalue() == "[assistant] reply\n[idle] shutting down\n"
+    assert output_stream.getvalue() == (
+        "[user] real question\n[assistant] reply\n[idle] shutting down\n"
+    )
 
 
 def test_run_chat_loop_rebuilds_prompt_history_after_thread_switch(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     output_stream = StringIO()
     sessions: list[object] = []
@@ -4772,6 +4926,8 @@ def test_run_chat_loop_rebuilds_prompt_history_after_thread_switch(
     assert exit_code == 0
     assert history_thread_ids[:2] == [None, "existing-thread"]
     assert messages == [("existing-thread", "hello")]
+    assert Path.home() == tmp_path / "home"
+    assert (tmp_path / "home" / ".local" / "state" / "minigent" / "cli-state.json").exists()
 
 
 def test_run_chat_loop_handles_local_chat_commands(
@@ -4800,8 +4956,9 @@ def test_run_chat_loop_handles_local_chat_commands(
         "[user] [idle] chat commands: /help, /new, /agent [current|preset], "
         "/llm [current|profile], /options, /skills, /profiles, /threads, /switch <id>, "
         "/rename <title>, /copy-id, /cancel, "
-        "/compact, /export [markdown|json], /tokens, /debug, /editor, "
-        "/image <path...>|paste|list|clear, /commands, /command set|show|delete, "
+        "/compact, /actions, /discard-action <consent-id>, /export [markdown|json], /tokens, "
+        "/debug, /editor, /image <path...>|paste|list|clear, /commands, "
+        "/command set|show|delete, "
         "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
         "[user] [idle] shutting down\n"

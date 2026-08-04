@@ -2,13 +2,17 @@
 
 Status: Partially implemented
 
-Implemented: tenant membership model and SQLite store, admin CRUD/list/status-transition
-APIs and CLI commands, mutation audit records, optional request-time active-membership
-enforcement with `MINIGENT_TENANT_USER_REGISTRY_REQUIRED`, and membership fields on
-`TenantContext`.
+Implemented: tenant membership model and SQLite store, global-admin and tenant-owner scoped
+CRUD/list/status-transition APIs and UI, last-active-owner and self-credential lockout protection,
+tenant-scoped encrypted OpenAI OAuth import from Pi, mutation audit records, optional request-time
+active-membership enforcement with `MINIGENT_TENANT_USER_REGISTRY_REQUIRED`, and membership fields
+on `TenantContext`.
 
-Still pending or partial: invite-token/email workflows, granular tenant-admin RBAC, richer
-identity-provider mapping, service-account modeling, and seat/billing limits.
+Still pending or partial: invite-token/email delivery workflows, granular tenant-admin RBAC, richer
+identity-provider mapping, service-account modeling, seat/billing limits, interactive personal MCP
+OAuth flows and credential lifecycle cleanup, and guided console editors for the user-owned
+execution overlay (a complete JSON editor and static credential manager are available).
+See [User execution extensibility](user-execution-extensibility.md) for that design.
 
 Focus: tenant user and membership management, not full identity management.
 
@@ -38,13 +42,15 @@ full identity-provider scope in the first iteration.
 - Preserve current auth behavior during migration.
 - Optionally require active tenant membership before business logic runs.
 - Keep identity-provider concerns decoupled from Minigent membership state.
+- Support a first-class, principal-scoped execution overlay for personal agents, skills,
+  capability profiles, and third-party tools without requiring tenant config edits.
 
 ## Non-goals for the first iteration
 
 - Password management.
 - Public signup flows.
 - Email invite delivery.
-- OAuth account linking.
+- General OAuth account linking beyond the tenant-owner Pi credential import.
 - SCIM provisioning.
 - Full organization/team hierarchy.
 - Billing integration and seat enforcement.
@@ -137,9 +143,9 @@ user_status
 membership_metadata
 ```
 
-These fields remain optional for compatibility mode and are populated when
-`MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true` and the authenticated user has an active
-membership.
+These fields remain optional for compatibility mode. Active membership metadata is included whenever
+a matching record exists; when `MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true`, missing or inactive
+membership is rejected instead of being omitted.
 
 ## Admin operations
 
@@ -215,8 +221,11 @@ matrices.
 - Do not use tenant membership records as authentication credentials.
 - Keep authentication delegated to the existing auth modes and external identity providers.
 - Treat membership as authorization and lifecycle metadata.
-- Require global admin access for first-iteration membership admin APIs, or explicitly design
-  tenant-admin delegation before exposing member management to tenant admins.
+- Require global admin access for cross-tenant operations. Active `owner` memberships may use the
+  explicitly delegated tenant-scoped profile, member, credential, domain, entitlement-read, and
+  execution-configuration routes only for their own tenant.
+- Tenant owners cannot change plan/region/metadata, verify domains, perform lifecycle operations,
+  remove or demote the final active owner, or disable their own local credential.
 - Audit every membership mutation.
 - Redact secrets from membership metadata in read responses and audit records.
 - Normalize and validate email addresses if email is provided.

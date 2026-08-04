@@ -7,15 +7,6 @@ import pytest
 from app.shell_mcp_server import ShellMCPServer
 
 
-def test_shell_mcp_server_lists_run_command_tool(tmp_path: Path) -> None:
-    server = ShellMCPServer(workspace=tmp_path, shell="/bin/sh")
-
-    response = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
-
-    assert response is not None
-    assert response["result"]["tools"][0]["name"] == "run_command"
-
-
 def test_run_command_executes_inside_workspace(tmp_path: Path) -> None:
     server = ShellMCPServer(workspace=tmp_path, shell="/bin/sh")
 

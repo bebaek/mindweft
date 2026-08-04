@@ -2,22 +2,42 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-STATE_DIR_NAME = ".minigent"
+STATE_DIR_NAME = "minigent"
+LEGACY_STATE_DIR_NAME = ".minigent"
 STATE_FILE_NAME = "cli-state.json"
+XDG_STATE_HOME_ENV = "XDG_STATE_HOME"
 PROMPT_COMMANDS_KEY = "prompt_commands"
 
 
 _PROMPT_COMMAND_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]{0,63}$")
 
 
+def state_dir_path() -> Path:
+    configured_home = os.getenv(XDG_STATE_HOME_ENV, "").strip()
+    if configured_home:
+        state_home = Path(configured_home).expanduser()
+        if state_home.is_absolute():
+            return state_home / STATE_DIR_NAME
+    return Path.home() / ".local" / "state" / STATE_DIR_NAME
+
+
+def legacy_state_dir_path() -> Path:
+    return Path.home() / LEGACY_STATE_DIR_NAME
+
+
 def state_file_path() -> Path:
-    return Path.home() / STATE_DIR_NAME / STATE_FILE_NAME
+    return state_dir_path() / STATE_FILE_NAME
+
+
+def legacy_state_file_path() -> Path:
+    return legacy_state_dir_path() / STATE_FILE_NAME
 
 
 @dataclass
@@ -64,8 +84,13 @@ class ClientState:
     @classmethod
     def load(cls, path: Path | None = None) -> "ClientState":
         resolved_path = path or state_file_path()
+        source_path = resolved_path
+        if path is None and not resolved_path.exists():
+            legacy_path = legacy_state_file_path()
+            if legacy_path.exists():
+                source_path = legacy_path
         try:
-            data = json.loads(resolved_path.read_text())
+            data = json.loads(source_path.read_text())
         except FileNotFoundError:
             return cls(path=resolved_path)
         except json.JSONDecodeError:
@@ -85,7 +110,7 @@ class ClientState:
         for key, thread_id in parsed_recent_threads.items():
             if key not in parsed_thread_history:
                 parsed_thread_history[key] = [ThreadHistoryItem(thread_id=thread_id)]
-        return cls(
+        state = cls(
             recent_threads=parsed_recent_threads,
             thread_history=parsed_thread_history,
             path=resolved_path,
@@ -95,6 +120,12 @@ class ClientState:
                 if key not in {"recent_threads", "thread_history"}
             },
         )
+        if source_path != resolved_path:
+            try:
+                state.save()
+            except OSError:
+                pass
+        return state
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

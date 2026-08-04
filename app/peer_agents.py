@@ -80,6 +80,9 @@ class PeerAgentRegistry:
     def list_agents(self) -> list[dict[str, object]]:
         return [self._agents[name].public_dict() for name in sorted(self._agents)]
 
+    def agent_base_url(self, name: str) -> str:
+        return self._agent_or_404(name).base_url
+
     async def list_agents_with_cards(self) -> list[dict[str, object]]:
         agents: list[dict[str, object]] = []
         for name in sorted(self._agents):
@@ -120,6 +123,37 @@ class PeerAgentRegistry:
             f"/tasks/{task_id}/cancel",
             response_label="task response",
         )
+
+    async def cancel_task_at(self, name: str, base_url: str, task_id: str) -> dict[str, Any]:
+        path = f"/tasks/{task_id}/cancel"
+        url = f"{base_url.rstrip('/')}{path}"
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout,
+                transport=self._transport,
+            ) as client:
+                response = await client.post(url)
+                if response.status_code in {404, 409, 410}:
+                    return {"status": "not_found_or_terminal"}
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Peer agent '{name}' {path} request failed with status "
+                    f"{exc.response.status_code}"
+                ),
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Peer agent '{name}' {path} request failed: {exc}",
+            ) from exc
+        try:
+            payload = response.json()
+        except ValueError:
+            return {"status": "canceled"}
+        return payload if isinstance(payload, dict) else {"status": "canceled"}
 
     async def task_events(
         self,

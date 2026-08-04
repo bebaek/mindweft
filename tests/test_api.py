@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import sqlite3
@@ -37,6 +38,7 @@ from app.mcp import MCPServerInfo
 from app.mcp_broker import MINIGENT_MCP_BROKER_TOKEN_ENV, MINIGENT_MCP_BROKER_URL_ENV
 from app.models import (
     AuditRecord,
+    ImagePart,
     LLMResponse,
     Message,
     MessageRole,
@@ -50,6 +52,7 @@ from app.models import (
     ToolSpec,
 )
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
+from app.rate_limits import InMemoryRateLimiter, RunConcurrencyPolicy
 from app.runtime import AgentRuntime
 from app.store import InMemoryThreadStore, SQLiteThreadStore
 from app.tools import build_local_tool_registry
@@ -63,6 +66,10 @@ OTHER_TENANT_HEADERS = {
     "X-Minigent-User-Id": "user-2",
     "X-Minigent-Tenant-Id": "tenant-2",
 }
+SAME_TENANT_OTHER_USER_HEADERS = {
+    "X-Minigent-User-Id": "user-2",
+    "X-Minigent-Tenant-Id": "tenant-1",
+}
 ADMIN_HEADERS = {
     "X-Minigent-User-Id": "admin-user",
     "X-Minigent-Tenant-Id": "admin-tenant",
@@ -71,6 +78,10 @@ ADMIN_HEADERS = {
 
 TOKEN_HEADERS = {"Authorization": "Bearer token-1"}
 OTHER_TOKEN_HEADERS = {"Authorization": "Bearer token-2"}
+
+PNG_1X1_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 def test_peer_backend_settings_from_env_mapping_uses_defaults() -> None:
@@ -126,6 +137,93 @@ def test_admin_store_settings_from_env_mapping_treats_blank_as_none() -> None:
         db_path=None,
         encryption_key=None,
     )
+
+
+def test_admin_store_settings_from_env_parses_mcp_server_catalog() -> None:
+    settings = AdminStoreSettings.from_env(
+        {
+            "MINIGENT_ADMIN_MCP_SERVER_CATALOG": json.dumps(
+                [
+                    {
+                        "id": "web-search",
+                        "title": "Web search",
+                        "description": "Search current web content.",
+                        "detail": "Local sidecar · 3 tools",
+                        "server": {
+                            "name": "web-search",
+                            "url": "http://127.0.0.1:8766/mcp",
+                            "headers": {"Authorization": "Bearer secret-token"},
+                            "allowed_tools": ["web", "news", "context"],
+                        },
+                    }
+                ]
+            )
+        }
+    )
+
+    assert len(settings.mcp_server_catalog) == 1
+    assert settings.mcp_server_catalog[0].id == "web-search"
+    assert settings.mcp_server_catalog[0].server["headers"] == {
+        "Authorization": "Bearer secret-token"
+    }
+
+
+def test_admin_store_settings_prefers_secret_mcp_server_catalog() -> None:
+    public_catalog = [
+        {
+            "id": "public",
+            "title": "Public",
+            "description": "Public catalog.",
+            "server": {"name": "public", "url": "https://public.example/mcp"},
+        }
+    ]
+    secret_catalog = [
+        {
+            "id": "private",
+            "title": "Private",
+            "description": "Secret-backed catalog.",
+            "server": {
+                "name": "private",
+                "url": "https://private.example/mcp",
+                "headers": {"Authorization": "Bearer ${PRIVATE_TOKEN}"},
+            },
+        }
+    ]
+
+    settings = AdminStoreSettings.from_env(
+        {
+            "MINIGENT_ADMIN_MCP_SERVER_CATALOG": json.dumps(public_catalog),
+            "MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET": json.dumps(secret_catalog),
+            "PRIVATE_TOKEN": "secret-token",
+        }
+    )
+
+    assert [item.id for item in settings.mcp_server_catalog] == ["private"]
+    assert settings.mcp_server_catalog[0].server["headers"] == {
+        "Authorization": "Bearer secret-token"
+    }
+
+
+def test_admin_store_settings_rejects_invalid_headers_in_mcp_server_catalog() -> None:
+    with pytest.raises(RuntimeError, match="headers must be a string map"):
+        AdminStoreSettings.from_env(
+            {
+                "MINIGENT_ADMIN_MCP_SERVER_CATALOG": json.dumps(
+                    [
+                        {
+                            "id": "private",
+                            "title": "Private",
+                            "description": "Private service.",
+                            "server": {
+                                "name": "private",
+                                "url": "https://example.com/mcp",
+                                "headers": {"Authorization": 42},
+                            },
+                        }
+                    ]
+                )
+            }
+        )
 
 
 def test_admin_store_settings_from_env_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -224,6 +322,10 @@ def test_image_input_settings_from_env_mapping_parses_values() -> None:
         {
             "MINIGENT_IMAGE_INPUT_ENABLED": "yes",
             "MINIGENT_IMAGE_INPUT_MAX_BYTES": "1234",
+            "MINIGENT_IMAGE_INPUT_MAX_IMAGES": "3",
+            "MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES": "2468",
+            "MINIGENT_IMAGE_INPUT_MAX_PIXELS": "4000000",
+            "MINIGENT_IMAGE_INPUT_MAX_DIMENSION": "4096",
             "MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES": "image/png, image/avif",
         }
     )
@@ -231,6 +333,10 @@ def test_image_input_settings_from_env_mapping_parses_values() -> None:
     assert settings == ImageInputSettings(
         enabled=True,
         max_bytes=1234,
+        max_images=3,
+        max_total_bytes=2468,
+        max_pixels=4_000_000,
+        max_dimension=4096,
         allowed_mime_types=frozenset({"image/png", "image/avif"}),
     )
 
@@ -247,9 +353,21 @@ def test_image_input_settings_from_env_mapping_rejects_invalid_values() -> None:
     assert str(exc_info.value) == "MINIGENT_IMAGE_INPUT_MAX_BYTES must be a positive integer"
 
 
+def test_llm_input_modalities_reject_unknown_values() -> None:
+    with pytest.raises(RuntimeError, match="LLM input_modalities must be a subset"):
+        parse_tenant_execution_config(
+            "tenant-1",
+            {"llm": {"provider": "mock", "input_modalities": ["text", "smell"]}},
+        )
+
+
 def test_config_reports_and_exports_image_input_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_BYTES", "1234")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_IMAGES", "3")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES", "2468")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_PIXELS", "4000000")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_DIMENSION", "4096")
     monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES", "image/png,image/webp")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
@@ -262,11 +380,19 @@ def test_config_reports_and_exports_image_input_settings(monkeypatch: pytest.Mon
     assert body["image_input"] == {
         "enabled": True,
         "max_bytes": 1234,
+        "max_images": 3,
+        "max_total_bytes": 2468,
+        "max_pixels": 4_000_000,
+        "max_dimension": 4096,
         "allowed_mime_types": ["image/png", "image/webp"],
     }
     assert body["unified_config_export"]["image_input"] == {
         "enabled": True,
         "max_bytes": 1234,
+        "max_images": 3,
+        "max_total_bytes": 2468,
+        "max_pixels": 4_000_000,
+        "max_dimension": 4096,
         "allowed_mime_types": ["image/png", "image/webp"],
     }
 
@@ -284,7 +410,7 @@ def test_add_message_rejects_image_when_disabled() -> None:
             "content": "describe it",
             "parts": [
                 {"type": "text", "text": "describe it"},
-                {"type": "image", "mime_type": "image/png", "data": "aGk="},
+                {"type": "image", "mime_type": "image/png", "data": PNG_1X1_BASE64},
             ],
         },
         headers=AUTH_HEADERS,
@@ -308,7 +434,7 @@ def test_add_message_accepts_image_when_enabled(monkeypatch: pytest.MonkeyPatch)
             "content": "describe it",
             "parts": [
                 {"type": "text", "text": "describe it"},
-                {"type": "image", "mime_type": "image/png", "data": "aGk="},
+                {"type": "image", "mime_type": "image/png", "data": PNG_1X1_BASE64},
             ],
         },
         headers=AUTH_HEADERS,
@@ -316,6 +442,499 @@ def test_add_message_accepts_image_when_enabled(monkeypatch: pytest.MonkeyPatch)
 
     assert response.status_code == 200
     assert response.json()["parts"][1]["mime_type"] == "image/png"
+
+
+@pytest.mark.parametrize(
+    ("image", "detail"),
+    [
+        (
+            {"mime_type": "image/png", "attachment_id": "image-1"},
+            "image attachment_id is invalid",
+        ),
+        (
+            {
+                "mime_type": "image/png",
+                "data": PNG_1X1_BASE64,
+                "url": "https://example.com/image.png",
+            },
+            "image part must include exactly one of data, url, or attachment_id",
+        ),
+        (
+            {"mime_type": "image/png", "url": "file:///tmp/image.png"},
+            "image URL must be an absolute HTTP or HTTPS URL",
+        ),
+        (
+            {"mime_type": "image/jpeg", "data": PNG_1X1_BASE64},
+            "image data does not match declared MIME type: image/jpeg",
+        ),
+    ],
+)
+def test_add_message_rejects_unsafe_or_ambiguous_image_sources(
+    monkeypatch: pytest.MonkeyPatch,
+    image: dict[str, str],
+    detail: str,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "describe it", "parts": [{"type": "image", **image}]},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == detail
+
+
+def test_add_message_enforces_image_count_and_total_size_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_IMAGES", "1")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES", "1")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    first_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    count_response = client.post(
+        f"/threads/{first_thread_id}/messages",
+        json={
+            "content": "compare",
+            "parts": [
+                {"type": "image", "mime_type": "image/png", "url": "https://example.com/a"},
+                {"type": "image", "mime_type": "image/png", "url": "https://example.com/b"},
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+    second_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    size_response = client.post(
+        f"/threads/{second_thread_id}/messages",
+        json={
+            "content": "describe",
+            "parts": [{"type": "image", "mime_type": "image/png", "data": PNG_1X1_BASE64}],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert count_response.status_code == 400
+    assert count_response.json()["detail"] == "message exceeds maximum image count (1)"
+    assert size_response.status_code == 400
+    assert size_response.json()["detail"] == "message images exceed maximum total allowed size"
+
+
+def test_attachment_upload_stores_reference_and_resolves_for_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingAdapter(LLMAdapter):
+        def __init__(self) -> None:
+            self.messages: list[Message] = []
+
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            del tools
+            self.messages = messages
+            return LLMResponse(content="described")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "recording"}
+
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    adapter = RecordingAdapter()
+    app = create_app(llm_adapter=adapter, tool_registry=build_local_tool_registry())
+    client = TestClient(app)
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    upload_response = client.post(
+        f"/threads/{thread_id}/attachments",
+        json={"mime_type": "image/png", "data": PNG_1X1_BASE64},
+        headers=AUTH_HEADERS,
+    )
+    assert upload_response.status_code == 200
+    attachment = upload_response.json()
+    attachment_id = attachment["attachment_id"]
+    assert attachment["size_bytes"] > 0
+
+    message_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={
+            "content": "describe it",
+            "parts": [
+                {"type": "text", "text": "describe it"},
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "attachment_id": attachment_id,
+                },
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert message_response.status_code == 200
+    stored_image = message_response.json()["parts"][1]
+    assert stored_image["attachment_id"] == attachment_id
+    assert stored_image["data"] is None
+    assert (
+        app.state.attachment_store.delete_unreferenced("tenant-1", thread_id, attachment_id)
+        is False
+    )
+
+    download_response = client.get(
+        f"/threads/{thread_id}/attachments/{attachment_id}",
+        headers=AUTH_HEADERS,
+    )
+    assert download_response.status_code == 200
+    assert download_response.headers["content-type"] == "image/png"
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    assert run_response.status_code == 200
+    user_message = next(message for message in adapter.messages if message.role == MessageRole.USER)
+    assert isinstance(user_message.parts[1], ImagePart)
+    assert user_message.parts[1].attachment_id is None
+    assert user_message.parts[1].data == PNG_1X1_BASE64
+
+    delete_response = client.delete(
+        f"/threads/{thread_id}/attachments/{attachment_id}",
+        headers=AUTH_HEADERS,
+    )
+    assert delete_response.status_code == 409
+    assert delete_response.json()["detail"] == "attachment is referenced by message history"
+
+
+def test_attachment_upload_rate_limit_covers_both_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_UPLOAD_RATE_LIMIT_TENANT_CAPACITY", "4")
+    monkeypatch.setenv("MINIGENT_UPLOAD_RATE_LIMIT_TENANT_REFILL_PER_SECOND", "0.01")
+    monkeypatch.setenv("MINIGENT_UPLOAD_RATE_LIMIT_USER_CAPACITY", "2")
+    monkeypatch.setenv("MINIGENT_UPLOAD_RATE_LIMIT_USER_REFILL_PER_SECOND", "0.01")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    legacy = client.post(
+        f"/threads/{thread_id}/attachments",
+        json={"mime_type": "image/png", "data": PNG_1X1_BASE64},
+        headers=AUTH_HEADERS,
+    )
+    binary = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=base64.b64decode(PNG_1X1_BASE64),
+        headers={**AUTH_HEADERS, "Content-Type": "image/png"},
+    )
+    rejected = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=b"not-an-image",
+        headers={**AUTH_HEADERS, "Content-Type": "text/plain"},
+    )
+
+    assert legacy.status_code == 200
+    assert binary.status_code == 200
+    assert rejected.status_code == 429
+    assert rejected.headers["retry-after"] == "100"
+    assert rejected.json()["detail"] == {
+        "error": "rate_limit_exceeded",
+        "category": "attachment_upload",
+        "retry_after_seconds": 100,
+    }
+
+    other_user = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=base64.b64decode(PNG_1X1_BASE64),
+        headers={**SAME_TENANT_OTHER_USER_HEADERS, "Content-Type": "image/png"},
+    )
+    assert other_user.status_code == 200
+
+
+def test_admin_attachment_statistics_are_aggregate_and_tenant_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    app = create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    client = TestClient(app)
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    uploads = [
+        client.post(
+            f"/threads/{thread_id}/attachments",
+            json={"mime_type": "image/png", "data": PNG_1X1_BASE64},
+            headers=AUTH_HEADERS,
+        ).json()
+        for _ in range(2)
+    ]
+    message_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={
+            "content": "describe",
+            "parts": [
+                {"type": "text", "text": "describe"},
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "attachment_id": uploads[0]["attachment_id"],
+                },
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert message_response.status_code == 200
+
+    forbidden = client.get(
+        "/admin/tenants/tenant-1/attachments/statistics",
+        headers=AUTH_HEADERS,
+    )
+    response = client.get(
+        "/admin/tenants/tenant-1/attachments/statistics",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert forbidden.status_code == 403
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["tenant_id"] == "tenant-1"
+    assert payload["total_count"] == 2
+    assert payload["total_bytes"] == sum(upload["size_bytes"] for upload in uploads)
+    assert payload["pending_count"] == 1
+    assert payload["referenced_count"] == 1
+    assert payload["exempt_count"] == 0
+    assert payload["oldest_pending_age_seconds"] >= 0
+    assert payload["max_count"] == 1_000
+    assert payload["max_bytes"] == 1024 * 1024 * 1024
+    assert "attachment_id" not in payload
+    assert "created_by" not in payload
+
+
+def test_unreferenced_attachment_can_be_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    upload_response = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=base64.b64decode(PNG_1X1_BASE64),
+        headers={**AUTH_HEADERS, "Content-Type": "image/png"},
+    )
+    assert upload_response.status_code == 200
+    attachment_id = upload_response.json()["attachment_id"]
+
+    delete_response = client.delete(
+        f"/threads/{thread_id}/attachments/{attachment_id}",
+        headers=AUTH_HEADERS,
+    )
+    get_response = client.get(
+        f"/threads/{thread_id}/attachments/{attachment_id}",
+        headers=AUTH_HEADERS,
+    )
+
+    assert delete_response.status_code == 204
+    assert get_response.status_code == 404
+
+
+def test_pending_attachment_expires_when_message_never_references_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_ATTACHMENT_PENDING_TTL_SECONDS", "1")
+    app = create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    client = TestClient(app)
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    upload = client.post(
+        f"/threads/{thread_id}/attachments",
+        json={"mime_type": "image/png", "data": PNG_1X1_BASE64},
+        headers=AUTH_HEADERS,
+    )
+    attachment_id = upload.json()["attachment_id"]
+    created_at = datetime.fromisoformat(upload.json()["created_at"])
+
+    deleted = app.state.attachment_store.delete_expired_pending(
+        now=created_at + timedelta(seconds=2)
+    )
+    get_response = client.get(
+        f"/threads/{thread_id}/attachments/{attachment_id}",
+        headers=AUTH_HEADERS,
+    )
+
+    assert deleted == 1
+    assert get_response.status_code == 404
+
+
+def test_attachment_reference_mark_rolls_back_when_message_persistence_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    app = create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    client = TestClient(app, raise_server_exceptions=False)
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    upload = client.post(
+        f"/threads/{thread_id}/attachments",
+        json={"mime_type": "image/png", "data": PNG_1X1_BASE64},
+        headers=AUTH_HEADERS,
+    )
+    attachment_id = upload.json()["attachment_id"]
+
+    def fail_append(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated message persistence failure")
+
+    monkeypatch.setattr(app.state.store, "append_message", fail_append)
+    response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={
+            "content": "describe",
+            "parts": [
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "attachment_id": attachment_id,
+                }
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 500
+    assert app.state.attachment_store.delete_unreferenced("tenant-1", thread_id, attachment_id)
+
+
+def test_binary_attachment_upload_enforces_type_and_stream_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_BYTES", "8")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    png = base64.b64decode(PNG_1X1_BASE64)
+
+    unsupported = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=b"content",
+        headers={**AUTH_HEADERS, "Content-Type": "application/octet-stream"},
+    )
+    oversized = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=png,
+        headers={**AUTH_HEADERS, "Content-Type": "image/png"},
+    )
+
+    assert unsupported.status_code == 400
+    assert unsupported.json()["detail"] == "unsupported image MIME type: application/octet-stream"
+    assert oversized.status_code == 400
+    assert oversized.json()["detail"] == "image exceeds maximum allowed size"
+
+
+def test_binary_attachment_upload_enforces_pixel_and_dimension_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_PIXELS", "3")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    two_by_two_png = (
+        b"\x89PNG\r\n\x1a\n"
+        + (13).to_bytes(4, "big")
+        + b"IHDR"
+        + (2).to_bytes(4, "big")
+        + (2).to_bytes(4, "big")
+        + b"\x08\x06\x00\x00\x00"
+    )
+
+    excessive_pixels = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=two_by_two_png,
+        headers={**AUTH_HEADERS, "Content-Type": "image/png"},
+    )
+    malformed_header = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=b"\x89PNG\r\n\x1a\n",
+        headers={**AUTH_HEADERS, "Content-Type": "image/png"},
+    )
+
+    assert excessive_pixels.status_code == 400
+    assert excessive_pixels.json()["detail"] == "image exceeds maximum allowed pixel count (3)"
+    assert malformed_header.status_code == 400
+    assert malformed_header.json()["detail"] == "image dimensions could not be determined"
+
+
+def test_attachment_reference_is_scoped_to_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    first_thread = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    second_thread = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    attachment_id = client.post(
+        f"/threads/{first_thread}/attachments",
+        json={"mime_type": "image/png", "data": PNG_1X1_BASE64},
+        headers=AUTH_HEADERS,
+    ).json()["attachment_id"]
+
+    response = client.post(
+        f"/threads/{second_thread}/messages",
+        json={
+            "content": "describe",
+            "parts": [
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "attachment_id": attachment_id,
+                }
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "image attachment_id is invalid"
+
+
+def test_attachment_upload_enforces_thread_count_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_ATTACHMENT_MAX_PER_THREAD", "1")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    payload = {"mime_type": "image/png", "data": PNG_1X1_BASE64}
+
+    first = client.post(f"/threads/{thread_id}/attachments", json=payload, headers=AUTH_HEADERS)
+    second = client.post(f"/threads/{thread_id}/attachments", json=payload, headers=AUTH_HEADERS)
+
+    assert first.status_code == 200
+    assert second.status_code == 400
+    assert second.json()["detail"] == "thread attachment count limit exceeded"
+
+
+def test_attachment_upload_enforces_tenant_count_limit_across_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_ATTACHMENT_MAX_PER_TENANT", "1")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    first_thread = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    second_thread = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    payload = {"mime_type": "image/png", "data": PNG_1X1_BASE64}
+
+    first = client.post(f"/threads/{first_thread}/attachments", json=payload, headers=AUTH_HEADERS)
+    second = client.post(
+        f"/threads/{second_thread}/attachments", json=payload, headers=AUTH_HEADERS
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 400
+    assert second.json()["detail"] == "tenant attachment count limit exceeded"
 
 
 def test_sqlite_thread_store_persists_threads_and_messages(tmp_path: Path) -> None:
@@ -463,6 +1082,18 @@ def test_web_client_static_files_are_served() -> None:
     assert response.status_code == 200
     assert "Minigent Web Client" in response.text
     assert "./app.js" in response.text
+
+
+def test_console_client_static_files_are_served() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    response = client.get("/console/")
+
+    assert response.status_code == 200
+    assert "Minigent Console" in response.text
+    assert "/console/assets/" in response.text
 
 
 def test_list_threads_returns_recent_thread_summaries() -> None:
@@ -772,6 +1403,90 @@ def test_peer_agent_events_and_artifact_proxy_endpoints() -> None:
     ]
 
 
+def test_run_rate_limit_is_shared_by_standard_and_stream_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_RUN_RATE_LIMIT_TENANT_CAPACITY", "4")
+    monkeypatch.setenv("MINIGENT_RUN_RATE_LIMIT_TENANT_REFILL_PER_SECOND", "0.01")
+    monkeypatch.setenv("MINIGENT_RUN_RATE_LIMIT_USER_CAPACITY", "2")
+    monkeypatch.setenv("MINIGENT_RUN_RATE_LIMIT_USER_REFILL_PER_SECOND", "0.01")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "hello"},
+        headers=AUTH_HEADERS,
+    )
+
+    standard = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    streamed = client.post(f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS)
+    rejected = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert standard.status_code == 200
+    assert streamed.status_code == 200
+    assert rejected.status_code == 429
+    assert rejected.headers["retry-after"] == "100"
+    assert rejected.json()["detail"]["category"] == "thread_run"
+
+
+def test_run_concurrency_limit_covers_run_stream_and_consent_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_TENANT_CAPACITY", "1")
+    monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_USER_CAPACITY", "1")
+    monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_LEASE_SECONDS", "60")
+    monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_HEARTBEAT_SECONDS", "20")
+    limiter = InMemoryRateLimiter()
+    policy = RunConcurrencyPolicy(
+        tenant_capacity=1,
+        user_capacity=1,
+        lease_seconds=60,
+        heartbeat_seconds=20,
+    )
+    occupied = limiter.acquire_run_slot("tenant-1", "other-user", policy)
+    assert occupied.lease is not None
+    app = create_app(
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=build_local_tool_registry(),
+        rate_limiter=limiter,
+    )
+    client = TestClient(app)
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    responses = [
+        client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS),
+        client.post(f"/threads/{thread_id}/run/stream", headers=AUTH_HEADERS),
+        client.post(
+            f"/threads/{thread_id}/private-value-consents/missing/resume",
+            headers=AUTH_HEADERS,
+        ),
+    ]
+
+    for response in responses:
+        assert response.status_code == 429
+        assert response.headers["retry-after"]
+        assert response.json()["detail"]["error"] == "concurrent_run_limit_exceeded"
+        assert response.json()["detail"]["category"] == "thread_run_concurrency"
+
+    statistics = client.get(
+        "/admin/tenants/tenant-1/run-concurrency",
+        headers=ADMIN_HEADERS,
+    )
+    assert statistics.status_code == 200
+    assert statistics.json()["active_runs"] == 1
+    assert statistics.json()["active_users"] == 1
+    assert statistics.json()["tenant_capacity"] == 1
+    assert "user_id" not in statistics.json()
+    assert "lease_id" not in statistics.json()
+
+    assert limiter.release_run_slot(occupied.lease) is True
+    completed = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    assert completed.status_code == 200
+    assert limiter.run_concurrency_statistics("tenant-1").active_runs == 0
+
+
 def test_run_stream_endpoint_emits_ndjson_events() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
@@ -893,25 +1608,29 @@ def test_run_stream_endpoint_emits_tool_events() -> None:
 
 
 def test_run_stream_endpoint_emits_peer_task_events() -> None:
+    task_id = ""
+
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal task_id
         if request.method == "POST" and request.url.path == "/tasks":
-            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            task_id = str(json.loads(request.content)["task_id"])
+            return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
             return httpx.Response(
                 200,
                 json={
-                    "task_id": "task_123",
+                    "task_id": task_id,
                     "status": "completed",
                     "final_output": "Pi result",
                 },
             )
-        if request.method == "GET" and request.url.path == "/tasks/task_123/events":
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}/events":
             after = request.url.params.get("after")
             if after is None:
                 return httpx.Response(
                     200,
                     json={
-                        "task_id": "task_123",
+                        "task_id": task_id,
                         "next_index": 1,
                         "events": [{"index": 0, "type": "session_start"}],
                     },
@@ -920,7 +1639,7 @@ def test_run_stream_endpoint_emits_peer_task_events() -> None:
                 return httpx.Response(
                     200,
                     json={
-                        "task_id": "task_123",
+                        "task_id": task_id,
                         "next_index": 2,
                         "events": [
                             {
@@ -933,7 +1652,7 @@ def test_run_stream_endpoint_emits_peer_task_events() -> None:
                 )
             return httpx.Response(
                 200,
-                json={"task_id": "task_123", "next_index": 2, "events": []},
+                json={"task_id": task_id, "next_index": 2, "events": []},
             )
         return httpx.Response(404, json={"detail": "missing"})
 
@@ -991,21 +1710,25 @@ def test_run_stream_endpoint_emits_peer_task_events() -> None:
 
 
 def test_run_stream_endpoint_emits_peer_task_usage() -> None:
+    task_id = ""
+
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal task_id
         if request.method == "POST" and request.url.path == "/tasks":
-            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            task_id = str(json.loads(request.content)["task_id"])
+            return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
             return httpx.Response(
                 200,
                 json={
-                    "task_id": "task_123",
+                    "task_id": task_id,
                     "status": "completed",
                     "final_output": "Pi result",
                     "usage": {"input": 12, "output": 5, "totalTokens": 17},
                 },
             )
-        if request.method == "GET" and request.url.path == "/tasks/task_123/events":
-            return httpx.Response(200, json={"task_id": "task_123", "next_index": 0, "events": []})
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}/events":
+            return httpx.Response(200, json={"task_id": task_id, "next_index": 0, "events": []})
         return httpx.Response(404, json={"detail": "missing"})
 
     config = parse_tenant_execution_config(
@@ -1057,14 +1780,18 @@ def test_run_stream_endpoint_emits_peer_task_usage() -> None:
 
 
 def test_peer_agent_backend_persists_peer_tool_events_in_raw_context() -> None:
+    task_id = ""
+
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal task_id
         if request.method == "POST" and request.url.path == "/tasks":
-            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            task_id = str(json.loads(request.content)["task_id"])
+            return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
             return httpx.Response(
                 200,
                 json={
-                    "task_id": "task_123",
+                    "task_id": task_id,
                     "status": "completed",
                     "final_output": "Pi result",
                     "events_tail": [
@@ -1341,6 +2068,55 @@ class BlockingLLMAdapter(LLMAdapter):
         return {"provider": "blocking"}
 
 
+def test_run_concurrency_lease_heartbeats_and_releases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_TENANT_CAPACITY", "1")
+        monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_USER_CAPACITY", "1")
+        monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_LEASE_SECONDS", "2")
+        monkeypatch.setenv("MINIGENT_RUN_CONCURRENCY_HEARTBEAT_SECONDS", "1")
+        limiter = InMemoryRateLimiter()
+        adapter = BlockingLLMAdapter()
+        app = create_app(
+            llm_adapter=adapter,
+            tool_registry=build_local_tool_registry(),
+            rate_limiter=limiter,
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            first_thread = (await client.post("/threads", headers=AUTH_HEADERS)).json()["thread_id"]
+            second_thread = (await client.post("/threads", headers=AUTH_HEADERS)).json()[
+                "thread_id"
+            ]
+            await client.post(
+                f"/threads/{first_thread}/messages",
+                json={"content": "first"},
+                headers=AUTH_HEADERS,
+            )
+            first_run = asyncio.create_task(
+                client.post(f"/threads/{first_thread}/run", headers=AUTH_HEADERS)
+            )
+            await adapter.started.wait()
+
+            rejected = await client.post(
+                f"/threads/{second_thread}/run",
+                headers=AUTH_HEADERS,
+            )
+            assert rejected.status_code == 429
+            assert rejected.json()["detail"]["error"] == "concurrent_run_limit_exceeded"
+
+            await asyncio.sleep(2.2)
+            statistics = limiter.run_concurrency_statistics("tenant-1")
+            assert statistics.active_runs == 1
+            adapter.release.set()
+            completed = await first_run
+            assert completed.status_code == 200
+            assert limiter.run_concurrency_statistics("tenant-1").active_runs == 0
+
+    asyncio.run(scenario())
+
+
 def test_agent_runtime_cancellation_resets_thread_to_idle() -> None:
     async def scenario() -> None:
         store = InMemoryThreadStore()
@@ -1405,10 +2181,14 @@ def test_run_endpoint_handles_tool_call_flow() -> None:
     assert "[tool_result]\nname: echo" in raw_context["rendered"]
 
 
-def test_run_endpoint_can_use_peer_agent_backend() -> None:
+def test_run_endpoint_can_use_peer_agent_backend(tmp_path: Path) -> None:
     requests: list[tuple[str, str, dict[str, object] | None]] = []
+    task_id = ""
+    database = tmp_path / "threads.db"
+    store = SQLiteThreadStore(database)
 
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal task_id
         payload = json.loads(request.content) if request.content else None
         requests.append((request.method, request.url.path, payload))
         if request.method == "POST" and request.url.path == "/tasks":
@@ -1422,12 +2202,18 @@ def test_run_endpoint_can_use_peer_agent_backend() -> None:
             assert "You are running as the execution backend for a Minigent thread." in prompt
             assert "Minigent MCP broker:" in prompt
             assert "[user]\nplease inspect the repo" in prompt
-            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            task_id = str(payload["task_id"])
+            with sqlite3.connect(database) as connection:
+                reserved_task_id = connection.execute(
+                    "SELECT peer_task_id FROM thread_runs"
+                ).fetchone()[0]
+            assert reserved_task_id == task_id
+            return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
             return httpx.Response(
                 200,
                 json={
-                    "task_id": "task_123",
+                    "task_id": task_id,
                     "status": "completed",
                     "final_output": "OpenCode result",
                 },
@@ -1453,6 +2239,7 @@ def test_run_endpoint_can_use_peer_agent_backend() -> None:
         create_app(
             execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
             peer_agent_registry=registry,
+            thread_store=store,
         )
     )
     thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
@@ -1469,11 +2256,123 @@ def test_run_endpoint_can_use_peer_agent_backend() -> None:
     messages = client.get(f"/threads/{thread_id}/messages", headers=AUTH_HEADERS).json()
     assert [message["role"] for message in messages] == [MessageRole.USER, MessageRole.ASSISTANT]
     assert messages[-1]["content"] == "OpenCode result"
-    assert [request[:2] for request in requests] == [("POST", "/tasks"), ("GET", "/tasks/task_123")]
+    assert [request[:2] for request in requests] == [
+        ("POST", "/tasks"),
+        ("GET", f"/tasks/{task_id}"),
+    ]
+
+
+def test_peer_agent_backend_rejects_image_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    config = parse_tenant_execution_config(
+        "tenant-1",
+        {
+            "agent_backend": {
+                "type": "peer_agent",
+                "peer": "opencode",
+                "cwd": "/workspace/project",
+            }
+        },
+    )
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "opencode", "base_url": "http://opencode.test"}])
+    )
+    client = TestClient(
+        create_app(
+            execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
+            peer_agent_registry=registry,
+        )
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    message_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={
+            "content": "inspect this",
+            "parts": [
+                {"type": "text", "text": "inspect this"},
+                {"type": "image", "mime_type": "image/png", "data": PNG_1X1_BASE64},
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+
+    assert message_response.status_code == 200
+    assert run_response.status_code == 400
+    assert run_response.json()["detail"] == "peer_agent backend does not support image input"
+
+
+def test_peer_agent_backend_queues_reserved_task_when_create_fails(tmp_path: Path) -> None:
+    database = tmp_path / "threads.db"
+    store = SQLiteThreadStore(database)
+    recovery = SQLiteThreadStore(database)
+    reserved_task_id = ""
+    requests: list[tuple[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal reserved_task_id
+        requests.append((request.method, request.url.path))
+        if request.method == "POST" and request.url.path == "/tasks":
+            payload = json.loads(request.content)
+            reserved_task_id = str(payload["task_id"])
+            with sqlite3.connect(database) as connection:
+                persisted = connection.execute("SELECT peer_task_id FROM thread_runs").fetchone()[0]
+            assert persisted == reserved_task_id
+            return httpx.Response(503, json={"detail": "creation outcome unknown"})
+        if request.method == "POST" and request.url.path == f"/tasks/{reserved_task_id}/cancel":
+            return httpx.Response(503, json={"detail": "peer unavailable"})
+        return httpx.Response(404, json={"detail": "missing"})
+
+    config = parse_tenant_execution_config(
+        "tenant-1",
+        {
+            "agent_backend": {
+                "type": "peer_agent",
+                "peer": "opencode",
+                "cwd": "/workspace/project",
+                "mcp_broker_enabled": False,
+            }
+        },
+    )
+    registry = PeerAgentRegistry(
+        parse_peer_agent_configs([{"name": "opencode", "base_url": "http://opencode.test"}]),
+        transport=httpx.MockTransport(handler),
+    )
+    client = TestClient(
+        create_app(
+            execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
+            peer_agent_registry=registry,
+            thread_store=store,
+        )
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "please inspect the repo"},
+        headers=AUTH_HEADERS,
+    )
+
+    response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    claimed = recovery.claim_peer_task_cancellations(lease_seconds=30, limit=1)
+
+    assert response.status_code == 502
+    assert reserved_task_id.startswith("task_")
+    assert len(reserved_task_id) == 37
+    assert requests == [
+        ("POST", "/tasks"),
+        ("POST", f"/tasks/{reserved_task_id}/cancel"),
+    ]
+    assert len(claimed) == 1
+    assert claimed[0].task_id == reserved_task_id
+    assert store.get_thread("tenant-1", thread_id).status == ThreadStatus.ERROR
 
 
 def test_peer_agent_backend_prompt_includes_tool_call_context() -> None:
+    task_id = ""
+
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal task_id
         payload = json.loads(request.content) if request.content else None
         if request.method == "POST" and request.url.path == "/tasks":
             assert payload is not None
@@ -1482,12 +2381,13 @@ def test_peer_agent_backend_prompt_includes_tool_call_context() -> None:
             assert 'arguments: {"text": "hello from peer context"}' in prompt
             assert "[tool_result]\nname: echo\nid: call-1" in prompt
             assert '{"echo": "hello from peer context"}' in prompt
-            return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-        if request.method == "GET" and request.url.path == "/tasks/task_123":
+            task_id = str(payload["task_id"])
+            return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+        if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
             return httpx.Response(
                 200,
                 json={
-                    "task_id": "task_123",
+                    "task_id": task_id,
                     "status": "completed",
                     "final_output": "Peer result",
                 },
@@ -1556,17 +2456,20 @@ def test_peer_agent_backend_cancellation_cancels_peer_task_and_resets_thread() -
         requests: list[tuple[str, str]] = []
         task_polled = asyncio.Event()
         release_poll = asyncio.Event()
+        task_id = ""
 
         async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal task_id
             requests.append((request.method, request.url.path))
             if request.method == "POST" and request.url.path == "/tasks":
-                return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-            if request.method == "GET" and request.url.path == "/tasks/task_123":
+                task_id = str(json.loads(request.content)["task_id"])
+                return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+            if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
                 task_polled.set()
                 await release_poll.wait()
-                return httpx.Response(200, json={"task_id": "task_123", "status": "running"})
-            if request.method == "POST" and request.url.path == "/tasks/task_123/cancel":
-                return httpx.Response(200, json={"task_id": "task_123", "status": "canceled"})
+                return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+            if request.method == "POST" and request.url.path == f"/tasks/{task_id}/cancel":
+                return httpx.Response(200, json={"task_id": task_id, "status": "canceled"})
             return httpx.Response(404, json={"detail": "missing"})
 
         config = parse_tenant_execution_config(
@@ -1608,7 +2511,76 @@ def test_peer_agent_backend_cancellation_cancels_peer_task_and_resets_thread() -
             await task
         release_poll.set()
 
-        assert ("POST", "/tasks/task_123/cancel") in requests
+        assert ("POST", f"/tasks/{task_id}/cancel") in requests
+        assert store.get_thread(principal.tenant_id, thread.thread_id).status == ThreadStatus.IDLE
+
+    asyncio.run(scenario())
+
+
+def test_peer_agent_backend_persists_failed_cancellation_for_retry(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        task_polled = asyncio.Event()
+        release_poll = asyncio.Event()
+        cancel_requests = 0
+        task_id = ""
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal cancel_requests, task_id
+            if request.method == "POST" and request.url.path == "/tasks":
+                task_id = str(json.loads(request.content)["task_id"])
+                return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+            if request.method == "GET" and request.url.path == f"/tasks/{task_id}":
+                task_polled.set()
+                await release_poll.wait()
+                return httpx.Response(200, json={"task_id": task_id, "status": "running"})
+            if request.method == "POST" and request.url.path == f"/tasks/{task_id}/cancel":
+                cancel_requests += 1
+                return httpx.Response(503, json={"detail": "temporarily unavailable"})
+            return httpx.Response(404, json={"detail": "missing"})
+
+        config = parse_tenant_execution_config(
+            "tenant-1",
+            {
+                "agent_backend": {
+                    "type": "peer_agent",
+                    "peer": "opencode",
+                    "cwd": "/workspace/project",
+                    "poll_interval_seconds": 0.001,
+                }
+            },
+        )
+        registry = PeerAgentRegistry(
+            parse_peer_agent_configs([{"name": "opencode", "base_url": "http://opencode.test"}]),
+            transport=httpx.MockTransport(handler),
+        )
+        database = tmp_path / "threads.db"
+        store = SQLiteThreadStore(database)
+        recovery = SQLiteThreadStore(database)
+        app = create_app(
+            execution_resolver=InMemoryTenantExecutionResolver({"tenant-1": config}),
+            peer_agent_registry=registry,
+            thread_store=store,
+        )
+        principal = Principal(user_id="user-1", tenant_id="tenant-1")
+        thread = store.create_thread(principal.tenant_id)
+        store.append_message(
+            principal.tenant_id,
+            Message(thread_id=thread.thread_id, role=MessageRole.USER, content="please inspect"),
+        )
+
+        task = asyncio.create_task(app.state.agent_backend.run_thread(principal, thread.thread_id))
+        await task_polled.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release_poll.set()
+
+        claimed = recovery.claim_peer_task_cancellations(lease_seconds=30, limit=1)
+        assert cancel_requests == 1
+        assert len(claimed) == 1
+        assert claimed[0].peer_name == "opencode"
+        assert claimed[0].peer_base_url == "http://opencode.test"
+        assert claimed[0].task_id == task_id
         assert store.get_thread(principal.tenant_id, thread.thread_id).status == ThreadStatus.IDLE
 
     asyncio.run(scenario())
@@ -1626,7 +2598,11 @@ def test_run_endpoint_can_disable_peer_agent_mcp_broker() -> None:
             assert "Minigent MCP broker:" not in str(payload["prompt"])
             return httpx.Response(
                 200,
-                json={"task_id": "task_123", "status": "completed", "final_output": "ok"},
+                json={
+                    "task_id": payload["task_id"],
+                    "status": "completed",
+                    "final_output": "ok",
+                },
             )
         return httpx.Response(404, json={"detail": "missing"})
 
@@ -2428,6 +3404,7 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
                         ],
                     },
                     "agents": {
+                        "defaultAgent": "support",
                         "items": [
                             {
                                 "name": "support",
@@ -2455,24 +3432,59 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
         "tenant_id": "tenant-1",
         "skills": {
             "default": "support",
+            "defaults": ["support"],
             "items": [
-                {"name": "support", "description": "Support assistant"},
-                {"name": "coding", "description": None},
+                {
+                    "name": "support",
+                    "description": "Support assistant",
+                    "id": "shared:support",
+                    "display_name": "support",
+                    "source": "shared",
+                    "version": None,
+                },
+                {
+                    "name": "coding",
+                    "description": None,
+                    "id": "shared:coding",
+                    "display_name": "coding",
+                    "source": "shared",
+                    "version": None,
+                },
             ],
         },
         "capability_profiles": {
             "default": "inspect",
+            "defaults": None,
             "items": [
-                {"name": "inspect", "description": "Inspection tools"},
-                {"name": "math", "description": None},
+                {
+                    "name": "inspect",
+                    "description": "Inspection tools",
+                    "id": "shared:inspect",
+                    "display_name": "inspect",
+                    "source": "shared",
+                    "version": None,
+                },
+                {
+                    "name": "math",
+                    "description": None,
+                    "id": "shared:math",
+                    "display_name": "math",
+                    "source": "shared",
+                    "version": None,
+                },
             ],
         },
-        "llm_profiles": {"default": None, "items": []},
+        "llm_profiles": {"default": None, "defaults": None, "items": []},
         "agents": {
+            "default": "support",
             "items": [
                 {
                     "name": "support",
                     "description": "Support mode",
+                    "id": "shared:support",
+                    "display_name": "support",
+                    "source": "shared",
+                    "version": None,
                     "skill_name": "support",
                     "skills": None,
                     "capability_profile": "inspect",
@@ -2480,6 +3492,10 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
                 {
                     "name": "math",
                     "description": None,
+                    "id": "shared:math",
+                    "display_name": "math",
+                    "source": "shared",
+                    "version": None,
                     "skill_name": None,
                     "skills": ["coding"],
                     "capability_profile": "math",
@@ -2489,6 +3505,30 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
     }
     assert "system_prompt" not in response.text
     assert "allowed_local_tools" not in response.text
+
+    default_thread = client.post("/threads", headers=AUTH_HEADERS)
+    selected_thread = client.post("/threads", json={"agent_name": "math"}, headers=AUTH_HEADERS)
+    overridden_thread = client.post(
+        "/threads",
+        json={"agent_name": "math", "skill_name": "support", "capability_profile": "inspect"},
+        headers=AUTH_HEADERS,
+    )
+    unknown_agent = client.post("/threads", json={"agent_name": "missing"}, headers=AUTH_HEADERS)
+
+    assert default_thread.status_code == 200
+    assert selected_thread.status_code == 200
+    assert overridden_thread.status_code == 200
+    assert unknown_agent.status_code == 400
+    threads = {
+        item["thread_id"]: item
+        for item in client.get("/threads", headers=AUTH_HEADERS).json()["threads"]
+    }
+    assert threads[default_thread.json()["thread_id"]]["skill_names"] == ["support"]
+    assert threads[default_thread.json()["thread_id"]]["capability_profile"] == "inspect"
+    assert threads[selected_thread.json()["thread_id"]]["skill_names"] == ["coding"]
+    assert threads[selected_thread.json()["thread_id"]]["capability_profile"] == "math"
+    assert threads[overridden_thread.json()["thread_id"]]["skill_names"] == ["support"]
+    assert threads[overridden_thread.json()["thread_id"]]["capability_profile"] == "inspect"
 
 
 def test_threads_bind_named_llm_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2513,9 +3553,24 @@ def test_threads_bind_named_llm_profiles(monkeypatch: pytest.MonkeyPatch) -> Non
     assert options.status_code == 200
     assert options.json()["llm_profiles"] == {
         "default": "primary",
+        "defaults": None,
         "items": [
-            {"name": "primary", "description": None},
-            {"name": "backup", "description": None},
+            {
+                "name": "primary",
+                "description": None,
+                "id": "shared:primary",
+                "display_name": "primary",
+                "source": "shared",
+                "version": None,
+            },
+            {
+                "name": "backup",
+                "description": None,
+                "id": "shared:backup",
+                "display_name": "backup",
+                "source": "shared",
+                "version": None,
+            },
         ],
     }
 
@@ -2530,6 +3585,56 @@ def test_threads_bind_named_llm_profiles(monkeypatch: pytest.MonkeyPatch) -> Non
     profiles = {thread["thread_id"]: thread["llm_profile"] for thread in threads}
     assert profiles[default_thread.json()["thread_id"]] == "primary"
     assert profiles[backup_thread.json()["thread_id"]] == "backup"
+
+
+def test_selected_llm_profile_enforces_declared_image_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "default_llm_profile": "text-only",
+                    "llm_profiles": {
+                        "text-only": {
+                            "provider": "mock",
+                            "input_modalities": ["text"],
+                        },
+                        "vision": {
+                            "provider": "mock",
+                            "inputModalities": ["text", "image"],
+                        },
+                    },
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+    text_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    vision_thread_id = client.post(
+        "/threads", headers=AUTH_HEADERS, json={"llm_profile": "vision"}
+    ).json()["thread_id"]
+    payload = {
+        "content": "describe it",
+        "parts": [
+            {"type": "text", "text": "describe it"},
+            {"type": "image", "mime_type": "image/png", "data": PNG_1X1_BASE64},
+        ],
+    }
+
+    text_response = client.post(
+        f"/threads/{text_thread_id}/messages", headers=AUTH_HEADERS, json=payload
+    )
+    vision_response = client.post(
+        f"/threads/{vision_thread_id}/messages", headers=AUTH_HEADERS, json=payload
+    )
+
+    assert text_response.status_code == 400
+    assert text_response.json()["detail"] == "selected LLM profile does not support image input"
+    assert vision_response.status_code == 200
 
 
 def test_runtime_uses_thread_llm_profile(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2562,7 +3667,7 @@ def test_runtime_uses_thread_llm_profile(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(
         execution_module,
         "_build_llm_adapter",
-        lambda config: ProfileAdapter(config.model or "legacy"),
+        lambda config, **_kwargs: ProfileAdapter(config.model or "legacy"),
     )
     client = TestClient(create_app())
     created = client.post("/threads", headers=AUTH_HEADERS, json={"llm_profile": "backup"})
@@ -2627,7 +3732,7 @@ provider = "mock"
     monkeypatch.setattr(
         execution_module,
         "_build_llm_adapter",
-        lambda _config: RecordingLLMAdapter(),
+        lambda _config, **_kwargs: RecordingLLMAdapter(),
     )
     load_environment(discover_default_files=False)
     client = TestClient(create_app())
@@ -2636,7 +3741,17 @@ provider = "mock"
     assert options_response.status_code == 200
     assert options_response.json()["skills"] == {
         "default": None,
-        "items": [{"name": "code-reviewer", "description": "Reviews code changes."}],
+        "defaults": None,
+        "items": [
+            {
+                "name": "code-reviewer",
+                "description": "Reviews code changes.",
+                "id": "shared:code-reviewer",
+                "display_name": "code-reviewer",
+                "source": "shared",
+                "version": None,
+            }
+        ],
     }
     assert "Loaded imported skill instructions" not in options_response.text
 
@@ -2996,6 +4111,74 @@ def test_admin_api_can_manage_tenant_registry(tmp_path: Path) -> None:
     assert audit_record["new_values"]["metadata"]["api_token"] == "<redacted>"
 
 
+def test_admin_api_can_provision_generic_tenant_execution_defaults(tmp_path: Path) -> None:
+    store = _sqlite_store(tmp_path)
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store"))
+
+    response = client.post(
+        "/admin/tenants",
+        json={
+            "id": "tenant-1",
+            "slug": "tenant-one",
+            "name": "Tenant One",
+            "status": "active",
+            "provisioning_profile": "generic-v1",
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 201
+    config = store.get_raw_config("tenant-1")
+    assert config is not None
+    assert config["tools"]["allowed_local_tools"] == ["current_time", "calculator"]
+    assert config["skills"]["default_skill"] == "general"
+    assert config["capability_profiles"]["default_profile"] == "safe-default"
+    assert config["agents"]["default_agent"] == "general"
+
+    options = client.get("/execution-options", headers=AUTH_HEADERS)
+    assert options.status_code == 200
+    assert options.json()["agents"]["default"] == "general"
+    thread_response = client.post("/threads", headers=AUTH_HEADERS)
+    assert thread_response.status_code == 200
+    thread = client.get("/threads", headers=AUTH_HEADERS).json()["threads"][0]
+    assert thread["skill_names"] == ["general"]
+    assert thread["capability_profile"] == "safe-default"
+
+    duplicate = client.post(
+        "/admin/tenants",
+        json={
+            "id": "tenant-2",
+            "slug": "tenant-one",
+            "name": "Duplicate",
+            "provisioning_profile": "generic-v1",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert duplicate.status_code == 409
+    assert store.get_raw_config("tenant-2") is None
+
+    unsupported = client.post(
+        "/admin/tenants",
+        json={
+            "id": "tenant-3",
+            "slug": "tenant-three",
+            "name": "Tenant Three",
+            "provisioning_profile": "unknown",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert unsupported.status_code == 422
+
+    invalid_default = client.post(
+        "/admin/tenants/tenant-1/execution-config/validate",
+        json={"config": {"agents": {"default_agent": "missing", "items": []}}},
+        headers=ADMIN_HEADERS,
+    )
+    assert invalid_default.status_code == 200
+    assert invalid_default.json()["valid"] is False
+    assert "agents.default_agent" in invalid_default.json()["config_shape"]["errors"][0]
+
+
 def test_admin_store_can_manage_tenant_users(tmp_path: Path) -> None:
     store = _sqlite_store(tmp_path)
 
@@ -3201,6 +4384,210 @@ def test_admin_api_tenant_users_require_admin(tmp_path: Path) -> None:
     response = client.get("/admin/tenants/tenant-1/users", headers=AUTH_HEADERS)
 
     assert response.status_code == 403
+
+
+def test_tenant_owner_can_manage_only_their_tenant(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+    assert (
+        client.post(
+            "/admin/tenants",
+            json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "active"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    owner_response = client.post(
+        "/admin/tenants/tenant-1/users",
+        json={"user_id": "user-1", "role": "owner", "status": "active"},
+        headers=ADMIN_HEADERS,
+    )
+    assert owner_response.status_code == 201
+    owner_id = owner_response.json()["id"]
+
+    context = client.get("/tenant-context", headers=AUTH_HEADERS)
+    assert context.status_code == 200
+    assert context.json()["user_role"] == "owner"
+    assert client.get("/admin/tenants", headers=AUTH_HEADERS).status_code == 403
+    assert client.get("/admin/tenants/tenant-2", headers=AUTH_HEADERS).status_code == 403
+    assert client.get("/admin/tenants/tenant-1", headers=AUTH_HEADERS).status_code == 200
+
+    profile = client.patch(
+        "/admin/tenants/tenant-1",
+        json={"name": "Tenant One Updated", "slug": "tenant-one-updated"},
+        headers=AUTH_HEADERS,
+    )
+    assert profile.status_code == 200
+    assert profile.json()["name"] == "Tenant One Updated"
+    assert (
+        client.patch(
+            "/admin/tenants/tenant-1",
+            json={"plan": "enterprise"},
+            headers=AUTH_HEADERS,
+        ).status_code
+        == 403
+    )
+
+    member = client.post(
+        "/admin/tenants/tenant-1/users",
+        json={"user_id": "user-2", "role": "member", "status": "invited"},
+        headers=AUTH_HEADERS,
+    )
+    assert member.status_code == 201
+    assert client.get("/admin/tenants/tenant-1/users", headers=AUTH_HEADERS).status_code == 200
+    assert (
+        client.get(
+            "/admin/tenants/tenant-1/users",
+            headers=SAME_TENANT_OTHER_USER_HEADERS,
+        ).status_code
+        == 403
+    )
+
+    last_owner = client.patch(
+        f"/admin/tenants/tenant-1/users/{owner_id}",
+        json={"role": "member"},
+        headers=AUTH_HEADERS,
+    )
+    assert last_owner.status_code == 409
+    assert last_owner.json()["detail"] == "A tenant must retain an active owner"
+
+    domain = client.post(
+        "/admin/tenants/tenant-1/domains",
+        json={"domain": "tenant-one.example"},
+        headers=AUTH_HEADERS,
+    )
+    assert domain.status_code == 201
+    assert (
+        client.post(
+            f"/admin/tenants/tenant-1/domains/{domain.json()['id']}/verify",
+            headers=AUTH_HEADERS,
+        ).status_code
+        == 403
+    )
+
+    execution = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        json={"config": {"llm": {"provider": "mock"}}},
+        headers=AUTH_HEADERS,
+    )
+    assert execution.status_code == 200
+    assert execution.json()["config"]["llm"]["provider"] == "mock"
+
+
+def test_tenant_owner_can_import_pi_openai_oauth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oauth_db = tmp_path / "oauth.db"
+    oauth_key = base64.urlsafe_b64encode(b"o" * 32).decode().rstrip("=")
+    oauth_env = {
+        "MINIGENT_OAUTH_STORE_PATH": str(oauth_db),
+        "MINIGENT_OAUTH_ENCRYPTION_KEYS": json.dumps({"1": oauth_key}),
+        "MINIGENT_OAUTH_KEY_VERSION": "1",
+        "MINIGENT_OAUTH_PROVIDER_ID": "openai-codex",
+        "MINIGENT_OAUTH_CLIENT_ID": "pi-client",
+        "MINIGENT_OAUTH_AUTHORIZE_URL": "https://auth.example/authorize",
+        "MINIGENT_OAUTH_TOKEN_URL": "https://auth.example/token",
+        "MINIGENT_OAUTH_REDIRECT_URI": "http://localhost:1455/auth/callback",
+        "MINIGENT_OAUTH_SCOPE": "openid profile email offline_access",
+    }
+    for name, value in oauth_env.items():
+        monkeypatch.setenv(name, value)
+
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+    assert (
+        client.post(
+            "/admin/tenants",
+            json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "active"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/admin/tenants/tenant-1/users",
+            json={"user_id": "user-1", "role": "owner", "status": "active"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+
+    disconnected = client.get(
+        "/admin/tenants/tenant-1/oauth/openai-codex",
+        headers=AUTH_HEADERS,
+    )
+    assert disconnected.status_code == 200
+    assert disconnected.json()["connected"] is False
+
+    pi_credential = {
+        "type": "oauth",
+        "access": "pi-access-token",
+        "refresh": "pi-refresh-token",
+        "expires": 1_900_000_000_000,
+        "accountId": "account-1",
+    }
+    assert (
+        client.post(
+            "/admin/tenants/tenant-1/oauth/openai-codex/import/pi",
+            json={"credential": pi_credential, "acknowledge_transfer": False},
+            headers=AUTH_HEADERS,
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/admin/tenants/tenant-1/oauth/openai-codex/import/pi",
+            json={
+                "credential": {"type": "api_key", "key": "not-oauth"},
+                "acknowledge_transfer": True,
+            },
+            headers=AUTH_HEADERS,
+        ).status_code
+        == 400
+    )
+    imported = client.post(
+        "/admin/tenants/tenant-1/oauth/openai-codex/import/pi",
+        json={"credential": pi_credential, "acknowledge_transfer": True},
+        headers=AUTH_HEADERS,
+    )
+    assert imported.status_code == 200
+    assert imported.json() == {
+        "tenant_id": "tenant-1",
+        "provider_id": "openai-codex",
+        "source": "pi",
+        "connected": True,
+        "account_id": "account-1",
+        "expires_at": "2030-03-17T17:46:40Z",
+    }
+    assert "pi-access-token" not in imported.text
+    assert "pi-refresh-token" not in imported.text
+    assert (
+        client.get(
+            "/admin/tenants/tenant-1/oauth/openai-codex",
+            headers=SAME_TENANT_OTHER_USER_HEADERS,
+        ).status_code
+        == 403
+    )
+
+    encrypted_database = oauth_db.read_bytes()
+    assert b"pi-access-token" not in encrypted_database
+    assert b"pi-refresh-token" not in encrypted_database
+
+    deleted = client.delete(
+        "/admin/tenants/tenant-1/oauth/openai-codex",
+        headers=AUTH_HEADERS,
+    )
+    assert deleted.status_code == 204
+    assert (
+        client.get(
+            "/admin/tenants/tenant-1/oauth/openai-codex",
+            headers=AUTH_HEADERS,
+        ).json()["connected"]
+        is False
+    )
 
 
 def test_admin_api_rejects_invalid_tenant_slug(tmp_path: Path) -> None:
@@ -3415,6 +4802,24 @@ def test_admin_api_can_manage_tenant_entitlements(tmp_path: Path) -> None:
     )
     assert validate_response.status_code == 200
     assert validate_response.json()["valid"] is True
+
+    invalid_limit_response = client.post(
+        "/admin/tenants/tenant-1/entitlements/validate",
+        json={"limits": {"max_threads": -1.5}},
+        headers=ADMIN_HEADERS,
+    )
+    assert invalid_limit_response.status_code == 200
+    assert invalid_limit_response.json()["valid"] is False
+    assert invalid_limit_response.json()["limits"]["errors"] == [
+        "Limit 'max_threads' must be a non-negative integer or null"
+    ]
+
+    rejected_limit_response = client.put(
+        "/admin/tenants/tenant-1/entitlements",
+        json={"limits": {"max_threads": -1}},
+        headers=ADMIN_HEADERS,
+    )
+    assert rejected_limit_response.status_code == 400
 
     first_response = client.put(
         "/admin/tenants/tenant-1/entitlements",
@@ -3844,6 +5249,219 @@ def test_tenant_registry_required_blocks_inactive_tenants(
     assert suspended_response.status_code == 403
 
 
+def test_admin_api_returns_configured_mcp_server_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog = [
+        {
+            "id": "web-search",
+            "title": "Web search",
+            "description": "Search current web content.",
+            "detail": "Local Brave Search sidecar · 3 tools",
+            "server": {
+                "name": "web-search",
+                "url": "http://127.0.0.1:8766/mcp",
+                "headers": {"Authorization": "Bearer secret-token"},
+                "allowed_tools": ["web", "news", "context"],
+            },
+        }
+    ]
+    monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
+    store = _sqlite_store(tmp_path)
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store"))
+
+    response = client.get(
+        "/admin/tenants/tenant-1/mcp-server-catalog",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    response_item = response.json()["items"][0]
+    assert response_item["server"]["headers"] == {"Authorization": "<redacted>"}
+    assert response_item["server"]["has_headers"] is True
+    assert "secret-token" not in response.text
+
+    put_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+        json={
+            "config": {
+                "llm": {"provider": "mock"},
+                "tools": {"mcp_servers": [response_item["server"]]},
+            }
+        },
+    )
+    assert put_response.status_code == 200
+    stored = store.get_raw_config("tenant-1")
+    assert stored is not None
+    assert stored["tools"]["mcp_servers"][0]["headers"] == {"Authorization": "Bearer secret-token"}
+
+
+def test_admin_can_assign_mcp_catalog_per_tenant_and_policy_is_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog = [
+        {
+            "id": "web-search",
+            "title": "Web search",
+            "description": "Search current web content.",
+            "server": {
+                "name": "web-search",
+                "url": "https://tools.example/web/mcp",
+                "allowed_tools": ["web", "news"],
+            },
+        },
+        {
+            "id": "internal-crm",
+            "title": "Internal CRM",
+            "description": "Read CRM records.",
+            "server": {
+                "name": "internal-crm",
+                "url": "https://tools.example/crm/mcp",
+                "allowed_tools": ["contacts"],
+            },
+        },
+    ]
+    monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
+    store = _sqlite_store(tmp_path)
+    app = create_app(admin_store=store, tenant_config_source="store")
+    client = TestClient(app)
+    assert (
+        client.post(
+            "/admin/tenants",
+            json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+
+    legacy_catalog = client.get("/admin/tenants/tenant-1/mcp-server-catalog", headers=ADMIN_HEADERS)
+    assert legacy_catalog.status_code == 200
+    assert legacy_catalog.json()["managed"] is False
+    assert {item["id"] for item in legacy_catalog.json()["items"]} == {
+        "web-search",
+        "internal-crm",
+    }
+
+    policy_response = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+        headers=ADMIN_HEADERS,
+        json={"item_ids": ["web-search"], "allow_custom_mcp_servers": False},
+    )
+    assert policy_response.status_code == 200
+    assert policy_response.json()["item_ids"] == ["web-search"]
+    assert policy_response.json()["version"] == 1
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+            headers=AUTH_HEADERS,
+            json={"item_ids": [], "allow_custom_mcp_servers": False},
+        ).status_code
+        == 403
+    )
+    deployment_catalog = client.get("/admin/mcp-server-catalog", headers=ADMIN_HEADERS)
+    assert deployment_catalog.status_code == 200
+    assert {item["id"] for item in deployment_catalog.json()["items"]} == {
+        "web-search",
+        "internal-crm",
+    }
+
+    assigned_catalog = client.get(
+        "/admin/tenants/tenant-1/mcp-server-catalog", headers=ADMIN_HEADERS
+    )
+    assert assigned_catalog.status_code == 200
+    assert assigned_catalog.json()["managed"] is True
+    assert assigned_catalog.json()["allow_custom_mcp_servers"] is False
+    assert [item["id"] for item in assigned_catalog.json()["items"]] == ["web-search"]
+
+    custom_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+        json={
+            "config": {
+                "llm": {"provider": "mock"},
+                "tools": {"mcp_servers": [{"name": "custom", "url": "https://custom.example/mcp"}]},
+            }
+        },
+    )
+    assert custom_response.status_code == 400
+    assert "not in its assigned catalog" in custom_response.json()["detail"]
+
+    ungranted_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+        json={
+            "config": {
+                "llm": {"provider": "mock"},
+                "tools": {"mcp_servers": [catalog[1]["server"]]},
+            }
+        },
+    )
+    assert ungranted_response.status_code == 400
+    assert "not granted" in ungranted_response.json()["detail"]
+
+    unrestricted_catalog_server = dict(catalog[0]["server"])
+    unrestricted_catalog_server.pop("allowed_tools")
+    unrestricted_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+        json={
+            "config": {
+                "llm": {"provider": "mock"},
+                "tools": {"mcp_servers": [unrestricted_catalog_server]},
+            }
+        },
+    )
+    assert unrestricted_response.status_code == 400
+    assert "must define allowed_tools" in unrestricted_response.json()["detail"]
+
+    wrong_url_server = {**catalog[0]["server"], "url": "https://attacker.example/mcp"}
+    wrong_url_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+        json={
+            "config": {
+                "llm": {"provider": "mock"},
+                "tools": {"mcp_servers": [wrong_url_server]},
+            }
+        },
+    )
+    assert wrong_url_response.status_code == 400
+    assert "must use its catalog URL" in wrong_url_response.json()["detail"]
+
+    granted_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        headers=ADMIN_HEADERS,
+        json={
+            "config": {
+                "llm": {"provider": "mock"},
+                "tools": {"mcp_servers": [catalog[0]["server"]]},
+            }
+        },
+    )
+    assert granted_response.status_code == 200
+
+    revoke_response = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+        headers=ADMIN_HEADERS,
+        json={"item_ids": [], "allow_custom_mcp_servers": False},
+    )
+    assert revoke_response.status_code == 200
+    with pytest.raises(HTTPException) as exc_info:
+        app.state.execution_resolver.resolve("tenant-1")
+    assert exc_info.value.status_code == 403
+    assert "not granted" in str(exc_info.value.detail)
+
+    audit_response = client.get("/admin/tenants/tenant-1/audit-records", headers=ADMIN_HEADERS)
+    assert audit_response.status_code == 200
+    assert any(
+        item["action"] == "tenant_mcp_server_catalog_policy.put"
+        for item in audit_response.json()["audit_records"]
+    )
+
+
 def test_admin_api_validates_tenant_execution_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -3919,7 +5537,7 @@ def test_admin_api_validates_tenant_execution_config(
                     "ok": True,
                     "error": None,
                     "tool_count": 1,
-                    "protocol_version": "2025-11-25",
+                    "protocol_version": "2026-07-28",
                     "session": True,
                     "server_name": "demo-server",
                     "server_version": "1.2.3",
@@ -4412,14 +6030,20 @@ def test_admin_thread_inspection_requires_admin() -> None:
 def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
     tmp_path: Path,
 ) -> None:
-    client = TestClient(
-        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store")
-    )
+    store = _sqlite_store(tmp_path)
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store"))
     payload = {
         "config": {
             "llm": {
                 "provider": "mock",
                 "api_key": "secret-key",
+                "extra_headers": {"X-LLM-Token": "llm-token"},
+            },
+            "llm_profiles": {"backup": {"provider": "mock", "api_key": "profile-secret"}},
+            "quality": {
+                "enabled": False,
+                "provider": "mock",
+                "api_key": "quality-secret",
             },
             "tools": {
                 "allowed_local_tools": ["echo"],
@@ -4441,12 +6065,33 @@ def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
     )
 
     assert put_response.status_code == 200
+    assert put_response.json()["version"] == 1
     assert put_response.json()["config"]["llm"]["api_key"] == "<redacted>"
     assert put_response.json()["config"]["llm"]["has_api_key"] is True
     assert (
         put_response.json()["config"]["tools"]["mcp_servers"][0]["headers"]["Authorization"]
         == "<redacted>"
     )
+    assert put_response.json()["config"]["llm"]["extra_headers"] == {"X-LLM-Token": "<redacted>"}
+    assert put_response.json()["config"]["llm_profiles"]["backup"]["api_key"] == "<redacted>"
+    assert put_response.json()["config"]["quality"]["api_key"] == "<redacted>"
+
+    round_trip_payload = put_response.json()["config"]
+    round_trip_payload["llm"]["model"] = "updated-model"
+    update_response = client.put(
+        "/admin/tenants/tenant-1/execution-config",
+        json={"config": round_trip_payload},
+        headers=ADMIN_HEADERS,
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["version"] == 2
+    stored = store.get_raw_config("tenant-1")
+    assert stored is not None
+    assert stored["llm"]["api_key"] == "secret-key"
+    assert stored["llm"]["extra_headers"] == {"X-LLM-Token": "llm-token"}
+    assert stored["llm_profiles"]["backup"]["api_key"] == "profile-secret"
+    assert stored["quality"]["api_key"] == "quality-secret"
+    assert stored["llm"]["model"] == "updated-model"
 
     list_response = client.get("/admin/execution-config-tenants", headers=ADMIN_HEADERS)
     assert list_response.status_code == 200
@@ -4457,6 +6102,7 @@ def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
         headers=ADMIN_HEADERS,
     )
     assert get_response.status_code == 200
+    assert get_response.json()["version"] == 2
     assert get_response.json()["config"]["llm"]["api_key"] == "<redacted>"
 
 
@@ -4640,3 +6286,373 @@ def _sqlite_store(tmp_path: Path, *, encryption_key: str | None = None):
         str(tmp_path / "tenant-configs.db"),
         encryption_key=encryption_key,
     )
+
+
+def test_admin_api_patch_can_clear_optional_tenant_and_user_fields(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
+    )
+    client.post(
+        "/admin/tenants",
+        json={
+            "id": "tenant-clear",
+            "slug": "tenant-clear",
+            "name": "Tenant Clear",
+            "plan": "enterprise",
+            "region": "us-east",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    user_response = client.post(
+        "/admin/tenants/tenant-clear/users",
+        json={"user_id": "user-clear", "display_name": "Clear Me"},
+        headers=ADMIN_HEADERS,
+    )
+
+    tenant_response = client.patch(
+        "/admin/tenants/tenant-clear",
+        json={"plan": None, "region": None},
+        headers=ADMIN_HEADERS,
+    )
+    user_patch_response = client.patch(
+        f"/admin/tenants/tenant-clear/users/{user_response.json()['id']}",
+        json={"display_name": None},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert tenant_response.status_code == 200
+    assert tenant_response.json()["plan"] is None
+    assert tenant_response.json()["region"] is None
+    assert user_patch_response.status_code == 200
+    assert user_patch_response.json()["display_name"] is None
+
+
+def test_admin_can_assign_mcp_catalog_by_role_and_user(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog = [
+        {
+            "id": "web-search",
+            "title": "Web search",
+            "description": "Search current web content.",
+            "server": {
+                "name": "web-search",
+                "url": "https://tools.example/web/mcp",
+                "allowed_tools": ["web"],
+            },
+        },
+        {
+            "id": "private-calendar",
+            "title": "Private calendar",
+            "description": "Manage private calendars.",
+            "server": {
+                "name": "private-calendar",
+                "url": "http://127.0.0.1:8769/mcp",
+                "allowed_tools": ["calendars_list"],
+            },
+        },
+    ]
+    monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
+    store = _sqlite_store(tmp_path)
+    app = create_app(admin_store=store, tenant_config_source="store")
+    client = TestClient(app)
+    assert (
+        client.post(
+            "/admin/tenants",
+            json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/admin/tenants/tenant-1/users",
+            json={
+                "user_id": "member-1",
+                "email": "member@example.com",
+                "role": "member",
+                "status": "active",
+            },
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+            json={
+                "item_ids": ["web-search", "private-calendar"],
+                "allow_custom_mcp_servers": False,
+            },
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+
+    role_response = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-assignments/role/member",
+        json={"item_ids": ["web-search"]},
+        headers=ADMIN_HEADERS,
+    )
+    assert role_response.status_code == 200
+    user_response = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-assignments/user/member-1",
+        json={"item_ids": ["private-calendar"]},
+        headers=ADMIN_HEADERS,
+    )
+    assert user_response.status_code == 200
+    assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") == (
+        "private-calendar",
+    )
+
+    list_response = client.get(
+        "/admin/tenants/tenant-1/mcp-server-catalog-assignments",
+        headers=ADMIN_HEADERS,
+    )
+    assert list_response.status_code == 200
+    assert {
+        (assignment["subject_type"], assignment["subject_id"])
+        for assignment in list_response.json()["assignments"]
+    } == {("role", "member"), ("user", "member-1")}
+
+    overreach = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+        json={"item_ids": ["web-search"], "allow_custom_mcp_servers": False},
+        headers=ADMIN_HEADERS,
+    )
+    assert overreach.status_code == 200
+    assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") == ()
+
+    delete_response = client.delete(
+        "/admin/tenants/tenant-1/mcp-server-catalog-assignments/user/member-1",
+        headers=ADMIN_HEADERS,
+    )
+    assert delete_response.status_code == 204
+    assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") == (
+        "web-search",
+    )
+
+
+def test_mcp_catalog_fail_closed_requires_break_glass_and_previews_access(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog = [
+        {
+            "id": "web-search",
+            "title": "Web search",
+            "description": "Search current web content.",
+            "server": {
+                "name": "web-search",
+                "url": "https://tools.example/web/mcp",
+                "allowed_tools": ["web"],
+            },
+        }
+    ]
+    monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
+    store = _sqlite_store(tmp_path)
+    app = create_app(admin_store=store, tenant_config_source="store")
+    client = TestClient(app)
+    assert (
+        client.post(
+            "/admin/tenants",
+            json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    for user_id, role in (("owner-1", "owner"), ("member-1", "member")):
+        assert (
+            client.post(
+                "/admin/tenants/tenant-1/users",
+                json={"user_id": user_id, "role": role, "status": "active"},
+                headers=ADMIN_HEADERS,
+            ).status_code
+            == 201
+        )
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+            json={
+                "item_ids": ["web-search"],
+                "allow_custom_mcp_servers": False,
+                "require_subject_assignment": False,
+            },
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+
+    preview = client.get(
+        "/admin/tenants/tenant-1/mcp-server-catalog-access-preview",
+        params={"require_subject_assignment": "true"},
+        headers=ADMIN_HEADERS,
+    )
+    assert preview.status_code == 200
+    assert {
+        user["user_id"]: (user["source"], user["item_ids"], user["denied"])
+        for user in preview.json()["users"]
+    } == {
+        "owner-1": ("unassigned", [], True),
+        "member-1": ("unassigned", [], True),
+    }
+
+    rejected = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+        json={
+            "item_ids": ["web-search"],
+            "allow_custom_mcp_servers": False,
+            "require_subject_assignment": True,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert rejected.status_code == 409
+    assert "owner or admin assignment" in rejected.json()["detail"]
+
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-assignments/user/owner-1",
+            json={"item_ids": ["web-search"]},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+    enabled = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+        json={
+            "item_ids": ["web-search"],
+            "allow_custom_mcp_servers": False,
+            "require_subject_assignment": True,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert enabled.status_code == 200
+    assert enabled.json()["require_subject_assignment"] is True
+    assert store.effective_subject_mcp_server_catalog_access("tenant-1", "owner-1") == (
+        ("web-search",),
+        "user",
+    )
+    assert store.effective_subject_mcp_server_catalog_access("tenant-1", "member-1") == (
+        (),
+        "unassigned",
+    )
+    authorize = app.state.runtime._mcp_server_name_authorizer
+    assert authorize("tenant-1", "owner-1") == {"web-search"}
+    assert authorize("tenant-1", "member-1") == set()
+    break_glass_empty = client.put(
+        "/admin/tenants/tenant-1/mcp-server-catalog-assignments/user/owner-1",
+        json={"item_ids": []},
+        headers=ADMIN_HEADERS,
+    )
+    assert break_glass_empty.status_code == 409
+    break_glass_delete = client.delete(
+        "/admin/tenants/tenant-1/mcp-server-catalog-assignments/user/owner-1",
+        headers=ADMIN_HEADERS,
+    )
+    assert break_glass_delete.status_code == 409
+
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-assignments/role/member",
+            json={"item_ids": ["web-search"]},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+    assert store.effective_subject_mcp_server_catalog_access("tenant-1", "member-1") == (
+        ("web-search",),
+        "role",
+    )
+    assert authorize("tenant-1", "member-1") == {"web-search"}
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-assignments/user/member-1",
+            json={"item_ids": []},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+    assert store.effective_subject_mcp_server_catalog_access("tenant-1", "member-1") == (
+        (),
+        "user",
+    )
+    assert authorize("tenant-1", "member-1") == set()
+
+
+def test_subject_catalog_assignments_are_inactive_without_tenant_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_ADMIN_MCP_SERVER_CATALOG",
+        json.dumps(
+            [
+                {
+                    "id": "web-search",
+                    "title": "Web search",
+                    "description": "Search the web.",
+                    "server": {
+                        "name": "web-search",
+                        "url": "https://tools.example/web/mcp",
+                        "allowed_tools": ["web"],
+                    },
+                }
+            ]
+        ),
+    )
+    store = _sqlite_store(tmp_path)
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store"))
+    assert (
+        client.post(
+            "/admin/tenants",
+            json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/admin/tenants/tenant-1/users",
+            json={"user_id": "member-1", "role": "member", "status": "active"},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 201
+    )
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-assignments/role/member",
+            json={"item_ids": ["web-search"]},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 409
+    )
+
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+            json={"item_ids": ["web-search"], "allow_custom_mcp_servers": False},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+    assert (
+        client.put(
+            "/admin/tenants/tenant-1/mcp-server-catalog-assignments/role/member",
+            json={"item_ids": ["web-search"]},
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 200
+    )
+    assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") == (
+        "web-search",
+    )
+
+    assert (
+        client.delete(
+            "/admin/tenants/tenant-1/mcp-server-catalog-policy",
+            headers=ADMIN_HEADERS,
+        ).status_code
+        == 204
+    )
+    assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") is None

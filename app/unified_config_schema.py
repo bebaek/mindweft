@@ -61,6 +61,7 @@ class LLMConfig:
     thinking_budget_tokens: object = None
     thinking_effort: object = None
     prompt_cache_enabled: object = None
+    input_modalities: object = None
     timeout: object = None
 
 
@@ -68,7 +69,39 @@ class LLMConfig:
 class ImageInputConfig:
     enabled: object = None
     max_bytes: object = None
+    max_images: object = None
+    max_total_bytes: object = None
+    max_pixels: object = None
+    max_dimension: object = None
     allowed_mime_types: object = None
+
+
+@dataclass(frozen=True)
+class AttachmentConfig:
+    db_path: object = None
+    max_per_thread: object = None
+    max_bytes_per_thread: object = None
+    max_per_tenant: object = None
+    max_bytes_per_tenant: object = None
+    pending_ttl_seconds: object = None
+    cleanup_interval_seconds: object = None
+
+
+@dataclass(frozen=True)
+class RateLimitConfig:
+    db_path: object = None
+    upload_tenant_capacity: object = None
+    upload_tenant_refill_per_second: object = None
+    upload_user_capacity: object = None
+    upload_user_refill_per_second: object = None
+    run_tenant_capacity: object = None
+    run_tenant_refill_per_second: object = None
+    run_user_capacity: object = None
+    run_user_refill_per_second: object = None
+    concurrent_run_tenant_capacity: object = None
+    concurrent_run_user_capacity: object = None
+    concurrent_run_lease_seconds: object = None
+    concurrent_run_heartbeat_seconds: object = None
 
 
 @dataclass(frozen=True)
@@ -146,6 +179,8 @@ class UnifiedConfig:
     oauth: OAuthConfig = field(default_factory=OAuthConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     image_input: ImageInputConfig = field(default_factory=ImageInputConfig)
+    attachments: AttachmentConfig = field(default_factory=AttachmentConfig)
+    rate_limits: RateLimitConfig = field(default_factory=RateLimitConfig)
     coding: CodingConfig = field(default_factory=CodingConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
@@ -163,6 +198,8 @@ SECTION_FIELDS: dict[str, set[str]] = {
     "oauth": set(OAuthConfig.__dataclass_fields__),
     "llm": set(LLMConfig.__dataclass_fields__),
     "image_input": set(ImageInputConfig.__dataclass_fields__),
+    "attachments": set(AttachmentConfig.__dataclass_fields__),
+    "rate_limits": set(RateLimitConfig.__dataclass_fields__),
     "coding": set(CodingConfig.__dataclass_fields__),
     "mcp": set(MCPConfig.__dataclass_fields__),
     "voice": set(VoiceConfig.__dataclass_fields__),
@@ -178,6 +215,8 @@ TOP_LEVEL_KEYS = {
     "oauth",
     "llm",
     "image_input",
+    "attachments",
+    "rate_limits",
     "coding",
     "mcp",
     "voice",
@@ -195,6 +234,8 @@ SECTION_TYPES: dict[str, type[Any]] = {
     "oauth": OAuthConfig,
     "llm": LLMConfig,
     "image_input": ImageInputConfig,
+    "attachments": AttachmentConfig,
+    "rate_limits": RateLimitConfig,
     "coding": CodingConfig,
     "mcp": MCPConfig,
     "voice": VoiceConfig,
@@ -218,6 +259,7 @@ _STRING_KEYS = {
     "auth.jwt_tenant_claim",
     "auth.jwt_admin_claim",
     "oauth.store_path",
+    "rate_limits.db_path",
     "oauth.provider_id",
     "oauth.client_id",
     "oauth.authorize_url",
@@ -268,6 +310,24 @@ _INT_KEYS = {
     "llm.max_tokens",
     "llm.thinking_budget_tokens",
     "image_input.max_bytes",
+    "image_input.max_images",
+    "image_input.max_total_bytes",
+    "image_input.max_pixels",
+    "image_input.max_dimension",
+    "attachments.max_per_thread",
+    "attachments.max_bytes_per_thread",
+    "attachments.max_per_tenant",
+    "attachments.max_bytes_per_tenant",
+    "attachments.pending_ttl_seconds",
+    "attachments.cleanup_interval_seconds",
+    "rate_limits.upload_tenant_capacity",
+    "rate_limits.upload_user_capacity",
+    "rate_limits.run_tenant_capacity",
+    "rate_limits.run_user_capacity",
+    "rate_limits.concurrent_run_tenant_capacity",
+    "rate_limits.concurrent_run_user_capacity",
+    "rate_limits.concurrent_run_lease_seconds",
+    "rate_limits.concurrent_run_heartbeat_seconds",
     "coding.bridge_port",
     "coding.mcp_gateway_port",
     "quality.max_payload_chars",
@@ -277,6 +337,10 @@ _NUMBER_KEYS = {
     "app.tool_timeout_seconds",
     "llm.timeout",
     "quality.timeout",
+    "rate_limits.upload_tenant_refill_per_second",
+    "rate_limits.upload_user_refill_per_second",
+    "rate_limits.run_tenant_refill_per_second",
+    "rate_limits.run_user_refill_per_second",
 }
 
 _BOOL_KEYS = {
@@ -294,6 +358,7 @@ _BOOL_KEYS = {
 
 _STRING_LIST_KEYS = {
     "image_input.allowed_mime_types",
+    "llm.input_modalities",
     "coding.workspaces",
     "coding.shell_allowed_command_prefixes",
     "coding.bridge_allow_globs",

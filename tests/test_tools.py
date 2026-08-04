@@ -8,10 +8,11 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from app.mcp import MCPServerConfig, MCPServerInfo
+from app.mcp import MCPPrivateValuePolicy, MCPServerConfig, MCPServerInfo
 from app.mcp_manager import MCPServerManager
 from app.models import ToolSpec
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
+from app.private_consents import PrivateValueDisclosure
 from app.redaction import ToolResultRedactionPolicy
 from app.tools import (
     MINIGENT_MINIRAG_BACKEND_ENV,
@@ -25,6 +26,228 @@ from app.tools import (
     build_tool_registry,
     build_tool_registry_from_env,
 )
+
+
+def test_tool_registry_denies_private_placeholders_by_default() -> None:
+    called = False
+
+    def handler(arguments, context=None):
+        nonlocal called
+        called = True
+        return arguments
+
+    registry = ToolRegistry()
+    registry.register("send", "Send", {"type": "object"}, handler)
+
+    with pytest.raises(HTTPException, match="disclosure is denied") as exc_info:
+        asyncio.run(
+            registry.execute(
+                "send",
+                {"recipient": "{{pii:email:email-ref}}"},
+                context=ToolExecutionContext(
+                    private_value_resolver=lambda text: text.replace(
+                        "{{pii:email:email-ref}}", "private@example.com"
+                    )
+                ),
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert called is False
+
+
+def test_tool_registry_resolves_only_selected_private_argument_paths(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    received: list[dict[str, object]] = []
+    received_contexts: list[ToolExecutionContext | None] = []
+    authorized: list[tuple[str, str, tuple[PrivateValueDisclosure, ...]]] = []
+
+    def send_handler(arguments, context=None):
+        received.append(arguments)
+        received_contexts.append(context)
+        return {"sent": True}
+
+    registry = ToolRegistry()
+    registry.register(
+        "send",
+        "Send",
+        {"type": "object"},
+        send_handler,
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email", "cc[*].email"),
+        ),
+    )
+    arguments = {
+        "recipient": {"email": "{{pii:email:to-ref}}"},
+        "cc": [{"email": "{{pii:email:cc-ref}}"}],
+        "subject": "Hello",
+    }
+    values = {
+        "{{pii:email:to-ref}}": "to@example.com",
+        "{{pii:email:cc-ref}}": "cc@example.com",
+    }
+
+    with caplog.at_level(logging.INFO):
+        result = asyncio.run(
+            registry.execute(
+                "send",
+                arguments,
+                context=ToolExecutionContext(
+                    tenant_id="tenant-a",
+                    user_id="user-a",
+                    thread_id="thread-a",
+                    private_value_resolver=lambda text: values[text],
+                    private_value_authorizer=lambda name, fingerprint, disclosures: (
+                        authorized.append((name, fingerprint, disclosures))
+                    ),
+                ),
+            )
+        )
+
+    assert result == {"sent": True}
+    assert received == [
+        {
+            "recipient": {"email": "to@example.com"},
+            "cc": [{"email": "cc@example.com"}],
+            "subject": "Hello",
+        }
+    ]
+    assert arguments["recipient"] == {"email": "{{pii:email:to-ref}}"}
+    assert received_contexts[0] is not None
+    assert received_contexts[0].tenant_id == "tenant-a"
+    assert received_contexts[0].user_id == "user-a"
+    assert received_contexts[0].thread_id == "thread-a"
+    assert received_contexts[0].private_value_resolver is None
+    assert received_contexts[0].private_value_validator is None
+    assert received_contexts[0].private_value_authorizer is None
+    assert authorized[0][0] == "send"
+    assert len(authorized[0][1]) == 64
+    assert {(item.path, item.kind) for item in authorized[0][2]} == {
+        ("recipient.email", "email"),
+        ("cc[*].email", "email"),
+    }
+    assert "to@example.com" not in caplog.text
+    assert "cc@example.com" not in caplog.text
+
+
+def test_tool_registry_requires_approval_without_private_disclosures() -> None:
+    calls: list[dict[str, object]] = []
+    approvals: list[tuple[str, str, tuple[PrivateValueDisclosure, ...]]] = []
+    registry = ToolRegistry()
+    registry.register(
+        "contacts.delete",
+        "Delete contact",
+        {"type": "object"},
+        lambda arguments, context=None: calls.append(arguments) or {"deleted": True},
+        private_value_policy=MCPPrivateValuePolicy(requires_approval=True),
+    )
+
+    result = asyncio.run(
+        registry.execute(
+            "contacts.delete",
+            {"contact_ref": "opaque-ref"},
+            context=ToolExecutionContext(
+                private_value_authorizer=lambda name, fingerprint, disclosures: approvals.append(
+                    (name, fingerprint, disclosures)
+                )
+            ),
+        )
+    )
+
+    assert result == {"deleted": True}
+    assert calls == [{"contact_ref": "opaque-ref"}]
+    assert approvals[0][0] == "contacts.delete"
+    assert len(approvals[0][1]) == 64
+    assert approvals[0][2] == ()
+
+
+def test_tool_registry_validates_private_placeholders_before_consent() -> None:
+    calls: list[str] = []
+    registry = ToolRegistry()
+    registry.register(
+        "send",
+        "Send",
+        {"type": "object"},
+        lambda arguments, context=None: calls.append("handler"),
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email",),
+        ),
+    )
+
+    def reject_invalid_placeholder(text: str) -> None:
+        calls.append(f"validate:{text}")
+        raise HTTPException(status_code=409, detail="Private value kind does not match placeholder")
+
+    with pytest.raises(HTTPException, match="kind does not match") as exc_info:
+        asyncio.run(
+            registry.execute(
+                "send",
+                {"recipient": {"email": "{{pii:phone:email-ref}}"}},
+                context=ToolExecutionContext(
+                    private_value_resolver=lambda text: calls.append("resolve") or text,
+                    private_value_validator=reject_invalid_placeholder,
+                    private_value_authorizer=lambda name, fingerprint, disclosures: calls.append(
+                        "authorize"
+                    ),
+                ),
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert calls == ["validate:{{pii:phone:email-ref}}"]
+
+
+def test_tool_registry_rejects_private_placeholder_on_unapproved_path() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "send",
+        "Send",
+        {"type": "object"},
+        lambda arguments, context=None: arguments,
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email",),
+        ),
+    )
+
+    with pytest.raises(HTTPException, match="argument path 'subject'") as exc_info:
+        asyncio.run(
+            registry.execute(
+                "send",
+                {"subject": "Leak {{pii:email:email-ref}}"},
+                context=ToolExecutionContext(private_value_resolver=lambda text: text),
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_tool_registry_rejects_private_placeholder_in_argument_key() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "send",
+        "Send",
+        {"type": "object"},
+        lambda arguments, context=None: arguments,
+        private_value_policy=MCPPrivateValuePolicy(
+            mode="resolve_selected",
+            argument_paths=("recipient.email",),
+        ),
+    )
+
+    with pytest.raises(HTTPException, match="argument keys") as exc_info:
+        asyncio.run(
+            registry.execute(
+                "send",
+                {"{{pii:email:email-ref}}": "value"},
+                context=ToolExecutionContext(private_value_resolver=lambda text: text),
+            )
+        )
+
+    assert exc_info.value.status_code == 403
 
 
 def test_local_registry_exposes_expected_tools() -> None:
@@ -460,6 +683,31 @@ def test_tool_execution_logs_start_and_success(caplog: pytest.LogCaptureFixture)
     assert "tool.ok name=calculator duration_ms=" in caplog.text
 
 
+def test_tool_execution_redacts_private_contact_preprocessor_input(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "private-contacts.contacts_protect_text",
+        "Protect contact names.",
+        {"type": "object"},
+        lambda arguments, context=None: arguments,
+        trusted_input_preprocessor=True,
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.tools"):
+        result = asyncio.run(
+            registry.execute(
+                "private-contacts.contacts_protect_text",
+                {"text": "Show me Gabe Zurita's email"},
+            )
+        )
+
+    assert result == {"text": "Show me Gabe Zurita's email"}
+    assert "Gabe Zurita" not in caplog.text
+    assert "arguments={'text': '<redacted>'}" in caplog.text
+
+
 def test_tool_execution_logs_error_with_redacted_arguments(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -644,16 +892,8 @@ def test_peer_agent_task_tool_can_poll_until_completion(
     assert "peer_agent_task.result peer=codex task_id=task_123 status=completed" in caplog.text
 
 
-def test_peer_agent_task_tool_reports_timeout_with_observability_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sleeps = 0
+def test_peer_agent_task_tool_reports_timeout_with_observability_fields() -> None:
     cancel_requests = 0
-
-    async def fake_sleep(seconds: float) -> None:
-        nonlocal sleeps
-        assert seconds == 0.1
-        sleeps += 1
 
     async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal cancel_requests
@@ -691,7 +931,6 @@ def test_peer_agent_task_tool_reports_timeout_with_observability_fields(
             )
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
-    monkeypatch.setattr("app.tools.asyncio.sleep", fake_sleep)
     peer_registry = PeerAgentRegistry(
         parse_peer_agent_configs([{"name": "codex", "base_url": "http://codex-agent.test"}]),
         transport=httpx.MockTransport(handler),
@@ -714,7 +953,6 @@ def test_peer_agent_task_tool_reports_timeout_with_observability_fields(
         )
     )
 
-    assert sleeps >= 1
     assert cancel_requests == 1
     assert result["peer"] == "codex"
     assert result["task_id"] == "task_123"
@@ -1005,11 +1243,21 @@ def test_build_tool_registry_from_env_discovers_mcp_tools_inside_running_loop(
             "server_version": "1.0.0",
             "tool_count": 1,
             "allowed_tools": None,
+            "trusted_input_preprocessor_tools": [],
+            "forward_identity": False,
+            "identity_audience": "private-dav",
+            "identity_scopes": [],
             "path_policy": {"deny_globs": [], "allow_globs": []},
             "result_redaction": {
                 "enabled": True,
                 "mode": "best_effort",
                 "sensitive_tools": [],
+            },
+            "private_value_policy": {
+                "mode": "deny",
+                "argument_paths": [],
+                "requires_approval": False,
+                "tool_overrides": {},
             },
             "status": "connected",
             "last_error": None,

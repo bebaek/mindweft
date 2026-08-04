@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shlex
 import signal
 import tempfile
@@ -51,6 +52,7 @@ class Settings(BaseModel):
 
 
 class TaskRequest(BaseModel):
+    task_id: str | None = Field(default=None, pattern=r"^task_[0-9a-f]{32}$")
     prompt: str = Field(min_length=1)
     cwd: Path
     env: dict[str, str] = Field(default_factory=dict)
@@ -135,6 +137,7 @@ class TaskRecord:
     stderr: OutputTail = field(default_factory=lambda: OutputTail(20_000))
     process: asyncio.subprocess.Process | None = None
     worker: asyncio.Task[None] | None = None
+    creation_fingerprint: tuple[str, str, tuple[tuple[str, str], ...]] | None = None
 
     def response(self) -> TaskResponse:
         return TaskResponse(
@@ -171,21 +174,34 @@ class TaskStore:
 
     async def create(self, request: TaskRequest) -> TaskRecord:
         cwd = _resolve_allowed_workspace(request.cwd, self._settings.allowed_workspaces)
-        task_id = f"task_{uuid4().hex}"
-        record = TaskRecord(
-            task_id=task_id,
-            prompt=request.prompt,
-            cwd=cwd,
-            env=_allowed_task_env(request.env, self._settings.allowed_task_env_prefixes),
-            all_events=[],
-            events=deque(maxlen=self._settings.event_limit),
-            stdout=OutputTail(self._settings.tail_chars),
-            stderr=OutputTail(self._settings.tail_chars),
-        )
+        env = _allowed_task_env(request.env, self._settings.allowed_task_env_prefixes)
+        task_id = request.task_id or f"task_{uuid4().hex}"
+        fingerprint = (request.prompt, str(cwd), tuple(sorted(env.items())))
         async with self._lock:
+            existing = self._tasks.get(task_id)
+            if existing is not None:
+                if existing.creation_fingerprint is None:
+                    return existing
+                if existing.creation_fingerprint != fingerprint:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Task '{task_id}' already exists with a different request",
+                    )
+                return existing
+            record = TaskRecord(
+                task_id=task_id,
+                prompt=request.prompt,
+                cwd=cwd,
+                env=env,
+                all_events=[],
+                events=deque(maxlen=self._settings.event_limit),
+                stdout=OutputTail(self._settings.tail_chars),
+                stderr=OutputTail(self._settings.tail_chars),
+                creation_fingerprint=fingerprint,
+            )
             self._tasks[task_id] = record
             record.worker = asyncio.create_task(self._run(record))
-        return record
+            return record
 
     async def get(self, task_id: str) -> TaskRecord:
         async with self._lock:
@@ -195,7 +211,20 @@ class TaskStore:
             return record
 
     async def cancel(self, task_id: str) -> TaskRecord:
-        record = await self.get(task_id)
+        if re.fullmatch(r"task_[0-9a-f]{32}", task_id) is None:
+            raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+        async with self._lock:
+            record = self._tasks.get(task_id)
+            if record is None:
+                record = TaskRecord(
+                    task_id=task_id,
+                    prompt="",
+                    cwd=Path("."),
+                    status=TaskStatus.CANCELED,
+                    finished_at=utc_now(),
+                )
+                self._tasks[task_id] = record
+                return record
         await self._cancel_record(record)
         return record
 
@@ -889,7 +918,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             name=f"{runtime}-coding-agent",
             description=f"Runs local {runtime} CLI tasks in configured workspaces.",
             version="0.1.0",
-            capabilities=["code.inspect", "code.explain", "code.change.proposed"],
+            capabilities=[
+                "code.inspect",
+                "code.explain",
+                "code.change.proposed",
+                "task.idempotent_create",
+            ],
             endpoints={
                 "create_task": "POST /tasks",
                 "get_task": "GET /tasks/{task_id}",

@@ -4,8 +4,11 @@ version = "0.1.0"
 description = "Minimal AI agent runtime POC"
 requires-python = ">=3.11"
 dependencies = [
+  "cryptography>=43,<47",
   "fastapi>=0.115,<1.0",
   "httpx>=0.28,<1.0",
+  "httpx2>=2.9,<3",
+  "mcp>=2,<3",
   "opentelemetry-api>=1.33,<2.0",
   "opentelemetry-exporter-otlp-proto-http>=1.33,<2.0",
   "opentelemetry-instrumentation-fastapi>=0.54b0,<1.0",
@@ -31,7 +34,7 @@ voice = [
   "faster-whisper>=1.1,<2.0",
   "numpy>=2,<3",
   "piper-tts>=1.4,<2.0",
-  "pvporcupine>=3.0,<4.0",
+  "pvporcupine>=3.0,<5.0",
   "pyopen-wakeword>=1.1.0,<2.0",
   "silero-vad>=6.2.1,<7.0",
   "sounddevice>=0.5.5,<0.6",
@@ -52,7 +55,7 @@ build-backend = "setuptools.build_meta"
 include = ["app*", "minigent_client*"]
 
 [tool.setuptools.package-data]
-app = ["static/web/*"]
+app = ["static/web/*", "static/console/*", "static/console/assets/*"]
 
 [tool.ruff]
 line-length = 100

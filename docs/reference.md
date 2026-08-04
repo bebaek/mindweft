@@ -89,7 +89,23 @@ uv sync --dev
 uv run uvicorn app.main:app --reload
 ```
 
-## Dev Web Client
+## Browser clients
+
+The production console foundation is served at `/console/`. Its source is in `web/`; use
+`npm ci && npm run dev` there for frontend development and `npm run build` to refresh the static
+assets packaged under `app/static/console/`. Run `npm run test:e2e:install` once, then
+`npm run test:e2e` for desktop/mobile Chromium coverage and axe accessibility checks. The console
+currently provides runtime readiness, connection setup, thread history, message composition,
+streaming run activity, cancellation, context inspection, confirmed context compaction, validated
+image selection, authenticated attachment upload/display, image detail controls, one-time
+private-value approval/denial, pending-consent recovery, uncertain-action reconciliation, tenant
+search/detail views, tenant and user provisioning, domain verification, entitlement and execution
+configuration editing, operational capacity metrics, confirmed tenant lifecycle transitions,
+filtered thread and retained-message inspection, previewed pruning, confirmed thread deletion, and
+paginated audit review.
+
+The dependency-free development client remains at `/web/` and provides the complete current chat
+workflow.
 
 `POST /threads/{thread_id}/run/stream` is also available for clients that want run
 progress without waiting for the final JSON response. It returns newline-delimited JSON
@@ -326,7 +342,12 @@ MINIGENT_LLM_PROMPT_CACHE_KEY=thread
 # Optional: set when the provider requires an account/org header populated from a JWT claim.
 MINIGENT_LLM_ACCOUNT_ID_HEADER=x-provider-account-id
 
-MINIGENT_OAUTH_STORE_PATH=/path/to/oauth.json
+MINIGENT_OAUTH_STORE_PATH=/path/to/oauth.db
+# Configure either one 32-byte base64url key or a versioned keyring. A keyring supports rotation.
+MINIGENT_OAUTH_ENCRYPTION_KEYS='{"1":"BASE64URL_32_BYTE_KEY"}'
+MINIGENT_OAUTH_KEY_VERSION=1
+# Optional one-time import source when migrating from the legacy JSON credential file.
+MINIGENT_OAUTH_LEGACY_STORE_PATH=/path/to/oauth.json
 MINIGENT_OAUTH_PROVIDER_ID=your-provider-id
 MINIGENT_OAUTH_CLIENT_ID=your-client-id
 MINIGENT_OAUTH_AUTHORIZE_URL=https://provider.example/oauth/authorize
@@ -338,6 +359,33 @@ MINIGENT_OAUTH_AUTH_PARAMS='{"prompt":"login"}'
 MINIGENT_OAUTH_ACCOUNT_ID_JWT_CLAIM=auth.account_id
 ```
 
+The tenant-owner console can also import Pi's `openai-codex` OAuth credential from
+`~/.pi/agent/auth.json`. The browser extracts only the `openai-codex` entry; Minigent validates and
+normalizes the Pi OAuth fields, encrypts them in the configured SQLite OAuth store, and keys them to
+the authenticated tenant. The raw auth file and tokens are never returned by the API or included in
+audit records.
+
+Use **Tenant settings → Import from Pi**, acknowledge the rotating-refresh-token warning, and select
+Pi's `auth.json`. Configure the tenant execution provider as `generic-oauth`, choose a Codex model,
+and use `https://chatgpt.com/backend-api/codex/responses` as the LLM URL. The deployment's generic
+OAuth client, token URL, and account-ID-header settings still apply to refreshes and requests.
+Encrypted OAuth storage is mandatory for tenant imports.
+
+Pi and Minigent must not independently refresh copies of the same credential. OpenAI refresh-token
+rotation can invalidate the other copy, so treat import as a credential transfer and avoid continuing
+to use that Pi login concurrently.
+
+Tenant-owner credential routes are:
+
+```text
+GET    /admin/tenants/{tenant_id}/oauth/openai-codex
+POST   /admin/tenants/{tenant_id}/oauth/openai-codex/import/pi
+DELETE /admin/tenants/{tenant_id}/oauth/openai-codex
+```
+
+The routes enforce active owner membership and same-tenant access. Import and deletion are audited
+without credential material.
+
 Start Minigent, then begin login from a browser:
 
 ```text
@@ -345,9 +393,22 @@ http://127.0.0.1:8000/oauth/generic/open
 ```
 
 Alternatively, `GET /oauth/generic/login` returns an `authorization_url` JSON field that
-can be opened manually. The callback exchanges the code for access/refresh tokens, stores
-them in `MINIGENT_OAUTH_STORE_PATH`, and the `generic-oauth` adapter refreshes expired
-tokens automatically. Minigent accepts callbacks at both `/oauth/generic/callback` and
+can be opened manually. When `MINIGENT_OAUTH_ENCRYPTION_KEY` or
+`MINIGENT_OAUTH_ENCRYPTION_KEYS` is configured, the callback stores encrypted credentials and
+single-use PKCE flow state in the SQLite database at `MINIGENT_OAUTH_STORE_PATH`. The
+`generic-oauth` adapter coordinates refresh-token rotation through a transactional lease, so only
+one replica refreshes an expired credential while other replicas reload the winner's result. The
+same database lets a callback received by one replica consume a login flow started by another.
+
+For migration, set `MINIGENT_OAUTH_LEGACY_STORE_PATH` to the previous JSON file. Its provider
+entries are imported only once and never overwrite later database updates. Remove the legacy file
+after verifying the import because that source remains plaintext. Versioned keys can be rotated by
+starting with old and new keys present, re-encrypting stored rows with
+`SQLiteEncryptedOAuthStore.reencrypt_to_active_key()`, and then retiring the old key.
+
+Without an OAuth encryption key, Minigent retains the compatibility JSON credential store and
+in-memory login-flow store. JSON writes use atomic replacement, but that compatibility mode is not
+safe for multiple replicas. Minigent accepts callbacks at both `/oauth/generic/callback` and
 `/auth/callback` for providers with fixed redirect path requirements.
 
 For same-machine testing, start the API and open:
@@ -410,6 +471,7 @@ MINIGENT_AGENT_BACKEND=peer_agent
 MINIGENT_AGENT_BACKEND_PEER=pi
 MINIGENT_AGENT_BACKEND_CWD=/Users/burm/code/minigent
 MINIGENT_MCP_BROKER_BASE_URL=http://127.0.0.1:8000
+MINIGENT_MCP_BROKER_DB_PATH=/data/minigent-mcp-broker.db
 MINIGENT_MCP_BROKER_ENABLED=true
 ```
 
@@ -418,7 +480,9 @@ peer agent, including retained assistant tool-call records and tool results, pol
 the task completes, stores sanitized peer tool-execution events as retained tool-call/tool-result
 messages, stores the peer `final_output` as the assistant message, and returns it as the run
 reply. Streamed peer runs forward task `usage` on `peer.task.completed` when the peer reports
-actual token counts. Per-tenant execution config can use the same backend shape:
+actual token counts. The peer-agent prompt protocol is currently text-only; Minigent rejects
+threads containing image parts instead of silently dropping those images. Per-tenant execution
+config can use the same backend shape:
 
 ```json
 {
@@ -533,10 +597,21 @@ MINIGENT_MCP_BROKER_SESSION=<session>
 
 The broker exposes the thread's approved Minigent tools through MCP JSON-RPC and
 forwards allowed `tools/call` requests through Minigent's existing tool registry, so
-OpenCode does not receive upstream MCP server credentials. The wrapper only accepts task
-environment variables whose names start with `MINIGENT_MCP_BROKER_` by default; override
-that allowlist with `AGENT_ALLOWED_TASK_ENV_PREFIXES` if you add more task-scoped
-variables.
+OpenCode does not receive upstream MCP server credentials. The official SDK v2 low-level server
+owns broker discovery, initialization, request validation, dispatch, and modern result envelopes;
+Minigent retains short-lived bearer authentication, session routing, frozen tool allowlists, and
+execution context. Each authenticated HTTP request is adapted to an isolated SDK server exchange,
+so modern stateless clients and the legacy initialization shape remain compatible. SDK JSON-RPC
+models are also used for boundary errors, while modern-only result envelope fields are removed from
+legacy responses. When
+`MINIGENT_MCP_BROKER_DB_PATH` is configured, session identity, expiry, and the original approved
+tool-name set are stored in shared SQLite. Bearer tokens are persisted only as SHA-256 hashes, and
+a replica receiving a broker call reconstructs the tenant/thread tool registry locally while still
+enforcing the tool names frozen when the session was created. This allows broker URLs minted by one
+replica to be served by another. Without that setting, broker sessions remain process-local.
+The wrapper only accepts task environment variables whose names start with
+`MINIGENT_MCP_BROKER_` by default; override that allowlist with
+`AGENT_ALLOWED_TASK_ENV_PREFIXES` if you add more task-scoped variables.
 
 For OpenCode tasks, the wrapper also generates per-task `OPENCODE_CONFIG_CONTENT` that
 adds a remote MCP server named `minigent` using the broker URL and bearer token. Existing
@@ -651,13 +726,32 @@ and [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) for running Minigen
 host that already manages apps with Docker Compose.
 
 The runtime can persist thread state and message history in SQLite when
-`MINIGENT_THREAD_DB_PATH` points at a writable database path. Without that setting,
-threads remain in memory and are lost on restart. The optional admin control plane can
-also persist tenant execution config in SQLite when `MINIGENT_ADMIN_DB_PATH` points at a
-mounted volume.
+`MINIGENT_THREAD_DB_PATH` points at a writable database path. SQLite-backed runs acquire an atomic
+per-thread lease, heartbeat that lease while executing, and accept cancellation requests from any
+replica. Expired leases are recovered as errored runs at startup and by a five-second background
+sweep in every replica; run IDs fence late completion and message writes from stale owners. For a
+peer-agent run, Minigent generates a remote task ID and attaches it with the trusted peer base URL
+to the lease before sending the create request. Compatible wrappers advertise
+`task.idempotent_create`, atomically create at most one process for that ID, return the existing task
+for an identical retry, reject conflicting reuse, and retain a canceled tombstone when cancellation
+arrives before creation. Stale recovery can therefore cancel the known ID even if the owner fails
+during task creation; a late create after cancellation returns `canceled` without starting a
+process. Minigent rejects a create response whose task ID differs from its reserved ID. Stale
+recovery moves attached metadata into a durable cancellation outbox. User-requested cancellation,
+backend timeout, ambiguous creation outcome, and nonterminal peer failures first attempt immediate
+remote cancellation; if that request fails, the owner copies the attached metadata into the same
+outbox before releasing its run lease. Replicas claim outbox entries with a lease, send idempotent
+remote cancellation requests, and retry failures with exponential backoff. A claimant crash can
+cause a repeated cancellation after its claim expires, so peer cancellation endpoints must remain
+idempotent; only one replica can hold an active claim at a time. Upgrade peer wrappers before this
+Minigent version; older wrappers that ignore or replace client task IDs are rejected. Without SQLite
+thread storage, threads and run coordination remain in memory and are lost on restart. The optional
+admin control plane can also persist tenant execution config in SQLite when
+`MINIGENT_ADMIN_DB_PATH` points at a mounted volume.
 
-The current safe deployment shape is a single Minigent container behind your existing
-reverse proxy.
+The thread, attachment, rate-limit, OAuth, private-value, DAV, run-lease, and optional MCP broker stores support shared
+replica state when their SQLite paths are configured. Keep every replica on the same shared volume
+and configuration so broker tool registries can be reconstructed consistently.
 
 Thread history is compacted in memory as conversations grow. Older turns are folded into
 the thread summary and removed from the raw message list, so `GET /threads/{thread_id}/messages`
@@ -679,7 +773,18 @@ MINIGENT_LLM_PROVIDER=openai
 OPENAI_API_KEY=...
 MINIGENT_LOG_FORMAT=json
 MINIGENT_THREAD_DB_PATH=/data/minigent-threads.db
+MINIGENT_ATTACHMENT_DB_PATH=/data/minigent-attachments.db
+MINIGENT_RATE_LIMIT_DB_PATH=/data/minigent-rate-limits.db
 ```
+
+Rate limits use shared atomic token buckets for attachment uploads and thread runs. Tenant and user
+buckets are configured independently with the `MINIGENT_UPLOAD_RATE_LIMIT_*` and
+`MINIGENT_RUN_RATE_LIMIT_*` capacity/refill settings. Capacity `0` disables a bucket. A rejected
+request returns HTTP 429 with `Retry-After`; standard and streaming runs share the same run category,
+and binary and base64 attachment endpoints share the same upload category. Concurrent-run limits
+use `MINIGENT_RUN_CONCURRENCY_*` tenant/user capacities plus renewable expiry leases in the same
+SQLite store, and also cover private-consent resumes. Configure the shared rate-limit database
+whenever more than one replica is active.
 
 Bring the service up with:
 
@@ -797,7 +902,26 @@ By default, [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) binds the A
 network exposure, change the port mapping deliberately instead of binding to all
 interfaces by default.
 
-The container exposes `GET /health` for Compose health checks.
+The container exposes four unauthenticated health and lifecycle endpoints:
+
+- `GET /health` remains a compatibility alias for the shallow process check.
+- `GET /health/live` checks only that the API process can respond; temporary storage or dependency
+  failures do not make liveness fail.
+- `GET /health/ready` opens every configured SQLite-backed thread, MCP broker, private-value,
+  consent, admin, and encrypted OAuth store in read/write mode and queries its schema. It returns
+  `503` with per-store `ok`/`failed` states when any configured database is inaccessible. A draining
+  process also returns `503` with a failed `lifecycle` check. Paths and raw exception details are not
+  disclosed.
+- `POST /health/drain` is restricted to loopback clients for container lifecycle hooks. It marks the
+  process unready, rejects new runs with `503`, cancels active local run tasks, and waits for their
+  cancellation handlers. Peer backends immediately request remote cancellation and durably enqueue
+  a retry before releasing their run lease if that request fails. Drain is one-way for the process;
+  restart it to accept runs again.
+
+Kubernetes should use `/health/live` for liveness, `/health/ready` for readiness, and invoke
+`POST /health/drain` from an exec-based `preStop` hook through `127.0.0.1`. Dependencies running as
+sidecars should retain their own readiness probes so Kubernetes removes the whole pod from Service
+endpoints when any required container is unready.
 
 [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) mounts a named volume at
 `/data`, so `MINIGENT_THREAD_DB_PATH=/data/minigent-threads.db` survives container
@@ -1256,6 +1380,79 @@ Authentication is controlled by `MINIGENT_AUTH_MODE`:
 - `static-tokens`: resolve bearer tokens from `MINIGENT_AUTH_TOKENS`
 - `jwt`: verify bearer JWTs and map claims into a `Principal`
 
+### Generic Console Sessions
+
+The production console can authenticate with deployment-managed static credentials without tying
+Minigent to a specific identity provider. This browser session layer works alongside any
+`MINIGENT_AUTH_MODE`; bearer tokens and JWTs remain available for API clients.
+
+Generate a scrypt password hash interactively (the password is not echoed or stored):
+
+```bash
+uv run python scripts/hash-session-password.py
+```
+
+Configure one or more usernames with hashed passwords and principals, plus an independent random
+session-signing secret of at least 32 bytes:
+
+```dotenv
+MINIGENT_SESSION_CREDENTIALS={"admin":{"password_hash":"scrypt$16384$8$1$...","principal":{"user_id":"admin","tenant_id":"platform","is_admin":true}}}
+MINIGENT_SESSION_SECRET=replace-with-at-least-32-random-bytes
+MINIGENT_SESSION_TTL_SECONDS=28800
+MINIGENT_SESSION_COOKIE_SECURE=true
+MINIGENT_SESSION_ALLOWED_ORIGINS=https://minigent.example.com
+```
+
+`MINIGENT_SESSION_ALLOWED_ORIGINS` is optional and accepts a comma-separated list or JSON array.
+The request's same origin is always allowed. Successful login sets an `HttpOnly`, `SameSite=Strict`
+cookie. Cookie-authenticated mutations require a matching `Origin` header to prevent cross-site
+request forgery. Passwords are verified with scrypt; store only generated hashes in deployment
+secrets. Login attempts are limited per normalized username using the configured shared rate-limit
+store; tune `MINIGENT_SESSION_LOGIN_RATE_LIMIT_CAPACITY` and
+`MINIGENT_SESSION_LOGIN_RATE_LIMIT_REFILL_PER_SECOND` when needed. Login, status, and logout
+use `POST`, `GET`, and `DELETE /auth/session`, respectively.
+
+For a first-run administration deployment, also configure durable encrypted administration state
+and allow console execution changes to override environment defaults:
+
+```dotenv
+MINIGENT_ADMIN_DB_PATH=/data/minigent-admin.db
+MINIGENT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
+MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults
+```
+
+After an `is_admin=true` credential signs in, an empty administration store presents the tenant
+creation workflow. Create the initial tenant, membership, entitlements, and execution configuration
+before using the workspace.
+
+Deployment credentials are intended for bootstrap and break-glass administration. Additional tenant
+users use local identities stored in the administration database:
+
+1. Create an invited tenant user.
+2. Select **Sign-in** beside that user and choose a globally unique login username.
+3. Create a single-use setup link and deliver it to the user through a trusted channel.
+4. The user opens the link and chooses a password of at least 12 characters. The URL keeps the raw
+   token in its fragment so reverse proxies and HTTP access logs do not receive it.
+5. Successful setup stores only a scrypt password hash, activates an invited membership, signs the
+   user in, and permanently consumes the setup token.
+
+Setup tokens are random, stored only as SHA-256 hashes, expire after 24 hours by default, and are
+invalidated when a replacement link is generated. Administrators can create password-reset links or
+disable local sign-in from the same user dialog. Password replacement and credential disabling bump
+a credential version, immediately invalidating existing signed sessions. Local sessions also check
+current tenant and membership status on every authenticated request, so suspension, archival, or
+deletion takes effect without waiting for cookie expiry. Local tenant roles do not grant global
+`is_admin` access; control-plane administration remains restricted to explicitly configured
+bootstrap administrators.
+
+The corresponding API routes are:
+
+- `GET /admin/tenants/{tenant_id}/users/{user_record_id}/credential`
+- `POST /admin/tenants/{tenant_id}/users/{user_record_id}/credential/setup`
+- `DELETE /admin/tenants/{tenant_id}/users/{user_record_id}/credential`
+- `POST /auth/password/setup/status`
+- `POST /auth/password/setup`
+
 ### JWT Mode
 
 Production-oriented mode uses JWT verification:
@@ -1373,7 +1570,7 @@ Supported fields:
 - `tools.mcp_servers`: per-tenant MCP server definitions
 - `skills.default_skill`, `skills.items`: available prompt-overlay skills
 - `capability_profiles.default_profile`, `capability_profiles.items`: explicit tool/MCP narrowing profiles
-- `agents.items`: named server-side presets that combine skills and capability profiles for clients
+- `agents.default_agent`, `agents.items`: named server-side presets that combine skills and capability profiles for clients; the default agent supplies missing skill/profile selections when a thread is created
 
 String values in `MINIGENT_TENANT_EXECUTION_CONFIGS` can reference environment values with
 `${NAME}` placeholders. Placeholder replacement is recursive across nested objects and arrays,
@@ -1506,6 +1703,8 @@ Admin endpoints:
 - `POST /admin/tenants/{tenant_id}/entitlements/validate`
 - `DELETE /admin/tenants/{tenant_id}/entitlements`
 - `GET /admin/execution-config-tenants`
+- `GET /admin/tenants/{tenant_id}/attachments/statistics`
+- `GET /admin/tenants/{tenant_id}/run-concurrency`
 - `GET /admin/tenants/{tenant_id}/threads`
 - `GET /admin/tenants/{tenant_id}/threads/{thread_id}`
 - `DELETE /admin/tenants/{tenant_id}/threads/{thread_id}`
@@ -1524,11 +1723,37 @@ X-Minigent-Tenant-Id: admin-tenant
 X-Minigent-Admin: true
 ```
 
-Tenant registry endpoints manage durable tenant identity and lifecycle state. Tenant records include `id`, `slug`, `name`, `status`, `plan`, `region`, JSON `metadata`, actor fields, and timestamps. Slugs must be unique and contain lowercase letters, digits, and hyphens. `DELETE /admin/tenants/{tenant_id}` soft-deletes by setting `status` to `deleted`; it does not remove threads or execution config. `GET /admin/tenants` returns tenant objects with pagination metadata and accepts `limit`, `offset`, `status`, `plan`, and `slug` query parameters. `POST /admin/tenants/seed` can create missing registry tenants from existing execution-config tenant IDs; pass `dry_run=true` to preview. Tenant entitlements are stored as `features` and `limits` JSON objects with a monotonically increasing `version`; validation currently checks shape only and does not enforce limits at runtime. `GET /admin/execution-config-tenants` preserves the old execution-config tenant listing by returning tenant IDs that have stored execution config.
+Tenant registry endpoints manage durable tenant identity and lifecycle state. Tenant records include `id`, `slug`, `name`, `status`, `plan`, `region`, JSON `metadata`, actor fields, and timestamps. Slugs must be unique and contain lowercase letters,
+digits, and hyphens. `DELETE /admin/tenants/{tenant_id}` soft-deletes by setting `status` to `deleted`;
+it does not remove threads or execution config. `GET /admin/tenants` returns tenant objects with
+pagination metadata and accepts `limit`, `offset`, `status`, `plan`, and `slug` query parameters.
+`POST /admin/tenants/seed` can create missing registry tenants from existing execution-config tenant
+IDs; pass `dry_run=true` to preview. Tenant entitlements are stored as `features` and `limits` JSON
+objects with a monotonically increasing `version`; validation enforces scalar shape and the runtime's
+known non-negative integer limits, and thread/message/run limits plus MCP/peer-agent feature gates are
+enforced at runtime. `GET /admin/execution-config-tenants` preserves the old execution-config tenant
+listing by returning tenant IDs that have stored execution config.
+
+Execution-config reads and writes return the store's monotonically increasing `version`. API keys and
+header values are returned as `<redacted>` markers with `has_*` metadata; validation and update
+requests can round-trip those markers to preserve the corresponding stored values without
+sending secrets to the browser. Supplying a new value replaces a secret, while explicit `null` clears
+an API key. Updates preserve the submitted supported shape, including LLM profiles, MCP policy,
+skills, capability profiles, and agent presets, rather than collapsing it to a partial normalized
+payload. Successful updates and deletes invalidate the runtime resolver and append redacted tenant
+audit records.
 
 When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, public thread endpoints reject authenticated principals whose `tenant_id` is missing from the registry or not `active`. The default is `false` to preserve local and migration workflows. When `MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true`, request-time tenant context resolution also requires an active tenant membership for `(tenant_id, user_id)` and populates membership fields such as `membership_id`, `user_role`, and `user_status` on `TenantContext`.
 
 Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. Admin deletion removes a thread and its messages and writes an audit record. The prune endpoint deletes matching tenant threads with `updated_at` older than required `updated_before`, with optional `status`, `profile`, and `skill` filters. Add `dry_run=true` to preview `candidate_thread_ids` without deleting threads or writing audit records. The audit endpoint lists deletion/prune records and tenant mutation records with actor, action, affected count, thread IDs, optional `resource_type`/`resource_id`, optional `old_values`/`new_values`, optional metadata, timestamp, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `action`, `actor`, `created_after`, and `created_before` query parameters. Tenant audit payloads redact secret-like keys such as `token`, `secret`, `key`, `authorization`, and `password`. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect and manage persisted threads and audit records after process restarts.
+
+The React administration workspace exposes these thread operations with status/profile/skill/date
+filters, tenant-scoped detail views for compacted context and retained messages, a dry-run preview
+before filtered pruning, explicit confirmation before individual deletion, and action/actor/date
+filters for the paginated audit log. Audit detail expansion displays only the already-redacted values
+returned by the admin API.
+
+The attachment statistics endpoint returns only tenant-level counts and byte totals split across pending, referenced, and lifecycle-exempt records, plus the oldest pending timestamp and age and the configured tenant quota. It does not read or return attachment contents or per-record metadata. The run-concurrency endpoint returns only aggregate active-run and active-user counts, the next lease expiration, and configured capacities/timings; it does not expose user IDs, thread IDs, or lease IDs.
 
 The packaged CLI can inspect and manage the same tenant registry and thread data when authenticated as an admin:
 
@@ -1572,6 +1797,119 @@ minigent --api-token ADMIN_TOKEN admin threads list --tenant TENANT_ID --json
 
 Secrets such as LLM API keys and MCP headers are accepted on writes but redacted in read responses. If `MINIGENT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`, `MINIGENT_ADMIN_ENCRYPTION_KEY` is required and those secrets are encrypted before being written to SQLite. Updating or deleting a tenant config invalidates the in-process execution cache for that tenant so new runs pick up the change immediately.
 
+`MINIGENT_ADMIN_MCP_SERVER_CATALOG` optionally configures the internal-service quick-add cards shown
+by the tenant execution editor. `MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET` has the same format and
+takes precedence; use it when catalog templates contain credential headers so secret-management
+systems recognize the value as sensitive. It is a JSON array; each item has `id`, `title`,
+`description`, an optional `detail`, and a `server` object containing the tenant MCP server
+definition. The catalog definitions are deployment-owned. Platform administrators set each
+tenant's maximum subset with `PUT /admin/tenants/{tenant_id}/mcp-server-catalog-policy`; the request
+contains `item_ids`, `allow_custom_mcp_servers`, and optional `require_subject_assignment`.
+`GET` returns the stored policy and `DELETE` restores the backward-compatible unmanaged behavior.
+In unmanaged mode, all deployment catalog entries are visible and custom MCP servers remain
+allowed. `GET /admin/mcp-server-catalog` returns the complete redacted deployment catalog to
+platform administrators, while
+`GET /admin/tenants/{tenant_id}/mcp-server-catalog` returns only that tenant's assigned entries and
+includes `managed` and `allow_custom_mcp_servers` policy indicators.
+
+Once a tenant policy exists, platform administrators can narrow MCP access by role or individual
+user in the execution editor or through
+`PUT /admin/tenants/{tenant_id}/mcp-server-catalog-assignments/{subject_type}/{subject_id}`. The
+subject type is `role` (`owner`, `admin`, `member`, or `viewer`) or `user` (a tenant `user_id`), and
+the request contains `item_ids`. An individual user assignment takes precedence over a role
+assignment, and the selected assignment is intersected with the tenant policy. By default, a subject
+without either assignment inherits tenant access; a saved empty assignment revokes every catalog
+MCP server for that subject. When `require_subject_assignment=true`, an unassigned subject receives
+no managed MCP servers. Suspended and deleted users always receive none. Enabling fail-closed mode
+requires a non-empty active owner or admin user/role assignment within the tenant ceiling, preventing
+accidental removal of all break-glass access.
+
+`GET /admin/tenants/{tenant_id}/mcp-server-catalog-access-preview` reports each tenant user's
+prospective effective source and item IDs; pass `require_subject_assignment=true` to dry-run
+fail-closed enforcement before saving it. `GET
+/admin/tenants/{tenant_id}/mcp-server-catalog-assignments` lists assignments, and deleting one
+restores inheritance when fail-closed mode is disabled or denies access when it is enabled.
+Assignment writes and deletes are audited. Runtime authorization is evaluated for every run, so
+changes do not depend on rebuilding the tenant execution configuration.
+
+Managed policies are enforced when execution configurations are validated or saved and again when
+the store-backed runtime resolves a tenant. Catalog entries must be assigned, must retain their
+catalog URL, and cannot expand `allowed_tools` beyond the catalog definition. When custom MCP
+servers are disabled, non-catalog servers are rejected. Policy changes are audited and invalidate
+the tenant execution cache, so revoking an entry prevents subsequent runs even if an older stored
+execution configuration still references it.
+
+`MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS` optionally enables a provider-neutral external grant
+control plane for platform administrators. When unset, no providers or grant panels are registered.
+The setting is a JSON array whose entries define `id`, `title`, optional `description`, `base_url`,
+forwarded-identity `audience`, non-empty `read_scopes` and `write_scopes`, and
+`allowed_permissions`. Generic endpoint defaults are `GET/PUT /v1/resource-grants` and
+`DELETE /v1/resource-grants/{resource_id}?user_id=...`; deployments can override `list_path`,
+`upsert_path`, and `delete_path`. Providers with a safe administrative resource catalog can set
+optional `resources_path`; Minigent uses it to show labels and resource-specific permissions while
+preserving free-form entry for providers without discovery. Providers with an immutable audit API
+can also set optional `audit_path`; Minigent forwards `limit` and `before_id`, reads the provider
+history with the configured read scopes, and displays it alongside current grants. URLs are
+deployment-owned and reject embedded credentials, query strings, and non-HTTP schemes.
+
+The platform-admin-only routes are `GET /admin/external-grant-providers`,
+`GET/PUT /admin/tenants/{tenant_id}/external-grants/{provider_id}`,
+`GET /admin/tenants/{tenant_id}/external-grants/{provider_id}/resources`,
+`GET /admin/tenants/{tenant_id}/external-grants/{provider_id}/audit`, and
+`DELETE /admin/tenants/{tenant_id}/external-grants/{provider_id}/{resource_id}?subject_id=...`.
+The browser grant panel joins provider resources and grants with Minigent's tenant-user directory.
+New exact-subject grants can target only active tenant users; `*` is presented explicitly as
+"Everyone in tenant." The API independently rejects enabled grants for missing or inactive tenant
+users. Existing grants for missing or inactive users may still be disabled or deleted, allowing the
+panel's reconciliation report and confirmed bulk-disable action to deprovision stale access without
+silently mutating provider state. User labels and emails remain in Minigent's platform-admin UI;
+only canonical user IDs are forwarded to providers.
+
+Changing an existing tenant user to `suspended` or `deleted` atomically appends a durable
+user-deprovisioning event in the admin database. Runtime identity and MCP checks continue to deny
+the inactive user immediately; provider availability is not part of that transaction. A background
+worker claims due events with a SQLite lease so replicas do not process the same event concurrently,
+removes the user's explicit MCP catalog assignment, and disables every enabled exact-subject grant
+returned by each configured provider. Processing is idempotent: retries skip absent assignments and
+already-disabled grants. Reactivating a user does not cancel pending deprovisioning or restore grants
+or assignments; those require explicit administrative action.
+
+Failures use exponential backoff and become `dead_letter` after eight attempts by default. Configure
+polling, retry limits, and stale-claim recovery with
+`MINIGENT_USER_DEPROVISIONING_INTERVAL_SECONDS`,
+`MINIGENT_USER_DEPROVISIONING_MAX_ATTEMPTS`, and
+`MINIGENT_USER_DEPROVISIONING_LEASE_SECONDS`. Tenant owners and platform administrators can inspect
+`GET /admin/tenants/{tenant_id}/user-deprovisioning-events` (optionally filtered by `state`) and
+requeue pending or dead-letter work with
+`POST /admin/tenants/{tenant_id}/user-deprovisioning-events/{event_id}/retry`. Events retain the
+initiating actor, target status, attempt count, redacted failure summary, assignment-cleanup result,
+and count of grants disabled. The outbox is part of normal admin-database backup and restore.
+
+Minigent issues a fresh 30–300 second forwarded-identity token for each provider request and uses
+only the configured read or write scopes. Provider credentials, scopes, and HTTP operations are
+never added to tenant execution configuration or exposed as model tools. Grant state remains
+authoritative at the provider; Minigent stores only its normal redacted administrative audit
+record. Provider availability is deliberately excluded from startup, readiness, chat execution,
+and tool discovery, so an outage affects only grant-administration requests.
+
+Example:
+
+```bash
+MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS='[{"id":"example-grants","title":"Example grants","description":"Manage authoritative external grants.","base_url":"http://127.0.0.1:8769","audience":"example-grants","read_scopes":["grants:read"],"write_scopes":["grants:write"],"allowed_permissions":["read","read_write"],"resources_path":"/v1/resources","audit_path":"/v1/resource-grant-audit"}]'
+```
+
+Header values are redacted before catalog
+entries reach the browser. When a quick-add entry is validated or saved, its `<redacted>` header
+placeholders are restored server-side from the deployment catalog; existing tenant values take
+precedence. Therefore catalogs containing credentials must be supplied through a secret manager,
+not committed as plaintext. `${NAME}` placeholders in catalog strings are resolved from the
+process environment at startup, allowing a catalog stored in a secret to reference another secret
+key such as `NETWISE_API_TOKEN`. For example:
+
+```bash
+MINIGENT_ADMIN_MCP_SERVER_CATALOG='[{"id":"web-search","title":"Web search","description":"Search web, news, and ranked page content.","detail":"Local Brave Search sidecar · 3 tools","server":{"name":"web-search","url":"http://127.0.0.1:8766/mcp","headers":{},"allowed_tools":["brave_web_search","brave_news_search","brave_llm_context"]}}]'
+```
+
 The admin CLI can bridge the static JSON and DB-backed modes. `admin execution-config import`
 accepts the same top-level tenant map used by `MINIGENT_TENANT_EXECUTION_CONFIGS`; it also
 accepts a bundle with an `execution_configs` object. Imports validate each tenant before any
@@ -1614,6 +1952,12 @@ OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 ## MCP Config
 
 You can attach HTTP MCP servers by setting `MINIGENT_MCP_SERVERS` to a JSON array in `.env`.
+Minigent defaults new server entries to MCP `2026-07-28`: the outbound client uses the
+official MCP Python SDK v2 to probe `server/discover`, validate schemas/results, and fall back
+to the `2025-11-25` `initialize` handshake when discovery is rejected. Minigent wraps the SDK
+with allowed-tool filtering, path policy, short-lived identity forwarding, redaction, and HTTP
+error mapping. Set an entry's `protocolVersion` to `2025-11-25` to skip the probe for a known
+legacy server.
 
 Example:
 
@@ -1623,11 +1967,43 @@ MINIGENT_MCP_SERVERS=[{"name":"demo","url":"https://example.com/mcp","headers":{
 
 Discovered MCP tools are namespaced as `<server>.<tool>`, for example `demo.echo`.
 
+Identity-aware MCP services can request a fresh user-scoped token on each tool call:
+
+```json
+{
+  "name": "private-calendar",
+  "url": "http://127.0.0.1:8769/mcp",
+  "headers": {},
+  "forward_identity": true,
+  "identity_audience": "private-dav",
+  "identity_scopes": ["dav:calendar:read", "dav:calendar:write"]
+}
+```
+
+Forwarded identity requires these Minigent process settings:
+
+```text
+MINIGENT_MCP_IDENTITY_ISSUER
+MINIGENT_MCP_IDENTITY_PRIVATE_KEY
+MINIGENT_MCP_IDENTITY_KEY_ID
+MINIGENT_MCP_IDENTITY_TOKEN_LIFETIME_SECONDS
+```
+
+The private key remains in Minigent; the MCP service receives only short-lived signed bearer
+tokens. Minigent derives `tenant_id` and `sub` from the authenticated runtime principal rather than
+tool arguments. Discovery uses a non-user `__mcp_discovery__` identity. Token lifetime defaults to
+300 seconds and cannot exceed 300 seconds. A server cannot combine `forward_identity` with a static
+`Authorization` header.
+
 Current scope:
 - `initialize`
 - `notifications/initialized`
 - `tools/list`
 - `tools/call`
+
+Because this is a tools-only client, Minigent sends request/response traffic over POST and does
+not open the optional long-lived GET event stream for server-initiated notifications. This keeps
+it compatible with the POST-only stdio bridge and shared gateway routes.
 
 The service retains MCP servers that fail discovery, reports them as `unavailable` in
 `/config`, and retries them in the background with exponential backoff. When a retry
@@ -1838,9 +2214,16 @@ The bridge binds to `127.0.0.1` by default and accepts the stdio server command 
 argv array after `--`; it does not run commands through a shell. It buffers stdio MCP
 responses up to 16 MiB by default so large single-line JSON tool results such as file reads
 can be forwarded; override this with `--stdio-stream-limit <bytes>` if a deployment needs a
-different cap. The v1 bridge starts one stdio MCP server per bridge process and supports
-the same tools-only MCP scope Minigent uses today: `initialize`,
-`notifications/initialized`, `tools/list`, and `tools/call`.
+different cap. The bridge supports the tools-only MCP scope Minigent uses today and uses the
+official SDK v2 client for subprocess negotiation, stdio request correlation, and protocol result
+validation. Minigent still owns process restart, stream-size limits, tool filtering, and path
+policy. For MCP `2026-07-28`, the HTTP side accepts `server/discover`, `tools/list`, and
+`tools/call` without requiring an `MCP-Session-Id`; modern requests carry their protocol, client
+information, and client capabilities in `params._meta`. Legacy HTTP clients continue to use
+`initialize`, `notifications/initialized`, `tools/list`, and `tools/call` with bridge-issued
+session IDs. The bridge translates either HTTP-facing form to the protocol negotiated by its
+SDK client with the stdio subprocess. Shared compatibility helpers use SDK JSON-RPC models for
+responses and remove modern-only result envelope fields when serving legacy HTTP callers.
 
 ## Observability
 
@@ -1862,9 +2245,10 @@ MINIGENT_LOG_JSON_FIELDS={"service":"minigent","env":"dev"}
 MINIGENT_LOG_JSON_INCLUDE_TRACE_CONTEXT=true
 ```
 
-Successful Uvicorn access logs for `GET /health` are suppressed by default so Compose
-health checks do not flood normal logs. Non-2xx health responses are still logged, and
-the endpoint remains available for health probes and `minigent health`.
+Successful Uvicorn access logs for `GET /health`, `GET /health/live`, and
+`GET /health/ready` are suppressed by default so health probes do not flood normal logs. Non-2xx
+health responses are still logged. The compatibility endpoint remains available to `minigent
+health` clients.
 
 OpenTelemetry tracing is optional:
 
@@ -2013,6 +2397,7 @@ MINIGENT_TENANT_EXECUTION_CONFIGS={
       ]
     },
     "agents":{
+      "default_agent":"support",
       "items":[
         {
           "name":"support",

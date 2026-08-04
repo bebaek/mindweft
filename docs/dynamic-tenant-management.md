@@ -157,17 +157,21 @@ Implemented runtime enforcement covers:
 - `max_messages_per_thread`: enforced before user message creation.
 - `max_messages`: accepted as a fallback for `max_messages_per_thread`.
 - `max_thread_runs`: enforced before non-streaming and streaming thread runs.
+- Tenant attachment count and byte quotas, per-upload size limits, and lifecycle cleanup.
+- Shared tenant/user request-rate limits for uploads and runs.
+- Shared tenant/user concurrent-run limits with renewable crash-recovery leases.
 
-Broader quota coverage is still pending, including token usage, time-window rate limits,
-tool-call counts, MCP-call counts, storage usage, attachment size, and concurrent-run
-limits.
+Broader quota coverage is still pending for durable model-token usage, longer accounting periods,
+tool-call counts, and MCP-call counts. The deferred design for a shared usage ledger, atomic budget
+reservation and settlement, admin aggregates, and operational rollout is recorded in
+[Durable usage accounting and budget enforcement](usage-accounting-and-budgets.md).
 
 ## Admin operations status
 
 | Operation | Status | Notes |
 | --- | --- | --- |
 | List tenants | Implemented | Supports `status`, `plan`, `slug`, `limit`, and `offset`. |
-| Create tenant | Implemented | Optional explicit ID; otherwise generated UUID. |
+| Create tenant | Implemented | Optional explicit ID; otherwise generated UUID. Optional `generic-v1` provisioning profile atomically creates a conservative starter execution config; the web administration UI applies this profile to new tenants automatically. |
 | Read tenant | Implemented | `GET /admin/tenants/{tenant_id}`. |
 | Update tenant fields | Implemented | Supports slug, name, plan, region, metadata. |
 | Activate tenant | Implemented | Status transition to `active`. |
@@ -191,7 +195,7 @@ Implemented tenant registry and control-plane routes include:
 
 ```text
 GET    /admin/tenants
-POST   /admin/tenants
+POST   /admin/tenants                         # accepts optional provisioning_profile: none | generic-v1
 POST   /admin/tenants/seed
 GET    /admin/tenants/{tenant_id}
 PATCH  /admin/tenants/{tenant_id}
@@ -225,6 +229,12 @@ GET /admin/execution-config-tenants
 
 Existing admin thread-inspection and audit-listing endpoints remain tenant-scoped under
 `/admin/tenants/{tenant_id}`.
+
+Execution configurations can define `agents.default_agent` (or `defaultAgent`) to reference a
+configured preset. Thread creation accepts an optional `agent_name`; explicit thread skill or
+capability fields override the selected/default agent, while unspecified fields are materialized
+from the agent preset onto the thread. If no agent applies, the existing default skill and
+capability-profile behavior remains in effect.
 
 ## Storage and caching
 
@@ -308,7 +318,8 @@ entitlements, and execution config the runtime source of truth for tenant-specif
 ## Remaining follow-up work
 
 - Resolve tenant from verified request domain/host where that deployment mode is enabled.
-- Add broader quota/rate-limit enforcement.
+- Add broader quota enforcement for durable model usage and longer accounting periods; follow the
+  deferred [usage accounting and budget design](usage-accounting-and-budgets.md).
 - Add registry and entitlement caching only if needed, with per-tenant invalidation and a
   multi-instance invalidation mechanism.
 - Add granular admin roles beyond `is_admin=true`.

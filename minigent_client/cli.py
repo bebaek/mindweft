@@ -50,14 +50,15 @@ from minigent_client.speech import (
     SilentSpeechOutput,
 )
 from minigent_client.state import (
-    STATE_DIR_NAME,
-    PromptCommand,
-    ThreadHistoryItem,
-    normalize_prompt_command_name,
-    state_scope_key,
+    ClientState as PersistentClientState,
 )
 from minigent_client.state import (
-    ClientState as PersistentClientState,
+    PromptCommand,
+    ThreadHistoryItem,
+    legacy_state_dir_path,
+    normalize_prompt_command_name,
+    state_dir_path,
+    state_scope_key,
 )
 from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
 from minigent_client.vad import SileroVoiceActivityDetector
@@ -93,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         default=None,
-        help="Path to a TOML client config file. Defaults to MINIGENT_CLIENT_CONFIG, ~/.config/minigent/client.toml, ~/.minigent/client.toml, or ./.minigent-client.toml.",
+        help="Path to a TOML client config file. Defaults to MINIGENT_CLIENT_CONFIG, $XDG_CONFIG_HOME/minigent/client.toml (or ~/.config/minigent/client.toml), legacy ~/.minigent/client.toml, or ./.minigent-client.toml.",
     )
     parser.add_argument(
         "--base-url",
@@ -463,6 +464,7 @@ class RememberingMinigentAPIClient:
     def create_thread(
         self,
         *,
+        agent_name: str | None = None,
         skill_name: str | None = None,
         skills: list[str] | None = None,
         capability_profile: str | None = None,
@@ -473,6 +475,8 @@ class RememberingMinigentAPIClient:
             "skills": skills,
             "capability_profile": capability_profile,
         }
+        if agent_name is not None:
+            create_kwargs["agent_name"] = agent_name
         if llm_profile is not None:
             create_kwargs["llm_profile"] = llm_profile
         response = self._client.create_thread(**create_kwargs)  # type: ignore[attr-defined]
@@ -946,6 +950,12 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         if utterance == "/compact":
             _handle_chat_compact(client, output_stream)
             continue
+        if utterance == "/actions":
+            _handle_chat_private_actions(client, output_stream)
+            continue
+        if utterance == "/discard-action" or utterance.startswith("/discard-action "):
+            _handle_chat_discard_private_action(utterance, client, output_stream)
+            continue
         if utterance == "/tokens":
             _handle_chat_tokens(client, output_stream)
             continue
@@ -975,6 +985,13 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
                 client.send_user_message(utterance, parts=message_parts)
                 pending_image_parts.clear()
             reply, metadata = client.run_thread()
+            reply, metadata = _maybe_resume_private_value_consent(
+                client,
+                reply,
+                metadata,
+                input_stream=input_stream,
+                output_stream=output_stream,
+            )
         except KeyboardInterrupt:
             _cancel_current_run_after_interrupt(client)
             output_stream.write(f"\n{_chat_abort_message(config)}\n")
@@ -1002,6 +1019,53 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             return 0
 
 
+def _maybe_resume_private_value_consent(
+    client: Any,
+    reply: str,
+    metadata: dict[str, Any] | None,
+    *,
+    input_stream: TextIO,
+    output_stream: TextIO,
+) -> tuple[str, dict[str, Any] | None]:
+    if not input_stream.isatty():
+        return reply, metadata
+    pending = client.list_pending_private_value_consents()
+    if not pending:
+        return reply, metadata
+    consent = pending[0]
+    consent_id = consent.get("consent_id")
+    if not isinstance(consent_id, str):
+        return reply, metadata
+    tool_name = str(consent.get("tool_name") or "tool")
+    disclosures = consent.get("disclosures")
+    if isinstance(disclosures, list) and disclosures:
+        output_stream.write(f"\n[consent] {tool_name} requests private values:\n")
+        for item in disclosures:
+            if not isinstance(item, dict):
+                continue
+            output_stream.write(
+                f"  - {item.get('count', 1)} {item.get('kind', 'private value')} "
+                f"at {item.get('path', 'unknown path')}\n"
+            )
+    else:
+        output_stream.write(f"\n[consent] {tool_name} requests action approval.\n")
+    output_stream.write("Approve this exact tool call once? [y/N] ")
+    output_stream.flush()
+    approved = input_stream.readline().strip().lower() in {"y", "yes"}
+    client.decide_private_value_consent(
+        consent_id,
+        approve=approved,
+        one_shot=True,
+    )
+    if not approved:
+        output_stream.write("[consent] denied\n")
+        output_stream.flush()
+        return reply, metadata
+    output_stream.write("[consent] approved; resuming exact tool call\n")
+    output_stream.flush()
+    return client.resume_private_value_consent(consent_id)
+
+
 def _cancel_current_run_after_interrupt(client: Any) -> None:
     try:
         client.cancel_current_run()
@@ -1025,8 +1089,9 @@ def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
         "[idle] chat commands: /help, /new, /agent [current|preset], /llm [current|profile], "
         "/options, /skills, /profiles, /threads, /switch <id>, /rename <title>, /copy-id, /cancel, "
-        "/compact, /export [markdown|json], /tokens, /debug, /editor, "
-        "/image <path...>|paste|list|clear, /commands, /command set|show|delete, "
+        "/compact, /actions, /discard-action <consent-id>, /export [markdown|json], /tokens, "
+        "/debug, /editor, /image <path...>|paste|list|clear, /commands, "
+        "/command set|show|delete, "
         "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"
     )
@@ -1661,6 +1726,64 @@ def _handle_chat_cancel(
     output_stream.flush()
 
 
+def _handle_chat_private_actions(
+    client: RememberingMinigentAPIClient,
+    output_stream: ChatOutputStream,
+) -> None:
+    thread_id = client.thread_id
+    if not thread_id:
+        output_stream.write("[idle] no current thread\n")
+        output_stream.flush()
+        return
+    try:
+        actions = client.list_private_value_actions(thread_id)
+    except Exception as exc:
+        output_stream.write(f"[idle] private action request failed: {exc}\n")
+        output_stream.flush()
+        return
+    if not actions:
+        output_stream.write("[idle] no pending or executing private actions\n")
+        output_stream.flush()
+        return
+    output_stream.write("[idle] private actions:\n")
+    for action in actions:
+        output_stream.write(
+            f"  {action.get('consent_id', 'unknown')}  "
+            f"{action.get('state', 'unknown')}  "
+            f"{action.get('tool_name', 'tool')}  "
+            f"expires={action.get('expires_at', 'unknown')}\n"
+        )
+    output_stream.flush()
+
+
+def _handle_chat_discard_private_action(
+    utterance: str,
+    client: RememberingMinigentAPIClient,
+    output_stream: ChatOutputStream,
+) -> None:
+    consent_id = utterance.removeprefix("/discard-action").strip()
+    if not consent_id:
+        output_stream.write("[idle] usage: /discard-action <consent-id>\n")
+        output_stream.flush()
+        return
+    thread_id = client.thread_id
+    if not thread_id:
+        output_stream.write("[idle] no current thread\n")
+        output_stream.flush()
+        return
+    try:
+        result = client.discard_private_value_action(consent_id, thread_id=thread_id)
+    except Exception as exc:
+        output_stream.write(f"[idle] private action discard failed: {exc}\n")
+        output_stream.flush()
+        return
+    output_stream.write(
+        f"[idle] discarded {result.get('state', 'unknown')} private action "
+        f"{result.get('consent_id', consent_id)}\n"
+    )
+    output_stream.flush()
+
+
 def _handle_chat_compact(
     client: RememberingMinigentAPIClient,
     output_stream: ChatOutputStream,
@@ -1799,7 +1922,14 @@ def _read_chat_line(
     prompt_label = style_text("[user]", "user", stream=cast(TextIO, output_stream)) + " "
     if prompt_session is not None:
         prompt = prompt_session.prompt
-        return prompt(_prompt_toolkit_label(prompt_label))
+        line = prompt(_prompt_toolkit_label(prompt_label))
+        # prompt_toolkit renders wrapped input as physical terminal rows. Replay the
+        # accepted prompt with normal terminal autowrap so scrollback can reflow and
+        # copy long prompts without width-dependent newlines.
+        if line.strip():
+            output_stream.write(f"{prompt_label}{line}\n")
+            output_stream.flush()
+        return line
     output_stream.write(prompt_label)
     output_stream.flush()
     return input_stream.readline()
@@ -1823,13 +1953,28 @@ def chat_history_file_path(
     thread_id: str | None = None,
     scope_key: str | None = None,
 ) -> Path:
-    legacy_file_path = Path.home() / STATE_DIR_NAME / CHAT_HISTORY_FILE_NAME
+    state_dir = state_dir_path()
+    legacy_state_dir = legacy_state_dir_path()
     if not thread_id:
-        return legacy_file_path
-    history_dir_path = Path.home() / STATE_DIR_NAME / CHAT_HISTORY_DIR_NAME
+        path = state_dir / CHAT_HISTORY_FILE_NAME
+        _copy_legacy_history_if_missing(path, legacy_state_dir / CHAT_HISTORY_FILE_NAME)
+        return path
     scope_digest = hashlib.sha256((scope_key or "default").encode("utf-8")).hexdigest()[:16]
     safe_thread_id = re.sub(r"[^A-Za-z0-9_.-]", "_", thread_id).strip("._") or "thread"
-    return history_dir_path / scope_digest / safe_thread_id
+    relative_path = Path(CHAT_HISTORY_DIR_NAME) / scope_digest / safe_thread_id
+    path = state_dir / relative_path
+    _copy_legacy_history_if_missing(path, legacy_state_dir / relative_path)
+    return path
+
+
+def _copy_legacy_history_if_missing(path: Path, legacy_path: Path) -> None:
+    if path.exists() or not legacy_path.is_file():
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(legacy_path, path)
+    except OSError:
+        return
 
 
 def _extract_user_prompt_history_entries(messages: object) -> list[str]:
@@ -2019,6 +2164,7 @@ def _build_chat_prompt_session(
             key_bindings=key_bindings,
             multiline=True,
             prompt_continuation="",
+            erase_when_done=True,
         )
     except Exception:
         return None

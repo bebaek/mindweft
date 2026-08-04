@@ -71,6 +71,10 @@ WEB_CLIENT_DOM_CLASSES = r"""
                 document.activeElement = this;
                 this.dispatchEvent({ type: "focus" });
               }
+              blur() {
+                if (document.activeElement === this) document.activeElement = null;
+                this.dispatchEvent({ type: "blur" });
+              }
               append(...nodes) {
                 this.children.push(...nodes);
                 this.textContent = this.children.map((node) => node.textContent || "").join("");
@@ -110,12 +114,13 @@ WEB_CLIENT_ELEMENT_IDS_JS = r"""[
               "context-summary", "context-rendered", "compact-context-button", "threads-backdrop",
               "threads-sheet", "threads-close", "threads-summary", "threads-list",
               "threads-new-button", "threads-refresh-button", "composer", "message-input",
-              "send-button", "stop-button",
+              "image-preview-list", "attach-image-button", "image-input", "camera-image-button",
+              "camera-image-input", "send-button", "stop-button",
             ]"""
 
 WEB_CLIENT_HIDDEN_ELEMENT_IDS_JS = r"""["more-backdrop", "more-sheet", "settings-backdrop", "activity-backdrop",
               "activity-sheet", "context-backdrop", "context-sheet", "threads-backdrop", "threads-sheet",
-              "activity-button", "stop-button"]"""
+              "activity-button", "image-preview-list", "image-input", "camera-image-input", "stop-button"]"""
 
 WEB_CLIENT_ASYNC_HELPERS = r"""
             async function flushAsyncWork() {
@@ -171,7 +176,12 @@ WEB_CLIENT_BROWSER_HARNESS = (
               };
               const fetchCalls = [];
               async function fetch(url, options = {}) {
-                fetchCalls.push({ url, method: options.method || "GET", body: options.body || "" });
+                fetchCalls.push({
+                  url,
+                  method: options.method || "GET",
+                  headers: options.headers || {},
+                  body: options.body || "",
+                });
                 const path = new URL(url).pathname + new URL(url).search;
                 return fetchImpl(url, options, path);
               }
@@ -191,6 +201,271 @@ def _run_node_script(tmp_path: Path, repo_root: Path, name: str, source: str) ->
     runner = tmp_path / name
     runner.write_text(textwrap.dedent(source), encoding="utf-8")
     subprocess.run(["node", str(runner)], cwd=repo_root, check=True)
+
+
+def test_web_client_image_picker_uses_native_file_input_overlay() -> None:
+    repo_root = Path(__file__).parents[1]
+    html = (repo_root / "app" / "static" / "web" / "index.html").read_text(encoding="utf-8")
+    styles = (repo_root / "app" / "static" / "web" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="attach-image-button"' in html
+    assert '<input id="image-input" type="file" accept="image/*" multiple />' in html
+    assert 'id="camera-image-input"' in html
+    assert 'capture="environment"' in html
+    assert "app.js?v=keyboard-dismiss-1" in html
+    assert ".camera-image-button {\n  display: none;" in styles
+    assert "@media (hover: none) and (pointer: coarse)" in styles
+
+
+def test_web_client_mobile_composer_gives_message_input_its_own_row() -> None:
+    repo_root = Path(__file__).parents[1]
+    html = (repo_root / "app" / "static" / "web" / "index.html").read_text(encoding="utf-8")
+    styles = (repo_root / "app" / "static" / "web" / "styles.css").read_text(encoding="utf-8")
+
+    assert '<div class="composer-tools">' in html
+    mobile_styles = styles.split("@media (max-width: 640px)", maxsplit=1)[1]
+    assert ".composer {\n    grid-template-columns: minmax(0, 1fr);" in mobile_styles
+    assert ".composer-input,\n  .composer-tools {\n    grid-column: 1 / -1;" in mobile_styles
+
+
+def test_web_client_queues_and_sends_image_parts(tmp_path: Path) -> None:
+    repo_root = Path(__file__).parents[1]
+    app_path = repo_root / "app" / "static" / "web" / "app.js"
+    _run_node_script(
+        tmp_path,
+        repo_root,
+        "web_image_input.mjs",
+        f"""
+            import assert from "node:assert/strict";
+            import fs from "node:fs";
+            import vm from "node:vm";
+
+            {WEB_CLIENT_DOM_CLASSES}
+            {WEB_CLIENT_BROWSER_HARNESS}
+            {WEB_CLIENT_ASYNC_HELPERS}
+
+            function jsonResponse(payload) {{
+              return {{ ok: true, status: 200, json: async () => payload, text: async () => "" }};
+            }}
+
+            let failMessage = false;
+            let uploadCount = 0;
+            const harness = createWebClientHarness({{
+              storageValue: JSON.stringify({{ baseUrl: "http://ui.test", threadId: "t1" }}),
+              async fetchImpl(url, options, path) {{
+                if (path === "/execution-options") {{
+                  return jsonResponse({{ skills: {{ items: [] }}, capability_profiles: {{ items: [] }} }});
+                }}
+                if (path === "/config") {{
+                  return jsonResponse({{
+                    image_input: {{
+                      enabled: true,
+                      max_bytes: 1024,
+                      max_images: 2,
+                      max_total_bytes: 2048,
+                      allowed_mime_types: ["image/png"],
+                    }},
+                  }});
+                }}
+                if (
+                  path === "/threads/t1/attachments/binary" &&
+                  options.method === "POST"
+                ) {{
+                  uploadCount += 1;
+                  return jsonResponse({{ attachment_id: `attachment-${{uploadCount}}` }});
+                }}
+                if (
+                  path === "/threads/t1/attachments/attachment-1" &&
+                  options.method === "DELETE"
+                ) {{
+                  return {{ ok: true, status: 204, text: async () => "" }};
+                }}
+                if (path === "/threads/t1/attachments/attachment-1") {{
+                  return {{
+                    ok: true,
+                    status: 200,
+                    blob: async () => "attachment-blob",
+                    text: async () => "",
+                  }};
+                }}
+                if (
+                  path === "/threads/t1/messages" &&
+                  options.method === "POST" &&
+                  failMessage
+                ) {{
+                  return {{
+                    ok: false,
+                    status: 500,
+                    statusText: "failed",
+                    text: async () => "message failed",
+                  }};
+                }}
+                if (path === "/threads/t1/messages") return jsonResponse([]);
+                return jsonResponse({{}});
+              }},
+            }});
+            globalThis.document = harness.document;
+            harness.context.URL.createObjectURL = () => "blob:attachment-1";
+            harness.context.FileReader = class FileReader {{
+              constructor() {{ this.listeners = new Map(); this.result = ""; }}
+              addEventListener(type, listener) {{ this.listeners.set(type, listener); }}
+              readAsDataURL(file) {{
+                this.result = file.dataUrl;
+                this.listeners.get("load")();
+              }}
+            }};
+            vm.runInContext(fs.readFileSync({str(app_path)!r}, "utf8"), harness.context, {{ filename: "app.js" }});
+            await flushAsyncWork();
+            harness.context.streamRun = async () => {{}};
+
+            const image = {{
+              name: "diagram.png",
+              type: "image/png",
+              size: 12,
+              dataUrl: "data:image/png;base64,aW1hZ2U=",
+            }};
+            const pasteEvent = {{ type: "paste", clipboardData: {{ files: [image] }} }};
+            await harness.elements.get("message-input").dispatchEvent(pasteEvent);
+
+            assert.equal(pasteEvent.defaultPrevented, true);
+            assert.equal(harness.elements.get("image-preview-list").hidden, false);
+            assert.equal(harness.elements.get("image-preview-list").children.length, 1);
+            const detailSelect = harness.elements.get("image-preview-list").children[0].children[1];
+            assert.equal(detailSelect.value, "auto");
+            detailSelect.value = "high";
+            await detailSelect.dispatchEvent({{ type: "change" }});
+            harness.elements.get("message-input").value = "Describe this";
+            await harness.elements.get("composer").requestSubmit();
+            await flushAsyncWork();
+
+            const post = harness.fetchCalls.find(
+              (call) => call.method === "POST" && call.url.endsWith("/threads/t1/messages"),
+            );
+            const upload = harness.fetchCalls.find(
+              (call) =>
+                call.method === "POST" &&
+                call.url.endsWith("/threads/t1/attachments/binary"),
+            );
+            assert.equal(upload.headers["Content-Type"], "image/png");
+            assert.equal(upload.body, image);
+            assert.deepEqual(JSON.parse(post.body), {{
+              content: "Describe this",
+              parts: [
+                {{ type: "text", text: "Describe this" }},
+                {{
+                  type: "image",
+                  mime_type: "image/png",
+                  attachment_id: "attachment-1",
+                  detail: "high",
+                }},
+              ],
+            }});
+            assert.equal(harness.elements.get("image-preview-list").hidden, true);
+            assert.equal(harness.elements.get("image-preview-list").children.length, 0);
+            const message = harness.elements.get("messages").children.at(-1);
+            assert.equal(message.children.length, 3);
+            assert.equal(message.children[2].children[0].src, "data:image/png;base64,aW1hZ2U=");
+
+            harness.context.renderMessages([
+              {{
+                role: "user",
+                content: "Describe this",
+                parts: [
+                  {{
+                    type: "image",
+                    mime_type: "image/png",
+                    attachment_id: "attachment-1",
+                  }},
+                ],
+              }},
+            ]);
+            await flushAsyncWork();
+            const restored = harness.elements.get("messages").children.at(-1);
+            assert.equal(restored.children[2].children[0].src, "blob:attachment-1");
+
+            const dropEvent = {{ type: "drop", dataTransfer: {{ files: [image] }} }};
+            await harness.elements.get("composer").dispatchEvent(dropEvent);
+            assert.equal(dropEvent.defaultPrevented, true);
+            await flushAsyncWork();
+            failMessage = true;
+            harness.elements.get("message-input").value = "Fail this message";
+            await harness.elements.get("composer").requestSubmit();
+            await flushAsyncWork();
+            assert.equal(
+              harness.fetchCalls.some(
+                (call) =>
+                  call.method === "DELETE" &&
+                  call.url.endsWith("/threads/t1/attachments/attachment-2"),
+              ),
+              true,
+            );
+
+            harness.elements.get("camera-image-input").files = [image];
+            await harness.elements.get("camera-image-input").dispatchEvent({{ type: "change" }});
+            assert.equal(harness.elements.get("image-preview-list").children.length, 2);
+        """,
+    )
+
+
+def test_web_client_reconciles_uncertain_private_action(tmp_path: Path) -> None:
+    repo_root = Path(__file__).parents[1]
+    app_path = repo_root / "app" / "static" / "web" / "app.js"
+    _run_node_script(
+        tmp_path,
+        repo_root,
+        "web_private_action_reconciliation.mjs",
+        f"""
+            import assert from "node:assert/strict";
+            import fs from "node:fs";
+            import vm from "node:vm";
+
+            {WEB_CLIENT_DOM_CLASSES}
+            {WEB_CLIENT_BROWSER_HARNESS}
+            {WEB_CLIENT_ASYNC_HELPERS}
+
+            function jsonResponse(payload, status = 200) {{
+              return {{
+                ok: status >= 200 && status < 300,
+                status,
+                statusText: status === 200 ? "OK" : "Error",
+                json: async () => payload,
+                text: async () => JSON.stringify(payload),
+              }};
+            }}
+
+            const harness = createWebClientHarness({{
+              storageValue: JSON.stringify({{ baseUrl: "http://ui.test", threadId: "t1" }}),
+              async fetchImpl(url, options, path) {{
+                if (path === "/execution-options") {{
+                  return jsonResponse({{ skills: {{ items: [] }}, capability_profiles: {{ items: [] }} }});
+                }}
+                if (path === "/threads/t1/messages") return jsonResponse([]);
+                if (path === "/threads/t1/private-value-actions") {{
+                  return jsonResponse([
+                    {{ consent_id: "consent-1", thread_id: "t1", tool_name: "trusted.send", state: "executing", expires_at: 700 }},
+                  ]);
+                }}
+                if (path === "/threads/t1/private-value-actions/consent-1" && options.method === "DELETE") {{
+                  return jsonResponse({{ consent_id: "consent-1", state: "executing", discarded: true }});
+                }}
+                return jsonResponse({{}});
+              }},
+            }});
+            vm.runInContext(fs.readFileSync({str(app_path)!r}, "utf8"), harness.context, {{ filename: "app.js" }});
+            await flushAsyncWork();
+
+            const discarded = await harness.context.offerPrivateValueActionReconciliation("t1", "consent-1");
+
+            assert.equal(discarded, true);
+            assert.equal(
+              harness.fetchCalls.some((call) => call.url.endsWith("/threads/t1/private-value-actions/consent-1") && call.method === "DELETE"),
+              true,
+            );
+            assert.equal(harness.elements.get("messages").textContent.includes("may have completed"), true);
+            assert.equal(harness.elements.get("messages").textContent.includes("No automatic retry"), true);
+            assert.equal(harness.elements.get("run-status-label").textContent, "Action record discarded");
+        """,
+    )
 
 
 def test_web_client_mobile_navigation_interactions(tmp_path: Path) -> None:
@@ -501,6 +776,7 @@ def test_web_client_new_thread_send_flow(tmp_path: Path) -> None:
             }};
             const {{ elements, localStorageStore, fetchCalls, context, document }} = createWebClientHarness({{
               storageValue: JSON.stringify({{ baseUrl: "http://ui.test" }}),
+              isMobile: true,
               fetchImpl: async (_url, _options, path) => {{
                 if (path === "/threads") return {{ ok: true, status: 200, json: async () => ({{ thread_id: "t-new" }}), text: async () => "" }};
                 if (path === "/threads/t-new/run/stream") return ndjsonResponse([{{ type: "assistant.message", content: "New assistant reply" }}]);
@@ -512,9 +788,11 @@ def test_web_client_new_thread_send_flow(tmp_path: Path) -> None:
             await flushAsyncWork();
             assert.equal(elements.get("context-button").hidden, true);
 
+            elements.get("message-input").focus();
             elements.get("message-input").value = "Start thread";
             const submitPromise = elements.get("composer").requestSubmit();
             await waitUntil(() => fetchCalls.some((call) => call.url === "http://ui.test/threads/t-new/run/stream"));
+            assert.equal(document.activeElement, null);
             assert.equal(elements.get("send-button").hidden, true);
             assert.equal(elements.get("stop-button").hidden, false);
             assert.equal(elements.get("context-button").hidden, false);
@@ -525,6 +803,7 @@ def test_web_client_new_thread_send_flow(tmp_path: Path) -> None:
 
             assert.equal(elements.get("send-button").hidden, false);
             assert.equal(elements.get("stop-button").hidden, true);
+            assert.equal(document.activeElement, null);
             assert.equal(elements.get("message-input").value, "");
             assert.equal(elements.get("messages").textContent.includes("Start thread"), true);
             assert.equal(elements.get("messages").textContent.includes("New assistant reply"), true);
@@ -621,6 +900,7 @@ def test_web_client_new_thread_button_clears_state_then_sends(tmp_path: Path) ->
 
             assert.equal(elements.get("send-button").hidden, false);
             assert.equal(elements.get("stop-button").hidden, true);
+            assert.equal(document.activeElement, elements.get("message-input"));
             assert.equal(elements.get("message-input").value, "");
             assert.equal(elements.get("messages").textContent.includes("old prompt"), false);
             assert.equal(elements.get("messages").textContent.includes("Fresh prompt"), true);

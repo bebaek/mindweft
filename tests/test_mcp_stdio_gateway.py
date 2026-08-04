@@ -22,7 +22,13 @@ for line in sys.stdin:
     method = payload["method"]
     if "id" not in payload:
         continue
-    if method == "initialize":
+    if method == "server/discover":
+        result = {
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {"tools": {}},
+            "resultType": "complete",
+        }
+    elif method == "initialize":
         result = {
             "protocolVersion": "2025-11-25",
             "serverInfo": {"name": "fake-stdio", "version": "1.0.0"},
@@ -46,6 +52,9 @@ for line in sys.stdin:
     else:
         print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "error": {"code": -32601, "message": "not found"}}), flush=True)
         continue
+    metadata = payload.get("params", {}).get("_meta", {})
+    if metadata.get("io.modelcontextprotocol/protocolVersion") == "2026-07-28":
+        result.update({"resultType": "complete", "ttlMs": 0, "cacheScope": "private"})
     print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": result}), flush=True)
 """
 
@@ -93,6 +102,44 @@ def test_stdio_gateway_routes_to_multiple_servers(tmp_path: Path) -> None:
     ]
     assert beta_tools.status_code == 200
     assert [tool["name"] for tool in beta_tools.json()["result"]["tools"]] == ["read_file"]
+
+
+def test_stdio_gateway_routes_modern_stateless_requests(tmp_path: Path) -> None:
+    client = TestClient(
+        create_gateway_app(GatewaySettings(bridges=[_bridge_settings(tmp_path, name="alpha")]))
+    )
+    metadata = {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1.0.0"},
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }
+
+    with client:
+        discover = client.post(
+            "/mcp/alpha",
+            headers={"MCP-Protocol-Version": "2026-07-28"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "server/discover",
+                "params": {"_meta": metadata},
+            },
+        )
+        tools = client.post(
+            "/mcp/alpha",
+            headers={"MCP-Protocol-Version": "2026-07-28"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {"_meta": metadata},
+            },
+        )
+
+    assert discover.json()["result"]["supportedVersions"] == ["2026-07-28"]
+    assert "mcp-session-id" not in discover.headers
+    assert tools.status_code == 200
+    assert tools.json()["result"]["tools"][0]["name"] == "echo"
 
 
 def test_stdio_gateway_keeps_server_sessions_separate(tmp_path: Path) -> None:
