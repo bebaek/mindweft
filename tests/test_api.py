@@ -3432,25 +3432,59 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
         "tenant_id": "tenant-1",
         "skills": {
             "default": "support",
+            "defaults": ["support"],
             "items": [
-                {"name": "support", "description": "Support assistant"},
-                {"name": "coding", "description": None},
+                {
+                    "name": "support",
+                    "description": "Support assistant",
+                    "id": "shared:support",
+                    "display_name": "support",
+                    "source": "shared",
+                    "version": None,
+                },
+                {
+                    "name": "coding",
+                    "description": None,
+                    "id": "shared:coding",
+                    "display_name": "coding",
+                    "source": "shared",
+                    "version": None,
+                },
             ],
         },
         "capability_profiles": {
             "default": "inspect",
+            "defaults": None,
             "items": [
-                {"name": "inspect", "description": "Inspection tools"},
-                {"name": "math", "description": None},
+                {
+                    "name": "inspect",
+                    "description": "Inspection tools",
+                    "id": "shared:inspect",
+                    "display_name": "inspect",
+                    "source": "shared",
+                    "version": None,
+                },
+                {
+                    "name": "math",
+                    "description": None,
+                    "id": "shared:math",
+                    "display_name": "math",
+                    "source": "shared",
+                    "version": None,
+                },
             ],
         },
-        "llm_profiles": {"default": None, "items": []},
+        "llm_profiles": {"default": None, "defaults": None, "items": []},
         "agents": {
             "default": "support",
             "items": [
                 {
                     "name": "support",
                     "description": "Support mode",
+                    "id": "shared:support",
+                    "display_name": "support",
+                    "source": "shared",
+                    "version": None,
                     "skill_name": "support",
                     "skills": None,
                     "capability_profile": "inspect",
@@ -3458,6 +3492,10 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
                 {
                     "name": "math",
                     "description": None,
+                    "id": "shared:math",
+                    "display_name": "math",
+                    "source": "shared",
+                    "version": None,
                     "skill_name": None,
                     "skills": ["coding"],
                     "capability_profile": "math",
@@ -3515,9 +3553,24 @@ def test_threads_bind_named_llm_profiles(monkeypatch: pytest.MonkeyPatch) -> Non
     assert options.status_code == 200
     assert options.json()["llm_profiles"] == {
         "default": "primary",
+        "defaults": None,
         "items": [
-            {"name": "primary", "description": None},
-            {"name": "backup", "description": None},
+            {
+                "name": "primary",
+                "description": None,
+                "id": "shared:primary",
+                "display_name": "primary",
+                "source": "shared",
+                "version": None,
+            },
+            {
+                "name": "backup",
+                "description": None,
+                "id": "shared:backup",
+                "display_name": "backup",
+                "source": "shared",
+                "version": None,
+            },
         ],
     }
 
@@ -3688,7 +3741,17 @@ provider = "mock"
     assert options_response.status_code == 200
     assert options_response.json()["skills"] == {
         "default": None,
-        "items": [{"name": "code-reviewer", "description": "Reviews code changes."}],
+        "defaults": None,
+        "items": [
+            {
+                "name": "code-reviewer",
+                "description": "Reviews code changes.",
+                "id": "shared:code-reviewer",
+                "display_name": "code-reviewer",
+                "source": "shared",
+                "version": None,
+            }
+        ],
     }
     assert "Loaded imported skill instructions" not in options_response.text
 

@@ -52,11 +52,27 @@ export interface ReadinessResponse {
 export interface ExecutionOptionItem {
   name: string;
   description?: string | null;
+  id?: string | null;
+  display_name?: string | null;
+  source?: "shared" | "user" | null;
+  version?: number | null;
 }
 
 export interface ExecutionOptionSection {
   default?: string | null;
+  defaults?: string[] | null;
   items: ExecutionOptionItem[];
+}
+
+export interface ExecutionAgentOptionItem extends ExecutionOptionItem {
+  skill_name?: string | null;
+  skills?: string[] | null;
+  capability_profile?: string | null;
+}
+
+export interface ExecutionAgentOptionSection {
+  default?: string | null;
+  items: ExecutionAgentOptionItem[];
 }
 
 export interface ExecutionOptionsResponse {
@@ -64,6 +80,7 @@ export interface ExecutionOptionsResponse {
   skills: ExecutionOptionSection;
   capability_profiles: ExecutionOptionSection;
   llm_profiles: ExecutionOptionSection;
+  agents: ExecutionAgentOptionSection;
 }
 
 export type ThreadStatus = "idle" | "running" | "error";

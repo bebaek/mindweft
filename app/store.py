@@ -75,6 +75,7 @@ class ThreadStore(Protocol):
         self,
         tenant_id: str,
         *,
+        execution_user_id: str | None = None,
         skill_name: str | None = None,
         skill_names: list[str] | None = None,
         capability_profile: str | None = None,
@@ -228,6 +229,7 @@ class InMemoryThreadStore:
         self,
         tenant_id: str,
         *,
+        execution_user_id: str | None = None,
         skill_name: str | None = None,
         skill_names: list[str] | None = None,
         capability_profile: str | None = None,
@@ -237,6 +239,7 @@ class InMemoryThreadStore:
             normalized_skill_names = list(skill_names) if skill_names is not None else None
             thread = Thread(
                 tenant_id=tenant_id,
+                execution_user_id=execution_user_id,
                 skill_name=skill_name,
                 skill_names=normalized_skill_names,
                 capability_profile=capability_profile,
@@ -739,6 +742,7 @@ class SQLiteThreadStore:
         self,
         tenant_id: str,
         *,
+        execution_user_id: str | None = None,
         skill_name: str | None = None,
         skill_names: list[str] | None = None,
         capability_profile: str | None = None,
@@ -748,6 +752,7 @@ class SQLiteThreadStore:
             normalized_skill_names = list(skill_names) if skill_names is not None else None
             thread = Thread(
                 tenant_id=tenant_id,
+                execution_user_id=execution_user_id,
                 skill_name=skill_name,
                 skill_names=normalized_skill_names,
                 capability_profile=capability_profile,

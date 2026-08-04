@@ -5,11 +5,15 @@ Status: Partially implemented
 Implemented foundation: versioned SQLite storage scoped by tenant and user, typed validation for
 personal skills, MCP servers, capability profiles, agents, defaults, and qualified references,
 optimistic concurrency, and principal-scoped coarse read/update/validate/delete APIs under
-`/me/execution-config`.
+`/me/execution-config`. Principal-aware execution options, thread creation, live personal-skill
+prompt resolution, personal agent composition/defaults, and personal-resource ownership checks are
+also implemented. Shared resources expose qualified `shared:` IDs while legacy unqualified shared
+names remain accepted.
 
-Still pending: merging the overlay into thread creation and runtime resolution, personal
-credential storage and MCP execution, resource-specific APIs and console editors, thread resource
-version metadata, lifecycle cleanup, and sharing.
+Still pending: personal credential storage and MCP/capability execution, resource-specific APIs and
+console editors, immutable thread resource version metadata and pinning, lifecycle cleanup, and
+sharing. Personal capability profiles are discoverable but thread creation rejects selecting them
+with an explicit pending-runtime message.
 
 This document defines the first design direction for user-owned agents, skills, capability
 profiles, and third-party MCP tools. It intentionally documents the product and runtime model
@@ -301,8 +305,14 @@ The difference is that each selection may now reference either source.
 
 ## Thread lifecycle and versioning
 
-Threads should store selected qualified references and the resource versions resolved when the
-thread was created:
+The current implementation stores personal `user:` references and the execution owner's user ID
+on new threads, while normalizing selected shared resources to their legacy unqualified names for
+compatibility. Runtime resolution reloads the owner's current personal skill definition on every
+run. Full qualified shared references, per-resource thread versions, and pinning remain the target
+model below.
+
+Threads should eventually store selected qualified references and the resource versions resolved
+when the thread was created:
 
 ```json
 {
@@ -492,9 +502,15 @@ Status: implemented for the coarse user execution-config document and self-servi
 
 ### Phase 2: Skills and agents
 
+Status: implemented for principal-aware options, thread creation, native and peer prompt loading,
+live personal-skill resolution, personal defaults, and personal-resource ownership enforcement.
+Personal agents may compose shared and personal skills plus shared capability profiles. Agents
+that reference personal capability profiles remain blocked until Phase 3.
+
 - Merge personal skills and agents into principal execution options.
 - Resolve shared and personal skill references during thread creation and runs.
-- Add personal defaults and web-console editors.
+- Add personal defaults and web-console editors. Backend defaults are implemented; dedicated
+  console editors remain pending.
 
 ### Phase 3: Personal MCP and capabilities
 

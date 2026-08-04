@@ -43,11 +43,7 @@ from app.execution import (
     StoreBackedTenantExecutionResolver,
     TenantExecutionResolver,
     build_execution_resolver_from_env,
-    get_agent_preset,
-    get_capability_profile,
     get_llm_config,
-    get_skill_config,
-    get_skill_configs,
     resolve_tenant_config_source,
 )
 from app.external_grants import build_external_grant_provider_registry_from_env
@@ -117,6 +113,10 @@ from app.store import (
 from app.tenants import require_active_tenant_principal, require_tenant_context
 from app.tools import ToolRegistry, build_tool_registry_from_env
 from app.user_deprovisioning import UserDeprovisioningProcessor
+from app.user_execution import (
+    UserExecutionResolutionError,
+    effective_execution_catalog,
+)
 from app.user_execution_api import build_user_execution_router
 
 __all__ = [
@@ -904,6 +904,7 @@ def create_app(
         context_compaction_enabled=runtime_settings.context_compaction_enabled,
         attachment_store=app.state.attachment_store,
         mcp_server_name_authorizer=mcp_server_name_authorizer,
+        user_execution_config_source=admin_store,
     )
     app.state.peer_agent_registry = (
         peer_agent_registry
@@ -919,6 +920,7 @@ def create_app(
         peer_agent_registry=app.state.peer_agent_registry,
         mcp_broker_sessions=app.state.mcp_broker_sessions,
         mcp_server_name_authorizer=mcp_server_name_authorizer,
+        user_execution_config_source=admin_store,
     )
     app.include_router(build_session_auth_router())
     app.include_router(build_admin_router())
@@ -995,37 +997,78 @@ def create_app(
             execution=execution,
         )
         config = execution.config
+        catalog = effective_execution_catalog(
+            config,
+            request.app.state.admin_store,
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+        )
+        skill_options = catalog.skill_options()
+        capability_options = catalog.capability_profile_options()
+        agent_options = catalog.agent_options()
+        default_skill_refs = catalog.default_skill_refs
         return ExecutionOptionsResponse(
             tenant_id=principal.tenant_id,
             skills=ExecutionOptionSection(
-                default=config.skills.default_skill,
+                default=(default_skill_refs[0] if default_skill_refs else None),
+                defaults=default_skill_refs,
                 items=[
-                    ExecutionOptionItem(name=skill.name, description=skill.description)
-                    for skill in config.skills.items
+                    ExecutionOptionItem(
+                        name=(option.display_name if option.source == "shared" else option.id),
+                        id=option.id,
+                        display_name=option.display_name,
+                        description=option.description,
+                        source=option.source,
+                        version=option.version,
+                    )
+                    for option in skill_options
                 ],
             ),
             capability_profiles=ExecutionOptionSection(
-                default=config.capability_profiles.default_profile,
+                default=catalog.default_capability_profile_ref,
                 items=[
-                    ExecutionOptionItem(name=profile.name, description=profile.description)
-                    for profile in config.capability_profiles.items
+                    ExecutionOptionItem(
+                        name=(option.display_name if option.source == "shared" else option.id),
+                        id=option.id,
+                        display_name=option.display_name,
+                        description=option.description,
+                        source=option.source,
+                        version=option.version,
+                    )
+                    for option in capability_options
                 ],
             ),
             llm_profiles=ExecutionOptionSection(
                 default=config.default_llm_profile,
-                items=[ExecutionOptionItem(name=name) for name in config.llm_profiles],
+                items=[
+                    ExecutionOptionItem(
+                        name=name,
+                        id=f"shared:{name}",
+                        display_name=name,
+                        source="shared",
+                    )
+                    for name in config.llm_profiles
+                ],
             ),
             agents=ExecutionAgentOptionSection(
-                default=config.agents.default_agent,
+                default=catalog.default_agent_ref,
                 items=[
                     ExecutionAgentOptionItem(
-                        name=agent.name,
-                        description=agent.description,
-                        skill_name=agent.skill_name,
-                        skills=agent.skills,
-                        capability_profile=agent.capability_profile,
+                        name=(option.display_name if option.source == "shared" else option.id),
+                        id=option.id,
+                        display_name=option.display_name,
+                        description=option.description,
+                        source=option.source,
+                        version=option.version,
+                        skill_name=(
+                            option.skill_refs[0]
+                            if len(option.skill_refs) == 1 and not option.uses_skill_list
+                            else None
+                        ),
+                        skills=(list(option.skill_refs) if option.uses_skill_list else None),
+                        capability_profile=option.capability_profile_ref,
                     )
-                    for agent in config.agents.items
+                    for option in agent_options
                 ],
             ),
         )
@@ -1196,12 +1239,24 @@ def create_app(
             context=tenant_context_from_request_state(request.state),
             execution=execution,
         )
-        agent = get_agent_preset(execution.config, agent_name)
+        catalog = effective_execution_catalog(
+            execution.config,
+            request.app.state.admin_store,
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+        )
+        try:
+            agent = catalog.resolve_agent(agent_name, use_default=True)
+        except UserExecutionResolutionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if skill_name is not None and skill_names is not None:
             raise HTTPException(
                 status_code=400,
                 detail="Provide either skill_name or skill_names, not both",
             )
+        explicit_skill_names = skill_names is not None
+        explicit_skill_name = skill_name is not None
+        requested_skill_refs: list[str] | None
         if skill_names is not None:
             duplicates = sorted({name for name in skill_names if skill_names.count(name) > 1})
             if duplicates:
@@ -1209,22 +1264,52 @@ def create_app(
                     status_code=400,
                     detail="Duplicate skill_names are not allowed: " + ", ".join(duplicates),
                 )
-            get_skill_configs(execution.config, skill_names)
+            requested_skill_refs = skill_names
         elif skill_name is not None:
-            get_skill_config(execution.config, skill_name)
-            skill_names = [skill_name]
-        elif agent is not None and agent.skill_name is not None:
-            skill_name = agent.skill_name
-            skill_names = [agent.skill_name]
-        elif agent is not None and agent.skills is not None:
-            skill_names = list(agent.skills)
-        elif execution.config.skills.default_skill is not None:
-            skill_names = [execution.config.skills.default_skill]
-            skill_name = execution.config.skills.default_skill
-        if capability_profile is None and agent is not None:
-            capability_profile = agent.capability_profile
-        if capability_profile is not None:
-            get_capability_profile(execution.config, capability_profile)
+            requested_skill_refs = [skill_name]
+        elif agent is not None:
+            requested_skill_refs = list(agent.skill_refs) or catalog.default_skill_refs
+        else:
+            requested_skill_refs = catalog.default_skill_refs
+        try:
+            resolved_skills = catalog.resolve_skill_refs(
+                requested_skill_refs,
+                use_defaults=False,
+            )
+        except UserExecutionResolutionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        skill_names = [skill.stored_ref for skill in resolved_skills]
+        if not skill_names:
+            skill_names = [] if explicit_skill_names else None
+            skill_name = None
+        elif explicit_skill_names:
+            skill_name = None
+        elif explicit_skill_name or len(skill_names) == 1:
+            skill_name = skill_names[0]
+
+        requested_capability_ref = capability_profile
+        if requested_capability_ref is None and agent is not None:
+            requested_capability_ref = agent.capability_profile_ref
+        if requested_capability_ref is None:
+            requested_capability_ref = catalog.default_capability_profile_ref
+        try:
+            resolved_capability = catalog.resolve_capability_profile(
+                requested_capability_ref,
+                use_default=False,
+            )
+        except UserExecutionResolutionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if resolved_capability is not None and resolved_capability.source == "user":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Personal capability profile '{resolved_capability.id}' cannot be selected "
+                    "yet; personal MCP runtime support is pending"
+                ),
+            )
+        capability_profile = (
+            resolved_capability.stored_ref if resolved_capability is not None else None
+        )
         if llm_profile is None:
             llm_profile = execution.config.default_llm_profile
         if llm_profile is not None and llm_profile not in execution.config.llm_profiles:
@@ -1234,6 +1319,7 @@ def create_app(
             )
         thread = request.app.state.store.create_thread(
             principal.tenant_id,
+            execution_user_id=principal.user_id,
             skill_name=skill_name,
             skill_names=skill_names,
             capability_profile=capability_profile,

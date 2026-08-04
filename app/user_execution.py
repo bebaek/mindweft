@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -13,6 +13,13 @@ from pydantic import (
     ValidationError,
     field_validator,
     model_validator,
+)
+
+from app.execution import (
+    TenantAgentPresetConfig,
+    TenantCapabilityProfileConfig,
+    TenantExecutionConfig,
+    TenantSkillConfig,
 )
 
 _USER_RESOURCE_ID_PATTERN = re.compile(r"^user:[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$")
@@ -46,6 +53,12 @@ class UserSkillDefinition(UserExecutionModel):
         max_length=128,
         validation_alias=AliasChoices("workspace_scope", "workspaceScope"),
     )
+
+    @model_validator(mode="after")
+    def require_system_prompt(self) -> UserSkillDefinition:
+        if self.system_prompt is None:
+            raise ValueError("personal skill system_prompt is required")
+        return self
 
     @field_validator("id")
     @classmethod
@@ -329,6 +342,274 @@ def validate_user_execution_config(payload: object) -> UserExecutionConfigValida
             errors.append(prefix + str(error["msg"]))
         return UserExecutionConfigValidationReport(valid=False, config=None, errors=errors)
     return UserExecutionConfigValidationReport(valid=True, config=config, errors=[])
+
+
+@dataclass(frozen=True)
+class EffectiveSkill:
+    id: str
+    display_name: str
+    description: str | None
+    source: Literal["shared", "user"]
+    version: int | None
+    config: TenantSkillConfig
+    stored_ref: str
+
+
+@dataclass(frozen=True)
+class EffectiveCapabilityProfile:
+    id: str
+    display_name: str
+    description: str | None
+    source: Literal["shared", "user"]
+    version: int | None
+    config: TenantCapabilityProfileConfig | UserCapabilityProfileDefinition
+    stored_ref: str
+
+
+@dataclass(frozen=True)
+class EffectiveAgent:
+    id: str
+    display_name: str
+    description: str | None
+    source: Literal["shared", "user"]
+    version: int | None
+    skill_refs: list[str]
+    capability_profile_ref: str | None
+    uses_skill_list: bool = True
+
+
+class UserExecutionConfigSource(Protocol):
+    def get_user_execution_config(self, tenant_id: str, user_id: str) -> Any | None: ...
+
+
+class UserExecutionResolutionError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class EffectiveExecutionCatalog:
+    tenant_config: TenantExecutionConfig
+    user_config: UserExecutionConfig | None = None
+    user_config_version: int | None = None
+
+    @property
+    def default_agent_ref(self) -> str | None:
+        if self.user_config is not None and self.user_config.defaults.agent_ref is not None:
+            return self.user_config.defaults.agent_ref
+        return self.tenant_config.agents.default_agent
+
+    @property
+    def default_skill_refs(self) -> list[str] | None:
+        if self.user_config is not None and self.user_config.defaults.skill_refs is not None:
+            return list(self.user_config.defaults.skill_refs)
+        if self.tenant_config.skills.default_skill is None:
+            return None
+        return [self.tenant_config.skills.default_skill]
+
+    @property
+    def default_capability_profile_ref(self) -> str | None:
+        if (
+            self.user_config is not None
+            and self.user_config.defaults.capability_profile_ref is not None
+        ):
+            return self.user_config.defaults.capability_profile_ref
+        return self.tenant_config.capability_profiles.default_profile
+
+    def skill_options(self) -> list[EffectiveSkill]:
+        options = [
+            EffectiveSkill(
+                id=f"shared:{skill.name}",
+                display_name=skill.name,
+                description=skill.description,
+                source="shared",
+                version=None,
+                config=skill,
+                stored_ref=skill.name,
+            )
+            for skill in self.tenant_config.skills.items
+        ]
+        if self.user_config is not None:
+            options.extend(
+                EffectiveSkill(
+                    id=skill.id,
+                    display_name=skill.name,
+                    description=skill.description,
+                    source="user",
+                    version=self.user_config_version,
+                    config=TenantSkillConfig(
+                        name=skill.id,
+                        system_prompt=skill.system_prompt,
+                        description=skill.description,
+                        workspace_scope=skill.workspace_scope,
+                    ),
+                    stored_ref=skill.id,
+                )
+                for skill in self.user_config.skills.items
+            )
+        return options
+
+    def capability_profile_options(self) -> list[EffectiveCapabilityProfile]:
+        options = [
+            EffectiveCapabilityProfile(
+                id=f"shared:{profile.name}",
+                display_name=profile.name,
+                description=profile.description,
+                source="shared",
+                version=None,
+                config=profile,
+                stored_ref=profile.name,
+            )
+            for profile in self.tenant_config.capability_profiles.items
+        ]
+        if self.user_config is not None:
+            options.extend(
+                EffectiveCapabilityProfile(
+                    id=profile.id,
+                    display_name=profile.name,
+                    description=profile.description,
+                    source="user",
+                    version=self.user_config_version,
+                    config=profile,
+                    stored_ref=profile.id,
+                )
+                for profile in self.user_config.capability_profiles.items
+            )
+        return options
+
+    def agent_options(self) -> list[EffectiveAgent]:
+        options = [self._shared_agent(agent) for agent in self.tenant_config.agents.items]
+        if self.user_config is not None:
+            options.extend(
+                EffectiveAgent(
+                    id=agent.id,
+                    display_name=agent.name,
+                    description=agent.description,
+                    source="user",
+                    version=self.user_config_version,
+                    skill_refs=list(agent.skill_refs),
+                    capability_profile_ref=agent.capability_profile_ref,
+                )
+                for agent in self.user_config.agents.items
+            )
+        return options
+
+    def resolve_skill_refs(
+        self,
+        refs: list[str] | None,
+        *,
+        use_defaults: bool = True,
+    ) -> list[EffectiveSkill]:
+        resolved_refs = self.default_skill_refs if refs is None and use_defaults else refs
+        if resolved_refs is None:
+            return []
+        options = self.skill_options()
+        by_ref = {option.id: option for option in options}
+        by_ref.update(
+            {option.display_name: option for option in options if option.source == "shared"}
+        )
+        resolved: list[EffectiveSkill] = []
+        for ref in resolved_refs:
+            option = by_ref.get(ref)
+            if option is None:
+                raise UserExecutionResolutionError(
+                    f"Unknown skill '{ref}' for tenant '{self.tenant_config.tenant_id}'"
+                )
+            resolved.append(option)
+        return resolved
+
+    def resolve_agent(
+        self,
+        ref: str | None,
+        *,
+        use_default: bool = True,
+    ) -> EffectiveAgent | None:
+        resolved_ref = self.default_agent_ref if ref is None and use_default else ref
+        if resolved_ref is None:
+            return None
+        options = self.agent_options()
+        by_ref = {option.id: option for option in options}
+        by_ref.update(
+            {option.display_name: option for option in options if option.source == "shared"}
+        )
+        option = by_ref.get(resolved_ref)
+        if option is None:
+            raise UserExecutionResolutionError(
+                f"Unknown agent preset '{resolved_ref}' for tenant '{self.tenant_config.tenant_id}'"
+            )
+        return option
+
+    def resolve_capability_profile(
+        self,
+        ref: str | None,
+        *,
+        use_default: bool = True,
+    ) -> EffectiveCapabilityProfile | None:
+        resolved_ref = self.default_capability_profile_ref if ref is None and use_default else ref
+        if resolved_ref is None:
+            return None
+        options = self.capability_profile_options()
+        by_ref = {option.id: option for option in options}
+        by_ref.update(
+            {option.display_name: option for option in options if option.source == "shared"}
+        )
+        option = by_ref.get(resolved_ref)
+        if option is None:
+            raise UserExecutionResolutionError(
+                f"Unknown capability profile '{resolved_ref}' for tenant "
+                f"'{self.tenant_config.tenant_id}'"
+            )
+        return option
+
+    def _shared_agent(self, agent: TenantAgentPresetConfig) -> EffectiveAgent:
+        skill_refs: list[str] = []
+        if agent.skill_name is not None:
+            skill_refs = [agent.skill_name]
+        elif agent.skills is not None:
+            skill_refs = list(agent.skills)
+        return EffectiveAgent(
+            id=f"shared:{agent.name}",
+            display_name=agent.name,
+            description=agent.description,
+            source="shared",
+            version=None,
+            skill_refs=skill_refs,
+            capability_profile_ref=agent.capability_profile,
+            uses_skill_list=agent.skills is not None,
+        )
+
+
+def effective_execution_catalog(
+    tenant_config: TenantExecutionConfig,
+    source: UserExecutionConfigSource | None,
+    *,
+    tenant_id: str,
+    user_id: str,
+) -> EffectiveExecutionCatalog:
+    if source is None:
+        return EffectiveExecutionCatalog(tenant_config=tenant_config)
+    record = source.get_user_execution_config(tenant_id, user_id)
+    if record is None:
+        return EffectiveExecutionCatalog(tenant_config=tenant_config)
+    report = validate_user_execution_config(record.config)
+    if not report.valid or report.config is None:
+        raise RuntimeError(
+            f"Stored user execution config for '{tenant_id}/{user_id}' is invalid: "
+            + "; ".join(report.errors)
+        )
+    return EffectiveExecutionCatalog(
+        tenant_config=tenant_config,
+        user_config=report.config,
+        user_config_version=record.version,
+    )
+
+
+def has_personal_execution_refs(
+    skill_names: list[str] | None,
+    capability_profile: str | None,
+) -> bool:
+    return any(ref.startswith("user:") for ref in skill_names or []) or (
+        capability_profile is not None and capability_profile.startswith("user:")
+    )
 
 
 def _validate_user_resource_id(value: str) -> str:

@@ -19,8 +19,6 @@ from app.execution import (
     build_tool_registry_for_capability_profile,
     build_tool_registry_for_mcp_server_names,
     build_tool_registry_for_skill,
-    get_capability_profile,
-    get_skill_configs,
 )
 from app.mcp_broker import (
     MINIGENT_MCP_BROKER_BASE_URL_ENV,
@@ -29,12 +27,18 @@ from app.mcp_broker import (
     MINIGENT_MCP_BROKER_URL_ENV,
     MCPBrokerSessionStore,
 )
-from app.models import Message, MessageRole, Principal, ThreadStatus
+from app.models import Message, MessageRole, Principal, Thread, ThreadStatus
 from app.peer_agents import PeerAgentRegistry
 from app.redaction import sanitize_value_for_logging
-from app.runtime import AgentRuntime
+from app.runtime import AgentRuntime, load_active_skill_instructions
 from app.store import ThreadStore
 from app.tools import ToolRegistry
+from app.user_execution import (
+    UserExecutionConfigSource,
+    UserExecutionResolutionError,
+    effective_execution_catalog,
+    has_personal_execution_refs,
+)
 
 _TERMINAL_PEER_STATUSES = {"completed", "failed", "canceled"}
 PEER_TOOL_ARG_ALLOWLIST_ENV = "MINIGENT_PEER_TOOL_ARG_ALLOWLIST"
@@ -108,6 +112,7 @@ class AgentBackendRouter(AgentBackend):
         peer_agent_registry: PeerAgentRegistry,
         mcp_broker_sessions: MCPBrokerSessionStore | None = None,
         mcp_server_name_authorizer: MCPServerNameAuthorizer | None = None,
+        user_execution_config_source: UserExecutionConfigSource | None = None,
     ) -> None:
         self._store = store
         self._execution_resolver = execution_resolver
@@ -115,6 +120,7 @@ class AgentBackendRouter(AgentBackend):
         self._peer_agent_registry = peer_agent_registry
         self._mcp_broker_sessions = mcp_broker_sessions
         self._mcp_server_name_authorizer = mcp_server_name_authorizer
+        self._user_execution_config_source = user_execution_config_source
 
     async def run_thread(
         self,
@@ -124,6 +130,8 @@ class AgentBackendRouter(AgentBackend):
         event_sink: RunEventSink | None = None,
     ) -> tuple[str, dict[str, Any] | None]:
         execution = self._execution_resolver.resolve(principal.tenant_id)
+        thread = self._store.get_thread(principal.tenant_id, thread_id)
+        self._enforce_personal_execution_owner(principal, thread)
         backend = execution.config.agent_backend
         if backend.type == AGENT_BACKEND_NATIVE:
             return await self._native_backend.run_thread(
@@ -328,8 +336,29 @@ class AgentBackendRouter(AgentBackend):
         skill_names = thread.skill_names
         if skill_names is None and thread.skill_name is not None:
             skill_names = [thread.skill_name]
-        skills = get_skill_configs(execution.config, skill_names)
-        capability_profile = get_capability_profile(execution.config, thread.capability_profile)
+        catalog = effective_execution_catalog(
+            execution.config,
+            self._user_execution_config_source if thread.execution_user_id is not None else None,
+            tenant_id=principal.tenant_id,
+            user_id=thread.execution_user_id or principal.user_id,
+        )
+        try:
+            skills = catalog.resolve_skill_refs(
+                skill_names, use_defaults=thread.execution_user_id is None
+            )
+            capability_profile = catalog.resolve_capability_profile(
+                thread.capability_profile, use_default=thread.execution_user_id is None
+            )
+        except UserExecutionResolutionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if capability_profile is not None and capability_profile.source == "user":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Personal capability profile '{capability_profile.id}' cannot run yet; "
+                    "personal MCP runtime support is pending"
+                ),
+            )
         allowed_mcp_server_names = (
             self._mcp_server_name_authorizer(principal.tenant_id, principal.user_id)
             if self._mcp_server_name_authorizer is not None
@@ -338,16 +367,17 @@ class AgentBackendRouter(AgentBackend):
         if capability_profile is not None:
             return build_tool_registry_for_capability_profile(
                 execution.config,
-                thread.capability_profile,
+                capability_profile.stored_ref,
                 mcp_manager=execution.mcp_manager,
                 allowed_mcp_server_names=allowed_mcp_server_names,
             )
         if len(skills) == 1 and (
-            skills[0].allowed_local_tools is not None or skills[0].mcp_server_names is not None
+            skills[0].config.allowed_local_tools is not None
+            or skills[0].config.mcp_server_names is not None
         ):
             return build_tool_registry_for_skill(
                 execution.config,
-                skills[0].name,
+                skills[0].stored_ref,
                 mcp_manager=execution.mcp_manager,
                 allowed_mcp_server_names=allowed_mcp_server_names,
             )
@@ -357,6 +387,19 @@ class AgentBackendRouter(AgentBackend):
             )
         return execution.tool_registry
 
+    @staticmethod
+    def _enforce_personal_execution_owner(principal: Principal, thread: Thread) -> None:
+        skill_names = thread.skill_names
+        if skill_names is None and thread.skill_name is not None:
+            skill_names = [thread.skill_name]
+        if not has_personal_execution_refs(skill_names, thread.capability_profile):
+            return
+        if thread.execution_user_id is None or thread.execution_user_id != principal.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Personal execution resources belong to a different user",
+            )
+
     def _prompt_for_peer_agent(self, principal: Principal, thread_id: str) -> str:
         messages = self._store.list_messages(principal.tenant_id, thread_id)
         context = self._store.get_thread_context(principal.tenant_id, thread_id)
@@ -364,6 +407,31 @@ class AgentBackendRouter(AgentBackend):
             "You are running as the execution backend for a Minigent thread.",
             "Use the provided conversation as context and return the final assistant reply for the latest user request.",
         ]
+        thread = self._store.get_thread(principal.tenant_id, thread_id)
+        skill_names = thread.skill_names
+        if skill_names is None and thread.skill_name is not None:
+            skill_names = [thread.skill_name]
+        execution = self._execution_resolver.resolve(principal.tenant_id)
+        catalog = effective_execution_catalog(
+            execution.config,
+            self._user_execution_config_source if thread.execution_user_id is not None else None,
+            tenant_id=principal.tenant_id,
+            user_id=thread.execution_user_id or principal.user_id,
+        )
+        try:
+            skills = catalog.resolve_skill_refs(
+                skill_names, use_defaults=thread.execution_user_id is None
+            )
+        except UserExecutionResolutionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if skills:
+            sections.append(
+                "Active skill instructions:\n"
+                + "\n\n".join(
+                    f"[{skill.config.name}]\n{load_active_skill_instructions(skill.config)}"
+                    for skill in skills
+                )
+            )
         if context.summary:
             sections.append(f"Thread summary:\n{context.summary}")
         rendered_messages = [_render_peer_context_message(message) for message in messages]
