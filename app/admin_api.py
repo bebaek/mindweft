@@ -26,6 +26,7 @@ from app.execution import (
     ADMIN_EXECUTION_CONFIG_KEY,
     DEFAULT_TENANT_KEY,
     TenantExecutionResolver,
+    _load_tenant_execution_configs_env,
     interpolate_tenant_execution_env_placeholders,
     parse_tenant_execution_config,
     redact_tenant_execution_payload,
@@ -891,6 +892,10 @@ def build_admin_router() -> APIRouter:
             )
         store = _require_admin_store(request)
         tenant_ids = store.list_tenants()
+        env_configs = _load_tenant_execution_configs_env() or {}
+        for tenant_id in env_configs:
+            if tenant_id != ADMIN_EXECUTION_CONFIG_KEY and tenant_id not in tenant_ids:
+                tenant_ids.append(tenant_id)
         used_slugs = _used_tenant_slugs(store)
         items: list[AdminTenantSeedItemResponse] = []
         existing = 0

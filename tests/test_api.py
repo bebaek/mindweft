@@ -4693,7 +4693,10 @@ def test_admin_api_can_manage_tenant_domains(tmp_path: Path) -> None:
     )
 
 
-def test_admin_api_seeds_tenants_from_execution_configs(tmp_path: Path) -> None:
+def test_admin_api_seeds_tenants_from_execution_configs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MINIGENT_TENANT_EXECUTION_CONFIGS", raising=False)
     store = _sqlite_store(tmp_path)
     store.upsert_raw_config("Tenant A", {"llm": {"provider": "mock"}})
     store.upsert_raw_config("tenant-a", {"llm": {"provider": "mock"}})
@@ -6025,6 +6028,46 @@ def test_admin_thread_inspection_requires_admin() -> None:
         headers=AUTH_HEADERS,
     )
     assert prune_response.status_code == 403
+
+
+def test_admin_api_seeds_environment_execution_tenants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "demo-tenant": {"llm": {"provider": "mock"}},
+                "__platform_admin__": {"llm": {"provider": "mock"}},
+            }
+        ),
+    )
+    store = _sqlite_store(tmp_path)
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store"))
+
+    dry_run = client.post(
+        "/admin/tenants/seed",
+        json={"source": "execution-configs", "dry_run": True},
+        headers=ADMIN_HEADERS,
+    )
+    assert dry_run.status_code == 200
+    assert dry_run.json()["discovered"] == 1
+    assert dry_run.json()["created"] == 0
+    assert dry_run.json()["tenants"][0]["id"] == "demo-tenant"
+    assert dry_run.json()["tenants"][0]["action"] == "would_create"
+    assert store.get_tenant("demo-tenant") is None
+
+    seeded = client.post(
+        "/admin/tenants/seed",
+        json={"source": "execution-configs"},
+        headers=ADMIN_HEADERS,
+    )
+    assert seeded.status_code == 200
+    assert seeded.json()["created"] == 1
+    created = store.get_tenant("demo-tenant")
+    assert created is not None
+    assert created.slug == "demo-tenant"
+    assert created.name == "demo-tenant"
 
 
 def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
