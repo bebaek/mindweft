@@ -1,7 +1,7 @@
 # User MCP
 
-Minigent exposes a read-only Streamable HTTP MCP v2 endpoint at `/user-mcp` for an
-authenticated active tenant user. It is separate from the administrator-only `/mcp` endpoint.
+Minigent exposes a Streamable HTTP MCP v2 endpoint at `/user-mcp` for an authenticated active
+tenant user. It is separate from the administrator-only `/mcp` endpoint.
 
 ## Authentication and scope
 
@@ -32,13 +32,22 @@ The first user MCP surface is read-only:
 - `list_user_mcp_access` reports the caller's personal and tenant-shared MCP servers, effective
   policy for personal servers, allowed tool names, and whether a personal credential reference is
   configured.
+- `put_user_execution_config(config, expected_version)` validates and stores the caller's personal
+  execution config using optimistic concurrency.
+- `delete_user_execution_config(confirm, expected_version)` deletes the caller's config only when
+  explicitly confirmed.
+- `put_user_execution_credential(credential_ref, header_name, header_value, expected_version)`
+  stores an encrypted write-only credential and returns metadata only.
+- `delete_user_execution_credential(credential_ref, confirm, expected_version)` deletes an
+  encrypted credential only when explicitly confirmed.
 
 Tools never return credential values, authorization headers, or another user's configuration.
 The effective access view reuses the same tenant policy and user execution catalog used by runtime
 execution.
 
-Configuration and credential mutations remain available through the principal-scoped `/me`
-REST API for now. User MCP mutation tools will be added in a later slice.
+The first user MCP surface also supports user-owned configuration and credential mutations.
+Mutations are principal-scoped, use optimistic version checks, and return metadata rather than
+secret values.
 
 ## Client configuration
 

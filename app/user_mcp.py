@@ -11,11 +11,20 @@ from mcp.server import MCPServer
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from app.admin_store import (
+    UserExecutionConfigConflictError,
+    UserExecutionCredentialConflictError,
+)
 from app.auth import require_principal
 from app.execution import redact_tenant_execution_payload
-from app.models import Principal
+from app.models import AuditRecord, Principal
 from app.tenants import require_active_tenant_principal
 from app.user_execution import effective_execution_catalog, validate_user_execution_config
+from app.user_execution_api import (
+    UserExecutionConfigPutRequest,
+    UserExecutionCredentialPutRequest,
+    _validate_credential_ref,
+)
 
 
 @dataclass(frozen=True)
@@ -169,6 +178,279 @@ def validate_user_execution_config_for_mcp(
     }
 
 
+def _audit_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if any(
+                part in key_text.casefold()
+                for part in ("token", "secret", "key", "authorization", "password", "value")
+            ):
+                result[key_text] = "<redacted>"
+            else:
+                result[key_text] = _audit_payload(item)
+        return result
+    if isinstance(value, list):
+        return [_audit_payload(item) for item in value]
+    return value
+
+
+def _append_user_audit(
+    app: Any,
+    principal: Principal,
+    action: str,
+    *,
+    resource_type: str,
+    resource_id: str,
+    old_values: dict[str, Any] | None = None,
+    new_values: dict[str, Any] | None = None,
+) -> None:
+    app.state.store.append_audit_record(
+        AuditRecord(
+            tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            action=action,
+            affected_count=1,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            old_values=_audit_payload(old_values),
+            new_values=_audit_payload(new_values),
+        )
+    )
+
+
+def _require_confirmation(arguments: dict[str, Any]) -> None:
+    if arguments.get("confirm") is not True:
+        raise HTTPException(
+            status_code=400,
+            detail="This destructive operation requires confirm=true",
+        )
+
+
+def _config_record_response(record: Any) -> dict[str, object]:
+    return {
+        "tenant_id": record.tenant_id,
+        "user_id": record.user_id,
+        "config": redact_tenant_execution_payload(_safe_payload(record.config)),
+        "version": record.version,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+
+
+def put_user_execution_config(
+    app: Any,
+    principal: Principal,
+    arguments: dict[str, Any],
+) -> dict[str, object]:
+    request = UserExecutionConfigPutRequest.model_validate(arguments)
+    report = validate_user_execution_config(request.config)
+    if not report.valid or report.config is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Invalid user execution config", "errors": report.errors},
+        )
+    store = _store_or_raise(app)
+    old_record = store.get_user_execution_config(principal.tenant_id, principal.user_id)
+    try:
+        record = store.upsert_user_execution_config(
+            principal.tenant_id,
+            principal.user_id,
+            report.config.model_dump(mode="json", exclude_none=True),
+            expected_version=request.expected_version,
+        )
+    except UserExecutionConfigConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "User execution config version conflict",
+                "expected_version": exc.expected_version,
+                "actual_version": exc.actual_version,
+            },
+        ) from exc
+    _append_user_audit(
+        app,
+        principal,
+        "user_execution_config.put",
+        resource_type="user_execution_config",
+        resource_id=f"{principal.tenant_id}/{principal.user_id}",
+        old_values=(old_record.config if old_record is not None else None),
+        new_values=record.config,
+    )
+    return _config_record_response(record)
+
+
+def delete_user_execution_config(
+    app: Any,
+    principal: Principal,
+    arguments: dict[str, Any],
+) -> dict[str, object]:
+    _require_confirmation(arguments)
+    expected_version = arguments.get("expected_version")
+    if expected_version is not None and (
+        not isinstance(expected_version, int)
+        or isinstance(expected_version, bool)
+        or expected_version < 0
+    ):
+        raise HTTPException(
+            status_code=400, detail="expected_version must be a non-negative integer"
+        )
+    store = _store_or_raise(app)
+    old_record = store.get_user_execution_config(principal.tenant_id, principal.user_id)
+    try:
+        deleted = store.delete_user_execution_config(
+            principal.tenant_id,
+            principal.user_id,
+            expected_version=expected_version,
+        )
+    except UserExecutionConfigConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "User execution config version conflict",
+                "expected_version": exc.expected_version,
+                "actual_version": exc.actual_version,
+            },
+        ) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="User execution config not found")
+    _append_user_audit(
+        app,
+        principal,
+        "user_execution_config.delete",
+        resource_type="user_execution_config",
+        resource_id=f"{principal.tenant_id}/{principal.user_id}",
+        old_values=(old_record.config if old_record is not None else None),
+    )
+    return {"deleted": True, "tenant_id": principal.tenant_id, "user_id": principal.user_id}
+
+
+def put_user_execution_credential(
+    app: Any,
+    principal: Principal,
+    credential_ref: str,
+    arguments: dict[str, Any],
+) -> dict[str, object]:
+    _validate_credential_ref(credential_ref)
+    request = UserExecutionCredentialPutRequest.model_validate(arguments)
+    store = _store_or_raise(app)
+    if not store.user_execution_credentials_encrypted:
+        raise HTTPException(
+            status_code=503,
+            detail="Encrypted user execution credential storage is not configured",
+        )
+    old_record = store.get_user_execution_credential(
+        principal.tenant_id, principal.user_id, credential_ref
+    )
+    try:
+        record = store.upsert_user_execution_credential(
+            principal.tenant_id,
+            principal.user_id,
+            credential_ref,
+            header_name=request.header_name,
+            header_value=request.header_value,
+            expected_version=request.expected_version,
+        )
+    except UserExecutionCredentialConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "User execution credential version conflict",
+                "expected_version": exc.expected_version,
+                "actual_version": exc.actual_version,
+            },
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    _append_user_audit(
+        app,
+        principal,
+        "user_execution_credential.put",
+        resource_type="user_execution_credential",
+        resource_id=f"{principal.tenant_id}/{principal.user_id}/{credential_ref}",
+        old_values=(
+            {"credential_ref": old_record.credential_ref, "header_name": old_record.header_name}
+            if old_record is not None
+            else None
+        ),
+        new_values={"credential_ref": record.credential_ref, "header_name": record.header_name},
+    )
+    return {
+        "tenant_id": record.tenant_id,
+        "user_id": record.user_id,
+        "credential_ref": record.credential_ref,
+        "header_name": record.header_name,
+        "version": record.version,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+
+
+def delete_user_execution_credential(
+    app: Any,
+    principal: Principal,
+    credential_ref: str,
+    arguments: dict[str, Any],
+) -> dict[str, object]:
+    _require_confirmation(arguments)
+    _validate_credential_ref(credential_ref)
+    expected_version = arguments.get("expected_version")
+    if expected_version is not None and (
+        not isinstance(expected_version, int)
+        or isinstance(expected_version, bool)
+        or expected_version < 0
+    ):
+        raise HTTPException(
+            status_code=400, detail="expected_version must be a non-negative integer"
+        )
+    store = _store_or_raise(app)
+    if not store.user_execution_credentials_encrypted:
+        raise HTTPException(
+            status_code=503,
+            detail="Encrypted user execution credential storage is not configured",
+        )
+    old_record = store.get_user_execution_credential(
+        principal.tenant_id, principal.user_id, credential_ref
+    )
+    try:
+        deleted = store.delete_user_execution_credential(
+            principal.tenant_id,
+            principal.user_id,
+            credential_ref,
+            expected_version=expected_version,
+        )
+    except UserExecutionCredentialConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "User execution credential version conflict",
+                "expected_version": exc.expected_version,
+                "actual_version": exc.actual_version,
+            },
+        ) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="User execution credential not found")
+    _append_user_audit(
+        app,
+        principal,
+        "user_execution_credential.delete",
+        resource_type="user_execution_credential",
+        resource_id=f"{principal.tenant_id}/{principal.user_id}/{credential_ref}",
+        old_values=(
+            {"credential_ref": old_record.credential_ref, "header_name": old_record.header_name}
+            if old_record is not None
+            else None
+        ),
+    )
+    return {
+        "deleted": True,
+        "tenant_id": principal.tenant_id,
+        "user_id": principal.user_id,
+        "credential_ref": credential_ref,
+    }
+
+
 def _server_summary(server: Any, *, source: str) -> dict[str, object]:
     return {
         "id": server.id if source == "user" else server.name,
@@ -218,9 +500,9 @@ def build_user_mcp_server() -> MCPServer[Any]:
     server = MCPServer(
         "Minigent User Operations",
         instructions=(
-            "This server is read-only. It reports the authenticated user's redacted execution "
-            "configuration and effective MCP access. Never request or return secrets, credential "
-            "values, or authorization headers."
+            "This server is principal-scoped. It reports the authenticated user's redacted execution "
+            "configuration and effective MCP access, and may update the user's own configuration. "
+            "Never request or return secrets, credential values, or authorization headers."
         ),
     )
 
@@ -242,5 +524,60 @@ def build_user_mcp_server() -> MCPServer[Any]:
     def mcp_list_user_mcp_access() -> dict[str, object]:
         context = _context()
         return list_user_mcp_access(context.app, context.principal)
+
+    @server.tool(name="put_user_execution_config")
+    def mcp_put_user_execution_config(
+        config: dict[str, Any], expected_version: int | None = None
+    ) -> dict[str, object]:
+        context = _context()
+        return put_user_execution_config(
+            context.app,
+            context.principal,
+            {"config": config, "expected_version": expected_version},
+        )
+
+    @server.tool(name="delete_user_execution_config")
+    def mcp_delete_user_execution_config(
+        confirm: bool, expected_version: int | None = None
+    ) -> dict[str, object]:
+        context = _context()
+        return delete_user_execution_config(
+            context.app,
+            context.principal,
+            {"confirm": confirm, "expected_version": expected_version},
+        )
+
+    @server.tool(name="put_user_execution_credential")
+    def mcp_put_user_execution_credential(
+        credential_ref: str,
+        header_name: str,
+        header_value: str,
+        expected_version: int | None = None,
+    ) -> dict[str, object]:
+        context = _context()
+        return put_user_execution_credential(
+            context.app,
+            context.principal,
+            credential_ref,
+            {
+                "header_name": header_name,
+                "header_value": header_value,
+                "expected_version": expected_version,
+            },
+        )
+
+    @server.tool(name="delete_user_execution_credential")
+    def mcp_delete_user_execution_credential(
+        credential_ref: str,
+        confirm: bool,
+        expected_version: int | None = None,
+    ) -> dict[str, object]:
+        context = _context()
+        return delete_user_execution_credential(
+            context.app,
+            context.principal,
+            credential_ref,
+            {"confirm": confirm, "expected_version": expected_version},
+        )
 
     return server

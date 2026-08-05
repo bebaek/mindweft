@@ -63,9 +63,9 @@ first, then `$XDG_CONFIG_HOME/minigent/minigent.toml` or
 workspace tool model, bridge path glob controls, optional trusted-local shell command
 support, and optional codebase-memory/code-navigation MCP setup.
 
-For a user-operated agent, see [User MCP](docs/user-mcp.md) for the read-only, principal-scoped
+For a user-operated agent, see [User MCP](docs/user-mcp.md) for the principal-scoped
 MCP v2 endpoint at `/user-mcp`, which reports personal execution configuration and effective MCP
-access without exposing credentials. For an administrator-operated agent, see [Admin operations MCP](docs/admin-mcp.md) for the
+access without exposing credentials and supports scoped user-owned configuration updates. For an administrator-operated agent, see [Admin operations MCP](docs/admin-mcp.md) for the
 read-only in-process MCP v2 endpoint at `/mcp`, its authentication model, safe setup
 diagnostics, the same role-scoped operations available directly to authenticated admin chat, and
 the platform-admin execution editor used to bootstrap that chat without tenant configuration.
