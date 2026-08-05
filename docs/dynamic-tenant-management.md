@@ -327,7 +327,6 @@ entitlements, and execution config the runtime source of truth for tenant-specif
 - Add registry and entitlement caching only if needed, with per-tenant invalidation and a
   multi-instance invalidation mechanism.
 - Add granular admin roles beyond `is_admin=true`.
-- Audit execution-config create/update/delete operations.
 - Decide whether entitlement writes and execution-config writes must require an existing
   registry tenant after migration.
 - Add or enforce foreign-key constraints once registry-first operation is mandatory.
@@ -335,7 +334,8 @@ entitlements, and execution config the runtime source of truth for tenant-specif
   explicit overrides, or a combination.
 - Clarify which tenant states should block reads, writes, new runs, and admin-only access.
 - Complete migration of tenant-specific defaults from env/static config to durable tenant
-  records and execution config.
+  records and execution config. The planned explicit workflow is documented in
+  [tenant-registry-bootstrap.md](tenant-registry-bootstrap.md).
 
 ## Open questions
 
