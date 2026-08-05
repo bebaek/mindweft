@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 
 from app.admin_api import build_admin_router
+from app.admin_mcp import AdminMCPAuthMiddleware, build_admin_mcp_server
 from app.admin_store import SQLiteTenantConfigStore
 from app.agent_backends import AgentBackendRouter, NativeAgentBackend
 from app.attachments import (
@@ -740,9 +741,18 @@ def create_app(
     mcp_manager = (
         MCPServerManager() if execution_resolver is None and tool_registry is None else None
     )
+    admin_mcp_server = build_admin_mcp_server()
+    admin_mcp_app = admin_mcp_server.streamable_http_app(
+        streamable_http_path="/",
+        stateless_http=True,
+        json_response=True,
+        host="0.0.0.0",
+    )
+    admin_mcp_lifespan = admin_mcp_server.session_manager.run()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        await admin_mcp_lifespan.__aenter__()
         if mcp_manager is not None:
             await mcp_manager.start()
         _log_available_internal_tools(app.state.execution_resolver)
@@ -784,6 +794,7 @@ def create_app(
                     pass
             if mcp_manager is not None:
                 await mcp_manager.stop()
+            await admin_mcp_lifespan.__aexit__(None, None, None)
 
     app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0", lifespan=lifespan)
     app.state.session_auth_settings = session_auth_settings
@@ -1801,6 +1812,7 @@ def create_app(
         request.app.state.attachment_store.delete_thread(principal.tenant_id, thread_id)
         request.app.state.runtime.clear_private_values(principal, thread_id)
 
+    app.mount("/mcp", AdminMCPAuthMiddleware(admin_mcp_app), name="admin-mcp")
     return app
 
 
