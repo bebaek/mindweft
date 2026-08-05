@@ -11,6 +11,7 @@ from mcp.server import MCPServer
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from app.admin_mutations import AdminMutationService
 from app.auth import require_principal
 from app.execution import ADMIN_EXECUTION_CONFIG_KEY
 from app.health import database_readiness_checks
@@ -223,6 +224,7 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
     if not principal.is_admin:
         raise ValueError("Admin chat tools require an admin principal")
     registry = ToolRegistry()
+    mutations = AdminMutationService(app) if app.state.admin_store is not None else None
 
     async def setup_handler(
         arguments: dict[str, Any], context: ToolExecutionContext | None = None
@@ -244,6 +246,61 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
             app,
             _required_string(arguments, "tenant_id"),
             _required_string(arguments, "user_id"),
+        )
+
+    def propose_tenant_update_handler(
+        arguments: dict[str, Any], context: ToolExecutionContext | None = None
+    ) -> dict[str, object]:
+        _ = context
+        changes = arguments.get("changes")
+        if not isinstance(changes, dict):
+            raise HTTPException(status_code=400, detail="changes must be an object")
+        if mutations is None:
+            raise HTTPException(status_code=409, detail="Admin store is not configured")
+        return mutations.propose_tenant_update(
+            admin_user_id=principal.user_id,
+            tenant_id=_required_string(arguments, "tenant_id"),
+            changes=changes,
+        )
+
+    def propose_entitlements_handler(
+        arguments: dict[str, Any], context: ToolExecutionContext | None = None
+    ) -> dict[str, object]:
+        _ = context
+        if mutations is None:
+            raise HTTPException(status_code=409, detail="Admin store is not configured")
+        features = arguments.get("features", {})
+        limits = arguments.get("limits", {})
+        if not isinstance(features, dict) or not isinstance(limits, dict):
+            raise HTTPException(status_code=400, detail="features and limits must be objects")
+        return mutations.propose_entitlements(
+            admin_user_id=principal.user_id,
+            tenant_id=_required_string(arguments, "tenant_id"),
+            features=features,
+            limits=limits,
+        )
+
+    def propose_domain_handler(
+        arguments: dict[str, Any], context: ToolExecutionContext | None = None
+    ) -> dict[str, object]:
+        _ = context
+        if mutations is None:
+            raise HTTPException(status_code=409, detail="Admin store is not configured")
+        return mutations.propose_domain_add(
+            admin_user_id=principal.user_id,
+            tenant_id=_required_string(arguments, "tenant_id"),
+            domain=_required_string(arguments, "domain"),
+        )
+
+    def confirm_mutation_handler(
+        arguments: dict[str, Any], context: ToolExecutionContext | None = None
+    ) -> dict[str, object]:
+        _ = context
+        if mutations is None:
+            raise HTTPException(status_code=409, detail="Admin store is not configured")
+        return mutations.confirm(
+            admin_user_id=principal.user_id,
+            token=_required_string(arguments, "confirmation_id"),
         )
 
     registry.register(
@@ -276,6 +333,54 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
             "additionalProperties": False,
         },
         catalog_handler,
+    )
+    registry.register(
+        "minigent_admin_propose_tenant_update",
+        "Propose a tenant metadata change. This never writes; return the diff for confirmation.",
+        {
+            "type": "object",
+            "properties": {"tenant_id": {"type": "string"}, "changes": {"type": "object"}},
+            "required": ["tenant_id", "changes"],
+            "additionalProperties": False,
+        },
+        propose_tenant_update_handler,
+    )
+    registry.register(
+        "minigent_admin_propose_entitlements",
+        "Propose tenant feature and limit changes; this never writes until confirmed.",
+        {
+            "type": "object",
+            "properties": {
+                "tenant_id": {"type": "string"},
+                "features": {"type": "object"},
+                "limits": {"type": "object"},
+            },
+            "required": ["tenant_id", "features", "limits"],
+            "additionalProperties": False,
+        },
+        propose_entitlements_handler,
+    )
+    registry.register(
+        "minigent_admin_propose_domain_add",
+        "Propose adding a tenant domain; this never writes until confirmed.",
+        {
+            "type": "object",
+            "properties": {"tenant_id": {"type": "string"}, "domain": {"type": "string"}},
+            "required": ["tenant_id", "domain"],
+            "additionalProperties": False,
+        },
+        propose_domain_handler,
+    )
+    registry.register(
+        "minigent_admin_confirm_mutation",
+        "Apply one previously proposed mutation after explicit administrator confirmation.",
+        {
+            "type": "object",
+            "properties": {"confirmation_id": {"type": "string"}},
+            "required": ["confirmation_id"],
+            "additionalProperties": False,
+        },
+        confirm_mutation_handler,
     )
     return registry
 
