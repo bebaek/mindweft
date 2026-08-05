@@ -518,56 +518,78 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
             item_id: dict(server) for item_id, server in (mcp_server_catalog or {}).items()
         }
         self._contexts: dict[str, TenantExecutionContext] = {}
+        self._context_config_states: dict[str, tuple[str, int]] = {}
         self._lock = Lock()
 
     def resolve(self, tenant_id: str) -> TenantExecutionContext:
         with self._lock:
-            context = self._contexts.get(tenant_id)
-            if context is not None:
-                if self._refresh_context_if_needed(tenant_id, context):
-                    return self._contexts[tenant_id]
+            for _ in range(2):
+                config_state = self._effective_config_state(tenant_id)
+                context = self._contexts.get(tenant_id)
+                if (
+                    context is not None
+                    and self._context_config_states.get(tenant_id) == config_state
+                ):
+                    if self._refresh_context_if_needed(tenant_id, context):
+                        return self._contexts[tenant_id]
+                    return context
+
+                self._contexts.pop(tenant_id, None)
+                self._context_config_states.pop(tenant_id, None)
+                if config_state is None:
+                    if self._fallback_resolver is not None:
+                        return self._fallback_resolver.resolve(tenant_id)
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Tenant '{tenant_id}' has no execution configuration",
+                    )
+
+                config_tenant_id, _ = config_state
+                payload = self._store.get_raw_config(config_tenant_id)
+                if payload is None:
+                    # The config changed between the version and payload reads. Retry once
+                    # against the new effective state instead of caching stale fallback data.
+                    continue
+
+                policy = self._store.get_tenant_mcp_server_catalog_policy(tenant_id)
+                policy_errors = tenant_mcp_server_catalog_policy_errors(
+                    tenant_id,
+                    payload,
+                    policy,
+                    self._mcp_server_catalog,
+                )
+                if policy_errors:
+                    raise HTTPException(status_code=403, detail="; ".join(policy_errors))
+
+                config = parse_tenant_execution_config(
+                    tenant_id,
+                    payload,
+                    default_llm=_tenant_llm_config_from_env(),
+                )
+                registry, generation = _build_registry_for_config(
+                    config,
+                    mcp_manager=self._mcp_manager,
+                )
+                context = TenantExecutionContext(
+                    llm_adapter=_build_llm_adapter(config.llm, tenant_id=tenant_id),
+                    tool_registry=registry,
+                    config=config,
+                    llm_adapters=_build_llm_adapters(config.llm_profiles, tenant_id=tenant_id),
+                    mcp_generation=generation,
+                    mcp_manager=self._mcp_manager,
+                )
+                self._contexts[tenant_id] = context
+                self._context_config_states[tenant_id] = config_state
                 return context
 
-            payload = self._store.get_raw_config(tenant_id)
-            if payload is None:
-                payload = self._store.get_raw_config(DEFAULT_TENANT_KEY)
-            if payload is None:
-                if self._fallback_resolver is not None:
-                    return self._fallback_resolver.resolve(tenant_id)
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"Tenant '{tenant_id}' has no execution configuration",
-                )
-
-            policy = self._store.get_tenant_mcp_server_catalog_policy(tenant_id)
-            policy_errors = tenant_mcp_server_catalog_policy_errors(
-                tenant_id,
-                payload,
-                policy,
-                self._mcp_server_catalog,
+            # A second concurrent mutation can make both payload reads miss. Resolve the
+            # latest state on the next request rather than retaining an outdated context.
+            if self._fallback_resolver is not None:
+                return self._fallback_resolver.resolve(tenant_id)
+            raise HTTPException(
+                status_code=403,
+                detail=f"Tenant '{tenant_id}' has no execution configuration",
             )
-            if policy_errors:
-                raise HTTPException(status_code=403, detail="; ".join(policy_errors))
-
-            config = parse_tenant_execution_config(
-                tenant_id,
-                payload,
-                default_llm=_tenant_llm_config_from_env(),
-            )
-            registry, generation = _build_registry_for_config(
-                config,
-                mcp_manager=self._mcp_manager,
-            )
-            context = TenantExecutionContext(
-                llm_adapter=_build_llm_adapter(config.llm, tenant_id=tenant_id),
-                tool_registry=registry,
-                config=config,
-                llm_adapters=_build_llm_adapters(config.llm_profiles, tenant_id=tenant_id),
-                mcp_generation=generation,
-                mcp_manager=self._mcp_manager,
-            )
-            self._contexts[tenant_id] = context
-            return context
 
     def describe(
         self,
@@ -585,6 +607,17 @@ class StoreBackedTenantExecutionResolver(TenantExecutionResolver):
     def invalidate(self, tenant_id: str) -> None:
         with self._lock:
             self._contexts.pop(tenant_id, None)
+            self._context_config_states.pop(tenant_id, None)
+
+    def _effective_config_state(self, tenant_id: str) -> tuple[str, int] | None:
+        version = self._store.get_config_version(tenant_id)
+        if version is not None:
+            return tenant_id, version
+        if tenant_id != DEFAULT_TENANT_KEY:
+            version = self._store.get_config_version(DEFAULT_TENANT_KEY)
+            if version is not None:
+                return DEFAULT_TENANT_KEY, version
+        return None
 
     def _refresh_context_if_needed(self, tenant_id: str, context: TenantExecutionContext) -> bool:
         if self._mcp_manager is None or not context.config.tools.mcp_servers:

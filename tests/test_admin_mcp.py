@@ -162,6 +162,38 @@ def test_platform_admin_can_configure_chat_execution_without_a_tenant(tmp_path: 
     assert store.get_raw_config(ADMIN_EXECUTION_CONFIG_KEY) is None
 
 
+def test_platform_execution_update_refreshes_other_replica_cache(tmp_path: Path) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    store.upsert_raw_config(
+        ADMIN_EXECUTION_CONFIG_KEY,
+        {
+            "llm": {"provider": "mock"},
+            "tools": {"allowed_local_tools": ["echo"]},
+        },
+    )
+    writer_app = create_app(admin_store=store, tenant_config_source="store")
+    other_replica_app = create_app(admin_store=store, tenant_config_source="store")
+
+    with TestClient(writer_app) as writer, TestClient(other_replica_app) as other_replica:
+        original_reply = _chat_with_tool(other_replica, ADMIN_HEADERS, "echo")
+        updated = writer.put(
+            "/admin/execution-config",
+            headers=ADMIN_HEADERS,
+            json={
+                "config": {
+                    "llm": {"provider": "mock"},
+                    "tools": {"allowed_local_tools": []},
+                }
+            },
+        )
+        refreshed_reply = _chat_with_tool(other_replica, ADMIN_HEADERS, "echo")
+
+    assert original_reply.startswith("Tool result:")
+    assert updated.status_code == 200
+    assert updated.json()["version"] == 2
+    assert refreshed_reply == "Mock reply: /tool echo"
+
+
 def test_admin_chat_uses_deployment_execution_when_tenant_has_no_config(tmp_path: Path) -> None:
     store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
     app = create_app(admin_store=store, tenant_config_source="store")
