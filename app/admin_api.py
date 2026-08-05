@@ -497,6 +497,7 @@ class AdminTenantSeedRequest(BaseModel):
     plan: str | None = None
     region: str | None = None
     dry_run: bool = False
+    tenant_ids: list[str] | None = None
 
 
 class AdminTenantSeedItemResponse(BaseModel):
@@ -505,6 +506,7 @@ class AdminTenantSeedItemResponse(BaseModel):
     name: str
     status: TenantStatus
     action: str
+    execution_config_source: str
 
 
 class AdminTenantSeedResponse(BaseModel):
@@ -515,6 +517,7 @@ class AdminTenantSeedResponse(BaseModel):
     created: int
     conflicts: int
     tenants: list[AdminTenantSeedItemResponse]
+    missing_tenant_ids: list[str] = Field(default_factory=list)
 
 
 class AdminTenantEntitlementsRequest(BaseModel):
@@ -896,6 +899,11 @@ def build_admin_router() -> APIRouter:
         for tenant_id in env_configs:
             if tenant_id != ADMIN_EXECUTION_CONFIG_KEY and tenant_id not in tenant_ids:
                 tenant_ids.append(tenant_id)
+        missing_tenant_ids: list[str] = []
+        if body.tenant_ids is not None:
+            selected_ids = set(body.tenant_ids)
+            missing_tenant_ids = sorted(selected_ids - set(tenant_ids))
+            tenant_ids = [tenant_id for tenant_id in tenant_ids if tenant_id in selected_ids]
         used_slugs = _used_tenant_slugs(store)
         items: list[AdminTenantSeedItemResponse] = []
         existing = 0
@@ -913,6 +921,9 @@ def build_admin_router() -> APIRouter:
                         name=current.name,
                         status=current.status,
                         action="exists",
+                        execution_config_source=(
+                            "environment" if tenant_id in env_configs else "store"
+                        ),
                     )
                 )
                 continue
@@ -924,6 +935,7 @@ def build_admin_router() -> APIRouter:
                 name=tenant_id,
                 status=body.status,
                 action="would_create" if body.dry_run else "created",
+                execution_config_source=("environment" if tenant_id in env_configs else "store"),
             )
             items.append(item)
             if body.dry_run:
@@ -959,7 +971,13 @@ def build_admin_router() -> APIRouter:
                     "plan": body.plan,
                     "region": body.region,
                 },
-                metadata={"source": body.source, "slug": slug},
+                metadata={
+                    "source": body.source,
+                    "slug": slug,
+                    "execution_config_source": (
+                        "environment" if tenant_id in env_configs else "store"
+                    ),
+                },
             )
         return AdminTenantSeedResponse(
             source=body.source,
@@ -969,6 +987,7 @@ def build_admin_router() -> APIRouter:
             created=created,
             conflicts=conflicts,
             tenants=items,
+            missing_tenant_ids=missing_tenant_ids,
         )
 
     @router.get(

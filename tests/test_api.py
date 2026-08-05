@@ -4748,6 +4748,7 @@ def test_admin_api_seeds_tenants_from_execution_configs(
     assert payload["conflicts"] == 0
     by_id = {item["id"]: item for item in payload["tenants"]}
     assert by_id["Tenant A"]["slug"] == "tenant-a-2"
+    assert by_id["Tenant A"]["execution_config_source"] == "store"
     assert by_id["tenant-a"]["slug"] == "tenant-a-3"
 
     get_response = client.get("/admin/tenants/Tenant A", headers=ADMIN_HEADERS)
@@ -4773,7 +4774,11 @@ def test_admin_api_seeds_tenants_from_execution_configs(
     audit_record = audit_response.json()["audit_records"][0]
     assert audit_record["resource_type"] == "tenant"
     assert audit_record["new_values"]["slug"] == "tenant-a-2"
-    assert audit_record["metadata"] == {"source": "execution-configs", "slug": "tenant-a-2"}
+    assert audit_record["metadata"] == {
+        "source": "execution-configs",
+        "slug": "tenant-a-2",
+        "execution_config_source": "store",
+    }
 
 
 def test_admin_api_seed_rejects_unknown_source(tmp_path: Path) -> None:
@@ -6047,7 +6052,11 @@ def test_admin_api_seeds_environment_execution_tenants(
 
     dry_run = client.post(
         "/admin/tenants/seed",
-        json={"source": "execution-configs", "dry_run": True},
+        json={
+            "source": "execution-configs",
+            "dry_run": True,
+            "tenant_ids": ["demo-tenant", "missing-tenant"],
+        },
         headers=ADMIN_HEADERS,
     )
     assert dry_run.status_code == 200
@@ -6055,6 +6064,8 @@ def test_admin_api_seeds_environment_execution_tenants(
     assert dry_run.json()["created"] == 0
     assert dry_run.json()["tenants"][0]["id"] == "demo-tenant"
     assert dry_run.json()["tenants"][0]["action"] == "would_create"
+    assert dry_run.json()["tenants"][0]["execution_config_source"] == "environment"
+    assert dry_run.json()["missing_tenant_ids"] == ["missing-tenant"]
     assert store.get_tenant("demo-tenant") is None
 
     seeded = client.post(
@@ -6068,6 +6079,12 @@ def test_admin_api_seeds_environment_execution_tenants(
     assert created is not None
     assert created.slug == "demo-tenant"
     assert created.name == "demo-tenant"
+    audit = client.get(
+        "/admin/tenants/demo-tenant/audit-records?action=tenants.seed",
+        headers=ADMIN_HEADERS,
+    )
+    assert audit.status_code == 200
+    assert audit.json()["audit_records"][0]["metadata"]["execution_config_source"] == "environment"
 
 
 def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
