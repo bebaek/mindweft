@@ -2583,6 +2583,8 @@ def build_admin_router() -> APIRouter:
                 redact_tenant_execution_payload(old_payload) if old_payload is not None else None
             ),
             new_values=redact_tenant_execution_payload(payload),
+            resource_type="execution_config",
+            resource_id=tenant_id,
         )
         return AdminTenantExecutionConfigResponse(
             tenant_id=tenant_id,
@@ -2634,6 +2636,8 @@ def build_admin_router() -> APIRouter:
                 redact_tenant_execution_payload(old_payload) if old_payload is not None else None
             ),
             new_values=None,
+            resource_type="execution_config",
+            resource_id=tenant_id,
         )
 
     return router

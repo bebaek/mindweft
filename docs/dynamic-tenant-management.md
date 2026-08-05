@@ -244,15 +244,19 @@ registry data, tenant domains, entitlements, and store-backed tenant execution c
 Implemented caching/invalidation:
 
 - Store-backed execution config resolution uses an in-process cache.
-- Admin execution-config writes and deletes invalidate the in-process execution resolver for
-  the affected tenant.
+- Each resolution compares its cached context with the version from the shared config store.
+  A version change rebuilds the context, including when resolution switches between a tenant
+  config and the default config. This keeps replicas using the same SQLite store coherent
+  without requiring a browser refresh or request affinity.
+- Admin execution-config writes and deletes invalidate the local execution resolver for the
+  affected tenant as an immediate optimization; the shared version check handles other
+  processes.
 
 Not yet implemented:
 
 - Tenant registry record caching.
 - Tenant entitlement caching.
 - Registry/entitlement cache invalidation.
-- Cross-process cache invalidation for multi-instance deployments.
 
 Because registry and entitlements are currently loaded from the store during tenant-context
 resolution, stale registry/entitlement cache behavior is not a current runtime concern. It
@@ -266,8 +270,8 @@ will become relevant if registry or entitlement caching is added.
 - Require `is_admin=true` for control-plane operations. More granular admin roles remain
   future work.
 - Audit all tenant mutations with actor, timestamp, action, old values, and new values.
-  Current audit coverage is partial: tenant/domain/entitlement mutations are audited, while
-  execution-config mutation audit coverage should be completed.
+  Tenant/domain/entitlement mutations and tenant/platform execution-config writes and deletes
+  are audited. Execution-config audit values redact secrets.
 - Redact secrets from read responses and audit records. Execution-config read responses and
   audit helper payloads currently redact secret-looking values.
 - Validate slug and domain uniqueness.

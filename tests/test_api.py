@@ -6105,6 +6105,21 @@ def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(
     assert get_response.json()["version"] == 2
     assert get_response.json()["config"]["llm"]["api_key"] == "<redacted>"
 
+    audit_response = client.get(
+        "/admin/tenants/tenant-1/audit-records?action=tenant_execution_config.put",
+        headers=ADMIN_HEADERS,
+    )
+    assert audit_response.status_code == 200
+    assert audit_response.json()["total"] == 2
+    latest_audit = audit_response.json()["audit_records"][0]
+    assert latest_audit["action"] == "tenant_execution_config.put"
+    assert latest_audit["resource_type"] == "execution_config"
+    assert latest_audit["resource_id"] == "tenant-1"
+    assert latest_audit["new_values"]["llm"]["api_key"] == "<redacted>"
+    assert latest_audit["new_values"]["tools"]["mcp_servers"][0]["headers"]["Authorization"] == (
+        "<redacted>"
+    )
+
 
 def test_admin_api_updates_runtime_after_config_change(tmp_path: Path) -> None:
     client = TestClient(
@@ -6161,6 +6176,17 @@ def test_admin_api_updates_runtime_after_config_change(tmp_path: Path) -> None:
         headers=ADMIN_HEADERS,
     )
     assert delete_response.status_code == 204
+    delete_audit = client.get(
+        "/admin/tenants/tenant-1/audit-records?action=tenant_execution_config.delete",
+        headers=ADMIN_HEADERS,
+    )
+    assert delete_audit.status_code == 200
+    assert delete_audit.json()["total"] == 1
+    delete_record = delete_audit.json()["audit_records"][0]
+    assert delete_record["resource_type"] == "execution_config"
+    assert delete_record["resource_id"] == "tenant-1"
+    assert delete_record["old_values"]["tools"]["allowed_local_tools"] == ["current_time"]
+    assert delete_record["new_values"] is None
 
 
 def test_admin_store_encrypts_secrets_at_rest(tmp_path: Path) -> None:
