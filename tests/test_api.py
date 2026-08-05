@@ -4893,6 +4893,45 @@ def test_admin_api_seed_fails_before_creating_slug_conflicts(tmp_path: Path) -> 
     assert client.get("/admin/tenants/Tenant A", headers=ADMIN_HEADERS).status_code == 404
 
 
+def test_admin_api_seed_retries_late_slug_conflict_with_suffix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _sqlite_store(tmp_path)
+    store.upsert_raw_config("Tenant A", {"llm": {"provider": "mock"}})
+    original_create_tenant = store.create_tenant
+    state = {"raised": False}
+
+    def create_tenant_once_with_conflict(tenant, **kwargs):
+        if tenant.id == "Tenant A" and not state["raised"]:
+            state["raised"] = True
+            raise sqlite3.IntegrityError("UNIQUE constraint failed: tenants.slug")
+        return original_create_tenant(tenant, **kwargs)
+
+    monkeypatch.setattr(store, "create_tenant", create_tenant_once_with_conflict)
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store-with-defaults"))
+
+    response = client.post(
+        "/admin/tenants/seed",
+        json={"tenant_ids": ["Tenant A"]},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["created"] == 1
+    assert payload["conflicts"] == 1
+    assert payload["conflict_details"] == [
+        {
+            "id": "Tenant A",
+            "requested_slug": "tenant-a",
+            "slug": "tenant-a",
+            "conflict": "slug",
+            "phase": "create",
+        }
+    ]
+    assert payload["tenants"][0]["slug"] == "tenant-a-2"
+
+
 def test_admin_api_seed_rejects_unknown_source(tmp_path: Path) -> None:
     client = TestClient(
         create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")

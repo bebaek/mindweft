@@ -522,6 +522,7 @@ class AdminTenantSeedResponse(BaseModel):
     created: int
     skipped: int
     conflicts: int
+    conflict_details: list[dict[str, Any]] = Field(default_factory=list)
     tenants: list[AdminTenantSeedItemResponse]
     missing_tenant_ids: list[str] = Field(default_factory=list)
 
@@ -924,6 +925,7 @@ def build_admin_router() -> APIRouter:
                 _validate_slug(override)
         used_slugs = _used_tenant_slugs(store)
         items: list[AdminTenantSeedItemResponse] = []
+        conflict_details: list[dict[str, Any]] = []
         planned_tenants: list[tuple[str, str, AdminTenantSeedItemResponse]] = []
         existing = 0
         conflicts = 0
@@ -956,6 +958,15 @@ def build_admin_router() -> APIRouter:
             conflict = requested_slug in used_slugs
             if conflict:
                 conflicts += 1
+                conflict_details.append(
+                    {
+                        "id": tenant_id,
+                        "requested_slug": requested_slug,
+                        "slug": requested_slug,
+                        "conflict": "slug",
+                        "phase": "preflight",
+                    }
+                )
                 if body.conflict_policy == "fail":
                     items.append(
                         AdminTenantSeedItemResponse(
@@ -1020,29 +1031,93 @@ def build_admin_router() -> APIRouter:
             )
 
         created = 0
+        late_fail_conflicts: list[dict[str, Any]] = []
         if not body.dry_run:
             for tenant_id, slug, item in planned_tenants:
-                try:
-                    store.create_tenant(
-                        Tenant(
-                            id=tenant_id,
-                            slug=slug,
-                            name=tenant_id,
-                            status=body.status,
-                            plan=body.plan,
-                            region=body.region,
-                            created_by=admin.user_id,
-                            updated_by=admin.user_id,
+                candidate_slug = slug
+                created_tenant = False
+                for _attempt in range(10):
+                    try:
+                        store.create_tenant(
+                            Tenant(
+                                id=tenant_id,
+                                slug=candidate_slug,
+                                name=tenant_id,
+                                status=body.status,
+                                plan=body.plan,
+                                region=body.region,
+                                created_by=admin.user_id,
+                                updated_by=admin.user_id,
+                            )
                         )
-                    )
-                except sqlite3.IntegrityError:
-                    conflicts += 1
-                    items[items.index(item)] = item.model_copy(update={"action": "conflict"})
+                        created_tenant = True
+                        break
+                    except sqlite3.IntegrityError:
+                        current = store.get_tenant(tenant_id)
+                        if current is not None:
+                            existing += 1
+                            items[items.index(item)] = item.model_copy(
+                                update={
+                                    "slug": current.slug,
+                                    "requested_slug": current.slug,
+                                    "action": "exists",
+                                    "conflict": None,
+                                }
+                            )
+                            break
+                        conflict_detail = {
+                            "id": tenant_id,
+                            "requested_slug": item.requested_slug,
+                            "slug": candidate_slug,
+                            "conflict": "slug",
+                            "phase": "create",
+                        }
+                        conflict_details.append(conflict_detail)
+                        conflicts += 1
+                        if body.conflict_policy == "suffix":
+                            used_slugs = _used_tenant_slugs(store)
+                            used_slugs.update(
+                                planned_slug
+                                for planned_id, planned_slug, _planned_item in planned_tenants
+                                if planned_id != tenant_id
+                            )
+                            used_slugs.add(candidate_slug)
+                            next_slug = _unique_seed_slug(tenant_id, used_slugs)
+                            if next_slug == candidate_slug:
+                                break
+                            candidate_slug = next_slug
+                            continue
+                        if body.conflict_policy == "skip":
+                            skipped += 1
+                            items[items.index(item)] = item.model_copy(
+                                update={"action": "skipped", "conflict": "slug"}
+                            )
+                        else:
+                            items[items.index(item)] = item.model_copy(
+                                update={"action": "conflict", "conflict": "slug"}
+                            )
+                            late_fail_conflicts.append(conflict_detail)
+                        break
+                if not created_tenant:
                     continue
+                if candidate_slug != item.slug:
+                    item = item.model_copy(
+                        update={"slug": candidate_slug, "conflict": "slug", "action": "created"}
+                    )
+                    items[
+                        items.index(
+                            next(
+                                existing_item
+                                for existing_item in items
+                                if existing_item.id == tenant_id
+                            )
+                        )
+                    ] = item
+                used_slugs.add(candidate_slug)
                 created += 1
                 metadata: dict[str, Any] = {
                     "source": body.source,
-                    "slug": slug,
+                    "slug": candidate_slug,
                     "execution_config_source": (
                         "environment" if tenant_id in env_configs else "store"
                     ),
@@ -1062,7 +1137,7 @@ def build_admin_router() -> APIRouter:
                     "tenants.seed",
                     new_values={
                         "id": tenant_id,
-                        "slug": slug,
+                        "slug": candidate_slug,
                         "name": tenant_id,
                         "status": body.status.value,
                         "plan": body.plan,
@@ -1071,6 +1146,16 @@ def build_admin_router() -> APIRouter:
                     metadata=metadata,
                 )
 
+        if late_fail_conflicts:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Tenant seed encountered late slug conflicts",
+                    "conflicts": late_fail_conflicts,
+                    "created": created,
+                    "partial": True,
+                },
+            )
         return AdminTenantSeedResponse(
             source=body.source,
             dry_run=body.dry_run,
@@ -1080,6 +1165,7 @@ def build_admin_router() -> APIRouter:
             created=created,
             skipped=skipped,
             conflicts=conflicts,
+            conflict_details=conflict_details,
             tenants=items,
             missing_tenant_ids=missing_tenant_ids,
         )

@@ -1727,7 +1727,7 @@ def test_admin_tenants_seed_sends_options(monkeypatch: Any, capsys: Any) -> None
         in output
     )
     assert (
-        "tenant-b slug=tenant-b status=active action=would_create config_source=environment"
+        "tenant-b slug=tenant-b requested_slug=tenant-b status=active action=would_create conflict=none config_source=environment"
         in output
     )
 

@@ -1575,8 +1575,10 @@ def run_admin_tenants_seed(
                 [
                     str(tenant.get("id", "")),
                     f"slug={tenant.get('slug')}",
+                    f"requested_slug={tenant.get('requested_slug', tenant.get('slug'))}",
                     f"status={tenant.get('status')}",
                     f"action={tenant.get('action')}",
+                    f"conflict={tenant.get('conflict') or 'none'}",
                     f"config_source={tenant.get('execution_config_source', 'unknown')}",
                 ]
             )
