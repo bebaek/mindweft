@@ -255,6 +255,48 @@ class SQLiteTenantConfigStore:
             raise RuntimeError(f"Tenant '{tenant.id}' was not created")
         return created
 
+    def create_tenants_atomic(self, tenants: list[Tenant]) -> list[Tenant]:
+        """Create a seed batch atomically, rolling back on any uniqueness error."""
+        if not tenants:
+            return []
+        now = _utc_now_iso()
+        with self._lock:
+            with self._connection() as connection:
+                try:
+                    for tenant in tenants:
+                        created_at = tenant.created_at.isoformat() if tenant.created_at else now
+                        updated_at = tenant.updated_at.isoformat() if tenant.updated_at else now
+                        connection.execute(
+                            """
+                            INSERT INTO tenants (
+                                id, slug, name, status, plan, region, metadata_json,
+                                created_by, updated_by, created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                tenant.id,
+                                tenant.slug,
+                                tenant.name,
+                                tenant.status.value,
+                                tenant.plan,
+                                tenant.region,
+                                json.dumps(tenant.metadata, ensure_ascii=True, sort_keys=True),
+                                tenant.created_by,
+                                tenant.updated_by,
+                                created_at,
+                                updated_at,
+                            ),
+                        )
+                    connection.commit()
+                except sqlite3.IntegrityError:
+                    connection.rollback()
+                    raise
+        return [
+            tenant
+            for tenant in (self.get_tenant(item.id) for item in tenants)
+            if tenant is not None
+        ]
+
     def update_tenant(
         self,
         tenant_id: str,

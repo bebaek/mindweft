@@ -1032,6 +1032,75 @@ def build_admin_router() -> APIRouter:
 
         created = 0
         late_fail_conflicts: list[dict[str, Any]] = []
+        if body.conflict_policy == "fail" and planned_tenants and not body.dry_run:
+            atomic_tenants = [
+                Tenant(
+                    id=tenant_id,
+                    slug=slug,
+                    name=tenant_id,
+                    status=body.status,
+                    plan=body.plan,
+                    region=body.region,
+                    created_by=admin.user_id,
+                    updated_by=admin.user_id,
+                )
+                for tenant_id, slug, _item in planned_tenants
+            ]
+            try:
+                store.create_tenants_atomic(atomic_tenants)
+            except sqlite3.IntegrityError as exc:
+                conflict_details = [
+                    {
+                        "id": tenant_id,
+                        "requested_slug": item.requested_slug,
+                        "slug": slug,
+                        "conflict": "unique_constraint",
+                        "phase": "create",
+                    }
+                    for tenant_id, slug, item in planned_tenants
+                ]
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Tenant seed encountered late uniqueness conflicts",
+                        "conflicts": conflict_details,
+                        "created": 0,
+                        "partial": False,
+                    },
+                ) from exc
+            created = len(atomic_tenants)
+            for tenant_id, slug, item in planned_tenants:
+                atomic_metadata: dict[str, Any] = {
+                    "source": body.source,
+                    "slug": slug,
+                    "execution_config_source": (
+                        "environment" if tenant_id in env_configs else "store"
+                    ),
+                }
+                if item.conflict is not None:
+                    atomic_metadata.update(
+                        {
+                            "requested_slug": item.requested_slug,
+                            "conflict": item.conflict,
+                            "conflict_policy": body.conflict_policy,
+                        }
+                    )
+                _append_tenant_audit(
+                    request,
+                    tenant_id,
+                    admin,
+                    "tenants.seed",
+                    new_values={
+                        "id": tenant_id,
+                        "slug": slug,
+                        "name": tenant_id,
+                        "status": body.status.value,
+                        "plan": body.plan,
+                        "region": body.region,
+                    },
+                    metadata=atomic_metadata,
+                )
+            planned_tenants = []
         if not body.dry_run:
             for tenant_id, slug, item in planned_tenants:
                 candidate_slug = slug

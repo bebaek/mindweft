@@ -89,6 +89,12 @@ minigent admin tenants seed --from execution-configs \
   --conflict-policy fail
 ```
 
+Conflict handling is explicit: `suffix` preserves the default generated-suffix behavior,
+`skip` leaves conflicting records uncreated, and `fail` rejects the batch. In `fail` mode,
+registry tenant creation is transactional, so a late uniqueness conflict rolls back the
+entire seed batch. Dry-run responses include the requested slug, resolved slug, and structured
+conflict details.
+
 Do not run this migration automatically in application startup. Operators should be
 able to inspect the dry-run output before creating metadata records.
 

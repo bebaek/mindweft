@@ -43,6 +43,7 @@ from app.models import (
     Message,
     MessageRole,
     Principal,
+    Tenant,
     TenantStatus,
     TenantUser,
     TenantUserRole,
@@ -4930,6 +4931,20 @@ def test_admin_api_seed_retries_late_slug_conflict_with_suffix(
         }
     ]
     assert payload["tenants"][0]["slug"] == "tenant-a-2"
+
+
+def test_admin_store_atomic_tenant_batch_rolls_back_on_conflict(tmp_path: Path) -> None:
+    store = _sqlite_store(tmp_path)
+    tenants = [
+        Tenant(id="tenant-one", slug="tenant-one", name="Tenant One"),
+        Tenant(id="tenant-two", slug="tenant-one", name="Tenant Two"),
+    ]
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.create_tenants_atomic(tenants)
+
+    assert store.get_tenant("tenant-one") is None
+    assert store.get_tenant("tenant-two") is None
 
 
 def test_admin_api_seed_rejects_unknown_source(tmp_path: Path) -> None:
