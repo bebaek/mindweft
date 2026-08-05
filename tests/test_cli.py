@@ -1698,6 +1698,8 @@ def test_admin_tenants_seed_sends_options(monkeypatch: Any, capsys: Any) -> None
             "tenant-b",
             "--tenant",
             "tenant-c",
+            "--slug-override",
+            "tenant-b=tenant-b-primary",
             "--dry-run",
         ]
     )
@@ -1712,6 +1714,7 @@ def test_admin_tenants_seed_sends_options(monkeypatch: Any, capsys: Any) -> None
                 "status": "active",
                 "dry_run": True,
                 "conflict_policy": "suffix",
+                "slug_overrides": {"tenant-b": "tenant-b-primary"},
                 "plan": "pro",
                 "region": "us",
                 "tenant_ids": ["tenant-b", "tenant-c"],

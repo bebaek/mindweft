@@ -435,6 +435,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Restrict seeding to this tenant ID; repeat for multiple IDs.",
     )
+    admin_tenants_seed_parser.add_argument(
+        "--slug-override",
+        dest="seed_slug_overrides",
+        action="append",
+        default=None,
+        metavar="TENANT_ID=SLUG",
+        help="Override a derived slug; repeat for multiple tenant IDs.",
+    )
 
     admin_execution_config_parser = admin_subparsers.add_parser(
         "execution-config", help="Import, export, and validate tenant execution configs."
@@ -1502,6 +1510,19 @@ def run_admin_tenants_transition(
     return _print_admin_tenant_response(args, response, trace_id)
 
 
+def _parse_seed_slug_overrides(values: list[str] | None) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    for value in values or []:
+        tenant_id, separator, slug = value.partition("=")
+        if not separator or not tenant_id or not slug or tenant_id in overrides:
+            raise MinigentAPIError(
+                "Slug overrides must use a unique TENANT_ID=SLUG format.",
+                category="invalid_request",
+            )
+        overrides[tenant_id] = slug
+    return overrides
+
+
 def run_admin_tenants_seed(
     args: argparse.Namespace,
     client: MinigentAPIClient,
@@ -1519,6 +1540,9 @@ def run_admin_tenants_seed(
         payload["region"] = args.region
     if args.seed_tenants is not None:
         payload["tenant_ids"] = args.seed_tenants
+    slug_overrides = _parse_seed_slug_overrides(args.seed_slug_overrides)
+    if slug_overrides:
+        payload["slug_overrides"] = slug_overrides
     response = client.seed_admin_tenants(payload)
     if args.json:
         output: dict[str, Any] = dict(response)

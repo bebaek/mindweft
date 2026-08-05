@@ -78,9 +78,15 @@ Example dry-run result:
 Keep the API operation explicit and admin-authorized. Add a matching CLI command:
 
 ```bash
-minigent admin tenants seed --source execution-configs --dry-run
-minigent admin tenants seed --source execution-configs \
+minigent admin tenants seed --from execution-configs --dry-run
+minigent admin tenants seed --from execution-configs \
   --status active --plan pro --region demo
+
+# Resolve a known derived-slug collision explicitly:
+minigent admin tenants seed --from execution-configs \
+  --tenant demo-tenant \
+  --slug-override demo-tenant=demo-primary \
+  --conflict-policy fail
 ```
 
 Do not run this migration automatically in application startup. Operators should be

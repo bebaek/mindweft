@@ -499,6 +499,7 @@ class AdminTenantSeedRequest(BaseModel):
     dry_run: bool = False
     tenant_ids: list[str] | None = None
     conflict_policy: Literal["suffix", "skip", "fail"] = "suffix"
+    slug_overrides: dict[str, str] = Field(default_factory=dict)
 
 
 class AdminTenantSeedItemResponse(BaseModel):
@@ -909,6 +910,18 @@ def build_admin_router() -> APIRouter:
             selected_ids = set(body.tenant_ids)
             missing_tenant_ids = sorted(selected_ids - set(tenant_ids))
             tenant_ids = [tenant_id for tenant_id in tenant_ids if tenant_id in selected_ids]
+        if body.slug_overrides:
+            unknown_overrides = sorted(set(body.slug_overrides) - set(tenant_ids))
+            if unknown_overrides:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "message": "Slug overrides reference undiscovered tenant IDs",
+                        "tenant_ids": unknown_overrides,
+                    },
+                )
+            for _tenant_id, override in body.slug_overrides.items():
+                _validate_slug(override)
         used_slugs = _used_tenant_slugs(store)
         items: list[AdminTenantSeedItemResponse] = []
         planned_tenants: list[tuple[str, str, AdminTenantSeedItemResponse]] = []
@@ -935,7 +948,11 @@ def build_admin_router() -> APIRouter:
                 )
                 continue
 
-            requested_slug = _seed_slug_from_tenant_id(tenant_id)
+            requested_slug = body.slug_overrides.get(
+                tenant_id, _seed_slug_from_tenant_id(tenant_id)
+            )
+            if tenant_id in body.slug_overrides:
+                _validate_slug(requested_slug)
             conflict = requested_slug in used_slugs
             if conflict:
                 conflicts += 1
