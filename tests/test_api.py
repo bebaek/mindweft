@@ -4748,6 +4748,7 @@ def test_admin_api_seeds_tenants_from_execution_configs(
     assert payload["conflicts"] == 0
     by_id = {item["id"]: item for item in payload["tenants"]}
     assert by_id["Tenant A"]["slug"] == "tenant-a-2"
+    assert by_id["Tenant A"]["execution_config_source"] == "store"
     assert by_id["tenant-a"]["slug"] == "tenant-a-3"
 
     get_response = client.get("/admin/tenants/Tenant A", headers=ADMIN_HEADERS)
@@ -6055,6 +6056,7 @@ def test_admin_api_seeds_environment_execution_tenants(
     assert dry_run.json()["created"] == 0
     assert dry_run.json()["tenants"][0]["id"] == "demo-tenant"
     assert dry_run.json()["tenants"][0]["action"] == "would_create"
+    assert dry_run.json()["tenants"][0]["execution_config_source"] == "environment"
     assert store.get_tenant("demo-tenant") is None
 
     seeded = client.post(

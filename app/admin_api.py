@@ -505,6 +505,7 @@ class AdminTenantSeedItemResponse(BaseModel):
     name: str
     status: TenantStatus
     action: str
+    execution_config_source: str
 
 
 class AdminTenantSeedResponse(BaseModel):
@@ -913,6 +914,9 @@ def build_admin_router() -> APIRouter:
                         name=current.name,
                         status=current.status,
                         action="exists",
+                        execution_config_source=(
+                            "environment" if tenant_id in env_configs else "store"
+                        ),
                     )
                 )
                 continue
@@ -924,6 +928,7 @@ def build_admin_router() -> APIRouter:
                 name=tenant_id,
                 status=body.status,
                 action="would_create" if body.dry_run else "created",
+                execution_config_source=("environment" if tenant_id in env_configs else "store"),
             )
             items.append(item)
             if body.dry_run:
