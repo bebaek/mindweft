@@ -78,10 +78,22 @@ Example dry-run result:
 Keep the API operation explicit and admin-authorized. Add a matching CLI command:
 
 ```bash
-minigent admin tenants seed --source execution-configs --dry-run
-minigent admin tenants seed --source execution-configs \
+minigent admin tenants seed --from execution-configs --dry-run
+minigent admin tenants seed --from execution-configs \
   --status active --plan pro --region demo
+
+# Resolve a known derived-slug collision explicitly:
+minigent admin tenants seed --from execution-configs \
+  --tenant demo-tenant \
+  --slug-override demo-tenant=demo-primary \
+  --conflict-policy fail
 ```
+
+Conflict handling is explicit: `suffix` preserves the default generated-suffix behavior,
+`skip` leaves conflicting records uncreated, and `fail` rejects the batch. In `fail` mode,
+registry tenant creation is transactional, so a late uniqueness conflict rolls back the
+entire seed batch. Dry-run responses include the requested slug, resolved slug, and structured
+conflict details.
 
 Do not run this migration automatically in application startup. Operators should be
 able to inspect the dry-run output before creating metadata records.

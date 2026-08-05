@@ -1698,6 +1698,8 @@ def test_admin_tenants_seed_sends_options(monkeypatch: Any, capsys: Any) -> None
             "tenant-b",
             "--tenant",
             "tenant-c",
+            "--slug-override",
+            "tenant-b=tenant-b-primary",
             "--dry-run",
         ]
     )
@@ -1711,6 +1713,8 @@ def test_admin_tenants_seed_sends_options(monkeypatch: Any, capsys: Any) -> None
                 "source": "execution-configs",
                 "status": "active",
                 "dry_run": True,
+                "conflict_policy": "suffix",
+                "slug_overrides": {"tenant-b": "tenant-b-primary"},
                 "plan": "pro",
                 "region": "us",
                 "tenant_ids": ["tenant-b", "tenant-c"],
@@ -1719,11 +1723,11 @@ def test_admin_tenants_seed_sends_options(monkeypatch: Any, capsys: Any) -> None
     ]
     output = capsys.readouterr().out
     assert (
-        "source=execution-configs discovered=2 existing=1 created=0 conflicts=0 missing=0 dry_run=True"
+        "source=execution-configs discovered=2 existing=1 created=0 skipped=0 conflicts=0 policy=suffix missing=0 dry_run=True"
         in output
     )
     assert (
-        "tenant-b slug=tenant-b status=active action=would_create config_source=environment"
+        "tenant-b slug=tenant-b requested_slug=tenant-b status=active action=would_create conflict=none config_source=environment"
         in output
     )
 
