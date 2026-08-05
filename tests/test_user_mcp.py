@@ -249,3 +249,21 @@ def test_user_mcp_mutations_are_versioned_write_only_and_confirmed(tmp_path: Pat
         "user_execution_credential.delete",
     }
     assert "mcp-secret" not in str(audit_records)
+
+
+def test_user_mcp_access_rest_views_are_principal_scoped(tmp_path: Path) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"), encryption_key="user-mcp-test-key")
+    app = create_app(admin_store=store)
+    with TestClient(app) as client:
+        status = client.get("/me/mcp-status", headers=USER_HEADERS)
+        access = client.get("/me/mcp-access", headers=USER_HEADERS)
+        other = client.get("/me/mcp-status", headers=OTHER_USER_HEADERS)
+
+    assert status.status_code == 200
+    assert status.json()["endpoint_path"] == "/user-mcp"
+    assert status.json()["user_id"] == "user-1"
+    assert access.status_code == 200
+    assert access.json()["user_id"] == "user-1"
+    assert access.json()["personal_servers"] == []
+    assert other.status_code == 200
+    assert other.json()["user_id"] == "user-2"

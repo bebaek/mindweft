@@ -31,6 +31,28 @@ it("validates personal configuration and stores a write-only MCP credential", as
     updateUserExecutionConfig: vi.fn(),
     deleteUserExecutionConfig: vi.fn(),
     listUserExecutionCredentials: vi.fn().mockResolvedValue({ items: [] }),
+    getUserMCPAccess: vi.fn().mockResolvedValue({
+      tenant_id: "tenant-1",
+      user_id: "user-1",
+      endpoint_path: "/user-mcp",
+      personal_mcp_servers_allowed: true,
+      personal_servers: [],
+      shared_servers: [],
+    }),
+    getUserMCPStatus: vi.fn().mockResolvedValue({
+      tenant_id: "tenant-1",
+      user_id: "user-1",
+      endpoint_path: "/user-mcp",
+      execution_configured: true,
+      execution_config_version: 3,
+      encrypted_credentials_available: true,
+      personal_mcp_servers_allowed: true,
+      skills: 0,
+      mcp_servers: 0,
+      capability_profiles: 0,
+      agents: 0,
+      findings: [],
+    }),
     updateUserExecutionCredential: storeCredential,
     deleteUserExecutionCredential: vi.fn(),
   } as unknown as MinigentApiClient;
@@ -52,6 +74,8 @@ it("validates personal configuration and stores a write-only MCP credential", as
   );
 
   expect(await screen.findByText("Version 3")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "User MCP access" })).toBeInTheDocument();
+  expect(screen.getByText("http://localhost:3000/user-mcp")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Validate" }));
   await waitFor(() => expect(validateConfig).toHaveBeenCalledWith({ mcp_servers: { items: [] } }));
   expect(await screen.findByText("Configuration is valid")).toBeInTheDocument();

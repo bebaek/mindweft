@@ -49,7 +49,15 @@ The first user MCP surface also supports user-owned configuration and credential
 Mutations are principal-scoped, use optimistic version checks, and return metadata rather than
 secret values.
 
-## Client configuration
+For browser users, the Personal setup console page shows the endpoint, effective personal/shared
+MCP access, policy status, available tools, and safe copyable client instructions. The equivalent
+principal-scoped REST views are:
+
+```text
+GET /me/mcp-status
+GET /me/mcp-access
+```
+
 
 Point a Streamable HTTP MCP v2 client at the deployment's `/user-mcp` path and configure the same
 bearer authentication used for the Minigent API. The endpoint supports modern MCP discovery and

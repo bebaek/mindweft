@@ -18,6 +18,7 @@ from app.admin_store import (
 from app.models import Principal
 from app.tenants import require_active_tenant_principal
 from app.user_execution import validate_user_execution_config
+from app.user_mcp_access import get_user_execution_status, list_user_mcp_access
 
 
 class UserExecutionConfigPutRequest(BaseModel):
@@ -83,6 +84,45 @@ class UserExecutionCredentialListResponse(BaseModel):
     items: list[UserExecutionCredentialResponse] = Field(default_factory=list)
 
 
+class UserMCPServerAccessResponse(BaseModel):
+    id: str
+    name: str
+    source: str
+    allowed_tools: list[str] | None = None
+    credential_configured: bool = False
+
+
+class UserMCPAccessResponse(BaseModel):
+    tenant_id: str
+    user_id: str
+    endpoint_path: str
+    personal_mcp_servers_allowed: bool
+    personal_servers: list[UserMCPServerAccessResponse] = Field(default_factory=list)
+    shared_servers: list[UserMCPServerAccessResponse] = Field(default_factory=list)
+
+
+class UserMCPStatusFinding(BaseModel):
+    code: str
+    severity: str
+    message: str
+    remediation: str
+
+
+class UserMCPStatusResponse(BaseModel):
+    tenant_id: str
+    user_id: str
+    endpoint_path: str
+    execution_configured: bool
+    execution_config_version: int | None = None
+    encrypted_credentials_available: bool
+    personal_mcp_servers_allowed: bool
+    skills: int
+    mcp_servers: int
+    capability_profiles: int
+    agents: int
+    findings: list[UserMCPStatusFinding] = Field(default_factory=list)
+
+
 class UserExecutionConfigValidationResponse(BaseModel):
     valid: bool
     errors: list[str] = Field(default_factory=list)
@@ -146,6 +186,22 @@ def build_user_execution_router() -> APIRouter:
                 else None
             ),
         )
+
+    @router.get("/mcp-status", response_model=UserMCPStatusResponse)
+    async def get_user_mcp_status(
+        request: Request,
+        principal: Annotated[Principal, Depends(require_active_tenant_principal)],
+    ) -> UserMCPStatusResponse:
+        return UserMCPStatusResponse.model_validate(
+            get_user_execution_status(request.app, principal)
+        )
+
+    @router.get("/mcp-access", response_model=UserMCPAccessResponse)
+    async def get_user_mcp_access(
+        request: Request,
+        principal: Annotated[Principal, Depends(require_active_tenant_principal)],
+    ) -> UserMCPAccessResponse:
+        return UserMCPAccessResponse.model_validate(list_user_mcp_access(request.app, principal))
 
     @router.delete("/execution-config", status_code=204)
     async def delete_user_execution_config(
