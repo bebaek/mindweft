@@ -153,6 +153,10 @@ class SQLiteTenantConfigStore:
         self._fernet = _build_fernet(encryption_key)
         self._initialize()
 
+    @property
+    def db_path(self) -> Path:
+        return self._db_path
+
     def list_registry_tenants(
         self,
         *,

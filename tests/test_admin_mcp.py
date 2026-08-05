@@ -1,10 +1,12 @@
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from mcp.types import LATEST_PROTOCOL_VERSION
 
 from app.admin_mcp import ADMIN_CHAT_SETUP_TOOL
+from app.admin_mutations import AdminMutationService
 from app.admin_store import SQLiteTenantConfigStore
 from app.execution import ADMIN_EXECUTION_CONFIG_KEY
 from app.llm import MockLLMAdapter
@@ -88,6 +90,85 @@ def _chat_with_tool(client: TestClient, headers: dict[str, str], tool_name: str)
     run = client.post(f"/threads/{thread_id}/run", headers=headers)
     assert run.status_code == 200
     return run.json()["reply"]
+
+
+def test_admin_mutation_confirmation_is_bound_and_single_use(tmp_path: Path) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    app = create_app(admin_store=store, tenant_config_source="store")
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/admin/tenants",
+            headers=ADMIN_HEADERS,
+            json={"id": "tenant-1", "slug": "tenant-1", "name": "Before"},
+        )
+        assert created.status_code == 201
+        service = AdminMutationService(app)
+        proposal = service.propose_tenant_update(
+            admin_user_id="admin-1",
+            tenant_id="tenant-1",
+            changes={"name": "After"},
+        )
+        assert proposal["requires_confirmation"] is True
+        assert proposal["diff"]["name"] == {"from": "Before", "to": "After"}
+
+        with pytest.raises(HTTPException):
+            service.confirm(admin_user_id="different-admin", token=proposal["confirmation_id"])
+        confirmed = service.confirm(admin_user_id="admin-1", token=proposal["confirmation_id"])
+        assert confirmed["confirmed"] is True
+        updated_tenant = store.get_tenant("tenant-1")
+        assert updated_tenant is not None
+        assert updated_tenant.name == "After"
+        with pytest.raises(HTTPException):
+            service.confirm(admin_user_id="admin-1", token=proposal["confirmation_id"])
+
+
+def test_admin_mutation_confirmation_supports_domains_entitlements_and_rejects_secrets(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    app = create_app(admin_store=store, tenant_config_source="store")
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/admin/tenants",
+            headers=ADMIN_HEADERS,
+            json={"id": "tenant-1", "slug": "tenant-1", "name": "Tenant"},
+        )
+        assert created.status_code == 201
+        service = AdminMutationService(app)
+
+        domain_proposal = service.propose_domain_add(
+            admin_user_id="admin-1", tenant_id="tenant-1", domain="App.Example.COM."
+        )
+        assert domain_proposal["diff"] == {"domain": {"from": None, "to": "app.example.com"}}
+        domain_result = service.confirm(
+            admin_user_id="admin-1", token=domain_proposal["confirmation_id"]
+        )
+        assert domain_result["confirmed"] is True
+        assert store.list_tenant_domains("tenant-1")[0].domain == "app.example.com"
+
+        entitlement_proposal = service.propose_entitlements(
+            admin_user_id="admin-1",
+            tenant_id="tenant-1",
+            features={"chat": True},
+            limits={"requests": 100},
+        )
+        entitlement_result = service.confirm(
+            admin_user_id="admin-1", token=entitlement_proposal["confirmation_id"]
+        )
+        assert entitlement_result["confirmed"] is True
+        entitlements = store.get_tenant_entitlements("tenant-1")
+        assert entitlements is not None
+        assert entitlements.features == {"chat": True}
+        assert entitlements.limits == {"requests": 100}
+
+        with pytest.raises(HTTPException):
+            service.propose_tenant_update(
+                admin_user_id="admin-1",
+                tenant_id="tenant-1",
+                changes={"metadata": {"api_key": "must-not-enter-chat"}},
+            )
 
 
 def test_admin_chat_can_call_minigent_admin_tools_in_process() -> None:
