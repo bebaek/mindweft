@@ -4774,7 +4774,11 @@ def test_admin_api_seeds_tenants_from_execution_configs(
     audit_record = audit_response.json()["audit_records"][0]
     assert audit_record["resource_type"] == "tenant"
     assert audit_record["new_values"]["slug"] == "tenant-a-2"
-    assert audit_record["metadata"] == {"source": "execution-configs", "slug": "tenant-a-2"}
+    assert audit_record["metadata"] == {
+        "source": "execution-configs",
+        "slug": "tenant-a-2",
+        "execution_config_source": "store",
+    }
 
 
 def test_admin_api_seed_rejects_unknown_source(tmp_path: Path) -> None:
@@ -6070,6 +6074,12 @@ def test_admin_api_seeds_environment_execution_tenants(
     assert created is not None
     assert created.slug == "demo-tenant"
     assert created.name == "demo-tenant"
+    audit = client.get(
+        "/admin/tenants/demo-tenant/audit-records?action=tenants.seed",
+        headers=ADMIN_HEADERS,
+    )
+    assert audit.status_code == 200
+    assert audit.json()["audit_records"][0]["metadata"]["execution_config_source"] == "environment"
 
 
 def test_admin_api_can_manage_tenant_execution_config_and_redacts_secrets(

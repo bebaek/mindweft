@@ -968,7 +968,13 @@ def build_admin_router() -> APIRouter:
                     "plan": body.plan,
                     "region": body.region,
                 },
-                metadata={"source": body.source, "slug": slug},
+                metadata={
+                    "source": body.source,
+                    "slug": slug,
+                    "execution_config_source": (
+                        "environment" if tenant_id in env_configs else "store"
+                    ),
+                },
             )
         return AdminTenantSeedResponse(
             source=body.source,
