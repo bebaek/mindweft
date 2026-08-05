@@ -68,6 +68,10 @@ def test_user_mcp_requires_active_non_admin_user_and_lists_only_user_tools(tmp_p
         "get_user_execution_config",
         "validate_user_execution_config",
         "list_user_mcp_access",
+        "put_user_execution_config",
+        "delete_user_execution_config",
+        "put_user_execution_credential",
+        "delete_user_execution_credential",
     }
     assert status.status_code == 200
     result = status.json()["result"]["structuredContent"]
@@ -143,3 +147,105 @@ def test_user_mcp_validate_does_not_require_stored_config() -> None:
     result = response.json()["result"]["structuredContent"]
     assert result["valid"] is False
     assert result["errors"]
+
+
+def test_user_mcp_mutations_are_versioned_write_only_and_confirmed(tmp_path: Path) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"), encryption_key="user-mcp-test-key")
+    app = create_app(admin_store=store)
+    with TestClient(app) as client:
+        put_config = _request(
+            client,
+            1,
+            "tools/call",
+            {
+                "name": "put_user_execution_config",
+                "arguments": {"config": {}, "expected_version": 0},
+                "_meta": MCP_METADATA,
+            },
+            USER_HEADERS,
+        )
+        conflict = _request(
+            client,
+            2,
+            "tools/call",
+            {
+                "name": "put_user_execution_config",
+                "arguments": {"config": {}, "expected_version": 0},
+                "_meta": MCP_METADATA,
+            },
+            USER_HEADERS,
+        )
+        put_credential = _request(
+            client,
+            3,
+            "tools/call",
+            {
+                "name": "put_user_execution_credential",
+                "arguments": {
+                    "credential_ref": "oauth:linear",
+                    "header_name": "Authorization",
+                    "header_value": "Bearer mcp-secret",
+                    "expected_version": 0,
+                },
+                "_meta": MCP_METADATA,
+            },
+            USER_HEADERS,
+        )
+        delete_without_confirmation = _request(
+            client,
+            4,
+            "tools/call",
+            {
+                "name": "delete_user_execution_credential",
+                "arguments": {
+                    "credential_ref": "oauth:linear",
+                    "confirm": False,
+                    "expected_version": 1,
+                },
+                "_meta": MCP_METADATA,
+            },
+            USER_HEADERS,
+        )
+        delete_credential = _request(
+            client,
+            5,
+            "tools/call",
+            {
+                "name": "delete_user_execution_credential",
+                "arguments": {
+                    "credential_ref": "oauth:linear",
+                    "confirm": True,
+                    "expected_version": 1,
+                },
+                "_meta": MCP_METADATA,
+            },
+            USER_HEADERS,
+        )
+        delete_config = _request(
+            client,
+            6,
+            "tools/call",
+            {
+                "name": "delete_user_execution_config",
+                "arguments": {"confirm": True, "expected_version": 1},
+                "_meta": MCP_METADATA,
+            },
+            USER_HEADERS,
+        )
+
+    assert put_config.json()["result"]["structuredContent"]["version"] == 1
+    assert conflict.json()["result"]["isError"] is True
+    assert "actual_version" in str(conflict.json())
+    assert put_credential.json()["result"]["structuredContent"]["version"] == 1
+    assert "Bearer mcp-secret" not in put_credential.text
+    assert delete_without_confirmation.json()["result"]["isError"] is True
+    assert delete_credential.json()["result"]["structuredContent"]["deleted"] is True
+    assert delete_config.json()["result"]["structuredContent"]["deleted"] is True
+    audit_records = app.state.store.list_audit_records("tenant-1")
+    assert {record.action for record in audit_records} == {
+        "user_execution_config.put",
+        "user_execution_config.delete",
+        "user_execution_credential.put",
+        "user_execution_credential.delete",
+    }
+    assert "mcp-secret" not in str(audit_records)
