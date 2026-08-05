@@ -142,6 +142,16 @@ def test_platform_admin_can_configure_chat_execution_without_a_tenant(tmp_path: 
         echo_reply = _chat_with_tool(client, ADMIN_HEADERS, "echo")
         admin_reply = _chat_with_tool(client, ADMIN_HEADERS, ADMIN_CHAT_SETUP_TOOL)
         deleted = client.delete("/admin/execution-config", headers=ADMIN_HEADERS)
+        put_audit = client.get(
+            f"/admin/tenants/{ADMIN_EXECUTION_CONFIG_KEY}/audit-records",
+            params={"action": "admin_execution_config.put"},
+            headers=ADMIN_HEADERS,
+        )
+        delete_audit = client.get(
+            f"/admin/tenants/{ADMIN_EXECUTION_CONFIG_KEY}/audit-records",
+            params={"action": "admin_execution_config.delete"},
+            headers=ADMIN_HEADERS,
+        )
         missing_after_delete = client.get("/admin/execution-config", headers=ADMIN_HEADERS)
 
     assert missing.status_code == 404
@@ -158,6 +168,17 @@ def test_platform_admin_can_configure_chat_execution_without_a_tenant(tmp_path: 
     assert echo_reply == "Mock reply: /tool echo"
     assert admin_reply.startswith("Tool result:")
     assert deleted.status_code == 204
+    assert put_audit.status_code == 200
+    assert put_audit.json()["total"] == 1
+    put_record = put_audit.json()["audit_records"][0]
+    assert put_record["resource_type"] == "execution_config"
+    assert put_record["resource_id"] == ADMIN_EXECUTION_CONFIG_KEY
+    assert put_record["new_values"]["llm"]["api_key"] == "<redacted>"
+    assert delete_audit.status_code == 200
+    assert delete_audit.json()["total"] == 1
+    delete_record = delete_audit.json()["audit_records"][0]
+    assert delete_record["old_values"]["llm"]["api_key"] == "<redacted>"
+    assert delete_record["new_values"] is None
     assert missing_after_delete.status_code == 404
     assert store.get_raw_config(ADMIN_EXECUTION_CONFIG_KEY) is None
 
