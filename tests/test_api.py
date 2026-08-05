@@ -6052,7 +6052,11 @@ def test_admin_api_seeds_environment_execution_tenants(
 
     dry_run = client.post(
         "/admin/tenants/seed",
-        json={"source": "execution-configs", "dry_run": True},
+        json={
+            "source": "execution-configs",
+            "dry_run": True,
+            "tenant_ids": ["demo-tenant", "missing-tenant"],
+        },
         headers=ADMIN_HEADERS,
     )
     assert dry_run.status_code == 200
@@ -6061,6 +6065,7 @@ def test_admin_api_seeds_environment_execution_tenants(
     assert dry_run.json()["tenants"][0]["id"] == "demo-tenant"
     assert dry_run.json()["tenants"][0]["action"] == "would_create"
     assert dry_run.json()["tenants"][0]["execution_config_source"] == "environment"
+    assert dry_run.json()["missing_tenant_ids"] == ["missing-tenant"]
     assert store.get_tenant("demo-tenant") is None
 
     seeded = client.post(

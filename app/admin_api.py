@@ -517,6 +517,7 @@ class AdminTenantSeedResponse(BaseModel):
     created: int
     conflicts: int
     tenants: list[AdminTenantSeedItemResponse]
+    missing_tenant_ids: list[str] = Field(default_factory=list)
 
 
 class AdminTenantEntitlementsRequest(BaseModel):
@@ -898,8 +899,10 @@ def build_admin_router() -> APIRouter:
         for tenant_id in env_configs:
             if tenant_id != ADMIN_EXECUTION_CONFIG_KEY and tenant_id not in tenant_ids:
                 tenant_ids.append(tenant_id)
+        missing_tenant_ids: list[str] = []
         if body.tenant_ids is not None:
             selected_ids = set(body.tenant_ids)
+            missing_tenant_ids = sorted(selected_ids - set(tenant_ids))
             tenant_ids = [tenant_id for tenant_id in tenant_ids if tenant_id in selected_ids]
         used_slugs = _used_tenant_slugs(store)
         items: list[AdminTenantSeedItemResponse] = []
@@ -984,6 +987,7 @@ def build_admin_router() -> APIRouter:
             created=created,
             conflicts=conflicts,
             tenants=items,
+            missing_tenant_ids=missing_tenant_ids,
         )
 
     @router.get(
