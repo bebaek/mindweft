@@ -5,6 +5,8 @@ import {
   type UserExecutionConfig,
   type UserExecutionConfigValidation,
   type UserExecutionCredential,
+  type UserMCPAccess,
+  type UserMCPStatus,
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
 
@@ -29,6 +31,16 @@ export function PersonalizationPage() {
   const credentials = useQuery({
     queryKey: credentialKey,
     queryFn: ({ signal }) => api.listUserExecutionCredentials(signal),
+    retry: false,
+  });
+  const mcpAccess = useQuery({
+    queryKey: ["user-mcp-access", authentication],
+    queryFn: ({ signal }) => api.getUserMCPAccess(signal),
+    retry: false,
+  });
+  const mcpStatus = useQuery({
+    queryKey: ["user-mcp-status", authentication],
+    queryFn: ({ signal }) => api.getUserMCPStatus(signal),
     retry: false,
   });
   const [draft, setDraft] = useState(pretty(starterConfig));
@@ -101,6 +113,8 @@ export function PersonalizationPage() {
         </div>
       </header>
 
+      <MCPAccessPanel access={mcpAccess.data} status={mcpStatus.data} pending={mcpAccess.isPending || mcpStatus.isPending} error={mcpAccess.error ? errorMessage(mcpAccess.error) : mcpStatus.error ? errorMessage(mcpStatus.error) : null} />
+
       <div className="personalization-grid">
         <section className="personalization-panel config-panel" aria-labelledby="personal-config-title">
           <div className="personalization-panel-heading">
@@ -155,6 +169,76 @@ export function PersonalizationPage() {
           onChanged={() => queryClient.invalidateQueries({ queryKey: credentialKey })}
         />
       </div>
+    </section>
+  );
+}
+
+function MCPAccessPanel({
+  access,
+  status,
+  pending,
+  error,
+}: {
+  access?: UserMCPAccess;
+  status?: UserMCPStatus;
+  pending: boolean;
+  error: string | null;
+}) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const endpoint = access?.endpoint_path ?? status?.endpoint_path ?? "/user-mcp";
+  const endpointUrl = `${window.location.origin}${endpoint}`;
+  const servers = [...(access?.personal_servers ?? []), ...(access?.shared_servers ?? [])];
+
+  async function copy(value: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(label);
+    } catch {
+      setCopied(null);
+    }
+  }
+
+  return (
+    <section className="personalization-panel mcp-access-panel" aria-labelledby="mcp-access-title">
+      <div className="personalization-panel-heading">
+        <div>
+          <p className="eyebrow">External agent connection</p>
+          <h2 id="mcp-access-title">User MCP access</h2>
+          <p>Connect an MCP-compatible client to your principal-scoped endpoint. Credentials and authorization headers are never shown here.</p>
+        </div>
+        {status && <span>{status.execution_configured ? "Ready" : "Setup needed"}</span>}
+      </div>
+      {pending && <p className="personalization-status">Loading MCP access…</p>}
+      {error && <p className="inline-error" role="alert">{error}</p>}
+      {!pending && !error && (
+        <>
+          <div className="mcp-endpoint-row">
+            <code>{endpointUrl}</code>
+            <button type="button" onClick={() => void copy(endpointUrl, "endpoint")}>Copy endpoint</button>
+          </div>
+          <div className="mcp-access-meta">
+            <span>{servers.length} server{servers.length === 1 ? "" : "s"} available</span>
+            <span>{status?.personal_mcp_servers_allowed ? "Personal MCP allowed" : "Personal MCP blocked by tenant policy"}</span>
+            {status?.execution_config_version != null && <span>Config version {String(status.execution_config_version)}</span>}
+          </div>
+          {status?.findings.map((finding) => (
+            <p key={finding.code} className={`mcp-finding ${finding.severity}`} role="status">{finding.message} {finding.remediation}</p>
+          ))}
+          <div className="mcp-server-access-list">
+            {servers.map((server) => (
+              <div key={`${server.source}-${server.id}`} className="mcp-server-access-row">
+                <div><strong>{server.name}</strong><small>{server.source === "user" ? "Personal" : "Shared"} · {server.allowed_tools?.join(", ") || "All allowed tools"}</small></div>
+                {server.source === "user" && <span>{server.credential_configured ? "Credential configured" : "Credential missing"}</span>}
+              </div>
+            ))}
+            {servers.length === 0 && <p className="personalization-empty">No effective MCP servers are available.</p>}
+          </div>
+          <div className="mcp-access-actions">
+            <button type="button" onClick={() => void copy(`MCP endpoint: ${endpointUrl}\nUse your Minigent bearer authentication.`, "instructions")}>Copy client instructions</button>
+            {copied && <small role="status">Copied {copied}</small>}
+          </div>
+        </>
+      )}
     </section>
   );
 }

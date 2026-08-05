@@ -112,6 +112,45 @@ export interface UserExecutionCredentialListResponse {
   items: UserExecutionCredential[];
 }
 
+export interface UserMCPServerAccess {
+  id: string;
+  name: string;
+  source: "user" | "shared";
+  allowed_tools?: string[] | null;
+  credential_configured: boolean;
+}
+
+export interface UserMCPAccess {
+  tenant_id: string;
+  user_id: string;
+  endpoint_path: string;
+  personal_mcp_servers_allowed: boolean;
+  personal_servers: UserMCPServerAccess[];
+  shared_servers: UserMCPServerAccess[];
+}
+
+export interface UserMCPStatusFinding {
+  code: string;
+  severity: "info" | "warning" | "error";
+  message: string;
+  remediation: string;
+}
+
+export interface UserMCPStatus {
+  tenant_id: string;
+  user_id: string;
+  endpoint_path: string;
+  execution_configured: boolean;
+  execution_config_version?: number | null;
+  encrypted_credentials_available: boolean;
+  personal_mcp_servers_allowed: boolean;
+  skills: number;
+  mcp_servers: number;
+  capability_profiles: number;
+  agents: number;
+  findings: UserMCPStatusFinding[];
+}
+
 export interface UserExecutionCredentialInput {
   header_name: string;
   header_value: string;
@@ -799,11 +838,20 @@ export class MinigentApiClient {
     return this.#request<void>(`/me/execution-config${query}`, { method: "DELETE" });
   }
 
+  getUserMCPAccess(signal?: AbortSignal): Promise<UserMCPAccess> {
+    return this.#request<UserMCPAccess>("/me/mcp-access", { signal });
+  }
+
+  getUserMCPStatus(signal?: AbortSignal): Promise<UserMCPStatus> {
+    return this.#request<UserMCPStatus>("/me/mcp-status", { signal });
+  }
+
   listUserExecutionCredentials(signal?: AbortSignal): Promise<UserExecutionCredentialListResponse> {
     return this.#request<UserExecutionCredentialListResponse>("/me/execution-credentials", {
       signal,
     });
   }
+
 
   updateUserExecutionCredential(
     credentialRef: string,
