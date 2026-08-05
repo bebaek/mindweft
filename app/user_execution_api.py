@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
@@ -127,6 +127,24 @@ class UserExecutionConfigValidationResponse(BaseModel):
     valid: bool
     errors: list[str] = Field(default_factory=list)
     normalized_config: dict[str, Any] | None = None
+
+
+UserResourceType = Literal["skills", "mcp-servers", "capability-profiles", "agents"]
+
+
+class UserResourceListResponse(BaseModel):
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    version: int | None = None
+
+
+class UserResourceResponse(BaseModel):
+    resource: dict[str, Any]
+    version: int
+
+
+class UserResourcePutRequest(BaseModel):
+    resource: dict[str, Any] = Field(default_factory=dict)
+    expected_version: int | None = Field(default=None, ge=0)
 
 
 def build_user_execution_router() -> APIRouter:
@@ -283,7 +301,140 @@ def build_user_execution_router() -> APIRouter:
             raise HTTPException(status_code=404, detail="User execution credential not found")
         return Response(status_code=204)
 
+    @router.get(
+        "/{resource_type}",
+        response_model=UserResourceListResponse,
+    )
+    async def list_user_resources(
+        resource_type: UserResourceType,
+        request: Request,
+        principal: Annotated[Principal, Depends(require_active_tenant_principal)],
+    ) -> UserResourceListResponse:
+        store = _require_user_execution_store(request)
+        record = store.get_user_execution_config(principal.tenant_id, principal.user_id)
+        if record is None:
+            return UserResourceListResponse()
+        resources = _resources_from_config(record.config, resource_type)
+        return UserResourceListResponse(items=resources, version=record.version)
+
+    @router.get(
+        "/{resource_type}/{resource_id}",
+        response_model=UserResourceResponse,
+    )
+    async def get_user_resource(
+        resource_type: UserResourceType,
+        resource_id: str,
+        request: Request,
+        principal: Annotated[Principal, Depends(require_active_tenant_principal)],
+    ) -> UserResourceResponse:
+        store = _require_user_execution_store(request)
+        record = store.get_user_execution_config(principal.tenant_id, principal.user_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="User execution config not found")
+        resource = _find_resource(_resources_from_config(record.config, resource_type), resource_id)
+        if resource is None:
+            raise HTTPException(status_code=404, detail="User resource not found")
+        return UserResourceResponse(resource=resource, version=record.version)
+
+    @router.put(
+        "/{resource_type}/{resource_id}",
+        response_model=UserResourceResponse,
+    )
+    async def put_user_resource(
+        resource_type: UserResourceType,
+        resource_id: str,
+        body: UserResourcePutRequest,
+        request: Request,
+        principal: Annotated[Principal, Depends(require_active_tenant_principal)],
+    ) -> UserResourceResponse:
+        if body.resource.get("id") != resource_id:
+            raise HTTPException(status_code=422, detail="Resource id must match the URL")
+        store = _require_user_execution_store(request)
+        current = store.get_user_execution_config(principal.tenant_id, principal.user_id)
+        config = dict(current.config) if current is not None else {}
+        items = list(_resources_from_config(config, resource_type))
+        replacement = dict(body.resource)
+        replaced = False
+        for index, resource in enumerate(items):
+            if resource.get("id") == resource_id:
+                items[index] = replacement
+                replaced = True
+                break
+        if not replaced:
+            items.append(replacement)
+        config[_resource_config_key(resource_type)] = {"items": items}
+        record = _save_resource_config(store, principal, config, body.expected_version)
+        saved = _find_resource(_resources_from_config(record.config, resource_type), resource_id)
+        assert saved is not None
+        return UserResourceResponse(resource=saved, version=record.version)
+
+    @router.delete("/{resource_type}/{resource_id}", status_code=204)
+    async def delete_user_resource(
+        resource_type: UserResourceType,
+        resource_id: str,
+        request: Request,
+        principal: Annotated[Principal, Depends(require_active_tenant_principal)],
+        expected_version: Annotated[int | None, Query(ge=0)] = None,
+    ) -> Response:
+        store = _require_user_execution_store(request)
+        current = store.get_user_execution_config(principal.tenant_id, principal.user_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="User execution config not found")
+        items = _resources_from_config(current.config, resource_type)
+        if _find_resource(items, resource_id) is None:
+            raise HTTPException(status_code=404, detail="User resource not found")
+        config = dict(current.config)
+        config[_resource_config_key(resource_type)] = {
+            "items": [item for item in items if item.get("id") != resource_id]
+        }
+        _save_resource_config(store, principal, config, expected_version)
+        return Response(status_code=204)
+
     return router
+
+
+def _resource_config_key(resource_type: UserResourceType) -> str:
+    return {
+        "skills": "skills",
+        "mcp-servers": "mcp_servers",
+        "capability-profiles": "capability_profiles",
+        "agents": "agents",
+    }[resource_type]
+
+
+def _resources_from_config(
+    config: dict[str, Any], resource_type: UserResourceType
+) -> list[dict[str, Any]]:
+    collection = config.get(_resource_config_key(resource_type), {})
+    items = collection.get("items", []) if isinstance(collection, dict) else []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _find_resource(resources: list[dict[str, Any]], resource_id: str) -> dict[str, Any] | None:
+    return next((resource for resource in resources if resource.get("id") == resource_id), None)
+
+
+def _save_resource_config(
+    store: SQLiteTenantConfigStore,
+    principal: Principal,
+    config: dict[str, Any],
+    expected_version: int | None,
+) -> UserExecutionConfigRecord:
+    report = validate_user_execution_config(config)
+    if not report.valid or report.config is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Invalid user resource", "errors": report.errors},
+        )
+    try:
+        return store.upsert_user_execution_config(
+            principal.tenant_id,
+            principal.user_id,
+            report.config.model_dump(mode="json", exclude_none=True),
+            expected_version=expected_version,
+        )
+    except UserExecutionConfigConflictError as exc:
+        raise _version_conflict(exc) from exc
 
 
 def _require_user_execution_store(request: Request) -> SQLiteTenantConfigStore:
