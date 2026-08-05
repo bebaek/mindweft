@@ -46,6 +46,7 @@ from app.execution import (
     TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS,
     FixedTenantExecutionResolver,
     StoreBackedTenantExecutionResolver,
+    TenantExecutionContext,
     TenantExecutionResolver,
     build_execution_resolver_from_env,
     get_llm_config,
@@ -837,6 +838,7 @@ def create_app(
         if admin_store is not None
         else None
     )
+    admin_fallback_execution_resolver: TenantExecutionResolver | None = None
     if execution_resolver is None:
         if llm_adapter is not None or tool_registry is not None:
             adapter = llm_adapter or build_llm_adapter_from_env()
@@ -845,6 +847,7 @@ def create_app(
         else:
             config_source = resolve_tenant_config_source(tenant_config_source)
             fallback_resolver = build_execution_resolver_from_env(mcp_manager=mcp_manager)
+            admin_fallback_execution_resolver = fallback_resolver
             if config_source == TENANT_CONFIG_SOURCE_ENV_ONLY:
                 execution_resolver = fallback_resolver
             elif config_source == TENANT_CONFIG_SOURCE_STORE:
@@ -911,6 +914,11 @@ def create_app(
 
         mcp_server_name_authorizer = authorize_mcp_server_names
 
+    def resolve_principal_execution(principal: Principal) -> TenantExecutionContext:
+        if principal.is_admin and admin_fallback_execution_resolver is not None:
+            return admin_fallback_execution_resolver.resolve(principal.tenant_id)
+        return execution_resolver.resolve(principal.tenant_id)
+
     def principal_tool_registry_provider(principal: Principal) -> ToolRegistry | None:
         if not principal.is_admin:
             return None
@@ -926,6 +934,7 @@ def create_app(
         attachment_store=app.state.attachment_store,
         mcp_server_name_authorizer=mcp_server_name_authorizer,
         user_execution_config_source=admin_store,
+        principal_execution_resolver=resolve_principal_execution,
         principal_tool_registry_provider=principal_tool_registry_provider,
     )
     app.state.peer_agent_registry = (
@@ -943,6 +952,7 @@ def create_app(
         mcp_broker_sessions=app.state.mcp_broker_sessions,
         mcp_server_name_authorizer=mcp_server_name_authorizer,
         user_execution_config_source=admin_store,
+        principal_execution_resolver=resolve_principal_execution,
         principal_tool_registry_provider=principal_tool_registry_provider,
     )
     app.include_router(build_session_auth_router())
@@ -1014,7 +1024,7 @@ def create_app(
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> ExecutionOptionsResponse:
-        execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
+        execution = resolve_principal_execution(principal)
         enforce_execution_entitlements(
             context=tenant_context_from_request_state(request.state),
             execution=execution,
@@ -1253,7 +1263,7 @@ def create_app(
         skill_names = body.skill_names if body is not None else None
         capability_profile = body.capability_profile if body is not None else None
         llm_profile = body.llm_profile if body is not None else None
-        execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
+        execution = resolve_principal_execution(principal)
         enforce_thread_creation_limit(
             context=tenant_context_from_request_state(request.state),
             store=request.app.state.store,
@@ -1523,7 +1533,7 @@ def create_app(
             store=app_request.app.state.store,
             thread_id=thread_id,
         )
-        execution = app_request.app.state.execution_resolver.resolve(principal.tenant_id)
+        execution = resolve_principal_execution(principal)
         thread = app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
         llm_config = get_llm_config(execution, thread.llm_profile)
         request = _validate_and_normalize_message_request(
@@ -1665,7 +1675,7 @@ def create_app(
     ) -> RunThreadResponse:
         _reject_if_draining(request)
         _enforce_request_rate_limit(request, principal, RUN_RATE_LIMIT_CATEGORY)
-        execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
+        execution = resolve_principal_execution(principal)
         enforce_execution_entitlements(
             context=tenant_context_from_request_state(request.state),
             execution=execution,
@@ -1688,7 +1698,7 @@ def create_app(
     ) -> StreamingResponse:
         _reject_if_draining(request)
         _enforce_request_rate_limit(request, principal, RUN_RATE_LIMIT_CATEGORY)
-        execution = request.app.state.execution_resolver.resolve(principal.tenant_id)
+        execution = resolve_principal_execution(principal)
         enforce_execution_entitlements(
             context=tenant_context_from_request_state(request.state),
             execution=execution,
