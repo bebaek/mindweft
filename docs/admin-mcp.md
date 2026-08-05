@@ -52,7 +52,13 @@ tenant tools:
 - `minigent_admin_list_mcp_server_catalog_access`
 
 These tools are present only when the principal has `is_admin: true`. The externally callable MCP
-names remain unchanged for compatibility.
+names remain unchanged for compatibility. Platform admins do not need a tenant record, tenant
+membership, or tenant execution configuration to start this chat. In store-backed execution
+modes, platform-admin chat uses the deployment-level execution settings from the environment or
+unified `minigent.toml` instead of a tenant's execution configuration; ordinary tenant users still
+fail closed in strict `store` mode. Configure that deployment-level LLM with the normal
+`MINIGENT_LLM_*` or `[llm]` settings so the bootstrap admin chat uses a production model instead
+of the mock default.
 
 This first surface deliberately cannot modify tenant execution config, MCP catalog policies,
 assignments, credentials, path policy, or shell access. A later mutation surface must use an

@@ -81,6 +81,10 @@ async def require_tenant_context(
 
     tenant = store.get_tenant(principal.tenant_id)
     if tenant is None:
+        if principal.is_admin:
+            context = TenantContext(principal=principal, tenant_id=principal.tenant_id)
+            request.state.tenant_context = context
+            return context
         if required:
             raise HTTPException(status_code=403, detail="Tenant is not active")
         membership = (
@@ -95,15 +99,19 @@ async def require_tenant_context(
         request.state.tenant_context = context
         return context
 
-    if required and tenant.status != TenantStatus.ACTIVE:
+    if required and tenant.status != TenantStatus.ACTIVE and not principal.is_admin:
         raise HTTPException(status_code=403, detail="Tenant is not active")
 
     entitlements = store.get_tenant_entitlements(principal.tenant_id)
     execution_config_version = store.get_config_version(principal.tenant_id)
     membership = (
-        _require_active_membership(store, principal)
-        if user_required
-        else _active_membership(store, principal)
+        _active_membership(store, principal)
+        if principal.is_admin
+        else (
+            _require_active_membership(store, principal)
+            if user_required
+            else _active_membership(store, principal)
+        )
     )
     context = _tenant_context_from_records(
         principal,

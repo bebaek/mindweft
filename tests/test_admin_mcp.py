@@ -1,7 +1,11 @@
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 from mcp.types import LATEST_PROTOCOL_VERSION
 
 from app.admin_mcp import ADMIN_CHAT_SETUP_TOOL
+from app.admin_store import SQLiteTenantConfigStore
 from app.llm import MockLLMAdapter
 from app.main import create_app
 from app.tools import build_local_tool_registry
@@ -94,3 +98,34 @@ def test_admin_chat_can_call_minigent_admin_tools_in_process() -> None:
     assert admin_reply.startswith("Tool result:")
     assert "readiness_checks" in admin_reply
     assert user_reply == f"Mock reply: /tool {ADMIN_CHAT_SETUP_TOOL}"
+
+
+def test_admin_chat_uses_deployment_execution_when_tenant_has_no_config(tmp_path: Path) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    app = create_app(admin_store=store, tenant_config_source="store")
+
+    with TestClient(app) as client:
+        admin_reply = _chat_with_tool(client, ADMIN_HEADERS, ADMIN_CHAT_SETUP_TOOL)
+        user_create = client.post("/threads", headers=USER_HEADERS)
+
+    assert admin_reply.startswith("Tool result:")
+    assert "readiness_checks" in admin_reply
+    assert user_create.status_code == 403
+    assert user_create.json()["detail"] == ("Tenant 'tenant-1' has no execution configuration")
+
+
+def test_admin_chat_does_not_require_a_tenant_membership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINIGENT_TENANT_USER_REGISTRY_REQUIRED", "true")
+    app = create_app(
+        admin_store=SQLiteTenantConfigStore(str(tmp_path / "admin.db")),
+        tenant_config_source="store",
+    )
+
+    with TestClient(app) as client:
+        admin_reply = _chat_with_tool(client, ADMIN_HEADERS, ADMIN_CHAT_SETUP_TOOL)
+
+    assert admin_reply.startswith("Tool result:")
+    assert "readiness_checks" in admin_reply
