@@ -1660,6 +1660,7 @@ def test_admin_tenants_seed_sends_options(monkeypatch: Any, capsys: Any) -> None
                 "name": "tenant-a",
                 "status": "active",
                 "action": "exists",
+                "execution_config_source": "store",
             },
             {
                 "id": "tenant-b",
@@ -1667,6 +1668,7 @@ def test_admin_tenants_seed_sends_options(monkeypatch: Any, capsys: Any) -> None
                 "name": "tenant-b",
                 "status": "active",
                 "action": "would_create",
+                "execution_config_source": "environment",
             },
         ],
     }
@@ -1717,10 +1719,13 @@ def test_admin_tenants_seed_sends_options(monkeypatch: Any, capsys: Any) -> None
     ]
     output = capsys.readouterr().out
     assert (
-        "source=execution-configs discovered=2 existing=1 created=0 conflicts=0 dry_run=True"
+        "source=execution-configs discovered=2 existing=1 created=0 conflicts=0 missing=0 dry_run=True"
         in output
     )
-    assert "tenant-b slug=tenant-b status=active action=would_create" in output
+    assert (
+        "tenant-b slug=tenant-b status=active action=would_create config_source=environment"
+        in output
+    )
 
 
 def test_admin_tenants_seed_json(monkeypatch: Any, capsys: Any) -> None:
