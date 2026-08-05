@@ -64,8 +64,8 @@ workspace tool model, bridge path glob controls, optional trusted-local shell co
 support, and optional codebase-memory/code-navigation MCP setup.
 
 For an administrator-operated agent, see [Admin operations MCP](docs/admin-mcp.md) for the
-read-only in-process MCP v2 endpoint at `/mcp`, its authentication model, and safe setup
-diagnostics.
+read-only in-process MCP v2 endpoint at `/mcp`, its authentication model, safe setup
+diagnostics, and the same role-scoped operations available directly to authenticated admin chat.
 
 ## Basic API flow
 

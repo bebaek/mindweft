@@ -17,7 +17,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 
 from app.admin_api import build_admin_router
-from app.admin_mcp import AdminMCPAuthMiddleware, build_admin_mcp_server
+from app.admin_mcp import (
+    AdminMCPAuthMiddleware,
+    build_admin_chat_tool_registry,
+    build_admin_mcp_server,
+)
 from app.admin_store import SQLiteTenantConfigStore
 from app.agent_backends import AgentBackendRouter, NativeAgentBackend
 from app.attachments import (
@@ -906,6 +910,12 @@ def create_app(
             }
 
         mcp_server_name_authorizer = authorize_mcp_server_names
+
+    def principal_tool_registry_provider(principal: Principal) -> ToolRegistry | None:
+        if not principal.is_admin:
+            return None
+        return build_admin_chat_tool_registry(app, principal)
+
     app.state.runtime = AgentRuntime(
         store=app.state.store,
         execution_resolver=execution_resolver,
@@ -916,6 +926,7 @@ def create_app(
         attachment_store=app.state.attachment_store,
         mcp_server_name_authorizer=mcp_server_name_authorizer,
         user_execution_config_source=admin_store,
+        principal_tool_registry_provider=principal_tool_registry_provider,
     )
     app.state.peer_agent_registry = (
         peer_agent_registry
@@ -932,6 +943,7 @@ def create_app(
         mcp_broker_sessions=app.state.mcp_broker_sessions,
         mcp_server_name_authorizer=mcp_server_name_authorizer,
         user_execution_config_source=admin_store,
+        principal_tool_registry_provider=principal_tool_registry_provider,
     )
     app.include_router(build_session_auth_router())
     app.include_router(build_admin_router())
