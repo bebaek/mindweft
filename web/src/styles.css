@@ -727,6 +727,16 @@ html[data-theme="dark"] .admin-page .lifecycle-actions .archive { color:#ff9d94;
 .personalization-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:9px; margin-top:18px; }
 .personalization-actions .button-danger { margin-right:auto; }
 .personalization-status,.personalization-empty { color:var(--muted); }
+.resource-editors { margin-top:18px; }
+.resource-skill-form { display:grid; gap:12px; max-width:720px; }
+.resource-skill-form label { display:grid; gap:5px; color:var(--muted); font-size:var(--text-sm); font-weight:700; }
+.resource-skill-form input,.resource-skill-form textarea { width:100%; box-sizing:border-box; padding:10px 11px; border:1px solid var(--line); border-radius:8px; color:var(--ink); background:var(--paper); font:inherit; }
+.resource-skill-form textarea { resize:vertical; }
+.resource-skill-form>button { justify-self:start; }
+.resource-list { display:grid; gap:8px; margin:18px 0 0; padding:0; list-style:none; }
+.resource-list li { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px 0; border-top:1px solid var(--line); }
+.resource-list li>div { display:grid; gap:3px; min-width:0; }.resource-list small { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.resource-list .button-danger { flex:none; padding:6px 9px; }
 .personal-credential-list { display:grid; gap:0; margin:0 0 22px; padding:0; list-style:none; }
 .personal-credential-list li { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:9px; padding:13px 0; border-bottom:1px solid var(--line); }
 .personal-credential-list li>div { display:grid; min-width:0; gap:4px; }

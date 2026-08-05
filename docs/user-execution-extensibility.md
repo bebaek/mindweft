@@ -12,9 +12,11 @@ also implemented. Shared resources expose qualified `shared:` IDs while legacy u
 names remain accepted. The console also manages write-only static MCP credential headers with
 create, rotation, and confirmed deletion flows.
 
-Still pending: interactive OAuth connection and refresh flows, guided resource-specific config APIs
-and console editors, immutable thread resource version metadata and pinning, lifecycle cleanup, and
-sharing. Personal capability profiles can use tenant-approved tools and user-owned MCP servers.
+Still pending: interactive OAuth connection and refresh flows, immutable thread resource version metadata
+and pinning, lifecycle cleanup, sharing, and guided console editors. Granular principal-scoped
+resource CRUD APIs for skills, MCP servers, capability profiles, and agents are now available
+alongside the coarse config API; the console migration to those APIs is still pending. Personal
+capability profiles can use tenant-approved tools and user-owned MCP servers.
 User-owned servers are restricted to public HTTPS destinations, revalidated on every request, and
 gated by the tenant custom-MCP policy. Static authorization or API-key headers can be stored in the
 write-only encrypted personal credential store and are resolved live for each thread run.
@@ -390,8 +392,19 @@ PUT    /me/agents/{resource_id}
 DELETE /me/agents/{resource_id}
 ```
 
-A coarse config endpoint is enough for the first backend iteration; resource-specific routes can
-follow when the web console needs granular editing and conflict handling.
+The following resource-specific routes are implemented in addition to the coarse document API:
+
+```text
+GET    /me/{skills|mcp-servers|capability-profiles|agents}
+GET    /me/{resource_type}/{resource_id}
+PUT    /me/{resource_type}/{resource_id}
+DELETE /me/{resource_type}/{resource_id}
+```
+
+Resource writes use the same `expected_version` optimistic-concurrency field and return the updated
+resource plus its config version. Resource payloads are validated against the typed user execution
+models before storage; IDs are principal-scoped and must use the `user:` namespace.
+
 
 The implemented coarse API uses this update envelope:
 

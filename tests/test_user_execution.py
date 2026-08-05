@@ -444,6 +444,80 @@ def test_user_execution_config_api_round_trip_is_principal_scoped(tmp_path: Path
     assert deleted.status_code == 204
 
 
+def test_user_resource_api_supports_granular_skill_crud_and_conflicts(tmp_path: Path) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    app = create_app(admin_store=store)
+    skill = {
+        "id": "user:reviewer",
+        "name": "reviewer",
+        "description": "Review changes",
+        "system_prompt": "Review code carefully.",
+    }
+
+    with TestClient(app) as client:
+        created = client.put(
+            "/me/skills/user:reviewer",
+            headers=AUTH_HEADERS,
+            json={"resource": skill, "expected_version": 0},
+        )
+        listed = client.get("/me/skills", headers=AUTH_HEADERS)
+        fetched = client.get("/me/skills/user:reviewer", headers=AUTH_HEADERS)
+        updated = client.put(
+            "/me/skills/user:reviewer",
+            headers=AUTH_HEADERS,
+            json={
+                "resource": {**skill, "description": "Review every change"},
+                "expected_version": 1,
+            },
+        )
+        conflict = client.put(
+            "/me/skills/user:reviewer",
+            headers=AUTH_HEADERS,
+            json={"resource": skill, "expected_version": 1},
+        )
+        other_user = client.get("/me/skills", headers=OTHER_USER_HEADERS)
+        deleted = client.delete(
+            "/me/skills/user:reviewer?expected_version=2",
+            headers=AUTH_HEADERS,
+        )
+        missing = client.get("/me/skills/user:reviewer", headers=AUTH_HEADERS)
+
+    assert created.status_code == 200
+    assert created.json()["resource"]["id"] == "user:reviewer"
+    assert created.json()["version"] == 1
+    assert listed.json() == {"items": [skill], "version": 1}
+    assert fetched.json()["resource"] == skill
+    assert updated.status_code == 200
+    assert updated.json()["resource"]["description"] == "Review every change"
+    assert updated.json()["version"] == 2
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["actual_version"] == 2
+    assert other_user.json() == {"items": [], "version": None}
+    assert deleted.status_code == 204
+    assert missing.status_code == 404
+
+
+def test_user_resource_api_rejects_url_id_mismatch(tmp_path: Path) -> None:
+    app = create_app(admin_store=SQLiteTenantConfigStore(str(tmp_path / "admin.db")))
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/me/skills/user:reviewer",
+            headers=AUTH_HEADERS,
+            json={
+                "resource": {
+                    "id": "user:other",
+                    "name": "reviewer",
+                    "system_prompt": "Review code.",
+                },
+                "expected_version": 0,
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Resource id must match the URL"
+
+
 def test_user_execution_config_validate_endpoint_returns_errors() -> None:
     app = create_app()
 

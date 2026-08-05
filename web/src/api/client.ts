@@ -98,6 +98,16 @@ export interface UserExecutionConfigValidation {
   normalized_config?: Record<string, unknown> | null;
 }
 
+export interface UserResourceListResponse {
+  items: Record<string, unknown>[];
+  version?: number | null;
+}
+
+export interface UserResourceResponse {
+  resource: Record<string, unknown>;
+  version: number;
+}
+
 export interface UserExecutionCredential {
   tenant_id: string;
   user_id: string;
@@ -836,6 +846,53 @@ export class MinigentApiClient {
       ? ""
       : `?expected_version=${encodeURIComponent(String(expectedVersion))}`;
     return this.#request<void>(`/me/execution-config${query}`, { method: "DELETE" });
+  }
+
+  listUserResources(
+    resourceType: "skills" | "mcp-servers" | "capability-profiles" | "agents",
+    signal?: AbortSignal,
+  ): Promise<UserResourceListResponse> {
+    return this.#request<UserResourceListResponse>(`/me/${resourceType}`, { signal });
+  }
+
+  getUserResource(
+    resourceType: "skills" | "mcp-servers" | "capability-profiles" | "agents",
+    resourceId: string,
+    signal?: AbortSignal,
+  ): Promise<UserResourceResponse> {
+    return this.#request<UserResourceResponse>(
+      `/me/${resourceType}/${encodeURIComponent(resourceId)}`,
+      { signal },
+    );
+  }
+
+  updateUserResource(
+    resourceType: "skills" | "mcp-servers" | "capability-profiles" | "agents",
+    resourceId: string,
+    resource: Record<string, unknown>,
+    expectedVersion?: number,
+  ): Promise<UserResourceResponse> {
+    return this.#request<UserResourceResponse>(
+      `/me/${resourceType}/${encodeURIComponent(resourceId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ resource, expected_version: expectedVersion }),
+      },
+    );
+  }
+
+  deleteUserResource(
+    resourceType: "skills" | "mcp-servers" | "capability-profiles" | "agents",
+    resourceId: string,
+    expectedVersion?: number,
+  ): Promise<void> {
+    const query = expectedVersion === undefined
+      ? ""
+      : `?expected_version=${encodeURIComponent(String(expectedVersion))}`;
+    return this.#request<void>(
+      `/me/${resourceType}/${encodeURIComponent(resourceId)}${query}`,
+      { method: "DELETE" },
+    );
   }
 
   getUserMCPAccess(signal?: AbortSignal): Promise<UserMCPAccess> {

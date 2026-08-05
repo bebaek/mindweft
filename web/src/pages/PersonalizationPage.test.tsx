@@ -30,6 +30,9 @@ it("validates personal configuration and stores a write-only MCP credential", as
     validateUserExecutionConfig: validateConfig,
     updateUserExecutionConfig: vi.fn(),
     deleteUserExecutionConfig: vi.fn(),
+    listUserResources: vi.fn().mockResolvedValue({ items: [], version: 3 }),
+    updateUserResource: vi.fn(),
+    deleteUserResource: vi.fn(),
     listUserExecutionCredentials: vi.fn().mockResolvedValue({ items: [] }),
     getUserMCPAccess: vi.fn().mockResolvedValue({
       tenant_id: "tenant-1",
