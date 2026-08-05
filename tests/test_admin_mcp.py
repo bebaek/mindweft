@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 from mcp.types import LATEST_PROTOCOL_VERSION
 
+from app.admin_mcp import ADMIN_CHAT_SETUP_TOOL
 from app.llm import MockLLMAdapter
 from app.main import create_app
 from app.tools import build_local_tool_registry
@@ -67,3 +68,29 @@ def test_admin_mcp_requires_admin_and_exposes_only_read_tools() -> None:
     result = status.json()["result"]["structuredContent"]
     assert "readiness_checks" in result
     assert "authorization" not in str(result).lower()
+
+
+def _chat_with_tool(client: TestClient, headers: dict[str, str], tool_name: str) -> str:
+    created = client.post("/threads", headers=headers)
+    assert created.status_code == 200
+    thread_id = created.json()["thread_id"]
+    message = client.post(
+        f"/threads/{thread_id}/messages",
+        headers=headers,
+        json={"content": f"/tool {tool_name}"},
+    )
+    assert message.status_code == 200
+    run = client.post(f"/threads/{thread_id}/run", headers=headers)
+    assert run.status_code == 200
+    return run.json()["reply"]
+
+
+def test_admin_chat_can_call_minigent_admin_tools_in_process() -> None:
+    app = create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    with TestClient(app) as client:
+        admin_reply = _chat_with_tool(client, ADMIN_HEADERS, ADMIN_CHAT_SETUP_TOOL)
+        user_reply = _chat_with_tool(client, USER_HEADERS, ADMIN_CHAT_SETUP_TOOL)
+
+    assert admin_reply.startswith("Tool result:")
+    assert "readiness_checks" in admin_reply
+    assert user_reply == f"Mock reply: /tool {ADMIN_CHAT_SETUP_TOOL}"

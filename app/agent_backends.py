@@ -114,6 +114,7 @@ class AgentBackendRouter(AgentBackend):
         mcp_broker_sessions: MCPBrokerSessionStore | None = None,
         mcp_server_name_authorizer: MCPServerNameAuthorizer | None = None,
         user_execution_config_source: UserExecutionConfigSource | None = None,
+        principal_tool_registry_provider: Callable[[Principal], ToolRegistry | None] | None = None,
     ) -> None:
         self._store = store
         self._execution_resolver = execution_resolver
@@ -122,6 +123,7 @@ class AgentBackendRouter(AgentBackend):
         self._mcp_broker_sessions = mcp_broker_sessions
         self._mcp_server_name_authorizer = mcp_server_name_authorizer
         self._user_execution_config_source = user_execution_config_source
+        self._principal_tool_registry_provider = principal_tool_registry_provider
 
     async def run_thread(
         self,
@@ -363,7 +365,7 @@ class AgentBackendRouter(AgentBackend):
             else None
         )
         if personal_capability_constraints is not None:
-            return build_tool_registry_for_constraints(
+            registry = build_tool_registry_for_constraints(
                 execution.config,
                 profile_allowed_local_tools=personal_capability_constraints.allowed_local_tools,
                 profile_mcp_server_names=(personal_capability_constraints.shared_mcp_server_names),
@@ -371,28 +373,35 @@ class AgentBackendRouter(AgentBackend):
                 mcp_manager=execution.mcp_manager,
                 allowed_mcp_server_names=allowed_mcp_server_names,
             )
-        if capability_profile is not None:
-            return build_tool_registry_for_capability_profile(
+        elif capability_profile is not None:
+            registry = build_tool_registry_for_capability_profile(
                 execution.config,
                 capability_profile.stored_ref,
                 mcp_manager=execution.mcp_manager,
                 allowed_mcp_server_names=allowed_mcp_server_names,
             )
-        if len(skills) == 1 and (
+        elif len(skills) == 1 and (
             skills[0].config.allowed_local_tools is not None
             or skills[0].config.mcp_server_names is not None
         ):
-            return build_tool_registry_for_skill(
+            registry = build_tool_registry_for_skill(
                 execution.config,
                 skills[0].stored_ref,
                 mcp_manager=execution.mcp_manager,
                 allowed_mcp_server_names=allowed_mcp_server_names,
             )
-        if allowed_mcp_server_names is not None:
-            return build_tool_registry_for_mcp_server_names(
+        elif allowed_mcp_server_names is not None:
+            registry = build_tool_registry_for_mcp_server_names(
                 execution.config, allowed_mcp_server_names, mcp_manager=execution.mcp_manager
             )
-        return execution.tool_registry
+        else:
+            registry = execution.tool_registry
+        if self._principal_tool_registry_provider is None:
+            return registry
+        principal_registry = self._principal_tool_registry_provider(principal)
+        if principal_registry is None:
+            return registry
+        return ToolRegistry.combine(registry, principal_registry)
 
     @staticmethod
     def _enforce_personal_execution_owner(principal: Principal, thread: Thread) -> None:

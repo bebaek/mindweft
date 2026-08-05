@@ -35,6 +35,25 @@ secret values, bearer tokens, credential headers, or configured MCP URLs.
   available to a tenant user, including only server ID, name, transport category, and allowed tool
   names.
 
+## Admin chat
+
+Authenticated platform-admin chat runs can invoke these operations directly in process; no
+loopback HTTP request and no forwarding of the user's bearer or session credential is involved.
+The runtime composes a role-scoped tool registry with the thread's normal tool registry after its
+skill, capability-profile, and MCP access policy have been resolved. This composition point can
+later supply purpose-built tools for tenant owners or other roles without granting those roles the
+platform-admin surface.
+
+The chat-visible names are deliberately namespaced so they cannot be confused with ordinary
+tenant tools:
+
+- `minigent_admin_get_setup_status`
+- `minigent_admin_diagnose_tenant_setup`
+- `minigent_admin_list_mcp_server_catalog_access`
+
+These tools are present only when the principal has `is_admin: true`. The externally callable MCP
+names remain unchanged for compatibility.
+
 This first surface deliberately cannot modify tenant execution config, MCP catalog policies,
 assignments, credentials, path policy, or shell access. A later mutation surface must use an
 explicit preview plus a tenant-bound, single-use confirmation flow.

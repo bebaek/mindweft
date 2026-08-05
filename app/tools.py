@@ -221,6 +221,23 @@ class ToolRegistry:
     def mcp_servers(self) -> list[dict[str, Any]]:
         return list(self._mcp_servers)
 
+    @classmethod
+    def combine(cls, *registries: ToolRegistry) -> ToolRegistry:
+        """Return a registry containing each input registry without mutating them."""
+        if not registries:
+            return cls()
+        combined = cls(result_redaction_policy=registries[0]._result_redaction_policy)
+        for registry in registries:
+            duplicate_names = set(combined._tools) & set(registry._tools)
+            if duplicate_names:
+                names = ", ".join(sorted(duplicate_names))
+                raise ValueError(f"Cannot combine duplicate tool names: {names}")
+            combined._tools.update(registry._tools)
+            combined._private_value_policies.update(registry._private_value_policies)
+            combined._trusted_input_preprocessors.update(registry._trusted_input_preprocessors)
+            combined._mcp_servers.extend(registry._mcp_servers)
+        return combined
+
 
 def build_local_tool_registry(
     allowed_tools: list[str] | None = None,
