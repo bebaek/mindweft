@@ -373,10 +373,13 @@ export interface AdminAuditFilters {
   created_before?: string;
 }
 
-export interface AdminTenantExecutionConfig {
-  tenant_id: string;
+export interface AdminExecutionConfig {
   version: number;
   config: Record<string, unknown>;
+}
+
+export interface AdminTenantExecutionConfig extends AdminExecutionConfig {
+  tenant_id: string;
 }
 
 export interface AdminMcpServerCatalogItem {
@@ -1236,6 +1239,32 @@ export class MinigentApiClient {
       `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-server-catalog`,
       { signal },
     );
+  }
+
+  getAdminExecutionConfig(signal?: AbortSignal): Promise<AdminExecutionConfig> {
+    return this.#request<AdminExecutionConfig>("/admin/execution-config", { signal });
+  }
+
+  validateAdminExecutionConfig(
+    config: Record<string, unknown>,
+  ): Promise<AdminExecutionValidation> {
+    return this.#request<AdminExecutionValidation>("/admin/execution-config/validate", {
+      method: "POST",
+      body: JSON.stringify({ config }),
+    });
+  }
+
+  updateAdminExecutionConfig(
+    config: Record<string, unknown>,
+  ): Promise<AdminExecutionConfig> {
+    return this.#request<AdminExecutionConfig>("/admin/execution-config", {
+      method: "PUT",
+      body: JSON.stringify({ config }),
+    });
+  }
+
+  deleteAdminExecutionConfig(): Promise<void> {
+    return this.#request<void>("/admin/execution-config", { method: "DELETE" });
   }
 
   getAdminTenantExecutionConfig(

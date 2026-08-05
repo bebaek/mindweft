@@ -177,6 +177,8 @@ export function AdminPage({ tenantId: scopedTenantId }: { tenantId?: string }) {
         </div>}
       </header>
 
+      {!tenantScoped && <ExecutionConfigPanel platform />}
+
       {(tenantScoped ? scopedTenant.isError : tenants.isError) && (
         <div className="admin-access-error" role="alert">
           <strong>{tenantScoped ? "Tenant settings are unavailable." : "Tenant administration is unavailable."}</strong>

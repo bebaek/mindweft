@@ -23,6 +23,8 @@ from app.admin_store import (
 )
 from app.auth import require_admin_principal, require_principal
 from app.execution import (
+    ADMIN_EXECUTION_CONFIG_KEY,
+    DEFAULT_TENANT_KEY,
     TenantExecutionResolver,
     interpolate_tenant_execution_env_placeholders,
     parse_tenant_execution_config,
@@ -543,6 +545,11 @@ class AdminTenantExecutionConfigResponse(BaseModel):
     config: dict[str, Any]
 
 
+class AdminExecutionConfigResponse(BaseModel):
+    version: int
+    config: dict[str, Any]
+
+
 class AdminTenantExecutionConfigRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
@@ -717,7 +724,102 @@ def build_admin_router() -> APIRouter:
     ) -> AdminExecutionConfigTenantListResponse:
         _ = admin
         store = _require_admin_store(request)
-        return AdminExecutionConfigTenantListResponse(tenants=store.list_tenants())
+        return AdminExecutionConfigTenantListResponse(
+            tenants=[
+                tenant_id
+                for tenant_id in store.list_tenants()
+                if tenant_id != ADMIN_EXECUTION_CONFIG_KEY
+            ]
+        )
+
+    @router.get("/execution-config", response_model=AdminExecutionConfigResponse)
+    async def get_admin_execution_config(
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminExecutionConfigResponse:
+        _ = admin
+        store = _require_admin_store(request)
+        payload = store.get_raw_config(ADMIN_EXECUTION_CONFIG_KEY)
+        version = store.get_config_version(ADMIN_EXECUTION_CONFIG_KEY)
+        if payload is None or version is None:
+            raise HTTPException(status_code=404, detail="Admin execution configuration not found")
+        return AdminExecutionConfigResponse(
+            version=version,
+            config=redact_tenant_execution_payload(payload),
+        )
+
+    @router.put("/execution-config", response_model=AdminExecutionConfigResponse)
+    async def put_admin_execution_config(
+        body: AdminTenantExecutionConfigRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminExecutionConfigResponse:
+        store = _require_admin_store(request)
+        old_payload = store.get_raw_config(ADMIN_EXECUTION_CONFIG_KEY)
+        secret_source = _execution_config_secret_source(request, old_payload)
+        payload = _restore_redacted_payload(body.config, secret_source)
+        try:
+            parse_tenant_execution_config(ADMIN_EXECUTION_CONFIG_KEY, payload)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        store.upsert_raw_config(ADMIN_EXECUTION_CONFIG_KEY, payload)
+        version = store.get_config_version(ADMIN_EXECUTION_CONFIG_KEY)
+        if version is None:  # pragma: no cover - defensive
+            raise RuntimeError("Admin execution configuration was not saved")
+        _invalidate_resolver(request.app.state.admin_execution_resolver, ADMIN_EXECUTION_CONFIG_KEY)
+        _append_tenant_audit(
+            request,
+            ADMIN_EXECUTION_CONFIG_KEY,
+            admin,
+            "admin_execution_config.put",
+            old_values=(
+                redact_tenant_execution_payload(old_payload) if old_payload is not None else None
+            ),
+            new_values=redact_tenant_execution_payload(payload),
+            resource_type="execution_config",
+            resource_id=ADMIN_EXECUTION_CONFIG_KEY,
+        )
+        return AdminExecutionConfigResponse(
+            version=version,
+            config=redact_tenant_execution_payload(payload),
+        )
+
+    @router.post(
+        "/execution-config/validate",
+        response_model=AdminTenantExecutionConfigValidationResponse,
+    )
+    async def validate_admin_execution_config(
+        body: AdminTenantExecutionConfigRequest,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantExecutionConfigValidationResponse:
+        _ = admin
+        store = _require_admin_store(request)
+        existing = store.get_raw_config(ADMIN_EXECUTION_CONFIG_KEY)
+        secret_source = _execution_config_secret_source(request, existing)
+        payload = _restore_redacted_payload(body.config, secret_source)
+        report = await validate_tenant_execution_config(ADMIN_EXECUTION_CONFIG_KEY, payload)
+        return AdminTenantExecutionConfigValidationResponse.model_validate(report.to_dict())
+
+    @router.delete("/execution-config", status_code=204)
+    async def delete_admin_execution_config(
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> None:
+        store = _require_admin_store(request)
+        old_payload = store.get_raw_config(ADMIN_EXECUTION_CONFIG_KEY)
+        if old_payload is None or not store.delete_config(ADMIN_EXECUTION_CONFIG_KEY):
+            raise HTTPException(status_code=404, detail="Admin execution configuration not found")
+        _invalidate_resolver(request.app.state.admin_execution_resolver, ADMIN_EXECUTION_CONFIG_KEY)
+        _append_tenant_audit(
+            request,
+            ADMIN_EXECUTION_CONFIG_KEY,
+            admin,
+            "admin_execution_config.delete",
+            old_values=redact_tenant_execution_payload(old_payload),
+            resource_type="execution_config",
+            resource_id=ADMIN_EXECUTION_CONFIG_KEY,
+        )
 
     @router.get(
         "/tenant-domains/lookup",
@@ -2939,6 +3041,8 @@ def _redact_audit_value(value: object) -> object:
 def _validate_tenant_id(tenant_id: str) -> None:
     if not tenant_id.strip():
         raise HTTPException(status_code=400, detail="Tenant id must be non-empty")
+    if tenant_id in {ADMIN_EXECUTION_CONFIG_KEY, DEFAULT_TENANT_KEY}:
+        raise HTTPException(status_code=400, detail="Tenant id is reserved")
 
 
 def _validate_user_id(user_id: str) -> None:

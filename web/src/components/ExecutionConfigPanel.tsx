@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
+  type AdminExecutionConfig,
   type AdminExecutionValidation,
   type AdminMcpServerCatalogItem,
-  type AdminTenantExecutionConfig,
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
 import { CapabilityMCPAccessEditor } from "./CapabilityMCPAccessEditor";
@@ -14,53 +14,65 @@ type EditorTab = "llm" | "tools" | "runtime" | "skills" | "presets" | "advanced"
 
 type ValidationResult = {
   report: AdminExecutionValidation;
-  saved: AdminTenantExecutionConfig | null;
+  saved: AdminExecutionConfig | null;
 };
 
-export function ExecutionConfigPanel({ tenantId }: { tenantId: string }) {
+type ExecutionConfigPanelProps =
+  | { platform: true; tenantId?: never }
+  | { platform?: false; tenantId: string };
+
+export function ExecutionConfigPanel({ platform = false, tenantId }: ExecutionConfigPanelProps) {
   const { api, authentication } = useAuth();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [validation, setValidation] = useState<AdminExecutionValidation | null>(null);
+  const resolvedTenantId = tenantId ?? "";
+  const scopeKey = platform ? "platform" : resolvedTenantId;
+  const queryKey = ["admin-execution-config", scopeKey, authentication];
   const executionConfig = useQuery({
-    queryKey: ["admin-tenant-execution-config", tenantId, authentication],
-    queryFn: ({ signal }) => api.getAdminTenantExecutionConfig(tenantId, signal),
+    queryKey,
+    queryFn: ({ signal }) =>
+      platform
+        ? api.getAdminExecutionConfig(signal)
+        : api.getAdminTenantExecutionConfig(resolvedTenantId, signal),
     retry: false,
   });
   const mcpServerCatalog = useQuery({
-    queryKey: ["admin-mcp-server-catalog", tenantId, authentication],
-    queryFn: ({ signal }) => api.getAdminMcpServerCatalog(tenantId, signal),
+    queryKey: ["admin-mcp-server-catalog", scopeKey, authentication],
+    queryFn: ({ signal }) =>
+      platform
+        ? api.getAdminDeploymentMcpServerCatalog(signal)
+        : api.getAdminMcpServerCatalog(resolvedTenantId, signal),
     retry: false,
   });
   const missing = executionConfig.error instanceof ApiError && executionConfig.error.status === 404;
   const apply = useMutation({
     mutationFn: async (config: Record<string, unknown>): Promise<ValidationResult> => {
-      const report = await api.validateAdminTenantExecutionConfig(tenantId, config);
+      const report = platform
+        ? await api.validateAdminExecutionConfig(config)
+        : await api.validateAdminTenantExecutionConfig(resolvedTenantId, config);
       if (!report.valid) return { report, saved: null };
-      const saved = await api.updateAdminTenantExecutionConfig(tenantId, config);
+      const saved = platform
+        ? await api.updateAdminExecutionConfig(config)
+        : await api.updateAdminTenantExecutionConfig(resolvedTenantId, config);
       return { report, saved };
     },
     onSuccess: ({ report, saved }) => {
       setValidation(report);
       if (!saved) return;
-      queryClient.setQueryData(
-        ["admin-tenant-execution-config", tenantId, authentication],
-        saved,
-      );
+      queryClient.setQueryData(queryKey, saved);
       setEditing(false);
     },
   });
   const reset = useMutation({
-    mutationFn: () => api.deleteAdminTenantExecutionConfig(tenantId),
+    mutationFn: () =>
+      platform ? api.deleteAdminExecutionConfig() : api.deleteAdminTenantExecutionConfig(resolvedTenantId),
     onSuccess: () => {
-      queryClient.removeQueries({
-        queryKey: ["admin-tenant-execution-config", tenantId, authentication],
-        exact: true,
-      });
+      queryClient.removeQueries({ queryKey, exact: true });
       setConfirmReset(false);
       void queryClient.invalidateQueries({
-        queryKey: ["admin-tenant-execution-config", tenantId],
+        queryKey: ["admin-execution-config", scopeKey],
       });
     },
   });
@@ -71,10 +83,11 @@ export function ExecutionConfigPanel({ tenantId }: { tenantId: string }) {
     setEditing(true);
   }
 
+  const titleId = platform ? "platform-execution-config-title" : `execution-config-title-${resolvedTenantId}`;
   return (
-    <section className="execution-config-panel" aria-labelledby="execution-config-title">
+    <section className="execution-config-panel" aria-labelledby={titleId}>
       <div className="execution-config-heading">
-        <div><p className="eyebrow">Runtime policy</p><h3 id="execution-config-title">Execution configuration</h3><p>Configure models, tools, agent behavior, skills, and capability presets.</p></div>
+        <div><p className="eyebrow">{platform ? "Admin chat runtime" : "Runtime policy"}</p><h3 id={titleId}>{platform ? "Platform admin execution" : "Execution configuration"}</h3><p>{platform ? "Configure the model and runtime used by platform-admin chat without relying on tenant setup." : "Configure models, tools, agent behavior, skills, and capability presets."}</p></div>
         <div className="execution-config-heading-actions">
           {executionConfig.data && <span>Version {executionConfig.data.version}</span>}
           <button type="button" onClick={openEditor}>{executionConfig.data ? "Edit configuration" : "Configure runtime"}</button>
@@ -83,12 +96,12 @@ export function ExecutionConfigPanel({ tenantId }: { tenantId: string }) {
 
       {executionConfig.isPending && <p className="execution-config-loading">Loading execution configuration…</p>}
       {executionConfig.isError && !missing && <p className="inline-error" role="alert">{errorMessage(executionConfig.error)}</p>}
-      {missing && <div className="execution-config-empty"><strong>No tenant-specific execution configuration</strong><span>The configured tenant source will use defaults or fail closed, depending on server policy.</span></div>}
+      {missing && <div className="execution-config-empty"><strong>{platform ? "No platform-admin execution configuration" : "No tenant-specific execution configuration"}</strong><span>{platform ? "Deployment environment or minigent.toml defaults apply until this runtime is configured." : "The configured tenant source will use defaults or fail closed, depending on server policy."}</span></div>}
       {executionConfig.data && <ExecutionSummary config={executionConfig.data.config} />}
       {executionConfig.data && <footer className="execution-config-footer"><span>Secrets are redacted and never returned to the browser.</span><button type="button" onClick={() => { reset.reset(); setConfirmReset(true); }}>Reset configuration</button></footer>}
 
-      {editing && <ExecutionConfigEditor key={`${tenantId}-${executionConfig.data?.version ?? "new"}`} current={executionConfig.data?.config ?? null} mcpCatalog={mcpServerCatalog.data?.items ?? []} allowCustomMcpServers={mcpServerCatalog.data?.allow_custom_mcp_servers ?? true} mcpCatalogPending={mcpServerCatalog.isPending} mcpCatalogError={mcpServerCatalog.isError ? errorMessage(mcpServerCatalog.error) : null} pending={apply.isPending} validation={validation} error={apply.isError ? errorMessage(apply.error) : null} onClose={() => { apply.reset(); setValidation(null); setEditing(false); }} onApply={(config) => { setValidation(null); apply.mutate(config); }} />}
-      {confirmReset && <ResetExecutionConfigDialog pending={reset.isPending} error={reset.isError ? errorMessage(reset.error) : null} onCancel={() => setConfirmReset(false)} onConfirm={() => reset.mutate()} />}
+      {editing && <ExecutionConfigEditor platform={platform} key={`${scopeKey}-${executionConfig.data?.version ?? "new"}`} current={executionConfig.data?.config ?? null} mcpCatalog={mcpServerCatalog.data?.items ?? []} allowCustomMcpServers={platform || (mcpServerCatalog.data?.allow_custom_mcp_servers ?? true)} mcpCatalogPending={mcpServerCatalog.isPending} mcpCatalogError={mcpServerCatalog.isError ? errorMessage(mcpServerCatalog.error) : null} pending={apply.isPending} validation={validation} error={apply.isError ? errorMessage(apply.error) : null} onClose={() => { apply.reset(); setValidation(null); setEditing(false); }} onApply={(config) => { setValidation(null); apply.mutate(config); }} />}
+      {confirmReset && <ResetExecutionConfigDialog platform={platform} pending={reset.isPending} error={reset.isError ? errorMessage(reset.error) : null} onCancel={() => setConfirmReset(false)} onConfirm={() => reset.mutate()} />}
     </section>
   );
 }
@@ -109,7 +122,7 @@ function SummaryItem({ label, value, detail }: { label: string; value: string; d
   return <article><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>;
 }
 
-function ExecutionConfigEditor({ current, mcpCatalog, allowCustomMcpServers, mcpCatalogPending, mcpCatalogError, pending, validation, error, onClose, onApply }: { current: Record<string, unknown> | null; mcpCatalog: AdminMcpServerCatalogItem[]; allowCustomMcpServers: boolean; mcpCatalogPending: boolean; mcpCatalogError: string | null; pending: boolean; validation: AdminExecutionValidation | null; error: string | null; onClose: () => void; onApply: (config: Record<string, unknown>) => void }) {
+function ExecutionConfigEditor({ platform, current, mcpCatalog, allowCustomMcpServers, mcpCatalogPending, mcpCatalogError, pending, validation, error, onClose, onApply }: { platform: boolean; current: Record<string, unknown> | null; mcpCatalog: AdminMcpServerCatalogItem[]; allowCustomMcpServers: boolean; mcpCatalogPending: boolean; mcpCatalogError: string | null; pending: boolean; validation: AdminExecutionValidation | null; error: string | null; onClose: () => void; onApply: (config: Record<string, unknown>) => void }) {
   const dialogRef = useModalDialog();
   const initial = useMemo(() => structuredConfig(current), [current]);
   const [tab, setTab] = useState<EditorTab>("llm");
@@ -172,7 +185,7 @@ function ExecutionConfigEditor({ current, mcpCatalog, allowCustomMcpServers, mcp
       <p className="execution-editor-copy">Validate the complete configuration before applying it. Stored secrets remain server-side unless replaced or explicitly cleared.</p>
       <nav className="execution-editor-tabs" aria-label="Execution configuration sections">{(["llm", "tools", "runtime", "skills", "presets", "advanced"] as EditorTab[]).map((item) => <button key={item} type="button" className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{tabLabel(item)}</button>)}</nav>
 
-      {tab === "llm" && <div className="execution-editor-section"><div className="oauth-llm-preset"><div><strong>OpenAI through Pi OAuth</strong><span>Uses the tenant credential imported from Pi. Choose a Codex model before applying.</span></div><button type="button" onClick={() => { setProvider("generic-oauth"); setBaseUrl("https://chatgpt.com/backend-api/codex/responses"); setApiKey(""); setClearApiKey(false); setDirty(true); }}>Use OAuth defaults</button></div><div className="execution-field-grid"><label>Provider<input required value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="mock" /></label><label>Model<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Provider default" /></label><label className="wide">Base URL<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="Provider default" /></label><label>Timeout (seconds)<input required type="number" min="0.1" step="0.1" value={timeout} onChange={(event) => setTimeout(event.target.value)} /></label><label>API key<input type="password" autoComplete="off" value={apiKey} disabled={clearApiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={initial.hadApiKey ? "Stored secret — leave blank to preserve" : "Optional"} /></label>{initial.hadApiKey && <label className="execution-checkbox"><input type="checkbox" checked={clearApiKey} onChange={(event) => setClearApiKey(event.target.checked)} />Clear stored API key</label>}</div><JsonField label="Advanced LLM settings" value={llmAdvanced} onChange={setLlmAdvanced} help="JSON object for headers, token limits, thinking, caching, and input modalities." /></div>}
+      {tab === "llm" && <div className="execution-editor-section">{!platform && <div className="oauth-llm-preset"><div><strong>OpenAI through Pi OAuth</strong><span>Uses the tenant credential imported from Pi. Choose a Codex model before applying.</span></div><button type="button" onClick={() => { setProvider("generic-oauth"); setBaseUrl("https://chatgpt.com/backend-api/codex/responses"); setApiKey(""); setClearApiKey(false); setDirty(true); }}>Use OAuth defaults</button></div>}<div className="execution-field-grid"><label>Provider<input required value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="mock" /></label><label>Model<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Provider default" /></label><label className="wide">Base URL<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="Provider default" /></label><label>Timeout (seconds)<input required type="number" min="0.1" step="0.1" value={timeout} onChange={(event) => setTimeout(event.target.value)} /></label><label>API key<input type="password" autoComplete="off" value={apiKey} disabled={clearApiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={initial.hadApiKey ? "Stored secret — leave blank to preserve" : "Optional"} /></label>{initial.hadApiKey && <label className="execution-checkbox"><input type="checkbox" checked={clearApiKey} onChange={(event) => setClearApiKey(event.target.checked)} />Clear stored API key</label>}</div><JsonField label="Advanced LLM settings" value={llmAdvanced} onChange={setLlmAdvanced} help="JSON object for headers, token limits, thinking, caching, and input modalities." /></div>}
       {tab === "tools" && <div className="execution-editor-section"><label className="execution-text-field">Allowed local tools<input value={localTools} onChange={(event) => setLocalTools(event.target.value)} placeholder="echo, current_time, calculator" /><small>Comma-separated. Leave blank to use the runtime default tool policy.</small></label><MCPServerPicker value={mcpServers} catalog={mcpCatalog} pending={mcpCatalogPending} error={mcpCatalogError} onChange={(value) => { setMcpServers(value); setDirty(true); }} />{allowCustomMcpServers ? <details className="execution-advanced"><summary>Advanced MCP server JSON</summary><JsonField label="MCP servers" value={mcpServers} onChange={setMcpServers} help="Add custom server definitions or edit quick-added services. Credentials belong in headers; redacted values preserve stored secrets." rows={10} /></details> : <p className="execution-config-empty">This tenant is restricted to assigned catalog services. Custom MCP servers and catalog URL overrides are rejected by the server.</p>}<JsonField label="Advanced tool policy" value={toolsAdvanced} onChange={setToolsAdvanced} help="JSON object for result redaction and other tool policy fields." /></div>}
       {tab === "runtime" && <div className="execution-editor-section"><div className="execution-field-grid"><label>Backend<select value={backendType} onChange={(event) => setBackendType(event.target.value)}><option value="native">Native</option><option value="peer_agent">Peer agent</option></select></label>{backendType === "peer_agent" && <><label>Peer<input required value={peer} onChange={(event) => setPeer(event.target.value)} placeholder="pi" /></label><label className="wide">Working directory<input required value={cwd} onChange={(event) => setCwd(event.target.value)} placeholder="/workspace/project" /></label></>}</div><JsonField label="Advanced backend settings" value={backendAdvanced} onChange={setBackendAdvanced} help="JSON object for timeouts, polling, and MCP broker behavior." /><JsonField label="Quality review" value={quality} onChange={setQuality} help="JSON object for optional remote quality review. Secret values stay redacted." /></div>}
       {tab === "skills" && <div className="execution-editor-section"><JsonField label="Skills configuration" value={skills} onChange={setSkills} help="JSON object with default_skill and items. Items can use system_prompt or instruction_source." rows={16} /></div>}
@@ -196,9 +209,9 @@ function ValidationReport({ report }: { report: AdminExecutionValidation }) {
   return <div className={`execution-validation ${report.valid ? "valid" : "invalid"}`} role="status"><strong>{report.valid ? "Validation passed" : "Validation needs attention"}</strong>{errors.length > 0 && <ul>{errors.map((item, index) => <li key={`${String(index)}-${item}`}>{item}</li>)}</ul>}<div><span>Shape: {report.config_shape.ok ? "OK" : "Failed"}</span><span>LLM: {report.llm.ok ? "OK" : "Failed"}</span><span>Tools: {report.tools.ok ? "OK" : "Failed"}</span></div>{report.tools.mcp_servers.length > 0 && <details><summary>MCP checks</summary><ul>{report.tools.mcp_servers.map((server) => <li key={server.name}>{server.name}: {server.ok ? `${String(server.tool_count)} tools` : server.error || "Failed"}</li>)}</ul></details>}</div>;
 }
 
-function ResetExecutionConfigDialog({ pending, error, onCancel, onConfirm }: { pending: boolean; error: string | null; onCancel: () => void; onConfirm: () => void }) {
+function ResetExecutionConfigDialog({ platform, pending, error, onCancel, onConfirm }: { platform: boolean; pending: boolean; error: string | null; onCancel: () => void; onConfirm: () => void }) {
   const dialogRef = useModalDialog();
-  return <dialog ref={dialogRef} className="admin-dialog admin-confirm-dialog" aria-labelledby="reset-execution-title" onCancel={onCancel} onClose={onCancel}><div><p className="eyebrow">Confirm reset</p><h2 id="reset-execution-title">Reset execution configuration?</h2><p>The stored tenant configuration will be deleted. Runtime defaults will apply, or execution will fail closed when the server uses store-only configuration.</p>{error && <p className="dialog-error" role="alert">{error}</p>}<div className="dialog-actions"><button type="button" className="button button-secondary" onClick={onCancel}>Cancel</button><button type="button" className="button button-danger" disabled={pending} onClick={onConfirm}>{pending ? "Resetting…" : "Reset configuration"}</button></div></div></dialog>;
+  return <dialog ref={dialogRef} className="admin-dialog admin-confirm-dialog" aria-labelledby="reset-execution-title" onCancel={onCancel} onClose={onCancel}><div><p className="eyebrow">Confirm reset</p><h2 id="reset-execution-title">Reset execution configuration?</h2><p>{platform ? "The stored platform-admin configuration will be deleted and deployment defaults will apply." : "The stored tenant configuration will be deleted. Runtime defaults will apply, or execution will fail closed when the server uses store-only configuration."}</p>{error && <p className="dialog-error" role="alert">{error}</p>}<div className="dialog-actions"><button type="button" className="button button-secondary" onClick={onCancel}>Cancel</button><button type="button" className="button button-danger" disabled={pending} onClick={onConfirm}>{pending ? "Resetting…" : "Reset configuration"}</button></div></div></dialog>;
 }
 
 interface EditorValues {

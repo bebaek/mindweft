@@ -65,7 +65,8 @@ support, and optional codebase-memory/code-navigation MCP setup.
 
 For an administrator-operated agent, see [Admin operations MCP](docs/admin-mcp.md) for the
 read-only in-process MCP v2 endpoint at `/mcp`, its authentication model, safe setup
-diagnostics, and the same role-scoped operations available directly to authenticated admin chat.
+diagnostics, the same role-scoped operations available directly to authenticated admin chat, and
+the platform-admin execution editor used to bootstrap that chat without tenant configuration.
 
 ## Basic API flow
 

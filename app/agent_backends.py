@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from app.execution import (
     AGENT_BACKEND_NATIVE,
     AGENT_BACKEND_PEER_AGENT,
+    TenantExecutionContext,
     TenantExecutionResolver,
     build_tool_registry_for_capability_profile,
     build_tool_registry_for_constraints,
@@ -114,6 +115,7 @@ class AgentBackendRouter(AgentBackend):
         mcp_broker_sessions: MCPBrokerSessionStore | None = None,
         mcp_server_name_authorizer: MCPServerNameAuthorizer | None = None,
         user_execution_config_source: UserExecutionConfigSource | None = None,
+        principal_execution_resolver: Callable[[Principal], TenantExecutionContext] | None = None,
         principal_tool_registry_provider: Callable[[Principal], ToolRegistry | None] | None = None,
     ) -> None:
         self._store = store
@@ -123,7 +125,13 @@ class AgentBackendRouter(AgentBackend):
         self._mcp_broker_sessions = mcp_broker_sessions
         self._mcp_server_name_authorizer = mcp_server_name_authorizer
         self._user_execution_config_source = user_execution_config_source
+        self._principal_execution_resolver = principal_execution_resolver
         self._principal_tool_registry_provider = principal_tool_registry_provider
+
+    def _resolve_execution(self, principal: Principal) -> TenantExecutionContext:
+        if self._principal_execution_resolver is not None:
+            return self._principal_execution_resolver(principal)
+        return self._execution_resolver.resolve(principal.tenant_id)
 
     async def run_thread(
         self,
@@ -132,7 +140,7 @@ class AgentBackendRouter(AgentBackend):
         *,
         event_sink: RunEventSink | None = None,
     ) -> tuple[str, dict[str, Any] | None]:
-        execution = self._execution_resolver.resolve(principal.tenant_id)
+        execution = self._resolve_execution(principal)
         thread = self._store.get_thread(principal.tenant_id, thread_id)
         self._enforce_personal_execution_owner(principal, thread)
         backend = execution.config.agent_backend
@@ -334,7 +342,7 @@ class AgentBackendRouter(AgentBackend):
         }
 
     def tool_registry_for_thread(self, principal: Principal, thread_id: str) -> ToolRegistry:
-        execution = self._execution_resolver.resolve(principal.tenant_id)
+        execution = self._resolve_execution(principal)
         thread = self._store.get_thread(principal.tenant_id, thread_id)
         skill_names = thread.skill_names
         if skill_names is None and thread.skill_name is not None:
@@ -361,7 +369,7 @@ class AgentBackendRouter(AgentBackend):
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         allowed_mcp_server_names = (
             self._mcp_server_name_authorizer(principal.tenant_id, principal.user_id)
-            if self._mcp_server_name_authorizer is not None
+            if self._mcp_server_name_authorizer is not None and not principal.is_admin
             else None
         )
         if personal_capability_constraints is not None:
@@ -427,7 +435,7 @@ class AgentBackendRouter(AgentBackend):
         skill_names = thread.skill_names
         if skill_names is None and thread.skill_name is not None:
             skill_names = [thread.skill_name]
-        execution = self._execution_resolver.resolve(principal.tenant_id)
+        execution = self._resolve_execution(principal)
         catalog = effective_execution_catalog(
             execution.config,
             self._user_execution_config_source if thread.execution_user_id is not None else None,

@@ -185,6 +185,7 @@ class AgentRuntime:
         attachment_store: AttachmentStore | None = None,
         mcp_server_name_authorizer: MCPServerNameAuthorizer | None = None,
         user_execution_config_source: UserExecutionConfigSource | None = None,
+        principal_execution_resolver: Callable[[Principal], TenantExecutionContext] | None = None,
         principal_tool_registry_provider: Callable[[Principal], ToolRegistry | None] | None = None,
     ) -> None:
         self._store = store
@@ -216,7 +217,13 @@ class AgentRuntime:
         self._attachment_store = attachment_store or InMemoryAttachmentStore()
         self._mcp_server_name_authorizer = mcp_server_name_authorizer
         self._user_execution_config_source = user_execution_config_source
+        self._principal_execution_resolver = principal_execution_resolver
         self._principal_tool_registry_provider = principal_tool_registry_provider
+
+    def _resolve_execution(self, principal: Principal) -> TenantExecutionContext:
+        if self._principal_execution_resolver is not None:
+            return self._principal_execution_resolver(principal)
+        return self._execution_resolver.resolve(principal.tenant_id)
 
     async def protect_user_content(
         self,
@@ -224,7 +231,7 @@ class AgentRuntime:
         thread_id: str,
         content: str,
     ) -> str:
-        execution = self._execution_resolver.resolve(principal.tenant_id)
+        execution = self._resolve_execution(principal)
         protected_content = content
         registry = execution.tool_registry
         preprocessor_names = getattr(registry, "trusted_input_preprocessor_names", None)
@@ -407,7 +414,7 @@ class AgentRuntime:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         allowed_mcp_server_names = (
             self._mcp_server_name_authorizer(principal.tenant_id, principal.user_id)
-            if self._mcp_server_name_authorizer is not None
+            if self._mcp_server_name_authorizer is not None and not principal.is_admin
             else None
         )
         if personal_capability_constraints is not None:
@@ -532,7 +539,7 @@ class AgentRuntime:
         thread = self._store.get_thread(principal.tenant_id, thread_id)
         if thread.status == ThreadStatus.RUNNING:
             raise HTTPException(status_code=409, detail="Thread is already running")
-        execution = self._execution_resolver.resolve(principal.tenant_id)
+        execution = self._resolve_execution(principal)
         tool_registry = self._tool_registry_for_thread(execution, thread, principal)
         pending_action = self._private_value_consent_store.get_pending_action(
             tenant_id=principal.tenant_id,
@@ -620,7 +627,7 @@ class AgentRuntime:
         event_sink: RunEventSink | None = None,
     ) -> tuple[str, dict[str, Any] | None]:
         failed_tool_calls: set[str] = set()
-        execution = self._execution_resolver.resolve(principal.tenant_id)
+        execution = self._resolve_execution(principal)
         thread = self._store.get_thread(principal.tenant_id, thread_id)
         llm_adapter = get_llm_adapter(execution, thread.llm_profile)
         skill_names = thread.skill_names
