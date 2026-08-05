@@ -1692,6 +1692,10 @@ def test_admin_tenants_seed_sends_options(monkeypatch: Any, capsys: Any) -> None
             "pro",
             "--region",
             "us",
+            "--tenant",
+            "tenant-b",
+            "--tenant",
+            "tenant-c",
             "--dry-run",
         ]
     )
@@ -1707,6 +1711,7 @@ def test_admin_tenants_seed_sends_options(monkeypatch: Any, capsys: Any) -> None
                 "dry_run": True,
                 "plan": "pro",
                 "region": "us",
+                "tenant_ids": ["tenant-b", "tenant-c"],
             },
         )
     ]

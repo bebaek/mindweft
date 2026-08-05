@@ -497,6 +497,7 @@ class AdminTenantSeedRequest(BaseModel):
     plan: str | None = None
     region: str | None = None
     dry_run: bool = False
+    tenant_ids: list[str] | None = None
 
 
 class AdminTenantSeedItemResponse(BaseModel):
@@ -897,6 +898,9 @@ def build_admin_router() -> APIRouter:
         for tenant_id in env_configs:
             if tenant_id != ADMIN_EXECUTION_CONFIG_KEY and tenant_id not in tenant_ids:
                 tenant_ids.append(tenant_id)
+        if body.tenant_ids is not None:
+            selected_ids = set(body.tenant_ids)
+            tenant_ids = [tenant_id for tenant_id in tenant_ids if tenant_id in selected_ids]
         used_slugs = _used_tenant_slugs(store)
         items: list[AdminTenantSeedItemResponse] = []
         existing = 0

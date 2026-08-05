@@ -422,6 +422,13 @@ def build_parser() -> argparse.ArgumentParser:
     admin_tenants_seed_parser.add_argument("--plan", default=None)
     admin_tenants_seed_parser.add_argument("--region", default=None)
     admin_tenants_seed_parser.add_argument("--dry-run", action="store_true")
+    admin_tenants_seed_parser.add_argument(
+        "--tenant",
+        dest="seed_tenants",
+        action="append",
+        default=None,
+        help="Restrict seeding to this tenant ID; repeat for multiple IDs.",
+    )
 
     admin_execution_config_parser = admin_subparsers.add_parser(
         "execution-config", help="Import, export, and validate tenant execution configs."
@@ -1503,6 +1510,8 @@ def run_admin_tenants_seed(
         payload["plan"] = args.plan
     if args.region is not None:
         payload["region"] = args.region
+    if args.seed_tenants is not None:
+        payload["tenant_ids"] = args.seed_tenants
     response = client.seed_admin_tenants(payload)
     if args.json:
         output: dict[str, Any] = dict(response)
