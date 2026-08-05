@@ -12,6 +12,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.auth import require_principal
+from app.execution import ADMIN_EXECUTION_CONFIG_KEY
 from app.health import database_readiness_checks
 from app.models import Principal
 from app.tools import ToolExecutionContext, ToolRegistry
@@ -94,6 +95,11 @@ async def get_setup_status(app: Any) -> dict[str, object]:
     checks = await database_readiness_checks()
     resolver_description = app.state.execution_resolver.describe(include_export=False)
     admin_store_configured = app.state.admin_store is not None
+    admin_execution_configured = (
+        app.state.admin_store.get_raw_config(ADMIN_EXECUTION_CONFIG_KEY) is not None
+        if admin_store_configured
+        else False
+    )
     catalog = getattr(app.state.admin_store_settings, "mcp_server_catalog", ())
     findings: list[dict[str, str]] = []
     for name, healthy in checks.items():
@@ -115,12 +121,22 @@ async def get_setup_status(app: Any) -> dict[str, object]:
                 "remediation": "Configure the encrypted admin store before managing tenant setup.",
             }
         )
+    elif not admin_execution_configured:
+        findings.append(
+            {
+                "code": "admin_execution.unconfigured",
+                "severity": "warning",
+                "message": "Platform-admin chat is using deployment execution defaults.",
+                "remediation": "Configure Platform admin execution in the administration screen.",
+            }
+        )
     return {
         "status": "ready" if all(checks.values()) else "not_ready",
         "readiness_checks": {
             name: "ok" if healthy else "failed" for name, healthy in checks.items()
         },
         "admin_store_configured": admin_store_configured,
+        "admin_execution_configured": admin_execution_configured,
         "mcp_catalog_item_count": len(catalog),
         "execution_config_source": resolver_description.get("source"),
         "findings": findings,

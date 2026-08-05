@@ -6,6 +6,7 @@ from mcp.types import LATEST_PROTOCOL_VERSION
 
 from app.admin_mcp import ADMIN_CHAT_SETUP_TOOL
 from app.admin_store import SQLiteTenantConfigStore
+from app.execution import ADMIN_EXECUTION_CONFIG_KEY
 from app.llm import MockLLMAdapter
 from app.main import create_app
 from app.tools import build_local_tool_registry
@@ -98,6 +99,67 @@ def test_admin_chat_can_call_minigent_admin_tools_in_process() -> None:
     assert admin_reply.startswith("Tool result:")
     assert "readiness_checks" in admin_reply
     assert user_reply == f"Mock reply: /tool {ADMIN_CHAT_SETUP_TOOL}"
+
+
+def test_platform_admin_can_configure_chat_execution_without_a_tenant(tmp_path: Path) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    app = create_app(admin_store=store, tenant_config_source="store")
+
+    with TestClient(app) as client:
+        missing = client.get("/admin/execution-config", headers=ADMIN_HEADERS)
+        rejected = client.put(
+            "/admin/execution-config",
+            headers=USER_HEADERS,
+            json={"config": {"llm": {"provider": "mock"}}},
+        )
+        reserved_tenant = client.post(
+            "/admin/tenants",
+            headers=ADMIN_HEADERS,
+            json={
+                "id": ADMIN_EXECUTION_CONFIG_KEY,
+                "slug": "reserved-admin",
+                "name": "Reserved Admin",
+            },
+        )
+        validated = client.post(
+            "/admin/execution-config/validate",
+            headers=ADMIN_HEADERS,
+            json={"config": {"llm": {"provider": "mock"}}},
+        )
+        saved = client.put(
+            "/admin/execution-config",
+            headers=ADMIN_HEADERS,
+            json={
+                "config": {
+                    "llm": {"provider": "mock", "api_key": "admin-secret"},
+                    "tools": {"allowed_local_tools": []},
+                }
+            },
+        )
+        fetched = client.get("/admin/execution-config", headers=ADMIN_HEADERS)
+        stored_before_delete = store.get_raw_config(ADMIN_EXECUTION_CONFIG_KEY)
+        tenant_configs = client.get("/admin/execution-config-tenants", headers=ADMIN_HEADERS)
+        echo_reply = _chat_with_tool(client, ADMIN_HEADERS, "echo")
+        admin_reply = _chat_with_tool(client, ADMIN_HEADERS, ADMIN_CHAT_SETUP_TOOL)
+        deleted = client.delete("/admin/execution-config", headers=ADMIN_HEADERS)
+        missing_after_delete = client.get("/admin/execution-config", headers=ADMIN_HEADERS)
+
+    assert missing.status_code == 404
+    assert rejected.status_code == 403
+    assert reserved_tenant.status_code == 400
+    assert validated.status_code == 200
+    assert validated.json()["valid"] is True
+    assert saved.status_code == 200
+    assert saved.json()["version"] == 1
+    assert fetched.json()["config"]["llm"]["api_key"] == "<redacted>"
+    assert stored_before_delete is not None
+    assert stored_before_delete["llm"]["api_key"] == "admin-secret"
+    assert tenant_configs.json() == {"tenants": []}
+    assert echo_reply == "Mock reply: /tool echo"
+    assert admin_reply.startswith("Tool result:")
+    assert deleted.status_code == 204
+    assert missing_after_delete.status_code == 404
+    assert store.get_raw_config(ADMIN_EXECUTION_CONFIG_KEY) is None
 
 
 def test_admin_chat_uses_deployment_execution_when_tenant_has_no_config(tmp_path: Path) -> None:

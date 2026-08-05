@@ -41,6 +41,7 @@ from app.entitlements import (
     tenant_context_from_request_state,
 )
 from app.execution import (
+    ADMIN_EXECUTION_CONFIG_KEY,
     TENANT_CONFIG_SOURCE_ENV_ONLY,
     TENANT_CONFIG_SOURCE_STORE,
     TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS,
@@ -889,7 +890,19 @@ def create_app(
                 )
             else:
                 raise RuntimeError(f"Unhandled tenant config source '{config_source}'")
+    deployment_execution_resolver = admin_fallback_execution_resolver or execution_resolver
+    admin_execution_resolver: TenantExecutionResolver = deployment_execution_resolver
+    if admin_store is not None:
+        admin_execution_resolver = StoreBackedTenantExecutionResolver(
+            admin_store,
+            fallback_resolver=deployment_execution_resolver,
+            mcp_manager=mcp_manager,
+            mcp_server_catalog={
+                item.id: item.server for item in admin_store_settings.mcp_server_catalog
+            },
+        )
     app.state.execution_resolver = execution_resolver
+    app.state.admin_execution_resolver = admin_execution_resolver
     app.state.quality_enhancer = QualityEnhancer()
     runtime_settings = settings.runtime
     app.state.image_input_settings = settings.image_input
@@ -915,8 +928,8 @@ def create_app(
         mcp_server_name_authorizer = authorize_mcp_server_names
 
     def resolve_principal_execution(principal: Principal) -> TenantExecutionContext:
-        if principal.is_admin and admin_fallback_execution_resolver is not None:
-            return admin_fallback_execution_resolver.resolve(principal.tenant_id)
+        if principal.is_admin:
+            return admin_execution_resolver.resolve(ADMIN_EXECUTION_CONFIG_KEY)
         return execution_resolver.resolve(principal.tenant_id)
 
     def principal_tool_registry_provider(principal: Principal) -> ToolRegistry | None:

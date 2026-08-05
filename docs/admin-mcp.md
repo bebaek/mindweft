@@ -27,8 +27,8 @@ Production deployments should use static tokens or JWT rather than development h
 All tools are read-only and return purpose-built redacted summaries. They never return stored
 secret values, bearer tokens, credential headers, or configured MCP URLs.
 
-- `get_setup_status` reports deployment readiness, whether durable admin configuration exists,
-  configured MCP catalog count, and actionable non-secret findings.
+- `get_setup_status` reports deployment readiness, whether durable admin and platform-admin
+  execution configuration exist, configured MCP catalog count, and actionable non-secret findings.
 - `diagnose_tenant_setup(tenant_id)` reports effective execution resolution and tenant MCP policy
   and assignment readiness.
 - `list_mcp_server_catalog_access(tenant_id, user_id)` reports the catalog entries effectively
@@ -53,12 +53,24 @@ tenant tools:
 
 These tools are present only when the principal has `is_admin: true`. The externally callable MCP
 names remain unchanged for compatibility. Platform admins do not need a tenant record, tenant
-membership, or tenant execution configuration to start this chat. In store-backed execution
-modes, platform-admin chat uses the deployment-level execution settings from the environment or
-unified `minigent.toml` instead of a tenant's execution configuration; ordinary tenant users still
-fail closed in strict `store` mode. Configure that deployment-level LLM with the normal
-`MINIGENT_LLM_*` or `[llm]` settings so the bootstrap admin chat uses a production model instead
-of the mock default.
+membership, or tenant execution configuration to start this chat. Configure the dedicated
+**Platform admin execution** panel in the platform administration screen before relying on natural
+chat. It reuses the execution editor for provider, model, write-only API key, tools, skills,
+capabilities, and agent presets, but stores the configuration under a platform-only scope rather
+than a tenant. The equivalent bootstrap API is:
+
+```text
+GET    /admin/execution-config
+POST   /admin/execution-config/validate
+PUT    /admin/execution-config
+DELETE /admin/execution-config
+```
+
+The encrypted admin store preserves write-only secrets using the same redaction and replacement
+rules as tenant execution configuration. Saved platform-admin configuration takes effect on the
+next chat run. If it is absent, deployment-level environment or unified `minigent.toml` execution
+settings remain the fallback; configure their normal `MINIGENT_LLM_*` or `[llm]` settings for an
+out-of-band bootstrap. Ordinary tenant users still fail closed in strict `store` mode.
 
 This first surface deliberately cannot modify tenant execution config, MCP catalog policies,
 assignments, credentials, path policy, or shell access. A later mutation surface must use an

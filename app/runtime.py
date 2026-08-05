@@ -414,7 +414,7 @@ class AgentRuntime:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         allowed_mcp_server_names = (
             self._mcp_server_name_authorizer(principal.tenant_id, principal.user_id)
-            if self._mcp_server_name_authorizer is not None
+            if self._mcp_server_name_authorizer is not None and not principal.is_admin
             else None
         )
         if personal_capability_constraints is not None:
