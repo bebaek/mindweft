@@ -9,6 +9,7 @@ import {
   type UserMCPStatus,
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
+import { UserResourceEditors } from "../components/UserResourceEditors";
 
 const starterConfig = {
   defaults: {},
@@ -114,6 +115,7 @@ export function PersonalizationPage() {
       </header>
 
       <MCPAccessPanel access={mcpAccess.data} status={mcpStatus.data} pending={mcpAccess.isPending || mcpStatus.isPending} error={mcpAccess.error ? errorMessage(mcpAccess.error) : mcpStatus.error ? errorMessage(mcpStatus.error) : null} />
+      <UserResourceEditors />
 
       <div className="personalization-grid">
         <section className="personalization-panel config-panel" aria-labelledby="personal-config-title">
