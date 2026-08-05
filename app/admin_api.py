@@ -498,23 +498,28 @@ class AdminTenantSeedRequest(BaseModel):
     region: str | None = None
     dry_run: bool = False
     tenant_ids: list[str] | None = None
+    conflict_policy: Literal["suffix", "skip", "fail"] = "suffix"
 
 
 class AdminTenantSeedItemResponse(BaseModel):
     id: str
     slug: str
+    requested_slug: str | None = None
     name: str
     status: TenantStatus
     action: str
+    conflict: str | None = None
     execution_config_source: str
 
 
 class AdminTenantSeedResponse(BaseModel):
     source: str
     dry_run: bool
+    conflict_policy: str
     discovered: int
     existing: int
     created: int
+    skipped: int
     conflicts: int
     tenants: list[AdminTenantSeedItemResponse]
     missing_tenant_ids: list[str] = Field(default_factory=list)
@@ -906,9 +911,10 @@ def build_admin_router() -> APIRouter:
             tenant_ids = [tenant_id for tenant_id in tenant_ids if tenant_id in selected_ids]
         used_slugs = _used_tenant_slugs(store)
         items: list[AdminTenantSeedItemResponse] = []
+        planned_tenants: list[tuple[str, str, AdminTenantSeedItemResponse]] = []
         existing = 0
-        created = 0
         conflicts = 0
+        skipped = 0
         for tenant_id in tenant_ids:
             current = store.get_tenant(tenant_id)
             if current is not None:
@@ -918,6 +924,7 @@ def build_admin_router() -> APIRouter:
                     AdminTenantSeedItemResponse(
                         id=current.id,
                         slug=current.slug,
+                        requested_slug=current.slug,
                         name=current.name,
                         status=current.status,
                         action="exists",
@@ -927,64 +934,134 @@ def build_admin_router() -> APIRouter:
                     )
                 )
                 continue
-            slug = _unique_seed_slug(tenant_id, used_slugs)
+
+            requested_slug = _seed_slug_from_tenant_id(tenant_id)
+            conflict = requested_slug in used_slugs
+            if conflict:
+                conflicts += 1
+                if body.conflict_policy == "fail":
+                    items.append(
+                        AdminTenantSeedItemResponse(
+                            id=tenant_id,
+                            slug=requested_slug,
+                            requested_slug=requested_slug,
+                            name=tenant_id,
+                            status=body.status,
+                            action="conflict",
+                            conflict="slug",
+                            execution_config_source=(
+                                "environment" if tenant_id in env_configs else "store"
+                            ),
+                        )
+                    )
+                    continue
+                if body.conflict_policy == "skip":
+                    skipped += 1
+                    items.append(
+                        AdminTenantSeedItemResponse(
+                            id=tenant_id,
+                            slug=requested_slug,
+                            requested_slug=requested_slug,
+                            name=tenant_id,
+                            status=body.status,
+                            action="skipped",
+                            conflict="slug",
+                            execution_config_source=(
+                                "environment" if tenant_id in env_configs else "store"
+                            ),
+                        )
+                    )
+                    continue
+                slug = _unique_seed_slug(tenant_id, used_slugs)
+            else:
+                slug = requested_slug
             used_slugs.add(slug)
             item = AdminTenantSeedItemResponse(
                 id=tenant_id,
                 slug=slug,
+                requested_slug=requested_slug,
                 name=tenant_id,
                 status=body.status,
                 action="would_create" if body.dry_run else "created",
+                conflict="slug" if conflict else None,
                 execution_config_source=("environment" if tenant_id in env_configs else "store"),
             )
             items.append(item)
-            if body.dry_run:
-                continue
-            try:
-                store.create_tenant(
-                    Tenant(
-                        id=tenant_id,
-                        slug=slug,
-                        name=tenant_id,
-                        status=body.status,
-                        plan=body.plan,
-                        region=body.region,
-                        created_by=admin.user_id,
-                        updated_by=admin.user_id,
-                    )
-                )
-            except sqlite3.IntegrityError:
-                conflicts += 1
-                items[-1] = item.model_copy(update={"action": "conflict"})
-                continue
-            created += 1
-            _append_tenant_audit(
-                request,
-                tenant_id,
-                admin,
-                "tenants.seed",
-                new_values={
-                    "id": tenant_id,
-                    "slug": slug,
-                    "name": tenant_id,
-                    "status": body.status.value,
-                    "plan": body.plan,
-                    "region": body.region,
+            planned_tenants.append((tenant_id, slug, item))
+
+        if body.conflict_policy == "fail" and conflicts:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Tenant seed contains slug conflicts",
+                    "conflicts": [
+                        item.model_dump(exclude_none=True)
+                        for item in items
+                        if item.conflict == "slug"
+                    ],
                 },
-                metadata={
+            )
+
+        created = 0
+        if not body.dry_run:
+            for tenant_id, slug, item in planned_tenants:
+                try:
+                    store.create_tenant(
+                        Tenant(
+                            id=tenant_id,
+                            slug=slug,
+                            name=tenant_id,
+                            status=body.status,
+                            plan=body.plan,
+                            region=body.region,
+                            created_by=admin.user_id,
+                            updated_by=admin.user_id,
+                        )
+                    )
+                except sqlite3.IntegrityError:
+                    conflicts += 1
+                    items[items.index(item)] = item.model_copy(update={"action": "conflict"})
+                    continue
+                created += 1
+                metadata: dict[str, Any] = {
                     "source": body.source,
                     "slug": slug,
                     "execution_config_source": (
                         "environment" if tenant_id in env_configs else "store"
                     ),
-                },
-            )
+                }
+                if item.conflict is not None:
+                    metadata.update(
+                        {
+                            "requested_slug": item.requested_slug,
+                            "conflict": item.conflict,
+                            "conflict_policy": body.conflict_policy,
+                        }
+                    )
+                _append_tenant_audit(
+                    request,
+                    tenant_id,
+                    admin,
+                    "tenants.seed",
+                    new_values={
+                        "id": tenant_id,
+                        "slug": slug,
+                        "name": tenant_id,
+                        "status": body.status.value,
+                        "plan": body.plan,
+                        "region": body.region,
+                    },
+                    metadata=metadata,
+                )
+
         return AdminTenantSeedResponse(
             source=body.source,
             dry_run=body.dry_run,
+            conflict_policy=body.conflict_policy,
             discovered=len(tenant_ids),
             existing=existing,
             created=created,
+            skipped=skipped,
             conflicts=conflicts,
             tenants=items,
             missing_tenant_ids=missing_tenant_ids,
@@ -3108,8 +3185,15 @@ def _normalize_domain(domain: str) -> str:
 
 
 def _used_tenant_slugs(store: Any) -> set[str]:
-    tenants, _total = store.list_registry_tenants(limit=500, offset=0)
-    return {tenant.slug for tenant in tenants}
+    used_slugs: set[str] = set()
+    offset = 0
+    page_size = 500
+    while True:
+        tenants, total = store.list_registry_tenants(limit=page_size, offset=offset)
+        used_slugs.update(tenant.slug for tenant in tenants)
+        offset += len(tenants)
+        if offset >= total or not tenants:
+            return used_slugs
 
 
 def _seed_slug_from_tenant_id(tenant_id: str) -> str:

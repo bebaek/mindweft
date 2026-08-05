@@ -4745,9 +4745,13 @@ def test_admin_api_seeds_tenants_from_execution_configs(
     assert payload["discovered"] == 2
     assert payload["created"] == 2
     assert payload["existing"] == 0
-    assert payload["conflicts"] == 0
+    assert payload["conflicts"] == 2
+    assert payload["skipped"] == 0
+    assert payload["conflict_policy"] == "suffix"
     by_id = {item["id"]: item for item in payload["tenants"]}
     assert by_id["Tenant A"]["slug"] == "tenant-a-2"
+    assert by_id["Tenant A"]["requested_slug"] == "tenant-a"
+    assert by_id["Tenant A"]["conflict"] == "slug"
     assert by_id["Tenant A"]["execution_config_source"] == "store"
     assert by_id["tenant-a"]["slug"] == "tenant-a-3"
 
@@ -4777,8 +4781,72 @@ def test_admin_api_seeds_tenants_from_execution_configs(
     assert audit_record["metadata"] == {
         "source": "execution-configs",
         "slug": "tenant-a-2",
+        "requested_slug": "tenant-a",
+        "conflict": "slug",
+        "conflict_policy": "suffix",
         "execution_config_source": "store",
     }
+
+
+def test_admin_api_seed_can_skip_slug_conflicts(tmp_path: Path) -> None:
+    store = _sqlite_store(tmp_path)
+    store.upsert_raw_config("Tenant A", {"llm": {"provider": "mock"}})
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store-with-defaults"))
+    existing_response = client.post(
+        "/admin/tenants",
+        json={"id": "existing", "slug": "tenant-a", "name": "Existing"},
+        headers=ADMIN_HEADERS,
+    )
+    assert existing_response.status_code == 201
+
+    response = client.post(
+        "/admin/tenants/seed",
+        json={"conflict_policy": "skip", "tenant_ids": ["Tenant A"]},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["conflict_policy"] == "skip"
+    assert payload["created"] == 0
+    assert payload["skipped"] == 1
+    assert payload["conflicts"] == 1
+    assert payload["tenants"] == [
+        {
+            "id": "Tenant A",
+            "slug": "tenant-a",
+            "requested_slug": "tenant-a",
+            "name": "Tenant A",
+            "status": "active",
+            "action": "skipped",
+            "conflict": "slug",
+            "execution_config_source": "store",
+        }
+    ]
+    assert client.get("/admin/tenants/Tenant A", headers=ADMIN_HEADERS).status_code == 404
+
+
+def test_admin_api_seed_fails_before_creating_slug_conflicts(tmp_path: Path) -> None:
+    store = _sqlite_store(tmp_path)
+    store.upsert_raw_config("Tenant A", {"llm": {"provider": "mock"}})
+    client = TestClient(create_app(admin_store=store, tenant_config_source="store-with-defaults"))
+    existing_response = client.post(
+        "/admin/tenants",
+        json={"id": "existing", "slug": "tenant-a", "name": "Existing"},
+        headers=ADMIN_HEADERS,
+    )
+    assert existing_response.status_code == 201
+
+    response = client.post(
+        "/admin/tenants/seed",
+        json={"conflict_policy": "fail", "tenant_ids": ["Tenant A"]},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["message"] == "Tenant seed contains slug conflicts"
+    assert response.json()["detail"]["conflicts"][0]["requested_slug"] == "tenant-a"
+    assert client.get("/admin/tenants/Tenant A", headers=ADMIN_HEADERS).status_code == 404
 
 
 def test_admin_api_seed_rejects_unknown_source(tmp_path: Path) -> None:

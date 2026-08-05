@@ -423,6 +423,12 @@ def build_parser() -> argparse.ArgumentParser:
     admin_tenants_seed_parser.add_argument("--region", default=None)
     admin_tenants_seed_parser.add_argument("--dry-run", action="store_true")
     admin_tenants_seed_parser.add_argument(
+        "--conflict-policy",
+        choices=["suffix", "skip", "fail"],
+        default="suffix",
+        help="How to handle a derived slug that is already in use.",
+    )
+    admin_tenants_seed_parser.add_argument(
         "--tenant",
         dest="seed_tenants",
         action="append",
@@ -1505,6 +1511,7 @@ def run_admin_tenants_seed(
         "source": args.seed_source,
         "status": args.status,
         "dry_run": args.dry_run,
+        "conflict_policy": args.conflict_policy,
     }
     if args.plan is not None:
         payload["plan"] = args.plan
@@ -1528,7 +1535,9 @@ def run_admin_tenants_seed(
                 f"discovered={response.get('discovered')}",
                 f"existing={response.get('existing')}",
                 f"created={response.get('created')}",
+                f"skipped={response.get('skipped', 0)}",
                 f"conflicts={response.get('conflicts')}",
+                f"policy={response.get('conflict_policy', 'suffix')}",
                 f"missing={len(response.get('missing_tenant_ids', []))}",
                 f"dry_run={response.get('dry_run')}",
             ]
