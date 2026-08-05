@@ -7,9 +7,12 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
+from app.admin_store import SQLiteTenantConfigStore
 from app.execution import (
+    DEFAULT_TENANT_KEY,
     FixedTenantExecutionResolver,
     InMemoryTenantExecutionResolver,
+    StoreBackedTenantExecutionResolver,
     TenantExecutionConfig,
     TenantExecutionContext,
     TenantQualityConfig,
@@ -2094,6 +2097,64 @@ def test_build_tool_registry_for_capability_profile_can_narrow_mcp_servers(monke
 
     assert {spec.name for spec in registry.specs()} == {"current_time", "home-assistant.ping"}
     assert [server["name"] for server in registry.mcp_servers()] == ["home-assistant"]
+
+
+def test_store_backed_resolvers_refresh_cached_contexts_from_shared_versions(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    store.upsert_raw_config(
+        DEFAULT_TENANT_KEY,
+        {
+            "llm": {"provider": "mock"},
+            "tools": {"allowed_local_tools": ["echo"]},
+        },
+    )
+    writer_resolver = StoreBackedTenantExecutionResolver(store)
+    other_replica_resolver = StoreBackedTenantExecutionResolver(store)
+
+    writer_resolver.resolve(PRINCIPAL.tenant_id)
+    original = other_replica_resolver.resolve(PRINCIPAL.tenant_id)
+    assert _local_tool_names(original) == {"echo"}
+
+    store.upsert_raw_config(
+        DEFAULT_TENANT_KEY,
+        {
+            "llm": {
+                "provider": "openrouter",
+                "model": "openrouter/test-model",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key": "test-key",
+            },
+            "tools": {"allowed_local_tools": ["calculator"]},
+        },
+    )
+    writer_resolver.invalidate(PRINCIPAL.tenant_id)
+
+    refreshed_default = other_replica_resolver.resolve(PRINCIPAL.tenant_id)
+    assert refreshed_default is not original
+    assert refreshed_default.llm_adapter.describe()["provider"] == "openrouter"
+    assert refreshed_default.llm_adapter.describe()["model"] == "openrouter/test-model"
+    assert _local_tool_names(refreshed_default) == {"calculator"}
+
+    store.upsert_raw_config(
+        PRINCIPAL.tenant_id,
+        {
+            "llm": {"provider": "mock"},
+            "tools": {"allowed_local_tools": ["current_time"]},
+        },
+    )
+    direct = other_replica_resolver.resolve(PRINCIPAL.tenant_id)
+    assert _local_tool_names(direct) == {"current_time"}
+
+    assert store.delete_config(PRINCIPAL.tenant_id) is True
+    restored_default = other_replica_resolver.resolve(PRINCIPAL.tenant_id)
+    assert restored_default.llm_adapter.describe()["provider"] == "openrouter"
+    assert _local_tool_names(restored_default) == {"calculator"}
+
+
+def _local_tool_names(context: TenantExecutionContext) -> set[str]:
+    return {spec.name for spec in context.tool_registry.specs() if "." not in spec.name}
 
 
 def test_runtime_applies_enabled_remote_quality_critique() -> None:
