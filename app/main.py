@@ -125,7 +125,11 @@ from app.user_execution import (
     effective_execution_catalog,
 )
 from app.user_execution_api import build_user_execution_router
-from app.user_mcp import UserMCPAuthMiddleware, build_user_mcp_server
+from app.user_mcp import (
+    UserMCPAuthMiddleware,
+    build_user_mcp_server,
+    build_user_mcp_tool_registry,
+)
 
 __all__ = [
     "DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES",
@@ -944,9 +948,9 @@ def create_app(
         return execution_resolver.resolve(principal.tenant_id)
 
     def principal_tool_registry_provider(principal: Principal) -> ToolRegistry | None:
-        if not principal.is_admin:
-            return None
-        return build_admin_chat_tool_registry(app, principal)
+        if principal.is_admin:
+            return build_admin_chat_tool_registry(app, principal)
+        return build_user_mcp_tool_registry(app, principal)
 
     app.state.runtime = AgentRuntime(
         store=app.state.store,

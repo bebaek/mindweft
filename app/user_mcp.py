@@ -19,7 +19,8 @@ from app.auth import require_principal
 from app.execution import redact_tenant_execution_payload
 from app.models import AuditRecord, Principal
 from app.tenants import require_active_tenant_principal
-from app.user_execution import validate_user_execution_config
+from app.tools import ToolRegistry
+from app.user_execution import ensure_default_personal_agent, validate_user_execution_config
 from app.user_execution_api import (
     UserExecutionConfigPutRequest,
     UserExecutionCredentialPutRequest,
@@ -220,7 +221,7 @@ def put_user_execution_config(
         record = store.upsert_user_execution_config(
             principal.tenant_id,
             principal.user_id,
-            report.config.model_dump(mode="json", exclude_none=True),
+            ensure_default_personal_agent(report.config).model_dump(mode="json", exclude_none=True),
             expected_version=request.expected_version,
         )
     except UserExecutionConfigConflictError as exc:
@@ -412,6 +413,115 @@ def delete_user_execution_credential(
         "user_id": principal.user_id,
         "credential_ref": credential_ref,
     }
+
+
+def build_user_mcp_tool_registry(app: Any, principal: Principal) -> ToolRegistry:
+    """Build principal-scoped user-MCP tools for in-process agent execution."""
+    registry = ToolRegistry()
+    prefix = "minigent_user_mcp"
+
+    def register(name: str, description: str, schema: dict[str, Any], handler: Any) -> None:
+        registry.register(
+            name=f"{prefix}.{name}",
+            description=description,
+            input_schema=schema,
+            handler=lambda arguments, context=None: handler(arguments),
+        )
+
+    register(
+        "get_user_execution_status",
+        "Get the authenticated user's execution and personal MCP status.",
+        {"type": "object", "properties": {}},
+        lambda _: get_user_execution_status(app, principal),
+    )
+    register(
+        "get_user_execution_config",
+        "Get the authenticated user's redacted execution configuration.",
+        {"type": "object", "properties": {}},
+        lambda _: get_user_execution_config(app, principal),
+    )
+    register(
+        "validate_user_execution_config",
+        "Validate a proposed personal execution configuration without saving it.",
+        {"type": "object", "properties": {"config": {"type": "object"}}, "required": ["config"]},
+        lambda arguments: validate_user_execution_config_for_mcp(arguments["config"]),
+    )
+    register(
+        "list_user_mcp_access",
+        "List the authenticated user's effective personal and shared MCP access.",
+        {"type": "object", "properties": {}},
+        lambda _: list_user_mcp_access(app, principal),
+    )
+    register(
+        "put_user_execution_config",
+        "Save the authenticated user's personal execution configuration.",
+        {
+            "type": "object",
+            "properties": {
+                "config": {"type": "object"},
+                "expected_version": {"type": ["integer", "null"]},
+            },
+            "required": ["config"],
+        },
+        lambda arguments: put_user_execution_config(app, principal, arguments),
+    )
+    register(
+        "delete_user_execution_config",
+        "Delete the authenticated user's personal execution configuration.",
+        {
+            "type": "object",
+            "properties": {
+                "confirm": {"type": "boolean"},
+                "expected_version": {"type": ["integer", "null"]},
+            },
+            "required": ["confirm"],
+        },
+        lambda arguments: delete_user_execution_config(app, principal, arguments),
+    )
+    register(
+        "put_user_execution_credential",
+        "Store or rotate a write-only personal MCP credential header.",
+        {
+            "type": "object",
+            "properties": {
+                "credential_ref": {"type": "string"},
+                "header_name": {"type": "string"},
+                "header_value": {"type": "string"},
+                "expected_version": {"type": ["integer", "null"]},
+            },
+            "required": ["credential_ref", "header_name", "header_value"],
+        },
+        lambda arguments: put_user_execution_credential(
+            app, principal, arguments["credential_ref"], arguments
+        ),
+    )
+    register(
+        "delete_user_execution_credential",
+        "Delete a write-only personal MCP credential after confirmation.",
+        {
+            "type": "object",
+            "properties": {
+                "credential_ref": {"type": "string"},
+                "confirm": {"type": "boolean"},
+                "expected_version": {"type": ["integer", "null"]},
+            },
+            "required": ["credential_ref", "confirm"],
+        },
+        lambda arguments: delete_user_execution_credential(
+            app, principal, arguments["credential_ref"], arguments
+        ),
+    )
+    registry.set_mcp_servers(
+        [
+            {
+                "name": prefix,
+                "status": "connected",
+                "tool_count": len(registry.specs()),
+                "builtin": True,
+            }
+        ]
+    )
+    return registry
 
 
 def build_user_mcp_server() -> MCPServer[Any]:

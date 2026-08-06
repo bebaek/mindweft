@@ -1180,6 +1180,39 @@ class SQLiteTenantConfigStore:
             return (), "unassigned"
         return None, "tenant"
 
+    def list_user_execution_configs(
+        self,
+        *,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[UserExecutionConfigRecord], int]:
+        clauses: list[str] = []
+        values: list[object] = []
+        if tenant_id is not None:
+            clauses.append("tenant_id = ?")
+            values.append(tenant_id)
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            values.append(user_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connection() as connection:
+            total_row = connection.execute(
+                f"SELECT COUNT(*) FROM user_execution_configs{where}", tuple(values)
+            ).fetchone()
+            total = int(total_row[0]) if total_row is not None else 0
+            rows = connection.execute(
+                f"""
+                SELECT tenant_id, user_id, config_json, version, created_at, updated_at
+                FROM user_execution_configs{where}
+                ORDER BY tenant_id ASC, user_id ASC
+                LIMIT ? OFFSET ?
+                """,
+                (*values, limit, offset),
+            ).fetchall()
+        return [_user_execution_config_from_row(row, self._fernet) for row in rows], total
+
     def get_user_execution_config(
         self, tenant_id: str, user_id: str
     ) -> UserExecutionConfigRecord | None:
