@@ -270,6 +270,9 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 34px 56px; }
 .chat-composer:focus-within { border-color:#8da394; box-shadow:0 0 0 3px rgba(77,133,94,.1); }
 .chat-composer textarea { min-height:38px; max-height:130px; padding:8px 0; resize:none; border:0; outline:0; color:var(--ink); background:transparent; font-size:var(--text-body); line-height:1.5; }
 .chat-composer textarea::placeholder { color:var(--muted); }
+.agent-selector { display:flex; align-items:center; gap:8px; align-self:center; color:var(--muted); font-size:var(--text-sm); white-space:nowrap; }
+.agent-selector select { max-width:220px; padding:7px 28px 7px 9px; border:1px solid #d4dbd3; border-radius:8px; color:var(--ink); background:var(--white); font-size:var(--text-sm); }
+.agent-selector select:disabled { opacity:.65; }
 .chat-composer>button { align-self:center; min-width:37px; height:37px; border-radius:10px; cursor:pointer; }
 .send-message { border:0; color:white; background:var(--forest); font-size:18px; } .send-message:disabled { cursor:default; opacity:.35; }
 .stop-run { padding:0 12px; border:1px solid #d8aaa5; color:#8b3932; background:#fff4f2; font-size:var(--text-control); font-weight:700; }
