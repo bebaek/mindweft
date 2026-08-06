@@ -17,7 +17,11 @@ from app.admin_store import (
 )
 from app.models import Principal
 from app.tenants import require_active_tenant_principal
-from app.user_execution import validate_user_execution_config
+from app.user_execution import (
+    DEFAULT_PERSONAL_AGENT_ID,
+    ensure_default_personal_agent,
+    validate_user_execution_config,
+)
 from app.user_mcp_access import get_user_execution_status, list_user_mcp_access
 
 
@@ -175,10 +179,13 @@ def build_user_execution_router() -> APIRouter:
             )
         store = _require_user_execution_store(request)
         try:
+            normalized_config = ensure_default_personal_agent(report.config).model_dump(
+                mode="json", exclude_none=True
+            )
             record = store.upsert_user_execution_config(
                 principal.tenant_id,
                 principal.user_id,
-                report.config.model_dump(mode="json", exclude_none=True),
+                normalized_config,
                 expected_version=body.expected_version,
             )
         except UserExecutionConfigConflictError as exc:
@@ -376,6 +383,10 @@ def build_user_execution_router() -> APIRouter:
         principal: Annotated[Principal, Depends(require_active_tenant_principal)],
         expected_version: Annotated[int | None, Query(ge=0)] = None,
     ) -> Response:
+        if resource_type == "agents" and resource_id == DEFAULT_PERSONAL_AGENT_ID:
+            raise HTTPException(
+                status_code=409, detail="The personal assistant agent cannot be deleted"
+            )
         store = _require_user_execution_store(request)
         current = store.get_user_execution_config(principal.tenant_id, principal.user_id)
         if current is None:
@@ -426,11 +437,14 @@ def _save_resource_config(
             status_code=422,
             detail={"message": "Invalid user resource", "errors": report.errors},
         )
+    normalized_config = ensure_default_personal_agent(report.config).model_dump(
+        mode="json", exclude_none=True
+    )
     try:
         return store.upsert_user_execution_config(
             principal.tenant_id,
             principal.user_id,
-            report.config.model_dump(mode="json", exclude_none=True),
+            normalized_config,
             expected_version=expected_version,
         )
     except UserExecutionConfigConflictError as exc:
