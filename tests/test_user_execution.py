@@ -437,6 +437,7 @@ def test_user_execution_config_api_round_trip_is_principal_scoped(tmp_path: Path
     assert created.status_code == 200
     assert created.json()["version"] == 1
     assert created.json()["config"]["agents"]["items"][0]["id"] == "user:product-engineer"
+    assert created.json()["config"]["defaults"]["agent_ref"] == "user:product-engineer"
     assert fetched.status_code == 200
     assert other_user.status_code == 404
     assert conflict.status_code == 409
