@@ -90,9 +90,17 @@ def test_in_process_user_mcp_config_result_is_json_safe(tmp_path: Path) -> None:
     registry = build_user_mcp_tool_registry(app, Principal(tenant_id="tenant-1", user_id="user-1"))
 
     result = asyncio.run(registry.execute("minigent_user_mcp.get_user_execution_config", {}))
+    updated = asyncio.run(
+        registry.execute(
+            "minigent_user_mcp.put_user_execution_config",
+            {"config": {}, "expected_version": 1},
+        )
+    )
 
     assert isinstance(result["created_at"], str)
     assert isinstance(result["updated_at"], str)
+    assert isinstance(updated["created_at"], str)
+    assert isinstance(updated["updated_at"], str)
 
 
 def test_user_mcp_config_is_principal_scoped_and_redacted(tmp_path: Path) -> None:

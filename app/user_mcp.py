@@ -198,14 +198,16 @@ def _require_confirmation(arguments: dict[str, Any]) -> None:
 
 
 def _config_record_response(record: Any) -> dict[str, object]:
-    return {
-        "tenant_id": record.tenant_id,
-        "user_id": record.user_id,
-        "config": redact_tenant_execution_payload(_safe_payload(record.config)),
-        "version": record.version,
-        "created_at": record.created_at,
-        "updated_at": record.updated_at,
-    }
+    return _safe_payload(
+        {
+            "tenant_id": record.tenant_id,
+            "user_id": record.user_id,
+            "config": redact_tenant_execution_payload(_safe_payload(record.config)),
+            "version": record.version,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+    )
 
 
 def put_user_execution_config(
