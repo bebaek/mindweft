@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -109,6 +110,8 @@ def _safe_payload(value: Any) -> Any:
         return {str(key): _safe_payload(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_safe_payload(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
     return value
 
 
@@ -117,14 +120,16 @@ def get_user_execution_config(app: Any, principal: Principal) -> dict[str, objec
     record = store.get_user_execution_config(principal.tenant_id, principal.user_id)
     if record is None:
         raise HTTPException(status_code=404, detail="User execution config not found")
-    return {
-        "tenant_id": record.tenant_id,
-        "user_id": record.user_id,
-        "config": redact_tenant_execution_payload(_safe_payload(record.config)),
-        "version": record.version,
-        "created_at": record.created_at,
-        "updated_at": record.updated_at,
-    }
+    return _safe_payload(
+        {
+            "tenant_id": record.tenant_id,
+            "user_id": record.user_id,
+            "config": redact_tenant_execution_payload(_safe_payload(record.config)),
+            "version": record.version,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+    )
 
 
 def validate_user_execution_config_for_mcp(
@@ -340,15 +345,17 @@ def put_user_execution_credential(
         ),
         new_values={"credential_ref": record.credential_ref, "header_name": record.header_name},
     )
-    return {
-        "tenant_id": record.tenant_id,
-        "user_id": record.user_id,
-        "credential_ref": record.credential_ref,
-        "header_name": record.header_name,
-        "version": record.version,
-        "created_at": record.created_at,
-        "updated_at": record.updated_at,
-    }
+    return _safe_payload(
+        {
+            "tenant_id": record.tenant_id,
+            "user_id": record.user_id,
+            "credential_ref": record.credential_ref,
+            "header_name": record.header_name,
+            "version": record.version,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+    )
 
 
 def delete_user_execution_credential(
