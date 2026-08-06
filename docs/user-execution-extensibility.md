@@ -13,10 +13,10 @@ names remain accepted. The console also manages write-only static MCP credential
 create, rotation, and confirmed deletion flows.
 
 Still pending: interactive OAuth connection and refresh flows, immutable thread resource version metadata
-and pinning, lifecycle cleanup, sharing, and guided console editors. Granular principal-scoped
-resource CRUD APIs for skills, MCP servers, capability profiles, and agents are now available
-alongside the coarse config API; the console migration to those APIs is still pending. Personal
-capability profiles can use tenant-approved tools and user-owned MCP servers.
+and pinning, lifecycle cleanup, sharing, and guided console editors for skills and agents. Granular principal-scoped resource CRUD APIs for skills, MCP servers,
+capability profiles, and agents are now available alongside the coarse config API; the console now
+supports guided skill and agent creation/removal, while MCP and capability-profile editors remain
+pending. Personal capability profiles can use tenant-approved tools and user-owned MCP servers.
 User-owned servers are restricted to public HTTPS destinations, revalidated on every request, and
 gated by the tenant custom-MCP policy. Static authorization or API-key headers can be stored in the
 write-only encrypted personal credential store and are resolved live for each thread run.

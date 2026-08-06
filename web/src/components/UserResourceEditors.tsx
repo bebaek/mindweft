@@ -22,6 +22,10 @@ export function UserResourceEditors() {
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [agentName, setAgentName] = useState("");
+  const [agentSkills, setAgentSkills] = useState("");
+  const [agentProfile, setAgentProfile] = useState("");
+  const [agentFormError, setAgentFormError] = useState<string | null>(null);
   const createSkill = useMutation({
     mutationFn: () => {
       const slug = slugify(name);
@@ -47,6 +51,37 @@ export function UserResourceEditors() {
       await queryClient.invalidateQueries({ queryKey: ["user-execution-config", authentication] });
     },
   });
+  const createAgent = useMutation({
+    mutationFn: () => {
+      const slug = slugify(agentName);
+      if (!slug) throw new Error("Enter an agent name");
+      const skillRefs = agentSkills.split(",").map((item) => item.trim()).filter(Boolean);
+      if (skillRefs.some((item) => !item.includes(":"))) {
+        throw new Error("Skill references must use user: or shared: prefixes");
+      }
+      return api.updateUserResource("agents", `user:${slug}`, {
+        id: `user:${slug}`,
+        name: agentName.trim(),
+        skill_refs: skillRefs,
+        ...(agentProfile.trim() ? { capability_profile_ref: agentProfile.trim() } : {}),
+      }, agents.data?.version ?? 0);
+    },
+    onSuccess: async () => {
+      setAgentName("");
+      setAgentSkills("");
+      setAgentProfile("");
+      setAgentFormError(null);
+      await queryClient.invalidateQueries({ queryKey: agentsKey });
+      await queryClient.invalidateQueries({ queryKey: ["user-execution-config", authentication] });
+    },
+  });
+  const removeAgent = useMutation({
+    mutationFn: (agent: Resource) => api.deleteUserResource("agents", String(agent.id), agents.data?.version ?? undefined),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: agentsKey });
+      await queryClient.invalidateQueries({ queryKey: ["user-execution-config", authentication] });
+    },
+  });
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -59,6 +94,20 @@ export function UserResourceEditors() {
       createSkill.mutate();
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "Could not save skill");
+    }
+  }
+
+  function submitAgent(event: FormEvent) {
+    event.preventDefault();
+    setAgentFormError(null);
+    if (!agentName.trim()) {
+      setAgentFormError("Agent name is required.");
+      return;
+    }
+    try {
+      createAgent.mutate();
+    } catch (error) {
+      setAgentFormError(error instanceof Error ? error.message : "Could not save agent");
     }
   }
 
@@ -88,6 +137,24 @@ export function UserResourceEditors() {
         ))}
         {!skills.isPending && skills.data?.items.length === 0 && <li className="personalization-empty">No personal skills yet.</li>}
       </ul>
+      <form className="resource-skill-form resource-agent-form" onSubmit={submitAgent}>
+        <h3>New agent</h3>
+        <label>Agent name<input value={agentName} onChange={(event) => setAgentName(event.target.value)} placeholder="Release assistant" /></label>
+        <label>Skill references<input value={agentSkills} onChange={(event) => setAgentSkills(event.target.value)} placeholder="user:reviewer, shared:coding-workspace" /><small>Comma-separated qualified references.</small></label>
+        <label>Capability profile reference<input value={agentProfile} onChange={(event) => setAgentProfile(event.target.value)} placeholder="user:personal-tools or shared:workspace" /></label>
+        {(agentFormError || createAgent.error) && <p className="inline-error" role="alert">{agentFormError ?? errorMessage(createAgent.error)}</p>}
+        <button type="submit" className="button button-primary" disabled={createAgent.isPending}>{createAgent.isPending ? "Saving…" : "Add agent"}</button>
+      </form>
+      {agents.error && <p className="inline-error" role="alert">{errorMessage(agents.error)}</p>}
+      <ul className="resource-list">
+        {agents.data?.items.map((agent) => (
+          <li key={String(agent.id)}>
+            <div><strong>{String(agent.name ?? agent.id)}</strong><small>{agentSummary(agent)}</small></div>
+            <button type="button" className="button button-danger" disabled={removeAgent.isPending} onClick={() => removeAgent.mutate(agent)}>Remove</button>
+          </li>
+        ))}
+        {!agents.isPending && agents.data?.items.length === 0 && <li className="personalization-empty">No personal agents yet.</li>}
+      </ul>
     </section>
   );
 }
@@ -99,6 +166,14 @@ function slugify(value: string): string {
 function resourceSummary(resource: Resource): string {
   const summary = resource.description ?? resource.system_prompt;
   return typeof summary === "string" && summary.length > 0 ? summary : "Personal skill";
+}
+
+function agentSummary(agent: Resource): string {
+  const refs = agent.skill_refs;
+  const profile = agent.capability_profile_ref;
+  const skillText = Array.isArray(refs) ? refs.filter((item): item is string => typeof item === "string").join(", ") : "No skills";
+  const profileText = typeof profile === "string" ? profile : "";
+  return profileText ? `${skillText || "No skills"} · ${profileText}` : skillText;
 }
 
 function errorMessage(error: unknown): string {
