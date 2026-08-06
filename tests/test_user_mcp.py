@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -5,6 +6,8 @@ from mcp.types import LATEST_PROTOCOL_VERSION
 
 from app.admin_store import SQLiteTenantConfigStore
 from app.main import create_app
+from app.models import Principal
+from app.user_mcp import build_user_mcp_tool_registry
 
 USER_HEADERS = {
     "X-Minigent-User-Id": "user-1",
@@ -78,6 +81,18 @@ def test_user_mcp_requires_active_non_admin_user_and_lists_only_user_tools(tmp_p
     assert result["tenant_id"] == "tenant-1"
     assert result["user_id"] == "user-1"
     assert "authorization" not in str(result).lower()
+
+
+def test_in_process_user_mcp_config_result_is_json_safe(tmp_path: Path) -> None:
+    store = SQLiteTenantConfigStore(str(tmp_path / "admin.db"))
+    store.upsert_user_execution_config("tenant-1", "user-1", {})
+    app = create_app(admin_store=store)
+    registry = build_user_mcp_tool_registry(app, Principal(tenant_id="tenant-1", user_id="user-1"))
+
+    result = asyncio.run(registry.execute("minigent_user_mcp.get_user_execution_config", {}))
+
+    assert isinstance(result["created_at"], str)
+    assert isinstance(result["updated_at"], str)
 
 
 def test_user_mcp_config_is_principal_scoped_and_redacted(tmp_path: Path) -> None:
