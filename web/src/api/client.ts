@@ -1448,10 +1448,13 @@ export class MinigentApiClient {
     return this.#request<ThreadListResponse>(`/threads?limit=${String(limit)}`, { signal });
   }
 
-  createThread(signal?: AbortSignal): Promise<{ thread_id: string }> {
+  createThread(
+    options: { agentName?: string } = {},
+    signal?: AbortSignal,
+  ): Promise<{ thread_id: string }> {
     return this.#request<{ thread_id: string }>("/threads", {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify(options.agentName ? { agent_name: options.agentName } : {}),
       signal,
     });
   }

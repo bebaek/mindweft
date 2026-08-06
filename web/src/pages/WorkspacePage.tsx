@@ -32,6 +32,7 @@ export function WorkspacePage() {
   const { api, authentication } = useAuth();
   const queryClient = useQueryClient();
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState("");
   const [draft, setDraft] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
@@ -64,6 +65,12 @@ export function WorkspacePage() {
     queryFn: ({ signal }) => api.getPublicConfig(signal),
     staleTime: 300_000,
   });
+  const executionOptions = useQuery({
+    queryKey: ["execution-options", authentication],
+    queryFn: ({ signal }) => api.getExecutionOptions(signal),
+    retry: false,
+    staleTime: 60_000,
+  });
   const threads = useQuery({
     queryKey: ["threads", authentication],
     queryFn: ({ signal }) => api.listThreads(50, signal),
@@ -79,6 +86,12 @@ export function WorkspacePage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [messages.data, streamedReply, activity]);
+
+  useEffect(() => {
+    const defaultAgent = executionOptions.data?.agents.default;
+    if (!selectedAgent && defaultAgent) setSelectedAgent(defaultAgent);
+  }, [executionOptions.data, selectedAgent]);
+
 
   useEffect(
     () => () => {
@@ -139,7 +152,10 @@ export function WorkspacePage() {
     let messageStored = false;
     try {
       if (threadId === null) {
-        const created = await api.createThread(controller.signal);
+        const created = await api.createThread(
+          selectedAgent ? { agentName: selectedAgent } : {},
+          controller.signal,
+        );
         threadId = created.thread_id;
         setSelectedThreadId(threadId);
       }
@@ -358,6 +374,21 @@ export function WorkspacePage() {
               ))}
             </div>
           )}
+          <label className="agent-selector">
+            <span>Agent</span>
+            <select
+              aria-label="Agent"
+              value={selectedAgent}
+              disabled={selectedThreadId !== null || isRunning || executionOptions.isPending}
+              onChange={(event) => setSelectedAgent(event.target.value)}
+            >
+              {!executionOptions.data?.agents.items.length && <option value="">Default agent</option>}
+              {executionOptions.data?.agents.items.map((agent) => {
+                const value = agent.id ?? agent.name;
+                return <option key={value} value={value}>{agent.display_name ?? agent.name}</option>;
+              })}
+            </select>
+          </label>
           <label className={`attach-image ${config.data?.image_input.enabled ? "" : "disabled"}`} title={config.data?.image_input.enabled ? "Attach images" : "Image input is unavailable"}>
             <span aria-hidden="true">+</span><span className="sr-only">Attach images</span>
             <input
