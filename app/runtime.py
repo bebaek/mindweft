@@ -454,6 +454,8 @@ class AgentRuntime:
         return self._with_principal_tools(registry, principal)
 
     def _with_principal_tools(self, registry: ToolRegistry, principal: Principal) -> ToolRegistry:
+        if not isinstance(registry, ToolRegistry):
+            return registry
         if self._principal_tool_registry_provider is None:
             return registry
         principal_registry = self._principal_tool_registry_provider(principal)

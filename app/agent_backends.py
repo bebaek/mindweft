@@ -404,7 +404,7 @@ class AgentBackendRouter(AgentBackend):
             )
         else:
             registry = execution.tool_registry
-        if self._principal_tool_registry_provider is None:
+        if not isinstance(registry, ToolRegistry) or self._principal_tool_registry_provider is None:
             return registry
         principal_registry = self._principal_tool_registry_provider(principal)
         if principal_registry is None:
