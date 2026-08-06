@@ -65,6 +65,7 @@ export function PersonalizationPage() {
       setParseError(null);
       setValidation({ valid: true, errors: [], normalized_config: saved.config });
       void queryClient.invalidateQueries({ queryKey: ["execution-options"] });
+      void queryClient.invalidateQueries({ queryKey: ["user-resources"] });
     },
   });
   const reset = useMutation({
@@ -77,6 +78,7 @@ export function PersonalizationPage() {
       setValidation(null);
       setConfirmReset(false);
       void queryClient.invalidateQueries({ queryKey: ["execution-options"] });
+      void queryClient.invalidateQueries({ queryKey: ["user-resources"] });
     },
   });
 

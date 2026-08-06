@@ -2,7 +2,9 @@ import { FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../auth/auth-context";
 
+const DEFAULT_AGENT_ID = "user:personal-assistant";
 type Resource = Record<string, unknown>;
+
 
 export function UserResourceEditors() {
   const { api, authentication } = useAuth();
@@ -97,6 +99,14 @@ export function UserResourceEditors() {
     }
   }
 
+  function startAgentFrom(agent: Resource) {
+    const agentNameValue = typeof agent.name === "string" ? agent.name : "Personal assistant";
+    setAgentName(`${agentNameValue} copy`);
+    setAgentSkills(Array.isArray(agent.skill_refs) ? agent.skill_refs.filter((item): item is string => typeof item === "string").join(", ") : "");
+    setAgentProfile(typeof agent.capability_profile_ref === "string" ? agent.capability_profile_ref : "");
+    setAgentFormError(null);
+  }
+
   function submitAgent(event: FormEvent) {
     event.preventDefault();
     setAgentFormError(null);
@@ -149,8 +159,8 @@ export function UserResourceEditors() {
       <ul className="resource-list">
         {agents.data?.items.map((agent) => (
           <li key={String(agent.id)}>
-            <div><strong>{String(agent.name ?? agent.id)}</strong><small>{agentSummary(agent)}</small></div>
-            <button type="button" className="button button-danger" disabled={removeAgent.isPending} onClick={() => removeAgent.mutate(agent)}>Remove</button>
+            <div><strong>{String(agent.name ?? agent.id)} {agent.id === DEFAULT_AGENT_ID && <em className="resource-default-badge">Default</em>}</strong><small>{agentSummary(agent)}</small></div>
+            <div className="resource-row-actions"><button type="button" className="button button-secondary" onClick={() => startAgentFrom(agent)}>Use as template</button><button type="button" className="button button-danger" disabled={removeAgent.isPending || agent.id === DEFAULT_AGENT_ID} onClick={() => removeAgent.mutate(agent)}>{agent.id === DEFAULT_AGENT_ID ? "Protected" : "Remove"}</button></div>
           </li>
         ))}
         {!agents.isPending && agents.data?.items.length === 0 && <li className="personalization-empty">No personal agents yet.</li>}

@@ -33,6 +33,7 @@ from app.tools import DEFAULT_LOCAL_TOOL_NAMES
 
 _USER_RESOURCE_ID_PATTERN = re.compile(r"^user:[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$")
 _RESOURCE_REF_PATTERN = re.compile(r"^(?:user|shared):[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$")
+DEFAULT_PERSONAL_AGENT_ID = "user:personal-assistant"
 _CREDENTIAL_REF_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$")
 _FORBIDDEN_CREDENTIAL_HEADER_NAMES = frozenset(
     {
@@ -371,6 +372,26 @@ class UserExecutionConfig(UserExecutionModel):
                 [self.defaults.capability_profile_ref], personal_profiles, "defaults"
             )
         return self
+
+
+def ensure_default_personal_agent(config: UserExecutionConfig) -> UserExecutionConfig:
+    """Add the stable personal assistant default without overriding user choices."""
+    if config.defaults.agent_ref is not None:
+        return config
+    if any(agent.id == DEFAULT_PERSONAL_AGENT_ID for agent in config.agents.items):
+        config.defaults.agent_ref = DEFAULT_PERSONAL_AGENT_ID
+        return config
+    config.agents.items.append(
+        UserAgentDefinition(
+            id=DEFAULT_PERSONAL_AGENT_ID,
+            name="Personal assistant",
+            description="Uses your personal configuration on top of tenant defaults.",
+            skill_refs=list(config.defaults.skill_refs or []),
+            capability_profile_ref=config.defaults.capability_profile_ref,
+        )
+    )
+    config.defaults.agent_ref = DEFAULT_PERSONAL_AGENT_ID
+    return config
 
 
 @dataclass(frozen=True)

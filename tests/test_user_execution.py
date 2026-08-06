@@ -437,11 +437,35 @@ def test_user_execution_config_api_round_trip_is_principal_scoped(tmp_path: Path
     assert created.status_code == 200
     assert created.json()["version"] == 1
     assert created.json()["config"]["agents"]["items"][0]["id"] == "user:product-engineer"
+    assert created.json()["config"]["defaults"]["agent_ref"] == "user:product-engineer"
     assert fetched.status_code == 200
     assert other_user.status_code == 404
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["actual_version"] == 1
     assert deleted.status_code == 204
+
+
+def test_user_execution_config_bootstraps_personal_assistant(tmp_path: Path) -> None:
+    app = create_app(admin_store=SQLiteTenantConfigStore(str(tmp_path / "admin.db")))
+
+    with TestClient(app) as client:
+        created = client.put(
+            "/me/execution-config",
+            headers=AUTH_HEADERS,
+            json={"config": {}, "expected_version": 0},
+        )
+        agents = client.get("/me/agents", headers=AUTH_HEADERS)
+        deleted = client.delete(
+            "/me/agents/user:personal-assistant?expected_version=1",
+            headers=AUTH_HEADERS,
+        )
+
+    assert created.status_code == 200
+    assert created.json()["config"]["defaults"]["agent_ref"] == "user:personal-assistant"
+    assert agents.status_code == 200
+    assert agents.json()["items"][0]["name"] == "Personal assistant"
+    assert deleted.status_code == 409
+    assert "cannot be deleted" in deleted.json()["detail"]
 
 
 def test_user_resource_api_supports_granular_skill_crud_and_conflicts(tmp_path: Path) -> None:

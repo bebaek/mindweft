@@ -30,7 +30,9 @@ it("validates personal configuration and stores a write-only MCP credential", as
     validateUserExecutionConfig: validateConfig,
     updateUserExecutionConfig: vi.fn(),
     deleteUserExecutionConfig: vi.fn(),
-    listUserResources: vi.fn().mockResolvedValue({ items: [], version: 3 }),
+    listUserResources: vi.fn().mockImplementation((type: string) => Promise.resolve(type === "agents"
+      ? { items: [{ id: "user:personal-assistant", name: "Personal assistant", skill_refs: [], capability_profile_ref: null }], version: 3 }
+      : { items: [], version: 3 })),
     updateUserResource: vi.fn(),
     deleteUserResource: vi.fn(),
     listUserExecutionCredentials: vi.fn().mockResolvedValue({ items: [] }),
@@ -78,6 +80,10 @@ it("validates personal configuration and stores a write-only MCP credential", as
 
   expect(await screen.findByText("Version 3")).toBeInTheDocument();
   expect(await screen.findByRole("heading", { name: "User MCP access" })).toBeInTheDocument();
+  expect(await screen.findByText("Default")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Protected" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Use as template" }));
+  expect(screen.getByLabelText("Agent name")).toHaveValue("Personal assistant copy");
   expect(screen.getByText("http://localhost:3000/user-mcp")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Validate" }));
   await waitFor(() => expect(validateConfig).toHaveBeenCalledWith({ mcp_servers: { items: [] } }));
