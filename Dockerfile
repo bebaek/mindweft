@@ -1,3 +1,13 @@
+FROM node:22-bookworm-slim AS frontend-build
+
+WORKDIR /web
+
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+COPY web ./
+RUN npm run build
+
 FROM python:3.11-slim
 
 COPY --from=ghcr.io/astral-sh/uv:0.7.2 /uv /uvx /bin/
@@ -16,6 +26,7 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY app ./app
+COPY --from=frontend-build /web/dist ./app/static/console
 COPY minigent_client ./minigent_client
 RUN uv sync --frozen --no-dev
 

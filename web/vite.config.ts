@@ -5,7 +5,7 @@ export default defineConfig({
   base: "/console/",
   plugins: [react()],
   build: {
-    outDir: "../app/static/console",
+    outDir: "dist",
     emptyOutDir: true,
     sourcemap: false,
   },

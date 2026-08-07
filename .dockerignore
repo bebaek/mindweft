@@ -14,6 +14,9 @@ __pycache__/
 .opencode-container/
 .pi-container/
 tests/
+web/node_modules/
+web/dist/
+app/static/console/
 codex-agent-wrapper/.venv/
 codex-agent-wrapper/.pytest_cache/
 codex-agent-wrapper/.ruff_cache/
