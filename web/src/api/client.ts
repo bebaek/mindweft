@@ -68,6 +68,7 @@ export interface ExecutionAgentOptionItem extends ExecutionOptionItem {
   skill_name?: string | null;
   skills?: string[] | null;
   capability_profile?: string | null;
+  llm_profile?: string | null;
 }
 
 export interface ExecutionAgentOptionSection {

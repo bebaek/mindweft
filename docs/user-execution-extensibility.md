@@ -208,13 +208,15 @@ A personal agent preset is a reusable composition:
   "name": "product-engineer",
   "description": "My coding and product workflow",
   "skill_refs": ["shared:coding-workspace", "user:python-style"],
-  "capability_profile_ref": "user:product-tools"
+  "capability_profile_ref": "user:product-tools",
+  "llm_profile": "claude"
 }
 ```
 
-The agent is a convenience boundary, not a separate tool implementation. Thread creation resolves
-its component references using the same shared-plus-personal execution view used for explicit
-skill and capability selections.
+A personal agent may reference a tenant-approved named LLM profile with `llm_profile`. It cannot
+embed provider credentials or define an arbitrary provider endpoint. Explicit thread-level LLM
+selection still takes precedence over the agent's profile.
+
 
 ## Proposed storage
 

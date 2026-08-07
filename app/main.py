@@ -1128,6 +1128,7 @@ def create_app(
                         ),
                         skills=(list(option.skill_refs) if option.uses_skill_list else None),
                         capability_profile=option.capability_profile_ref,
+                        llm_profile=option.llm_profile,
                     )
                     for option in agent_options
                 ],
@@ -1368,6 +1369,8 @@ def create_app(
         capability_profile = (
             resolved_capability.stored_ref if resolved_capability is not None else None
         )
+        if llm_profile is None and agent is not None:
+            llm_profile = agent.llm_profile
         if llm_profile is None:
             llm_profile = execution.config.default_llm_profile
         if llm_profile is not None and llm_profile not in execution.config.llm_profiles:

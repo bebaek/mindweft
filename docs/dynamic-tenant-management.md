@@ -231,10 +231,11 @@ Existing admin thread-inspection and audit-listing endpoints remain tenant-scope
 `/admin/tenants/{tenant_id}`.
 
 Execution configurations can define `agents.default_agent` (or `defaultAgent`) to reference a
-configured preset. Thread creation accepts an optional `agent_name`; explicit thread skill or
-capability fields override the selected/default agent, while unspecified fields are materialized
-from the agent preset onto the thread. If no agent applies, the existing default skill and
-capability-profile behavior remains in effect.
+configured preset. An agent preset may also set `llm_profile` (or `llmProfile`) to reference one
+of the tenant's named LLM profiles. Thread creation accepts an optional `agent_name`; explicit
+thread skill, capability, or LLM profile fields override the selected/default agent, while
+unspecified fields are materialized from the agent preset onto the thread. If no agent applies,
+the existing default skill, capability-profile, and LLM-profile behavior remains in effect.
 
 ## Storage and caching
 

@@ -253,6 +253,10 @@ class UserAgentDefinition(UserExecutionModel):
         default=None,
         validation_alias=AliasChoices("capability_profile_ref", "capabilityProfileRef"),
     )
+    llm_profile: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("llm_profile", "llmProfile"),
+    )
 
     @field_validator("id")
     @classmethod
@@ -467,6 +471,7 @@ class EffectiveAgent:
     version: int | None
     skill_refs: list[str]
     capability_profile_ref: str | None
+    llm_profile: str | None
     uses_skill_list: bool = True
 
 
@@ -595,6 +600,7 @@ class EffectiveExecutionCatalog:
                     version=self.user_config_version,
                     skill_refs=list(agent.skill_refs),
                     capability_profile_ref=agent.capability_profile_ref,
+                    llm_profile=agent.llm_profile,
                 )
                 for agent in self.user_config.agents.items
             )
@@ -783,6 +789,7 @@ class EffectiveExecutionCatalog:
             version=None,
             skill_refs=skill_refs,
             capability_profile_ref=agent.capability_profile,
+            llm_profile=agent.llm_profile,
             uses_skill_list=agent.skills is not None,
         )
 
