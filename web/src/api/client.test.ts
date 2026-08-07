@@ -25,6 +25,28 @@ describe("MinigentApiClient", () => {
     );
   });
 
+  it("creates a thread with the selected agent and model profile", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ thread_id: "thread-1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await new MinigentApiClient({ mode: "session" }).createThread({
+      agentName: "user:product-engineer",
+      llmProfile: "claude",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/threads",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ agent_name: "user:product-engineer", llm_profile: "claude" }),
+      }),
+    );
+  });
+
   it("uses secure same-origin credentials by default", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ status: "ok" }), {

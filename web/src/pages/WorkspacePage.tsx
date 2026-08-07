@@ -33,6 +33,7 @@ export function WorkspacePage() {
   const queryClient = useQueryClient();
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState("");
+  const [selectedLlmProfile, setSelectedLlmProfile] = useState("");
   const [draft, setDraft] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
@@ -150,7 +151,10 @@ export function WorkspacePage() {
     try {
       if (threadId === null) {
         const created = await api.createThread(
-          effectiveAgent ? { agentName: effectiveAgent } : {},
+          {
+            ...(effectiveAgent ? { agentName: effectiveAgent } : {}),
+            ...(selectedLlmProfile ? { llmProfile: selectedLlmProfile } : {}),
+          },
           controller.signal,
         );
         threadId = created.thread_id;
@@ -281,6 +285,7 @@ export function WorkspacePage() {
     if (isRunning) return;
     setMobileThreadRailOpen(false);
     setSelectedThreadId(null);
+    setSelectedLlmProfile("");
     setStreamedReply(null);
     setActivity([]);
     setError(null);
@@ -371,21 +376,39 @@ export function WorkspacePage() {
               ))}
             </div>
           )}
-          <label className="agent-selector">
-            <span>Agent</span>
-            <select
-              aria-label="Agent"
-              value={effectiveAgent}
-              disabled={selectedThreadId !== null || isRunning || executionOptions.isPending}
-              onChange={(event) => setSelectedAgent(event.target.value)}
-            >
-              {!executionOptions.data?.agents.items.length && <option value="">Default agent</option>}
-              {executionOptions.data?.agents.items.map((agent) => {
-                const value = agent.id ?? agent.name;
-                return <option key={value} value={value}>{agent.display_name ?? agent.name}</option>;
-              })}
-            </select>
-          </label>
+          <div className="composer-runtime-selectors">
+            <label className="agent-selector">
+              <span>Agent</span>
+              <select
+                aria-label="Agent"
+                value={effectiveAgent}
+                disabled={selectedThreadId !== null || isRunning || executionOptions.isPending}
+                onChange={(event) => setSelectedAgent(event.target.value)}
+              >
+                {!executionOptions.data?.agents.items.length && <option value="">Default agent</option>}
+                {executionOptions.data?.agents.items.map((agent) => {
+                  const value = agent.id ?? agent.name;
+                  const profile = agent.llm_profile ? ` · ${agent.llm_profile.replace(/^shared:/, "")}` : "";
+                  return <option key={value} value={value}>{agent.display_name ?? agent.name}{profile}</option>;
+                })}
+              </select>
+            </label>
+            <label className="agent-selector">
+              <span>Model profile</span>
+              <select
+                aria-label="Model profile"
+                value={selectedLlmProfile}
+                disabled={selectedThreadId !== null || isRunning || executionOptions.isPending}
+                onChange={(event) => setSelectedLlmProfile(event.target.value)}
+              >
+                <option value="">Automatic</option>
+                {executionOptions.data?.llm_profiles.items.map((profile) => {
+                  const value = profile.name;
+                  return <option key={value} value={value}>{profile.display_name ?? profile.name}</option>;
+                })}
+              </select>
+            </label>
+          </div>
           <label className={`attach-image ${config.data?.image_input.enabled ? "" : "disabled"}`} title={config.data?.image_input.enabled ? "Attach images" : "Image input is unavailable"}>
             <span aria-hidden="true">+</span><span className="sr-only">Attach images</span>
             <input

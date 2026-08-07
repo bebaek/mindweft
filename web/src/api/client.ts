@@ -1450,12 +1450,16 @@ export class MinigentApiClient {
   }
 
   createThread(
-    options: { agentName?: string } = {},
+    options: { agentName?: string; llmProfile?: string } = {},
     signal?: AbortSignal,
   ): Promise<{ thread_id: string }> {
+    const body = {
+      ...(options.agentName ? { agent_name: options.agentName } : {}),
+      ...(options.llmProfile ? { llm_profile: options.llmProfile } : {}),
+    };
     return this.#request<{ thread_id: string }>("/threads", {
       method: "POST",
-      body: JSON.stringify(options.agentName ? { agent_name: options.agentName } : {}),
+      body: JSON.stringify(body),
       signal,
     });
   }
