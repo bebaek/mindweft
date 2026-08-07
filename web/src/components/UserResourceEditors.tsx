@@ -170,7 +170,7 @@ export function UserResourceEditors() {
       <ul className="resource-list">
         {agents.data?.items.map((agent) => (
           <li key={String(agent.id)}>
-            <div><strong>{String(agent.name ?? agent.id)} {agent.id === DEFAULT_AGENT_ID && <em className="resource-default-badge">Default</em>}</strong><small>{agentSummary(agent)}</small></div>
+            <div><strong>{String(agent.name ?? agent.id)} {agent.id === DEFAULT_AGENT_ID && <em className="resource-default-badge">Default</em>}</strong><small>{agentSummary(agent, executionOptions.data?.llm_profiles.items ?? [])}</small></div>
             <div className="resource-row-actions"><button type="button" className="button button-secondary" onClick={() => startAgentFrom(agent)}>Use as template</button><button type="button" className="button button-danger" disabled={removeAgent.isPending || agent.id === DEFAULT_AGENT_ID} onClick={() => removeAgent.mutate(agent)}>{agent.id === DEFAULT_AGENT_ID ? "Protected" : "Remove"}</button></div>
           </li>
         ))}
@@ -189,14 +189,16 @@ function resourceSummary(resource: Resource): string {
   return typeof summary === "string" && summary.length > 0 ? summary : "Personal skill";
 }
 
-function agentSummary(agent: Resource): string {
+function agentSummary(agent: Resource, llmProfiles: Array<{ name: string; display_name?: string | null }>): string {
   const refs = agent.skill_refs;
   const profile = agent.capability_profile_ref;
   const llmProfile = agent.llm_profile;
   const skillText = Array.isArray(refs) ? refs.filter((item): item is string => typeof item === "string").join(", ") : "No skills";
   const profileText = typeof profile === "string" ? profile : "";
-  const llmText = typeof llmProfile === "string" ? llmProfile : "";
-  return [profileText ? `${skillText || "No skills"} · ${profileText}` : skillText, llmText ? `Model: ${llmText}` : ""].filter(Boolean).join(" · ");
+  const llmText = typeof llmProfile === "string"
+    ? `Model: ${llmProfiles.find((profile) => profile.name === llmProfile)?.display_name ?? llmProfile}`
+    : "";
+  return [profileText ? `${skillText || "No skills"} · ${profileText}` : skillText, llmText].filter(Boolean).join(" · ");
 }
 
 function errorMessage(error: unknown): string {
