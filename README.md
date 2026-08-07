@@ -394,8 +394,7 @@ npm ci
 npm run dev
 ```
 
-Vite proxies API calls to `http://127.0.0.1:8000`. Validate and rebuild the committed assets served
-by FastAPI with:
+Vite proxies API calls to `http://127.0.0.1:8000`. Validate the frontend locally with:
 
 ```bash
 cd web
@@ -403,6 +402,10 @@ npm run lint
 npm test
 npm run build
 ```
+
+The local build writes generated files to `web/dist`, which is ignored by Git. Production assets
+are rebuilt automatically in the production Docker image and copied into the API's
+`/console/` static directory; generated files under `app/static/console` are not committed.
 
 Install Chromium once and run the browser suite against the production Vite build:
 

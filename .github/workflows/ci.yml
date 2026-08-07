@@ -31,6 +31,12 @@ jobs:
           version: "0.11.29"
           enable-cache: true
           cache-dependency-glob: uv.lock
+      - name: Set up Node.js for static-file tests
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: Install dependencies
         run: uv sync --locked --dev --extra voice
       - name: Check lockfile
@@ -41,14 +47,45 @@ jobs:
         run: uv run --no-sync ruff format --check .
       - name: Run basedpyright
         run: uv run --no-sync basedpyright
+      - name: Build frontend for static-file tests
+        working-directory: web
+        run: npm ci && npm run build
+      - name: Stage frontend for Python static-file tests
+        run: cp -R web/dist app/static/console
       - name: Run tests
         run: uv run --no-sync pytest
+
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+      - name: Run ESLint
+        working-directory: web
+        run: npm run lint
+      - name: Run tests
+        working-directory: web
+        run: npm test
+      - name: Build frontend
+        working-directory: web
+        run: npm run build
 
   production-image:
     name: Build and publish production image
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    needs: [quality]
+    needs: [quality, frontend]
     permissions:
       contents: read
       packages: write
