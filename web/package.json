@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:install": "playwright install chromium"
+    "test:e2e:install": "playwright install chromium",
+    "screenshot:workspace": "playwright test e2e/screenshots/workspace.spec.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.0.0",
