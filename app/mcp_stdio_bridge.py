@@ -114,6 +114,9 @@ class StdioMCPBridge:
             self._stderr_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._stderr_task
+        transport = getattr(process, "_transport", None)
+        if transport is not None:
+            transport.close()
         self._stderr_task = None
         self._process = None
 
