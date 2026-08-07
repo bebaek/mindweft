@@ -21,12 +21,19 @@ export function UserResourceEditors() {
     queryFn: ({ signal }) => api.listUserResources("agents", signal),
     retry: false,
   });
+  const executionOptions = useQuery({
+    queryKey: ["execution-options", authentication],
+    queryFn: ({ signal }) => api.getExecutionOptions(signal),
+    retry: false,
+    staleTime: 60_000,
+  });
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [agentName, setAgentName] = useState("");
   const [agentSkills, setAgentSkills] = useState("");
   const [agentProfile, setAgentProfile] = useState("");
+  const [agentLlmProfile, setAgentLlmProfile] = useState("");
   const [agentFormError, setAgentFormError] = useState<string | null>(null);
   const createSkill = useMutation({
     mutationFn: () => {
@@ -66,12 +73,14 @@ export function UserResourceEditors() {
         name: agentName.trim(),
         skill_refs: skillRefs,
         ...(agentProfile.trim() ? { capability_profile_ref: agentProfile.trim() } : {}),
+        ...(agentLlmProfile ? { llm_profile: agentLlmProfile } : {}),
       }, agents.data?.version ?? 0);
     },
     onSuccess: async () => {
       setAgentName("");
       setAgentSkills("");
       setAgentProfile("");
+      setAgentLlmProfile("");
       setAgentFormError(null);
       await queryClient.invalidateQueries({ queryKey: agentsKey });
       await queryClient.invalidateQueries({ queryKey: ["user-execution-config", authentication] });
@@ -104,6 +113,7 @@ export function UserResourceEditors() {
     setAgentName(`${agentNameValue} copy`);
     setAgentSkills(Array.isArray(agent.skill_refs) ? agent.skill_refs.filter((item): item is string => typeof item === "string").join(", ") : "");
     setAgentProfile(typeof agent.capability_profile_ref === "string" ? agent.capability_profile_ref : "");
+    setAgentLlmProfile(typeof agent.llm_profile === "string" ? agent.llm_profile : "");
     setAgentFormError(null);
   }
 
@@ -152,6 +162,7 @@ export function UserResourceEditors() {
         <label>Agent name<input value={agentName} onChange={(event) => setAgentName(event.target.value)} placeholder="Release assistant" /></label>
         <label>Skill references<input value={agentSkills} onChange={(event) => setAgentSkills(event.target.value)} placeholder="user:reviewer, shared:coding-workspace" /><small>Comma-separated qualified references.</small></label>
         <label>Capability profile reference<input value={agentProfile} onChange={(event) => setAgentProfile(event.target.value)} placeholder="user:personal-tools or shared:workspace" /></label>
+        <label>Model profile<select aria-label="Agent model profile" value={agentLlmProfile} onChange={(event) => setAgentLlmProfile(event.target.value)} disabled={executionOptions.isPending}><option value="">Use tenant default</option>{executionOptions.data?.llm_profiles.items.map((profile) => <option key={profile.name} value={profile.name}>{profile.display_name ?? profile.name}</option>)}</select><small>Choose which configured model this agent uses by default.</small></label>
         {(agentFormError || createAgent.error) && <p className="inline-error" role="alert">{agentFormError ?? errorMessage(createAgent.error)}</p>}
         <button type="submit" className="button button-primary" disabled={createAgent.isPending}>{createAgent.isPending ? "Saving…" : "Add agent"}</button>
       </form>
@@ -159,7 +170,7 @@ export function UserResourceEditors() {
       <ul className="resource-list">
         {agents.data?.items.map((agent) => (
           <li key={String(agent.id)}>
-            <div><strong>{String(agent.name ?? agent.id)} {agent.id === DEFAULT_AGENT_ID && <em className="resource-default-badge">Default</em>}</strong><small>{agentSummary(agent)}</small></div>
+            <div><strong>{String(agent.name ?? agent.id)} {agent.id === DEFAULT_AGENT_ID && <em className="resource-default-badge">Default</em>}</strong><small>{agentSummary(agent, executionOptions.data?.llm_profiles.items ?? [])}</small></div>
             <div className="resource-row-actions"><button type="button" className="button button-secondary" onClick={() => startAgentFrom(agent)}>Use as template</button><button type="button" className="button button-danger" disabled={removeAgent.isPending || agent.id === DEFAULT_AGENT_ID} onClick={() => removeAgent.mutate(agent)}>{agent.id === DEFAULT_AGENT_ID ? "Protected" : "Remove"}</button></div>
           </li>
         ))}
@@ -178,12 +189,16 @@ function resourceSummary(resource: Resource): string {
   return typeof summary === "string" && summary.length > 0 ? summary : "Personal skill";
 }
 
-function agentSummary(agent: Resource): string {
+function agentSummary(agent: Resource, llmProfiles: Array<{ name: string; display_name?: string | null }>): string {
   const refs = agent.skill_refs;
   const profile = agent.capability_profile_ref;
+  const llmProfile = agent.llm_profile;
   const skillText = Array.isArray(refs) ? refs.filter((item): item is string => typeof item === "string").join(", ") : "No skills";
   const profileText = typeof profile === "string" ? profile : "";
-  return profileText ? `${skillText || "No skills"} · ${profileText}` : skillText;
+  const llmText = typeof llmProfile === "string"
+    ? `Model: ${llmProfiles.find((profile) => profile.name === llmProfile)?.display_name ?? llmProfile}`
+    : "";
+  return [profileText ? `${skillText || "No skills"} · ${profileText}` : skillText, llmText].filter(Boolean).join(" · ");
 }
 
 function errorMessage(error: unknown): string {

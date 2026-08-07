@@ -18,6 +18,7 @@ it("validates personal configuration and stores a write-only MCP credential", as
     created_at: "2026-08-04T00:00:00Z",
     updated_at: "2026-08-04T00:00:00Z",
   });
+  const updateUserResource = vi.fn();
   const api = {
     getUserExecutionConfig: vi.fn().mockResolvedValue({
       tenant_id: "tenant-1",
@@ -27,13 +28,20 @@ it("validates personal configuration and stores a write-only MCP credential", as
       created_at: "2026-08-04T00:00:00Z",
       updated_at: "2026-08-04T00:00:00Z",
     }),
+    getExecutionOptions: vi.fn().mockResolvedValue({
+      tenant_id: "tenant-1",
+      skills: { items: [] },
+      capability_profiles: { items: [] },
+      llm_profiles: { items: [{ name: "claude", display_name: "Claude Sonnet" }] },
+      agents: { default: "user:personal-assistant", items: [] },
+    }),
     validateUserExecutionConfig: validateConfig,
     updateUserExecutionConfig: vi.fn(),
     deleteUserExecutionConfig: vi.fn(),
     listUserResources: vi.fn().mockImplementation((type: string) => Promise.resolve(type === "agents"
-      ? { items: [{ id: "user:personal-assistant", name: "Personal assistant", skill_refs: [], capability_profile_ref: null }], version: 3 }
+      ? { items: [{ id: "user:personal-assistant", name: "Personal assistant", skill_refs: [], capability_profile_ref: null, llm_profile: "claude" }], version: 3 }
       : { items: [], version: 3 })),
-    updateUserResource: vi.fn(),
+    updateUserResource,
     deleteUserResource: vi.fn(),
     listUserExecutionCredentials: vi.fn().mockResolvedValue({ items: [] }),
     getUserMCPAccess: vi.fn().mockResolvedValue({
@@ -84,6 +92,14 @@ it("validates personal configuration and stores a write-only MCP credential", as
   expect(screen.getByRole("button", { name: "Protected" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "Use as template" }));
   expect(screen.getByLabelText("Agent name")).toHaveValue("Personal assistant copy");
+  expect(screen.getByLabelText("Agent model profile")).toHaveValue("claude");
+  fireEvent.click(screen.getByRole("button", { name: "Add agent" }));
+  await waitFor(() => expect(updateUserResource).toHaveBeenCalledWith(
+    "agents",
+    "user:personal-assistant-copy",
+    expect.objectContaining({ llm_profile: "claude" }),
+    3,
+  ));
   expect(screen.getByText("http://localhost:3000/user-mcp")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Validate" }));
   await waitFor(() => expect(validateConfig).toHaveBeenCalledWith({ mcp_servers: { items: [] } }));
