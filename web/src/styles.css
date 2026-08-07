@@ -734,7 +734,7 @@ html[data-theme="dark"] .admin-page .lifecycle-actions .archive { color:#ff9d94;
 .resource-editors { margin-top:18px; }
 .resource-skill-form { display:grid; gap:12px; max-width:720px; }
 .resource-skill-form label { display:grid; gap:5px; color:var(--muted); font-size:var(--text-sm); font-weight:700; }
-.resource-skill-form input,.resource-skill-form textarea { width:100%; box-sizing:border-box; padding:10px 11px; border:1px solid var(--line); border-radius:8px; color:var(--ink); background:var(--paper); font:inherit; }
+.resource-skill-form input,.resource-skill-form textarea,.resource-skill-form select { width:100%; box-sizing:border-box; padding:10px 11px; border:1px solid var(--line); border-radius:8px; color:var(--ink); background:var(--paper); font:inherit; }
 .resource-skill-form textarea { resize:vertical; }
 .resource-skill-form>button { justify-self:start; }
 .resource-list { display:grid; gap:8px; margin:18px 0 0; padding:0; list-style:none; }
