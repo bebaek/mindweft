@@ -70,7 +70,13 @@ export async function installDemoWorkspaceMocks(page: Page) {
         tenant_id: "demo-tenant",
         skills: { items: [] },
         capability_profiles: { items: [] },
-        llm_profiles: { items: [] },
+        llm_profiles: {
+          default: "claude",
+          items: [
+            { name: "claude", display_name: "Claude Sonnet" },
+            { name: "gpt-4.1", display_name: "GPT-4.1" },
+          ],
+        },
         agents: {
           default: "user:personal-assistant",
           items: [
@@ -78,6 +84,7 @@ export async function installDemoWorkspaceMocks(page: Page) {
               id: "user:personal-assistant",
               name: "user:personal-assistant",
               display_name: "Personal assistant",
+              llm_profile: "claude",
             },
             { id: "user:researcher", name: "user:researcher", display_name: "Researcher" },
           ],
@@ -87,6 +94,10 @@ export async function installDemoWorkspaceMocks(page: Page) {
   );
   await page.route("**/threads**", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === "/threads" && route.request().method() === "POST") {
+      await route.fulfill(fulfill({ thread_id: "thread-new" }));
+      return;
+    }
     if (url.pathname === "/threads" && route.request().method() === "GET") {
       await route.fulfill(fulfill({ threads: [thread], total: 1, limit: 50, offset: 0 }));
       return;
