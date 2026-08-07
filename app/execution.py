@@ -228,6 +228,7 @@ class TenantAgentPresetConfig:
     skill_name: str | None = None
     skills: list[str] | None = None
     capability_profile: str | None = None
+    llm_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1197,7 +1198,11 @@ def parse_tenant_execution_config(
         skills=skills_config,
         capability_profiles=capability_profiles_config,
         agents=_parse_tenant_agent_presets_config(
-            tenant_id, agents_payload, skills_config, capability_profiles_config
+            tenant_id,
+            agents_payload,
+            skills_config,
+            capability_profiles_config,
+            set(llm_profiles),
         ),
     )
 
@@ -1637,6 +1642,7 @@ def _parse_tenant_agent_presets_config(
     payload: dict[str, Any],
     skills_config: TenantSkillsConfig,
     capability_profiles_config: TenantCapabilityProfilesConfig,
+    llm_profile_names: set[str],
 ) -> TenantAgentPresetsConfig:
     default_agent = _optional_str(payload.get("default_agent") or payload.get("defaultAgent"))
     items_raw = payload.get("items") or []
@@ -1672,7 +1678,18 @@ def _parse_tenant_agent_presets_config(
         capability_profile = _optional_str(
             entry.get("capability_profile") or entry.get("capabilityProfile")
         )
-        if skill_name is None and skills is None and capability_profile is None:
+        llm_profile = _optional_str(entry.get("llm_profile") or entry.get("llmProfile"))
+        if llm_profile is not None and llm_profile not in llm_profile_names:
+            raise RuntimeError(
+                f"Tenant '{tenant_id}' agent preset '{name}' references unknown LLM profile "
+                f"'{llm_profile}'"
+            )
+        if (
+            skill_name is None
+            and skills is None
+            and capability_profile is None
+            and llm_profile is None
+        ):
             raise RuntimeError(
                 f"Tenant '{tenant_id}' agent preset '{name}' must set skill_name, skill_names, or capability_profile"
             )
@@ -1695,6 +1712,7 @@ def _parse_tenant_agent_presets_config(
                 skill_name=skill_name,
                 skills=skills,
                 capability_profile=capability_profile,
+                llm_profile=llm_profile,
             )
         )
     if default_agent is not None and default_agent not in seen_names:

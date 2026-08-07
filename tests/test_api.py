@@ -6908,3 +6908,46 @@ def test_subject_catalog_assignments_are_inactive_without_tenant_policy(
         == 204
     )
     assert store.effective_subject_mcp_server_catalog_item_ids("tenant-1", "member-1") is None
+
+
+def test_agent_preset_selects_llm_profile_and_request_overrides_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "default_llm_profile": "primary",
+                    "llm_profiles": {
+                        "primary": {"provider": "mock", "model": "primary"},
+                        "coding": {"provider": "mock", "model": "coding"},
+                    },
+                    "agents": {
+                        "default_agent": "coding",
+                        "items": [{"name": "coding", "llm_profile": "coding"}],
+                    },
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+
+    agent_thread = client.post("/threads", headers=AUTH_HEADERS)
+    assert agent_thread.status_code == 200
+    override_thread = client.post(
+        "/threads",
+        headers=AUTH_HEADERS,
+        json={"llm_profile": "primary"},
+    )
+    assert override_thread.status_code == 200
+
+    threads = client.get("/threads", headers=AUTH_HEADERS).json()["threads"]
+    profiles = {thread["thread_id"]: thread["llm_profile"] for thread in threads}
+    assert profiles[agent_thread.json()["thread_id"]] == "coding"
+    assert profiles[override_thread.json()["thread_id"]] == "primary"
+
+    options = client.get("/execution-options", headers=AUTH_HEADERS)
+    assert options.status_code == 200
+    assert options.json()["agents"]["items"][0]["llm_profile"] == "coding"

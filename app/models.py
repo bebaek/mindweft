@@ -241,6 +241,7 @@ class ExecutionAgentOptionItem(BaseModel):
     skill_name: str | None = None
     skills: list[str] | None = None
     capability_profile: str | None = None
+    llm_profile: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class ExecutionAgentOptionSection(BaseModel):
