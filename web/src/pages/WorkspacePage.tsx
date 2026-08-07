@@ -87,10 +87,7 @@ export function WorkspacePage() {
     messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [messages.data, streamedReply, activity]);
 
-  useEffect(() => {
-    const defaultAgent = executionOptions.data?.agents.default;
-    if (!selectedAgent && defaultAgent) setSelectedAgent(defaultAgent);
-  }, [executionOptions.data, selectedAgent]);
+  const effectiveAgent = selectedAgent || executionOptions.data?.agents.default || "";
 
 
   useEffect(
@@ -153,7 +150,7 @@ export function WorkspacePage() {
     try {
       if (threadId === null) {
         const created = await api.createThread(
-          selectedAgent ? { agentName: selectedAgent } : {},
+          effectiveAgent ? { agentName: effectiveAgent } : {},
           controller.signal,
         );
         threadId = created.thread_id;
@@ -378,7 +375,7 @@ export function WorkspacePage() {
             <span>Agent</span>
             <select
               aria-label="Agent"
-              value={selectedAgent}
+              value={effectiveAgent}
               disabled={selectedThreadId !== null || isRunning || executionOptions.isPending}
               onChange={(event) => setSelectedAgent(event.target.value)}
             >
