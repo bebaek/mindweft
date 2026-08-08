@@ -488,7 +488,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 34px 56px; }
 .entitlement-row>button { padding:8px 5px; border:0; color:#91443c; background:transparent; cursor:pointer; font-size:var(--text-xs); font-weight:700; }.unlimited-value { align-self:center; padding:8px; color:var(--muted); font-size:var(--text-sm); }
 .execution-config-panel { margin-top:10px; padding:19px; border:1px solid var(--line); border-radius:11px; background:var(--white); }
 .execution-config-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; }
-.execution-config-heading .eyebrow { margin-bottom:3px; }.execution-config-heading h3 { margin:0; font-family:Georgia,serif; font-size:20px; font-weight:500; }
+.execution-config-heading .eyebrow { margin-bottom:3px; }.execution-config-heading :is(h2,h3) { margin:0; font-family:Georgia,serif; font-size:20px; font-weight:500; }
 .execution-config-heading>div:first-child>p:last-child { margin:5px 0 0; color:var(--muted); font-size:var(--text-sm); }
 .execution-config-heading-actions { display:flex; align-items:center; gap:9px; }.execution-config-heading-actions>span { color:var(--muted); font-size:var(--text-xs); font-weight:700; text-transform:uppercase; }
 .execution-config-heading-actions>button { padding:7px 10px; border:1px solid var(--forest); border-radius:8px; color:white; background:var(--forest); cursor:pointer; font-size:var(--text-sm); font-weight:700; }

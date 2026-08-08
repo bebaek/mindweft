@@ -88,7 +88,7 @@ export function ExecutionConfigPanel({ platform = false, tenantId }: ExecutionCo
   return (
     <section className="execution-config-panel" aria-labelledby={titleId}>
       <div className="execution-config-heading">
-        <div><p className="eyebrow">{platform ? "Admin chat runtime" : "Runtime policy"}</p><h3 id={titleId}>{platform ? "Platform admin execution" : "Execution configuration"}</h3><p>{platform ? "Configure the model and runtime used by platform-admin chat without relying on tenant setup." : "Configure models, tools, agent behavior, skills, and capability presets."}</p></div>
+        <div><p className="eyebrow">{platform ? "Admin chat runtime" : "Runtime policy"}</p>{platform ? <h2 id={titleId}>Platform admin execution</h2> : <h3 id={titleId}>Execution configuration</h3>}<p>{platform ? "Configure the model and runtime used by platform-admin chat without relying on tenant setup." : "Configure models, tools, agent behavior, skills, and capability presets."}</p></div>
         <div className="execution-config-heading-actions">
           {executionConfig.data && <span>Version {executionConfig.data.version}</span>}
           <button type="button" onClick={openEditor}>{executionConfig.data ? "Edit configuration" : "Configure runtime"}</button>
