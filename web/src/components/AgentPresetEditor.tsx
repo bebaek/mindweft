@@ -43,8 +43,8 @@ export function AgentPresetEditor({
     const next: JsonObject = {
       name,
       ...(draft.description.trim() ? { description: draft.description.trim() } : {}),
-      skill_refs: refs(draft.skillRefs),
-      ...(draft.capabilityProfile ? { capability_profile_ref: draft.capabilityProfile } : {}),
+      skill_names: skills(draft.skillNames),
+      ...(draft.capabilityProfile ? { capability_profile: draft.capabilityProfile } : {}),
       ...(draft.llmProfile ? { llm_profile: draft.llmProfile } : {}),
     };
     const items = parsed.agents.map((item) => ({ ...item }));
@@ -85,7 +85,7 @@ export function AgentPresetEditor({
           <div className="execution-field-grid">
             <label>Name<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Code reviewer" /></label>
             <label className="wide">Description<input value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Reviews changes and reports risks" /></label>
-            <label className="wide">Skill references<input value={draft.skillRefs} onChange={(event) => setDraft({ ...draft, skillRefs: event.target.value })} placeholder="shared:coding, user:reviewer" /><small>Comma-separated qualified references.</small></label>
+            <label className="wide">Skills<input value={draft.skillNames} onChange={(event) => setDraft({ ...draft, skillNames: event.target.value })} placeholder="coding, reviewer" /><small>Comma-separated configured skill names.</small></label>
             <label>Capability profile<select value={draft.capabilityProfile} onChange={(event) => setDraft({ ...draft, capabilityProfile: event.target.value })}><option value="">Use default</option>{parsed.capabilityNames.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
             <label>Model profile<select value={draft.llmProfile} onChange={(event) => setDraft({ ...draft, llmProfile: event.target.value })}><option value="">Use default</option>{parsed.llmNames.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
           </div>
@@ -97,18 +97,22 @@ export function AgentPresetEditor({
   );
 }
 
-interface AgentDraft { name: string; description: string; skillRefs: string; capabilityProfile: string; llmProfile: string }
-function emptyDraft(): AgentDraft { return { name: "", description: "", skillRefs: "", capabilityProfile: "", llmProfile: "" }; }
+interface AgentDraft { name: string; description: string; skillNames: string; capabilityProfile: string; llmProfile: string }
+function emptyDraft(): AgentDraft { return { name: "", description: "", skillNames: "", capabilityProfile: "", llmProfile: "" }; }
 function toDraft(agent: AgentPreset): AgentDraft {
+  const configuredSkills = agent.skill_names ?? agent.skillNames ?? agent.skills;
+  const singularSkill = agent.skill_name ?? agent.skillName;
   return {
     name: agent.name,
     description: typeof agent.description === "string" ? agent.description : "",
-    skillRefs: Array.isArray(agent.skill_refs) ? agent.skill_refs.filter((item): item is string => typeof item === "string").join(", ") : "",
-    capabilityProfile: typeof agent.capability_profile_ref === "string" ? agent.capability_profile_ref : "",
-    llmProfile: typeof agent.llm_profile === "string" ? agent.llm_profile : "",
+    skillNames: Array.isArray(configuredSkills)
+      ? configuredSkills.filter((item): item is string => typeof item === "string").join(", ")
+      : typeof singularSkill === "string" ? singularSkill : "",
+    capabilityProfile: stringProperty(agent, "capability_profile", "capabilityProfile"),
+    llmProfile: stringProperty(agent, "llm_profile", "llmProfile"),
   };
 }
-function refs(value: string): string[] { return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))]; }
+function skills(value: string): string[] { return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))]; }
 interface ParsedState {
   error: string | null;
   agentConfig: JsonObject;
@@ -134,10 +138,20 @@ function emptyParsed(error: string): ParsedState {
   return { error, agentConfig: {}, agents: [], capabilityNames: [], llmNames: [] };
 }
 function summary(agent: AgentPreset, capabilityNames: string[], llmNames: string[]): string {
-  const skills = Array.isArray(agent.skill_refs) ? agent.skill_refs.filter((item): item is string => typeof item === "string").join(", ") : "No skills";
-  const capability = typeof agent.capability_profile_ref === "string" && capabilityNames.includes(agent.capability_profile_ref) ? agent.capability_profile_ref : "Default tools";
-  const model = typeof agent.llm_profile === "string" && llmNames.includes(agent.llm_profile) ? agent.llm_profile : "Default model";
-  return `${skills || "No skills"} · ${capability} · ${model}`;
+  const configuredSkills = agent.skill_names ?? agent.skillNames ?? agent.skills;
+  const singularSkill = agent.skill_name ?? agent.skillName;
+  const skillList = Array.isArray(configuredSkills)
+    ? configuredSkills.filter((item): item is string => typeof item === "string")
+    : typeof singularSkill === "string" ? [singularSkill] : [];
+  const capabilityName = stringProperty(agent, "capability_profile", "capabilityProfile");
+  const llmName = stringProperty(agent, "llm_profile", "llmProfile");
+  const capability = capabilityNames.includes(capabilityName) ? capabilityName : "Default tools";
+  const model = llmNames.includes(llmName) ? llmName : "Default model";
+  return `${skillList.join(", ") || "No skills"} · ${capability} · ${model}`;
+}
+function stringProperty(value: JsonObject, snakeCase: string, camelCase: string): string {
+  const property = value[snakeCase] ?? value[camelCase];
+  return typeof property === "string" ? property : "";
 }
 function isObject(value: unknown): value is JsonObject { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
 function isNamed(value: unknown): value is { name: string } { return isObject(value) && typeof value.name === "string"; }
