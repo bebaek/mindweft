@@ -8,6 +8,7 @@ import type {
   ThreadListItem,
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
+import { visibleChatMessages } from "./workspaceMessages";
 import { ContextDialog } from "../components/ContextDialog";
 import { ConsentDialog } from "../components/ConsentDialog";
 
@@ -338,7 +339,7 @@ export function WorkspacePage() {
         <div className="message-scroll" aria-live="polite" tabIndex={0}>
           {!selectedThreadId && !isRunning && <Welcome />}
           {messages.isPending && selectedThreadId && <p className="loading-messages">Loading conversation…</p>}
-          {messages.data?.filter((message) => message.role === "user" || message.role === "assistant").map((message) => (
+          {visibleChatMessages(messages.data, streamedReply).map((message) => (
             <article className={`chat-message ${message.role}`} key={message.id}>
               <span className="message-author">{message.role === "user" ? "You" : "Minigent"}</span>
               {message.content && (message.role === "assistant" ? <RenderedAssistantMessage content={message.content} /> : <div className="message-content plain-message-content">{message.content}</div>)}
