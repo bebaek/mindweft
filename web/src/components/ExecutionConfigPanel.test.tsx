@@ -48,7 +48,7 @@ it("loads the platform-admin execution scope without a tenant", async () => {
     </QueryClientProvider>,
   );
 
-  expect(await screen.findByRole("heading", { name: "Platform admin execution" })).toBeVisible();
+  expect(await screen.findByRole("heading", { level: 2, name: "Platform admin execution" })).toBeVisible();
   expect(await screen.findByText("gpt-test")).toBeVisible();
   await waitFor(() => expect(getAdminExecutionConfig).toHaveBeenCalled());
   expect(getAdminTenantExecutionConfig).not.toHaveBeenCalled();
