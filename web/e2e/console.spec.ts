@@ -945,6 +945,7 @@ test("validates and applies execution configuration without exposing stored secr
   await dialog.getByRole("button", { name: "Skills" }).click();
   await dialog.getByLabel("Skills configuration").fill(JSON.stringify({ default_skill: "review", items: [{ name: "review", system_prompt: "Review carefully" }] }, null, 2));
   await dialog.getByRole("button", { name: "Presets" }).click();
+  await dialog.getByText("Advanced preset JSON", { exact: true }).click();
   await dialog.getByRole("textbox", { name: /^Capability profiles/ }).fill(JSON.stringify({ default_profile: "safe", items: [{ name: "safe", allowed_local_tools: ["echo"] }] }, null, 2));
   await dialog.getByRole("textbox", { name: /^Agent presets/ }).fill(JSON.stringify({ items: [{ name: "reviewer", skill_name: "review", capability_profile: "safe" }] }, null, 2));
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
