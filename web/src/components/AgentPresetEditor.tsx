@@ -40,16 +40,11 @@ export function AgentPresetEditor({
       setError("Agent preset name is required.");
       return;
     }
-    const next: JsonObject = {
-      name,
-      ...(draft.description.trim() ? { description: draft.description.trim() } : {}),
-      skill_names: skills(draft.skillNames),
-      ...(draft.capabilityProfile ? { capability_profile: draft.capabilityProfile } : {}),
-      ...(draft.llmProfile ? { llm_profile: draft.llmProfile } : {}),
-    };
+    const existing = editing === null ? null : parsed.agents[editing];
+    const next = presetFromDraft(draft, existing);
     const items = parsed.agents.map((item) => ({ ...item }));
-    if (editing === null) items.push(next as AgentPreset);
-    else items[editing] = next as AgentPreset;
+    if (editing === null) items.push(next);
+    else items[editing] = next;
     onChange(JSON.stringify({ ...parsed.agentConfig, items }, null, 2));
     startNew();
   }
@@ -112,6 +107,22 @@ function toDraft(agent: AgentPreset): AgentDraft {
     llmProfile: stringProperty(agent, "llm_profile", "llmProfile"),
   };
 }
+function presetFromDraft(draft: AgentDraft, existing: AgentPreset | null): AgentPreset {
+  const preset: JsonObject = existing ? { ...existing } : {};
+  removeKeys(preset, [
+    "name", "description",
+    "skill_name", "skillName", "skill_names", "skillNames", "skills",
+    "capability_profile", "capabilityProfile",
+    "llm_profile", "llmProfile",
+  ]);
+  preset.name = draft.name.trim();
+  if (draft.description.trim()) preset.description = draft.description.trim();
+  preset.skill_names = skills(draft.skillNames);
+  if (draft.capabilityProfile) preset.capability_profile = draft.capabilityProfile;
+  if (draft.llmProfile) preset.llm_profile = draft.llmProfile;
+  return preset as AgentPreset;
+}
+function removeKeys(object: JsonObject, keys: string[]) { for (const key of keys) delete object[key]; }
 function skills(value: string): string[] { return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))]; }
 interface ParsedState {
   error: string | null;
@@ -127,7 +138,8 @@ function parseState(agents: string, capabilities: string, llmProfiles: string): 
     const capabilityConfig = JSON.parse(capabilities) as unknown;
     const llmConfig = JSON.parse(llmProfiles) as unknown;
     if (!isObject(agentConfig) || !Array.isArray(agentConfig.items)) return emptyParsed("Agent presets JSON must contain an items array.");
-    const parsedAgents = agentConfig.items.filter(isAgent);
+    if (!agentConfig.items.every(isAgent)) return emptyParsed("Agent presets JSON must contain only named preset objects.");
+    const parsedAgents = agentConfig.items;
     const capabilityNames = isObject(capabilityConfig) && Array.isArray(capabilityConfig.items) ? capabilityConfig.items.filter(isNamed).map((item) => item.name) : [];
     const llmNames = isObject(llmConfig) ? Object.keys(llmConfig) : [];
     return { error: null, agentConfig, agents: parsedAgents, capabilityNames, llmNames };

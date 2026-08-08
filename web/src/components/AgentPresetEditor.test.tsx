@@ -55,6 +55,51 @@ describe("AgentPresetEditor", () => {
     });
   });
 
+  it("preserves fields outside the guided editor when updating a preset", () => {
+    const onChange = vi.fn();
+    render(
+      <AgentPresetEditor
+        {...props}
+        agents={JSON.stringify({
+          items: [{
+            name: "default",
+            description: "Old description",
+            skill_names: ["coding"],
+            capability_profile: "safe",
+            llm_profile: "fast",
+            future_policy: { mode: "strict", retries: 2 },
+          }],
+        })}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Updated description" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save preset" }));
+
+    const updated = JSON.parse(onChange.mock.calls[0]?.[0] as string) as { items: Array<Record<string, unknown>> };
+    expect(updated.items[0]).toMatchObject({
+      description: "Updated description",
+      future_policy: { mode: "strict", retries: 2 },
+    });
+  });
+
+  it("does not silently discard malformed preset entries", () => {
+    const onChange = vi.fn();
+    render(
+      <AgentPresetEditor
+        {...props}
+        agents={JSON.stringify({ items: [{ name: "valid", skill_names: ["coding"] }, { skill_names: ["reviewer"] }] })}
+        onChange={onChange}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("only named preset objects");
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("edits and removes an existing preset", () => {
     const onChange = vi.fn();
     render(<AgentPresetEditor {...props} onChange={onChange} />);
