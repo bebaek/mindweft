@@ -55,6 +55,42 @@ describe("AgentPresetEditor", () => {
     });
   });
 
+  it("updates the default agent reference when its preset is renamed", () => {
+    const onChange = vi.fn();
+    render(
+      <AgentPresetEditor
+        {...props}
+        agents={JSON.stringify({ defaultAgent: "default", items: [{ name: "default", skill_names: ["coding"] }] })}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "reviewer" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save preset" }));
+
+    const updated = JSON.parse(onChange.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    expect(updated.default_agent).toBe("reviewer");
+    expect(updated).not.toHaveProperty("defaultAgent");
+  });
+
+  it("clears the default agent reference when its preset is removed", () => {
+    const onChange = vi.fn();
+    render(
+      <AgentPresetEditor
+        {...props}
+        agents={JSON.stringify({ default_agent: "default", items: [{ name: "default", skill_names: ["coding"] }] })}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    const updated = JSON.parse(onChange.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    expect(updated).not.toHaveProperty("default_agent");
+    expect(updated).not.toHaveProperty("defaultAgent");
+  });
+
   it("preserves fields outside the guided editor when updating a preset", () => {
     const onChange = vi.fn();
     render(

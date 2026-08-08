@@ -45,13 +45,16 @@ export function AgentPresetEditor({
     const items = parsed.agents.map((item) => ({ ...item }));
     if (editing === null) items.push(next);
     else items[editing] = next;
-    onChange(JSON.stringify({ ...parsed.agentConfig, items }, null, 2));
+    const agentConfig = syncDefaultAgent(parsed.agentConfig, existing?.name, next.name);
+    onChange(JSON.stringify({ ...agentConfig, items }, null, 2));
     startNew();
   }
 
   function remove(index: number) {
+    const removed = parsed.agents[index];
     const items = parsed.agents.filter((_, itemIndex) => itemIndex !== index);
-    onChange(JSON.stringify({ ...parsed.agentConfig, items }, null, 2));
+    const agentConfig = syncDefaultAgent(parsed.agentConfig, removed?.name, null);
+    onChange(JSON.stringify({ ...agentConfig, items }, null, 2));
     if (editing === index) {
       setEditing(null);
       setFormOpen(false);
@@ -121,6 +124,14 @@ function presetFromDraft(draft: AgentDraft, existing: AgentPreset | null): Agent
   if (draft.capabilityProfile) preset.capability_profile = draft.capabilityProfile;
   if (draft.llmProfile) preset.llm_profile = draft.llmProfile;
   return preset as AgentPreset;
+}
+function syncDefaultAgent(config: JsonObject, previousName: string | undefined, nextName: string | null): JsonObject {
+  const defaultAgent = config.default_agent ?? config.defaultAgent;
+  if (typeof defaultAgent !== "string" || defaultAgent !== previousName) return config;
+  const updated = { ...config };
+  removeKeys(updated, ["default_agent", "defaultAgent"]);
+  if (nextName) updated.default_agent = nextName;
+  return updated;
 }
 function removeKeys(object: JsonObject, keys: string[]) { for (const key of keys) delete object[key]; }
 function skills(value: string): string[] { return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))]; }
