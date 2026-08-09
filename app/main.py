@@ -173,13 +173,14 @@ async def _cleanup_pending_attachments_periodically(
                 round((monotonic() - started_at) * 1000, 3),
             )
             continue
-        logger.info(
-            "attachment.pending_cleanup_completed "
-            "trigger=scheduled deleted_count=%s deleted_bytes=%s duration_ms=%s",
-            result.deleted_count,
-            result.deleted_bytes,
-            round((monotonic() - started_at) * 1000, 3),
-        )
+        if result.deleted_count:
+            logger.info(
+                "attachment.pending_cleanup_completed "
+                "trigger=scheduled deleted_count=%s deleted_bytes=%s duration_ms=%s",
+                result.deleted_count,
+                result.deleted_bytes,
+                round((monotonic() - started_at) * 1000, 3),
+            )
 
 
 def _cleanup_pending_attachments_before_upload(store: AttachmentStore) -> None:

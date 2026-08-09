@@ -427,7 +427,7 @@ the regular image picker because they commonly ignore the HTML camera-capture hi
 | `max_per_tenant` | `MINIGENT_ATTACHMENT_MAX_PER_TENANT` | Maximum stored attachment records across all of one tenant's threads; defaults to 1,000. |
 | `max_bytes_per_tenant` | `MINIGENT_ATTACHMENT_MAX_BYTES_PER_TENANT` | Maximum aggregate attachment bytes across one tenant; defaults to 1 GiB. |
 | `pending_ttl_seconds` | `MINIGENT_ATTACHMENT_PENDING_TTL_SECONDS` | Time before an uploaded attachment that was never referenced by a message is eligible for deletion; defaults to 24 hours. |
-| `cleanup_interval_seconds` | `MINIGENT_ATTACHMENT_CLEANUP_INTERVAL_SECONDS` | Interval between background pending-upload cleanup passes; defaults to 15 minutes. |
+| `cleanup_interval_seconds` | `MINIGENT_ATTACHMENT_CLEANUP_INTERVAL_SECONDS` | Interval between background pending-upload cleanup passes; defaults to 1 hour. |
 
 Attachment records are scoped by tenant and thread. Provider requests resolve references to
 image bytes only in transient model-facing message copies; stored messages retain references.
