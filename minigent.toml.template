@@ -57,7 +57,7 @@ enabled = false
 # max_per_tenant = 1000
 # max_bytes_per_tenant = 1073741824
 # pending_ttl_seconds = 86400
-# cleanup_interval_seconds = 900
+# cleanup_interval_seconds = 3600
 # Encryption keys are environment-only; see MINIGENT_ATTACHMENT_ENCRYPTION_KEYS.
 
 [rate_limits]

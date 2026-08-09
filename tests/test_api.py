@@ -25,6 +25,7 @@ from app.admin_api import (
     admin_store_settings_from_env,
 )
 from app.agent_backends import PeerBackendSettings, _sanitize_peer_task_event
+from app.attachments import InMemoryAttachmentStore
 from app.config import load_environment
 from app.execution import (
     InMemoryTenantExecutionResolver,
@@ -33,7 +34,12 @@ from app.execution import (
     parse_tenant_execution_config,
 )
 from app.llm import LLMAdapter, MockLLMAdapter, OpenAICompatibleAdapter
-from app.main import DEFAULT_IMAGE_INPUT_MAX_BYTES, ImageInputSettings, create_app
+from app.main import (
+    DEFAULT_IMAGE_INPUT_MAX_BYTES,
+    ImageInputSettings,
+    _cleanup_pending_attachments_periodically,
+    create_app,
+)
 from app.mcp import MCPServerInfo
 from app.mcp_broker import MINIGENT_MCP_BROKER_TOKEN_ENV, MINIGENT_MCP_BROKER_URL_ENV
 from app.models import (
@@ -735,6 +741,32 @@ def test_unreferenced_attachment_can_be_deleted(monkeypatch: pytest.MonkeyPatch)
 
     assert delete_response.status_code == 204
     assert get_response.status_code == 404
+
+
+def test_scheduled_pending_attachment_cleanup_suppresses_noop_info_log(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sleep_calls = 0
+
+    async def stop_after_one_cleanup(_seconds: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls > 1:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr("app.main.asyncio.sleep", stop_after_one_cleanup)
+
+    with caplog.at_level(logging.INFO, logger="app.main"):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(
+                _cleanup_pending_attachments_periodically(
+                    InMemoryAttachmentStore(),
+                    interval_seconds=60 * 60,
+                )
+            )
+
+    assert "attachment.pending_cleanup_completed" not in caplog.text
 
 
 def test_pending_attachment_expires_when_message_never_references_it(

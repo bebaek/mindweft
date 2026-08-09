@@ -27,7 +27,7 @@ def test_attachment_store_settings_from_env() -> None:
     assert defaults.max_per_tenant == 1_000
     assert defaults.max_bytes_per_tenant == 1024 * 1024 * 1024
     assert defaults.pending_ttl_seconds == 24 * 60 * 60
-    assert defaults.cleanup_interval_seconds == 15 * 60
+    assert defaults.cleanup_interval_seconds == 60 * 60
     assert AttachmentStoreSettings.from_env(
         {
             "MINIGENT_ATTACHMENT_DB_PATH": "/data/attachments.db",
