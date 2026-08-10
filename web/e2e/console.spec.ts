@@ -473,6 +473,25 @@ test("uses readable typography tokens for chat and controls", async ({ page }) =
   }
 });
 
+test("gives the chat message input the full composer row", async ({ page }) => {
+  await installApiMocks(page);
+  await installWorkspaceMocks(page);
+  await page.goto("./");
+  await navigateToWorkspace(page);
+  await openConversations(page);
+  await page.getByRole("button", { name: "Review the deployment plan" }).click();
+
+  const composerBox = await page.locator(".chat-composer").boundingBox();
+  const selectorBox = await page.locator(".composer-runtime-selectors").boundingBox();
+  const inputBox = await page.getByLabel(/^Message /).boundingBox();
+
+  expect(composerBox).not.toBeNull();
+  expect(selectorBox).not.toBeNull();
+  expect(inputBox).not.toBeNull();
+  expect(inputBox!.width).toBeGreaterThan(composerBox!.width * 0.7);
+  expect(inputBox!.y).toBeGreaterThanOrEqual(selectorBox!.y + selectorBox!.height - 1);
+});
+
 test("keeps overview, authentication, and administration legible in dark mode", async ({ page }) => {
   await installApiMocks(page);
   await installAdminMocks(page);
