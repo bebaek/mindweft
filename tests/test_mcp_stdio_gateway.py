@@ -4,7 +4,6 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.mcp import MCPPathPolicy
 from app.mcp_stdio_bridge import BridgeSettings
 from app.mcp_stdio_gateway import (
     GatewaySettings,
@@ -12,6 +11,7 @@ from app.mcp_stdio_gateway import (
     create_gateway_app,
     load_gateway_settings,
 )
+from minigent_mcp.path_policy import MCPPathPolicy
 
 FAKE_STDIO_MCP_SERVER = r"""
 import json
