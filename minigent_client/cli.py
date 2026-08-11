@@ -1922,14 +1922,7 @@ def _read_chat_line(
     prompt_label = style_text("[user]", "user", stream=cast(TextIO, output_stream)) + " "
     if prompt_session is not None:
         prompt = prompt_session.prompt
-        line = prompt(_prompt_toolkit_label(prompt_label))
-        # prompt_toolkit renders wrapped input as physical terminal rows. Replay the
-        # accepted prompt with normal terminal autowrap so scrollback can reflow and
-        # copy long prompts without width-dependent newlines.
-        if line.strip():
-            output_stream.write(f"{prompt_label}{line}\n")
-            output_stream.flush()
-        return line
+        return prompt(_prompt_toolkit_label(prompt_label))
     output_stream.write(prompt_label)
     output_stream.flush()
     return input_stream.readline()
@@ -2159,12 +2152,14 @@ def _build_chat_prompt_session(
         def _(event: Any) -> None:
             event.current_buffer.insert_text("\n")
 
+        # Keep prompt_toolkit's accepted input in place. Erasing it and replaying the
+        # text causes visible duplicate prompt rows when terminal cursor tracking and
+        # tmux pane redraws disagree.
         return PromptSession(
             history=FileHistory(str(history_path)),
             key_bindings=key_bindings,
             multiline=True,
             prompt_continuation="",
-            erase_when_done=True,
         )
     except Exception:
         return None
