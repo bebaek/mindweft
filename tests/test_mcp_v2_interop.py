@@ -21,7 +21,7 @@ def test_official_mcp_v2_client_interoperates_with_text_server(tmp_path: Path) -
             command=sys.executable,
             args=[
                 "-m",
-                "app.text_mcp_server",
+                "minigent_workspace.servers.text",
                 "--workspace",
                 str(tmp_path),
             ],
@@ -67,7 +67,7 @@ def test_official_mcp_v2_client_uses_legacy_mode_with_text_server(tmp_path: Path
             command=sys.executable,
             args=[
                 "-m",
-                "app.text_mcp_server",
+                "minigent_workspace.servers.text",
                 "--workspace",
                 str(tmp_path),
             ],
@@ -92,7 +92,7 @@ def test_official_mcp_v2_client_interoperates_with_shell_server(tmp_path: Path) 
             command=sys.executable,
             args=[
                 "-m",
-                "app.shell_mcp_server",
+                "minigent_workspace.servers.shell",
                 "--workspace",
                 str(tmp_path),
             ],

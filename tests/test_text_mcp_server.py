@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.text_mcp_server import TextMCPServer
+from minigent_workspace.servers.text import TextMCPServer
 
 
 def test_read_text_file_lines_reads_inclusive_line_range(tmp_path: Path) -> None:

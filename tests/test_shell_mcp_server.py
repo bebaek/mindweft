@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.shell_mcp_server import ShellMCPServer
+from minigent_workspace.servers.shell import ShellMCPServer
 
 
 def test_run_command_executes_inside_workspace(tmp_path: Path) -> None:
