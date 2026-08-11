@@ -163,6 +163,13 @@ The template sets `MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db` so 
 survive runner/API restarts. Remove that setting only if you intentionally want in-memory,
 restart-discarded threads.
 
+The coding workspace runner also defaults image attachment storage to
+`$XDG_STATE_HOME/minigent/attachments.db`, falling back to
+`~/.local/state/minigent/attachments.db`. This keeps image references valid across local API
+restarts without requiring an `[attachments]` section in `minigent.toml`. Set
+`MINIGENT_ATTACHMENT_DB_PATH` or `[attachments].db_path` only to override that local default;
+non-coding Minigent API deployments retain their existing explicit storage behavior.
+
 To expose multiple roots through the same filesystem MCP server, set
 `MINIGENT_CODING_WORKSPACES` to a comma-separated list or repeat `--workspace` on the runner
 CLI. The older singular `MINIGENT_CODING_WORKSPACE` key is still accepted for compatibility.

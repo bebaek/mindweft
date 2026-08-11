@@ -91,6 +91,36 @@ def test_load_config_command_env_sets_dotenv_without_overriding(
     assert runner.os.environ["MINIGENT_CODING_TENANT_ID"] == "tenant"
 
 
+def test_coding_workspace_state_defaults_use_xdg_state_home(tmp_path: Path) -> None:
+    env = {"XDG_STATE_HOME": str(tmp_path)}
+
+    runner.apply_coding_workspace_state_defaults(env)
+
+    assert env["MINIGENT_ATTACHMENT_DB_PATH"] == str(tmp_path / "minigent" / "attachments.db")
+
+
+def test_coding_workspace_state_defaults_use_home_fallback(tmp_path: Path) -> None:
+    env = {"HOME": str(tmp_path)}
+
+    runner.apply_coding_workspace_state_defaults(env)
+
+    assert env["MINIGENT_ATTACHMENT_DB_PATH"] == str(
+        tmp_path / ".local" / "state" / "minigent" / "attachments.db"
+    )
+
+
+def test_coding_workspace_state_defaults_preserve_attachment_override(tmp_path: Path) -> None:
+    configured_path = tmp_path / "custom-attachments.db"
+    env = {
+        "HOME": str(tmp_path),
+        "MINIGENT_ATTACHMENT_DB_PATH": str(configured_path),
+    }
+
+    runner.apply_coding_workspace_state_defaults(env)
+
+    assert env["MINIGENT_ATTACHMENT_DB_PATH"] == str(configured_path)
+
+
 def test_load_env_file_reads_file_backed_values(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("MINIGENT_TENANT_EXECUTION_CONFIGS", raising=False)
     config_path = tmp_path / "tenant-config.json"
