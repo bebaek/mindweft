@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 STATE_DIR_NAME = "minigent"
 LEGACY_STATE_DIR_NAME = ".minigent"
@@ -19,13 +19,16 @@ PROMPT_COMMANDS_KEY = "prompt_commands"
 _PROMPT_COMMAND_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]{0,63}$")
 
 
-def state_dir_path() -> Path:
-    configured_home = os.getenv(XDG_STATE_HOME_ENV, "").strip()
+def state_dir_path(env: Mapping[str, str] | None = None) -> Path:
+    lookup = os.environ if env is None else env
+    configured_home = lookup.get(XDG_STATE_HOME_ENV, "").strip()
     if configured_home:
         state_home = Path(configured_home).expanduser()
         if state_home.is_absolute():
             return state_home / STATE_DIR_NAME
-    return Path.home() / ".local" / "state" / STATE_DIR_NAME
+    configured_user_home = lookup.get("HOME", "").strip()
+    user_home = Path(configured_user_home).expanduser() if configured_user_home else Path.home()
+    return user_home / ".local" / "state" / STATE_DIR_NAME
 
 
 def legacy_state_dir_path() -> Path:

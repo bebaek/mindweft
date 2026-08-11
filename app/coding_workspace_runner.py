@@ -17,7 +17,9 @@ from typing import Any, NamedTuple
 
 from dotenv import dotenv_values
 
+from app.attachments import ATTACHMENT_DB_PATH_ENV
 from app.unified_config import DEFAULT_CODING_DOTENV_FILE, apply_unified_config_to_env
+from minigent_client.state import state_dir_path
 
 DEFAULT_API_HOST = "127.0.0.1"
 DEFAULT_API_PORT = 8000
@@ -30,6 +32,7 @@ DEFAULT_TEXT_BRIDGE_NAME = "text-workspace"
 DEFAULT_TEXT_BRIDGE_PORT = 8767
 DEFAULT_MCP_GATEWAY_PATH_PREFIX = "/mcp"
 DEFAULT_TENANT_ID = "demo-tenant"
+DEFAULT_ATTACHMENT_DB_FILE = "attachments.db"
 DEFAULT_BRIDGE_ALLOWED_TOOLS = (
     "list_allowed_directories",
     "list_directory",
@@ -345,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
         None if args.no_env_file else args.env_file,
         warn_if_missing=env_file_explicit,
     )
+    apply_coding_workspace_state_defaults(env)
 
     workspace_roots = resolve_workspace_roots(
         args.workspace,
@@ -1171,6 +1175,14 @@ def resolve_active_workspace_scope(
                 f"{outside}. Configured workspaces: {configured}"
             )
     return scope.roots, scope
+
+
+def apply_coding_workspace_state_defaults(env: dict[str, str]) -> None:
+    """Use durable user-local attachment storage unless the deployment overrides it."""
+    env.setdefault(
+        ATTACHMENT_DB_PATH_ENV,
+        str(state_dir_path(env) / DEFAULT_ATTACHMENT_DB_FILE),
+    )
 
 
 def load_env_file(env_file: str | None, *, warn_if_missing: bool = True) -> dict[str, str]:
