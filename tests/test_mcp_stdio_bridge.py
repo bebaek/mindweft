@@ -6,8 +6,9 @@ from pathlib import Path
 import httpx2
 from fastapi.testclient import TestClient
 
-from app.mcp import MCPHTTPClient, MCPPathPolicy, MCPServerConfig
+from app.mcp import MCPHTTPClient, MCPServerConfig
 from app.mcp_stdio_bridge import BridgeSettings, build_parser, create_bridge_app
+from minigent_mcp.path_policy import MCPPathPolicy
 
 FAKE_STDIO_MCP_SERVER = r"""
 import json

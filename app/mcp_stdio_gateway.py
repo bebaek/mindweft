@@ -8,7 +8,6 @@ from typing import Any, Sequence
 
 from fastapi import FastAPI, HTTPException, Request, Response
 
-from app.mcp import MCPPathPolicy
 from app.mcp_stdio_bridge import (
     DEFAULT_HOST,
     DEFAULT_PATH,
@@ -18,6 +17,7 @@ from app.mcp_stdio_bridge import (
     BridgeSettings,
     StdioMCPBridge,
 )
+from minigent_mcp.path_policy import MCPPathPolicy
 
 DEFAULT_GATEWAY_PATH_PREFIX = "/mcp"
 

@@ -22,15 +22,15 @@ from mcp.server.lowlevel import Server
 from mcp.shared.exceptions import MCPError
 from mcp.shared.message import SessionMessage
 
-from app.mcp import (
+from app.models import Principal
+from app.tools import ToolExecutionContext, ToolRegistry
+from minigent_mcp.protocol import (
     LEGACY_MCP_PROTOCOL_VERSION,
     MODERN_MCP_PROTOCOL_VERSION,
     mcp_jsonrpc_error,
     mcp_request_protocol_version,
     strip_modern_mcp_result_envelope,
 )
-from app.models import Principal
-from app.tools import ToolExecutionContext, ToolRegistry
 
 MINIGENT_MCP_BROKER_BASE_URL_ENV = "MINIGENT_MCP_BROKER_BASE_URL"
 MINIGENT_MCP_BROKER_URL_ENV = "MINIGENT_MCP_BROKER_URL"

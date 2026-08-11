@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fnmatch
 import json
 import logging
 import os
@@ -18,7 +17,7 @@ from mcp.client.streamable_http import StreamableHTTPTransport
 from mcp.shared._compat import resync_tracer
 from mcp.shared._context_streams import create_context_streams
 from mcp.shared.message import SessionMessage
-from mcp.types import DiscoverResult, ErrorData, Implementation, JSONRPCError, JSONRPCResponse
+from mcp.types import DiscoverResult, Implementation
 
 from app.mcp_identity import MCPIdentityTokenIssuer
 from app.models import ToolSpec
@@ -29,19 +28,28 @@ from app.redaction import (
     redact_url_secrets,
     redact_urls_in_text,
 )
+from minigent_mcp import protocol as _mcp_protocol
+from minigent_mcp.path_policy import (
+    MCPPathPolicy,
+    filter_directory_listing_text,
+    iter_path_arguments,
+    path_denied,
+)
 
 logger = logging.getLogger(__name__)
 
-LEGACY_MCP_PROTOCOL_VERSION = "2025-11-25"
-MODERN_MCP_PROTOCOL_VERSION = "2026-07-28"
-DEFAULT_MCP_PROTOCOL_VERSION = MODERN_MCP_PROTOCOL_VERSION
-SUPPORTED_MCP_PROTOCOL_VERSIONS = (
-    LEGACY_MCP_PROTOCOL_VERSION,
-    MODERN_MCP_PROTOCOL_VERSION,
-)
+LEGACY_MCP_PROTOCOL_VERSION = _mcp_protocol.LEGACY_MCP_PROTOCOL_VERSION
+MODERN_MCP_PROTOCOL_VERSION = _mcp_protocol.MODERN_MCP_PROTOCOL_VERSION
+DEFAULT_MCP_PROTOCOL_VERSION = _mcp_protocol.DEFAULT_MCP_PROTOCOL_VERSION
+SUPPORTED_MCP_PROTOCOL_VERSIONS = _mcp_protocol.SUPPORTED_MCP_PROTOCOL_VERSIONS
+MCP_PROTOCOL_VERSION_META_KEY = _mcp_protocol.MCP_PROTOCOL_VERSION_META_KEY
+mcp_request_protocol_version = _mcp_protocol.mcp_request_protocol_version
+mcp_jsonrpc_error = _mcp_protocol.mcp_jsonrpc_error
+mcp_jsonrpc_result = _mcp_protocol.mcp_jsonrpc_result
+strip_modern_mcp_result_envelope = _mcp_protocol.strip_modern_mcp_result_envelope
+
 DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS = 30.0
 MCP_SERVERS_ENV = "MINIGENT_MCP_SERVERS"
-MCP_PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion"
 PRIVATE_VALUES_META_KEY = "io.minigent/private-values"
 LEGACY_PRIVATE_VALUES_META_KEY = "io.minigent/carddav-private-values"
 PRIVATE_VALUES_META_KEYS = (PRIVATE_VALUES_META_KEY, LEGACY_PRIVATE_VALUES_META_KEY)
@@ -65,12 +73,6 @@ class MCPSettings:
     def from_env(cls, env: Mapping[str, str] | None = None) -> MCPSettings:
         lookup = os.environ if env is None else env
         return cls(servers=_parse_mcp_server_configs(lookup.get(MCP_SERVERS_ENV, "")))
-
-
-@dataclass(frozen=True)
-class MCPPathPolicy:
-    deny_globs: list[str] = field(default_factory=list)
-    allow_globs: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -361,8 +363,8 @@ class MCPHTTPClient:
 
     def _validate_path_policy(self, tool_name: str, arguments: dict[str, Any]) -> None:
         _ = tool_name
-        for path in _iter_path_arguments(arguments):
-            if _path_denied(path, self._config.path_policy):
+        for path in iter_path_arguments(arguments):
+            if path_denied(path, self._config.path_policy):
                 raise HTTPException(
                     status_code=403,
                     detail=f"MCP path '{path}' is denied by server '{self._config.name}' policy",
@@ -383,7 +385,7 @@ class MCPHTTPClient:
                 filtered.append(item)
                 continue
             filtered.append(
-                {**item, "text": _filter_directory_listing_text(text, self._config.path_policy)}
+                {**item, "text": filter_directory_listing_text(text, self._config.path_policy)}
             )
         return filtered
 
@@ -443,55 +445,6 @@ def _exception_group_contains(exc: BaseException, error_type: type[BaseException
     if isinstance(exc, BaseExceptionGroup):
         return any(_exception_group_contains(item, error_type) for item in exc.exceptions)
     return False
-
-
-def mcp_request_protocol_version(payload: Mapping[str, Any]) -> str | None:
-    params = payload.get("params")
-    if not isinstance(params, Mapping):
-        return None
-    metadata = params.get("_meta")
-    if not isinstance(metadata, Mapping):
-        return None
-    version = metadata.get(MCP_PROTOCOL_VERSION_META_KEY)
-    return version if isinstance(version, str) and version else None
-
-
-def mcp_jsonrpc_error(request_id: object, code: int, message: str) -> dict[str, Any]:
-    response = JSONRPCError(
-        jsonrpc="2.0",
-        id=_mcp_jsonrpc_id(request_id),
-        error=ErrorData(code=code, message=message),
-    )
-    payload = response.model_dump(by_alias=True, mode="json", exclude_none=True)
-    if response.id is None:
-        payload["id"] = None
-    return payload
-
-
-def mcp_jsonrpc_result(request_id: object, result: Mapping[str, Any]) -> dict[str, Any]:
-    normalized_id = _mcp_jsonrpc_id(request_id)
-    if normalized_id is None:
-        return mcp_jsonrpc_error(None, -32600, "Invalid Request")
-    response = JSONRPCResponse(jsonrpc="2.0", id=normalized_id, result=dict(result))
-    return response.model_dump(by_alias=True, mode="json", exclude_none=True)
-
-
-def strip_modern_mcp_result_envelope(payload: Mapping[str, Any]) -> dict[str, Any]:
-    normalized = dict(payload)
-    result = normalized.get("result")
-    if not isinstance(result, Mapping):
-        return normalized
-    legacy_result = dict(result)
-    for key in ("resultType", "ttlMs", "cacheScope", "_meta"):
-        legacy_result.pop(key, None)
-    normalized["result"] = legacy_result
-    return normalized
-
-
-def _mcp_jsonrpc_id(value: object) -> int | str | None:
-    if type(value) is int or isinstance(value, str):
-        return value
-    return None
 
 
 def load_mcp_server_configs_from_env(env: Mapping[str, str] | None = None) -> list[MCPServerConfig]:
@@ -749,64 +702,3 @@ def _parse_path_policy(server_name: object, raw: object) -> MCPPathPolicy:
     ):
         raise RuntimeError(f"MCP server '{server_name}' has invalid path_policy.allow_globs")
     return MCPPathPolicy(deny_globs=list(deny_globs), allow_globs=list(allow_globs))
-
-
-def _iter_path_arguments(value: Any) -> list[str]:
-    paths: list[str] = []
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            if key in {"path", "paths", "source", "destination", "target"}:
-                paths.extend(_coerce_paths(nested))
-            elif isinstance(nested, dict | list):
-                paths.extend(_iter_path_arguments(nested))
-    elif isinstance(value, list):
-        for item in value:
-            paths.extend(_iter_path_arguments(item))
-    return paths
-
-
-def _coerce_paths(value: Any) -> list[str]:
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, list):
-        return [item for item in value if isinstance(item, str)]
-    return []
-
-
-def _path_denied(path: str, policy: MCPPathPolicy) -> bool:
-    normalized = path.replace("\\", "/").rstrip("/")
-    parts = [part for part in normalized.split("/") if part]
-    if _matches_path_globs(normalized, parts, policy.allow_globs):
-        return False
-    return _matches_path_globs(normalized, parts, policy.deny_globs)
-
-
-def _matches_path_globs(normalized: str, parts: list[str], patterns: list[str]) -> bool:
-    candidates = {normalized, normalized.lstrip("/")}
-    candidates.update(parts)
-    candidates.update("/".join(parts[index:]) for index in range(len(parts)))
-    expanded_patterns = set(patterns)
-    expanded_patterns.update(
-        pattern.removesuffix("/**") for pattern in patterns if pattern.endswith("/**")
-    )
-    return any(
-        fnmatch.fnmatch(candidate, pattern) or fnmatch.fnmatch(f"/{candidate}", pattern)
-        for pattern in expanded_patterns
-        for candidate in candidates
-    )
-
-
-def _filter_directory_listing_text(text: str, policy: MCPPathPolicy) -> str:
-    kept_lines: list[str] = []
-    hidden_count = 0
-    for line in text.splitlines():
-        name = line.rsplit(" ", 1)[-1].strip()
-        if name and _path_denied(name, policy):
-            hidden_count += 1
-            continue
-        kept_lines.append(line)
-    if hidden_count:
-        kept_lines.append(
-            f"[hidden {hidden_count} entr{'y' if hidden_count == 1 else 'ies'} by path policy]"
-        )
-    return "\n".join(kept_lines)

@@ -24,12 +24,14 @@ from mcp.types import (
 )
 from pydantic import BaseModel, Field
 
-from app.mcp import (
-    MODERN_MCP_PROTOCOL_VERSION,
+from minigent_mcp.path_policy import (
     MCPPathPolicy,
-    _filter_directory_listing_text,
-    _iter_path_arguments,
-    _path_denied,
+    filter_directory_listing_text,
+    iter_path_arguments,
+    path_denied,
+)
+from minigent_mcp.protocol import (
+    MODERN_MCP_PROTOCOL_VERSION,
     mcp_jsonrpc_error,
     mcp_jsonrpc_result,
     mcp_request_protocol_version,
@@ -397,8 +399,8 @@ class StdioMCPBridge:
             raise HTTPException(
                 status_code=400, detail="MCP tools/call arguments must be an object"
             )
-        for path in _iter_path_arguments(arguments):
-            if _path_denied(path, self._settings.path_policy):
+        for path in iter_path_arguments(arguments):
+            if path_denied(path, self._settings.path_policy):
                 logger.warning(
                     "MCP bridge denied path: name=%s tool=%s path=%s",
                     self._settings.name,
@@ -494,7 +496,7 @@ class StdioMCPBridge:
                 filtered_content.append(item)
                 continue
             filtered_content.append(
-                {**item, "text": _filter_directory_listing_text(text, self._settings.path_policy)}
+                {**item, "text": filter_directory_listing_text(text, self._settings.path_policy)}
             )
         return {**payload, "result": {**result, "content": filtered_content}}
 
