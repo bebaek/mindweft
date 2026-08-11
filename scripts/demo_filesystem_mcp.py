@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
             [
                 sys.executable,
                 "-c",
-                "from app.mcp_stdio_bridge import main; main()",
+                "from minigent_workspace.bridge.stdio import main; main()",
                 "--name",
                 "fs-workspace",
                 "--port",

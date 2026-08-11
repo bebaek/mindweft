@@ -1018,6 +1018,7 @@ def test_build_mcp_stdio_bridge_command_uses_declarative_spec() -> None:
 
     command = runner.build_mcp_stdio_bridge_command(spec)
 
+    assert "from minigent_workspace.bridge.stdio import main; main()" in command
     assert "--path" in command
     assert command[command.index("--path") + 1] == "/custom"
     assert command[command.index("--request-timeout") + 1] == "45"
@@ -1145,7 +1146,7 @@ def test_redacted_command_for_log_hides_sensitive_values() -> None:
 def test_build_mcp_gateway_command() -> None:
     command = runner.build_mcp_gateway_command(Path("gateway.json"), "127.0.0.1", 8765)
 
-    assert "from app.mcp_stdio_gateway import main; main()" in command
+    assert "from minigent_workspace.bridge.gateway import main; main()" in command
     assert command[command.index("--config") + 1] == "gateway.json"
     assert command[command.index("--host") + 1] == "127.0.0.1"
     assert command[command.index("--port") + 1] == "8765"
