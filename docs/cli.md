@@ -262,8 +262,8 @@ history, and multiline input.
 
 Set `MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter` or pass `--chat-submit-mode alt-enter`
 to switch modes. Use `/editor` to compose a long prompt in `$VISUAL` or `$EDITOR`.
-After submission, interactive prompts are redrawn with normal terminal wrapping so tmux and
-terminal scrollback can reflow and copy long prompts without pane-width line breaks.
+Interactive prompts use terminal soft wrapping, so resizing a tmux pane or terminal does not
+store pane-width newlines in prompt history.
 
 ### Chat flags
 
