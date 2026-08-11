@@ -213,7 +213,7 @@ def test_stdio_bridge_interoperates_with_sdk_v2_text_server(tmp_path: Path) -> N
                 command=[
                     sys.executable,
                     "-m",
-                    "app.text_mcp_server",
+                    "minigent_workspace.servers.text",
                     "--workspace",
                     str(tmp_path),
                 ],
@@ -264,7 +264,7 @@ def test_sdk_http_client_interoperates_with_sdk_text_server_through_bridge(
             command=[
                 sys.executable,
                 "-m",
-                "app.text_mcp_server",
+                "minigent_workspace.servers.text",
                 "--workspace",
                 str(tmp_path),
             ],

@@ -331,7 +331,7 @@ def test_text_bridge_command_runs_text_mcp_server(tmp_path: Path) -> None:
         "read_text_file_around",
         "search_text_file",
     ]
-    assert "from app.text_mcp_server import main; raise SystemExit(main())" in command
+    assert "from minigent_workspace.servers.text import main; raise SystemExit(main())" in command
     assert command[-2:] == ["--workspace", str(tmp_path)]
 
 
@@ -380,7 +380,7 @@ def test_shell_bridge_command_runs_shell_mcp_server(tmp_path: Path) -> None:
 
     assert "--allowed-tool" in command
     assert "run_command" in command
-    assert "from app.shell_mcp_server import main; raise SystemExit(main())" in command
+    assert "from minigent_workspace.servers.shell import main; raise SystemExit(main())" in command
     assert command[-2:] == ["--workspace", str(tmp_path)]
 
 

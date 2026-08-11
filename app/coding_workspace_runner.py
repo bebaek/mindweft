@@ -1793,7 +1793,7 @@ def build_shell_mcp_server_command(
     return [
         sys.executable,
         "-c",
-        "from app.shell_mcp_server import main; raise SystemExit(main())",
+        "from minigent_workspace.servers.shell import main; raise SystemExit(main())",
         *workspace_args,
         *allowed_command_args,
     ]
@@ -1835,7 +1835,7 @@ def build_text_mcp_server_command(workspaces: Path | list[Path]) -> list[str]:
     return [
         sys.executable,
         "-c",
-        "from app.text_mcp_server import main; raise SystemExit(main())",
+        "from minigent_workspace.servers.text import main; raise SystemExit(main())",
         *workspace_args,
     ]
 
