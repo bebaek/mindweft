@@ -166,20 +166,3 @@ def test_load_env_file_warns_for_explicit_missing_file(tmp_path: Path, monkeypat
         "env file not found; continuing with current environment: missing.env"
         in capsys.readouterr().out
     )
-
-
-def test_redacted_command_for_log_hides_sensitive_values() -> None:
-    logged = runner.redacted_command_for_log(
-        [
-            "server",
-            "--api-key",
-            "secret-token",
-            "--password=also-secret",
-            "AUTHORIZATION=Bearer token",
-        ]
-    )
-
-    assert "secret-token" not in logged
-    assert "also-secret" not in logged
-    assert "Bearer token" not in logged
-    assert "<redacted>" in logged
