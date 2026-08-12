@@ -7,8 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from app import mcp_stdio_bridge as legacy_bridge
+from app import mcp_stdio_gateway as legacy_gateway
 from app import shell_mcp_server as legacy_shell
 from app import text_mcp_server as legacy_text
+from minigent_workspace.bridge import gateway, stdio
 from minigent_workspace.servers import shell, text
 
 PROJECT_ROOT = Path(__file__).parents[1]
@@ -24,11 +27,25 @@ def test_legacy_shell_server_imports_delegate_to_workspace_package() -> None:
     assert legacy_shell.main is shell.main
 
 
+def test_legacy_bridge_imports_delegate_to_workspace_package() -> None:
+    assert legacy_bridge.BridgeSettings is stdio.BridgeSettings
+    assert legacy_bridge.StdioMCPBridge is stdio.StdioMCPBridge
+    assert legacy_bridge.main is stdio.main
+
+
+def test_legacy_gateway_imports_delegate_to_workspace_package() -> None:
+    assert legacy_gateway.GatewaySettings is gateway.GatewaySettings
+    assert legacy_gateway.create_gateway_app is gateway.create_gateway_app
+    assert legacy_gateway.main is gateway.main
+
+
 @pytest.mark.parametrize(
     ("script_name", "module_name"),
     [
         ("minigent-text-mcp", "minigent_workspace.servers.text"),
         ("minigent-shell-mcp", "minigent_workspace.servers.shell"),
+        ("minigent-mcp-stdio-bridge", "minigent_workspace.bridge.stdio"),
+        ("minigent-mcp-stdio-gateway", "minigent_workspace.bridge.gateway"),
     ],
 )
 def test_workspace_server_console_scripts_use_canonical_modules(
@@ -44,15 +61,19 @@ def test_workspace_server_console_scripts_use_canonical_modules(
 
 
 @pytest.mark.parametrize(
-    "module_name",
+    ("module_name", "expected_option"),
     [
-        "minigent_workspace.servers.text",
-        "minigent_workspace.servers.shell",
-        "app.text_mcp_server",
-        "app.shell_mcp_server",
+        ("minigent_workspace.servers.text", "--workspace"),
+        ("minigent_workspace.servers.shell", "--workspace"),
+        ("app.text_mcp_server", "--workspace"),
+        ("app.shell_mcp_server", "--workspace"),
+        ("minigent_workspace.bridge.stdio", "--name"),
+        ("minigent_workspace.bridge.gateway", "--config"),
+        ("app.mcp_stdio_bridge", "--name"),
+        ("app.mcp_stdio_gateway", "--config"),
     ],
 )
-def test_workspace_server_modules_support_help(module_name: str) -> None:
+def test_workspace_modules_support_help(module_name: str, expected_option: str) -> None:
     result = subprocess.run(
         [sys.executable, "-m", module_name, "--help"],
         cwd=PROJECT_ROOT,
@@ -62,4 +83,4 @@ def test_workspace_server_modules_support_help(module_name: str) -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "--workspace" in result.stdout
+    assert expected_option in result.stdout

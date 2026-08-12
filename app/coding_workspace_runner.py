@@ -720,7 +720,7 @@ def build_mcp_gateway_command(config_path: Path, host: str, port: int) -> list[s
     return [
         sys.executable,
         "-c",
-        "from app.mcp_stdio_gateway import main; main()",
+        "from minigent_workspace.bridge.gateway import main; main()",
         "--config",
         str(config_path),
         "--host",
@@ -1691,7 +1691,7 @@ def build_mcp_stdio_bridge_command(spec: CodingMCPServerSpec) -> list[str]:
     return [
         sys.executable,
         "-c",
-        "from app.mcp_stdio_bridge import main; main()",
+        "from minigent_workspace.bridge.stdio import main; main()",
         "--name",
         spec.name,
         "--host",
@@ -1758,7 +1758,7 @@ def build_bridge_command(
     return [
         sys.executable,
         "-c",
-        "from app.mcp_stdio_bridge import main; main()",
+        "from minigent_workspace.bridge.stdio import main; main()",
         "--name",
         bridge_name,
         "--host",
@@ -1813,7 +1813,7 @@ def build_shell_bridge_command(
     return [
         sys.executable,
         "-c",
-        "from app.mcp_stdio_bridge import main; main()",
+        "from minigent_workspace.bridge.stdio import main; main()",
         "--name",
         shell_bridge_name,
         "--host",
@@ -1850,7 +1850,7 @@ def build_text_bridge_command(
     return [
         sys.executable,
         "-c",
-        "from app.mcp_stdio_bridge import main; main()",
+        "from minigent_workspace.bridge.stdio import main; main()",
         "--name",
         text_bridge_name,
         "--host",

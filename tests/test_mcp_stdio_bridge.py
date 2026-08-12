@@ -7,8 +7,8 @@ import httpx2
 from fastapi.testclient import TestClient
 
 from app.mcp import MCPHTTPClient, MCPServerConfig
-from app.mcp_stdio_bridge import BridgeSettings, build_parser, create_bridge_app
 from minigent_mcp.path_policy import MCPPathPolicy
+from minigent_workspace.bridge.stdio import BridgeSettings, build_parser, create_bridge_app
 
 FAKE_STDIO_MCP_SERVER = r"""
 import json
