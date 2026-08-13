@@ -10,7 +10,6 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from app.coding_workspace_config import export_local_coding_config
 from app.unified_config import (
     CONFIG_FILE_ENV,
     DEFAULT_CODING_THREAD_DB_PATH,
@@ -26,6 +25,7 @@ from app.unified_config import (
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.errors import MinigentAPIError
 from minigent_client.output import print_json
+from minigent_workspace.config_export import export_local_coding_config
 
 DEFAULT_CONFIG_PROFILE = "local-coding"
 CONFIG_INIT_PROFILES = ("basic-chat", "openrouter", "local-coding", "voice")
