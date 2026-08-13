@@ -3,29 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import tenant_config
-
-
-def test_runner_reexports_canonical_tenant_config_helpers() -> None:
-    names = [
-        "apply_tenant_runtime_environment",
-        "tenant_mcp_server_from_spec",
-        "capability_profiles_from_specs",
-        "default_tenant_config_from_servers",
-        "default_tenant_config",
-        "inject_coding_mcp_servers",
-        "inject_coding_workspace_skill",
-        "coding_workspace_skill",
-        "enrich_coding_workspace_skill",
-        "append_workspace_roots_to_prompt",
-        "tenant_gateway_mcp_server_mismatches",
-        "bridge_allowed_tools_from_config",
-        "bridge_path_globs",
-    ]
-
-    for name in names:
-        assert getattr(legacy_runner, name) is getattr(tenant_config, name)
 
 
 def test_apply_tenant_runtime_environment_builds_default_config(tmp_path: Path) -> None:

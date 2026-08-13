@@ -1,15 +1,6 @@
 from __future__ import annotations
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import cli, runtime_settings
-
-
-def test_runner_reexports_canonical_runtime_settings_helpers() -> None:
-    assert legacy_runner.WorkspaceRuntimeSettings is runtime_settings.WorkspaceRuntimeSettings
-    assert (
-        legacy_runner.resolve_workspace_runtime_settings
-        is runtime_settings.resolve_workspace_runtime_settings
-    )
 
 
 def test_resolve_workspace_runtime_settings_uses_defaults() -> None:

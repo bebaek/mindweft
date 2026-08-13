@@ -2,14 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import output
 from minigent_workspace.mcp_specs import CodingMCPServerSpec
-
-
-def test_runner_reexports_canonical_output_helpers() -> None:
-    assert legacy_runner.print_workspace_summary is output.print_workspace_summary
-    assert legacy_runner.print_demo_commands is output.print_demo_commands
 
 
 def test_print_workspace_summary_reports_resolved_runtime(tmp_path: Path, capsys) -> None:

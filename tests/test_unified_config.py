@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from app.config import load_environment
 from app.execution import build_execution_resolver_from_env
 from app.settings import load_settings
+from minigent_config.environment import load_environment
 from minigent_config.unified_config import (
     apply_unified_config_to_env,
     load_unified_config_env,

@@ -2,19 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import environment
-
-
-def test_runner_reexports_canonical_environment_helpers() -> None:
-    names = [
-        "apply_coding_workspace_state_defaults",
-        "load_env_file",
-        "apply_file_env_values",
-    ]
-
-    for name in names:
-        assert getattr(legacy_runner, name) is getattr(environment, name)
 
 
 def test_coding_workspace_state_defaults_use_xdg_state_home(tmp_path: Path) -> None:

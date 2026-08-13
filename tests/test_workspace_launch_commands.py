@@ -3,26 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import launch_commands
 from minigent_workspace.mcp_specs import CodingMCPServerSpec
-
-
-def test_runner_reexports_canonical_launch_command_helpers() -> None:
-    names = [
-        "build_mcp_gateway_command",
-        "build_builtin_mcp_server_specs",
-        "build_mcp_stdio_bridge_command",
-        "build_bridge_command",
-        "shell_allowed_command_prefixes_from_env",
-        "build_shell_mcp_server_command",
-        "build_shell_bridge_command",
-        "build_text_mcp_server_command",
-        "build_text_bridge_command",
-    ]
-
-    for name in names:
-        assert getattr(legacy_runner, name) is getattr(launch_commands, name)
 
 
 def test_bridge_command_uses_default_read_only_tools(tmp_path: Path) -> None:

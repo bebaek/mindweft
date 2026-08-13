@@ -5,28 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import mcp_specs
-
-
-def test_runner_reexports_canonical_mcp_spec_helpers() -> None:
-    names = [
-        "CodingMCPServerSpec",
-        "env_flag_enabled",
-        "interpolate_config_string",
-        "normalize_path_prefix",
-        "mcp_server_specs_for_gateway",
-        "mcp_gateway_config_from_specs",
-        "write_mcp_gateway_config",
-        "resolve_mcp_servers_file",
-        "load_coding_mcp_server_specs",
-        "load_coding_mcp_server_specs_from_json",
-        "coding_mcp_server_spec_from_mapping",
-        "expand_coding_mcp_command",
-    ]
-
-    for name in names:
-        assert getattr(legacy_runner, name) is getattr(mcp_specs, name)
 
 
 def test_interpolate_config_string_replaces_missing_values_with_empty_string() -> None:

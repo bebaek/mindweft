@@ -26,7 +26,6 @@ from app.admin_api import (
 )
 from app.agent_backends import PeerBackendSettings, _sanitize_peer_task_event
 from app.attachments import InMemoryAttachmentStore
-from app.config import load_environment
 from app.execution import (
     InMemoryTenantExecutionResolver,
     build_execution_resolver_from_env,
@@ -63,6 +62,7 @@ from app.rate_limits import InMemoryRateLimiter, RunConcurrencyPolicy
 from app.runtime import AgentRuntime
 from app.store import InMemoryThreadStore, SQLiteThreadStore
 from app.tools import build_local_tool_registry
+from minigent_config.environment import load_environment
 
 AUTH_HEADERS = {
     "X-Minigent-User-Id": "user-1",

@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import Mock
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import cli, runtime_plan
 from minigent_workspace.mcp_resolution import ResolvedMCPServers
 from minigent_workspace.mcp_specs import CodingMCPServerSpec
@@ -32,11 +31,6 @@ def settings(*, gateway_enabled: bool = False) -> WorkspaceRuntimeSettings:
         shell_bridge_port=8766,
         shell_bridge_url="http://127.0.0.1:8766/mcp",
     )
-
-
-def test_runner_reexports_canonical_runtime_plan_helpers() -> None:
-    assert legacy_runner.WorkspaceRuntimePlan is runtime_plan.WorkspaceRuntimePlan
-    assert legacy_runner.prepare_workspace_runtime is runtime_plan.prepare_workspace_runtime
 
 
 def test_prepare_workspace_runtime_coordinates_resolvers(tmp_path: Path, monkeypatch) -> None:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.metadata
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import application
 
 
@@ -12,7 +11,3 @@ def test_console_script_entry_point_loads_canonical_main() -> None:
 
     loaded = entry_point.load()
     assert loaded is application.main
-
-
-def test_legacy_runner_reexports_canonical_main() -> None:
-    assert legacy_runner.main is application.main

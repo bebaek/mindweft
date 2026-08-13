@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import Mock
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import application, cli
 from minigent_workspace.mcp_resolution import ResolvedMCPServers
 from minigent_workspace.mcp_specs import CodingMCPServerSpec
@@ -44,11 +43,6 @@ def runtime_plan(tmp_path: Path, *, mismatches: list[str] | None = None) -> Work
         mcp_servers=ResolvedMCPServers(tmp_path / "servers.json", [process_spec], [tenant_spec]),
         gateway_mcp_server_mismatches=mismatches or [],
     )
-
-
-def test_runner_reexports_canonical_application_helper() -> None:
-    assert legacy_runner.main is application.main
-    assert legacy_runner.run_workspace_command is application.run_workspace_command
 
 
 def test_application_main_routes_config_command(monkeypatch) -> None:
