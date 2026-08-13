@@ -28,6 +28,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY app ./app
 COPY --from=frontend-build /web/dist ./app/static/console
 COPY minigent_client ./minigent_client
+COPY minigent_config ./minigent_config
 COPY minigent_mcp ./minigent_mcp
 COPY minigent_workspace ./minigent_workspace
 RUN uv sync --frozen --no-dev

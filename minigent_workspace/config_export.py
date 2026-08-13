@@ -6,7 +6,7 @@ from argparse import Namespace
 from pathlib import Path
 from typing import Any
 
-from app.unified_config import (
+from minigent_config.unified_config import (
     DEFAULT_CODING_DOTENV_FILE,
     DOTENV_FILE_ENV,
     load_unified_config_env,

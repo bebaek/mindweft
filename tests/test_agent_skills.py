@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app.agent_skills import (
+from minigent_config.agent_skills import (
     discover_agent_skills,
     load_agent_skill_body,
     parse_agent_skill_metadata,
