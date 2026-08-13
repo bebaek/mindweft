@@ -9,6 +9,7 @@ from minigent_workspace import tenant_config
 
 def test_runner_reexports_canonical_tenant_config_helpers() -> None:
     names = [
+        "apply_tenant_runtime_environment",
         "tenant_mcp_server_from_spec",
         "capability_profiles_from_specs",
         "default_tenant_config_from_servers",
@@ -25,6 +26,92 @@ def test_runner_reexports_canonical_tenant_config_helpers() -> None:
 
     for name in names:
         assert getattr(legacy_runner, name) is getattr(tenant_config, name)
+
+
+def test_apply_tenant_runtime_environment_builds_default_config(tmp_path: Path) -> None:
+    env: dict[str, str] = {}
+    spec = tenant_config.CodingMCPServerSpec(
+        name="fs-workspace",
+        url="http://127.0.0.1:8765/mcp",
+    )
+
+    tenant_config.apply_tenant_runtime_environment(
+        env,
+        "demo-tenant",
+        [spec],
+        workspace_roots=[tmp_path],
+        workspace_scope="default",
+    )
+
+    assert env["MINIGENT_AUTH_MODE"] == "dev-headers"
+    assert env["MINIGENT_LLM_PROVIDER"] == "mock"
+    assert env["MINIGENT_CODING_TENANT_ID"] == "demo-tenant"
+    assert env["MINIGENT_CODING_OAUTH_GLOBAL_FALLBACK"] == "true"
+    tenant = json.loads(env["MINIGENT_TENANT_EXECUTION_CONFIGS"])["demo-tenant"]
+    assert tenant["tools"]["mcp_servers"][0]["name"] == "fs-workspace"
+    assert tenant["skills"]["items"][0]["workspace_scope"] == "default"
+    assert str(tmp_path) in tenant["skills"]["items"][0]["system_prompt"]
+
+
+def test_apply_tenant_runtime_environment_injects_servers_and_skill(tmp_path: Path) -> None:
+    env = {
+        "MINIGENT_AUTH_MODE": "static",
+        "MINIGENT_LLM_PROVIDER": "openai",
+        "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(
+            {
+                "demo-tenant": {
+                    "tools": {"mcp_servers": []},
+                    "skills": {
+                        "default_skill": "existing",
+                        "items": [{"name": "existing", "system_prompt": "Existing prompt."}],
+                    },
+                }
+            }
+        ),
+    }
+    spec = tenant_config.CodingMCPServerSpec(
+        name="fs-workspace",
+        url="http://127.0.0.1:8765/mcp",
+    )
+
+    tenant_config.apply_tenant_runtime_environment(
+        env,
+        "demo-tenant",
+        [spec],
+        workspace_roots=[tmp_path],
+        workspace_scope=None,
+    )
+
+    assert env["MINIGENT_AUTH_MODE"] == "static"
+    assert env["MINIGENT_LLM_PROVIDER"] == "openai"
+    tenant = json.loads(env["MINIGENT_TENANT_EXECUTION_CONFIGS"])["demo-tenant"]
+    assert tenant["tools"]["mcp_servers"][0]["name"] == "fs-workspace"
+    assert tenant["skills"]["items"][1]["name"] == "coding-workspace"
+
+
+def test_apply_tenant_runtime_environment_can_skip_skill_injection(tmp_path: Path) -> None:
+    env = {
+        "MINIGENT_CODING_INJECT_WORKSPACE_SKILL": "false",
+        "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(
+            {
+                "demo-tenant": {
+                    "tools": {"mcp_servers": []},
+                    "skills": {"default_skill": "existing", "items": []},
+                }
+            }
+        ),
+    }
+
+    tenant_config.apply_tenant_runtime_environment(
+        env,
+        "demo-tenant",
+        [],
+        workspace_roots=[tmp_path],
+        workspace_scope=None,
+    )
+
+    tenant = json.loads(env["MINIGENT_TENANT_EXECUTION_CONFIGS"])["demo-tenant"]
+    assert tenant["skills"] == {"default_skill": "existing", "items": []}
 
 
 def test_default_tenant_config_adds_text_server_to_inspect_profile() -> None:

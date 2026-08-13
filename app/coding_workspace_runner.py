@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -202,37 +201,13 @@ def main(argv: list[str] | None = None) -> int:
         else mcp_server_specs
     )
 
-    env.setdefault("MINIGENT_AUTH_MODE", "dev-headers")
-    env.setdefault("MINIGENT_LLM_PROVIDER", "mock")
-    env["MINIGENT_CODING_TENANT_ID"] = tenant_id
-    env.setdefault("MINIGENT_CODING_OAUTH_GLOBAL_FALLBACK", "true")
-    if "MINIGENT_TENANT_EXECUTION_CONFIGS" not in env:
-        env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = json.dumps(
-            default_tenant_config_from_servers(
-                tenant_id,
-                tenant_mcp_server_specs,
-                workspace_roots=workspace_roots,
-                workspace_scope=active_workspace_scope.name if active_workspace_scope else None,
-            ),
-            separators=(",", ":"),
-        )
-    else:
-        env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = inject_coding_mcp_servers(
-            env["MINIGENT_TENANT_EXECUTION_CONFIGS"], tenant_id, tenant_mcp_server_specs
-        )
-    if "MINIGENT_CODING_INJECT_WORKSPACE_SKILL" not in env or env[
-        "MINIGENT_CODING_INJECT_WORKSPACE_SKILL"
-    ].lower() not in {
-        "0",
-        "false",
-        "no",
-    }:
-        env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = inject_coding_workspace_skill(
-            env["MINIGENT_TENANT_EXECUTION_CONFIGS"],
-            tenant_id,
-            workspace_roots=workspace_roots,
-            workspace_scope=active_workspace_scope.name if active_workspace_scope else None,
-        )
+    apply_tenant_runtime_environment(
+        env,
+        tenant_id,
+        tenant_mcp_server_specs,
+        workspace_roots=workspace_roots,
+        workspace_scope=active_workspace_scope.name if active_workspace_scope else None,
+    )
     if gateway_enabled:
         for missing_name in tenant_gateway_mcp_server_mismatches(
             env,
@@ -265,6 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
 
+apply_tenant_runtime_environment = _tenant_config.apply_tenant_runtime_environment
 tenant_mcp_server_from_spec = _tenant_config.tenant_mcp_server_from_spec
 capability_profiles_from_specs = _tenant_config.capability_profiles_from_specs
 default_tenant_config_from_servers = _tenant_config.default_tenant_config_from_servers
