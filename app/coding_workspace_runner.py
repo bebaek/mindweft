@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +9,7 @@ from minigent_workspace import cli as _cli
 from minigent_workspace import environment as _environment
 from minigent_workspace import launch_commands as _launch_commands
 from minigent_workspace import mcp_specs as _mcp_specs
+from minigent_workspace import output as _output
 from minigent_workspace import processes as _processes
 from minigent_workspace import scopes as _workspace_scopes
 from minigent_workspace import tenant_config as _tenant_config
@@ -56,6 +56,9 @@ parse_args = _cli.parse_args
 apply_coding_workspace_state_defaults = _environment.apply_coding_workspace_state_defaults
 load_env_file = _environment.load_env_file
 apply_file_env_values = _environment.apply_file_env_values
+
+print_workspace_summary = _output.print_workspace_summary
+print_demo_commands = _output.print_demo_commands
 
 build_mcp_gateway_command = _launch_commands.build_mcp_gateway_command
 build_builtin_mcp_server_specs = _launch_commands.build_builtin_mcp_server_specs
@@ -245,33 +248,20 @@ def main(argv: list[str] | None = None) -> int:
     processes: list[subprocess.Popen[str]] = []
     managed_http_processes: list[tuple[CodingMCPServerSpec, subprocess.Popen[str]]] = []
     generated_files: list[Path] = []
-    env_path = Path(args.env_file)
-    if not args.no_env_file:
-        if env_path.exists():
-            print(f"loaded_env_file={args.env_file}")
-        elif not env_file_explicit:
-            print(f"optional_env_file_not_found={args.env_file}")
-    print("workspaces=" + ", ".join(str(workspace) for workspace in workspace_roots))
-    if active_workspace_scope is not None:
-        print(f"workspace_scope={active_workspace_scope.name}")
-    print(f"tenant_id={tenant_id}")
-    if mcp_servers_file is not None:
-        print(f"mcp_servers_file={mcp_servers_file} (legacy input; export emits inline specs)")
-    for spec, tenant_spec in zip(mcp_server_specs, tenant_mcp_server_specs, strict=True):
-        if spec.url == tenant_spec.url:
-            print(
-                f"mcp_server={spec.name} url={spec.url} transport={spec.transport} "
-                f"managed={str(spec.managed).lower()}"
-            )
-        else:
-            print(
-                f"mcp_server={spec.name} url={tenant_spec.url} "
-                f"transport={spec.transport} managed={str(spec.managed).lower()} "
-                f"bridge_url={spec.url}"
-            )
-    if gateway_enabled:
-        print(f"mcp_gateway={gateway_url_prefix}")
-    print(f"api=http://{api_host}:{api_port}")
+    print_workspace_summary(
+        env_file=args.env_file,
+        no_env_file=args.no_env_file,
+        env_file_explicit=env_file_explicit,
+        workspace_roots=workspace_roots,
+        workspace_scope=active_workspace_scope.name if active_workspace_scope else None,
+        tenant_id=tenant_id,
+        mcp_servers_file=mcp_servers_file,
+        mcp_server_specs=mcp_server_specs,
+        tenant_mcp_server_specs=tenant_mcp_server_specs,
+        gateway_url_prefix=gateway_url_prefix if gateway_enabled else None,
+        api_host=api_host,
+        api_port=api_port,
+    )
 
     try:
         if not args.skip_bridge:
@@ -369,44 +359,6 @@ append_workspace_roots_to_prompt = _tenant_config.append_workspace_roots_to_prom
 tenant_gateway_mcp_server_mismatches = _tenant_config.tenant_gateway_mcp_server_mismatches
 bridge_allowed_tools_from_config = _tenant_config.bridge_allowed_tools_from_config
 bridge_path_globs = _tenant_config.bridge_path_globs
-
-
-def print_demo_commands(
-    api_host: str,
-    api_port: int,
-    tenant_id: str,
-    workspace: Path,
-    bridge_name: str,
-    text_bridge_name: str | None = None,
-    shell_bridge_name: str | None = None,
-) -> None:
-    base_url = f"http://{api_host}:{api_port}"
-    print("\nTry it from another shell:")
-    tool_message = f"/tool {bridge_name}.list_directory {json.dumps({'path': str(workspace)}, separators=(',', ':'))}"
-    print(
-        "uv run python scripts/demo_client.py "
-        f"--base-url {base_url} --tenant-id {tenant_id} --capability-profile inspect "
-        f"{shlex.quote(tool_message)}"
-    )
-    if text_bridge_name is not None:
-        text_message = f"/tool {text_bridge_name}.read_text_file_around " + json.dumps(
-            {"path": str(workspace / "README.md"), "line": 1, "after": 20}, separators=(",", ":")
-        )
-        print(
-            "uv run python scripts/demo_client.py "
-            f"--base-url {base_url} --tenant-id {tenant_id} --capability-profile inspect "
-            f"{shlex.quote(text_message)}"
-        )
-    if shell_bridge_name is not None:
-        shell_message = f"/tool {shell_bridge_name}.run_command " + json.dumps(
-            {"command": "pwd && ls", "cwd": str(workspace)}, separators=(",", ":")
-        )
-        print(
-            "uv run python scripts/demo_client.py "
-            f"--base-url {base_url} --tenant-id {tenant_id} --capability-profile test "
-            f"{shlex.quote(shell_message)}"
-        )
-    print("\nPress Ctrl-C to stop.")
 
 
 if __name__ == "__main__":
