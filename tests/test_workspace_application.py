@@ -47,7 +47,32 @@ def runtime_plan(tmp_path: Path, *, mismatches: list[str] | None = None) -> Work
 
 
 def test_runner_reexports_canonical_application_helper() -> None:
+    assert legacy_runner.main is application.main
     assert legacy_runner.run_workspace_command is application.run_workspace_command
+
+
+def test_application_main_routes_config_command(monkeypatch) -> None:
+    config = Mock(return_value=4)
+    workspace = Mock()
+    monkeypatch.setattr(application, "run_config_command", config)
+    monkeypatch.setattr(application, "run_workspace_command", workspace)
+
+    assert application.main(["config", "export", "--no-env-file"]) == 4
+
+    config.assert_called_once_with(["config", "export", "--no-env-file"])
+    workspace.assert_not_called()
+
+
+def test_application_main_routes_workspace_command(monkeypatch) -> None:
+    config = Mock()
+    workspace = Mock(return_value=5)
+    monkeypatch.setattr(application, "run_config_command", config)
+    monkeypatch.setattr(application, "run_workspace_command", workspace)
+
+    assert application.main(["--no-env-file"]) == 5
+
+    workspace.assert_called_once_with(["--no-env-file"])
+    config.assert_not_called()
 
 
 def test_run_workspace_command_prepares_reports_and_runs(tmp_path: Path, monkeypatch) -> None:

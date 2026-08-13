@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import sys
 
-from minigent_workspace.cli import parse_args
+from minigent_workspace.cli import parse_args, run_config_command
 from minigent_workspace.environment import apply_coding_workspace_state_defaults, load_env_file
 from minigent_workspace.orchestration import run_workspace_processes
 from minigent_workspace.output import print_workspace_summary
 from minigent_workspace.runtime_plan import prepare_workspace_runtime
+
+
+def main(argv: list[str] | None = None) -> int:
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    if raw_argv[:1] == ["config"]:
+        return run_config_command(raw_argv)
+    return run_workspace_command(raw_argv)
 
 
 def run_workspace_command(raw_argv: list[str]) -> int:
