@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import sys
-
 from minigent_workspace import application as _application
 from minigent_workspace import cli as _cli
 from minigent_workspace import environment as _environment
@@ -91,12 +89,7 @@ wait_for_processes = _processes.wait_for_processes
 stop_process = _processes.stop_process
 
 
-def main(argv: list[str] | None = None) -> int:
-    raw_argv = list(argv) if argv is not None else sys.argv[1:]
-    if raw_argv[:1] == ["config"]:
-        return run_config_command(raw_argv)
-    return run_workspace_command(raw_argv)
-
+main = _application.main
 
 apply_tenant_runtime_environment = _tenant_config.apply_tenant_runtime_environment
 tenant_mcp_server_from_spec = _tenant_config.tenant_mcp_server_from_spec
