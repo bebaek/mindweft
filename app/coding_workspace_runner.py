@@ -10,6 +10,7 @@ from minigent_workspace import mcp_specs as _mcp_specs
 from minigent_workspace import orchestration as _orchestration
 from minigent_workspace import output as _output
 from minigent_workspace import processes as _processes
+from minigent_workspace import runtime_settings as _runtime_settings
 from minigent_workspace import scopes as _workspace_scopes
 from minigent_workspace import tenant_config as _tenant_config
 
@@ -46,6 +47,8 @@ DEFAULT_BRIDGE_DENY_GLOBS = _tenant_config.DEFAULT_BRIDGE_DENY_GLOBS
 DEFAULT_BRIDGE_ALLOW_GLOBS = _tenant_config.DEFAULT_BRIDGE_ALLOW_GLOBS
 DEFAULT_MCP_GATEWAY_PATH_PREFIX = _mcp_specs.DEFAULT_MCP_GATEWAY_PATH_PREFIX
 DEFAULT_TENANT_ID = "demo-tenant"
+WorkspaceRuntimeSettings = _runtime_settings.WorkspaceRuntimeSettings
+resolve_workspace_runtime_settings = _runtime_settings.resolve_workspace_runtime_settings
 parse_config_args = _cli.parse_config_args
 build_coding_config_export_client_argv = _cli.build_coding_config_export_client_argv
 load_config_command_env = _cli.load_config_command_env
@@ -118,62 +121,21 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Workspace does not exist or is not a directory: {workspace}", file=sys.stderr)
             return 2
 
-    api_host = args.api_host or env.get("MINIGENT_HOST") or DEFAULT_API_HOST
-    api_port = args.api_port or int(env.get("MINIGENT_PORT") or DEFAULT_API_PORT)
-    bridge_host = args.bridge_host or env.get("MINIGENT_CODING_BRIDGE_HOST") or DEFAULT_BRIDGE_HOST
-    bridge_port = args.bridge_port or int(
-        env.get("MINIGENT_CODING_BRIDGE_PORT") or DEFAULT_BRIDGE_PORT
-    )
-    bridge_name = args.bridge_name or env.get("MINIGENT_CODING_BRIDGE_NAME") or DEFAULT_BRIDGE_NAME
-    bridge_url = f"http://{bridge_host}:{bridge_port}/mcp"
-    gateway_enabled = args.mcp_gateway or env_flag_enabled(
-        env.get("MINIGENT_CODING_MCP_GATEWAY_ENABLED")
-    )
-    gateway_port = args.mcp_gateway_port or int(
-        env.get("MINIGENT_CODING_MCP_GATEWAY_PORT") or bridge_port
-    )
-    gateway_path_prefix = (
-        args.mcp_gateway_path_prefix
-        or env.get("MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX")
-        or DEFAULT_MCP_GATEWAY_PATH_PREFIX
-    )
-    gateway_url_prefix = (
-        f"http://{bridge_host}:{gateway_port}{normalize_path_prefix(gateway_path_prefix)}"
-    )
-    text_enabled = args.enable_text or env_flag_enabled(env.get("MINIGENT_CODING_TEXT_ENABLED"))
-    text_bridge_name = (
-        args.text_bridge_name
-        or env.get("MINIGENT_CODING_TEXT_BRIDGE_NAME")
-        or DEFAULT_TEXT_BRIDGE_NAME
-    )
-    text_bridge_port = args.text_bridge_port or int(
-        env.get("MINIGENT_CODING_TEXT_BRIDGE_PORT") or DEFAULT_TEXT_BRIDGE_PORT
-    )
-    text_bridge_url = f"http://{bridge_host}:{text_bridge_port}/mcp"
-    shell_enabled = args.enable_shell or env_flag_enabled(env.get("MINIGENT_CODING_SHELL_ENABLED"))
-    shell_bridge_name = (
-        args.shell_bridge_name
-        or env.get("MINIGENT_CODING_SHELL_BRIDGE_NAME")
-        or DEFAULT_SHELL_BRIDGE_NAME
-    )
-    shell_bridge_port = args.shell_bridge_port or int(
-        env.get("MINIGENT_CODING_SHELL_BRIDGE_PORT") or DEFAULT_SHELL_BRIDGE_PORT
-    )
-    shell_bridge_url = f"http://{bridge_host}:{shell_bridge_port}/mcp"
+    settings = resolve_workspace_runtime_settings(args, env)
     mcp_servers_file = resolve_mcp_servers_file(
         args.mcp_servers_file, env, base_dir=Path(args.env_file).expanduser().resolve().parent
     )
     if env.get("MINIGENT_CODING_MCP_SERVER_SPECS"):
         mcp_server_specs = load_coding_mcp_server_specs_from_json(
             env["MINIGENT_CODING_MCP_SERVER_SPECS"],
-            bridge_host=bridge_host,
+            bridge_host=settings.bridge_host,
             workspace_roots=workspace_roots,
             env=env,
         )
     elif mcp_servers_file is not None:
         mcp_server_specs = load_coding_mcp_server_specs(
             mcp_servers_file,
-            bridge_host=bridge_host,
+            bridge_host=settings.bridge_host,
             workspace_roots=workspace_roots,
             env=env,
         )
@@ -181,23 +143,23 @@ def main(argv: list[str] | None = None) -> int:
         mcp_server_specs = build_builtin_mcp_server_specs(
             env,
             tenant_id,
-            bridge_name=bridge_name,
-            bridge_host=bridge_host,
-            bridge_port=bridge_port,
-            bridge_url=bridge_url,
+            bridge_name=settings.bridge_name,
+            bridge_host=settings.bridge_host,
+            bridge_port=settings.bridge_port,
+            bridge_url=settings.bridge_url,
             workspace_roots=workspace_roots,
-            text_enabled=text_enabled,
-            text_bridge_name=text_bridge_name,
-            text_bridge_port=text_bridge_port,
-            text_bridge_url=text_bridge_url,
-            shell_enabled=shell_enabled,
-            shell_bridge_name=shell_bridge_name,
-            shell_bridge_port=shell_bridge_port,
-            shell_bridge_url=shell_bridge_url,
+            text_enabled=settings.text_enabled,
+            text_bridge_name=settings.text_bridge_name,
+            text_bridge_port=settings.text_bridge_port,
+            text_bridge_url=settings.text_bridge_url,
+            shell_enabled=settings.shell_enabled,
+            shell_bridge_name=settings.shell_bridge_name,
+            shell_bridge_port=settings.shell_bridge_port,
+            shell_bridge_url=settings.shell_bridge_url,
         )
     tenant_mcp_server_specs = (
-        mcp_server_specs_for_gateway(mcp_server_specs, gateway_url_prefix)
-        if gateway_enabled
+        mcp_server_specs_for_gateway(mcp_server_specs, settings.gateway_url_prefix)
+        if settings.gateway_enabled
         else mcp_server_specs
     )
 
@@ -208,11 +170,11 @@ def main(argv: list[str] | None = None) -> int:
         workspace_roots=workspace_roots,
         workspace_scope=active_workspace_scope.name if active_workspace_scope else None,
     )
-    if gateway_enabled:
+    if settings.gateway_enabled:
         for missing_name in tenant_gateway_mcp_server_mismatches(
             env,
             tenant_id,
-            gateway_url_prefix=gateway_url_prefix,
+            gateway_url_prefix=settings.gateway_url_prefix,
             specs=mcp_server_specs,
         ):
             print(
@@ -226,17 +188,17 @@ def main(argv: list[str] | None = None) -> int:
         env=env,
         mcp_server_specs=mcp_server_specs,
         skip_bridge=args.skip_bridge,
-        gateway_enabled=gateway_enabled,
-        bridge_host=bridge_host,
-        gateway_port=gateway_port,
+        gateway_enabled=settings.gateway_enabled,
+        bridge_host=settings.bridge_host,
+        gateway_port=settings.gateway_port,
         skip_api=args.skip_api,
-        api_host=api_host,
-        api_port=api_port,
+        api_host=settings.api_host,
+        api_port=settings.api_port,
         tenant_id=tenant_id,
         workspace=workspace_roots[0],
-        bridge_name=bridge_name,
-        text_bridge_name=text_bridge_name if text_enabled else None,
-        shell_bridge_name=shell_bridge_name if shell_enabled else None,
+        bridge_name=settings.bridge_name,
+        text_bridge_name=settings.text_bridge_name if settings.text_enabled else None,
+        shell_bridge_name=settings.shell_bridge_name if settings.shell_enabled else None,
     )
 
 
