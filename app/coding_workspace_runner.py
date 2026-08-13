@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -9,6 +8,7 @@ from minigent_workspace import cli as _cli
 from minigent_workspace import environment as _environment
 from minigent_workspace import launch_commands as _launch_commands
 from minigent_workspace import mcp_specs as _mcp_specs
+from minigent_workspace import orchestration as _orchestration
 from minigent_workspace import output as _output
 from minigent_workspace import processes as _processes
 from minigent_workspace import scopes as _workspace_scopes
@@ -59,6 +59,8 @@ apply_file_env_values = _environment.apply_file_env_values
 
 print_workspace_summary = _output.print_workspace_summary
 print_demo_commands = _output.print_demo_commands
+
+run_workspace_processes = _orchestration.run_workspace_processes
 
 build_mcp_gateway_command = _launch_commands.build_mcp_gateway_command
 build_builtin_mcp_server_specs = _launch_commands.build_builtin_mcp_server_specs
@@ -245,106 +247,22 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
-    processes: list[subprocess.Popen[str]] = []
-    managed_http_processes: list[tuple[CodingMCPServerSpec, subprocess.Popen[str]]] = []
-    generated_files: list[Path] = []
-    print_workspace_summary(
-        env_file=args.env_file,
-        no_env_file=args.no_env_file,
-        env_file_explicit=env_file_explicit,
-        workspace_roots=workspace_roots,
-        workspace_scope=active_workspace_scope.name if active_workspace_scope else None,
-        tenant_id=tenant_id,
-        mcp_servers_file=mcp_servers_file,
+    return run_workspace_processes(
+        env=env,
         mcp_server_specs=mcp_server_specs,
-        tenant_mcp_server_specs=tenant_mcp_server_specs,
-        gateway_url_prefix=gateway_url_prefix if gateway_enabled else None,
+        skip_bridge=args.skip_bridge,
+        gateway_enabled=gateway_enabled,
+        bridge_host=bridge_host,
+        gateway_port=gateway_port,
+        skip_api=args.skip_api,
         api_host=api_host,
         api_port=api_port,
+        tenant_id=tenant_id,
+        workspace=workspace_roots[0],
+        bridge_name=bridge_name,
+        text_bridge_name=text_bridge_name if text_enabled else None,
+        shell_bridge_name=shell_bridge_name if shell_enabled else None,
     )
-
-    try:
-        if not args.skip_bridge:
-            if gateway_enabled:
-                gateway_config_path = write_mcp_gateway_config(mcp_server_specs)
-                generated_files.append(gateway_config_path)
-                processes.append(
-                    start_process(
-                        build_mcp_gateway_command(
-                            gateway_config_path,
-                            bridge_host,
-                            gateway_port,
-                        ),
-                        env=env,
-                        label="MCP stdio gateway",
-                    )
-                )
-            else:
-                for spec in mcp_server_specs:
-                    if spec.transport != "stdio":
-                        continue
-                    process_env = {**env, **spec.env}
-                    processes.append(
-                        start_process(
-                            build_mcp_stdio_bridge_command(spec),
-                            env=process_env,
-                            label=f"{spec.name} MCP bridge",
-                        )
-                    )
-            for spec in mcp_server_specs:
-                if spec.transport != "http" or not spec.managed:
-                    continue
-                if spec.command is None:
-                    raise RuntimeError(f"managed HTTP MCP server '{spec.name}' requires a command")
-                process_env = {**env, **spec.env}
-                process = start_process(
-                    spec.command,
-                    env=process_env,
-                    label=f"{spec.name} MCP HTTP server",
-                )
-                processes.append(process)
-                managed_http_processes.append((spec, process))
-            for spec, process in managed_http_processes:
-                wait_for_managed_http_server(spec, process)
-        if not args.skip_api:
-            processes.append(
-                start_process(
-                    [
-                        sys.executable,
-                        "-m",
-                        "uvicorn",
-                        "app.main:app",
-                        "--host",
-                        api_host,
-                        "--port",
-                        str(api_port),
-                    ],
-                    env=env,
-                    label="Minigent API",
-                )
-            )
-            print_demo_commands(
-                api_host,
-                api_port,
-                tenant_id,
-                workspace_roots[0],
-                bridge_name,
-                text_bridge_name if text_enabled else None,
-                shell_bridge_name if shell_enabled else None,
-            )
-
-        return wait_for_processes(processes)
-    except KeyboardInterrupt:
-        print("\nStopping coding workspace processes...")
-        return 0
-    finally:
-        for process in reversed(processes):
-            stop_process(process)
-        for path in generated_files:
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
 
 
 tenant_mcp_server_from_spec = _tenant_config.tenant_mcp_server_from_spec
