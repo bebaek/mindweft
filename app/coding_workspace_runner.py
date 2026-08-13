@@ -19,6 +19,7 @@ resolve_workspace_roots = _workspace_scopes.resolve_workspace_roots
 load_workspace_scopes_from_env = _workspace_scopes.load_workspace_scopes_from_env
 skill_workspace_scope_from_env = _workspace_scopes.skill_workspace_scope_from_env
 resolve_active_workspace_scope = _workspace_scopes.resolve_active_workspace_scope
+resolve_workspace_selection = _workspace_scopes.resolve_workspace_selection
 
 CodingMCPServerSpec = _mcp_specs.CodingMCPServerSpec
 env_flag_enabled = _mcp_specs.env_flag_enabled
@@ -95,31 +96,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     apply_coding_workspace_state_defaults(env)
 
-    workspace_roots = resolve_workspace_roots(
-        args.workspace,
-        env.get("MINIGENT_CODING_WORKSPACES") or env.get("MINIGENT_CODING_WORKSPACE"),
-    )
-
     tenant_id = args.tenant_id or env.get("MINIGENT_CODING_TENANT_ID") or DEFAULT_TENANT_ID
     try:
-        workspace_roots, active_workspace_scope = resolve_active_workspace_scope(
-            workspace_roots,
+        workspace_roots, active_workspace_scope = resolve_workspace_selection(
+            args.workspace,
+            args.workspace_scope,
             env,
             tenant_id=tenant_id,
-            explicit_scope=args.workspace_scope,
-            validate_under_configured_roots=bool(
-                args.workspace
-                or env.get("MINIGENT_CODING_WORKSPACES")
-                or env.get("MINIGENT_CODING_WORKSPACE")
-            ),
         )
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    for workspace in workspace_roots:
-        if not workspace.exists() or not workspace.is_dir():
-            print(f"Workspace does not exist or is not a directory: {workspace}", file=sys.stderr)
-            return 2
 
     settings = resolve_workspace_runtime_settings(args, env)
     mcp_servers_file = resolve_mcp_servers_file(

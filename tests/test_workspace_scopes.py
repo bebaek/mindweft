@@ -25,6 +25,71 @@ def test_runner_reexports_canonical_workspace_scope_helpers() -> None:
     assert legacy_runner.load_workspace_scopes_from_env is scopes.load_workspace_scopes_from_env
     assert legacy_runner.skill_workspace_scope_from_env is scopes.skill_workspace_scope_from_env
     assert legacy_runner.resolve_active_workspace_scope is scopes.resolve_active_workspace_scope
+    assert legacy_runner.resolve_workspace_selection is scopes.resolve_workspace_selection
+
+
+def test_resolve_workspace_selection_uses_cli_roots_and_scope(tmp_path: Path) -> None:
+    configured = tmp_path / "configured"
+    selected = configured / "selected"
+    selected.mkdir(parents=True)
+    env = _scope_env({"selected": selected})
+
+    roots, scope = scopes.resolve_workspace_selection(
+        [str(configured)],
+        "selected",
+        env,
+        tenant_id="demo-tenant",
+    )
+
+    assert roots == [selected.resolve()]
+    assert scope is not None
+    assert scope.name == "selected"
+
+
+def test_resolve_workspace_selection_prefers_plural_environment_root(tmp_path: Path) -> None:
+    plural = tmp_path / "plural"
+    singular = tmp_path / "singular"
+    plural.mkdir()
+    singular.mkdir()
+    env = {
+        "MINIGENT_CODING_WORKSPACES": str(plural),
+        "MINIGENT_CODING_WORKSPACE": str(singular),
+    }
+
+    roots, scope = scopes.resolve_workspace_selection(None, None, env, tenant_id="demo-tenant")
+
+    assert roots == [plural.resolve()]
+    assert scope is None
+
+
+def test_resolve_workspace_selection_rejects_missing_root(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+
+    with pytest.raises(RuntimeError, match="Workspace does not exist or is not a directory"):
+        scopes.resolve_workspace_selection(
+            [str(missing)],
+            None,
+            {},
+            tenant_id="demo-tenant",
+        )
+
+
+def test_resolve_workspace_selection_rejects_scope_outside_explicit_roots(
+    tmp_path: Path,
+) -> None:
+    configured = tmp_path / "configured"
+    outside = tmp_path / "outside"
+    configured.mkdir()
+    outside.mkdir()
+    env = _scope_env({"outside": outside})
+
+    with pytest.raises(RuntimeError, match="contains roots outside configured workspaces"):
+        scopes.resolve_workspace_selection(
+            [str(configured)],
+            "outside",
+            env,
+            tenant_id="demo-tenant",
+        )
 
 
 def test_resolve_workspace_roots_splits_comma_separated_env_value(tmp_path: Path) -> None:
