@@ -7,7 +7,7 @@ from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any
 
-from app import cli
+from minigent_client import one_shot_cli as cli
 
 
 class _Response:

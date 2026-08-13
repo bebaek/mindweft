@@ -5,7 +5,6 @@ import os
 import sys
 from pathlib import Path
 
-from app.config import load_environment
 from minigent_client.audio import (
     RecordedAudio,
     apply_gain,
@@ -14,6 +13,7 @@ from minigent_client.audio import (
     pad_with_silence,
 )
 from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
+from minigent_config.environment import load_environment
 
 
 def parse_args() -> argparse.Namespace:
