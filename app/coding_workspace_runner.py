@@ -10,6 +10,7 @@ from minigent_workspace import mcp_specs as _mcp_specs
 from minigent_workspace import orchestration as _orchestration
 from minigent_workspace import output as _output
 from minigent_workspace import processes as _processes
+from minigent_workspace import runtime_plan as _runtime_plan
 from minigent_workspace import runtime_settings as _runtime_settings
 from minigent_workspace import scopes as _workspace_scopes
 from minigent_workspace import tenant_config as _tenant_config
@@ -51,6 +52,9 @@ DEFAULT_BRIDGE_DENY_GLOBS = _tenant_config.DEFAULT_BRIDGE_DENY_GLOBS
 DEFAULT_BRIDGE_ALLOW_GLOBS = _tenant_config.DEFAULT_BRIDGE_ALLOW_GLOBS
 DEFAULT_MCP_GATEWAY_PATH_PREFIX = _mcp_specs.DEFAULT_MCP_GATEWAY_PATH_PREFIX
 DEFAULT_TENANT_ID = "demo-tenant"
+WorkspaceRuntimePlan = _runtime_plan.WorkspaceRuntimePlan
+prepare_workspace_runtime = _runtime_plan.prepare_workspace_runtime
+
 WorkspaceRuntimeSettings = _runtime_settings.WorkspaceRuntimeSettings
 resolve_workspace_runtime_settings = _runtime_settings.resolve_workspace_runtime_settings
 parse_config_args = _cli.parse_config_args
@@ -99,50 +103,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     apply_coding_workspace_state_defaults(env)
 
-    tenant_id = args.tenant_id or env.get("MINIGENT_CODING_TENANT_ID") or DEFAULT_TENANT_ID
     try:
-        workspace_roots, active_workspace_scope = resolve_workspace_selection(
-            args.workspace,
-            args.workspace_scope,
-            env,
-            tenant_id=tenant_id,
-        )
+        plan = prepare_workspace_runtime(args, env)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    for missing_name in plan.gateway_mcp_server_mismatches:
+        print(
+            "WARNING: tenant MCP server "
+            f"'{missing_name}' points at the coding MCP gateway but no matching "
+            "coding.mcp_server_specs entry was loaded; calls may return 404.",
+            file=sys.stderr,
+        )
 
-    settings = resolve_workspace_runtime_settings(args, env)
-    resolved_mcp_servers = resolve_workspace_mcp_servers(
-        args,
-        env,
-        tenant_id=tenant_id,
-        workspace_roots=workspace_roots,
-        settings=settings,
-    )
-    mcp_servers_file = resolved_mcp_servers.source_file
-    mcp_server_specs = resolved_mcp_servers.process_specs
-    tenant_mcp_server_specs = resolved_mcp_servers.tenant_specs
-
-    apply_tenant_runtime_environment(
-        env,
-        tenant_id,
-        tenant_mcp_server_specs,
-        workspace_roots=workspace_roots,
-        workspace_scope=active_workspace_scope.name if active_workspace_scope else None,
-    )
-    if settings.gateway_enabled:
-        for missing_name in tenant_gateway_mcp_server_mismatches(
-            env,
-            tenant_id,
-            gateway_url_prefix=settings.gateway_url_prefix,
-            specs=mcp_server_specs,
-        ):
-            print(
-                "WARNING: tenant MCP server "
-                f"'{missing_name}' points at the coding MCP gateway but no matching "
-                "coding.mcp_server_specs entry was loaded; calls may return 404.",
-                file=sys.stderr,
-            )
+    tenant_id = plan.tenant_id
+    workspace_roots = plan.workspace_roots
+    active_workspace_scope = plan.active_workspace_scope
+    settings = plan.settings
+    mcp_servers_file = plan.mcp_servers.source_file
+    mcp_server_specs = plan.mcp_servers.process_specs
+    tenant_mcp_server_specs = plan.mcp_servers.tenant_specs
 
     print_workspace_summary(
         env_file=args.env_file,
