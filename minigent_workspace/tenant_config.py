@@ -26,6 +26,47 @@ DEFAULT_TEXT_BRIDGE_NAME = "text-workspace"
 DEFAULT_TEXT_BRIDGE_PORT = 8767
 
 
+def apply_tenant_runtime_environment(
+    env: dict[str, str],
+    tenant_id: str,
+    specs: list[CodingMCPServerSpec],
+    *,
+    workspace_roots: list[Path],
+    workspace_scope: str | None,
+) -> None:
+    env.setdefault("MINIGENT_AUTH_MODE", "dev-headers")
+    env.setdefault("MINIGENT_LLM_PROVIDER", "mock")
+    env["MINIGENT_CODING_TENANT_ID"] = tenant_id
+    env.setdefault("MINIGENT_CODING_OAUTH_GLOBAL_FALLBACK", "true")
+    if "MINIGENT_TENANT_EXECUTION_CONFIGS" not in env:
+        env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = json.dumps(
+            default_tenant_config_from_servers(
+                tenant_id,
+                specs,
+                workspace_roots=workspace_roots,
+                workspace_scope=workspace_scope,
+            ),
+            separators=(",", ":"),
+        )
+    else:
+        env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = inject_coding_mcp_servers(
+            env["MINIGENT_TENANT_EXECUTION_CONFIGS"], tenant_id, specs
+        )
+    if "MINIGENT_CODING_INJECT_WORKSPACE_SKILL" not in env or env[
+        "MINIGENT_CODING_INJECT_WORKSPACE_SKILL"
+    ].lower() not in {
+        "0",
+        "false",
+        "no",
+    }:
+        env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = inject_coding_workspace_skill(
+            env["MINIGENT_TENANT_EXECUTION_CONFIGS"],
+            tenant_id,
+            workspace_roots=workspace_roots,
+            workspace_scope=workspace_scope,
+        )
+
+
 def tenant_mcp_server_from_spec(spec: CodingMCPServerSpec) -> dict[str, Any]:
     server: dict[str, Any] = {
         "name": spec.name,
