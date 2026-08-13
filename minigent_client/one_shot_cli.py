@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence, TextIO, cast
 
-from app.unified_config import DEFAULT_CODING_DOTENV_FILE, DEFAULT_CONFIG_FILE
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.config import ClientConfig, build_client_config
 from minigent_client.config_commands import (
@@ -44,6 +43,7 @@ from minigent_client.output import (
 )
 from minigent_client.state import ClientState, ThreadHistoryItem
 from minigent_client.state import state_scope_key as build_state_scope_key
+from minigent_config.unified_config import DEFAULT_CODING_DOTENV_FILE, DEFAULT_CONFIG_FILE
 
 
 def build_parser() -> argparse.ArgumentParser:

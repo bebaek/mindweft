@@ -19,7 +19,6 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Callable, Protocol, TextIO, cast
 
-from app.config import load_environment
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.audio import AudioCaptureConfig, MicrophoneRecorder, open_microphone_stream
 from minigent_client.backends.manual_audio import ManualAudioActivationSource
@@ -63,6 +62,7 @@ from minigent_client.state import (
 from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
 from minigent_client.vad import SileroVoiceActivityDetector
 from minigent_client.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
+from minigent_config.environment import load_environment
 
 CHAT_HISTORY_FILE_NAME = "client-chat-history"
 CHAT_HISTORY_DIR_NAME = f"{CHAT_HISTORY_FILE_NAME}.d"

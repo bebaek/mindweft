@@ -5,9 +5,9 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-from app.attachments import ATTACHMENT_DB_PATH_ENV
-from app.unified_config import apply_unified_config_to_env
 from minigent_client.state import state_dir_path
+from minigent_config.constants import ATTACHMENT_DB_PATH_ENV
+from minigent_config.unified_config import apply_unified_config_to_env
 
 DEFAULT_ATTACHMENT_DB_FILE = "attachments.db"
 

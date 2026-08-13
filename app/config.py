@@ -1,7 +1,5 @@
-from __future__ import annotations
+"""Compatibility facade for process-environment startup configuration."""
 
-from app.unified_config import apply_startup_config
+from minigent_config.environment import load_environment
 
-
-def load_environment(*, discover_default_files: bool | None = None) -> None:
-    apply_startup_config(discover_default_files=discover_default_files)
+__all__ = ["load_environment"]

@@ -14,7 +14,6 @@ from typing import Any, cast
 
 from fastapi import HTTPException
 
-from app.agent_skills import load_agent_skill_body
 from app.attachments import AttachmentStore, InMemoryAttachmentStore
 from app.execution import (
     FixedTenantExecutionResolver,
@@ -68,6 +67,7 @@ from app.user_execution import (
     effective_execution_catalog,
     has_personal_execution_refs,
 )
+from minigent_config.agent_skills import load_agent_skill_body
 
 RUNTIME_SYSTEM_PROMPT = (
     "Use tools when they are relevant and ground claims in tool results. "

@@ -15,8 +15,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pydantic import BaseModel, Field
 
 from app.private_keyring import load_encryption_keyring, parse_boolean
+from minigent_config.constants import ATTACHMENT_DB_PATH_ENV
 
-ATTACHMENT_DB_PATH_ENV = "MINIGENT_ATTACHMENT_DB_PATH"
 ATTACHMENT_MAX_PER_THREAD_ENV = "MINIGENT_ATTACHMENT_MAX_PER_THREAD"
 ATTACHMENT_MAX_BYTES_PER_THREAD_ENV = "MINIGENT_ATTACHMENT_MAX_BYTES_PER_THREAD"
 ATTACHMENT_MAX_PER_TENANT_ENV = "MINIGENT_ATTACHMENT_MAX_PER_TENANT"

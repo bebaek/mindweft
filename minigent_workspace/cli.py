@@ -4,7 +4,7 @@ import argparse
 import os
 from pathlib import Path
 
-from app.unified_config import DEFAULT_CODING_DOTENV_FILE
+from minigent_config.unified_config import DEFAULT_CODING_DOTENV_FILE
 
 
 def parse_config_args(argv: list[str]) -> argparse.Namespace:
