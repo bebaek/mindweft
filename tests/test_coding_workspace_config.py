@@ -3,7 +3,16 @@ from __future__ import annotations
 from argparse import Namespace
 from pathlib import Path
 
-from app import coding_workspace_config
+from app import coding_workspace_config as legacy_config
+from minigent_workspace import config_export
+
+
+def test_legacy_config_export_facade_reexports_canonical_helpers() -> None:
+    assert legacy_config.export_local_coding_config is config_export.export_local_coding_config
+    assert (
+        legacy_config.load_coding_workspace_export_env
+        is config_export.load_coding_workspace_export_env
+    )
 
 
 def test_export_local_coding_config_reuses_preloaded_env_file(tmp_path: Path, monkeypatch) -> None:
@@ -21,14 +30,14 @@ def test_export_local_coding_config_reuses_preloaded_env_file(tmp_path: Path, mo
     def fail_apply_file_env_values(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("global *_FILE scan should not run")
 
-    monkeypatch.setattr(coding_workspace_config.runner, "load_env_file", fail_load_env_file)
+    monkeypatch.setattr(config_export.environment, "load_env_file", fail_load_env_file)
     monkeypatch.setattr(
-        coding_workspace_config.runner,
+        config_export.environment,
         "apply_file_env_values",
         fail_apply_file_env_values,
     )
 
-    exported = coding_workspace_config.export_local_coding_config(
+    exported = config_export.export_local_coding_config(
         Namespace(coding_env_file=str(env_path), env_file=str(env_path))
     )
 
@@ -48,9 +57,9 @@ def test_export_local_coding_config_can_skip_env_file(tmp_path: Path, monkeypatc
     def fail_load_env_file(_path: str) -> dict[str, str]:
         raise AssertionError("env file should not be read")
 
-    monkeypatch.setattr(coding_workspace_config.runner, "load_env_file", fail_load_env_file)
+    monkeypatch.setattr(config_export.environment, "load_env_file", fail_load_env_file)
 
-    exported = coding_workspace_config.export_local_coding_config(
+    exported = config_export.export_local_coding_config(
         Namespace(no_coding_env_file=True, coding_env_file=str(env_path), env_file=str(env_path))
     )
 
@@ -73,12 +82,12 @@ def test_load_coding_workspace_export_env_applies_file_values_without_dotenv_rer
         raise AssertionError("global *_FILE scan should not run")
 
     monkeypatch.setattr(
-        coding_workspace_config.runner,
+        config_export.environment,
         "apply_file_env_values",
         fail_apply_file_env_values,
     )
 
-    env, base_dir = coding_workspace_config.load_coding_workspace_export_env(env_path)
+    env, base_dir = config_export.load_coding_workspace_export_env(env_path)
 
     assert base_dir == tmp_path
     assert env["MINIGENT_TENANT_EXECUTION_CONFIGS"] == '{"demo-tenant":{"llm":{"provider":"mock"}}}'
