@@ -136,3 +136,25 @@ def resolve_active_workspace_scope(
                 f"{outside}. Configured workspaces: {configured}"
             )
     return scope.roots, scope
+
+
+def resolve_workspace_selection(
+    cli_workspaces: list[str] | None,
+    explicit_scope: str | None,
+    env: dict[str, str],
+    *,
+    tenant_id: str,
+) -> tuple[list[Path], WorkspaceScope | None]:
+    env_workspace = env.get("MINIGENT_CODING_WORKSPACES") or env.get("MINIGENT_CODING_WORKSPACE")
+    workspace_roots = resolve_workspace_roots(cli_workspaces, env_workspace)
+    workspace_roots, active_workspace_scope = resolve_active_workspace_scope(
+        workspace_roots,
+        env,
+        tenant_id=tenant_id,
+        explicit_scope=explicit_scope,
+        validate_under_configured_roots=bool(cli_workspaces or env_workspace),
+    )
+    for workspace in workspace_roots:
+        if not workspace.exists() or not workspace.is_dir():
+            raise RuntimeError(f"Workspace does not exist or is not a directory: {workspace}")
+    return workspace_roots, active_workspace_scope
