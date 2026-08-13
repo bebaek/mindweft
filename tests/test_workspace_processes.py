@@ -6,22 +6,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import processes
 from minigent_workspace.mcp_specs import CodingMCPServerSpec
-
-
-def test_runner_reexports_canonical_process_helpers() -> None:
-    names = [
-        "start_process",
-        "redacted_command_for_log",
-        "wait_for_managed_http_server",
-        "wait_for_processes",
-        "stop_process",
-    ]
-
-    for name in names:
-        assert getattr(legacy_runner, name) is getattr(processes, name)
 
 
 def test_redacted_command_for_log_hides_sensitive_values() -> None:

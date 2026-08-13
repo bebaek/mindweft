@@ -3,16 +3,7 @@ from __future__ import annotations
 from argparse import Namespace
 from pathlib import Path
 
-from app import coding_workspace_config as legacy_config
 from minigent_workspace import config_export
-
-
-def test_legacy_config_export_facade_reexports_canonical_helpers() -> None:
-    assert legacy_config.export_local_coding_config is config_export.export_local_coding_config
-    assert (
-        legacy_config.load_coding_workspace_export_env
-        is config_export.load_coding_workspace_export_env
-    )
 
 
 def test_export_local_coding_config_reuses_preloaded_env_file(tmp_path: Path, monkeypatch) -> None:

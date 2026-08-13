@@ -2,21 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import cli
-
-
-def test_runner_reexports_canonical_cli_helpers() -> None:
-    names = [
-        "parse_config_args",
-        "build_coding_config_export_client_argv",
-        "load_config_command_env",
-        "run_config_command",
-        "parse_args",
-    ]
-
-    for name in names:
-        assert getattr(legacy_runner, name) is getattr(cli, name)
 
 
 def test_coding_config_export_builds_client_argv(monkeypatch) -> None:

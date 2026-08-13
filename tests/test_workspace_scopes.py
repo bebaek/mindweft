@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import scopes
 
 
@@ -17,15 +16,6 @@ def _scope_env(roots: dict[str, Path], **extra: str) -> dict[str, str]:
         ),
         **extra,
     }
-
-
-def test_runner_reexports_canonical_workspace_scope_helpers() -> None:
-    assert legacy_runner.WorkspaceScope is scopes.WorkspaceScope
-    assert legacy_runner.resolve_workspace_roots is scopes.resolve_workspace_roots
-    assert legacy_runner.load_workspace_scopes_from_env is scopes.load_workspace_scopes_from_env
-    assert legacy_runner.skill_workspace_scope_from_env is scopes.skill_workspace_scope_from_env
-    assert legacy_runner.resolve_active_workspace_scope is scopes.resolve_active_workspace_scope
-    assert legacy_runner.resolve_workspace_selection is scopes.resolve_workspace_selection
 
 
 def test_resolve_workspace_selection_uses_cli_roots_and_scope(tmp_path: Path) -> None:

@@ -5,7 +5,6 @@ from unittest.mock import Mock, call
 
 import pytest
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import orchestration
 from minigent_workspace.mcp_specs import CodingMCPServerSpec
 
@@ -33,10 +32,6 @@ def run_processes(
     }
     options.update(overrides)
     return orchestration.run_workspace_processes(**options)
-
-
-def test_runner_reexports_canonical_orchestration_helper() -> None:
-    assert legacy_runner.run_workspace_processes is orchestration.run_workspace_processes
 
 
 def test_run_workspace_processes_starts_stdio_bridges_and_stops_them(

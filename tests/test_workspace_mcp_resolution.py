@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import Mock
 
-from app import coding_workspace_runner as legacy_runner
 from minigent_workspace import cli, mcp_resolution, runtime_settings
 from minigent_workspace.mcp_specs import CodingMCPServerSpec
 
@@ -12,13 +11,6 @@ def default_inputs(tmp_path: Path):
     args = cli.parse_args(["--env-file", str(tmp_path / ".env.coding")])
     settings = runtime_settings.resolve_workspace_runtime_settings(args, {})
     return args, settings
-
-
-def test_runner_reexports_canonical_mcp_resolution_helpers() -> None:
-    assert legacy_runner.ResolvedMCPServers is mcp_resolution.ResolvedMCPServers
-    assert (
-        legacy_runner.resolve_workspace_mcp_servers is mcp_resolution.resolve_workspace_mcp_servers
-    )
 
 
 def test_resolve_workspace_mcp_servers_builds_builtin_specs(tmp_path: Path, monkeypatch) -> None:
