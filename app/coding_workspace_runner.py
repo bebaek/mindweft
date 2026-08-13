@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 from minigent_workspace import cli as _cli
 from minigent_workspace import environment as _environment
 from minigent_workspace import launch_commands as _launch_commands
+from minigent_workspace import mcp_resolution as _mcp_resolution
 from minigent_workspace import mcp_specs as _mcp_specs
 from minigent_workspace import orchestration as _orchestration
 from minigent_workspace import output as _output
@@ -20,6 +20,9 @@ load_workspace_scopes_from_env = _workspace_scopes.load_workspace_scopes_from_en
 skill_workspace_scope_from_env = _workspace_scopes.skill_workspace_scope_from_env
 resolve_active_workspace_scope = _workspace_scopes.resolve_active_workspace_scope
 resolve_workspace_selection = _workspace_scopes.resolve_workspace_selection
+
+ResolvedMCPServers = _mcp_resolution.ResolvedMCPServers
+resolve_workspace_mcp_servers = _mcp_resolution.resolve_workspace_mcp_servers
 
 CodingMCPServerSpec = _mcp_specs.CodingMCPServerSpec
 env_flag_enabled = _mcp_specs.env_flag_enabled
@@ -109,46 +112,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     settings = resolve_workspace_runtime_settings(args, env)
-    mcp_servers_file = resolve_mcp_servers_file(
-        args.mcp_servers_file, env, base_dir=Path(args.env_file).expanduser().resolve().parent
+    resolved_mcp_servers = resolve_workspace_mcp_servers(
+        args,
+        env,
+        tenant_id=tenant_id,
+        workspace_roots=workspace_roots,
+        settings=settings,
     )
-    if env.get("MINIGENT_CODING_MCP_SERVER_SPECS"):
-        mcp_server_specs = load_coding_mcp_server_specs_from_json(
-            env["MINIGENT_CODING_MCP_SERVER_SPECS"],
-            bridge_host=settings.bridge_host,
-            workspace_roots=workspace_roots,
-            env=env,
-        )
-    elif mcp_servers_file is not None:
-        mcp_server_specs = load_coding_mcp_server_specs(
-            mcp_servers_file,
-            bridge_host=settings.bridge_host,
-            workspace_roots=workspace_roots,
-            env=env,
-        )
-    else:
-        mcp_server_specs = build_builtin_mcp_server_specs(
-            env,
-            tenant_id,
-            bridge_name=settings.bridge_name,
-            bridge_host=settings.bridge_host,
-            bridge_port=settings.bridge_port,
-            bridge_url=settings.bridge_url,
-            workspace_roots=workspace_roots,
-            text_enabled=settings.text_enabled,
-            text_bridge_name=settings.text_bridge_name,
-            text_bridge_port=settings.text_bridge_port,
-            text_bridge_url=settings.text_bridge_url,
-            shell_enabled=settings.shell_enabled,
-            shell_bridge_name=settings.shell_bridge_name,
-            shell_bridge_port=settings.shell_bridge_port,
-            shell_bridge_url=settings.shell_bridge_url,
-        )
-    tenant_mcp_server_specs = (
-        mcp_server_specs_for_gateway(mcp_server_specs, settings.gateway_url_prefix)
-        if settings.gateway_enabled
-        else mcp_server_specs
-    )
+    mcp_servers_file = resolved_mcp_servers.source_file
+    mcp_server_specs = resolved_mcp_servers.process_specs
+    tenant_mcp_server_specs = resolved_mcp_servers.tenant_specs
 
     apply_tenant_runtime_environment(
         env,
@@ -170,6 +143,21 @@ def main(argv: list[str] | None = None) -> int:
                 "coding.mcp_server_specs entry was loaded; calls may return 404.",
                 file=sys.stderr,
             )
+
+    print_workspace_summary(
+        env_file=args.env_file,
+        no_env_file=args.no_env_file,
+        env_file_explicit=env_file_explicit,
+        workspace_roots=workspace_roots,
+        workspace_scope=active_workspace_scope.name if active_workspace_scope else None,
+        tenant_id=tenant_id,
+        mcp_servers_file=mcp_servers_file,
+        mcp_server_specs=mcp_server_specs,
+        tenant_mcp_server_specs=tenant_mcp_server_specs,
+        gateway_url_prefix=settings.gateway_url_prefix if settings.gateway_enabled else None,
+        api_host=settings.api_host,
+        api_port=settings.api_port,
+    )
 
     return run_workspace_processes(
         env=env,
