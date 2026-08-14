@@ -27,13 +27,13 @@ from minigent_client.backends.stdin_loop import StdinActivationSource
 from minigent_client.chat_commands import _format_markdown_transcript
 from minigent_client.config import AgentPreset, ClientConfig, build_client_config
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
+from minigent_client.diagnostic_commands import _format_execution_options
 from minigent_client.ducking import MacOsAmbientVolumeDucker
 from minigent_client.errors import (
     MinigentAPIError,
     format_stream_run_error_summary,
     is_stream_run_error,
 )
-from minigent_client.one_shot_cli import _format_execution_options
 from minigent_client.output import (
     estimate_thread_token_usage,
     extract_reasoning_content,

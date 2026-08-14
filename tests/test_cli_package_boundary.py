@@ -1,7 +1,21 @@
 from __future__ import annotations
 
 from app import cli as legacy_cli
-from minigent_client import admin_commands, chat_commands, one_shot_cli, one_shot_parser
+from minigent_client import (
+    admin_commands,
+    chat_commands,
+    diagnostic_commands,
+    one_shot_cli,
+    one_shot_parser,
+)
+
+_DIAGNOSTIC_COMMANDS = [
+    "collect_debug_bundle",
+    "run_debug_bundle",
+    "run_execution_options",
+    "run_health",
+    "run_ping",
+]
 
 _CHAT_COMMANDS = [
     "build_client",
@@ -42,6 +56,12 @@ _ADMIN_COMMANDS = [
     "run_admin_threads_prune",
     "run_admin_threads_show",
 ]
+
+
+def test_canonical_cli_reexports_diagnostic_command_handlers() -> None:
+    for name in _DIAGNOSTIC_COMMANDS:
+        assert getattr(one_shot_cli, name) is getattr(diagnostic_commands, name)
+    assert one_shot_cli._format_execution_options is diagnostic_commands._format_execution_options
 
 
 def test_canonical_cli_reexports_chat_command_handlers() -> None:
