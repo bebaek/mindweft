@@ -4,6 +4,7 @@ from app import cli as legacy_cli
 from minigent_client import (
     admin_commands,
     chat_commands,
+    command_router,
     diagnostic_commands,
     one_shot_cli,
     one_shot_parser,
@@ -56,6 +57,10 @@ _ADMIN_COMMANDS = [
     "run_admin_threads_prune",
     "run_admin_threads_show",
 ]
+
+
+def test_canonical_cli_uses_extracted_command_router() -> None:
+    assert one_shot_cli.dispatch_command is command_router.dispatch_command
 
 
 def test_canonical_cli_reexports_diagnostic_command_handlers() -> None:
