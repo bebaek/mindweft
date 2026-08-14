@@ -1,7 +1,28 @@
 from __future__ import annotations
 
 from app import cli as legacy_cli
-from minigent_client import admin_commands, one_shot_cli, one_shot_parser
+from minigent_client import admin_commands, chat_commands, one_shot_cli, one_shot_parser
+
+_CHAT_COMMANDS = [
+    "build_client",
+    "build_config",
+    "build_trace_headers",
+    "ensure_thread",
+    "forget_thread",
+    "list_remembered_threads",
+    "load_remembered_thread",
+    "pick_thread_from_history",
+    "remember_thread",
+    "run_chat",
+    "run_export",
+    "run_resume",
+    "run_threads_create",
+    "run_threads_delete",
+    "run_threads_list",
+    "run_threads_show",
+    "state_scope_key",
+    "validate_thread_create_options",
+]
 
 _ADMIN_COMMANDS = [
     "run_admin_audit_list",
@@ -21,6 +42,12 @@ _ADMIN_COMMANDS = [
     "run_admin_threads_prune",
     "run_admin_threads_show",
 ]
+
+
+def test_canonical_cli_reexports_chat_command_handlers() -> None:
+    for name in _CHAT_COMMANDS:
+        assert getattr(one_shot_cli, name) is getattr(chat_commands, name)
+    assert one_shot_cli._format_markdown_transcript is chat_commands._format_markdown_transcript
 
 
 def test_canonical_cli_reexports_admin_command_handlers() -> None:
