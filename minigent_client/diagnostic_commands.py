@@ -11,7 +11,7 @@ from typing import Any, cast
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.chat_commands import list_remembered_threads, state_scope_key
 from minigent_client.config import ClientConfig
-from minigent_client.config_commands import (
+from minigent_client.config_diagnostics import (
     DiagnosticCheck,
     collect_connection_checks,
     format_check,

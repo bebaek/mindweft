@@ -33,11 +33,11 @@ from minigent_client.chat_commands import (
 from minigent_client.config import ClientConfig
 from minigent_client.config_commands import (
     run_config,
-    run_config_doctor,
     run_config_export,
     run_config_init,
     run_config_print,
 )
+from minigent_client.config_diagnostics import run_config_doctor
 from minigent_client.diagnostic_commands import (
     run_debug_bundle,
     run_execution_options,
