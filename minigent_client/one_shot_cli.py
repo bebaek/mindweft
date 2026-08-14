@@ -53,10 +53,12 @@ from minigent_client.chat_commands import (  # noqa: F401 - preserve helper impo
 from minigent_client.command_router import dispatch_command  # noqa: F401
 from minigent_client.config_commands import (  # noqa: F401 - preserve handler import surface.
     run_config,
-    run_config_doctor,
     run_config_export,
     run_config_init,
     run_config_print,
+)
+from minigent_client.config_diagnostics import (  # noqa: F401 - preserve handler import surface.
+    run_config_doctor,
 )
 from minigent_client.diagnostic_commands import (  # noqa: F401 - preserve helper surface.
     _client_config_summary,

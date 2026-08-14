@@ -9,6 +9,7 @@ from minigent_client import (
     chat_commands,
     command_router,
     config_commands,
+    config_diagnostics,
     config_export,
     config_masking,
     diagnostic_commands,
@@ -65,6 +66,14 @@ _ADMIN_COMMANDS = [
 ]
 
 
+def test_config_commands_reexport_extracted_diagnostic_helpers() -> None:
+    assert config_commands.DiagnosticCheck is config_diagnostics.DiagnosticCheck
+    assert config_commands.run_config_doctor is config_diagnostics.run_config_doctor
+    assert config_commands.collect_connection_checks is config_diagnostics.collect_connection_checks
+    assert config_commands.server_config_checks is config_diagnostics.server_config_checks
+    assert config_commands.server_summary is config_diagnostics.server_summary
+
+
 def test_config_commands_reexport_extracted_serialization_helpers() -> None:
     assert (
         config_commands.export_unified_config_from_server
@@ -91,6 +100,10 @@ def test_one_shot_cli_reexports_canonical_application() -> None:
 
 def test_canonical_cli_uses_extracted_command_router() -> None:
     assert one_shot_cli.dispatch_command is command_router.dispatch_command
+
+
+def test_canonical_cli_reexports_config_doctor_handler() -> None:
+    assert one_shot_cli.run_config_doctor is config_diagnostics.run_config_doctor
 
 
 def test_canonical_cli_reexports_diagnostic_command_handlers() -> None:
