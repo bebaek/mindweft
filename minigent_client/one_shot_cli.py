@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import argparse
-import os
-import secrets
 import sys
 import urllib.parse
 import urllib.request  # noqa: F401 - exposed for existing CLI tests that monkeypatch urlopen.
-from pathlib import Path
-from typing import Sequence
 
 from minigent_client.admin_commands import (  # noqa: F401 - preserve handler import surface.
     run_admin_audit_list,
@@ -26,6 +21,12 @@ from minigent_client.admin_commands import (  # noqa: F401 - preserve handler im
     run_admin_threads_list,
     run_admin_threads_prune,
     run_admin_threads_show,
+)
+from minigent_client.application import (  # noqa: F401 - preserve helper import surface.
+    _abort_detail,
+    _apply_cli_env_file,
+    _print_abort_message,
+    main,
 )
 from minigent_client.chat_commands import (  # noqa: F401 - preserve helper import surface.
     _format_markdown_transcript,
@@ -49,7 +50,7 @@ from minigent_client.chat_commands import (  # noqa: F401 - preserve helper impo
     state_scope_key,
     validate_thread_create_options,
 )
-from minigent_client.command_router import dispatch_command
+from minigent_client.command_router import dispatch_command  # noqa: F401
 from minigent_client.config_commands import (  # noqa: F401 - preserve handler import surface.
     run_config,
     run_config_doctor,
@@ -70,91 +71,7 @@ from minigent_client.diagnostic_commands import (  # noqa: F401 - preserve helpe
     run_health,
     run_ping,
 )
-from minigent_client.errors import MinigentAPIError
-from minigent_client.one_shot_parser import build_parser
-from minigent_client.output import (
-    print_json,
-)
-
-
-def _abort_detail(args: argparse.Namespace) -> tuple[str, bool]:
-    server_cancelled = bool(getattr(args, "stream", False))
-    if server_cancelled:
-        return "server cancellation requested", server_cancelled
-    return "server cancellation unavailable for non-streaming runs", server_cancelled
-
-
-def _print_abort_message(args: argparse.Namespace) -> None:
-    detail, server_cancelled = _abort_detail(args)
-    if getattr(args, "json", False):
-        print_json(
-            {
-                "error": {
-                    "message": "Run aborted locally.",
-                    "category": "aborted",
-                    "server_cancelled": server_cancelled,
-                    "detail": detail,
-                }
-            }
-        )
-        return
-    print(f"[idle] locally aborted current run; {detail}.", file=sys.stderr)
-
-
-def _apply_cli_env_file(args: argparse.Namespace) -> None:
-    env_file = getattr(args, "env_file", None)
-    if not env_file:
-        return
-    path = Path(env_file).expanduser()
-    os.environ["MINIGENT_DOTENV_FILE"] = str(path)
-    if not path.exists():
-        return
-    from dotenv import dotenv_values
-
-    for key, value in dotenv_values(path).items():
-        if value is not None:
-            os.environ.setdefault(key, value)
-    if args.base_url == "http://127.0.0.1:8000" and os.environ.get("MINIGENT_BASE_URL"):
-        args.base_url = os.environ["MINIGENT_BASE_URL"]
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(list(argv) if argv is not None else None)
-    _apply_cli_env_file(args)
-
-    trace_id = secrets.token_hex(16) if args.trace else None
-    if args.command == "run":
-        args.message = _read_run_message(args)
-    config = build_config(args, trace_id)
-    client = build_client(args, trace_id)
-
-    try:
-        result = dispatch_command(args, client, config, trace_id)
-        if result is not None:
-            return result
-    except KeyboardInterrupt:
-        try:
-            client.cancel_current_run()
-        except Exception:
-            pass
-        _print_abort_message(args)
-        return 130
-    except MinigentAPIError as exc:
-        if args.json:
-            print_json({"error": exc.to_dict(include_detail=args.verbose)})
-        else:
-            print(f"Error: {exc.message}", file=sys.stderr)
-            if args.verbose and exc.detail:
-                print(f"Detail: {exc.detail}", file=sys.stderr)
-        return 1
-    except (RuntimeError, ValueError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-
-    parser.error(f"Unhandled command: {args.command}")
-    return 2
-
+from minigent_client.one_shot_parser import build_parser  # noqa: F401
 
 if __name__ == "__main__":
     sys.exit(main())
