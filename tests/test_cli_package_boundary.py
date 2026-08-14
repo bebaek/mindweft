@@ -8,6 +8,9 @@ from minigent_client import (
     application,
     chat_commands,
     command_router,
+    config_commands,
+    config_export,
+    config_masking,
     diagnostic_commands,
     one_shot_cli,
     one_shot_parser,
@@ -60,6 +63,16 @@ _ADMIN_COMMANDS = [
     "run_admin_threads_prune",
     "run_admin_threads_show",
 ]
+
+
+def test_config_commands_reexport_extracted_serialization_helpers() -> None:
+    assert (
+        config_commands.export_unified_config_from_server
+        is config_export.export_unified_config_from_server
+    )
+    assert config_commands.render_unified_config_toml is config_export.render_unified_config_toml
+    assert config_commands.mask_secrets is config_masking.mask_secrets
+    assert config_commands.mask_value is config_masking.mask_value
 
 
 def test_console_script_entry_point_loads_canonical_application() -> None:

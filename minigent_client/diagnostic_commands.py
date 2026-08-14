@@ -15,11 +15,10 @@ from minigent_client.config_commands import (
     DiagnosticCheck,
     collect_connection_checks,
     format_check,
-    mask_secrets,
-    mask_value,
     package_version,
     server_summary,
 )
+from minigent_client.config_masking import mask_secrets, mask_value
 from minigent_client.output import print_json
 from minigent_client.state import ClientState
 
