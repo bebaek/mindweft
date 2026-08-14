@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import importlib.metadata
+
 from app import cli as legacy_cli
 from minigent_client import (
     admin_commands,
+    application,
     chat_commands,
     command_router,
     diagnostic_commands,
@@ -57,6 +60,20 @@ _ADMIN_COMMANDS = [
     "run_admin_threads_prune",
     "run_admin_threads_show",
 ]
+
+
+def test_console_script_entry_point_loads_canonical_application() -> None:
+    scripts = importlib.metadata.entry_points(group="console_scripts")
+    entry_point = next(script for script in scripts if script.name == "minigent")
+
+    assert entry_point.load() is application.main
+
+
+def test_one_shot_cli_reexports_canonical_application() -> None:
+    assert one_shot_cli.main is application.main
+    assert one_shot_cli._abort_detail is application._abort_detail
+    assert one_shot_cli._apply_cli_env_file is application._apply_cli_env_file
+    assert one_shot_cli._print_abort_message is application._print_abort_message
 
 
 def test_canonical_cli_uses_extracted_command_router() -> None:

@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
-minigent = "minigent_client.one_shot_cli:main"
+minigent = "minigent_client.application:main"
 minigent-coding-workspace = "minigent_workspace.application:main"
 minigent-mcp-stdio-bridge = "minigent_workspace.bridge.stdio:main"
 minigent-mcp-stdio-gateway = "minigent_workspace.bridge.gateway:main"
