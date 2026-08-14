@@ -9,7 +9,7 @@ import urllib.request  # noqa: F401 - exposed for existing CLI tests that monkey
 from pathlib import Path
 from typing import Sequence
 
-from minigent_client.admin_commands import (
+from minigent_client.admin_commands import (  # noqa: F401 - preserve handler import surface.
     run_admin_audit_list,
     run_admin_execution_config_export,
     run_admin_execution_config_import,
@@ -49,7 +49,8 @@ from minigent_client.chat_commands import (  # noqa: F401 - preserve helper impo
     state_scope_key,
     validate_thread_create_options,
 )
-from minigent_client.config_commands import (
+from minigent_client.command_router import dispatch_command
+from minigent_client.config_commands import (  # noqa: F401 - preserve handler import surface.
     run_config,
     run_config_doctor,
     run_config_export,
@@ -126,90 +127,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "run":
         args.message = _read_run_message(args)
     config = build_config(args, trace_id)
-    base_url = config.base_url
     client = build_client(args, trace_id)
 
     try:
-        if args.command in {"chat", "run"}:
-            return run_chat(args, client, base_url, trace_id)
-        if args.command == "resume":
-            return run_resume(args, client, base_url, trace_id)
-        if args.command == "export":
-            return run_export(args, client, base_url, trace_id)
-        if args.command == "threads":
-            if args.threads_command in {None, "list"}:
-                return run_threads_list(args, base_url, trace_id)
-            if args.threads_command == "create":
-                return run_threads_create(args, client, base_url, trace_id)
-            if args.threads_command == "show":
-                return run_threads_show(args, client, trace_id)
-            if args.threads_command == "delete":
-                return run_threads_delete(args, client, base_url, trace_id)
-        if args.command == "admin":
-            if args.admin_command == "tenants":
-                if args.admin_tenants_command == "list":
-                    return run_admin_tenants_list(args, client, trace_id)
-                if args.admin_tenants_command == "create":
-                    return run_admin_tenants_create(args, client, trace_id)
-                if args.admin_tenants_command == "show":
-                    return run_admin_tenants_show(args, client, trace_id)
-                if args.admin_tenants_command == "update":
-                    return run_admin_tenants_update(args, client, trace_id)
-                if args.admin_tenants_command in {"activate", "suspend", "archive", "delete"}:
-                    return run_admin_tenants_transition(args, client, trace_id)
-                if args.admin_tenants_command == "seed":
-                    return run_admin_tenants_seed(args, client, trace_id)
-                if args.admin_tenants_command == "users":
-                    return run_admin_tenant_users(args, client, trace_id)
-                if args.admin_tenants_command == "entitlements":
-                    return run_admin_tenant_entitlements(args, client, trace_id)
-            if args.admin_command == "execution-config":
-                if args.admin_execution_config_command == "import":
-                    return run_admin_execution_config_import(args, client, trace_id)
-                if args.admin_execution_config_command == "export":
-                    return run_admin_execution_config_export(args, client, trace_id)
-                if args.admin_execution_config_command == "validate-file":
-                    return run_admin_execution_config_validate_file(args, client, trace_id)
-            if args.admin_command == "threads":
-                if args.admin_threads_command == "list":
-                    return run_admin_threads_list(args, client, trace_id)
-                if args.admin_threads_command == "show":
-                    return run_admin_threads_show(args, client, trace_id)
-                if args.admin_threads_command == "delete":
-                    return run_admin_threads_delete(args, client, trace_id)
-                if args.admin_threads_command == "prune":
-                    return run_admin_threads_prune(args, client, trace_id)
-            if args.admin_command == "audit":
-                if args.admin_audit_command == "list":
-                    return run_admin_audit_list(args, client, trace_id)
-        if args.command == "health":
-            return run_health(client, args.json, trace_id)
-        if args.command == "ping":
-            return run_ping(args, client, trace_id)
-        if args.command == "options":
-            return run_execution_options(client, trace_id, as_json=args.json)
-        if args.command == "skills":
-            return run_execution_options(client, trace_id, section="skills", as_json=args.json)
-        if args.command == "capabilities":
-            return run_execution_options(
-                client,
-                trace_id,
-                section="capability_profiles",
-                as_json=args.json,
-            )
-        if args.command == "debug-bundle":
-            return run_debug_bundle(args, client, config, trace_id)
-        if args.command == "config":
-            if args.config_command in {None, "show"}:
-                return run_config(client, trace_id)
-            if args.config_command == "init":
-                return run_config_init(args)
-            if args.config_command == "print":
-                return run_config_print(args)
-            if args.config_command == "export":
-                return run_config_export(args, client, trace_id)
-            if args.config_command == "doctor":
-                return run_config_doctor(args, client, trace_id)
+        result = dispatch_command(args, client, config, trace_id)
+        if result is not None:
+            return result
     except KeyboardInterrupt:
         try:
             client.cancel_current_run()
