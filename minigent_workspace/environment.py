@@ -6,17 +6,23 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 from minigent_client.state import state_dir_path
-from minigent_config.constants import ATTACHMENT_DB_PATH_ENV
+from minigent_config.constants import ATTACHMENT_DB_PATH_ENV, THREAD_DB_PATH_ENV
 from minigent_config.unified_config import apply_unified_config_to_env
 
 DEFAULT_ATTACHMENT_DB_FILE = "attachments.db"
+DEFAULT_THREAD_DB_FILE = "threads.db"
 
 
 def apply_coding_workspace_state_defaults(env: dict[str, str]) -> None:
-    """Use durable user-local attachment storage unless the deployment overrides it."""
+    """Use durable user-local API storage unless the deployment overrides it."""
+    state_dir = state_dir_path(env)
     env.setdefault(
         ATTACHMENT_DB_PATH_ENV,
-        str(state_dir_path(env) / DEFAULT_ATTACHMENT_DB_FILE),
+        str(state_dir / DEFAULT_ATTACHMENT_DB_FILE),
+    )
+    env.setdefault(
+        THREAD_DB_PATH_ENV,
+        str(state_dir / DEFAULT_THREAD_DB_FILE),
     )
 
 

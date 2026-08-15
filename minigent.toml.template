@@ -7,7 +7,8 @@ profile = "local-coding"
 [app]
 host = "127.0.0.1"
 port = 8000
-thread_db_path = ".data/minigent-coding-threads.db"
+# The coding runner defaults thread storage under $XDG_STATE_HOME/minigent.
+# thread_db_path = "/custom/path/threads.db"
 # max_iterations = 16
 # tool_timeout_seconds = 60
 

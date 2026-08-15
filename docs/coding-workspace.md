@@ -159,16 +159,14 @@ at a local TOML config and keeping provider keys in `.coding.sops.env`. Do not c
 decrypted dotenv files or place API keys in `minigent.toml`; `.coding.sops*.env` is ignored
 for local encrypted dotenv files.
 
-The template sets `MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db` so coding threads
-survive runner/API restarts. Remove that setting only if you intentionally want in-memory,
-restart-discarded threads.
-
-The coding workspace runner also defaults image attachment storage to
-`$XDG_STATE_HOME/minigent/attachments.db`, falling back to
-`~/.local/state/minigent/attachments.db`. This keeps image references valid across local API
-restarts without requiring an `[attachments]` section in `minigent.toml`. Set
-`MINIGENT_ATTACHMENT_DB_PATH` or `[attachments].db_path` only to override that local default;
-non-coding Minigent API deployments retain their existing explicit storage behavior.
+The coding workspace runner defaults thread and image attachment storage to
+`$XDG_STATE_HOME/minigent/threads.db` and `$XDG_STATE_HOME/minigent/attachments.db`, falling
+back to `~/.local/state/minigent/threads.db` and
+`~/.local/state/minigent/attachments.db`. This keeps threads and image references valid across
+local API restarts without requiring storage paths in `minigent.toml`. Set
+`MINIGENT_THREAD_DB_PATH` or `[app].thread_db_path`, and `MINIGENT_ATTACHMENT_DB_PATH` or
+`[attachments].db_path`, only to override those coding-runner defaults. Non-coding Minigent API
+deployments retain their existing explicit storage behavior.
 
 To expose multiple roots through the same filesystem MCP server, set
 `MINIGENT_CODING_WORKSPACES` to a comma-separated list or repeat `--workspace` on the runner

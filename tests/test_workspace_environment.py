@@ -11,6 +11,7 @@ def test_coding_workspace_state_defaults_use_xdg_state_home(tmp_path: Path) -> N
     environment.apply_coding_workspace_state_defaults(env)
 
     assert env["MINIGENT_ATTACHMENT_DB_PATH"] == str(tmp_path / "minigent" / "attachments.db")
+    assert env["MINIGENT_THREAD_DB_PATH"] == str(tmp_path / "minigent" / "threads.db")
 
 
 def test_coding_workspace_state_defaults_use_home_fallback(tmp_path: Path) -> None:
@@ -21,18 +22,24 @@ def test_coding_workspace_state_defaults_use_home_fallback(tmp_path: Path) -> No
     assert env["MINIGENT_ATTACHMENT_DB_PATH"] == str(
         tmp_path / ".local" / "state" / "minigent" / "attachments.db"
     )
+    assert env["MINIGENT_THREAD_DB_PATH"] == str(
+        tmp_path / ".local" / "state" / "minigent" / "threads.db"
+    )
 
 
-def test_coding_workspace_state_defaults_preserve_attachment_override(tmp_path: Path) -> None:
-    configured_path = tmp_path / "custom-attachments.db"
+def test_coding_workspace_state_defaults_preserve_storage_overrides(tmp_path: Path) -> None:
+    configured_attachment_path = tmp_path / "custom-attachments.db"
+    configured_thread_path = tmp_path / "custom-threads.db"
     env = {
         "HOME": str(tmp_path),
-        "MINIGENT_ATTACHMENT_DB_PATH": str(configured_path),
+        "MINIGENT_ATTACHMENT_DB_PATH": str(configured_attachment_path),
+        "MINIGENT_THREAD_DB_PATH": str(configured_thread_path),
     }
 
     environment.apply_coding_workspace_state_defaults(env)
 
-    assert env["MINIGENT_ATTACHMENT_DB_PATH"] == str(configured_path)
+    assert env["MINIGENT_ATTACHMENT_DB_PATH"] == str(configured_attachment_path)
+    assert env["MINIGENT_THREAD_DB_PATH"] == str(configured_thread_path)
 
 
 def test_load_env_file_reads_file_backed_values(tmp_path: Path, monkeypatch) -> None:

@@ -17,8 +17,8 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app.models import AuditRecord, Message, Thread, ThreadContext, ThreadStatus, utc_now
+from minigent_config.constants import THREAD_DB_PATH_ENV
 
-THREAD_DB_PATH_ENV = "MINIGENT_THREAD_DB_PATH"
 DEFAULT_RUN_LEASE_SECONDS = 30.0
 _CURRENT_RUN: ContextVar[tuple[str, str, str] | None] = ContextVar(
     "minigent_current_thread_run", default=None
