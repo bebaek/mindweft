@@ -713,7 +713,9 @@ def test_config_init_writes_minigent_toml(monkeypatch: Any, tmp_path: Path, caps
 
     assert exit_code == 0
     assert (tmp_path / "minigent.toml").exists()
-    assert "[llm]" in (tmp_path / "minigent.toml").read_text(encoding="utf-8")
+    content = (tmp_path / "minigent.toml").read_text(encoding="utf-8")
+    assert "[llm]" in content
+    assert "thread_db_path" not in content
     assert capsys.readouterr().out == "Wrote minigent.toml (local-coding)\n"
 
 
@@ -974,7 +976,7 @@ def test_config_export_local_coding_merges_runner_config(
         "\n".join(
             [
                 f"MINIGENT_CODING_WORKSPACES={workspace}",
-                "MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db",
+                "MINIGENT_THREAD_DB_PATH=/custom/coding-threads.db",
                 "MINIGENT_MAX_ITERATIONS=64",
                 "MINIGENT_TOOL_TIMEOUT_SECONDS=90",
                 "MINIGENT_CONTEXT_COMPACTION_ENABLED=true",
@@ -996,7 +998,7 @@ def test_config_export_local_coding_merges_runner_config(
     output = capsys.readouterr().out
     parsed = tomllib.loads(output)
     assert parsed["profile"] == "exported-coding"
-    assert parsed["app"]["thread_db_path"] == ".data/minigent-coding-threads.db"
+    assert parsed["app"]["thread_db_path"] == "/custom/coding-threads.db"
     assert parsed["app"]["max_iterations"] == 64
     assert parsed["app"]["tool_timeout_seconds"] == 90
     assert parsed["app"]["context_compaction_enabled"] is True

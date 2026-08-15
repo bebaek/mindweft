@@ -52,8 +52,9 @@ uv run minigent chat
 ```
 
 For the reusable coding-workspace runner, copy `.env.coding.template` to `.env.coding`.
-The template sets `MINIGENT_THREAD_DB_PATH=.data/minigent-coding-threads.db` so threads
-survive restarts. `MINIGENT_CODING_WORKSPACES` can be one path or a comma-separated list of
+When storage paths are not configured, the runner sets durable thread and attachment database
+paths under `$XDG_STATE_HOME/minigent`, falling back to `~/.local/state/minigent`.
+`MINIGENT_CODING_WORKSPACES` can be one path or a comma-separated list of
 workspace roots (`MINIGENT_CODING_WORKSPACE` is still accepted for compatibility). Pass
 `--no-env-file` to `minigent-coding-workspace` to skip reading `.env.coding` and use only the
 process environment plus unified config. Minigent discovers a cwd-local `./minigent.toml`

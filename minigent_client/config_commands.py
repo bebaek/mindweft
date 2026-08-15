@@ -60,7 +60,6 @@ from minigent_client.config_masking import (  # noqa: F401 - preserve helper imp
 from minigent_client.output import print_json
 from minigent_config.unified_config import (
     CONFIG_FILE_ENV,
-    DEFAULT_CODING_THREAD_DB_PATH,
     DEFAULT_DOTENV_FILE,
     DEFAULT_THREAD_DB_PATH,
     DEFAULT_VOICE_THREAD_DB_PATH,
@@ -83,7 +82,6 @@ profile = "local-coding"
 [app]
 host = "127.0.0.1"
 port = 8000
-thread_db_path = "{DEFAULT_CODING_THREAD_DB_PATH}"
 
 [auth]
 mode = "development"
