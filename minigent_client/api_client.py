@@ -344,6 +344,16 @@ class MinigentAPIClient:
             self._thread_id = thread_id
         return thread
 
+    def rename_thread(self, thread_id: str, title: str) -> dict[str, Any]:
+        response = self.request_json(
+            "PATCH",
+            f"{self._config.base_url}/threads/{thread_id}/title",
+            payload={"title": title},
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent rename-thread response must be an object")
+        return cast(dict[str, Any], response)
+
     def get_thread(self, thread_id: str) -> dict[str, Any]:
         messages = self.request_json(
             "GET",

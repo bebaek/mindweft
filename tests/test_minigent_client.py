@@ -4694,7 +4694,7 @@ def test_run_chat_loop_remembers_thread_after_successful_turn(
     state = PersistentClientState.load()
     assert exit_code == 0
     assert state.get_last_thread(key) == "thread-remembered"
-    assert state.list_threads(key)[0].title == "remember this"
+    assert state.list_threads(key)[0].title == "Remember this"
 
 
 def test_build_config_resolves_resume_last(
@@ -5266,7 +5266,7 @@ def test_run_chat_loop_handles_thread_shell_commands(
     output = output_stream.getvalue()
     assert exit_code == 0
     assert "[idle] created thread new-thread\n" in output
-    assert "[idle] * new-thread  question for new-thread" in output
+    assert "[idle] * new-thread  Question for new-thread" in output
     assert '[idle] renamed new-thread to "renamed thread"\n' in output
     assert "[idle] new-thread (clipboard unavailable)\n" in output
     assert "# Minigent transcript\n\nThread: `new-thread`" in output

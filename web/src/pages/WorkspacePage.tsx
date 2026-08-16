@@ -294,6 +294,19 @@ export function WorkspacePage() {
     setPendingImages([]);
   }
 
+  async function renameSelectedThread() {
+    if (!selectedThreadId || isRunning) return;
+    const currentTitle = selectedTitle(threads.data?.threads, selectedThreadId);
+    const requestedTitle = window.prompt("Rename conversation", currentTitle)?.trim();
+    if (!requestedTitle || requestedTitle === currentTitle) return;
+    try {
+      await api.renameThread(selectedThreadId, requestedTitle);
+      await queryClient.invalidateQueries({ queryKey: ["threads"] });
+    } catch (renameError) {
+      setError(renameError instanceof Error ? renameError.message : "Could not rename conversation");
+    }
+  }
+
   return (
     <section className="workspace-page">
       <aside className={`thread-rail ${mobileThreadRailOpen ? "is-open" : ""}`} aria-label="Conversations">
@@ -332,6 +345,7 @@ export function WorkspacePage() {
           <div><span className={`run-dot ${isRunning ? "active" : ""}`} /><div><h1>{selectedTitle(threads.data?.threads, selectedThreadId)}</h1><small>{isRunning ? "Agent is working" : selectedThreadId ? "Ready" : "New conversation"}</small></div></div>
           <div className="conversation-actions">
             {activity.length > 0 && <span className="activity-count">{activity.length} event{activity.length === 1 ? "" : "s"}</span>}
+            <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => void renameSelectedThread()}>Rename</button>
             <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => setContextOpen(true)}>Context</button>
           </div>
         </header>
@@ -455,10 +469,12 @@ export function WorkspacePage() {
 
 function ThreadButton({ thread, active, onClick }: { thread: ThreadListItem; active: boolean; onClick: () => void }) {
   const title = thread.title?.trim() || "New conversation";
+  const context = thread.skill_name?.replace(/^(?:shared|user):/, "") || thread.capability_profile?.replace(/^(?:shared|user):/, "") || thread.llm_profile?.replace(/^shared:/, "") || "Default";
+  const shortId = thread.thread_id.slice(0, 4);
   return (
-    <button className={`thread-button ${active ? "active" : ""}`} type="button" onClick={onClick} title={title}>
+    <button className={`thread-button ${active ? "active" : ""}`} type="button" onClick={onClick} title={`${title} · ${context} · ${thread.thread_id}`}>
       <span className="thread-title">{title}</span>
-      <span className="thread-meta"><small>{thread.message_count} message{thread.message_count === 1 ? "" : "s"}</small><time dateTime={thread.updated_at}>{relativeTime(thread.updated_at)}</time></span>
+      <span className="thread-meta"><small>{context} · {thread.message_count} msg · {shortId}</small><time dateTime={thread.updated_at}>{relativeTime(thread.updated_at)}</time></span>
     </button>
   );
 }

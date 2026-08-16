@@ -16,7 +16,16 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
-from app.models import AuditRecord, Message, Thread, ThreadContext, ThreadStatus, utc_now
+from app.models import (
+    AuditRecord,
+    Message,
+    MessageRole,
+    Thread,
+    ThreadContext,
+    ThreadStatus,
+    utc_now,
+)
+from app.thread_titles import generate_thread_title
 from minigent_config.constants import THREAD_DB_PATH_ENV
 
 DEFAULT_RUN_LEASE_SECONDS = 30.0
@@ -157,6 +166,15 @@ class ThreadStore(Protocol):
     def list_messages(self, tenant_id: str, thread_id: str) -> list[Message]: ...
 
     def append_message(self, tenant_id: str, message: Message) -> Message: ...
+
+    def set_thread_title(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        title: str,
+        source: str,
+    ) -> Thread: ...
 
     def set_thread_status(self, tenant_id: str, thread_id: str, status: ThreadStatus) -> Thread: ...
 
@@ -425,8 +443,32 @@ class InMemoryThreadStore:
             self._require_current_run(tenant_id, message.thread_id)
             thread = self._require_thread(tenant_id, message.thread_id)
             self._messages[message.thread_id].append(message)
-            thread.updated_at = utc_now()
+            now = utc_now()
+            thread.updated_at = now
+            if (
+                message.role == MessageRole.USER
+                and thread.title is None
+                and message.content.strip()
+            ):
+                thread.title = generate_thread_title(message.content)
+                thread.title_source = "generated"
+                thread.title_updated_at = now
             return message
+
+    def set_thread_title(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        title: str,
+        source: str,
+    ) -> Thread:
+        with self._lock:
+            thread = self._require_thread(tenant_id, thread_id)
+            thread.title = title
+            thread.title_source = "manual" if source == "manual" else "generated"
+            thread.title_updated_at = utc_now()
+            return thread.model_copy(deep=True)
 
     def set_thread_status(self, tenant_id: str, thread_id: str, status: ThreadStatus) -> Thread:
         with self._lock:
@@ -958,9 +1000,34 @@ class SQLiteThreadStore:
                 "INSERT INTO messages (thread_id, payload) VALUES (?, ?)",
                 (message.thread_id, _dump_model(message)),
             )
-            thread.updated_at = utc_now()
+            now = utc_now()
+            thread.updated_at = now
+            if (
+                message.role == MessageRole.USER
+                and thread.title is None
+                and message.content.strip()
+            ):
+                thread.title = generate_thread_title(message.content)
+                thread.title_source = "generated"
+                thread.title_updated_at = now
             self._save_thread(conn, thread)
             return message
+
+    def set_thread_title(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        title: str,
+        source: str,
+    ) -> Thread:
+        with self._lock, self._connection() as conn:
+            thread = self._require_thread(conn, tenant_id, thread_id)
+            thread.title = title
+            thread.title_source = "manual" if source == "manual" else "generated"
+            thread.title_updated_at = utc_now()
+            self._save_thread(conn, thread)
+            return thread
 
     def set_thread_status(self, tenant_id: str, thread_id: str, status: ThreadStatus) -> Thread:
         with self._lock, self._connection() as conn:

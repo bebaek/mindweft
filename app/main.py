@@ -82,6 +82,8 @@ from app.models import (
     ThreadListItem,
     ThreadListResponse,
     ThreadStatus,
+    ThreadTitleResponse,
+    UpdateThreadTitleRequest,
 )
 from app.oauth import GenericOAuthProvider, build_oauth_flow_store_from_env
 from app.observability import configure_logging, configure_tracing
@@ -117,6 +119,7 @@ from app.store import (
     ThreadStoreSettings,
 )
 from app.tenants import require_active_tenant_principal, require_tenant_context
+from app.thread_titles import generate_thread_title, normalize_manual_thread_title
 from app.tools import ToolRegistry, build_tool_registry_from_env
 from app.user_deprovisioning import UserDeprovisioningProcessor
 from app.user_execution import (
@@ -378,7 +381,9 @@ def _thread_list_item(store: ThreadStore, tenant_id: str, thread: Thread) -> Thr
     messages = store.list_messages(tenant_id, thread.thread_id)
     return ThreadListItem(
         thread_id=thread.thread_id,
-        title=_thread_title(messages),
+        title=thread.title or _thread_title(messages),
+        title_source=thread.title_source,
+        title_updated_at=thread.title_updated_at,
         status=thread.status,
         skill_name=thread.skill_name,
         skill_names=thread.skill_names,
@@ -393,18 +398,11 @@ def _thread_list_item(store: ThreadStore, tenant_id: str, thread: Thread) -> Thr
 def _thread_title(messages: list[Message]) -> str:
     for message in messages:
         if message.role == MessageRole.USER and message.content.strip():
-            return _truncate_thread_title(message.content)
+            return generate_thread_title(message.content)
     for message in messages:
         if message.content.strip():
-            return _truncate_thread_title(message.content)
-    return "New thread"
-
-
-def _truncate_thread_title(content: str, limit: int = 64) -> str:
-    title = " ".join(content.split())
-    if len(title) <= limit:
-        return title
-    return f"{title[: limit - 1].rstrip()}…"
+            return generate_thread_title(message.content)
+    return "New conversation"
 
 
 def _validate_and_normalize_message_request(
@@ -1280,6 +1278,33 @@ def create_app(
             total=store.count_threads(principal.tenant_id),
             limit=limit,
             offset=offset,
+        )
+
+    @app.patch("/threads/{thread_id}/title", response_model=ThreadTitleResponse)
+    async def update_thread_title(
+        thread_id: str,
+        body: UpdateThreadTitleRequest,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> ThreadTitleResponse:
+        try:
+            title = normalize_manual_thread_title(body.title)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        thread = request.app.state.store.set_thread_title(
+            principal.tenant_id,
+            thread_id,
+            title=title,
+            source="manual",
+        )
+        assert thread.title is not None
+        assert thread.title_source is not None
+        assert thread.title_updated_at is not None
+        return ThreadTitleResponse(
+            thread_id=thread.thread_id,
+            title=thread.title,
+            title_source=thread.title_source,
+            title_updated_at=thread.title_updated_at,
         )
 
     @app.post("/threads", response_model=CreateThreadResponse)

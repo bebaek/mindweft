@@ -20,6 +20,12 @@ from minigent_client.output import (
 )
 from minigent_client.state import ClientState, ThreadHistoryItem
 from minigent_client.state import state_scope_key as build_state_scope_key
+from minigent_client.thread_titles import (
+    is_placeholder_thread_title,
+)
+from minigent_client.thread_titles import (
+    thread_title_from_message as _thread_title_from_message,
+)
 
 
 def build_trace_headers(trace_id: str | None) -> dict[str, str]:
@@ -48,9 +54,13 @@ def remember_thread(
     message_count: int | None = None,
 ) -> None:
     state = ClientState.load()
-    state.set_last_thread(
-        state_scope_key(base_url, args), thread_id, title=title, message_count=message_count
+    scope_key = state_scope_key(base_url, args)
+    existing = next(
+        (item for item in state.list_threads(scope_key) if item.thread_id == thread_id), None
     )
+    if existing is not None and not is_placeholder_thread_title(existing.title):
+        title = existing.title
+    state.set_last_thread(scope_key, thread_id, title=title, message_count=message_count)
     state.save()
 
 
@@ -208,13 +218,6 @@ def ensure_thread(
     if not isinstance(thread_id, str):
         raise SystemExit("Create-thread response did not include a thread_id.")
     return thread_id, True
-
-
-def _thread_title_from_message(message: str) -> str:
-    normalized = " ".join(message.split())
-    if len(normalized) <= 60:
-        return normalized or "Thread"
-    return f"{normalized[:57]}..."
 
 
 def _title_from_thread_messages(messages: object) -> str | None:
