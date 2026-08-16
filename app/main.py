@@ -71,6 +71,7 @@ from app.models import (
     ExecutionOptionItem,
     ExecutionOptionSection,
     ExecutionOptionsResponse,
+    GenerateThreadTitleResponse,
     Message,
     MessageRole,
     Principal,
@@ -82,6 +83,8 @@ from app.models import (
     ThreadListItem,
     ThreadListResponse,
     ThreadStatus,
+    ThreadTitleResponse,
+    UpdateThreadTitleRequest,
 )
 from app.oauth import GenericOAuthProvider, build_oauth_flow_store_from_env
 from app.observability import configure_logging, configure_tracing
@@ -117,6 +120,11 @@ from app.store import (
     ThreadStoreSettings,
 )
 from app.tenants import require_active_tenant_principal, require_tenant_context
+from app.thread_title_service import (
+    automatic_semantic_titles_supported,
+    generate_semantic_thread_title,
+)
+from app.thread_titles import generate_thread_title, normalize_manual_thread_title
 from app.tools import ToolRegistry, build_tool_registry_from_env
 from app.user_deprovisioning import UserDeprovisioningProcessor
 from app.user_execution import (
@@ -378,7 +386,9 @@ def _thread_list_item(store: ThreadStore, tenant_id: str, thread: Thread) -> Thr
     messages = store.list_messages(tenant_id, thread.thread_id)
     return ThreadListItem(
         thread_id=thread.thread_id,
-        title=_thread_title(messages),
+        title=thread.title or _thread_title(messages),
+        title_source=thread.title_source,
+        title_updated_at=thread.title_updated_at,
         status=thread.status,
         skill_name=thread.skill_name,
         skill_names=thread.skill_names,
@@ -393,18 +403,11 @@ def _thread_list_item(store: ThreadStore, tenant_id: str, thread: Thread) -> Thr
 def _thread_title(messages: list[Message]) -> str:
     for message in messages:
         if message.role == MessageRole.USER and message.content.strip():
-            return _truncate_thread_title(message.content)
+            return generate_thread_title(message.content)
     for message in messages:
         if message.content.strip():
-            return _truncate_thread_title(message.content)
-    return "New thread"
-
-
-def _truncate_thread_title(content: str, limit: int = 64) -> str:
-    title = " ".join(content.split())
-    if len(title) <= limit:
-        return title
-    return f"{title[: limit - 1].rstrip()}…"
+            return generate_thread_title(message.content)
+    return "New conversation"
 
 
 def _validate_and_normalize_message_request(
@@ -609,7 +612,9 @@ async def _await_backend_run(
         _monitor_distributed_run(task, request.app.state.store, principal.tenant_id, thread_id)
     )
     try:
-        return await task
+        result = await task
+        _schedule_thread_title_generation(request, principal, thread_id)
+        return result
     finally:
         if request.app.state.active_run_tasks.get(run_key) is task:
             request.app.state.active_run_tasks.pop(run_key, None)
@@ -679,6 +684,7 @@ async def _run_thread_ndjson_stream(
                 "thread_context": _thread_context_usage(request, principal, thread_id),
             }
         )
+        _schedule_thread_title_generation(request, principal, thread_id)
 
     run_key = (principal.tenant_id, thread_id)
     task = asyncio.create_task(run())
@@ -713,6 +719,16 @@ async def _run_thread_ndjson_stream(
                 await task
             except asyncio.CancelledError:
                 pass
+
+
+def _schedule_thread_title_generation(
+    request: Request,
+    principal: Principal,
+    thread_id: str,
+) -> None:
+    scheduler = getattr(request.app.state, "schedule_thread_title_generation", None)
+    if callable(scheduler):
+        scheduler(principal, thread_id)
 
 
 def _ndjson_event(event: dict[str, object]) -> str:
@@ -802,6 +818,11 @@ def create_app(
             yield
         finally:
             await _drain_active_runs(app)
+            title_tasks = [task for task in app.state.thread_title_tasks if not task.done()]
+            for task in title_tasks:
+                task.cancel()
+            if title_tasks:
+                await asyncio.gather(*title_tasks, return_exceptions=True)
             stale_recovery_task.cancel()
             attachment_cleanup_task.cancel()
             if deprovisioning_task is not None:
@@ -952,6 +973,35 @@ def create_app(
         if principal.is_admin:
             return build_admin_chat_tool_registry(app, principal)
         return build_user_mcp_tool_registry(app, principal)
+
+    app.state.thread_title_tasks = set()
+
+    def schedule_thread_title_generation(principal: Principal, thread_id: str) -> None:
+        try:
+            execution = resolve_principal_execution(principal)
+            thread = app.state.store.get_thread(principal.tenant_id, thread_id)
+            if not automatic_semantic_titles_supported(execution, thread.llm_profile):
+                return
+        except Exception:
+            logger.exception(
+                "Could not resolve execution context for thread title tenant_id=%s thread_id=%s",
+                principal.tenant_id,
+                thread_id,
+            )
+            return
+        task = asyncio.create_task(
+            generate_semantic_thread_title(
+                store=app.state.store,
+                execution=execution,
+                tenant_id=principal.tenant_id,
+                thread_id=thread_id,
+            ),
+            name=f"thread-title-{thread_id}",
+        )
+        app.state.thread_title_tasks.add(task)
+        task.add_done_callback(app.state.thread_title_tasks.discard)
+
+    app.state.schedule_thread_title_generation = schedule_thread_title_generation
 
     app.state.runtime = AgentRuntime(
         store=app.state.store,
@@ -1280,6 +1330,78 @@ def create_app(
             total=store.count_threads(principal.tenant_id),
             limit=limit,
             offset=offset,
+        )
+
+    @app.post(
+        "/threads/{thread_id}/title/generate",
+        response_model=GenerateThreadTitleResponse,
+    )
+    async def generate_thread_title(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> GenerateThreadTitleResponse:
+        thread = request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        if thread.title_source == "manual":
+            return GenerateThreadTitleResponse(
+                thread_id=thread_id,
+                status="skipped",
+                title=thread.title,
+                reason="manual_title",
+            )
+        if thread.title_source == "semantic":
+            return GenerateThreadTitleResponse(
+                thread_id=thread_id,
+                status="skipped",
+                title=thread.title,
+                reason="already_semantic",
+            )
+        execution = resolve_principal_execution(principal)
+        if not automatic_semantic_titles_supported(execution, thread.llm_profile):
+            return GenerateThreadTitleResponse(
+                thread_id=thread_id,
+                status="skipped",
+                title=thread.title,
+                reason="unsupported_provider",
+            )
+        result = await generate_semantic_thread_title(
+            store=request.app.state.store,
+            execution=execution,
+            tenant_id=principal.tenant_id,
+            thread_id=thread_id,
+        )
+        return GenerateThreadTitleResponse(
+            thread_id=thread_id,
+            status=result.status,
+            title=result.title,
+            reason=result.reason,
+        )
+
+    @app.patch("/threads/{thread_id}/title", response_model=ThreadTitleResponse)
+    async def update_thread_title(
+        thread_id: str,
+        body: UpdateThreadTitleRequest,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> ThreadTitleResponse:
+        try:
+            title = normalize_manual_thread_title(body.title)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        thread = request.app.state.store.set_thread_title(
+            principal.tenant_id,
+            thread_id,
+            title=title,
+            source="manual",
+        )
+        assert thread.title is not None
+        assert thread.title_source is not None
+        assert thread.title_updated_at is not None
+        return ThreadTitleResponse(
+            thread_id=thread.thread_id,
+            title=thread.title,
+            title_source=thread.title_source,
+            title_updated_at=thread.title_updated_at,
         )
 
     @app.post("/threads", response_model=CreateThreadResponse)

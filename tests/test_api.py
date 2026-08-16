@@ -1159,6 +1159,8 @@ def test_list_threads_returns_recent_thread_summaries() -> None:
     [thread] = body["threads"]
     assert thread["thread_id"] == second_thread_id
     assert thread["title"] == "Second thread"
+    assert thread["title_source"] == "generated"
+    assert thread["title_updated_at"]
     assert thread["message_count"] == 1
     assert thread["status"] == "idle"
     assert thread["created_at"]
@@ -1168,6 +1170,101 @@ def test_list_threads_returns_recent_thread_summaries() -> None:
     first = next(thread for thread in all_threads if thread["thread_id"] == first_thread_id)
     assert first["title"].endswith("…")
     assert len(first["title"]) == 64
+
+
+def test_run_generates_semantic_title_after_concrete_exchange() -> None:
+    class SemanticTitleAdapter(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            del tools
+            if messages[0].role == MessageRole.SYSTEM and "semantic title" in messages[0].content:
+                transcript = messages[-1].content
+                if "weather in Austin" in transcript:
+                    return LLMResponse(content="Austin weather today")
+                return LLMResponse(content="INSUFFICIENT_CONTEXT")
+            return LLMResponse(content="I can help with that.")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "openai", "model": "semantic-title-test"}
+
+    client = TestClient(
+        create_app(llm_adapter=SemanticTitleAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    for content in ("hey", "what's the weather in Austin today?"):
+        client.post(
+            f"/threads/{thread_id}/messages",
+            json={"content": content},
+            headers=AUTH_HEADERS,
+        )
+        response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+        assert response.status_code == 200
+
+    thread = client.get("/threads", headers=AUTH_HEADERS).json()["threads"][0]
+
+    assert thread["title"] == "Austin weather today"
+    assert thread["title_source"] == "semantic"
+    repeated = client.post(
+        f"/threads/{thread_id}/title/generate",
+        headers=AUTH_HEADERS,
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["status"] == "skipped"
+    assert repeated.json()["reason"] == "already_semantic"
+
+
+def test_update_thread_title_is_canonical_and_manual() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "Could you please look into the token refresh failures?"},
+        headers=AUTH_HEADERS,
+    )
+
+    generated = client.get("/threads", headers=AUTH_HEADERS).json()["threads"][0]
+    assert generated["title"] == "Investigate the token refresh failures"
+    assert generated["title_source"] == "generated"
+
+    response = client.patch(
+        f"/threads/{thread_id}/title",
+        json={"title": "  Fix   refresh race  "},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "Fix refresh race"
+    assert response.json()["title_source"] == "manual"
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "A later message must not replace the manual title"},
+        headers=AUTH_HEADERS,
+    )
+    listed = client.get("/threads", headers=AUTH_HEADERS).json()["threads"][0]
+    assert listed["title"] == "Fix refresh race"
+    assert listed["title_source"] == "manual"
+
+
+def test_update_thread_title_is_tenant_scoped_and_rejects_blank_title() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    forbidden = client.patch(
+        f"/threads/{thread_id}/title",
+        json={"title": "Other tenant title"},
+        headers=OTHER_TENANT_HEADERS,
+    )
+    blank = client.patch(
+        f"/threads/{thread_id}/title",
+        json={"title": "   "},
+        headers=AUTH_HEADERS,
+    )
+
+    assert forbidden.status_code == 404
+    assert blank.status_code == 400
 
 
 def test_list_threads_is_tenant_scoped() -> None:

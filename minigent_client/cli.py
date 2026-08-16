@@ -59,8 +59,15 @@ from minigent_client.state import (
     normalize_prompt_command_name,
     state_dir_path,
     state_scope_key,
+    thread_history_items_from_api,
 )
 from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
+from minigent_client.thread_titles import (
+    is_placeholder_thread_title,
+)
+from minigent_client.thread_titles import (
+    thread_title_from_message as _thread_title_from_message,
+)
 from minigent_client.vad import SileroVoiceActivityDetector
 from minigent_client.wakeword import OpenWakeWordDetector, PorcupineWakeWordDetector
 from minigent_config.environment import load_environment
@@ -413,17 +420,20 @@ def remember_client_thread(
     message_count: int | None = None,
 ) -> None:
     state = PersistentClientState.load()
+    existing = next(
+        (
+            item
+            for item in state.list_threads(client_state_scope_key(config))
+            if item.thread_id == thread_id
+        ),
+        None,
+    )
+    if existing is not None and not is_placeholder_thread_title(existing.title):
+        title = existing.title
     state.set_last_thread(
         client_state_scope_key(config), thread_id, title=title, message_count=message_count
     )
     state.save()
-
-
-def _thread_title_from_message(message: str) -> str:
-    normalized = " ".join(message.split())
-    if len(normalized) <= 60:
-        return normalized or "Thread"
-    return f"{normalized[:57]}..."
 
 
 def _rename_client_thread(config: ClientConfig, thread_id: str, title: str) -> bool:
@@ -436,6 +446,21 @@ def _rename_client_thread(config: ClientConfig, thread_id: str, title: str) -> b
 
 def _list_client_threads(config: ClientConfig):
     return PersistentClientState.load().list_threads(client_state_scope_key(config))
+
+
+def _refresh_client_threads(
+    client: RememberingMinigentAPIClient,
+    config: ClientConfig,
+) -> list[ThreadHistoryItem]:
+    try:
+        response = client.list_threads()
+    except (AttributeError, RuntimeError):
+        return _list_client_threads(config)
+    threads = thread_history_items_from_api(response)
+    state = PersistentClientState.load()
+    state.thread_history[client_state_scope_key(config)] = threads
+    state.save()
+    return threads
 
 
 def forget_remembered_client_thread(config: ClientConfig, thread_id: str) -> bool:
@@ -1512,7 +1537,7 @@ def _handle_chat_threads(
     if selector:
         _switch_to_thread(selector, client, config, output_stream)
         return
-    threads = _list_client_threads(config)
+    threads = _refresh_client_threads(client, config)
     if not threads:
         output_stream.write("[idle] no locally remembered threads\n")
         output_stream.flush()
@@ -1676,10 +1701,20 @@ def _handle_chat_rename(
         output_stream.write("[idle] no current thread\n")
     elif not title:
         output_stream.write("[idle] usage: /rename <title>\n")
-    elif _rename_client_thread(config, thread_id, title):
-        output_stream.write(f'[idle] renamed {thread_id} to "{title}"\n')
     else:
-        remember_client_thread(config, thread_id, title=title)
+        rename_thread = getattr(client, "rename_thread", None)
+        if callable(rename_thread):
+            try:
+                response = rename_thread(thread_id, title)
+            except RuntimeError as exc:
+                output_stream.write(f"[idle] rename failed: {exc}\n")
+                output_stream.flush()
+                return
+            canonical_title = response.get("title") if isinstance(response, dict) else None
+            if isinstance(canonical_title, str) and canonical_title:
+                title = canonical_title
+        if not _rename_client_thread(config, thread_id, title):
+            remember_client_thread(config, thread_id, title=title)
         output_stream.write(f'[idle] renamed {thread_id} to "{title}"\n')
     output_stream.flush()
 

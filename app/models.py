@@ -146,6 +146,9 @@ class Thread(BaseModel):
     thread_id: str = Field(default_factory=lambda: str(uuid4()))
     tenant_id: str
     execution_user_id: str | None = None
+    title: str | None = None
+    title_source: Literal["generated", "semantic", "manual"] | None = None
+    title_updated_at: datetime | None = None
     skill_name: str | None = None
     skill_names: list[str] | None = None
     capability_profile: str | None = None
@@ -190,6 +193,8 @@ class CreateThreadResponse(BaseModel):
 class ThreadListItem(BaseModel):
     thread_id: str
     title: str
+    title_source: Literal["generated", "semantic", "manual"] | None = None
+    title_updated_at: datetime | None = None
     status: ThreadStatus
     skill_name: str | None = None
     skill_names: list[str] | None = None
@@ -214,6 +219,25 @@ class CreateThreadRequest(BaseModel):
     skill_names: list[str] | None = None
     capability_profile: str | None = None
     llm_profile: str | None = None
+
+
+class UpdateThreadTitleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=120)
+
+
+class GenerateThreadTitleResponse(BaseModel):
+    thread_id: str
+    status: Literal["updated", "skipped", "failed"]
+    title: str | None = None
+    reason: str | None = None
+
+
+class ThreadTitleResponse(BaseModel):
+    thread_id: str
+    title: str
+    title_source: Literal["generated", "manual"]
+    title_updated_at: datetime
 
 
 class ExecutionOptionItem(BaseModel):

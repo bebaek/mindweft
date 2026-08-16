@@ -46,6 +46,7 @@ from minigent_client.chat_commands import (  # noqa: F401 - preserve helper impo
     run_threads_create,
     run_threads_delete,
     run_threads_list,
+    run_threads_retitle,
     run_threads_show,
     state_scope_key,
     validate_thread_create_options,

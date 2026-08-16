@@ -87,7 +87,30 @@ curl -X POST http://127.0.0.1:8000/threads/<thread_id>/messages \
 
 curl -X POST http://127.0.0.1:8000/threads/<thread_id>/run \
   -H 'Authorization: Bearer dev-token'
+
+curl -X PATCH http://127.0.0.1:8000/threads/<thread_id>/title \
+  -H 'Authorization: Bearer dev-token' \
+  -H 'content-type: application/json' \
+  -d '{"title":"Investigate token refresh failures"}'
 ```
+
+Thread titles are stored canonically by the service. The first message supplies an immediate
+fallback title. After each successful run, Minigent asynchronously asks the thread's selected
+LLM for a concise semantic title using a bounded excerpt of user and assistant messages; tool
+payloads are excluded, `INSUFFICIENT_CONTEXT` leaves the fallback in place, and a successful
+semantic title is generated only once. `PATCH /threads/<thread_id>/title` sets a manual title
+that automatic generation never replaces. Thread lists also return the selected skill,
+capability profile, and LLM profile so clients can show those separately from the title.
+
+Backfill existing fallback titles explicitly so ordinary thread reads remain free of hidden LLM
+calls. Preview eligibility first, then run with bounded concurrency:
+
+```bash
+minigent threads retitle --dry-run --limit 50
+minigent threads retitle --limit 50 --concurrency 2
+```
+
+The operation is resumable: manual and semantic titles are skipped, as are empty threads.
 
 For live progress, use `POST /threads/<thread_id>/run/stream`. It returns newline-delimited
 JSON events for run start/completion, LLM requests/responses, tool calls/results, peer-agent

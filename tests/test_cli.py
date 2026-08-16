@@ -527,6 +527,22 @@ def test_threads_lists_locally_remembered_threads(
     monkeypatch: Any, tmp_path: Path, capsys: Any
 ) -> None:
     def urlopen(request: Any) -> _Response:
+        if "/threads?limit=" in request.full_url:
+            return _Response(
+                body={
+                    "threads": [
+                        {
+                            "thread_id": "thread-1",
+                            "title": "hello there",
+                            "message_count": 2,
+                            "updated_at": "2026-01-01T00:00:00Z",
+                        }
+                    ],
+                    "total": 1,
+                    "limit": 50,
+                    "offset": 0,
+                }
+            )
         if request.full_url.endswith("/threads"):
             return _Response(body={"thread_id": "thread-1"})
         if request.full_url.endswith("/threads/thread-1/messages"):
@@ -585,6 +601,22 @@ def test_resume_thread_id_remembers_selected_thread(
     monkeypatch: Any, tmp_path: Path, capsys: Any
 ) -> None:
     def urlopen(request: Any) -> _Response:
+        if "/threads?limit=" in request.full_url:
+            return _Response(
+                body={
+                    "threads": [
+                        {
+                            "thread_id": "thread-2",
+                            "title": "second thread",
+                            "message_count": 1,
+                            "updated_at": "2026-01-01T00:00:00Z",
+                        }
+                    ],
+                    "total": 1,
+                    "limit": 50,
+                    "offset": 0,
+                }
+            )
         if request.full_url.endswith("/threads/thread-2/messages"):
             return _Response(body=[{"role": "user", "content": "second thread"}])
         raise AssertionError(f"Unexpected request: {request.full_url}")

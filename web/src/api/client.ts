@@ -173,6 +173,8 @@ export type ThreadStatus = "idle" | "running" | "error";
 export interface ThreadListItem {
   thread_id: string;
   title: string;
+  title_source?: "generated" | "semantic" | "manual" | null;
+  title_updated_at?: string | null;
   status: ThreadStatus;
   skill_name?: string | null;
   capability_profile?: string | null;
@@ -1460,6 +1462,14 @@ export class MinigentApiClient {
     return this.#request<{ thread_id: string }>("/threads", {
       method: "POST",
       body: JSON.stringify(body),
+      signal,
+    });
+  }
+
+  renameThread(threadId: string, title: string, signal?: AbortSignal): Promise<{ thread_id: string; title: string; title_source: "manual"; title_updated_at: string }> {
+    return this.#request(`/threads/${encodeURIComponent(threadId)}/title`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
       signal,
     });
   }

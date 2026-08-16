@@ -344,6 +344,34 @@ class MinigentAPIClient:
             self._thread_id = thread_id
         return thread
 
+    def list_threads(self, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        response = self.request_json(
+            "GET",
+            f"{self._config.base_url}/threads?limit={limit}&offset={offset}",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent list-threads response must be an object")
+        return cast(dict[str, Any], response)
+
+    def generate_thread_title(self, thread_id: str) -> dict[str, Any]:
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/threads/{thread_id}/title/generate",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent generate-thread-title response must be an object")
+        return cast(dict[str, Any], response)
+
+    def rename_thread(self, thread_id: str, title: str) -> dict[str, Any]:
+        response = self.request_json(
+            "PATCH",
+            f"{self._config.base_url}/threads/{thread_id}/title",
+            payload={"title": title},
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Minigent rename-thread response must be an object")
+        return cast(dict[str, Any], response)
+
     def get_thread(self, thread_id: str) -> dict[str, Any]:
         messages = self.request_json(
             "GET",

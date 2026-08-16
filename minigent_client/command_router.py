@@ -28,6 +28,7 @@ from minigent_client.chat_commands import (
     run_threads_create,
     run_threads_delete,
     run_threads_list,
+    run_threads_retitle,
     run_threads_show,
 )
 from minigent_client.config import ClientConfig
@@ -62,9 +63,11 @@ def dispatch_command(
         return run_export(args, client, base_url, trace_id)
     if args.command == "threads":
         if args.threads_command in {None, "list"}:
-            return run_threads_list(args, base_url, trace_id)
+            return run_threads_list(args, client, base_url, trace_id)
         if args.threads_command == "create":
             return run_threads_create(args, client, base_url, trace_id)
+        if args.threads_command == "retitle":
+            return run_threads_retitle(args, client, trace_id)
         if args.threads_command == "show":
             return run_threads_show(args, client, trace_id)
         if args.threads_command == "delete":
