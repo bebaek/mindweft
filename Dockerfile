@@ -22,9 +22,10 @@ WORKDIR /app
 
 RUN groupadd --system app && useradd --system --gid app --create-home app
 
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
+COPY README.md ./
 COPY app ./app
 COPY --from=frontend-build /web/dist ./app/static/console
 COPY minigent_client ./minigent_client

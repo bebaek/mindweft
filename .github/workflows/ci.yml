@@ -97,8 +97,31 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Configure production image cache
+        id: image-cache
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          # A registry cache crosses the PR/main ref boundary. Fork PRs stay on
+          # GitHub's isolated cache because their token cannot write packages.
+          if [[ "$EVENT_NAME" != "pull_request" || "$HEAD_REPOSITORY" == "$GITHUB_REPOSITORY" ]]; then
+            {
+              echo 'from<<EOF'
+              echo "type=registry,ref=${IMAGE_NAME}:buildcache"
+              echo 'type=gha,scope=minigent'
+              echo 'EOF'
+              echo "to=type=registry,ref=${IMAGE_NAME}:buildcache,mode=max"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo 'from=type=gha,scope=minigent'
+              echo 'to=type=gha,mode=max,scope=minigent'
+            } >> "$GITHUB_OUTPUT"
+          fi
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -114,8 +137,8 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha,scope=minigent
-          cache-to: type=gha,mode=max,scope=minigent
+          cache-from: ${{ steps.image-cache.outputs.from }}
+          cache-to: ${{ steps.image-cache.outputs.to }}
       - name: Smoke-test production container
         env:
           SMOKE_IMAGE: minigent-production-smoke:${{ github.sha }}
