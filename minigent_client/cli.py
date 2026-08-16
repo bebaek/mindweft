@@ -59,6 +59,7 @@ from minigent_client.state import (
     normalize_prompt_command_name,
     state_dir_path,
     state_scope_key,
+    thread_history_items_from_api,
 )
 from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
 from minigent_client.thread_titles import (
@@ -445,6 +446,21 @@ def _rename_client_thread(config: ClientConfig, thread_id: str, title: str) -> b
 
 def _list_client_threads(config: ClientConfig):
     return PersistentClientState.load().list_threads(client_state_scope_key(config))
+
+
+def _refresh_client_threads(
+    client: RememberingMinigentAPIClient,
+    config: ClientConfig,
+) -> list[ThreadHistoryItem]:
+    try:
+        response = client.list_threads()
+    except (AttributeError, RuntimeError):
+        return _list_client_threads(config)
+    threads = thread_history_items_from_api(response)
+    state = PersistentClientState.load()
+    state.thread_history[client_state_scope_key(config)] = threads
+    state.save()
+    return threads
 
 
 def forget_remembered_client_thread(config: ClientConfig, thread_id: str) -> bool:
@@ -1521,7 +1537,7 @@ def _handle_chat_threads(
     if selector:
         _switch_to_thread(selector, client, config, output_stream)
         return
-    threads = _list_client_threads(config)
+    threads = _refresh_client_threads(client, config)
     if not threads:
         output_stream.write("[idle] no locally remembered threads\n")
         output_stream.flush()

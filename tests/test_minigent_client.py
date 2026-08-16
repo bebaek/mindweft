@@ -5479,6 +5479,52 @@ def test_minigent_client_cli_routes_chat_backend_without_minigent_client(
     assert calls[1] == ("once", True)
 
 
+def test_run_threads_retitle_dry_run_filters_manual_semantic_and_empty_threads(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from minigent_client.chat_commands import run_threads_retitle
+
+    class FakeClient:
+        def list_threads(self, *, limit: int = 50, offset: int = 0) -> dict[str, object]:
+            del limit, offset
+            return {
+                "total": 4,
+                "threads": [
+                    {
+                        "thread_id": "fallback",
+                        "title": "hey",
+                        "title_source": "generated",
+                        "message_count": 4,
+                    },
+                    {
+                        "thread_id": "manual",
+                        "title_source": "manual",
+                        "message_count": 4,
+                    },
+                    {
+                        "thread_id": "semantic",
+                        "title_source": "semantic",
+                        "message_count": 4,
+                    },
+                    {
+                        "thread_id": "empty",
+                        "title_source": "generated",
+                        "message_count": 0,
+                    },
+                ],
+            }
+
+    args = argparse.Namespace(limit=50, concurrency=2, dry_run=True, json=False)
+
+    result = run_threads_retitle(args, FakeClient(), None)  # type: ignore[arg-type]
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "eligible: fallback" in output
+    assert "inspected=4 eligible=1" in output
+    assert "skipped=3" in output
+
+
 def test_minigent_client_cli_delegates_one_shot_commands_to_one_shot_cli(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

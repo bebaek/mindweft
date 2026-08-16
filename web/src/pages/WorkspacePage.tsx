@@ -77,6 +77,11 @@ export function WorkspacePage() {
     queryKey: ["threads", authentication],
     queryFn: ({ signal }) => api.listThreads(50, signal),
     retry: false,
+    refetchInterval: (query) => {
+      const selected = query.state.data?.threads.find((thread) => thread.thread_id === selectedThreadId);
+      if (selected?.title_source !== "generated" || !selected.title_updated_at) return false;
+      return Date.now() - Date.parse(selected.title_updated_at) < 30_000 ? 5_000 : false;
+    },
   });
   const messages = useQuery({
     queryKey: ["messages", selectedThreadId, authentication],

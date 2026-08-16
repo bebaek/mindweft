@@ -5,6 +5,8 @@ import base64
 import mimetypes
 import secrets
 import sys
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Sequence, TextIO, cast
 
@@ -18,7 +20,7 @@ from minigent_client.output import (
     style_assistant_markdown,
     token_usage_from_event,
 )
-from minigent_client.state import ClientState, ThreadHistoryItem
+from minigent_client.state import ClientState, ThreadHistoryItem, thread_history_items_from_api
 from minigent_client.state import state_scope_key as build_state_scope_key
 from minigent_client.thread_titles import (
     is_placeholder_thread_title,
@@ -385,10 +387,19 @@ def _print_assistant_reply(reply: str) -> None:
 
 def run_threads_list(
     args: argparse.Namespace,
+    client: MinigentAPIClient,
     base_url: str,
     trace_id: str | None,
 ) -> int:
-    threads = list_remembered_threads(base_url, args)
+    try:
+        response = client.list_threads()
+    except RuntimeError:
+        threads = list_remembered_threads(base_url, args)
+    else:
+        threads = thread_history_items_from_api(response)
+        state = ClientState.load()
+        state.thread_history[state_scope_key(base_url, args)] = threads
+        state.save()
     if args.json:
         output: dict[str, Any] = {"threads": [item.to_dict() for item in threads]}
         if trace_id is not None:
@@ -478,6 +489,108 @@ def run_export(
         print(f"<!-- trace_id={trace_id} -->")
     print(_format_markdown_transcript(thread_id, messages), end="")
     return 0
+
+
+def run_threads_retitle(
+    args: argparse.Namespace,
+    client: MinigentAPIClient,
+    trace_id: str | None,
+) -> int:
+    limit = int(args.limit)
+    concurrency = int(args.concurrency)
+    if limit < 1 or limit > 10_000:
+        raise SystemExit("--limit must be between 1 and 10000")
+    if concurrency < 1 or concurrency > 8:
+        raise SystemExit("--concurrency must be between 1 and 8")
+
+    inspected: list[dict[str, Any]] = []
+    offset = 0
+    while len(inspected) < limit:
+        page_limit = min(100, limit - len(inspected))
+        response = client.list_threads(limit=page_limit, offset=offset)
+        page = response.get("threads")
+        if not isinstance(page, list) or not page:
+            break
+        inspected.extend(item for item in page if isinstance(item, dict))
+        offset += len(page)
+        total = response.get("total")
+        if isinstance(total, int) and offset >= total:
+            break
+
+    eligible = [
+        item
+        for item in inspected
+        if item.get("title_source") not in {"manual", "semantic"}
+        and isinstance(item.get("message_count"), int)
+        and item["message_count"] > 0
+        and isinstance(item.get("thread_id"), str)
+    ]
+    if args.dry_run:
+        results = [
+            {
+                "thread_id": item["thread_id"],
+                "status": "eligible",
+                "title": item.get("title"),
+            }
+            for item in eligible
+        ]
+    else:
+        results = []
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = {
+                executor.submit(client.generate_thread_title, str(item["thread_id"])): str(
+                    item["thread_id"]
+                )
+                for item in eligible
+            }
+            for future in as_completed(futures):
+                thread_id = futures[future]
+                try:
+                    result = future.result()
+                except RuntimeError as exc:
+                    result = {
+                        "thread_id": thread_id,
+                        "status": "failed",
+                        "reason": str(exc),
+                    }
+                results.append(result)
+        results.sort(key=lambda item: str(item.get("thread_id", "")))
+
+    skipped_before_request = len(inspected) - len(eligible)
+    counts = Counter(str(item.get("status", "unknown")) for item in results)
+    summary = {
+        "inspected": len(inspected),
+        "eligible": len(eligible),
+        "updated": counts["updated"],
+        "skipped": counts["skipped"] + skipped_before_request,
+        "failed": counts["failed"],
+        "insufficient_context": sum(
+            1 for item in results if item.get("reason") == "insufficient_context"
+        ),
+    }
+    if args.json:
+        output: dict[str, Any] = {
+            "dry_run": bool(args.dry_run),
+            "summary": summary,
+            "results": results,
+        }
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0 if not summary["failed"] else 1
+
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    for item in results:
+        detail = item.get("title") or item.get("reason") or ""
+        print(f"{item.get('status', 'unknown')}: {item.get('thread_id')}  {detail}".rstrip())
+    print(
+        "Summary: "
+        f"inspected={summary['inspected']} eligible={summary['eligible']} "
+        f"updated={summary['updated']} skipped={summary['skipped']} "
+        f"failed={summary['failed']} insufficient_context={summary['insufficient_context']}"
+    )
+    return 0 if not summary["failed"] else 1
 
 
 def run_threads_create(

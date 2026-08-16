@@ -176,6 +176,14 @@ class ThreadStore(Protocol):
         source: str,
     ) -> Thread: ...
 
+    def set_semantic_thread_title(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        title: str,
+    ) -> Thread: ...
+
     def set_thread_status(self, tenant_id: str, thread_id: str, status: ThreadStatus) -> Thread: ...
 
     def get_thread(self, tenant_id: str, thread_id: str) -> Thread: ...
@@ -467,6 +475,22 @@ class InMemoryThreadStore:
             thread = self._require_thread(tenant_id, thread_id)
             thread.title = title
             thread.title_source = "manual" if source == "manual" else "generated"
+            thread.title_updated_at = utc_now()
+            return thread.model_copy(deep=True)
+
+    def set_semantic_thread_title(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        title: str,
+    ) -> Thread:
+        with self._lock:
+            thread = self._require_thread(tenant_id, thread_id)
+            if thread.title_source in {"manual", "semantic"}:
+                return thread.model_copy(deep=True)
+            thread.title = title
+            thread.title_source = "semantic"
             thread.title_updated_at = utc_now()
             return thread.model_copy(deep=True)
 
@@ -1025,6 +1049,23 @@ class SQLiteThreadStore:
             thread = self._require_thread(conn, tenant_id, thread_id)
             thread.title = title
             thread.title_source = "manual" if source == "manual" else "generated"
+            thread.title_updated_at = utc_now()
+            self._save_thread(conn, thread)
+            return thread
+
+    def set_semantic_thread_title(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        title: str,
+    ) -> Thread:
+        with self._lock, self._connection() as conn:
+            thread = self._require_thread(conn, tenant_id, thread_id)
+            if thread.title_source in {"manual", "semantic"}:
+                return thread
+            thread.title = title
+            thread.title_source = "semantic"
             thread.title_updated_at = utc_now()
             self._save_thread(conn, thread)
             return thread

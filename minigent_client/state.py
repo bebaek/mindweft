@@ -288,6 +288,30 @@ def _parse_prompt_commands(raw_commands: dict[Any, Any]) -> dict[str, PromptComm
     return parsed
 
 
+def thread_history_items_from_api(response: object) -> list[ThreadHistoryItem]:
+    if not isinstance(response, dict) or not isinstance(response.get("threads"), list):
+        return []
+    items: list[ThreadHistoryItem] = []
+    for raw_item in response["threads"]:
+        if not isinstance(raw_item, dict):
+            continue
+        thread_id = raw_item.get("thread_id")
+        if not isinstance(thread_id, str) or not thread_id:
+            continue
+        title = raw_item.get("title")
+        updated_at = raw_item.get("updated_at")
+        message_count = raw_item.get("message_count")
+        items.append(
+            ThreadHistoryItem(
+                thread_id=thread_id,
+                title=title if isinstance(title, str) else None,
+                updated_at=updated_at if isinstance(updated_at, str) else None,
+                message_count=message_count if isinstance(message_count, int) else None,
+            )
+        )
+    return items
+
+
 def _parse_thread_history(raw_history: dict[Any, Any]) -> dict[str, list[ThreadHistoryItem]]:
     parsed: dict[str, list[ThreadHistoryItem]] = {}
     for key, raw_items in raw_history.items():

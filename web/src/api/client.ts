@@ -173,7 +173,7 @@ export type ThreadStatus = "idle" | "running" | "error";
 export interface ThreadListItem {
   thread_id: string;
   title: string;
-  title_source?: "generated" | "manual" | null;
+  title_source?: "generated" | "semantic" | "manual" | null;
   title_updated_at?: string | null;
   status: ThreadStatus;
   skill_name?: string | null;

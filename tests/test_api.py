@@ -1172,6 +1172,46 @@ def test_list_threads_returns_recent_thread_summaries() -> None:
     assert len(first["title"]) == 64
 
 
+def test_run_generates_semantic_title_after_concrete_exchange() -> None:
+    class SemanticTitleAdapter(LLMAdapter):
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            del tools
+            if messages[0].role == MessageRole.SYSTEM and "semantic title" in messages[0].content:
+                transcript = messages[-1].content
+                if "weather in Austin" in transcript:
+                    return LLMResponse(content="Austin weather today")
+                return LLMResponse(content="INSUFFICIENT_CONTEXT")
+            return LLMResponse(content="I can help with that.")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "openai", "model": "semantic-title-test"}
+
+    client = TestClient(
+        create_app(llm_adapter=SemanticTitleAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    for content in ("hey", "what's the weather in Austin today?"):
+        client.post(
+            f"/threads/{thread_id}/messages",
+            json={"content": content},
+            headers=AUTH_HEADERS,
+        )
+        response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+        assert response.status_code == 200
+
+    thread = client.get("/threads", headers=AUTH_HEADERS).json()["threads"][0]
+
+    assert thread["title"] == "Austin weather today"
+    assert thread["title_source"] == "semantic"
+    repeated = client.post(
+        f"/threads/{thread_id}/title/generate",
+        headers=AUTH_HEADERS,
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["status"] == "skipped"
+    assert repeated.json()["reason"] == "already_semantic"
+
+
 def test_update_thread_title_is_canonical_and_manual() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())

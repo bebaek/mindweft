@@ -291,6 +291,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Named LLM profile to bind to the thread.",
     )
 
+    threads_retitle_parser = threads_subparsers.add_parser(
+        "retitle", help="Generate semantic titles for existing threads."
+    )
+    threads_retitle_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List eligible threads without making LLM requests.",
+    )
+    threads_retitle_parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum threads to inspect (default: 50).",
+    )
+    threads_retitle_parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=2,
+        help="Maximum concurrent title requests (default: 2, max: 8).",
+    )
+
     threads_show_parser = threads_subparsers.add_parser("show", help="Show thread messages.")
     threads_show_parser.add_argument("thread_id", help="Thread ID to display.")
 
