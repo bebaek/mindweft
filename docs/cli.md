@@ -290,7 +290,7 @@ Available during interactive chat:
 | `/agent` | List configured agent presets. |
 | `/agent current` | Show the current client-side agent label. |
 | `/agent <preset>` | Create and switch to a new thread using that preset. |
-| `/threads` | List and interactively select a thread (TTY). |
+| `/threads` | List and interactively select a thread (TTY), ordered oldest-to-newest so recent threads remain next to the prompt. |
 | `/threads <selector>` | Switch to a thread by ID or unique title/date substring. |
 | `/switch <id>` | Switch to a specific thread. |
 | `/rename <title>` | Rename the current thread. |

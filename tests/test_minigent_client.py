@@ -5192,6 +5192,62 @@ def test_run_chat_loop_handles_cancel_command(
     assert "[idle] cleared run state for thread-running\n" in output_stream.getvalue()
 
 
+def test_handle_chat_threads_displays_recent_threads_last(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    threads = [
+        voice_cli.ThreadHistoryItem(
+            thread_id="thread-newest",
+            title="Newest thread",
+            updated_at="2026-05-20T02:00:00Z",
+            message_count=2,
+        ),
+        voice_cli.ThreadHistoryItem(
+            thread_id="thread-oldest",
+            title="Oldest thread",
+            updated_at="2026-05-20T01:00:00Z",
+            message_count=4,
+        ),
+    ]
+    output_stream = StringIO()
+    client = type("FakeClient", (), {"thread_id": "thread-newest"})()
+    monkeypatch.setattr(
+        voice_cli,
+        "_refresh_client_threads",
+        lambda client, config: threads,
+    )
+
+    voice_cli._handle_chat_threads(
+        "/threads",
+        client,
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+        output_stream,
+    )
+
+    output = output_stream.getvalue()
+    assert output.index("thread-oldest") < output.index("thread-newest")
+    assert output.endswith(
+        "[idle] * thread-newest  Newest thread  2026-05-20T02:00:00Z  messages=2\n"
+    )
+    assert [item.thread_id for item in threads] == ["thread-newest", "thread-oldest"]
+
+
+def test_write_numbered_thread_history_omits_idle_prefix() -> None:
+    output_stream = StringIO()
+    thread = voice_cli.ThreadHistoryItem(
+        thread_id="thread-newest",
+        title="Newest thread",
+        updated_at="2026-05-20T02:00:00Z",
+        message_count=2,
+    )
+
+    voice_cli._write_numbered_thread_history([thread], output_stream=output_stream)
+
+    assert output_stream.getvalue() == (
+        "1. thread-newest  Newest thread  2026-05-20T02:00:00Z  messages=2\n"
+    )
+
+
 def test_thread_history_selection_resolves_number_id_and_unique_search() -> None:
     threads = [
         voice_cli.ThreadHistoryItem(

@@ -1537,7 +1537,7 @@ def _handle_chat_threads(
     if selector:
         _switch_to_thread(selector, client, config, output_stream)
         return
-    threads = _refresh_client_threads(client, config)
+    threads = list(reversed(_refresh_client_threads(client, config)))
     if not threads:
         output_stream.write("[idle] no locally remembered threads\n")
         output_stream.flush()
@@ -1618,7 +1618,7 @@ def _write_numbered_thread_history(
     output_stream: ChatOutputStream,
 ) -> None:
     for index, item in enumerate(threads, start=1):
-        output_stream.write(f"[idle] {index}. {_format_thread_history_item(item)}\n")
+        output_stream.write(f"{index}. {_format_thread_history_item(item)}\n")
 
 
 def _resolve_thread_selection(selection: str, threads: list[ThreadHistoryItem]) -> str | None:
