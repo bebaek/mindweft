@@ -7,7 +7,7 @@ dependencies = [
   "cryptography>=50.0.0,<51",
   "fastapi>=0.141.1,<1.0",
   "httpx>=0.28,<1.0",
-  "httpx2>=2.9,<3",
+  "httpx2>=2.10.0,<3",
   "mcp>=2,<3",
   "opentelemetry-api>=1.44.0,<2.0",
   "opentelemetry-exporter-otlp-proto-http>=1.33,<2.0",
@@ -17,7 +17,7 @@ dependencies = [
   "prompt-toolkit>=3.0.53,<4.0",
   "pyjwt[crypto]>=2.13.0,<3.0",
   "python-dotenv>=1.0,<2.0",
-  "uvicorn>=0.52.1,<1.0",
+  "uvicorn>=0.52.3,<1.0",
 ]
 
 [project.scripts]
@@ -33,7 +33,7 @@ minigent-client = "minigent_client.cli:main"
 voice = [
   "faster-whisper>=1.1,<2.0",
   "numpy>=2.4.6,<3",
-  "piper-tts>=1.6.0,<2.0",
+  "piper-tts>=1.6.1,<2.0",
   "pvporcupine>=3.0,<5.0",
   "pyopen-wakeword>=1.1.0,<2.0",
   "silero-vad>=6.2.1,<7.0",
@@ -42,9 +42,9 @@ voice = [
 
 [dependency-groups]
 dev = [
-  "basedpyright>=1.39.9",
+  "basedpyright>=1.39.10",
   "pytest>=8.0,<10.0",
-  "ruff>=0.16.2,<1.0",
+  "ruff>=0.16.3,<1.0",
 ]
 
 [build-system]
