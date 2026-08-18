@@ -8,6 +8,8 @@ package version is `0.1.0`.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-18
+
 ### Added
 
 - Canonical `mindweft` Python distribution metadata.
