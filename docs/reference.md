@@ -432,7 +432,7 @@ local network.
 
 ## Local Agent Wrapper POC
 
-[`local-agent-wrapper`](/Users/burm/code/minigent/local-agent-wrapper) is a separate
+[`local-agent-wrapper`](../local-agent-wrapper) is a separate
 minimal package that exposes a local coding-agent CLI as a federated-agent-style HTTP
 member. It defaults to Pi Coding Agent and can be configured for OpenCode, Codex, or
 another CLI with a custom argv template. Mindweft can route tasks to it through the
@@ -443,7 +443,7 @@ Run it locally with an explicit workspace allowlist:
 ```bash
 cd local-agent-wrapper
 uv sync --dev
-AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
+AGENT_ALLOWED_WORKSPACES=/path/to/mindweft \
   uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
 ```
 
@@ -469,7 +469,7 @@ select the `peer_agent` backend:
 MINDWEFT_PEER_AGENTS='[{"name":"pi","base_url":"http://127.0.0.1:8010"}]'
 MINDWEFT_AGENT_BACKEND=peer_agent
 MINDWEFT_AGENT_BACKEND_PEER=pi
-MINDWEFT_AGENT_BACKEND_CWD=/Users/burm/code/minigent
+MINDWEFT_AGENT_BACKEND_CWD=/path/to/mindweft
 MINDWEFT_MCP_BROKER_BASE_URL=http://127.0.0.1:8000
 MINDWEFT_MCP_BROKER_DB_PATH=/data/mindweft-mcp-broker.db
 MINDWEFT_MCP_BROKER_ENABLED=true
@@ -489,7 +489,7 @@ config can use the same backend shape:
   "agent_backend": {
     "type": "peer_agent",
     "peer": "opencode",
-    "cwd": "/Users/burm/code/minigent",
+    "cwd": "/path/to/mindweft",
     "timeout_seconds": 180,
     "poll_interval_seconds": 1,
     "mcp_broker_enabled": true
@@ -566,7 +566,7 @@ Pi Coding Agent is the default peer profile. Install Pi separately and start the
 
 ```bash
 cd local-agent-wrapper
-AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
+AGENT_ALLOWED_WORKSPACES=/path/to/mindweft \
   uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
 ```
 
@@ -659,7 +659,7 @@ backend tasks with that same working directory. Override the target working dire
 `MINDWEFT_PI_WORKSPACE`:
 
 ```bash
-MINDWEFT_PI_WORKSPACE=/Users/burm/code/some-project ./scripts/dev_pi_peer_stack.sh
+MINDWEFT_PI_WORKSPACE=/path/to/some-project ./scripts/dev_pi_peer_stack.sh
 ```
 
 If the wrapper should allow multiple roots, set `AGENT_ALLOWED_WORKSPACES` with the
@@ -667,8 +667,8 @@ platform path separator, for example `:` on macOS/Linux, while keeping
 `MINDWEFT_PI_WORKSPACE` as the task working directory:
 
 ```bash
-MINDWEFT_PI_WORKSPACE=/Users/burm/code/some-project \
-AGENT_ALLOWED_WORKSPACES="/Users/burm/code/minigent:/Users/burm/code/some-project" \
+MINDWEFT_PI_WORKSPACE=/path/to/some-project \
+AGENT_ALLOWED_WORKSPACES="/path/to/mindweft:/path/to/some-project" \
   ./scripts/dev_pi_peer_stack.sh
 ```
 
@@ -722,8 +722,8 @@ MINDWEFT_RUN_PI_INTEGRATION_TESTS=true uv run pytest tests/test_pi_integration.p
 
 ## Docker Compose Deployment
 
-This repo now includes a production-oriented [`Dockerfile`](/Users/burm/code/minigent/Dockerfile)
-and [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) for running Mindweft on a remote
+This repo now includes a production-oriented [`Dockerfile`](../Dockerfile)
+and [`compose.yaml`](../compose.yaml) for running Mindweft on a remote
 host that already manages apps with Docker Compose.
 
 The runtime can persist thread state and message history in SQLite when
@@ -766,7 +766,7 @@ as the tool result content. For debugging the exact retained model-facing thread
 a rendered transcript that includes tool calls/results, and the same estimated thread-context
 token usage reported by streaming run events.
 
-Start from [.env.template](/Users/burm/code/minigent/.env.template), then set at least:
+Start from [.env.template](../.env.template), then set at least:
 
 ```dotenv
 MINDWEFT_AUTH_MODE=jwt
@@ -794,7 +794,7 @@ docker compose build
 docker compose up -d
 ```
 
-[`compose.yaml`](/Users/burm/code/minigent/compose.yaml) now reads the image name from
+[`compose.yaml`](../compose.yaml) now reads the image name from
 `MINDWEFT_IMAGE` (then legacy `MINIGENT_IMAGE`) and falls back to a local `mindweft:latest` tag.
 The service and data-volume keys remain `minigent` so in-place upgrades retain Compose DNS,
 operator commands, and existing volume data. Set the image in your
@@ -897,12 +897,12 @@ It builds `local-agent-wrapper/Dockerfile` with Pi enabled and pushes
 For remote deployments, set `MINDWEFT_IMAGE` in the deployment env file to the published
 tag you want to run, then use `docker compose pull` followed by `docker compose up -d`.
 
-[`compose.yaml`](/Users/burm/code/minigent/compose.yaml) uses whatever auth mode you set
+[`compose.yaml`](../compose.yaml) uses whatever auth mode you set
 in `.env`; it does not override `MINDWEFT_AUTH_MODE`. For local client testing,
 `static-tokens` is the easiest path. For remote exposure, prefer `jwt` and include the
 required JWT verification settings in `.env`.
 
-By default, [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) binds the API to
+By default, [`compose.yaml`](../compose.yaml) binds the API to
 `127.0.0.1:8000` so a same-host reverse proxy can publish it safely. If you need direct
 network exposure, change the port mapping deliberately instead of binding to all
 interfaces by default.
@@ -928,7 +928,7 @@ Kubernetes should use `/health/live` for liveness, `/health/ready` for readiness
 sidecars should retain their own readiness probes so Kubernetes removes the whole pod from Service
 endpoints when any required container is unready.
 
-[`compose.yaml`](/Users/burm/code/minigent/compose.yaml) mounts a named volume at
+[`compose.yaml`](../compose.yaml) mounts a named volume at
 `/data`, so `MINDWEFT_THREAD_DB_PATH=/data/mindweft-threads.db` survives container
 restarts.
 
@@ -1379,7 +1379,7 @@ are set:
 - `OPENROUTER_APP_NAME`
 - `PICOVOICE_ACCESS_KEY`
 
-You can put provider settings in a local `.env` file. Start from [.env.template](/Users/burm/code/minigent/.env.template).
+You can put provider settings in a local `.env` file. Start from [.env.template](../.env.template).
 
 ## Authentication
 
@@ -1591,7 +1591,7 @@ and non-string JSON values are left unchanged. Missing variables expand to an em
 This also applies when the JSON is loaded through `MINDWEFT_TENANT_EXECUTION_CONFIGS_FILE`.
 
 For a developer-oriented example that combines multiple skills with explicit capability profiles,
-see the commented block in [.env.template](/Users/burm/code/minigent/.env.template).
+see the commented block in [.env.template](../.env.template).
 
 #### Agent Skill instruction sources
 
@@ -2071,7 +2071,7 @@ Useful overrides:
 MINDWEFT_BASE_URL=http://127.0.0.1:8000 \
   uv run python scripts/demo_peer_agent.py \
   --peer pi \
-  --cwd /Users/burm/code/minigent \
+  --cwd /path/to/mindweft \
   --show-events \
   --prompt "Summarize this repository in one paragraph. Do not edit files."
 ```
@@ -2163,7 +2163,7 @@ Pass a custom containerized peer prompt the same way:
 ./scripts/demo_peer_agent_tool_compose.sh "Summarize this repository in one paragraph. Do not edit files."
 ```
 
-The Compose demo uses [compose.peer-demo.yaml](/Users/burm/code/minigent/compose.peer-demo.yaml).
+The Compose demo uses [compose.peer-demo.yaml](../compose.peer-demo.yaml).
 It exposes Mindweft on `127.0.0.1:8000`, keeps the local agent wrapper internal to the Compose
 network in its OpenCode profile, mounts this repository read-only at `/workspace/minigent`, and mounts
 `.opencode-container/data` plus `.opencode-container/config` as writable local OpenCode state.
@@ -2186,7 +2186,7 @@ ANTHROPIC_API_KEY=... ./scripts/demo_pi_backend_compose.sh
 # or OPENAI_API_KEY=... ./scripts/demo_pi_backend_compose.sh
 ```
 
-It uses [compose.pi-backend-demo.yaml](/Users/burm/code/minigent/compose.pi-backend-demo.yaml),
+It uses [compose.pi-backend-demo.yaml](../compose.pi-backend-demo.yaml),
 builds the wrapper image with Pi installed, enables Mindweft's MCP broker, mounts this
 repository read-only at `/workspace/minigent`, and stores Pi state in ignored
 `.pi-container/agent`. The demo runs `scripts/demo_pi_mcp_broker.py`, so a successful run
@@ -2316,7 +2316,7 @@ chore: redact secrets from MCP URL logging
 
 ## Demo Client
 
-With the server running, you can drive it with [scripts/demo_client.py](/Users/burm/code/minigent/scripts/demo_client.py):
+With the server running, you can drive it with [scripts/demo_client.py](../scripts/demo_client.py):
 
 ```bash
 uv run python scripts/demo_client.py "hello"

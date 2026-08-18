@@ -191,7 +191,7 @@ workspace root and default to the first root.
 ### Workspace scopes
 
 When a runner config exposes multiple workspace roots, you can define named scopes in
-`minigent.toml` and select one scope for the run. The MVP scope behavior is advisory: it
+`mindweft.toml` and select one scope for the run. The MVP scope behavior is advisory: it
 narrows the roots passed to the runner-generated MCP server commands and coding skill prompt,
 but it is not a standalone security boundary for already-running external tools. Keep the
 outer `coding.workspaces` list as the broad set of allowed roots; scope roots should sit
@@ -200,10 +200,10 @@ inside those configured roots.
 ```toml
 [coding]
 workspaces = ["/Users/example/code", "/Users/example/dotfiles"]
-default_workspace_scope = "minigent"
+default_workspace_scope = "mindweft"
 
-[coding.workspace_scopes.minigent]
-roots = ["/Users/example/code/minigent"]
+[coding.workspace_scopes.mindweft]
+roots = ["/Users/example/code/mindweft"]
 description = "Mindweft runtime and coding workspace development"
 
 [coding.workspace_scopes.dotfiles]

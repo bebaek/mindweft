@@ -62,7 +62,7 @@ OpenCode account uses a different model.
 ```bash
 cd local-agent-wrapper
 uv sync --dev
-AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
+AGENT_ALLOWED_WORKSPACES=/path/to/mindweft \
   uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
 ```
 
@@ -90,14 +90,14 @@ Codex compatibility:
 
 ```bash
 AGENT_RUNTIME=codex \
-AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
+AGENT_ALLOWED_WORKSPACES=/path/to/mindweft \
   uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
 ```
 
 Pi Coding Agent uses Pi's non-interactive JSON event mode by default:
 
 ```bash
-AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
+AGENT_ALLOWED_WORKSPACES=/path/to/mindweft \
   uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
 ```
 
@@ -124,7 +124,7 @@ Custom CLI example:
 ```bash
 AGENT_COMMAND="my-agent" \
 AGENT_ARGS_TEMPLATE="--workspace {cwd} --message {prompt}" \
-AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
+AGENT_ALLOWED_WORKSPACES=/path/to/mindweft \
   uv run uvicorn local_agent_wrapper.app:app --host 127.0.0.1 --port 8010
 ```
 
@@ -148,7 +148,7 @@ Example:
 ```bash
 curl -s http://127.0.0.1:8010/tasks \
   -H 'content-type: application/json' \
-  -d '{"task_id":"task_0123456789abcdef0123456789abcdef","cwd":"/Users/burm/code/minigent","prompt":"Summarize this repository in one paragraph."}'
+  -d '{"task_id":"task_0123456789abcdef0123456789abcdef","cwd":"/path/to/mindweft","prompt":"Summarize this repository in one paragraph."}'
 ```
 
 `task_id` is optional for standalone callers, but coordinating runtimes should generate a
@@ -195,7 +195,7 @@ Useful overrides:
 
 ```bash
 uv run python scripts/demo_task.py \
-  --cwd /Users/burm/code/minigent \
+  --cwd /path/to/mindweft \
   --prompt "List the main runtime components. Do not edit files."
 ```
 
