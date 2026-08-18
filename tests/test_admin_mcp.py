@@ -1,16 +1,22 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from mcp.types import LATEST_PROTOCOL_VERSION
 
-from app.admin_mcp import ADMIN_CHAT_SETUP_TOOL
+from app.admin_mcp import (
+    ADMIN_CHAT_SETUP_TOOL,
+    LEGACY_ADMIN_TOOL_ALIASES,
+    build_admin_chat_tool_registry,
+)
 from app.admin_mutations import AdminMutationService
 from app.admin_store import SQLiteTenantConfigStore
 from app.execution import ADMIN_EXECUTION_CONFIG_KEY
 from app.llm import MockLLMAdapter
 from app.main import create_app
+from app.models import Principal
 from app.tools import build_local_tool_registry
 
 ADMIN_HEADERS = {
@@ -178,7 +184,19 @@ def test_admin_mutation_confirmation_supports_domains_entitlements_and_rejects_s
             )
 
 
-def test_admin_chat_can_call_minigent_admin_tools_in_process() -> None:
+def test_admin_chat_registry_advertises_only_canonical_mindweft_tools() -> None:
+    registry = build_admin_chat_tool_registry(
+        SimpleNamespace(state=SimpleNamespace(admin_store=None)),
+        Principal(user_id="admin-1", tenant_id="tenant-1", is_admin=True),
+    )
+    names = {spec.name for spec in registry.specs()}
+
+    assert set(LEGACY_ADMIN_TOOL_ALIASES.values()) <= names
+    assert all(name.startswith("mindweft_admin_") for name in names)
+    assert not names.intersection(LEGACY_ADMIN_TOOL_ALIASES)
+
+
+def test_admin_chat_can_call_mindweft_admin_tools_in_process() -> None:
     app = create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     with TestClient(app) as client:
         admin_reply = _chat_with_tool(client, ADMIN_HEADERS, ADMIN_CHAT_SETUP_TOOL)

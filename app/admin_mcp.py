@@ -26,9 +26,23 @@ from app.health import database_readiness_checks
 from app.models import Principal
 from app.tools import ToolExecutionContext, ToolRegistry
 
-ADMIN_CHAT_SETUP_TOOL = "minigent_admin_get_setup_status"
-ADMIN_CHAT_TENANT_TOOL = "minigent_admin_diagnose_tenant_setup"
-ADMIN_CHAT_CATALOG_TOOL = "minigent_admin_list_mcp_server_catalog_access"
+ADMIN_CHAT_SETUP_TOOL = "mindweft_admin_get_setup_status"
+ADMIN_CHAT_TENANT_TOOL = "mindweft_admin_diagnose_tenant_setup"
+ADMIN_CHAT_CATALOG_TOOL = "mindweft_admin_list_mcp_server_catalog_access"
+ADMIN_PROPOSE_TENANT_UPDATE_TOOL = "mindweft_admin_propose_tenant_update"
+ADMIN_PROPOSE_ENTITLEMENTS_TOOL = "mindweft_admin_propose_entitlements"
+ADMIN_PROPOSE_DOMAIN_ADD_TOOL = "mindweft_admin_propose_domain_add"
+ADMIN_CONFIRM_MUTATION_TOOL = "mindweft_admin_confirm_mutation"
+
+LEGACY_ADMIN_TOOL_ALIASES = {
+    "minigent_admin_get_setup_status": ADMIN_CHAT_SETUP_TOOL,
+    "minigent_admin_diagnose_tenant_setup": ADMIN_CHAT_TENANT_TOOL,
+    "minigent_admin_list_mcp_server_catalog_access": ADMIN_CHAT_CATALOG_TOOL,
+    "minigent_admin_propose_tenant_update": ADMIN_PROPOSE_TENANT_UPDATE_TOOL,
+    "minigent_admin_propose_entitlements": ADMIN_PROPOSE_ENTITLEMENTS_TOOL,
+    "minigent_admin_propose_domain_add": ADMIN_PROPOSE_DOMAIN_ADD_TOOL,
+    "minigent_admin_confirm_mutation": ADMIN_CONFIRM_MUTATION_TOOL,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +52,7 @@ class AdminMCPRequestContext:
 
 
 _request_context: ContextVar[AdminMCPRequestContext | None] = ContextVar(
-    "minigent_admin_mcp_request_context",
+    "mindweft_admin_mcp_request_context",
     default=None,
 )
 
@@ -346,7 +360,7 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
         catalog_handler,
     )
     registry.register(
-        "minigent_admin_propose_tenant_update",
+        ADMIN_PROPOSE_TENANT_UPDATE_TOOL,
         "Propose a tenant metadata change. This never writes; return the diff for confirmation.",
         {
             "type": "object",
@@ -357,7 +371,7 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
         propose_tenant_update_handler,
     )
     registry.register(
-        "minigent_admin_propose_entitlements",
+        ADMIN_PROPOSE_ENTITLEMENTS_TOOL,
         "Propose tenant feature and limit changes; this never writes until confirmed.",
         {
             "type": "object",
@@ -372,7 +386,7 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
         propose_entitlements_handler,
     )
     registry.register(
-        "minigent_admin_propose_domain_add",
+        ADMIN_PROPOSE_DOMAIN_ADD_TOOL,
         "Propose adding a tenant domain; this never writes until confirmed.",
         {
             "type": "object",
@@ -383,7 +397,7 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
         propose_domain_handler,
     )
     registry.register(
-        "minigent_admin_confirm_mutation",
+        ADMIN_CONFIRM_MUTATION_TOOL,
         "Apply one previously proposed mutation after explicit administrator confirmation.",
         {
             "type": "object",
@@ -393,6 +407,8 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
         },
         confirm_mutation_handler,
     )
+    for alias, target in LEGACY_ADMIN_TOOL_ALIASES.items():
+        registry.register_alias(alias, target)
     return registry
 
 

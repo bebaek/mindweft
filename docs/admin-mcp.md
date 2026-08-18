@@ -50,11 +50,16 @@ platform-admin surface.
 The chat-visible names are deliberately namespaced so they cannot be confused with ordinary
 tenant tools:
 
-- `minigent_admin_get_setup_status`
-- `minigent_admin_diagnose_tenant_setup`
-- `minigent_admin_list_mcp_server_catalog_access`
+- `mindweft_admin_get_setup_status`
+- `mindweft_admin_diagnose_tenant_setup`
+- `mindweft_admin_list_mcp_server_catalog_access`
+- `mindweft_admin_propose_tenant_update`
+- `mindweft_admin_propose_entitlements`
+- `mindweft_admin_propose_domain_add`
+- `mindweft_admin_confirm_mutation`
 
-These tools are present only when the principal has `is_admin: true`. The externally callable MCP
+Legacy `minigent_admin_*` calls remain accepted as unadvertised compatibility aliases. These
+tools are present only when the principal has `is_admin: true`. The externally callable MCP
 names remain unchanged for compatibility. Platform admins do not need a tenant record, tenant
 membership, or tenant execution configuration to start this chat. Configure the dedicated
 **Platform admin execution** panel in the platform administration screen before relying on natural
@@ -72,7 +77,7 @@ DELETE /admin/execution-config
 The encrypted admin store preserves write-only secrets using the same redaction and replacement
 rules as tenant execution configuration. Saved platform-admin configuration takes effect on the
 next chat run. If it is absent, deployment-level environment or unified `minigent.toml` execution
-settings remain the fallback; configure their normal `MINIGENT_LLM_*` or `[llm]` settings for an
+settings remain the fallback; configure their normal `MINDWEFT_LLM_*` or `[llm]` settings for an
 out-of-band bootstrap. Ordinary tenant users still fail closed in strict `store` mode.
 
 This first surface deliberately cannot modify tenant execution config, MCP catalog policies,

@@ -116,7 +116,7 @@ as `peer.task.created`/`peer.task.poll`/`peer.task.event`/`peer.task.completed`,
 streaming: Mindweft forwards event type/status/tool metadata, emits only allowlisted tool
 argument summaries, and strips raw tool arguments plus nested message content from peer agent
 JSON events. Configure the peer tool argument summary allowlist with
-`MINIGENT_PEER_TOOL_ARG_ALLOWLIST`, either as JSON such as
+`MINDWEFT_PEER_TOOL_ARG_ALLOWLIST`, either as JSON such as
 `{"read":["path","limit"],"grep":["pattern","path"]}` or as
 `read:path,limit;grep:pattern,path`; set it to `off` to suppress argument summaries.
 For local development only, set it to `all` or `*` to summarize every argument key after
@@ -556,7 +556,7 @@ NDJSON run events, including `quality.sanitized`, `quality.remote_request`, and
 The same local llama.cpp path is available as an opt-in integration test:
 
 ```bash
-MINIGENT_RUN_LLAMA_CPP_INTEGRATION_TESTS=true \
+MINDWEFT_RUN_LLAMA_CPP_INTEGRATION_TESTS=true \
   LLAMA_CPP_BASE_URL=http://127.0.0.1:8080/v1 \
   LLAMA_CPP_MODEL=local-model \
   uv run pytest tests/test_demo_local_quality_integration.py
@@ -583,16 +583,16 @@ model/provider flags, fully custom tool narrowing, or custom Pi skills/extension
 specific peer deployment; a custom args template replaces the built-in Pi profile and
 therefore must include any desired MCP extension wiring itself.
 
-Set `MINIGENT_MCP_BROKER_ENABLED=false` or `agent_backend.mcp_broker_enabled=false` if
+Set `MINDWEFT_MCP_BROKER_ENABLED=false` or `agent_backend.mcp_broker_enabled=false` if
 the peer agent should run without Mindweft-brokered MCP tools.
 
 When the peer-agent backend runs, Mindweft mints a short-lived MCP broker session for
 that thread and passes these environment variables to the wrapper task:
 
 ```dotenv
-MINIGENT_MCP_BROKER_URL=http://127.0.0.1:8000/mcp/peer/<session>
-MINIGENT_MCP_BROKER_TOKEN=<short-lived-token>
-MINIGENT_MCP_BROKER_SESSION=<session>
+MINDWEFT_MCP_BROKER_URL=http://127.0.0.1:8000/mcp/peer/<session>
+MINDWEFT_MCP_BROKER_TOKEN=<short-lived-token>
+MINDWEFT_MCP_BROKER_SESSION=<session>
 ```
 
 The broker exposes the thread's approved Mindweft tools through MCP JSON-RPC and
@@ -656,24 +656,24 @@ without launching a demo prompt, use:
 
 By default, the wrapper allows tasks only in the Mindweft checkout and Mindweft sends peer
 backend tasks with that same working directory. Override the target working directory with
-`MINIGENT_PI_WORKSPACE`:
+`MINDWEFT_PI_WORKSPACE`:
 
 ```bash
-MINIGENT_PI_WORKSPACE=/Users/burm/code/some-project ./scripts/dev_pi_peer_stack.sh
+MINDWEFT_PI_WORKSPACE=/Users/burm/code/some-project ./scripts/dev_pi_peer_stack.sh
 ```
 
 If the wrapper should allow multiple roots, set `AGENT_ALLOWED_WORKSPACES` with the
 platform path separator, for example `:` on macOS/Linux, while keeping
-`MINIGENT_PI_WORKSPACE` as the task working directory:
+`MINDWEFT_PI_WORKSPACE` as the task working directory:
 
 ```bash
-MINIGENT_PI_WORKSPACE=/Users/burm/code/some-project \
+MINDWEFT_PI_WORKSPACE=/Users/burm/code/some-project \
 AGENT_ALLOWED_WORKSPACES="/Users/burm/code/minigent:/Users/burm/code/some-project" \
   ./scripts/dev_pi_peer_stack.sh
 ```
 
 Other useful overrides are `MINDWEFT_HOST`, `MINDWEFT_PORT`,
-`MINIGENT_PI_WRAPPER_PORT`, `MINIGENT_PI_PEER_NAME`, `AGENT_COMMAND`,
+`MINDWEFT_PI_WRAPPER_PORT`, `MINDWEFT_PI_PEER_NAME`, `AGENT_COMMAND`,
 `AGENT_RUNTIME`, and `AGENT_PI_TOOLS`. The development stack defaults
 `AGENT_PI_TOOLS` to `read,grep,find,ls,write,edit,bash`.
 
@@ -686,7 +686,7 @@ uv run python scripts/demo_pi_mcp_broker.py
 
 In the Mindweft API logs, look for `mcp_broker.tool_call` to confirm the peer called a
 tool through the broker rather than only echoing the prompt text. The Pi stack script
-enables the MCP broker by default; set `MINIGENT_MCP_BROKER_ENABLED=false` to disable it.
+enables the MCP broker by default; set `MINDWEFT_MCP_BROKER_ENABLED=false` to disable it.
 
 A Docker Compose variant is available for the Pi backend plus MCP broker path. It builds
 the wrapper with `INSTALL_PI=true`, mounts this repository read-only, and keeps Pi state in
@@ -716,8 +716,8 @@ The wrapper has opt-in real CLI integration tests:
 
 ```bash
 cd local-agent-wrapper
-MINIGENT_RUN_OPENCODE_INTEGRATION_TESTS=true uv run pytest tests/test_opencode_integration.py
-MINIGENT_RUN_PI_INTEGRATION_TESTS=true uv run pytest tests/test_pi_integration.py
+MINDWEFT_RUN_OPENCODE_INTEGRATION_TESTS=true uv run pytest tests/test_opencode_integration.py
+MINDWEFT_RUN_PI_INTEGRATION_TESTS=true uv run pytest tests/test_pi_integration.py
 ```
 
 ## Docker Compose Deployment
@@ -1758,7 +1758,7 @@ audit records.
 
 When `MINDWEFT_TENANT_REGISTRY_REQUIRED=true`, public thread endpoints reject authenticated principals whose `tenant_id` is missing from the registry or not `active`. The default is `false` to preserve local and migration workflows. When `MINDWEFT_TENANT_USER_REGISTRY_REQUIRED=true`, request-time tenant context resolution also requires an active tenant membership for `(tenant_id, user_id)` and populates membership fields such as `membership_id`, `user_role`, and `user_status` on `TenantContext`.
 
-Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. Admin deletion removes a thread and its messages and writes an audit record. The prune endpoint deletes matching tenant threads with `updated_at` older than required `updated_before`, with optional `status`, `profile`, and `skill` filters. Add `dry_run=true` to preview `candidate_thread_ids` without deleting threads or writing audit records. The audit endpoint lists deletion/prune records and tenant mutation records with actor, action, affected count, thread IDs, optional `resource_type`/`resource_id`, optional `old_values`/`new_values`, optional metadata, timestamp, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `action`, `actor`, `created_after`, and `created_before` query parameters. Tenant audit payloads redact secret-like keys such as `token`, `secret`, `key`, `authorization`, and `password`. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect and manage persisted threads and audit records after process restarts.
+Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. Admin deletion removes a thread and its messages and writes an audit record. The prune endpoint deletes matching tenant threads with `updated_at` older than required `updated_before`, with optional `status`, `profile`, and `skill` filters. Add `dry_run=true` to preview `candidate_thread_ids` without deleting threads or writing audit records. The audit endpoint lists deletion/prune records and tenant mutation records with actor, action, affected count, thread IDs, optional `resource_type`/`resource_id`, optional `old_values`/`new_values`, optional metadata, timestamp, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `action`, `actor`, `created_after`, and `created_before` query parameters. Tenant audit payloads redact secret-like keys such as `token`, `secret`, `key`, `authorization`, and `password`. With `MINDWEFT_THREAD_DB_PATH` configured, these endpoints can inspect and manage persisted threads and audit records after process restarts.
 
 The React administration workspace exposes these thread operations with status/profile/skill/date
 filters, tenant-scoped detail views for compacted context and retained messages, a dry-run preview
@@ -2128,7 +2128,7 @@ uv run python scripts/check_peer_agent_demo.py --check-running
 The same end-to-end path is available as an opt-in integration test:
 
 ```bash
-MINIGENT_RUN_PEER_AGENT_INTEGRATION_TESTS=true \
+MINDWEFT_RUN_PEER_AGENT_INTEGRATION_TESTS=true \
   uv run pytest tests/test_peer_agent_tool_integration.py
 ```
 
@@ -2139,7 +2139,7 @@ and a usable local OpenCode login because that demo selects the wrapper's OpenCo
 inside the sidecar:
 
 ```bash
-MINIGENT_RUN_COMPOSE_INTEGRATION_TESTS=true \
+MINDWEFT_RUN_COMPOSE_INTEGRATION_TESTS=true \
   uv run pytest tests/test_peer_agent_tool_compose_integration.py
 ```
 

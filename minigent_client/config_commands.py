@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 
-from minigent_client.api_client import MinigentAPIClient
+from minigent_client.api_client import MindweftAPIClient
 from minigent_client.config_diagnostics import (  # noqa: F401 - preserve helper import surface.
     DiagnosticCheck,
     _coding_config_checks,
@@ -206,7 +206,7 @@ CONFIG_PROFILE_TEMPLATES = {
 }
 
 
-def run_config(client: MinigentAPIClient, trace_id: str | None) -> int:
+def run_config(client: MindweftAPIClient, trace_id: str | None) -> int:
     response = client.config()
     if trace_id is not None:
         response = {**response, "trace_id": trace_id}
@@ -234,7 +234,7 @@ def run_config_print(args: argparse.Namespace) -> int:
 
 def run_config_export(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     server_config = client.config(export=True)
@@ -249,7 +249,7 @@ def run_config_export(
         _append_export_comment(
             export,
             "This API-only export includes tenant MCP gateway URLs but not coding runner launch specs; "
-            "use --local-coding or minigent-coding-workspace config export for a restartable coding stack.",
+            "use --local-coding or mindweft-coding-workspace config export for a restartable coding stack.",
         )
     if not getattr(args, "include_runtime", False):
         export.pop("runtime", None)

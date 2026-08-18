@@ -3858,11 +3858,11 @@ def test_minigent_client_cli_handles_keyboard_interrupt(
     )
     monkeypatch.setattr(
         voice_cli,
-        "MinigentAPIClient",
+        "MindweftAPIClient",
         lambda config, output_stream=None: object(),
     )
     monkeypatch.setattr(voice_cli, "build_speech_output", lambda config: object())
-    monkeypatch.setattr(voice_cli, "MinigentClientRuntime", FakeVoiceDaemon)
+    monkeypatch.setattr(voice_cli, "MindweftClientRuntime", FakeVoiceDaemon)
 
     exit_code = voice_cli.main(["--backend", "stdin"])
 
@@ -3906,7 +3906,7 @@ def test_run_chat_loop_expands_custom_slash_command(
             events.append(("run", "rewritten"))
             return ("rewritten", None)
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
     monkeypatch.setattr("minigent_client.state.state_file_path", lambda: state_path)
@@ -3951,7 +3951,7 @@ def test_run_chat_loop_reconciles_private_actions(monkeypatch: pytest.MonkeyPatc
             discarded.append((consent_id, thread_id))
             return {"consent_id": consent_id, "state": "executing", "discarded": True}
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -3986,7 +3986,7 @@ def test_run_chat_loop_handles_multiple_turns_and_blank_lines(
             events.append(("run", reply))
             return (reply, None)
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -4030,7 +4030,7 @@ def test_run_chat_loop_image_command_queues_next_message(
         def run_thread(self) -> tuple[str, dict[str, object] | None]:
             return ("it is tiny", None)
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -4089,7 +4089,7 @@ def test_run_chat_loop_image_paste_command_queues_clipboard_image(
         def run_thread(self) -> tuple[str, dict[str, object] | None]:
             return ("clipboard reply", None)
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli, "_image_parts_from_macos_clipboard", fake_clipboard_image)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
@@ -4616,7 +4616,7 @@ def test_run_chat_loop_continues_after_backend_error(
         def run_thread(self) -> tuple[str, dict[str, object] | None]:
             return ("good reply", None)
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -4651,7 +4651,7 @@ def test_run_chat_loop_summarizes_stream_errors_already_rendered(
                 status_code=502,
             )
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -4719,7 +4719,7 @@ def test_run_chat_loop_remembers_thread_after_successful_turn(
             return ("reply", None)
 
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -4806,7 +4806,7 @@ def test_run_chat_loop_resume_last_forgets_missing_thread_and_reports_error(
         def run_thread(self) -> tuple[str, dict[str, object] | None]:
             raise AssertionError("the thread must not run after a missing resumed thread")
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -4850,7 +4850,7 @@ def test_run_chat_loop_honors_once(
         def run_thread(self) -> tuple[str, dict[str, object] | None]:
             return ("first reply", None)
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -4892,7 +4892,7 @@ def test_run_chat_loop_ignores_blank_interactive_submit(
             except StopIteration as exc:
                 raise EOFError from exc
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(
         voice_cli,
         "_build_chat_prompt_session",
@@ -4957,7 +4957,7 @@ def test_run_chat_loop_rebuilds_prompt_history_after_thread_switch(
         history_thread_ids.append(history_thread_id)
         return FakePromptSession(history_thread_id)
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli, "_build_chat_prompt_session", fake_build_chat_prompt_session)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -4985,7 +4985,7 @@ def test_run_chat_loop_handles_local_chat_commands(
         def send_user_message(self, content: str) -> dict[str, str]:
             raise AssertionError(f"local chat command should not be sent: {content}")
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -5046,7 +5046,7 @@ def test_run_chat_loop_handles_llm_profile_command(
             raise AssertionError(f"local chat command should not be sent: {content}")
 
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -5096,7 +5096,7 @@ def test_run_chat_loop_handles_agent_command(
             raise AssertionError(f"local chat command should not be sent: {content}")
 
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -5186,7 +5186,7 @@ def test_run_chat_loop_handles_server_agent_command(
             raise AssertionError(f"local chat command should not be sent: {content}")
 
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -5223,7 +5223,7 @@ def test_run_chat_loop_handles_cancel_command(
         def send_user_message(self, content: str) -> dict[str, str]:
             raise AssertionError(f"local chat command should not be sent: {content}")
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -5355,7 +5355,7 @@ def test_run_chat_loop_handles_thread_shell_commands(
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(voice_cli.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -5401,7 +5401,7 @@ def test_run_chat_loop_handles_editor_command(
 
     monkeypatch.setenv("EDITOR", "fake-editor --wait")
     monkeypatch.setattr(voice_cli.subprocess, "run", fake_run)
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -5445,7 +5445,7 @@ def test_run_chat_loop_handles_editor_atomic_save(
 
     monkeypatch.setenv("EDITOR", "fake-editor")
     monkeypatch.setattr(voice_cli.subprocess, "run", fake_run)
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -5472,7 +5472,7 @@ def test_run_chat_loop_handles_keyboard_interrupt(
         def __init__(self, config: ClientConfig, output_stream=None) -> None:
             del config, output_stream
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", InterruptingInput())
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -5501,7 +5501,7 @@ def test_run_chat_loop_interrupt_during_run_aborts_turn_and_stays_in_chat(
         def run_thread(self) -> tuple[str, dict[str, object] | None]:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr(voice_cli, "MinigentAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
     monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
     monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
 
@@ -5536,7 +5536,7 @@ def test_minigent_client_cli_routes_chat_subcommand_without_minigent_client(
     monkeypatch.setattr(voice_cli, "run_chat_loop", fake_run_chat_loop)
     monkeypatch.setattr(
         voice_cli,
-        "MinigentClientRuntime",
+        "MindweftClientRuntime",
         lambda **kwargs: (_ for _ in ()).throw(
             AssertionError("MinigentClientRuntime should not be built for chat")
         ),
@@ -5565,7 +5565,7 @@ def test_minigent_client_cli_routes_chat_backend_without_minigent_client(
     monkeypatch.setattr(voice_cli, "run_chat_loop", fake_run_chat_loop)
     monkeypatch.setattr(
         voice_cli,
-        "MinigentClientRuntime",
+        "MindweftClientRuntime",
         lambda **kwargs: (_ for _ in ()).throw(
             AssertionError("MinigentClientRuntime should not be built for chat")
         ),

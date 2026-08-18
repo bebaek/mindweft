@@ -9,7 +9,7 @@ Mindweft has two related but independent sources of tenant state:
   entitlements, and administrative ownership.
 
 A tenant can therefore have an execution configuration without having a row in the
-admin store. For example, a tenant declared by `MINIGENT_TENANT_EXECUTION_CONFIGS`
+admin store. For example, a tenant declared by `MINDWEFT_TENANT_EXECUTION_CONFIGS`
 can resolve execution successfully while admin metadata mutations correctly return
 `404` because the tenant is not registered.
 

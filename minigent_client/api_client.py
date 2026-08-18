@@ -9,7 +9,7 @@ from dataclasses import replace
 from typing import Any, Iterator, TextIO, cast
 
 from minigent_client.config import ClientConfig
-from minigent_client.errors import MinigentAPIError
+from minigent_client.errors import MindweftAPIError
 from minigent_client.output import StreamProgressRenderer, TokenMode
 
 
@@ -21,7 +21,7 @@ def _resolve_token_mode(config_value: object, override: TokenMode | None) -> Tok
     return "auto"
 
 
-class MinigentAPIClient:
+class MindweftAPIClient:
     def __init__(
         self,
         config: ClientConfig,
@@ -804,7 +804,7 @@ class MinigentAPIClient:
         except TimeoutError as exc:
             raise _timeout_error(method, url, str(exc)) from exc
         except json.JSONDecodeError as exc:
-            raise MinigentAPIError(
+            raise MindweftAPIError(
                 "The Mindweft API returned malformed streaming data.",
                 category="malformed_response",
                 detail=f"{method} {url} returned invalid NDJSON: {exc}",
@@ -844,7 +844,7 @@ class MinigentAPIClient:
         except TimeoutError as exc:
             raise _timeout_error(method, url, str(exc)) from exc
         except json.JSONDecodeError as exc:
-            raise MinigentAPIError(
+            raise MindweftAPIError(
                 "The Mindweft API returned malformed JSON.",
                 category="malformed_response",
                 detail=f"{method} {url} returned invalid JSON: {exc}",
@@ -868,6 +868,10 @@ class MinigentAPIClient:
         if self._config.location:
             return f"location={self._config.location}"
         return None
+
+
+# Backward-compatible public alias.
+MinigentAPIClient = MindweftAPIClient
 
 
 def _extract_error_detail(body: str) -> object:
@@ -913,26 +917,26 @@ def _api_error_from_status(
     detail: object,
     *,
     technical_detail: str,
-) -> MinigentAPIError:
+) -> MindweftAPIError:
     detail_text = _detail_to_text(detail)
     structured_message = _structured_error_message(detail)
     structured_type = _structured_error_type(detail)
     if structured_message is not None:
-        return MinigentAPIError(
+        return MindweftAPIError(
             structured_message,
             category=structured_type or "request_failed",
             detail=technical_detail,
             status_code=status_code,
         )
     if status_code == 401:
-        return MinigentAPIError(
-            "Authentication failed. Check MINIGENT_API_TOKEN or your Mindweft principal headers.",
+        return MindweftAPIError(
+            "Authentication failed. Check MINDWEFT_API_TOKEN or your Mindweft principal headers.",
             category="authentication_failed",
             detail=technical_detail,
             status_code=status_code,
         )
     if status_code == 403:
-        return MinigentAPIError(
+        return MindweftAPIError(
             "Permission denied. Your Mindweft principal is not allowed to perform this action.",
             category="permission_denied",
             detail=technical_detail,
@@ -942,14 +946,14 @@ def _api_error_from_status(
         message = "Mindweft resource not found. Check the thread ID or base URL."
         if detail_text:
             message = f"{message} {detail_text}"
-        return MinigentAPIError(
+        return MindweftAPIError(
             message,
             category="not_found",
             detail=technical_detail,
             status_code=status_code,
         )
     if status_code in {408, 504}:
-        return MinigentAPIError(
+        return MindweftAPIError(
             "The Mindweft request timed out. Try again or check the API server.",
             category="timeout",
             detail=technical_detail,
@@ -959,7 +963,7 @@ def _api_error_from_status(
         message = f"Mindweft server error ({status_code})."
         if detail_text:
             message = f"{message} {detail_text}"
-        return MinigentAPIError(
+        return MindweftAPIError(
             message,
             category="server_error",
             detail=technical_detail,
@@ -970,7 +974,7 @@ def _api_error_from_status(
         message = f"Mindweft request failed ({status_code})."
     if detail_text:
         message = f"{message} {detail_text}"
-    return MinigentAPIError(
+    return MindweftAPIError(
         message,
         category="request_failed",
         detail=technical_detail,
@@ -980,20 +984,20 @@ def _api_error_from_status(
 
 def _api_error_from_url_error(
     method: str, url: str, exc: urllib.error.URLError
-) -> MinigentAPIError:
+) -> MindweftAPIError:
     reason = exc.reason
     reason_text = str(reason)
     if isinstance(reason, TimeoutError) or "timed out" in reason_text.lower():
         return _timeout_error(method, url, reason_text)
-    return MinigentAPIError(
+    return MindweftAPIError(
         "Cannot reach the Mindweft API. Check --base-url and make sure the server is running.",
         category="server_unavailable",
         detail=f"{method} {url} failed: {reason_text}",
     )
 
 
-def _timeout_error(method: str, url: str, detail: str) -> MinigentAPIError:
-    return MinigentAPIError(
+def _timeout_error(method: str, url: str, detail: str) -> MindweftAPIError:
+    return MindweftAPIError(
         "The Mindweft request timed out. Try again or check the API server.",
         category="timeout",
         detail=f"{method} {url} timed out: {detail}",

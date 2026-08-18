@@ -800,6 +800,7 @@ def test_config_print_resolved_masks_secrets(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
@@ -1151,7 +1152,9 @@ def test_config_print_resolved_uses_custom_env_file(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
@@ -1182,6 +1185,7 @@ def test_config_doctor_reports_unified_config_checks(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
@@ -1235,6 +1239,7 @@ def test_config_doctor_blocks_on_invalid_unified_config(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     (tmp_path / "minigent.toml").write_text('[llm\nprovider = "mock"\n', encoding="utf-8")
 
@@ -1252,7 +1257,9 @@ def test_config_doctor_blocks_when_provider_key_missing(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
@@ -1279,6 +1286,7 @@ def test_config_doctor_blocks_on_malformed_mcp_servers(
     capsys: Any,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     (tmp_path / "minigent.toml").write_text(
         """
@@ -1305,7 +1313,9 @@ def test_config_doctor_reports_local_and_server_checks(
 ) -> None:
     # Isolate from cwd-local and user-level Mindweft config files.
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     calls: list[tuple[str, str]] = []
@@ -1441,6 +1451,7 @@ def test_debug_bundle_json_masks_secrets_and_reports_diagnostics(
     assert output["server"]["config"]["llm"]["api_key"] == "<set>"
     assert output["server"]["config"]["mcp_servers"][0]["token"] == "<set>"
     assert output["mcp"] == {"broker_enabled": True, "server_count": 1}
+    assert output["client"]["environment"]["MINDWEFT_API_TOKEN"] == "<set>"
     dumped = json.dumps(output)
     assert "cli-secret" not in dumped
     assert "env-secret" not in dumped

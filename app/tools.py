@@ -121,6 +121,7 @@ class ToolRegistry:
             ],
         ] = {}
         self._private_value_policies: dict[str, MCPPrivateValuePolicy] = {}
+        self._aliases: dict[str, str] = {}
         self._trusted_input_preprocessors: set[str] = set()
         self._mcp_servers: list[dict[str, Any]] = []
 
@@ -141,10 +142,19 @@ class ToolRegistry:
             result_redaction_policy,
         )
         self._private_value_policies[name] = private_value_policy or MCPPrivateValuePolicy()
+        self._aliases.pop(name, None)
         if trusted_input_preprocessor:
             self._trusted_input_preprocessors.add(name)
         else:
             self._trusted_input_preprocessors.discard(name)
+
+    def register_alias(self, alias: str, target: str) -> None:
+        """Accept an unadvertised compatibility alias for a registered tool."""
+        if target not in self._tools:
+            raise ValueError(f"Cannot alias unknown tool '{target}'")
+        if alias in self._tools or alias in self._aliases:
+            raise ValueError(f"Tool name or alias '{alias}' is already registered")
+        self._aliases[alias] = target
 
     def specs(self) -> list[ToolSpec]:
         return [tool[0] for tool in self._tools.values()]
@@ -155,7 +165,7 @@ class ToolRegistry:
         )
 
     def is_trusted_input_preprocessor(self, name: str) -> bool:
-        return name in self._trusted_input_preprocessors
+        return self._aliases.get(name, name) in self._trusted_input_preprocessors
 
     async def execute(
         self,
@@ -164,7 +174,8 @@ class ToolRegistry:
         *,
         context: ToolExecutionContext | None = None,
     ) -> Any:
-        tool = self._tools.get(name)
+        resolved_name = self._aliases.get(name, name)
+        tool = self._tools.get(resolved_name)
         if tool is None:
             raise HTTPException(status_code=400, detail=f"Unknown tool '{name}'")
         sanitized_arguments = _sanitize_tool_arguments(
@@ -178,11 +189,11 @@ class ToolRegistry:
             handler = tool[1]
             handler_arguments = _prepare_private_tool_arguments(
                 arguments,
-                policy=self._private_value_policies[name],
+                policy=self._private_value_policies[resolved_name],
                 resolver=context.private_value_resolver if context is not None else None,
                 validator=context.private_value_validator if context is not None else None,
                 authorizer=context.private_value_authorizer if context is not None else None,
-                tool_name=name,
+                tool_name=resolved_name,
             )
             handler_context = (
                 ToolExecutionContext(
@@ -234,12 +245,15 @@ class ToolRegistry:
             return cls()
         combined = cls(result_redaction_policy=registries[0]._result_redaction_policy)
         for registry in registries:
-            duplicate_names = set(combined._tools) & set(registry._tools)
+            occupied_names = set(combined._tools) | set(combined._aliases)
+            incoming_names = set(registry._tools) | set(registry._aliases)
+            duplicate_names = occupied_names & incoming_names
             if duplicate_names:
                 names = ", ".join(sorted(duplicate_names))
                 raise ValueError(f"Cannot combine duplicate tool names: {names}")
             combined._tools.update(registry._tools)
             combined._private_value_policies.update(registry._private_value_policies)
+            combined._aliases.update(registry._aliases)
             combined._trusted_input_preprocessors.update(registry._trusted_input_preprocessors)
             combined._mcp_servers.extend(registry._mcp_servers)
         return combined

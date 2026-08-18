@@ -159,7 +159,7 @@ def write_mcp_gateway_config(specs: list[CodingMCPServerSpec]) -> Path:
     with tempfile.NamedTemporaryFile(
         "w",
         encoding="utf-8",
-        prefix="minigent-mcp-gateway-",
+        prefix="mindweft-mcp-gateway-",
         suffix=".json",
         delete=False,
     ) as file:

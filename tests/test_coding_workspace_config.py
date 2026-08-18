@@ -31,6 +31,7 @@ def test_export_local_coding_config_reuses_preloaded_env_file(tmp_path: Path, mo
     env_path.write_text("MINIGENT_CODING_WORKSPACES=/should/not/read\n", encoding="utf-8")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.setenv("MINIGENT_DOTENV_FILE", str(env_path))
     monkeypatch.setenv("MINIGENT_CODING_WORKSPACES", str(workspace))
     monkeypatch.setenv("MINIGENT_CODING_TENANT_ID", "preloaded-tenant")
@@ -85,6 +86,7 @@ def test_load_coding_workspace_export_env_applies_file_values_without_dotenv_rer
     env_path.write_text("MINIGENT_CODING_WORKSPACES=/should/not/read\n", encoding="utf-8")
     tenant_config_path = tmp_path / "tenant.json"
     tenant_config_path.write_text('{"demo-tenant":{"llm":{"provider":"mock"}}}', encoding="utf-8")
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.setenv("MINIGENT_DOTENV_FILE", str(env_path))
     monkeypatch.setenv("MINIGENT_TENANT_EXECUTION_CONFIGS_FILE", "tenant.json")
     monkeypatch.setenv("UNRELATED_BLOCKING_FILE", "unrelated.fifo")

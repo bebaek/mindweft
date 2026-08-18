@@ -16,19 +16,22 @@ app.store.build_thread_store_from_env = lambda: InMemoryThreadStore()
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Remove MINIGENT_THREAD_DB_PATH before any test module import.
+    """Remove Mindweft storage settings before any test module import.
 
     Belt-and-suspenders: even though build_thread_store_from_env is
     already patched above, we also clear the env var so no other code
     path can accidentally reach the developer's SQLite database.
     """
+    os.environ["MINDWEFT_CONFIG_FILE"] = _TEST_CONFIG_FILE
     os.environ["MINIGENT_CONFIG_FILE"] = _TEST_CONFIG_FILE
+    os.environ["MINDWEFT_DOTENV_FILE"] = _TEST_DOTENV_FILE
     os.environ["MINIGENT_DOTENV_FILE"] = _TEST_DOTENV_FILE
-    os.environ.pop("MINIGENT_THREAD_DB_PATH", None)
-    os.environ.pop("MINIGENT_PRIVATE_VALUE_DB_PATH", None)
-    os.environ.pop("MINIGENT_PRIVATE_CONSENT_DB_PATH", None)
-    os.environ.pop("MINIGENT_SESSION_CREDENTIALS", None)
-    os.environ.pop("MINIGENT_SESSION_SECRET", None)
+    for prefix in ("MINDWEFT", "MINIGENT"):
+        os.environ.pop(f"{prefix}_THREAD_DB_PATH", None)
+        os.environ.pop(f"{prefix}_PRIVATE_VALUE_DB_PATH", None)
+        os.environ.pop(f"{prefix}_PRIVATE_CONSENT_DB_PATH", None)
+        os.environ.pop(f"{prefix}_SESSION_CREDENTIALS", None)
+        os.environ.pop(f"{prefix}_SESSION_SECRET", None)
 
 
 @pytest.fixture(autouse=True)
@@ -44,13 +47,16 @@ def isolate_test_storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     monkeypatch.setenv("HOME", str(test_home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(test_home / ".config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(test_home / ".local" / "state"))
+    monkeypatch.setenv("MINDWEFT_CONFIG_FILE", _TEST_CONFIG_FILE)
     monkeypatch.setenv("MINIGENT_CONFIG_FILE", _TEST_CONFIG_FILE)
+    monkeypatch.setenv("MINDWEFT_DOTENV_FILE", _TEST_DOTENV_FILE)
     monkeypatch.setenv("MINIGENT_DOTENV_FILE", _TEST_DOTENV_FILE)
-    monkeypatch.delenv("MINIGENT_THREAD_DB_PATH", raising=False)
-    monkeypatch.delenv("MINIGENT_PRIVATE_VALUE_DB_PATH", raising=False)
-    monkeypatch.delenv("MINIGENT_PRIVATE_CONSENT_DB_PATH", raising=False)
-    monkeypatch.delenv("MINIGENT_SESSION_CREDENTIALS", raising=False)
-    monkeypatch.delenv("MINIGENT_SESSION_SECRET", raising=False)
+    for prefix in ("MINDWEFT", "MINIGENT"):
+        monkeypatch.delenv(f"{prefix}_THREAD_DB_PATH", raising=False)
+        monkeypatch.delenv(f"{prefix}_PRIVATE_VALUE_DB_PATH", raising=False)
+        monkeypatch.delenv(f"{prefix}_PRIVATE_CONSENT_DB_PATH", raising=False)
+        monkeypatch.delenv(f"{prefix}_SESSION_CREDENTIALS", raising=False)
+        monkeypatch.delenv(f"{prefix}_SESSION_SECRET", raising=False)
     monkeypatch.setattr(
         "app.main.build_thread_store_from_env",
         lambda: InMemoryThreadStore(),

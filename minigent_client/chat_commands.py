@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Sequence, TextIO, cast
 
-from minigent_client.api_client import MinigentAPIClient
+from minigent_client.api_client import MindweftAPIClient
 from minigent_client.config import ClientConfig, build_client_config
 from minigent_client.output import (
     StreamProgressRenderer,
@@ -176,7 +176,7 @@ class _QuietProgressStream:
         return None
 
 
-def build_client(args: argparse.Namespace, trace_id: str | None) -> MinigentAPIClient:
+def build_client(args: argparse.Namespace, trace_id: str | None) -> MindweftAPIClient:
     progress_stream: TextIO = (
         cast(TextIO, _QuietProgressStream()) if getattr(args, "quiet", False) else sys.stderr
     )
@@ -184,7 +184,7 @@ def build_client(args: argparse.Namespace, trace_id: str | None) -> MinigentAPIC
         TokenMode,
         "off" if getattr(args, "quiet", False) else getattr(args, "tokens", "auto"),
     )
-    return MinigentAPIClient(
+    return MindweftAPIClient(
         build_config(args, trace_id),
         progress_stream=progress_stream,
         progress_verbose=args.verbose and not getattr(args, "quiet", False),
@@ -202,7 +202,7 @@ def validate_thread_create_options(args: argparse.Namespace) -> None:
 
 def ensure_thread(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     base_url: str,
 ) -> tuple[str, bool]:
     if args.thread:
@@ -318,7 +318,7 @@ def _message_parts(
 
 def run_chat(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     base_url: str,
     trace_id: str | None,
 ) -> int:
@@ -387,7 +387,7 @@ def _print_assistant_reply(reply: str) -> None:
 
 def run_threads_list(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     base_url: str,
     trace_id: str | None,
 ) -> int:
@@ -423,7 +423,7 @@ def run_threads_list(
 
 def run_resume(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     base_url: str,
     trace_id: str | None,
 ) -> int:
@@ -465,7 +465,7 @@ def _format_markdown_transcript(thread_id: str, messages: list[dict[str, Any]]) 
 
 def run_export(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     base_url: str,
     trace_id: str | None,
 ) -> int:
@@ -493,7 +493,7 @@ def run_export(
 
 def run_threads_retitle(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     limit = int(args.limit)
@@ -595,7 +595,7 @@ def run_threads_retitle(
 
 def run_threads_create(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     base_url: str,
     trace_id: str | None,
 ) -> int:
@@ -624,7 +624,7 @@ def run_threads_create(
 
 def run_threads_show(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     thread = client.get_thread(args.thread_id)
@@ -644,7 +644,7 @@ def run_threads_show(
 
 def run_threads_delete(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     base_url: str,
     trace_id: str | None,
 ) -> int:

@@ -7,11 +7,14 @@ from types import ModuleType
 
 import pytest
 
-RUN_INTEGRATION_ENV = "MINIGENT_RUN_LLAMA_CPP_INTEGRATION_TESTS"
+RUN_INTEGRATION_ENV = "MINDWEFT_RUN_LLAMA_CPP_INTEGRATION_TESTS"
 pytestmark = pytest.mark.integration
 
 pytestmark = pytest.mark.skipif(
-    os.getenv(RUN_INTEGRATION_ENV, "").lower() not in {"1", "true", "yes", "on"},
+    (
+        os.getenv(RUN_INTEGRATION_ENV) or os.getenv("MINIGENT_RUN_LLAMA_CPP_INTEGRATION_TESTS", "")
+    ).lower()
+    not in {"1", "true", "yes", "on"},
     reason=f"Set {RUN_INTEGRATION_ENV}=true to run llama.cpp integration tests",
 )
 

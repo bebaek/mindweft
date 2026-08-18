@@ -75,7 +75,7 @@ class ImageInputSettings:
 
 
 @dataclass(frozen=True)
-class MinigentSettings:
+class MindweftSettings:
     admin_store: AdminStoreSettings
     agent_backend: TenantAgentBackendConfig
     attachment_store: AttachmentStoreSettings
@@ -93,7 +93,7 @@ class MinigentSettings:
     tracing: TracingSettings
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> MinigentSettings:
+    def from_env(cls, env: Mapping[str, str] | None = None) -> MindweftSettings:
         lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
             admin_store=AdminStoreSettings.from_env(lookup),
@@ -114,8 +114,12 @@ class MinigentSettings:
         )
 
 
-def load_settings(env: Mapping[str, str] | None = None) -> MinigentSettings:
-    return MinigentSettings.from_env(env)
+# Backward-compatible public alias.
+MinigentSettings = MindweftSettings
+
+
+def load_settings(env: Mapping[str, str] | None = None) -> MindweftSettings:
+    return MindweftSettings.from_env(env)
 
 
 def image_input_settings_from_env() -> ImageInputSettings:

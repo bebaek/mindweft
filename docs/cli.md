@@ -16,6 +16,13 @@ uv run mindweft-client chat
 
 After installing globally (`uv tool install '.[voice]'`), drop the `uv run` prefix.
 
+## Python API names
+
+New integrations should import `MindweftAPIClient`, `MindweftAPIError`,
+`MindweftClientRuntime`, and `MindweftSettings` from their existing modules. The corresponding
+`Minigent*` symbols remain available as aliases, so existing Python integrations do not need an
+immediate source migration.
+
 ## `mindweft-client` config file
 
 Interactive `mindweft-client` can load a TOML config file for stable local defaults. The

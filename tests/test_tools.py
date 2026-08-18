@@ -24,6 +24,23 @@ from app.tools import (
 )
 
 
+def test_tool_registry_accepts_unadvertised_compatibility_aliases() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "mindweft_tool",
+        "Canonical tool",
+        {"type": "object", "properties": {}},
+        lambda arguments, context=None: {"arguments": arguments, "context": context},
+    )
+    registry.register_alias("minigent_tool", "mindweft_tool")
+
+    combined = ToolRegistry.combine(registry)
+    result = asyncio.run(combined.execute("minigent_tool", {"value": 1}))
+
+    assert [spec.name for spec in combined.specs()] == ["mindweft_tool"]
+    assert result == {"arguments": {"value": 1}, "context": None}
+
+
 def test_tool_registry_denies_private_placeholders_by_default() -> None:
     called = False
 

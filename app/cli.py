@@ -1,4 +1,4 @@
-"""Compatibility facade for the packaged Minigent CLI."""
+"""Compatibility facade for the packaged Mindweft CLI."""
 
 import sys
 

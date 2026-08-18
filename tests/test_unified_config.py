@@ -651,7 +651,9 @@ def test_load_environment_precedence_real_env_then_dotenv_then_minigent_toml(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     config_path = tmp_path / "minigent.toml"
     config_path.write_text(
@@ -687,6 +689,7 @@ def test_load_environment_supports_custom_dotenv_file(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     (tmp_path / "minigent.toml").write_text(
         """
@@ -702,6 +705,7 @@ model = "from-toml"
         "MINIGENT_LLM_PROVIDER=mock\nMINIGENT_THREAD_DB_PATH=from-custom-dotenv.db\n",
         encoding="utf-8",
     )
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.setenv("MINIGENT_DOTENV_FILE", str(custom_dotenv))
     monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
@@ -719,7 +723,9 @@ def test_load_environment_can_disable_default_config_discovery(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
@@ -868,7 +874,9 @@ def test_coding_runner_env_applies_minigent_toml_then_env_file_override(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CODING_WORKSPACES", raising=False)
     monkeypatch.delenv("MINIGENT_CODING_SHELL_ENABLED", raising=False)

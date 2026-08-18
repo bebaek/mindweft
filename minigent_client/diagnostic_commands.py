@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import platform
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
-from minigent_client.api_client import MinigentAPIClient
+from minigent_client.api_client import MindweftAPIClient
 from minigent_client.chat_commands import list_remembered_threads, state_scope_key
 from minigent_client.config import ClientConfig
 from minigent_client.config_diagnostics import (
@@ -21,9 +20,10 @@ from minigent_client.config_diagnostics import (
 from minigent_client.config_masking import mask_secrets, mask_value
 from minigent_client.output import print_json
 from minigent_client.state import ClientState
+from minigent_config.unified_config import preferred_mindweft_env
 
 
-def run_health(client: MinigentAPIClient, as_json: bool, trace_id: str | None) -> int:
+def run_health(client: MindweftAPIClient, as_json: bool, trace_id: str | None) -> int:
     response = client.health()
     if as_json:
         output: dict[str, Any] = dict(response)
@@ -38,7 +38,7 @@ def run_health(client: MinigentAPIClient, as_json: bool, trace_id: str | None) -
 
 
 def run_execution_options(
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
     *,
     section: str | None = None,
@@ -134,7 +134,7 @@ def _format_execution_option_section(title: str, payload: object) -> str:
 
 def run_ping(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     checks, config_response = collect_connection_checks(args, client)
@@ -183,17 +183,17 @@ def _client_config_summary(args: argparse.Namespace, config: ClientConfig) -> di
         },
         "environment": mask_secrets(
             {
-                name: os.environ.get(name)
-                for name in (
-                    "MINIGENT_BASE_URL",
-                    "MINIGENT_API_TOKEN",
-                    "MINIGENT_VOICE_API_TOKEN",
-                    "MINIGENT_VOICE_USER_ID",
-                    "MINIGENT_VOICE_TENANT_ID",
-                    "MINIGENT_CLIENT_STREAM_RUNS",
-                    "MINIGENT_CLIENT_SHOW_TOOL_RESULTS",
+                f"MINDWEFT_{suffix}": value
+                for suffix in (
+                    "BASE_URL",
+                    "API_TOKEN",
+                    "VOICE_API_TOKEN",
+                    "VOICE_USER_ID",
+                    "VOICE_TENANT_ID",
+                    "CLIENT_STREAM_RUNS",
+                    "CLIENT_SHOW_TOOL_RESULTS",
                 )
-                if os.environ.get(name) is not None
+                if (value := preferred_mindweft_env(suffix)) is not None
             }
         ),
     }
@@ -201,7 +201,7 @@ def _client_config_summary(args: argparse.Namespace, config: ClientConfig) -> di
 
 def collect_debug_bundle(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     config: ClientConfig,
     trace_id: str | None,
 ) -> tuple[dict[str, object], bool]:
@@ -317,7 +317,7 @@ def _format_debug_bundle(bundle: dict[str, object]) -> str:
 
 def run_debug_bundle(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     config: ClientConfig,
     trace_id: str | None,
 ) -> int:

@@ -19,7 +19,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Callable, Protocol, TextIO, cast
 
-from minigent_client.api_client import MinigentAPIClient
+from minigent_client.api_client import MindweftAPIClient
 from minigent_client.audio import AudioCaptureConfig, MicrophoneRecorder, open_microphone_stream
 from minigent_client.backends.manual_audio import ManualAudioActivationSource
 from minigent_client.backends.passive_audio import PassiveAudioActivationSource
@@ -30,7 +30,7 @@ from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
 from minigent_client.diagnostic_commands import _format_execution_options
 from minigent_client.ducking import MacOsAmbientVolumeDucker
 from minigent_client.errors import (
-    MinigentAPIError,
+    MindweftAPIError,
     format_stream_run_error_summary,
     is_stream_run_error,
 )
@@ -42,7 +42,7 @@ from minigent_client.output import (
     style_text,
 )
 from minigent_client.ring_buffer import AudioRingBuffer
-from minigent_client.runtime import ActivationSource, MinigentClientRuntime
+from minigent_client.runtime import ActivationSource, MindweftClientRuntime
 from minigent_client.speech import (
     ConsoleSpeechOutput,
     MacOsSaySpeechOutput,
@@ -453,7 +453,7 @@ def _list_client_threads(config: ClientConfig):
 
 
 def _refresh_client_threads(
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     config: ClientConfig,
 ) -> list[ThreadHistoryItem]:
     try:
@@ -475,8 +475,8 @@ def forget_remembered_client_thread(config: ClientConfig, thread_id: str) -> boo
     return changed
 
 
-class RememberingMinigentAPIClient:
-    def __init__(self, client: MinigentAPIClient, config: ClientConfig) -> None:
+class RememberingMindweftAPIClient:
+    def __init__(self, client: MindweftAPIClient, config: ClientConfig) -> None:
         self._client = client
         self._remembering_config = config
         self.active_agent_preset: str | None = None
@@ -550,10 +550,10 @@ class RememberingMinigentAPIClient:
                 message = self._client.send_user_message(content)  # type: ignore[attr-defined]
             else:
                 message = self._client.send_user_message(content, parts=parts)  # type: ignore[attr-defined]
-        except MinigentAPIError as exc:
+        except MindweftAPIError as exc:
             if self._forget_missing_resumed_thread(exc):
                 thread_id = getattr(self._client, "thread_id", None)
-                raise MinigentAPIError(
+                raise MindweftAPIError(
                     f"Remembered thread '{thread_id}' was not found. "
                     "The saved resume target was forgotten; start a new thread explicitly with /new.",
                     category="not_found",
@@ -569,7 +569,7 @@ class RememberingMinigentAPIClient:
             )
         return message
 
-    def _forget_missing_resumed_thread(self, exc: MinigentAPIError) -> bool:
+    def _forget_missing_resumed_thread(self, exc: MindweftAPIError) -> bool:
         if not self._remembering_config.resume_last or exc.category != "not_found":
             return False
         thread_id = getattr(self._client, "thread_id", None)
@@ -724,13 +724,13 @@ def run_backend(backend: str, config: ClientConfig, *, once: bool = False) -> in
         activation_feedback=activation_feedback,
         capture_ended_feedback=capture_ended_feedback,
     )
-    client_runtime = MinigentClientRuntime(
+    client_runtime = MindweftClientRuntime(
         wake_phrase=config.wake_phrase,
         activation_source=activation_source,
         minigent_client=cast(
-            MinigentAPIClient,
-            RememberingMinigentAPIClient(
-                MinigentAPIClient(config, output_stream=sys.stdout),
+            MindweftAPIClient,
+            RememberingMindweftAPIClient(
+                MindweftAPIClient(config, output_stream=sys.stdout),
                 config,
             ),
         ),
@@ -880,8 +880,8 @@ def _handle_chat_image_command(
 def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
     output_stream = sys.stdout
     input_stream = sys.stdin
-    client = RememberingMinigentAPIClient(
-        MinigentAPIClient(config, output_stream=output_stream),
+    client = RememberingMindweftAPIClient(
+        MindweftAPIClient(config, output_stream=output_stream),
         config,
     )
     prompt_session: ChatPromptSession | None = None
@@ -1028,7 +1028,7 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             output_stream.flush()
             continue
         except RuntimeError as exc:
-            if is_stream_run_error(exc) and isinstance(exc, MinigentAPIError):
+            if is_stream_run_error(exc) and isinstance(exc, MindweftAPIError):
                 message = format_stream_run_error_summary(exc)
             else:
                 message = str(exc)
@@ -1130,7 +1130,7 @@ def _write_chat_help(output_stream: ChatOutputStream) -> None:
 
 def _handle_chat_llm(
     utterance: str,
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     config: ClientConfig,
     output_stream: ChatOutputStream,
 ) -> None:
@@ -1194,7 +1194,7 @@ def _handle_chat_llm(
 
 def _handle_chat_execution_options(
     utterance: str,
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     output_stream: ChatOutputStream,
 ) -> None:
     section = None
@@ -1336,7 +1336,7 @@ def _summarize_prompt_template(prompt_template: str, *, max_length: int = 72) ->
 
 
 def _handle_chat_new(
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     config: ClientConfig,
     output_stream: ChatOutputStream,
 ) -> None:
@@ -1369,7 +1369,7 @@ def _handle_chat_new(
 
 def _handle_chat_agent(
     utterance: str,
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     config: ClientConfig,
     output_stream: ChatOutputStream,
 ) -> None:
@@ -1422,7 +1422,7 @@ def _handle_chat_agent(
     output_stream.flush()
 
 
-def _server_agent_presets(client: RememberingMinigentAPIClient) -> tuple[AgentPreset, ...]:
+def _server_agent_presets(client: RememberingMindweftAPIClient) -> tuple[AgentPreset, ...]:
     try:
         response = client.execution_options()
     except (AttributeError, RuntimeError):
@@ -1494,7 +1494,7 @@ def _write_agent_preset_list(
 
 
 def _write_current_agent(
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     config: ClientConfig,
     output_stream: ChatOutputStream,
 ) -> None:
@@ -1533,7 +1533,7 @@ def _format_agent_preset_detail(preset: AgentPreset) -> str:
 
 def _handle_chat_threads(
     utterance: str,
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     config: ClientConfig,
     output_stream: ChatOutputStream,
 ) -> None:
@@ -1652,7 +1652,7 @@ def _resolve_thread_selection(selection: str, threads: list[ThreadHistoryItem]) 
 
 def _handle_chat_switch(
     utterance: str,
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     config: ClientConfig,
     output_stream: ChatOutputStream,
 ) -> None:
@@ -1666,7 +1666,7 @@ def _handle_chat_switch(
 
 def _switch_to_thread(
     thread_id: str,
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     config: ClientConfig,
     output_stream: ChatOutputStream,
 ) -> None:
@@ -1695,7 +1695,7 @@ def _switch_to_thread(
 
 def _handle_chat_rename(
     utterance: str,
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     config: ClientConfig,
     output_stream: ChatOutputStream,
 ) -> None:
@@ -1724,7 +1724,7 @@ def _handle_chat_rename(
 
 
 def _handle_chat_copy_id(
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     output_stream: ChatOutputStream,
 ) -> None:
     thread_id = client.thread_id
@@ -1745,7 +1745,7 @@ def _handle_chat_copy_id(
 
 
 def _handle_chat_cancel(
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     output_stream: ChatOutputStream,
 ) -> None:
     thread_id = client.thread_id
@@ -1767,7 +1767,7 @@ def _handle_chat_cancel(
 
 
 def _handle_chat_private_actions(
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     output_stream: ChatOutputStream,
 ) -> None:
     thread_id = client.thread_id
@@ -1798,7 +1798,7 @@ def _handle_chat_private_actions(
 
 def _handle_chat_discard_private_action(
     utterance: str,
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     output_stream: ChatOutputStream,
 ) -> None:
     consent_id = utterance.removeprefix("/discard-action").strip()
@@ -1825,7 +1825,7 @@ def _handle_chat_discard_private_action(
 
 
 def _handle_chat_compact(
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     output_stream: ChatOutputStream,
 ) -> None:
     thread_id = client.thread_id
@@ -1851,7 +1851,7 @@ def _handle_chat_compact(
 
 
 def _handle_chat_tokens(
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     output_stream: ChatOutputStream,
 ) -> None:
     thread_id = client.thread_id
@@ -1878,7 +1878,7 @@ def _handle_chat_tokens(
 
 def _handle_chat_export(
     utterance: str,
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     output_stream: ChatOutputStream,
 ) -> None:
     thread_id = client.thread_id
@@ -1931,7 +1931,7 @@ def _read_editor_chat_prompt(*, output_stream: ChatOutputStream) -> str | None:
         output_stream.write("[idle] set EDITOR or VISUAL to use /editor\n")
         output_stream.flush()
         return None
-    with tempfile.TemporaryDirectory(prefix="minigent-prompt-") as prompt_dir:
+    with tempfile.TemporaryDirectory(prefix="mindweft-prompt-") as prompt_dir:
         prompt_path = Path(prompt_dir) / "prompt.md"
         prompt_path.write_text(
             "\n# Write your Mindweft prompt above. Lines starting with # are ignored.\n",
@@ -2091,7 +2091,7 @@ def _append_missing_user_messages_to_chat_history(history_path: Path, messages: 
 
 
 def _sync_chat_prompt_history_from_thread(
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     config: ClientConfig,
 ) -> None:
     thread_id = client.thread_id
@@ -2116,7 +2116,7 @@ def _sync_chat_prompt_history_from_thread(
 
 
 def _ensure_chat_thread_for_prompt_history(
-    client: RememberingMinigentAPIClient,
+    client: RememberingMindweftAPIClient,
     config: ClientConfig,
     *,
     input_stream: ChatInputStream,

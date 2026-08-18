@@ -107,7 +107,7 @@ from app.settings import (
     DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES,
     DEFAULT_IMAGE_INPUT_MAX_BYTES,
     ImageInputSettings,
-    MinigentSettings,
+    MindweftSettings,
     _image_input_export_public_dict,
     _image_input_public_dict,
     load_settings,
@@ -760,7 +760,7 @@ def create_app(
     thread_store: ThreadStore | None = None,
     attachment_store: AttachmentStore | None = None,
     rate_limiter: RateLimiter | None = None,
-    settings: MinigentSettings | None = None,
+    settings: MindweftSettings | None = None,
 ) -> FastAPI:
     settings_was_provided = settings is not None
     settings = settings or load_settings()

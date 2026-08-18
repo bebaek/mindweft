@@ -9,8 +9,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from minigent_client.api_client import MinigentAPIClient
-from minigent_client.errors import MinigentAPIError
+from minigent_client.api_client import MindweftAPIClient
+from minigent_client.errors import MindweftAPIError
 from minigent_client.output import print_json
 from minigent_config.unified_config import (
     MINDWEFT_CONFIG_FILE,
@@ -41,7 +41,7 @@ class DiagnosticCheck:
 
 def run_config_doctor(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     checks: list[DiagnosticCheck] = [*_local_config_checks(args)]
@@ -78,13 +78,13 @@ def run_config_doctor(
 
 def collect_connection_checks(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
 ) -> tuple[list[DiagnosticCheck], dict[str, Any] | None]:
     checks: list[DiagnosticCheck] = []
     config_response: dict[str, Any] | None = None
     try:
         health_response = client.health()
-    except MinigentAPIError as exc:
+    except MindweftAPIError as exc:
         checks.append(
             DiagnosticCheck(
                 "error",
@@ -100,7 +100,7 @@ def collect_connection_checks(
 
     try:
         config_response = client.config()
-    except MinigentAPIError as exc:
+    except MindweftAPIError as exc:
         checks.append(
             DiagnosticCheck(
                 "error",
@@ -558,7 +558,7 @@ def server_summary(config_response: dict[str, Any]) -> dict[str, str]:
     return summary
 
 
-def diagnostic_detail(exc: MinigentAPIError, *, verbose: bool) -> str:
+def diagnostic_detail(exc: MindweftAPIError, *, verbose: bool) -> str:
     if verbose and exc.detail:
         return f"{exc.message} Detail: {exc.detail}"
     return exc.message

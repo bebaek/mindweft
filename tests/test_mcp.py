@@ -357,7 +357,7 @@ def test_mcp_http_client_discovers_and_uses_modern_stateless_protocol() -> None:
         assert request["headers"]["mcp-protocol-version"] == MODERN_MCP_PROTOCOL_VERSION
         metadata = request["body"]["params"]["_meta"]
         assert metadata["io.modelcontextprotocol/protocolVersion"] == MODERN_MCP_PROTOCOL_VERSION
-        assert metadata["io.modelcontextprotocol/clientInfo"]["name"] == "minigent"
+        assert metadata["io.modelcontextprotocol/clientInfo"]["name"] == "mindweft"
         assert metadata["io.modelcontextprotocol/clientCapabilities"] == {}
     assert requests[2]["headers"]["mcp-method"] == "tools/call"
     assert requests[2]["headers"]["mcp-name"] == "echo"

@@ -59,7 +59,7 @@ enabled = false
 # max_bytes_per_tenant = 1073741824
 # pending_ttl_seconds = 86400
 # cleanup_interval_seconds = 3600
-# Encryption keys are environment-only; see MINIGENT_ATTACHMENT_ENCRYPTION_KEYS.
+# Encryption keys are environment-only; see MINDWEFT_ATTACHMENT_ENCRYPTION_KEYS.
 
 [rate_limits]
 # Set a shared SQLite path when enabling limits across multiple replicas.

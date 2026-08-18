@@ -11,9 +11,9 @@ from app.main import create_app
 from app.models import Message, MessageRole, ToolSpec
 from app.tools import ToolRegistry
 
-RUN_ANTHROPIC_INTEGRATION_ENV = "MINIGENT_RUN_ANTHROPIC_INTEGRATION_TESTS"
-RUN_ANTHROPIC_REASONING_ENV = "MINIGENT_RUN_ANTHROPIC_REASONING_TESTS"
-RUN_ANTHROPIC_CACHE_ENV = "MINIGENT_RUN_ANTHROPIC_CACHE_TESTS"
+RUN_ANTHROPIC_INTEGRATION_ENV = "MINDWEFT_RUN_ANTHROPIC_INTEGRATION_TESTS"
+RUN_ANTHROPIC_REASONING_ENV = "MINDWEFT_RUN_ANTHROPIC_REASONING_TESTS"
+RUN_ANTHROPIC_CACHE_ENV = "MINDWEFT_RUN_ANTHROPIC_CACHE_TESTS"
 ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
 ANTHROPIC_MODEL_ENV = "ANTHROPIC_MODEL"
 ANTHROPIC_REASONING_MODEL_ENV = "ANTHROPIC_REASONING_MODEL"
@@ -27,7 +27,10 @@ pytestmark = pytest.mark.integration
 
 
 def _truthy_env(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+    value = os.getenv(name)
+    if value is None and name.startswith("MINDWEFT_"):
+        value = os.getenv(name.replace("MINDWEFT_", "MINIGENT_", 1))
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @pytest.mark.skipif(

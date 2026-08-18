@@ -10,12 +10,16 @@ from fastapi.testclient import TestClient
 
 from local_agent_wrapper.app import Settings, create_app
 
-RUN_OPENCODE_INTEGRATION_ENV = "MINIGENT_RUN_OPENCODE_INTEGRATION_TESTS"
+RUN_OPENCODE_INTEGRATION_ENV = "MINDWEFT_RUN_OPENCODE_INTEGRATION_TESTS"
 TERMINAL_STATUSES = {"completed", "failed", "canceled"}
 
 
 @pytest.mark.skipif(
-    os.getenv(RUN_OPENCODE_INTEGRATION_ENV, "").lower() not in {"1", "true", "yes"},
+    (
+        os.getenv(RUN_OPENCODE_INTEGRATION_ENV)
+        or os.getenv("MINIGENT_RUN_OPENCODE_INTEGRATION_TESTS", "")
+    ).lower()
+    not in {"1", "true", "yes"},
     reason=f"set {RUN_OPENCODE_INTEGRATION_ENV}=true to run real OpenCode integration tests",
 )
 def test_real_opencode_task_extracts_final_output() -> None:

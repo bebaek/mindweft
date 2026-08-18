@@ -301,7 +301,7 @@ class MCPHTTPClient:
         mode = self._client_mode()
         sdk_client = Client(
             transport,
-            client_info=Implementation(name="minigent", version="0.1.0"),
+            client_info=Implementation(name="mindweft", version="0.1.0"),
             mode=mode,
             prior_discover=self._prior_discover if mode == MODERN_MCP_PROTOCOL_VERSION else None,
             read_timeout_seconds=self._timeout,

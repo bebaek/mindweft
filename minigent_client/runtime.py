@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Protocol, TextIO
 
-from minigent_client.api_client import MinigentAPIClient
+from minigent_client.api_client import MindweftAPIClient
 from minigent_client.errors import (
-    MinigentAPIError,
+    MindweftAPIError,
     format_stream_run_error_summary,
     is_stream_run_error,
 )
@@ -58,13 +58,13 @@ class AmbientVolumeController(Protocol):
     def close(self) -> None: ...
 
 
-class MinigentClientRuntime:
+class MindweftClientRuntime:
     def __init__(
         self,
         *,
         wake_phrase: str,
         activation_source: ActivationSource,
-        minigent_client: MinigentAPIClient,
+        minigent_client: MindweftAPIClient,
         speech_output: SpeechOutput,
         activation_feedback: Callable[[], None] | None = None,
         follow_up_timeout_ms: int = 0,
@@ -118,7 +118,7 @@ class MinigentClientRuntime:
                 return reply
 
     def _handle_backend_error(self, exc: RuntimeError) -> None:
-        if is_stream_run_error(exc) and isinstance(exc, MinigentAPIError):
+        if is_stream_run_error(exc) and isinstance(exc, MindweftAPIError):
             message = format_stream_run_error_summary(exc)
         else:
             message = str(exc)
@@ -158,3 +158,7 @@ class MinigentClientRuntime:
     def close(self) -> None:
         if self._ambient_volume_controller is not None:
             self._ambient_volume_controller.close()
+
+
+# Backward-compatible public alias.
+MinigentClientRuntime = MindweftClientRuntime

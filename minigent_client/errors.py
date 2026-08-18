@@ -7,7 +7,7 @@ STREAM_RUN_ERROR_DETAIL_PREFIX = "run.error event:"
 
 
 @dataclass(slots=True)
-class MinigentAPIError(RuntimeError):
+class MindweftAPIError(RuntimeError):
     """User-facing API/client error with optional technical detail."""
 
     message: str
@@ -30,14 +30,18 @@ class MinigentAPIError(RuntimeError):
         return payload
 
 
+# Backward-compatible public alias.
+MinigentAPIError = MindweftAPIError
+
+
 def is_stream_run_error(exc: BaseException) -> bool:
     """Return true when a streaming run.error event was already rendered to the user."""
 
-    return isinstance(exc, MinigentAPIError) and bool(
+    return isinstance(exc, MindweftAPIError) and bool(
         exc.detail and exc.detail.startswith(STREAM_RUN_ERROR_DETAIL_PREFIX)
     )
 
 
-def format_stream_run_error_summary(exc: MinigentAPIError) -> str:
+def format_stream_run_error_summary(exc: MindweftAPIError) -> str:
     status = f" ({exc.status_code})" if exc.status_code is not None else ""
     return f"stream request failed{status}"

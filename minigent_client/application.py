@@ -9,7 +9,7 @@ from typing import Sequence
 
 from minigent_client.chat_commands import _read_run_message, build_client, build_config
 from minigent_client.command_router import dispatch_command
-from minigent_client.errors import MinigentAPIError
+from minigent_client.errors import MindweftAPIError
 from minigent_client.one_shot_parser import build_parser
 from minigent_client.output import print_json
 from minigent_config.unified_config import preferred_mindweft_env
@@ -81,7 +81,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             pass
         _print_abort_message(args)
         return 130
-    except MinigentAPIError as exc:
+    except MindweftAPIError as exc:
         if args.json:
             print_json({"error": exc.to_dict(include_detail=args.verbose)})
         else:

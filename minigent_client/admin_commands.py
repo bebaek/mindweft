@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from minigent_client.api_client import MinigentAPIClient
-from minigent_client.errors import MinigentAPIError
+from minigent_client.api_client import MindweftAPIClient
+from minigent_client.errors import MindweftAPIError
 from minigent_client.output import format_message, print_json
 
 
@@ -16,13 +16,13 @@ def _json_object_from_arg(raw: str | None, label: str) -> dict[str, Any] | None:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise MinigentAPIError(
+        raise MindweftAPIError(
             f"{label} must be valid JSON.",
             category="invalid_request",
             detail=str(exc),
         ) from exc
     if not isinstance(parsed, dict):
-        raise MinigentAPIError(
+        raise MindweftAPIError(
             f"{label} must be a JSON object.",
             category="invalid_request",
             detail=raw,
@@ -52,7 +52,7 @@ def _tenant_payload(args: argparse.Namespace, *, create: bool) -> dict[str, Any]
 
 def run_admin_tenants_list(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     response = client.list_admin_tenants(
@@ -89,7 +89,7 @@ def run_admin_tenants_list(
 
 def run_admin_tenants_create(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     response = client.create_admin_tenant(_tenant_payload(args, create=True))
@@ -98,7 +98,7 @@ def run_admin_tenants_create(
 
 def run_admin_tenants_show(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     response = client.get_admin_tenant(args.tenant_id)
@@ -107,7 +107,7 @@ def run_admin_tenants_show(
 
 def run_admin_tenants_update(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     payload = _tenant_payload(args, create=False)
@@ -117,7 +117,7 @@ def run_admin_tenants_update(
 
 def run_admin_tenants_transition(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     command = args.admin_tenants_command
@@ -133,7 +133,7 @@ def _parse_seed_slug_overrides(values: list[str] | None) -> dict[str, str]:
     for value in values or []:
         tenant_id, separator, slug = value.partition("=")
         if not separator or not tenant_id or not slug or tenant_id in overrides:
-            raise MinigentAPIError(
+            raise MindweftAPIError(
                 "Slug overrides must use a unique TENANT_ID=SLUG format.",
                 category="invalid_request",
             )
@@ -143,7 +143,7 @@ def _parse_seed_slug_overrides(values: list[str] | None) -> dict[str, str]:
 
 def run_admin_tenants_seed(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     payload: dict[str, Any] = {
@@ -209,37 +209,37 @@ def _load_execution_config_file(path_text: str) -> dict[str, dict[str, Any]]:
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise MinigentAPIError(
+        raise MindweftAPIError(
             f"Execution-config file not found: {path_text}",
             category="invalid_request",
             detail=str(exc),
         ) from exc
     except json.JSONDecodeError as exc:
-        raise MinigentAPIError(
+        raise MindweftAPIError(
             "Execution-config file must be valid JSON.",
             category="invalid_request",
             detail=str(exc),
         ) from exc
     if not isinstance(parsed, dict):
-        raise MinigentAPIError(
+        raise MindweftAPIError(
             "Execution-config file must contain a JSON object.",
             category="invalid_request",
         )
     raw_configs = parsed.get("execution_configs") if "execution_configs" in parsed else parsed
     if not isinstance(raw_configs, dict):
-        raise MinigentAPIError(
+        raise MindweftAPIError(
             "execution_configs must be a JSON object when present.",
             category="invalid_request",
         )
     configs: dict[str, dict[str, Any]] = {}
     for tenant_id, config in raw_configs.items():
         if not isinstance(tenant_id, str) or not tenant_id:
-            raise MinigentAPIError(
+            raise MindweftAPIError(
                 "Execution-config tenant IDs must be non-empty strings.",
                 category="invalid_request",
             )
         if not isinstance(config, dict):
-            raise MinigentAPIError(
+            raise MindweftAPIError(
                 f"Execution config for tenant '{tenant_id}' must be a JSON object.",
                 category="invalid_request",
             )
@@ -254,7 +254,7 @@ def _select_execution_configs(
         return configs
     config = configs.get(tenant_id)
     if config is None:
-        raise MinigentAPIError(
+        raise MindweftAPIError(
             f"Execution-config file has no tenant '{tenant_id}'.",
             category="invalid_request",
         )
@@ -282,7 +282,7 @@ def _validation_summary(report: dict[str, Any]) -> str:
 
 
 def _validate_execution_configs(
-    client: MinigentAPIClient, configs: dict[str, dict[str, Any]]
+    client: MindweftAPIClient, configs: dict[str, dict[str, Any]]
 ) -> dict[str, dict[str, Any]]:
     return {
         tenant_id: client.validate_admin_tenant_execution_config(tenant_id, config)
@@ -292,7 +292,7 @@ def _validate_execution_configs(
 
 def run_admin_execution_config_validate_file(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     configs = _select_execution_configs(
@@ -327,11 +327,11 @@ def run_admin_execution_config_validate_file(
 
 def run_admin_execution_config_import(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     if not args.dry_run and not args.upsert:
-        raise MinigentAPIError(
+        raise MindweftAPIError(
             "Import requires --dry-run or --upsert.",
             category="invalid_request",
         )
@@ -348,7 +348,7 @@ def run_admin_execution_config_import(
     written: list[str] = []
     if not args.dry_run:
         if invalid_tenant_ids:
-            raise MinigentAPIError(
+            raise MindweftAPIError(
                 "Import validation failed; no configs were written.",
                 category="invalid_request",
                 detail=", ".join(invalid_tenant_ids),
@@ -426,7 +426,7 @@ def run_admin_execution_config_import(
 
 def run_admin_execution_config_export(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     tenant_ids = (
@@ -507,7 +507,7 @@ def _print_admin_tenant_user_response(
 
 def run_admin_tenant_users(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     command = args.admin_tenant_users_command
@@ -599,7 +599,7 @@ def _entitlements_payload(args: argparse.Namespace) -> dict[str, Any]:
 
 def run_admin_tenant_entitlements(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     command = args.admin_tenant_entitlements_command
@@ -683,7 +683,7 @@ def _format_tenant_line(tenant: dict[str, Any]) -> str:
 
 def run_admin_threads_list(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     response = client.list_admin_threads(
@@ -733,7 +733,7 @@ def run_admin_threads_list(
 
 def run_admin_threads_delete(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     response = client.delete_admin_thread(args.admin_tenant_id, args.thread_id)
@@ -751,7 +751,7 @@ def run_admin_threads_delete(
 
 def run_admin_threads_prune(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     response = client.prune_admin_threads(
@@ -786,7 +786,7 @@ def run_admin_threads_prune(
 
 def run_admin_audit_list(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     response = client.list_admin_audit_records(
@@ -836,7 +836,7 @@ def run_admin_audit_list(
 
 def run_admin_threads_show(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
     response = client.get_admin_thread(args.admin_tenant_id, args.thread_id)

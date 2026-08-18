@@ -3989,7 +3989,9 @@ provider = "mock"
             return {"provider": "recording"}
 
     monkeypatch.delenv("MINIGENT_TENANT_EXECUTION_CONFIGS", raising=False)
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.setenv("MINIGENT_CONFIG_FILE", str(config_path))
     monkeypatch.setenv("MINIGENT_THREAD_DB_PATH", str(tmp_path / "threads.db"))
     monkeypatch.setattr(

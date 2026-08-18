@@ -33,7 +33,7 @@ Compaction is available through:
 
 - `POST /threads/{thread_id}/compact`;
 - the interactive CLI `/compact` command;
-- optional automatic compaction with `MINIGENT_CONTEXT_COMPACTION_ENABLED=true`.
+- optional automatic compaction with `MINDWEFT_CONTEXT_COMPACTION_ENABLED=true`.
 
 Automatic compaction is disabled by default. This preserves stable prompt prefixes and can
 improve provider-side prompt-cache reuse. Manual compaction remains available when a user
@@ -251,13 +251,13 @@ summaries with a deterministic fallback.
 Suggested future settings:
 
 ```dotenv
-MINIGENT_CONTEXT_OFFLOAD_ENABLED=true
-MINIGENT_CONTEXT_AUTO_OFFLOAD_POLICY=manual
-MINIGENT_CONTEXT_TARGET_PROMPT_TOKENS=3000
-MINIGENT_CONTEXT_RETAIN_RECENT_MESSAGES=8
-MINIGENT_CONTEXT_ARCHIVE_RAW=true
-MINIGENT_TOOL_OUTPUT_OFFLOAD_ENABLED=true
-MINIGENT_TOOL_OUTPUT_OFFLOAD_THRESHOLD_BYTES=20000
+MINDWEFT_CONTEXT_OFFLOAD_ENABLED=true
+MINDWEFT_CONTEXT_AUTO_OFFLOAD_POLICY=manual
+MINDWEFT_CONTEXT_TARGET_PROMPT_TOKENS=3000
+MINDWEFT_CONTEXT_RETAIN_RECENT_MESSAGES=8
+MINDWEFT_CONTEXT_ARCHIVE_RAW=true
+MINDWEFT_TOOL_OUTPUT_OFFLOAD_ENABLED=true
+MINDWEFT_TOOL_OUTPUT_OFFLOAD_THRESHOLD_BYTES=20000
 ```
 
 Suggested policies:
@@ -321,7 +321,7 @@ internal URLs, or accidental secrets. The design should enforce:
 ## Open questions
 
 - Should raw archive preservation be mandatory when compaction is enabled, or controlled by
-  `MINIGENT_CONTEXT_ARCHIVE_RAW`?
+  `MINDWEFT_CONTEXT_ARCHIVE_RAW`?
 - Should offload retrieval be a normal local tool, an internal runtime step, or both?
 - How should archives participate in thread export and admin pruning?
 - What is the best default threshold for large tool-output artifact offloading?

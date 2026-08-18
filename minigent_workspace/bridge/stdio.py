@@ -249,7 +249,7 @@ class StdioMCPBridge:
         try:
             async with Client(
                 _process_stdio_transport(self),
-                client_info=Implementation(name="minigent-stdio-bridge", version="0.1.0"),
+                client_info=Implementation(name="mindweft-stdio-bridge", version="0.1.0"),
                 mode="auto",
                 read_timeout_seconds=self._settings.request_timeout,
             ) as client:

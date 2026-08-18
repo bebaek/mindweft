@@ -20,7 +20,7 @@ from minigent_client.admin_commands import (
     run_admin_threads_prune,
     run_admin_threads_show,
 )
-from minigent_client.api_client import MinigentAPIClient
+from minigent_client.api_client import MindweftAPIClient
 from minigent_client.chat_commands import (
     run_chat,
     run_export,
@@ -49,7 +49,7 @@ from minigent_client.diagnostic_commands import (
 
 def dispatch_command(
     args: argparse.Namespace,
-    client: MinigentAPIClient,
+    client: MindweftAPIClient,
     config: ClientConfig,
     trace_id: str | None,
 ) -> int | None:

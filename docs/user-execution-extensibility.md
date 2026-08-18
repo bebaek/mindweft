@@ -93,7 +93,7 @@ chooses definitions for a thread. Personal defaults are preferences, not authori
 
 Saved user execution config may contain a credential reference but must not contain reusable
 plaintext credentials. Static credential headers are stored in encrypted, tenant-and-user-scoped
-rows under `MINIGENT_ADMIN_DB_PATH`; `MINIGENT_ADMIN_ENCRYPTION_KEY` is mandatory for credential
+rows under `MINDWEFT_ADMIN_DB_PATH`; `MINDWEFT_ADMIN_ENCRYPTION_KEY` is mandatory for credential
 APIs and runtime resolution. The write-only API is:
 
 ```text

@@ -225,6 +225,6 @@ uv run pytest
 Run real CLI integration tests only when the matching local CLI is installed and configured:
 
 ```bash
-MINIGENT_RUN_OPENCODE_INTEGRATION_TESTS=true uv run pytest tests/test_opencode_integration.py
-MINIGENT_RUN_PI_INTEGRATION_TESTS=true uv run pytest tests/test_pi_integration.py
+MINDWEFT_RUN_OPENCODE_INTEGRATION_TESTS=true uv run pytest tests/test_opencode_integration.py
+MINDWEFT_RUN_PI_INTEGRATION_TESTS=true uv run pytest tests/test_pi_integration.py
 ```

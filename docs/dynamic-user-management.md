@@ -5,7 +5,7 @@ Status: Partially implemented
 Implemented: tenant membership model and SQLite store, global-admin and tenant-owner scoped
 CRUD/list/status-transition APIs and UI, last-active-owner and self-credential lockout protection,
 tenant-scoped encrypted OpenAI OAuth import from Pi, mutation audit records, optional request-time
-active-membership enforcement with `MINIGENT_TENANT_USER_REGISTRY_REQUIRED`, and membership fields
+active-membership enforcement with `MINDWEFT_TENANT_USER_REGISTRY_REQUIRED`, and membership fields
 on `TenantContext`.
 
 Still pending or partial: invite-token/email delivery workflows, granular tenant-admin RBAC, richer
@@ -123,7 +123,7 @@ Current request flow when the admin store is available:
 Opt-in flag:
 
 ```text
-MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true
+MINDWEFT_TENANT_USER_REGISTRY_REQUIRED=true
 ```
 
 When disabled, Mindweft should continue trusting authenticated principal material for user
@@ -144,7 +144,7 @@ membership_metadata
 ```
 
 These fields remain optional for compatibility mode. Active membership metadata is included whenever
-a matching record exists; when `MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true`, missing or inactive
+a matching record exists; when `MINDWEFT_TENANT_USER_REGISTRY_REQUIRED=true`, missing or inactive
 membership is rejected instead of being omitted.
 
 ## Admin operations
@@ -256,7 +256,7 @@ CLI commands exist for list/show/create/update/activate/suspend/delete membershi
 
 Status: implemented.
 
-`MINIGENT_TENANT_USER_REGISTRY_REQUIRED` rejects requests from principals without an active
+`MINDWEFT_TENANT_USER_REGISTRY_REQUIRED` rejects requests from principals without an active
 tenant membership when enabled.
 
 ### Phase 5: Introduce granular roles

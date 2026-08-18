@@ -65,7 +65,7 @@ prices are updated.
 
 ## Proposed durable model
 
-Use a dedicated shared SQLite database, for example `MINIGENT_USAGE_DB_PATH`, on deployments with
+Use a dedicated shared SQLite database, for example `MINDWEFT_USAGE_DB_PATH`, on deployments with
 multiple replicas. Keep usage separate from thread content and encrypted private-data stores.
 
 The precise schema can change during implementation, but it should represent two concepts.
