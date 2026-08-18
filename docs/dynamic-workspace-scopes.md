@@ -34,19 +34,19 @@ The MVP should be deliberately small and backwards compatible.
 
 ### Configuration
 
-Add named coding workspace scopes to `minigent.toml`, for example:
+Add named coding workspace scopes to `mindweft.toml`, for example:
 
 ```toml
 [coding]
-workspaces = ["/Users/burm/code", "/Users/burm/dotfiles"]
-default_workspace_scope = "minigent"
+workspaces = ["/path/to/code", "/path/to/dotfiles"]
+default_workspace_scope = "mindweft"
 
-[coding.workspace_scopes.minigent]
-roots = ["/Users/burm/code/minigent"]
+[coding.workspace_scopes.mindweft]
+roots = ["/path/to/code/mindweft"]
 description = "Mindweft runtime and coding workspace development"
 
 [coding.workspace_scopes.dotfiles]
-roots = ["/Users/burm/dotfiles"]
+roots = ["/path/to/dotfiles"]
 description = "Personal shell/editor configuration"
 ```
 
@@ -74,9 +74,9 @@ The generated coding skill prompt should list only the active scope roots as the
 Example prompt fragment:
 
 ```text
-Active workspace scope: minigent
+Active workspace scope: mindweft
 Workspace roots:
-- /Users/burm/code/minigent
+- /path/to/code/mindweft
 
 Stay within these roots for file inspection and edits unless the user explicitly asks to switch scope.
 ```
