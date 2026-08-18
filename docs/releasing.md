@@ -61,6 +61,28 @@ Before the first public package release:
 10. Create release notes from `CHANGELOG.md` and include the migration guide when compatibility
     behavior changes.
 
+## Automated PyPI publishing
+
+The `.github/workflows/release.yml` workflow publishes tags matching `v*` through PyPI Trusted
+Publishing. Before using it:
+
+1. Configure the `mindweft` project (or a pending project) on PyPI with the GitHub publisher owner
+   `bebaek`, repository `mindweft`, workflow `release.yml`, and environment `pypi`.
+2. Configure the GitHub `pypi` environment to allow release tags such as `v*`; requiring a
+   maintainer's approval is recommended.
+3. Merge the release preparation change to `main` and wait for its CI checks to pass.
+4. Create an annotated or signed tag whose version exactly matches `project.version`, then push it:
+
+   ```bash
+   git tag -a v0.1.0 -m "Mindweft 0.1.0"
+   git push origin v0.1.0
+   ```
+
+The workflow rejects tags whose version differs from `pyproject.toml` or whose commit is not
+reachable from `origin/main`. It builds and smoke-tests the distributions in an unprivileged job,
+passes only those artifacts to the environment-protected publishing job, and obtains a short-lived
+PyPI credential through GitHub OIDC. No PyPI token should be stored in GitHub Secrets.
+
 ## Publication safety
 
 - Never rebuild artifacts after approval; publish the already-validated files from `dist/`.
