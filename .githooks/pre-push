@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MINIGENT_RUN_E2E_TESTS=true uv run pytest
+# The full suite starts several local servers and can exceed macOS's low default descriptor limit.
+ulimit -n 4096 2>/dev/null || true
+MINDWEFT_RUN_E2E_TESTS=true uv run pytest

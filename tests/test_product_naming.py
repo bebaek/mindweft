@@ -9,6 +9,7 @@ _EXPECTED_LEGACY_DOC_REFERENCES = {
     "README.md": 3,
     "docs/cli.md": 1,
     "docs/coding-workspace.md": 2,
+    "docs/migrating-from-minigent.md": 1,
     "docs/mindweft-toml.md": 3,
     "docs/minigent-toml.md": 1,
     "docs/reference.md": 5,

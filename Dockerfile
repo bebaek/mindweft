@@ -25,15 +25,19 @@ RUN groupadd --system app && useradd --system --gid app --create-home app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-COPY README.md ./
+COPY README.md LICENSE ./
 COPY app ./app
 COPY --from=frontend-build /web/dist ./app/static/console
+COPY mindweft_client ./mindweft_client
+COPY mindweft_config ./mindweft_config
+COPY mindweft_mcp ./mindweft_mcp
+COPY mindweft_workspace ./mindweft_workspace
 COPY minigent_client ./minigent_client
 COPY minigent_config ./minigent_config
 COPY minigent_mcp ./minigent_mcp
 COPY minigent_workspace ./minigent_workspace
 RUN uv sync --frozen --no-dev
-RUN python -c "import app.main, minigent_mcp, minigent_workspace"
+RUN python -c "import app.main, mindweft_mcp, mindweft_workspace, minigent_mcp, minigent_workspace"
 
 RUN mkdir -p /data && chown -R app:app /app /data
 

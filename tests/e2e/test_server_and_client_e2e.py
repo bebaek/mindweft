@@ -19,13 +19,15 @@ import pytest
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.config import ClientConfig, PrincipalConfig
 
-RUN_E2E_ENV = "MINIGENT_RUN_E2E_TESTS"
+RUN_E2E_ENV = "MINDWEFT_RUN_E2E_TESTS"
+LEGACY_RUN_E2E_ENV = "MINIGENT_RUN_E2E_TESTS"
+RUN_E2E_VALUE = os.getenv(RUN_E2E_ENV) or os.getenv(LEGACY_RUN_E2E_ENV, "")
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.e2e,
     pytest.mark.skipif(
-        os.getenv(RUN_E2E_ENV, "").strip().lower() not in {"1", "true", "yes", "on"},
+        RUN_E2E_VALUE.strip().lower() not in {"1", "true", "yes", "on"},
         reason=f"Set {RUN_E2E_ENV}=true to run Mindweft e2e tests",
     ),
 ]
@@ -119,7 +121,7 @@ allowed_local_tools = ["calculator"]
             ],
             cwd=tmp_path,
             env={
-                **os.environ,
+                **_clean_mindweft_environment(),
                 "MINIGENT_BASE_URL": source_base_url,
                 "MINIGENT_DOTENV_FILE": str(source_dotenv_path),
                 "PYTHONPATH": str(repo_root),
@@ -285,7 +287,7 @@ def _started_minigent_server(
     port = _unused_tcp_port()
     base_url = f"http://127.0.0.1:{port}"
     env = {
-        **os.environ,
+        **_clean_mindweft_environment(),
         "MINIGENT_BASE_URL": base_url,
         "PYTHONPATH": str(repo_root),
         **env_overrides,
@@ -330,6 +332,14 @@ def _started_minigent_server(
         if process.returncode not in {0, -15}:
             print(stdout, file=sys.stdout)
             print(stderr, file=sys.stderr)
+
+
+def _clean_mindweft_environment() -> dict[str, str]:
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("MINDWEFT_", "MINIGENT_"))
+    }
 
 
 def _unused_tcp_port() -> int:

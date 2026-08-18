@@ -57,7 +57,9 @@ Canonical Python imports are also available from `mindweft_client`, `mindweft_co
 `minigent_*` import packages remain available as compatibility aliases and resolve public modules
 to the same implementation objects.
 The installable distribution is named `mindweft`; legacy `minigent_*` import packages and
-`minigent-*` console aliases remain included for source and command compatibility.
+`minigent-*` console aliases remain included for source and command compatibility. See
+[Migrating from Minigent](docs/migrating-from-minigent.md) for upgrade guidance and the
+[change history](CHANGELOG.md) for release-level changes.
 
 For the reusable coding-workspace runner, copy `.env.coding.template` to `.env.coding`.
 When storage paths are not configured, the runner uses durable thread and attachment databases
@@ -583,6 +585,8 @@ it deliberately.
 - [Dynamic user management](docs/dynamic-user-management.md)
 - [Deferred usage accounting and budget design](docs/usage-accounting-and-budgets.md)
 - [Layered MCP tool stack](docs/layered-mcp-tool-stack.md)
+- [Migrating from legacy Minigent](docs/migrating-from-minigent.md)
+- [Release process](docs/releasing.md)
 - [Full reference](docs/reference.md)
 
 ## Development
@@ -612,3 +616,7 @@ The pre-commit hook runs formatting, lint, and type checks. The pre-push hook ru
 ```text
 chore: redact secrets from MCP URL logging
 ```
+
+## License
+
+Mindweft is licensed under the [Apache License 2.0](LICENSE).

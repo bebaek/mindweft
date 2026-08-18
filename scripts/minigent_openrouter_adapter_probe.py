@@ -81,7 +81,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--site-url",
-        default=os.getenv("OPENROUTER_SITE_URL", "https://github.com/burm/minigent"),
+        default=os.getenv("OPENROUTER_SITE_URL", "https://github.com/bebaek/mindweft"),
         help="Optional HTTP-Referer header value sent by the adapter.",
     )
     parser.add_argument(

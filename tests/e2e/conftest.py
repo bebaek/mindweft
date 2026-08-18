@@ -24,7 +24,7 @@ def live_minigent_server(tmp_path: Path, repo_root: Path) -> Iterator[str]:
     port = _unused_tcp_port()
     base_url = f"http://127.0.0.1:{port}"
     env = {
-        **os.environ,
+        **_clean_mindweft_environment(),
         "MINIGENT_CONFIG_DISCOVERY": "disabled",
         "MINIGENT_AUTH_MODE": "dev-headers",
         "MINIGENT_LLM_PROVIDER": "mock",
@@ -65,6 +65,14 @@ def live_minigent_server(tmp_path: Path, repo_root: Path) -> Iterator[str]:
         if process.returncode not in {0, -15}:
             print(stdout, file=sys.stdout)
             print(stderr, file=sys.stderr)
+
+
+def _clean_mindweft_environment() -> dict[str, str]:
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("MINDWEFT_", "MINIGENT_"))
+    }
 
 
 def _unused_tcp_port() -> int:

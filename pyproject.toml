@@ -1,8 +1,25 @@
 [project]
 name = "mindweft"
 version = "0.1.0"
-description = "Mindweft AI agent runtime POC"
+description = "Local-first AI agent runtime with HTTP, CLI, MCP, and coding-workspace interfaces"
+readme = { file = "README.md", content-type = "text/markdown" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
+keywords = ["ai", "agents", "fastapi", "llm", "mcp"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console",
+  "Framework :: FastAPI",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
   "cryptography>=50.0.0,<51",
   "fastapi>=0.141.1,<1.0",
@@ -19,6 +36,10 @@ dependencies = [
   "python-dotenv>=1.0,<2.0",
   "uvicorn>=0.52.3,<1.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/bebaek/mindweft"
+Issues = "https://github.com/bebaek/mindweft/issues"
 
 [project.scripts]
 mindweft = "mindweft_client.application:main"

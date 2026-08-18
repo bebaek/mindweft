@@ -47,6 +47,23 @@ def test_shell_entrypoints_prefer_mindweft_with_legacy_fallbacks() -> None:
     assert "Environment=MINDWEFT_VOICE_ENV_FILE=" in installer
 
 
+def test_production_dockerfile_includes_canonical_and_compatibility_packages() -> None:
+    dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "COPY README.md LICENSE ./" in dockerfile
+    for package in (
+        "mindweft_client",
+        "mindweft_config",
+        "mindweft_mcp",
+        "mindweft_workspace",
+        "minigent_client",
+        "minigent_config",
+        "minigent_mcp",
+        "minigent_workspace",
+    ):
+        assert f"COPY {package} ./{package}" in dockerfile
+
+
 def test_container_publish_scripts_default_to_mindweft_images() -> None:
     runtime_script = (PROJECT_ROOT / "scripts/docker-build-push.sh").read_text(encoding="utf-8")
     peer_script = (PROJECT_ROOT / "scripts/docker-build-push-pi-peer-agent.sh").read_text(

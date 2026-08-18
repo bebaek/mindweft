@@ -1,0 +1,5 @@
+include CHANGELOG.md
+include docs/migrating-from-minigent.md
+include docs/releasing.md
+include scripts/smoke_test_installed_distribution.py
+include scripts/verify_distribution_artifacts.py
