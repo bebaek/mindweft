@@ -320,8 +320,8 @@ def test_admin_chat_uses_deployment_execution_when_tenant_has_no_config(tmp_path
 def test_admin_chat_does_not_require_a_tenant_membership(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
-    monkeypatch.setenv("MINIGENT_TENANT_USER_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINDWEFT_TENANT_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINDWEFT_TENANT_USER_REGISTRY_REQUIRED", "true")
     app = create_app(
         admin_store=SQLiteTenantConfigStore(str(tmp_path / "admin.db")),
         tenant_config_source="store",

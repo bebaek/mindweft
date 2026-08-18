@@ -21,19 +21,20 @@ def test_rate_limit_settings_default_disabled_and_parse_values() -> None:
 
     settings = RateLimitSettings.from_env(
         {
-            "MINIGENT_RATE_LIMIT_DB_PATH": "/data/rate-limits.db",
-            "MINIGENT_UPLOAD_RATE_LIMIT_TENANT_CAPACITY": "30",
-            "MINIGENT_UPLOAD_RATE_LIMIT_TENANT_REFILL_PER_SECOND": "0.5",
-            "MINIGENT_UPLOAD_RATE_LIMIT_USER_CAPACITY": "10",
-            "MINIGENT_UPLOAD_RATE_LIMIT_USER_REFILL_PER_SECOND": "0.2",
-            "MINIGENT_RUN_RATE_LIMIT_TENANT_CAPACITY": "15",
-            "MINIGENT_RUN_RATE_LIMIT_TENANT_REFILL_PER_SECOND": "0.3",
-            "MINIGENT_RUN_RATE_LIMIT_USER_CAPACITY": "5",
-            "MINIGENT_RUN_RATE_LIMIT_USER_REFILL_PER_SECOND": "0.1",
-            "MINIGENT_RUN_CONCURRENCY_TENANT_CAPACITY": "4",
-            "MINIGENT_RUN_CONCURRENCY_USER_CAPACITY": "2",
-            "MINIGENT_RUN_CONCURRENCY_LEASE_SECONDS": "60",
-            "MINIGENT_RUN_CONCURRENCY_HEARTBEAT_SECONDS": "20",
+            "MINDWEFT_RATE_LIMIT_DB_PATH": "/data/rate-limits.db",
+            "MINDWEFT_UPLOAD_RATE_LIMIT_TENANT_CAPACITY": "30",
+            "MINDWEFT_UPLOAD_RATE_LIMIT_TENANT_REFILL_PER_SECOND": "0.5",
+            "MINDWEFT_UPLOAD_RATE_LIMIT_USER_CAPACITY": "10",
+            "MINDWEFT_UPLOAD_RATE_LIMIT_USER_REFILL_PER_SECOND": "0.2",
+            "MINDWEFT_RUN_RATE_LIMIT_TENANT_CAPACITY": "15",
+            "MINDWEFT_RUN_RATE_LIMIT_TENANT_REFILL_PER_SECOND": "0.3",
+            "MINDWEFT_RUN_RATE_LIMIT_USER_CAPACITY": "5",
+            "MINIGENT_RUN_RATE_LIMIT_USER_CAPACITY": "99",
+            "MINDWEFT_RUN_RATE_LIMIT_USER_REFILL_PER_SECOND": "0.1",
+            "MINDWEFT_RUN_CONCURRENCY_TENANT_CAPACITY": "4",
+            "MINDWEFT_RUN_CONCURRENCY_USER_CAPACITY": "2",
+            "MINDWEFT_RUN_CONCURRENCY_LEASE_SECONDS": "60",
+            "MINDWEFT_RUN_CONCURRENCY_HEARTBEAT_SECONDS": "20",
         }
     )
 
@@ -58,18 +59,30 @@ def test_rate_limit_settings_default_disabled_and_parse_values() -> None:
     )
 
     with pytest.raises(RuntimeError, match="non-negative integer"):
-        RateLimitSettings.from_env({"MINIGENT_RUN_RATE_LIMIT_USER_CAPACITY": "-1"})
+        RateLimitSettings.from_env({"MINDWEFT_RUN_RATE_LIMIT_USER_CAPACITY": "-1"})
     with pytest.raises(RuntimeError, match="positive finite number"):
-        RateLimitSettings.from_env({"MINIGENT_RUN_RATE_LIMIT_USER_REFILL_PER_SECOND": "nan"})
+        RateLimitSettings.from_env({"MINDWEFT_RUN_RATE_LIMIT_USER_REFILL_PER_SECOND": "nan"})
 
     with pytest.raises(RuntimeError, match="must be less than"):
         RateLimitSettings.from_env(
             {
-                "MINIGENT_RUN_CONCURRENCY_TENANT_CAPACITY": "1",
-                "MINIGENT_RUN_CONCURRENCY_LEASE_SECONDS": "20",
-                "MINIGENT_RUN_CONCURRENCY_HEARTBEAT_SECONDS": "20",
+                "MINDWEFT_RUN_CONCURRENCY_TENANT_CAPACITY": "1",
+                "MINDWEFT_RUN_CONCURRENCY_LEASE_SECONDS": "20",
+                "MINDWEFT_RUN_CONCURRENCY_HEARTBEAT_SECONDS": "20",
             }
         )
+
+
+def test_rate_limit_settings_accept_legacy_minigent_env() -> None:
+    settings = RateLimitSettings.from_env(
+        {
+            "MINIGENT_RATE_LIMIT_DB_PATH": "/data/legacy-rate-limits.db",
+            "MINIGENT_RUN_RATE_LIMIT_USER_CAPACITY": "3",
+        }
+    )
+
+    assert settings.db_path == "/data/legacy-rate-limits.db"
+    assert settings.runs.user_capacity == 3
 
 
 def test_run_concurrency_leases_enforce_scopes_renew_release_and_expiry(

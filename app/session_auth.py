@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.models import Principal
 from app.rate_limits import RateLimitPolicy
+from minigent_config.unified_config import normalize_mindweft_env
 
 SESSION_CREDENTIALS_ENV = "MINIGENT_SESSION_CREDENTIALS"
 SESSION_SECRET_ENV = "MINIGENT_SESSION_SECRET"
@@ -62,7 +63,7 @@ class SessionAuthSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> SessionAuthSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
             credentials=_load_credentials(lookup),
             secret=_optional_env(SESSION_SECRET_ENV, lookup),
@@ -111,10 +112,10 @@ def validate_session_auth_settings(
     settings = SessionAuthSettings.from_env(env)
     if settings.credentials and settings.secret is None:
         raise RuntimeError(
-            f"{SESSION_SECRET_ENV} is required when {SESSION_CREDENTIALS_ENV} is configured"
+            f"{_canonical_env_name(SESSION_SECRET_ENV)} is required when {_canonical_env_name(SESSION_CREDENTIALS_ENV)} is configured"
         )
     if settings.secret is not None and len(settings.secret.encode()) < 32:
-        raise RuntimeError(f"{SESSION_SECRET_ENV} must be at least 32 bytes")
+        raise RuntimeError(f"{_canonical_env_name(SESSION_SECRET_ENV)} must be at least 32 bytes")
     return settings
 
 
@@ -385,7 +386,7 @@ def _encode_session(
     credential_version: int,
 ) -> str:
     if settings.secret is None:  # pragma: no cover - validated by caller
-        raise RuntimeError(f"{SESSION_SECRET_ENV} is required")
+        raise RuntimeError(f"{_canonical_env_name(SESSION_SECRET_ENV)} is required")
     now = int(time.time())
     return jwt.encode(
         {
@@ -531,26 +532,34 @@ def _load_credentials(env: Mapping[str, str]) -> dict[str, SessionCredential]:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{SESSION_CREDENTIALS_ENV} must be valid JSON") from exc
+        raise RuntimeError(
+            f"{_canonical_env_name(SESSION_CREDENTIALS_ENV)} must be valid JSON"
+        ) from exc
     if not isinstance(parsed, dict) or not parsed:
-        raise RuntimeError(f"{SESSION_CREDENTIALS_ENV} must be a non-empty JSON object")
+        raise RuntimeError(
+            f"{_canonical_env_name(SESSION_CREDENTIALS_ENV)} must be a non-empty JSON object"
+        )
     credentials: dict[str, SessionCredential] = {}
     for username, value in parsed.items():
         if not isinstance(username, str) or not username.strip():
-            raise RuntimeError(f"{SESSION_CREDENTIALS_ENV} usernames must be non-empty strings")
+            raise RuntimeError(
+                f"{_canonical_env_name(SESSION_CREDENTIALS_ENV)} usernames must be non-empty strings"
+            )
         if not isinstance(value, dict):
-            raise RuntimeError(f"{SESSION_CREDENTIALS_ENV} credential values must be objects")
+            raise RuntimeError(
+                f"{_canonical_env_name(SESSION_CREDENTIALS_ENV)} credential values must be objects"
+            )
         password_hash = value.get("password_hash")
         principal_value: Any = value.get("principal")
         if not isinstance(password_hash, str) or not _valid_password_hash(password_hash):
             raise RuntimeError(
-                f"{SESSION_CREDENTIALS_ENV} credential '{username}' has an invalid password_hash"
+                f"{_canonical_env_name(SESSION_CREDENTIALS_ENV)} credential '{username}' has an invalid password_hash"
             )
         try:
             principal = Principal.model_validate(principal_value)
         except ValueError as exc:
             raise RuntimeError(
-                f"{SESSION_CREDENTIALS_ENV} credential '{username}' has an invalid principal"
+                f"{_canonical_env_name(SESSION_CREDENTIALS_ENV)} credential '{username}' has an invalid principal"
             ) from exc
         credentials[username] = SessionCredential(password_hash=password_hash, principal=principal)
     return credentials
@@ -565,14 +574,18 @@ def _optional_env(name: str, env: Mapping[str, str]) -> str | None:
     return value.strip() if value and value.strip() else None
 
 
+def _canonical_env_name(name: str) -> str:
+    return name.replace("MINIGENT_", "MINDWEFT_", 1)
+
+
 def _positive_int_env(name: str, env: Mapping[str, str], *, default: int) -> int:
     raw = env.get(name, str(default)).strip()
     try:
         value = int(raw)
     except ValueError as exc:
-        raise RuntimeError(f"{name} must be an integer") from exc
+        raise RuntimeError(f"{_canonical_env_name(name)} must be an integer") from exc
     if value <= 0:
-        raise RuntimeError(f"{name} must be greater than zero")
+        raise RuntimeError(f"{_canonical_env_name(name)} must be greater than zero")
     return value
 
 
@@ -581,9 +594,9 @@ def _non_negative_int_env(name: str, env: Mapping[str, str], *, default: int) ->
     try:
         value = int(raw)
     except ValueError as exc:
-        raise RuntimeError(f"{name} must be an integer") from exc
+        raise RuntimeError(f"{_canonical_env_name(name)} must be an integer") from exc
     if value < 0:
-        raise RuntimeError(f"{name} must be zero or greater")
+        raise RuntimeError(f"{_canonical_env_name(name)} must be zero or greater")
     return value
 
 
@@ -592,9 +605,9 @@ def _positive_float_env(name: str, env: Mapping[str, str], *, default: float) ->
     try:
         value = float(raw)
     except ValueError as exc:
-        raise RuntimeError(f"{name} must be a number") from exc
+        raise RuntimeError(f"{_canonical_env_name(name)} must be a number") from exc
     if value <= 0:
-        raise RuntimeError(f"{name} must be greater than zero")
+        raise RuntimeError(f"{_canonical_env_name(name)} must be greater than zero")
     return value
 
 
@@ -607,7 +620,7 @@ def _bool_env(name: str, env: Mapping[str, str], *, default: bool) -> bool:
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    raise RuntimeError(f"{name} must be a boolean")
+    raise RuntimeError(f"{_canonical_env_name(name)} must be a boolean")
 
 
 def _list_env(name: str, env: Mapping[str, str]) -> list[str]:
@@ -618,8 +631,8 @@ def _list_env(name: str, env: Mapping[str, str]) -> list[str]:
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"{name} must be valid JSON") from exc
+            raise RuntimeError(f"{_canonical_env_name(name)} must be valid JSON") from exc
         if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
-            raise RuntimeError(f"{name} must be a JSON array of strings")
+            raise RuntimeError(f"{_canonical_env_name(name)} must be a JSON array of strings")
         return [item for item in parsed if item]
     return [item.strip() for item in raw.split(",") if item.strip()]

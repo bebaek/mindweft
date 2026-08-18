@@ -10,6 +10,8 @@ from typing import Protocol
 
 from fastapi import HTTPException
 
+from minigent_config.unified_config import normalize_mindweft_env
+
 PII_PLACEHOLDER_PATTERN = re.compile(
     r"\{\{pii:(?P<kind>[a-z][a-z0-9_]*):(?P<reference>[A-Za-z0-9_-]+)\}\}"
 )
@@ -118,7 +120,7 @@ class LocalPIIProtector:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> LocalPIIProtector:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         raw = lookup.get(INPUT_PII_PROTECTION_ENABLED_ENV, "true").strip().lower()
         if raw not in {"true", "false"}:
             raise RuntimeError(f"{INPUT_PII_PROTECTION_ENABLED_ENV} must be true or false")
@@ -215,7 +217,7 @@ class InMemoryPrivateValueStore:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> InMemoryPrivateValueStore:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
             ttl_seconds=_positive_float_setting(
                 lookup,
@@ -348,7 +350,7 @@ class InMemoryPrivateValueStore:
 def build_private_value_store_from_env(
     env: Mapping[str, str] | None = None,
 ) -> PrivateValueStore:
-    lookup = os.environ if env is None else env
+    lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
     db_path = lookup.get(PRIVATE_VALUE_DB_PATH_ENV, "").strip()
     if not db_path:
         return InMemoryPrivateValueStore.from_env(lookup)

@@ -24,6 +24,7 @@ from mcp.shared.message import SessionMessage
 
 from app.models import Principal
 from app.tools import ToolExecutionContext, ToolRegistry
+from minigent_config.unified_config import preferred_mindweft_env
 from minigent_mcp.protocol import (
     LEGACY_MCP_PROTOCOL_VERSION,
     MODERN_MCP_PROTOCOL_VERSION,
@@ -32,6 +33,11 @@ from minigent_mcp.protocol import (
     strip_modern_mcp_result_envelope,
 )
 
+MINDWEFT_MCP_BROKER_BASE_URL_ENV = "MINDWEFT_MCP_BROKER_BASE_URL"
+MINDWEFT_MCP_BROKER_URL_ENV = "MINDWEFT_MCP_BROKER_URL"
+MINDWEFT_MCP_BROKER_TOKEN_ENV = "MINDWEFT_MCP_BROKER_TOKEN"
+MINDWEFT_MCP_BROKER_SESSION_ENV = "MINDWEFT_MCP_BROKER_SESSION"
+MINDWEFT_MCP_BROKER_DB_PATH_ENV = "MINDWEFT_MCP_BROKER_DB_PATH"
 MINIGENT_MCP_BROKER_BASE_URL_ENV = "MINIGENT_MCP_BROKER_BASE_URL"
 MINIGENT_MCP_BROKER_URL_ENV = "MINIGENT_MCP_BROKER_URL"
 MINIGENT_MCP_BROKER_TOKEN_ENV = "MINIGENT_MCP_BROKER_TOKEN"
@@ -60,7 +66,7 @@ class MCPBrokerStoreSettings:
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> MCPBrokerStoreSettings:
         lookup = os.environ if env is None else env
-        db_path = lookup.get(MINIGENT_MCP_BROKER_DB_PATH_ENV, "").strip()
+        db_path = (preferred_mindweft_env("MCP_BROKER_DB_PATH", lookup) or "").strip()
         return cls(db_path=db_path or None)
 
 
@@ -276,7 +282,11 @@ async def handle_mcp_broker_request(
     request: Request,
     tool_registry_resolver: ToolRegistryResolver | None = None,
 ) -> Response | dict[str, object]:
-    token = _bearer_token(request) or request.headers.get("x-minigent-mcp-broker-token")
+    token = (
+        _bearer_token(request)
+        or request.headers.get("x-mindweft-mcp-broker-token")
+        or request.headers.get("x-minigent-mcp-broker-token")
+    )
     session = session_store.require_session(session_id, token)
     tool_registry = session.tool_registry
     if tool_registry is None and tool_registry_resolver is not None:
@@ -325,7 +335,7 @@ def _broker_sdk_payload(
         sdk_params.setdefault("capabilities", {})
         sdk_params.setdefault(
             "clientInfo",
-            {"name": "minigent-mcp-broker-http-client", "version": "0.1.0"},
+            {"name": "mindweft-mcp-broker-http-client", "version": "0.1.0"},
         )
     else:
         raw_meta = sdk_params.get("_meta")
@@ -333,7 +343,7 @@ def _broker_sdk_payload(
         metadata.setdefault("io.modelcontextprotocol/protocolVersion", MODERN_MCP_PROTOCOL_VERSION)
         metadata.setdefault(
             "io.modelcontextprotocol/clientInfo",
-            {"name": "minigent-mcp-broker-http-client", "version": "0.1.0"},
+            {"name": "mindweft-mcp-broker-http-client", "version": "0.1.0"},
         )
         metadata.setdefault("io.modelcontextprotocol/clientCapabilities", {})
         sdk_params["_meta"] = metadata
@@ -345,7 +355,7 @@ def _build_broker_sdk_server(
     session: MCPBrokerSession,
     tool_registry: ToolRegistry,
 ) -> Server[Any]:
-    sdk_server: Server[Any] = Server("minigent-mcp-broker", version="0.1.0")
+    sdk_server: Server[Any] = Server("mindweft-mcp-broker", version="0.1.0")
 
     async def list_tools(
         _context: ServerRequestContext[Any, Any],

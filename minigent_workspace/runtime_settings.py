@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 
+from minigent_config.unified_config import normalize_mindweft_env
 from minigent_workspace.mcp_specs import (
     DEFAULT_BRIDGE_HOST,
     DEFAULT_BRIDGE_PORT,
@@ -47,6 +48,7 @@ class WorkspaceRuntimeSettings:
 def resolve_workspace_runtime_settings(
     args: argparse.Namespace, env: dict[str, str]
 ) -> WorkspaceRuntimeSettings:
+    normalize_mindweft_env(env)
     api_host = args.api_host or env.get("MINIGENT_HOST") or DEFAULT_API_HOST
     api_port = args.api_port or int(env.get("MINIGENT_PORT") or DEFAULT_API_PORT)
     bridge_host = args.bridge_host or env.get("MINIGENT_CODING_BRIDGE_HOST") or DEFAULT_BRIDGE_HOST

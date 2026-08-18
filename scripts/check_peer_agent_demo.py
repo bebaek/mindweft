@@ -105,7 +105,7 @@ def run_checks(args: argparse.Namespace) -> list[CheckResult]:
         check_command("uv can run", ["uv", "--version"], cwd=root_dir),
         check_agent_command_help(args.agent_runtime, agent_command, cwd=root_dir),
         check_command(
-            "minigent imports",
+            "mindweft imports",
             ["uv", "run", "python", "-c", "import app.main"],
             cwd=root_dir,
         ),

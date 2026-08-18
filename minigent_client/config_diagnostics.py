@@ -15,6 +15,7 @@ from minigent_client.output import print_json
 from minigent_config.unified_config import (
     MINDWEFT_CONFIG_FILE,
     load_unified_config_env,
+    normalize_mindweft_env,
     resolve_config_path,
     resolve_dotenv_path,
 )
@@ -192,7 +193,7 @@ def _unified_config_checks() -> list[DiagnosticCheck]:
             )
         )
         return checks
-    resolved_env = {**config_env, **env_snapshot}
+    resolved_env = normalize_mindweft_env({**config_env, **env_snapshot})
     checks.extend(_llm_config_checks(data, resolved_env))
     checks.extend(_coding_config_checks(data, resolved_env))
     checks.extend(_mcp_config_checks(data))

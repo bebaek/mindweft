@@ -10,6 +10,7 @@ from urllib.parse import quote, urlencode, urlsplit
 import httpx
 
 from app.mcp_identity import MCPIdentityTokenIssuer
+from minigent_config.unified_config import normalize_mindweft_env
 
 EXTERNAL_GRANT_PROVIDERS_ENV = "MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS"
 _PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
@@ -248,16 +249,16 @@ class ExternalGrantProviderRegistry:
 def build_external_grant_provider_registry_from_env(
     env: Mapping[str, str] | None = None,
 ) -> ExternalGrantProviderRegistry:
-    lookup = os.environ if env is None else env
+    lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
     raw = lookup.get(EXTERNAL_GRANT_PROVIDERS_ENV, "").strip()
     if not raw:
         return ExternalGrantProviderRegistry()
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{EXTERNAL_GRANT_PROVIDERS_ENV} must be valid JSON") from exc
+        raise RuntimeError("MINDWEFT_ADMIN_EXTERNAL_GRANT_PROVIDERS must be valid JSON") from exc
     if not isinstance(payload, list):
-        raise RuntimeError(f"{EXTERNAL_GRANT_PROVIDERS_ENV} must be a JSON array")
+        raise RuntimeError("MINDWEFT_ADMIN_EXTERNAL_GRANT_PROVIDERS must be a JSON array")
     providers: list[HTTPExternalGrantProvider] = []
     seen: set[str] = set()
     for index, item in enumerate(payload):

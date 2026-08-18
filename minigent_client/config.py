@@ -5,7 +5,9 @@ import os
 import tomllib
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, overload
+
+from minigent_config.unified_config import preferred_mindweft_env
 
 
 @dataclass(frozen=True)
@@ -105,46 +107,46 @@ class ClientConfig:
     def from_env(cls, config_path: str | os.PathLike[str] | None = None) -> "ClientConfig":
         file_overrides, loaded_config_path = load_client_config_overrides(config_path)
         config = cls(
-            base_url=os.getenv("MINIGENT_BASE_URL", "http://127.0.0.1:8000").rstrip("/"),
-            wake_phrase=os.getenv("MINIGENT_VOICE_WAKE_PHRASE", "hey minigent").strip(),
-            prompt_preamble=_clean_optional(os.getenv("MINIGENT_VOICE_PROMPT_PREAMBLE")),
-            location=_clean_optional(os.getenv("MINIGENT_VOICE_LOCATION")),
+            base_url=_getenv("MINIGENT_BASE_URL", "http://127.0.0.1:8000").rstrip("/"),
+            wake_phrase=_getenv("MINIGENT_VOICE_WAKE_PHRASE", "hey minigent").strip(),
+            prompt_preamble=_clean_optional(_getenv("MINIGENT_VOICE_PROMPT_PREAMBLE")),
+            location=_clean_optional(_getenv("MINIGENT_VOICE_LOCATION")),
             debug_show_prompt=_bool_from_env("MINIGENT_VOICE_DEBUG_SHOW_PROMPT", False),
             stream_runs=_bool_from_env("MINIGENT_CLIENT_STREAM_RUNS", False),
             show_tool_results=_bool_from_env("MINIGENT_CLIENT_SHOW_TOOL_RESULTS", False),
-            token_mode=os.getenv("MINIGENT_CLIENT_TOKENS", "auto").strip().lower(),
-            chat_submit_mode=os.getenv("MINIGENT_CLIENT_CHAT_SUBMIT_MODE", "enter").strip().lower(),
-            wake_acknowledgement=_clean_optional(os.getenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT")),
+            token_mode=_getenv("MINIGENT_CLIENT_TOKENS", "auto").strip().lower(),
+            chat_submit_mode=_getenv("MINIGENT_CLIENT_CHAT_SUBMIT_MODE", "enter").strip().lower(),
+            wake_acknowledgement=_clean_optional(_getenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT")),
             wake_acknowledgement_sound=_clean_optional(
-                os.getenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND")
+                _getenv("MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND")
             ),
             capture_ended_acknowledgement=_clean_optional(
-                os.getenv("MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT")
+                _getenv("MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT")
             ),
             capture_ended_acknowledgement_sound=_clean_optional(
-                os.getenv("MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT_SOUND")
+                _getenv("MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT_SOUND")
             ),
-            stt_provider=os.getenv("MINIGENT_VOICE_STT_PROVIDER", "openai").strip().lower(),
-            stt_device=_clean_optional(os.getenv("MINIGENT_VOICE_STT_DEVICE")),
-            stt_compute_type=_clean_optional(os.getenv("MINIGENT_VOICE_STT_COMPUTE_TYPE")),
-            stt_language=_clean_optional(os.getenv("MINIGENT_VOICE_STT_LANGUAGE")),
-            tts_provider=os.getenv("MINIGENT_VOICE_TTS_PROVIDER", "console").strip().lower(),
-            tts_voice=_clean_optional(os.getenv("MINIGENT_VOICE_TTS_VOICE")),
-            tts_model=_clean_optional(os.getenv("MINIGENT_VOICE_TTS_MODEL")),
-            tts_model_dir=_clean_optional(os.getenv("MINIGENT_VOICE_TTS_MODEL_DIR")),
+            stt_provider=_getenv("MINIGENT_VOICE_STT_PROVIDER", "openai").strip().lower(),
+            stt_device=_clean_optional(_getenv("MINIGENT_VOICE_STT_DEVICE")),
+            stt_compute_type=_clean_optional(_getenv("MINIGENT_VOICE_STT_COMPUTE_TYPE")),
+            stt_language=_clean_optional(_getenv("MINIGENT_VOICE_STT_LANGUAGE")),
+            tts_provider=_getenv("MINIGENT_VOICE_TTS_PROVIDER", "console").strip().lower(),
+            tts_voice=_clean_optional(_getenv("MINIGENT_VOICE_TTS_VOICE")),
+            tts_model=_clean_optional(_getenv("MINIGENT_VOICE_TTS_MODEL")),
+            tts_model_dir=_clean_optional(_getenv("MINIGENT_VOICE_TTS_MODEL_DIR")),
             tts_speaker=_optional_int_from_env("MINIGENT_VOICE_TTS_SPEAKER"),
             tts_length_scale=_optional_float_from_env("MINIGENT_VOICE_TTS_LENGTH_SCALE"),
             tts_sentence_silence=_float_from_env("MINIGENT_VOICE_TTS_SENTENCE_SILENCE", 0.35),
-            wakeword_provider=os.getenv("MINIGENT_VOICE_WAKEWORD_PROVIDER", "porcupine")
+            wakeword_provider=_getenv("MINIGENT_VOICE_WAKEWORD_PROVIDER", "porcupine")
             .strip()
             .lower(),
-            skill_name=_clean_optional(os.getenv("MINIGENT_VOICE_SKILL")),
-            agent_presets=parse_agent_presets_env(os.getenv("MINIGENT_CLIENT_AGENT_PRESETS")),
-            thread_id=_clean_optional(os.getenv("MINIGENT_VOICE_THREAD_ID")),
-            audio_device=_clean_optional(os.getenv("MINIGENT_VOICE_AUDIO_DEVICE")),
-            debug_capture_path=_clean_optional(os.getenv("MINIGENT_VOICE_DEBUG_CAPTURE_PATH")),
-            stt_debug_path=_clean_optional(os.getenv("MINIGENT_VOICE_STT_DEBUG_PATH")),
-            ducking_mode=os.getenv("MINIGENT_VOICE_DUCKING_MODE", "off").strip().lower(),
+            skill_name=_clean_optional(_getenv("MINIGENT_VOICE_SKILL")),
+            agent_presets=parse_agent_presets_env(_getenv("MINIGENT_CLIENT_AGENT_PRESETS")),
+            thread_id=_clean_optional(_getenv("MINIGENT_VOICE_THREAD_ID")),
+            audio_device=_clean_optional(_getenv("MINIGENT_VOICE_AUDIO_DEVICE")),
+            debug_capture_path=_clean_optional(_getenv("MINIGENT_VOICE_DEBUG_CAPTURE_PATH")),
+            stt_debug_path=_clean_optional(_getenv("MINIGENT_VOICE_STT_DEBUG_PATH")),
+            ducking_mode=_getenv("MINIGENT_VOICE_DUCKING_MODE", "off").strip().lower(),
             ducked_output_volume=_bounded_int_from_env(
                 "MINIGENT_VOICE_DUCKED_OUTPUT_VOLUME", 20, minimum=0, maximum=100
             ),
@@ -167,27 +169,27 @@ class ClientConfig:
             stt_pad_leading_ms=_int_from_env("MINIGENT_VOICE_STT_PAD_LEADING_MS", 250),
             stt_pad_trailing_ms=_int_from_env("MINIGENT_VOICE_STT_PAD_TRAILING_MS", 500),
             vad_threshold=_float_from_env("MINIGENT_VOICE_VAD_THRESHOLD", 0.5),
-            stt_model=os.getenv(
+            stt_model=_getenv(
                 "MINIGENT_VOICE_STT_MODEL",
-                _default_stt_model(os.getenv("MINIGENT_VOICE_STT_PROVIDER", "openai")),
+                _default_stt_model(_getenv("MINIGENT_VOICE_STT_PROVIDER", "openai")),
             ).strip(),
-            openai_api_key=_clean_optional(os.getenv("OPENAI_API_KEY")),
-            openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
-            openrouter_api_key=_clean_optional(os.getenv("OPENROUTER_API_KEY")),
-            openrouter_base_url=os.getenv(
+            openai_api_key=_clean_optional(_getenv("OPENAI_API_KEY")),
+            openai_base_url=_getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+            openrouter_api_key=_clean_optional(_getenv("OPENROUTER_API_KEY")),
+            openrouter_base_url=_getenv(
                 "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
             ).rstrip("/"),
-            openrouter_http_referer=_clean_optional(os.getenv("OPENROUTER_HTTP_REFERER")),
-            openrouter_app_name=_clean_optional(os.getenv("OPENROUTER_APP_NAME")),
-            picovoice_access_key=_clean_optional(os.getenv("PICOVOICE_ACCESS_KEY")),
-            porcupine_keyword_path=_clean_optional(os.getenv("MINIGENT_VOICE_KEYWORD_PATH")),
-            openwakeword_model=os.getenv("MINIGENT_VOICE_OWW_MODEL", "okay_nabu").strip(),
+            openrouter_http_referer=_clean_optional(_getenv("OPENROUTER_HTTP_REFERER")),
+            openrouter_app_name=_clean_optional(_getenv("OPENROUTER_APP_NAME")),
+            picovoice_access_key=_clean_optional(_getenv("PICOVOICE_ACCESS_KEY")),
+            porcupine_keyword_path=_clean_optional(_getenv("MINIGENT_VOICE_KEYWORD_PATH")),
+            openwakeword_model=_getenv("MINIGENT_VOICE_OWW_MODEL", "okay_nabu").strip(),
             openwakeword_threshold=_float_from_env("MINIGENT_VOICE_OWW_THRESHOLD", 0.5),
             principal=PrincipalConfig(
-                user_id=os.getenv("MINIGENT_VOICE_USER_ID", "demo-user"),
-                tenant_id=os.getenv("MINIGENT_VOICE_TENANT_ID", "demo-tenant"),
-                is_admin=os.getenv("MINIGENT_VOICE_ADMIN", "").lower() in {"1", "true", "yes"},
-                api_token=_clean_optional(os.getenv("MINIGENT_VOICE_API_TOKEN")),
+                user_id=_getenv("MINIGENT_VOICE_USER_ID", "demo-user"),
+                tenant_id=_getenv("MINIGENT_VOICE_TENANT_ID", "demo-tenant"),
+                is_admin=_getenv("MINIGENT_VOICE_ADMIN", "").lower() in {"1", "true", "yes"},
+                api_token=_clean_optional(_getenv("MINIGENT_VOICE_API_TOKEN")),
             ),
             config_path=loaded_config_path,
         )
@@ -323,7 +325,7 @@ LEGACY_CLIENT_CONFIG_ENV = "MINIGENT_CLIENT_CONFIG"
 
 
 def default_client_config_paths() -> tuple[Path, ...]:
-    configured_home = os.getenv("XDG_CONFIG_HOME", "").strip()
+    configured_home = _getenv("XDG_CONFIG_HOME", "").strip()
     config_home = Path(configured_home).expanduser() if configured_home else None
     if config_home is None or not config_home.is_absolute():
         config_home = Path.home() / ".config"
@@ -341,8 +343,8 @@ def load_client_config_overrides(
 ) -> tuple[dict[str, Any], str | None]:
     explicit_path = (
         config_path
-        or _clean_optional(os.getenv(CLIENT_CONFIG_ENV))
-        or _clean_optional(os.getenv(LEGACY_CLIENT_CONFIG_ENV))
+        or _clean_optional(_getenv(CLIENT_CONFIG_ENV))
+        or _clean_optional(_getenv(LEGACY_CLIENT_CONFIG_ENV))
     )
     if explicit_path is not None:
         path = Path(explicit_path).expanduser()
@@ -430,7 +432,7 @@ def _apply_file_overrides(config: ClientConfig, overrides: dict[str, Any]) -> Cl
         if field_name == "principal":
             replace_values["principal"] = _merge_principal_file_override(config.principal, value)
             continue
-        if any(name in os.environ for name in CLIENT_CONFIG_ENV_BY_FIELD.get(field_name, ())):
+        if any(_env_is_set(name) for name in CLIENT_CONFIG_ENV_BY_FIELD.get(field_name, ())):
             continue
         replace_values[field_name] = _coerce_config_value(field_name, value)
     if not replace_values:
@@ -445,7 +447,7 @@ def _merge_principal_file_override(
     for field_name, env_name in PRINCIPAL_CONFIG_ENV_BY_FIELD.items():
         values[field_name] = (
             getattr(env_principal, field_name)
-            if env_name in os.environ
+            if _env_is_set(env_name)
             else getattr(file_principal, field_name)
         )
     return PrincipalConfig(**values)
@@ -534,6 +536,30 @@ def build_client_config(
     )
 
 
+@overload
+def _getenv(name: str) -> str | None: ...
+
+
+@overload
+def _getenv(name: str, default: str) -> str: ...
+
+
+def _getenv(name: str, default: str | None = None) -> str | None:
+    if name.startswith(("MINIGENT_", "MINDWEFT_")):
+        suffix = name.split("_", 1)[1]
+        value = preferred_mindweft_env(suffix)
+        return default if value is None else value
+    return os.getenv(name, default)
+
+
+def _env_is_set(name: str) -> bool:
+    return _getenv(name) is not None
+
+
+def _canonical_env_name(name: str) -> str:
+    return name.replace("MINIGENT_", "MINDWEFT_", 1)
+
+
 def _clean_optional(value: str | None) -> str | None:
     if value is None:
         return None
@@ -542,21 +568,21 @@ def _clean_optional(value: str | None) -> str | None:
 
 
 def _int_from_env(name: str, default: int) -> int:
-    value = os.getenv(name)
+    value = _getenv(name)
     if value is None:
         return default
     return int(value)
 
 
 def _float_from_env(name: str, default: float) -> float:
-    value = os.getenv(name)
+    value = _getenv(name)
     if value is None:
         return default
     return float(value)
 
 
 def _optional_int_from_env(name: str) -> int | None:
-    value = os.getenv(name)
+    value = _getenv(name)
     if value is None:
         return None
     stripped = value.strip()
@@ -566,7 +592,7 @@ def _optional_int_from_env(name: str) -> int | None:
 
 
 def _optional_float_from_env(name: str) -> float | None:
-    value = os.getenv(name)
+    value = _getenv(name)
     if value is None:
         return None
     stripped = value.strip()
@@ -576,7 +602,7 @@ def _optional_float_from_env(name: str) -> float | None:
 
 
 def _bool_from_env(name: str, default: bool) -> bool:
-    value = os.getenv(name)
+    value = _getenv(name)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
@@ -585,7 +611,7 @@ def _bool_from_env(name: str, default: bool) -> bool:
 def _bounded_int_from_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
     value = _int_from_env(name, default)
     if value < minimum or value > maximum:
-        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+        raise ValueError(f"{_canonical_env_name(name)} must be between {minimum} and {maximum}")
     return value
 
 
@@ -595,7 +621,7 @@ def parse_agent_presets_env(value: str | None) -> tuple[AgentPreset, ...]:
     try:
         raw = json.loads(value)
     except json.JSONDecodeError as exc:
-        raise ValueError("MINIGENT_CLIENT_AGENT_PRESETS must be valid JSON") from exc
+        raise ValueError("MINDWEFT_CLIENT_AGENT_PRESETS must be valid JSON") from exc
     return parse_agent_presets(raw)
 
 

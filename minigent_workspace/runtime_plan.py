@@ -4,6 +4,7 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
+from minigent_config.unified_config import normalize_mindweft_env
 from minigent_workspace.mcp_resolution import ResolvedMCPServers, resolve_workspace_mcp_servers
 from minigent_workspace.runtime_settings import (
     WorkspaceRuntimeSettings,
@@ -33,6 +34,7 @@ def prepare_workspace_runtime(
     args: argparse.Namespace,
     env: dict[str, str],
 ) -> WorkspaceRuntimePlan:
+    normalize_mindweft_env(env)
     tenant_id = args.tenant_id or env.get("MINIGENT_CODING_TENANT_ID") or DEFAULT_TENANT_ID
     workspace_roots, active_workspace_scope = resolve_workspace_selection(
         args.workspace,

@@ -6,6 +6,26 @@ from pathlib import Path
 from minigent_workspace import config_export
 
 
+def test_export_local_coding_config_prefers_mindweft_environment(
+    tmp_path: Path, monkeypatch
+) -> None:
+    canonical = tmp_path / "canonical"
+    legacy = tmp_path / "legacy"
+    canonical.mkdir()
+    legacy.mkdir()
+    monkeypatch.setenv("MINDWEFT_CODING_WORKSPACES", str(canonical))
+    monkeypatch.setenv("MINIGENT_CODING_WORKSPACES", str(legacy))
+    monkeypatch.setenv("MINDWEFT_CODING_TENANT_ID", "canonical-tenant")
+    monkeypatch.setenv("MINIGENT_CODING_TENANT_ID", "legacy-tenant")
+
+    exported = config_export.export_local_coding_config(
+        Namespace(no_coding_env_file=True, coding_env_file=None, env_file=None)
+    )
+
+    assert exported["coding"]["workspaces"] == [str(canonical)]
+    assert exported["coding"]["tenant_id"] == "canonical-tenant"
+
+
 def test_export_local_coding_config_reuses_preloaded_env_file(tmp_path: Path, monkeypatch) -> None:
     env_path = tmp_path / ".env.coding"
     env_path.write_text("MINIGENT_CODING_WORKSPACES=/should/not/read\n", encoding="utf-8")

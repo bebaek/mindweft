@@ -219,6 +219,17 @@ def test_shell_bridge_command_passes_allowed_command_prefixes(tmp_path: Path) ->
     assert [command[index + 1] for index in prefix_indexes] == ["git", "uv run pytest"]
 
 
+def test_shell_allowed_command_prefixes_prefer_mindweft_environment() -> None:
+    prefixes = launch_commands.shell_allowed_command_prefixes_from_env(
+        {
+            "MINDWEFT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES": "git, uv run pytest",
+            "MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES": "legacy",
+        }
+    )
+
+    assert prefixes == ["git", "uv run pytest"]
+
+
 def test_shell_allowed_command_prefixes_from_env() -> None:
     assert launch_commands.shell_allowed_command_prefixes_from_env(
         {"MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES": "git, uv run pytest, rg"}

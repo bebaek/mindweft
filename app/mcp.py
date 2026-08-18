@@ -28,6 +28,7 @@ from app.redaction import (
     redact_url_secrets,
     redact_urls_in_text,
 )
+from minigent_config.unified_config import normalize_mindweft_env
 from minigent_mcp import protocol as _mcp_protocol
 from minigent_mcp.path_policy import (
     MCPPathPolicy,
@@ -76,7 +77,7 @@ class MCPSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> MCPSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(servers=_parse_mcp_server_configs(lookup.get(MCP_SERVERS_ENV, "")))
 
 
@@ -511,14 +512,14 @@ def _parse_mcp_server_configs(raw_value: str) -> list[MCPServerConfig]:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{MCP_SERVERS_ENV} must be valid JSON") from exc
+        raise RuntimeError("MINDWEFT_MCP_SERVERS must be valid JSON") from exc
     if not isinstance(parsed, list):
-        raise RuntimeError(f"{MCP_SERVERS_ENV} must be a JSON array")
+        raise RuntimeError("MINDWEFT_MCP_SERVERS must be a JSON array")
 
     configs: list[MCPServerConfig] = []
     for entry in parsed:
         if not isinstance(entry, dict):
-            raise RuntimeError("Each MINIGENT_MCP_SERVERS entry must be an object")
+            raise RuntimeError("Each MINDWEFT_MCP_SERVERS entry must be an object")
         name = entry.get("name")
         url = entry.get("url")
         headers = entry.get("headers") or {}
@@ -554,9 +555,9 @@ def _parse_mcp_server_configs(raw_value: str) -> list[MCPServerConfig]:
             f"MCP server '{name}' timeout_seconds",
         )
         if not isinstance(name, str) or not name:
-            raise RuntimeError("Each MINIGENT_MCP_SERVERS entry must include a non-empty 'name'")
+            raise RuntimeError("Each MINDWEFT_MCP_SERVERS entry must include a non-empty 'name'")
         if not isinstance(url, str) or not url:
-            raise RuntimeError("Each MINIGENT_MCP_SERVERS entry must include a non-empty 'url'")
+            raise RuntimeError("Each MINDWEFT_MCP_SERVERS entry must include a non-empty 'url'")
         if not isinstance(headers, dict) or not all(
             isinstance(key, str) and isinstance(value, str) for key, value in headers.items()
         ):

@@ -12,6 +12,7 @@ from minigent_client.command_router import dispatch_command
 from minigent_client.errors import MinigentAPIError
 from minigent_client.one_shot_parser import build_parser
 from minigent_client.output import print_json
+from minigent_config.unified_config import preferred_mindweft_env
 
 
 def _abort_detail(args: argparse.Namespace) -> tuple[str, bool]:
@@ -43,6 +44,8 @@ def _apply_cli_env_file(args: argparse.Namespace) -> None:
     if not env_file:
         return
     path = Path(env_file).expanduser()
+    # Internal consumers still key off the legacy alias; startup normalization gives the
+    # canonical MINDWEFT_DOTENV_FILE value precedence when users configure it directly.
     os.environ["MINIGENT_DOTENV_FILE"] = str(path)
     if not path.exists():
         return
@@ -51,8 +54,9 @@ def _apply_cli_env_file(args: argparse.Namespace) -> None:
     for key, value in dotenv_values(path).items():
         if value is not None:
             os.environ.setdefault(key, value)
-    if args.base_url == "http://127.0.0.1:8000" and os.environ.get("MINIGENT_BASE_URL"):
-        args.base_url = os.environ["MINIGENT_BASE_URL"]
+    configured_base_url = preferred_mindweft_env("BASE_URL")
+    if args.base_url == "http://127.0.0.1:8000" and configured_base_url:
+        args.base_url = configured_base_url
 
 
 def main(argv: Sequence[str] | None = None) -> int:

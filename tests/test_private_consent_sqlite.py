@@ -428,12 +428,15 @@ def test_encrypted_consent_store_rotates_all_record_types(tmp_path) -> None:
     )
 
 
-def test_factory_builds_encrypted_store(tmp_path) -> None:
+@pytest.mark.parametrize("prefix", ["MINDWEFT", "MINIGENT"])
+def test_factory_builds_encrypted_store(tmp_path, prefix: str) -> None:
     encoded_key = base64.urlsafe_b64encode(KEY).decode()
     store = build_private_value_consent_store_from_env(
         {
-            "MINIGENT_PRIVATE_CONSENT_DB_PATH": str(tmp_path / "private-consents.db"),
-            "MINIGENT_PRIVATE_CONSENT_ENCRYPTION_KEY": encoded_key,
+            f"{prefix}_PRIVATE_CONSENT_DB_PATH": str(
+                tmp_path / f"{prefix.lower()}-private-consents.db"
+            ),
+            f"{prefix}_PRIVATE_CONSENT_ENCRYPTION_KEY": encoded_key,
         }
     )
     assert isinstance(store, SQLiteEncryptedPrivateValueConsentStore)

@@ -117,15 +117,15 @@ def test_generic_oauth_provider_can_fall_back_to_global_credential(tmp_path: Pat
 def test_generic_oauth_export_settings_from_env_mapping(tmp_path: Path) -> None:
     settings = GenericOAuthExportSettings.from_env(
         {
-            "MINIGENT_OAUTH_STORE_PATH": str(tmp_path / "oauth.json"),
-            "MINIGENT_OAUTH_PROVIDER_ID": "chatgpt",
-            "MINIGENT_OAUTH_CLIENT_ID": "client-id",
-            "MINIGENT_OAUTH_AUTHORIZE_URL": "https://example.com/authorize",
-            "MINIGENT_OAUTH_TOKEN_URL": "https://example.com/token",
-            "MINIGENT_OAUTH_REDIRECT_URI": "http://127.0.0.1/callback",
-            "MINIGENT_OAUTH_SCOPE": "openid profile",
-            "MINIGENT_OAUTH_ACCOUNT_ID_JWT_CLAIM": "auth.account_id",
-            "MINIGENT_OAUTH_AUTH_PARAMS": json.dumps({"prompt": "login"}),
+            "MINDWEFT_OAUTH_STORE_PATH": str(tmp_path / "oauth.json"),
+            "MINDWEFT_OAUTH_PROVIDER_ID": "chatgpt",
+            "MINDWEFT_OAUTH_CLIENT_ID": "client-id",
+            "MINDWEFT_OAUTH_AUTHORIZE_URL": "https://example.com/authorize",
+            "MINDWEFT_OAUTH_TOKEN_URL": "https://example.com/token",
+            "MINDWEFT_OAUTH_REDIRECT_URI": "http://127.0.0.1/callback",
+            "MINDWEFT_OAUTH_SCOPE": "openid profile",
+            "MINDWEFT_OAUTH_ACCOUNT_ID_JWT_CLAIM": "auth.account_id",
+            "MINDWEFT_OAUTH_AUTH_PARAMS": json.dumps({"prompt": "login"}),
         }
     )
 
@@ -158,16 +158,32 @@ def _config(tmp_path: Path) -> GenericOAuthConfig:
 
 def _oauth_env(tmp_path: Path) -> dict[str, str]:
     return {
-        "MINIGENT_OAUTH_STORE_PATH": str(tmp_path / "oauth.json"),
-        "MINIGENT_OAUTH_PROVIDER_ID": "test-oauth",
-        "MINIGENT_OAUTH_CLIENT_ID": "client-id",
-        "MINIGENT_OAUTH_AUTHORIZE_URL": "https://auth.example/authorize",
-        "MINIGENT_OAUTH_TOKEN_URL": "https://auth.example/token",
-        "MINIGENT_OAUTH_REDIRECT_URI": "http://127.0.0.1:8000/oauth/generic/callback",
-        "MINIGENT_OAUTH_SCOPE": "openid offline_access",
-        "MINIGENT_OAUTH_AUTH_PARAMS": '{"prompt":"login"}',
-        "MINIGENT_OAUTH_ACCOUNT_ID_JWT_CLAIM": "auth.account_id",
+        "MINDWEFT_OAUTH_STORE_PATH": str(tmp_path / "oauth.json"),
+        "MINDWEFT_OAUTH_PROVIDER_ID": "test-oauth",
+        "MINDWEFT_OAUTH_CLIENT_ID": "client-id",
+        "MINDWEFT_OAUTH_AUTHORIZE_URL": "https://auth.example/authorize",
+        "MINDWEFT_OAUTH_TOKEN_URL": "https://auth.example/token",
+        "MINDWEFT_OAUTH_REDIRECT_URI": "http://127.0.0.1:8000/oauth/generic/callback",
+        "MINDWEFT_OAUTH_SCOPE": "openid offline_access",
+        "MINDWEFT_OAUTH_AUTH_PARAMS": '{"prompt":"login"}',
+        "MINDWEFT_OAUTH_ACCOUNT_ID_JWT_CLAIM": "auth.account_id",
     }
+
+
+def test_oauth_settings_prefer_mindweft_and_accept_legacy_env(tmp_path: Path) -> None:
+    preferred_env = _oauth_env(tmp_path)
+    preferred_env["MINIGENT_OAUTH_PROVIDER_ID"] = "legacy-provider"
+    preferred = OAuthSettings.from_env(preferred_env)
+
+    legacy_env = {
+        key.replace("MINDWEFT_", "MINIGENT_", 1): value
+        for key, value in _oauth_env(tmp_path).items()
+    }
+    legacy = OAuthSettings.from_env(legacy_env)
+
+    assert preferred.provider.provider_id == "test-oauth"
+    assert legacy.provider.provider_id == "test-oauth"
+    assert legacy.store.path == tmp_path / "oauth.json"
 
 
 def test_oauth_settings_from_env_mapping_parses_values(tmp_path: Path) -> None:
@@ -181,36 +197,36 @@ def test_oauth_settings_from_env_mapping_parses_values(tmp_path: Path) -> None:
 
 def test_generic_oauth_config_from_env_mapping_allows_missing_store_path(tmp_path: Path) -> None:
     env = _oauth_env(tmp_path)
-    env.pop("MINIGENT_OAUTH_STORE_PATH")
+    env.pop("MINDWEFT_OAUTH_STORE_PATH")
 
     assert GenericOAuthConfig.from_env(env) == _config(tmp_path)
 
 
 def test_oauth_store_path_from_env_expands_user(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_OAUTH_STORE_PATH", "~/minigent-oauth.json")
+    monkeypatch.setenv("MINDWEFT_OAUTH_STORE_PATH", "~/minigent-oauth.json")
 
     assert oauth_store_path_from_env() == Path("~/minigent-oauth.json").expanduser()
 
 
 def test_generic_oauth_config_from_env_rejects_missing_required_value() -> None:
     env = _oauth_env(Path("/tmp"))
-    env.pop("MINIGENT_OAUTH_CLIENT_ID")
+    env.pop("MINDWEFT_OAUTH_CLIENT_ID")
 
     with pytest.raises(RuntimeError) as exc_info:
         GenericOAuthConfig.from_env(env)
 
-    assert str(exc_info.value) == "MINIGENT_OAUTH_CLIENT_ID is required"
+    assert str(exc_info.value) == "MINDWEFT_OAUTH_CLIENT_ID is required"
 
 
 def test_generic_oauth_config_from_env_rejects_invalid_auth_params() -> None:
     env = _oauth_env(Path("/tmp"))
-    env["MINIGENT_OAUTH_AUTH_PARAMS"] = '{"prompt": true}'
+    env["MINDWEFT_OAUTH_AUTH_PARAMS"] = '{"prompt": true}'
 
     with pytest.raises(RuntimeError) as exc_info:
         GenericOAuthConfig.from_env(env)
 
     assert (
-        str(exc_info.value) == "MINIGENT_OAUTH_AUTH_PARAMS must be a JSON object of string values"
+        str(exc_info.value) == "MINDWEFT_OAUTH_AUTH_PARAMS must be a JSON object of string values"
     )
 
 
@@ -378,9 +394,9 @@ def test_sqlite_oauth_store_rotates_encryption_keys(tmp_path: Path) -> None:
 def test_sqlite_oauth_store_from_env_uses_versioned_keyring(tmp_path: Path) -> None:
     key = base64.urlsafe_b64encode(b"a" * 32).decode().rstrip("=")
     env = _oauth_env(tmp_path)
-    env["MINIGENT_OAUTH_STORE_PATH"] = str(tmp_path / "oauth.db")
-    env["MINIGENT_OAUTH_ENCRYPTION_KEYS"] = json.dumps({"3": key})
-    env["MINIGENT_OAUTH_KEY_VERSION"] = "3"
+    env["MINDWEFT_OAUTH_STORE_PATH"] = str(tmp_path / "oauth.db")
+    env["MINDWEFT_OAUTH_ENCRYPTION_KEYS"] = json.dumps({"3": key})
+    env["MINDWEFT_OAUTH_KEY_VERSION"] = "3"
 
     store = SQLiteEncryptedOAuthStore.from_env(env)
     store.set("test-oauth", OAuthCredentials("access", "refresh", time.time() + 3600))
@@ -1568,15 +1584,15 @@ def test_build_llm_adapter_from_env_supports_generic_oauth(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_LLM_PROVIDER", GENERIC_OAUTH_PROVIDER)
     monkeypatch.setenv("MINIGENT_LLM_MODEL", "test-model")
     monkeypatch.setenv("MINIGENT_LLM_URL", "https://example.test/responses")
-    monkeypatch.setenv("MINIGENT_OAUTH_STORE_PATH", "/tmp/minigent-oauth-test.json")
-    monkeypatch.setenv("MINIGENT_OAUTH_PROVIDER_ID", "test-oauth")
-    monkeypatch.setenv("MINIGENT_OAUTH_CLIENT_ID", "client-id")
-    monkeypatch.setenv("MINIGENT_OAUTH_AUTHORIZE_URL", "https://auth.example/authorize")
-    monkeypatch.setenv("MINIGENT_OAUTH_TOKEN_URL", "https://auth.example/token")
+    monkeypatch.setenv("MINDWEFT_OAUTH_STORE_PATH", "/tmp/minigent-oauth-test.json")
+    monkeypatch.setenv("MINDWEFT_OAUTH_PROVIDER_ID", "test-oauth")
+    monkeypatch.setenv("MINDWEFT_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("MINDWEFT_OAUTH_AUTHORIZE_URL", "https://auth.example/authorize")
+    monkeypatch.setenv("MINDWEFT_OAUTH_TOKEN_URL", "https://auth.example/token")
     monkeypatch.setenv(
-        "MINIGENT_OAUTH_REDIRECT_URI", "http://127.0.0.1:8000/oauth/generic/callback"
+        "MINDWEFT_OAUTH_REDIRECT_URI", "http://127.0.0.1:8000/oauth/generic/callback"
     )
-    monkeypatch.setenv("MINIGENT_OAUTH_SCOPE", "openid offline_access")
+    monkeypatch.setenv("MINDWEFT_OAUTH_SCOPE", "openid offline_access")
 
     adapter = build_llm_adapter_from_env()
 
@@ -1587,16 +1603,16 @@ def test_build_llm_adapter_from_env_supports_generic_oauth(monkeypatch) -> None:
 def test_generic_oauth_login_endpoint_returns_authorization_url(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("MINIGENT_OAUTH_STORE_PATH", str(tmp_path / "oauth.json"))
-    monkeypatch.setenv("MINIGENT_OAUTH_PROVIDER_ID", "test-oauth")
-    monkeypatch.setenv("MINIGENT_OAUTH_CLIENT_ID", "client-id")
-    monkeypatch.setenv("MINIGENT_OAUTH_AUTHORIZE_URL", "https://auth.example/authorize")
-    monkeypatch.setenv("MINIGENT_OAUTH_TOKEN_URL", "https://auth.example/token")
+    monkeypatch.setenv("MINDWEFT_OAUTH_STORE_PATH", str(tmp_path / "oauth.json"))
+    monkeypatch.setenv("MINDWEFT_OAUTH_PROVIDER_ID", "test-oauth")
+    monkeypatch.setenv("MINDWEFT_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("MINDWEFT_OAUTH_AUTHORIZE_URL", "https://auth.example/authorize")
+    monkeypatch.setenv("MINDWEFT_OAUTH_TOKEN_URL", "https://auth.example/token")
     monkeypatch.setenv(
-        "MINIGENT_OAUTH_REDIRECT_URI", "http://127.0.0.1:8000/oauth/generic/callback"
+        "MINDWEFT_OAUTH_REDIRECT_URI", "http://127.0.0.1:8000/oauth/generic/callback"
     )
-    monkeypatch.setenv("MINIGENT_OAUTH_SCOPE", "openid offline_access")
-    monkeypatch.setenv("MINIGENT_OAUTH_AUTH_PARAMS", '{"prompt":"login"}')
+    monkeypatch.setenv("MINDWEFT_OAUTH_SCOPE", "openid offline_access")
+    monkeypatch.setenv("MINDWEFT_OAUTH_AUTH_PARAMS", '{"prompt":"login"}')
     client = TestClient(create_app(tool_registry=build_local_tool_registry()))
 
     response = client.get("/oauth/generic/login")

@@ -34,9 +34,9 @@ def _configure_session(monkeypatch: pytest.MonkeyPatch) -> None:
             },
         }
     }
-    monkeypatch.setenv("MINIGENT_SESSION_CREDENTIALS", json.dumps(credential))
-    monkeypatch.setenv("MINIGENT_SESSION_SECRET", "s" * 32)
-    monkeypatch.setenv("MINIGENT_SESSION_COOKIE_SECURE", "false")
+    monkeypatch.setenv("MINDWEFT_SESSION_CREDENTIALS", json.dumps(credential))
+    monkeypatch.setenv("MINDWEFT_SESSION_SECRET", "s" * 32)
+    monkeypatch.setenv("MINDWEFT_SESSION_COOKIE_SECURE", "false")
 
 
 def _client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
@@ -68,18 +68,37 @@ def test_session_settings_require_credentials_and_strong_secret() -> None:
         }
     )
 
-    with pytest.raises(RuntimeError, match="MINIGENT_SESSION_SECRET is required"):
-        validate_session_auth_settings({"MINIGENT_SESSION_CREDENTIALS": credentials})
+    with pytest.raises(RuntimeError, match="MINDWEFT_SESSION_SECRET is required"):
+        validate_session_auth_settings({"MINDWEFT_SESSION_CREDENTIALS": credentials})
     with pytest.raises(RuntimeError, match="at least 32 bytes"):
         validate_session_auth_settings(
             {
-                "MINIGENT_SESSION_CREDENTIALS": credentials,
-                "MINIGENT_SESSION_SECRET": "too-short",
+                "MINDWEFT_SESSION_CREDENTIALS": credentials,
+                "MINDWEFT_SESSION_SECRET": "too-short",
             }
         )
-    secret_only = validate_session_auth_settings({"MINIGENT_SESSION_SECRET": "s" * 32})
+    secret_only = validate_session_auth_settings({"MINDWEFT_SESSION_SECRET": "s" * 32})
     assert secret_only.enabled
     assert secret_only.credentials == {}
+
+
+def test_session_settings_prefer_mindweft_and_accept_legacy_env() -> None:
+    preferred = SessionAuthSettings.from_env(
+        {
+            "MINDWEFT_SESSION_SECRET": "m" * 32,
+            "MINIGENT_SESSION_SECRET": "l" * 32,
+            "MINDWEFT_SESSION_TTL_SECONDS": "120",
+            "MINIGENT_SESSION_TTL_SECONDS": "60",
+        }
+    )
+    legacy = SessionAuthSettings.from_env(
+        {"MINIGENT_SESSION_SECRET": "l" * 32, "MINIGENT_SESSION_TTL_SECONDS": "60"}
+    )
+
+    assert preferred.secret == "m" * 32
+    assert preferred.ttl_seconds == 120
+    assert legacy.secret == "l" * 32
+    assert legacy.ttl_seconds == 60
 
 
 def test_disabled_session_status_is_public() -> None:
@@ -219,7 +238,7 @@ def test_login_rejects_bad_credentials_and_cross_origin_requests(tmp_path, monke
 
 def test_login_rate_limit_is_enforced(tmp_path, monkeypatch) -> None:
     _configure_session(monkeypatch)
-    monkeypatch.setenv("MINIGENT_SESSION_LOGIN_RATE_LIMIT_CAPACITY", "1")
+    monkeypatch.setenv("MINDWEFT_SESSION_LOGIN_RATE_LIMIT_CAPACITY", "1")
     client = TestClient(
         create_app(
             llm_adapter=MockLLMAdapter(),

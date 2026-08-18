@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from minigent_config.unified_config import normalize_mindweft_env
 from minigent_workspace.mcp_specs import CodingMCPServerSpec
 
 DEFAULT_BRIDGE_ALLOWED_TOOLS = (
@@ -34,6 +35,7 @@ def apply_tenant_runtime_environment(
     workspace_roots: list[Path],
     workspace_scope: str | None,
 ) -> None:
+    normalize_mindweft_env(env)
     env.setdefault("MINIGENT_AUTH_MODE", "dev-headers")
     env.setdefault("MINIGENT_LLM_PROVIDER", "mock")
     env["MINIGENT_CODING_TENANT_ID"] = tenant_id
@@ -238,7 +240,7 @@ def inject_coding_mcp_servers(
 ) -> str:
     payload = json.loads(raw_config)
     if not isinstance(payload, dict):
-        raise RuntimeError("MINIGENT_TENANT_EXECUTION_CONFIGS must be a JSON object")
+        raise RuntimeError("MINDWEFT_TENANT_EXECUTION_CONFIGS must be a JSON object")
     tenant = payload.get(tenant_id)
     if not isinstance(tenant, dict):
         return raw_config
@@ -285,7 +287,7 @@ def inject_coding_workspace_skill(
 ) -> str:
     payload = json.loads(raw_config)
     if not isinstance(payload, dict):
-        raise RuntimeError("MINIGENT_TENANT_EXECUTION_CONFIGS must be a JSON object")
+        raise RuntimeError("MINDWEFT_TENANT_EXECUTION_CONFIGS must be a JSON object")
     tenant = payload.get(tenant_id)
     if not isinstance(tenant, dict):
         return raw_config
@@ -383,6 +385,7 @@ def tenant_gateway_mcp_server_mismatches(
 ) -> list[str]:
     """Return tenant gateway MCP server names with no loaded stdio server spec."""
 
+    normalize_mindweft_env(env)
     raw_config = env.get("MINIGENT_TENANT_EXECUTION_CONFIGS")
     if not raw_config:
         return []
@@ -424,13 +427,14 @@ def bridge_allowed_tools_from_config(
     tenant_id: str,
     bridge_name: str,
 ) -> list[str]:
+    normalize_mindweft_env(env)
     raw_config = env.get("MINIGENT_TENANT_EXECUTION_CONFIGS")
     if not raw_config:
         return list(DEFAULT_BRIDGE_ALLOWED_TOOLS)
 
     payload = json.loads(raw_config)
     if not isinstance(payload, dict):
-        raise RuntimeError("MINIGENT_TENANT_EXECUTION_CONFIGS must be a JSON object")
+        raise RuntimeError("MINDWEFT_TENANT_EXECUTION_CONFIGS must be a JSON object")
     tenant = payload.get(tenant_id)
     if not isinstance(tenant, dict):
         return list(DEFAULT_BRIDGE_ALLOWED_TOOLS)
@@ -466,6 +470,7 @@ def bridge_path_globs(
     policy_camel_key: str,
     defaults: tuple[str, ...],
 ) -> list[str]:
+    normalize_mindweft_env(env)
     raw = env.get(env_name)
     if raw is not None:
         return [pattern.strip() for pattern in raw.split(",") if pattern.strip()]
@@ -476,7 +481,7 @@ def bridge_path_globs(
 
     payload = json.loads(raw_config)
     if not isinstance(payload, dict):
-        raise RuntimeError("MINIGENT_TENANT_EXECUTION_CONFIGS must be a JSON object")
+        raise RuntimeError("MINDWEFT_TENANT_EXECUTION_CONFIGS must be a JSON object")
     tenant = payload.get(tenant_id)
     if not isinstance(tenant, dict):
         return list(defaults)

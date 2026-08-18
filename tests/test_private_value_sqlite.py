@@ -28,7 +28,7 @@ def test_private_value_store_factory_defaults_to_memory() -> None:
 def test_encrypted_private_value_store_requires_key_when_configured(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="ENCRYPTION_KEY.*required"):
         build_private_value_store_from_env(
-            {"MINIGENT_PRIVATE_VALUE_DB_PATH": str(tmp_path / "private.db")}
+            {"MINDWEFT_PRIVATE_VALUE_DB_PATH": str(tmp_path / "private.db")}
         )
 
 
@@ -145,10 +145,10 @@ def test_encrypted_private_value_store_binds_references_to_declared_kinds(
 def test_encrypted_private_value_factory_reads_environment_mapping(tmp_path: Path) -> None:
     store = build_private_value_store_from_env(
         {
-            "MINIGENT_PRIVATE_VALUE_DB_PATH": str(tmp_path / "private.db"),
-            "MINIGENT_PRIVATE_VALUE_ENCRYPTION_KEY": KEY_B64,
-            "MINIGENT_PRIVATE_VALUE_KEY_VERSION": "2",
-            "MINIGENT_PRIVATE_VALUE_TTL_SECONDS": "60",
+            "MINDWEFT_PRIVATE_VALUE_DB_PATH": str(tmp_path / "private.db"),
+            "MINDWEFT_PRIVATE_VALUE_ENCRYPTION_KEY": KEY_B64,
+            "MINDWEFT_PRIVATE_VALUE_KEY_VERSION": "2",
+            "MINDWEFT_PRIVATE_VALUE_TTL_SECONDS": "60",
         }
     )
 
@@ -187,10 +187,10 @@ def test_encrypted_private_value_factory_reencrypts_with_keyring(tmp_path: Path)
 
     rotated = build_private_value_store_from_env(
         {
-            "MINIGENT_PRIVATE_VALUE_DB_PATH": str(db_path),
-            "MINIGENT_PRIVATE_VALUE_ENCRYPTION_KEYS": keyring,
-            "MINIGENT_PRIVATE_VALUE_KEY_VERSION": "2",
-            "MINIGENT_PRIVATE_VALUE_REENCRYPT_ON_STARTUP": "true",
+            "MINDWEFT_PRIVATE_VALUE_DB_PATH": str(db_path),
+            "MINDWEFT_PRIVATE_VALUE_ENCRYPTION_KEYS": keyring,
+            "MINDWEFT_PRIVATE_VALUE_KEY_VERSION": "2",
+            "MINDWEFT_PRIVATE_VALUE_REENCRYPT_ON_STARTUP": "true",
         }
     )
 

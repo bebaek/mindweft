@@ -1,8 +1,8 @@
 # Backfill existing personal agents
 
 This runbook backfills the stable `user:personal-assistant` agent and the built-in
-`shared:minigent-user-mcp` capability for existing user execution configurations. The migration
-creates a `user:minigent-user-tools` capability profile and attaches it to the personal assistant.
+`shared:mindweft-user-mcp` capability for existing user execution configurations. The migration
+creates a `user:mindweft-user-tools` capability profile and attaches it to the personal assistant.
 It is idempotent: users with an explicit `defaults.agent_ref` are not replaced, and rerunning the
 command does not create duplicate resources.
 
@@ -84,7 +84,7 @@ curl -H 'Authorization: Bearer …' \
 ```
 
 Confirm that `defaults.agent_ref` is `user:personal-assistant`, the personal assistant references
-`user:minigent-user-tools`, and that profile references `shared:minigent-user-mcp`. A new thread
+`user:mindweft-user-tools`, and that profile references `shared:mindweft-user-mcp`. A new thread
 should expose the `minigent_user_mcp.*` tools and use the personal execution options. Do not paste
 authenticated responses into tickets or logs.
 

@@ -17,11 +17,12 @@ from app.observability import (
 def test_logging_settings_from_env_mapping_parses_values() -> None:
     settings = LoggingSettings.from_env(
         {
-            "MINIGENT_LOG_LEVEL": "debug",
-            "MINIGENT_LOG_FORMAT": "json",
-            "MINIGENT_LOG_JSON_ROOT_KEY": "log",
-            "MINIGENT_LOG_JSON_FIELDS": '{"service":"minigent"}',
-            "MINIGENT_LOG_JSON_INCLUDE_TRACE_CONTEXT": "false",
+            "MINDWEFT_LOG_LEVEL": "debug",
+            "MINIGENT_LOG_LEVEL": "error",
+            "MINDWEFT_LOG_FORMAT": "json",
+            "MINDWEFT_LOG_JSON_ROOT_KEY": "log",
+            "MINDWEFT_LOG_JSON_FIELDS": '{"service":"minigent"}',
+            "MINDWEFT_LOG_JSON_INCLUDE_TRACE_CONTEXT": "false",
         }
     )
 
@@ -32,11 +33,22 @@ def test_logging_settings_from_env_mapping_parses_values() -> None:
     assert settings.json_include_trace_context is False
 
 
+def test_observability_settings_accept_legacy_minigent_env() -> None:
+    logging_settings = LoggingSettings.from_env({"MINIGENT_LOG_LEVEL": "warning"})
+    tracing_settings = TracingSettings.from_env(
+        {"MINIGENT_OTEL_ENABLED": "true", "MINIGENT_OTEL_SERVICE_NAME": "legacy-svc"}
+    )
+
+    assert logging_settings.level == "WARNING"
+    assert tracing_settings.enabled is True
+    assert tracing_settings.service_name == "legacy-svc"
+
+
 def test_load_logging_settings_from_env(monkeypatch) -> None:
-    monkeypatch.setenv("MINIGENT_LOG_FORMAT", "json")
-    monkeypatch.setenv("MINIGENT_LOG_JSON_ROOT_KEY", "log")
-    monkeypatch.setenv("MINIGENT_LOG_JSON_MESSAGE_KEY", "msg")
-    monkeypatch.setenv("MINIGENT_LOG_JSON_FIELDS", '{"service":"minigent","env":"test"}')
+    monkeypatch.setenv("MINDWEFT_LOG_FORMAT", "json")
+    monkeypatch.setenv("MINDWEFT_LOG_JSON_ROOT_KEY", "log")
+    monkeypatch.setenv("MINDWEFT_LOG_JSON_MESSAGE_KEY", "msg")
+    monkeypatch.setenv("MINDWEFT_LOG_JSON_FIELDS", '{"service":"minigent","env":"test"}')
 
     settings = load_logging_settings_from_env()
 
@@ -149,12 +161,13 @@ def test_successful_healthcheck_access_filter_keeps_regular_requests() -> None:
 def test_tracing_settings_from_env_mapping_parses_values() -> None:
     settings = TracingSettings.from_env(
         {
-            "MINIGENT_OTEL_ENABLED": "true",
-            "MINIGENT_OTEL_SERVICE_NAME": "svc",
-            "MINIGENT_OTEL_EXPORTER": "otlp",
-            "MINIGENT_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example/v1/traces",
-            "MINIGENT_OTEL_EXPORTER_OTLP_HEADERS": '{"authorization":"Bearer token"}',
-            "MINIGENT_OTEL_EXPORTER_OTLP_TIMEOUT_SECONDS": "3.5",
+            "MINDWEFT_OTEL_ENABLED": "true",
+            "MINDWEFT_OTEL_SERVICE_NAME": "svc",
+            "MINIGENT_OTEL_SERVICE_NAME": "legacy-svc",
+            "MINDWEFT_OTEL_EXPORTER": "otlp",
+            "MINDWEFT_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example/v1/traces",
+            "MINDWEFT_OTEL_EXPORTER_OTLP_HEADERS": '{"authorization":"Bearer token"}',
+            "MINDWEFT_OTEL_EXPORTER_OTLP_TIMEOUT_SECONDS": "3.5",
         }
     )
 
@@ -167,10 +180,10 @@ def test_tracing_settings_from_env_mapping_parses_values() -> None:
 
 
 def test_load_tracing_settings_from_env(monkeypatch) -> None:
-    monkeypatch.setenv("MINIGENT_OTEL_ENABLED", "true")
-    monkeypatch.setenv("MINIGENT_OTEL_EXPORTER", "otlp")
-    monkeypatch.setenv("MINIGENT_OTEL_EXPORTER_OTLP_ENDPOINT", "https://otel.example/v1/traces")
-    monkeypatch.setenv("MINIGENT_OTEL_EXPORTER_OTLP_HEADERS", '{"authorization":"Bearer token"}')
+    monkeypatch.setenv("MINDWEFT_OTEL_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_OTEL_EXPORTER", "otlp")
+    monkeypatch.setenv("MINDWEFT_OTEL_EXPORTER_OTLP_ENDPOINT", "https://otel.example/v1/traces")
+    monkeypatch.setenv("MINDWEFT_OTEL_EXPORTER_OTLP_HEADERS", '{"authorization":"Bearer token"}')
 
     settings = load_tracing_settings_from_env()
 
@@ -181,8 +194,8 @@ def test_load_tracing_settings_from_env(monkeypatch) -> None:
 
 
 def test_configure_tracing_instruments_fastapi_and_httpx(monkeypatch) -> None:
-    monkeypatch.setenv("MINIGENT_OTEL_ENABLED", "true")
-    monkeypatch.setenv("MINIGENT_OTEL_EXPORTER", "console")
+    monkeypatch.setenv("MINDWEFT_OTEL_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_OTEL_EXPORTER", "console")
 
     calls: list[str] = []
 
@@ -238,6 +251,6 @@ def test_configure_tracing_instruments_fastapi_and_httpx(monkeypatch) -> None:
 
     configure_tracing(FastAPI())
 
-    assert "resource:minigent" in calls
+    assert "resource:mindweft" in calls
     assert "httpx" in calls
     assert "fastapi:FakeProvider" in calls

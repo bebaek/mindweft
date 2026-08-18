@@ -4,6 +4,7 @@ import shlex
 import sys
 from pathlib import Path
 
+from minigent_config.unified_config import normalize_mindweft_env
 from minigent_workspace.mcp_specs import CodingMCPServerSpec
 from minigent_workspace.tenant_config import (
     DEFAULT_BRIDGE_ALLOW_GLOBS,
@@ -45,6 +46,7 @@ def build_builtin_mcp_server_specs(
     shell_bridge_port: int,
     shell_bridge_url: str,
 ) -> list[CodingMCPServerSpec]:
+    normalize_mindweft_env(env)
     filesystem_command = env.get("MINIGENT_CODING_FILESYSTEM_COMMAND")
     fs_command = (
         shlex.split(filesystem_command)
@@ -168,6 +170,7 @@ def build_bridge_command(
     bridge_port: int,
     workspaces: Path | list[Path],
 ) -> list[str]:
+    normalize_mindweft_env(env)
     workspace_roots = [workspaces] if isinstance(workspaces, Path) else list(workspaces)
     filesystem_command = env.get("MINIGENT_CODING_FILESYSTEM_COMMAND")
     command = (
@@ -224,6 +227,7 @@ def build_bridge_command(
 
 
 def shell_allowed_command_prefixes_from_env(env: dict[str, str]) -> list[str]:
+    normalize_mindweft_env(env)
     raw = env.get("MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES", "")
     return [prefix.strip() for prefix in raw.split(",") if prefix.strip()]
 

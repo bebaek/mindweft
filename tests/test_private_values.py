@@ -116,15 +116,28 @@ def test_private_value_store_clear_thread_removes_values() -> None:
 def test_private_value_store_reads_limits_from_environment_mapping() -> None:
     store = InMemoryPrivateValueStore.from_env(
         {
-            "MINIGENT_PRIVATE_VALUE_TTL_SECONDS": "5",
-            "MINIGENT_PRIVATE_VALUE_MAX_REFS_PER_THREAD": "1",
-            "MINIGENT_PRIVATE_VALUE_MAX_CHARS": "5",
+            "MINDWEFT_PRIVATE_VALUE_TTL_SECONDS": "5",
+            "MINDWEFT_PRIVATE_VALUE_MAX_REFS_PER_THREAD": "1",
+            "MINDWEFT_PRIVATE_VALUE_MAX_CHARS": "5",
         }
     )
     store.add("tenant", "thread", {"ref": "value"})
 
     with pytest.raises(HTTPException, match="reference limit"):
         store.add("tenant", "thread", {"other": "value"})
+
+
+def test_private_value_store_prefers_mindweft_and_accepts_legacy_env() -> None:
+    preferred = InMemoryPrivateValueStore.from_env(
+        {
+            "MINDWEFT_PRIVATE_VALUE_MAX_REFS_PER_THREAD": "2",
+            "MINIGENT_PRIVATE_VALUE_MAX_REFS_PER_THREAD": "1",
+        }
+    )
+    legacy = InMemoryPrivateValueStore.from_env({"MINIGENT_PRIVATE_VALUE_MAX_REFS_PER_THREAD": "3"})
+
+    assert preferred._max_refs_per_thread == 2
+    assert legacy._max_refs_per_thread == 3
 
 
 def test_local_pii_protector_masks_common_input_pii() -> None:
@@ -186,7 +199,7 @@ def test_local_pii_protector_preserves_existing_placeholders() -> None:
 
 
 def test_local_pii_protector_can_be_disabled() -> None:
-    protector = LocalPIIProtector.from_env({"MINIGENT_INPUT_PII_PROTECTION_ENABLED": "false"})
+    protector = LocalPIIProtector.from_env({"MINDWEFT_INPUT_PII_PROTECTION_ENABLED": "false"})
 
     result = protector.protect("Email jane@example.com")
 
@@ -196,4 +209,4 @@ def test_local_pii_protector_can_be_disabled() -> None:
 
 def test_local_pii_protector_rejects_invalid_boolean_setting() -> None:
     with pytest.raises(RuntimeError, match="must be true or false"):
-        LocalPIIProtector.from_env({"MINIGENT_INPUT_PII_PROTECTION_ENABLED": "sometimes"})
+        LocalPIIProtector.from_env({"MINDWEFT_INPUT_PII_PROTECTION_ENABLED": "sometimes"})

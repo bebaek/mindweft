@@ -44,6 +44,7 @@ from app.oauth import (
 )
 from app.redaction import ToolResultRedactionPolicy, parse_tool_result_redaction_policy
 from app.tools import DEFAULT_LOCAL_TOOL_NAMES, LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry
+from minigent_config.unified_config import normalize_mindweft_env, preferred_mindweft_env
 
 TENANT_EXECUTION_CONFIGS_ENV = "MINIGENT_TENANT_EXECUTION_CONFIGS"
 TENANT_CONFIG_SOURCE_ENV = "MINIGENT_TENANT_CONFIG_SOURCE"
@@ -113,21 +114,25 @@ class TenantAgentBackendConfig:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> TenantAgentBackendConfig:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         backend_type = lookup.get(AGENT_BACKEND_ENV, AGENT_BACKEND_NATIVE).strip().lower()
         if backend_type == AGENT_BACKEND_NATIVE:
             return cls()
         if backend_type != AGENT_BACKEND_PEER_AGENT:
             raise RuntimeError(
-                f"Unsupported {AGENT_BACKEND_ENV} '{backend_type}'. Expected "
+                f"Unsupported {_canonical_env_name(AGENT_BACKEND_ENV)} '{backend_type}'. Expected "
                 f"'{AGENT_BACKEND_NATIVE}' or '{AGENT_BACKEND_PEER_AGENT}'."
             )
         peer = lookup.get(AGENT_BACKEND_PEER_ENV, "").strip()
         cwd = lookup.get(AGENT_BACKEND_CWD_ENV, "").strip()
         if not peer:
-            raise RuntimeError(f"{AGENT_BACKEND_PEER_ENV} is required for peer_agent backend")
+            raise RuntimeError(
+                f"{_canonical_env_name(AGENT_BACKEND_PEER_ENV)} is required for peer_agent backend"
+            )
         if not cwd:
-            raise RuntimeError(f"{AGENT_BACKEND_CWD_ENV} is required for peer_agent backend")
+            raise RuntimeError(
+                f"{_canonical_env_name(AGENT_BACKEND_CWD_ENV)} is required for peer_agent backend"
+            )
         return cls(
             type=AGENT_BACKEND_PEER_AGENT,
             peer=peer,
@@ -152,10 +157,12 @@ class TenantQualityConfig:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> TenantQualityConfig:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         max_payload_chars = int(_positive_float_env(QUALITY_MAX_PAYLOAD_CHARS_ENV, 6000.0, lookup))
         if max_payload_chars < 256:
-            raise RuntimeError(f"{QUALITY_MAX_PAYLOAD_CHARS_ENV} must be at least 256")
+            raise RuntimeError(
+                f"{_canonical_env_name(QUALITY_MAX_PAYLOAD_CHARS_ENV)} must be at least 256"
+            )
         return cls(
             enabled=_bool_env(QUALITY_ENABLED_ENV, False, lookup),
             mode=lookup.get(QUALITY_MODE_ENV, "critique_draft").strip().lower(),
@@ -251,7 +258,7 @@ class GenericOAuthExportSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> GenericOAuthExportSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         auth_params = _generic_oauth_auth_params_for_export(lookup)
         return cls(
             store_path=_optional_env_value(lookup, OAUTH_STORE_PATH_ENV),
@@ -297,7 +304,7 @@ class TenantExecutionSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> TenantExecutionSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
             config_source=resolve_tenant_config_source(
                 lookup.get(TENANT_CONFIG_SOURCE_ENV, TENANT_CONFIG_SOURCE_ENV_ONLY)
@@ -1010,7 +1017,7 @@ def build_execution_resolver_from_env(
         and settings.default_llm_profile not in settings.llm_profiles
     ):
         raise RuntimeError(
-            f"{LLM_DEFAULT_PROFILE_ENV} references unknown profile '{settings.default_llm_profile}'"
+            f"{_canonical_env_name(LLM_DEFAULT_PROFILE_ENV)} references unknown profile '{settings.default_llm_profile}'"
         )
     if settings.tenant_configs is None:
         mcp_server_configs = load_mcp_server_configs_from_env(env)
@@ -1037,11 +1044,11 @@ def build_execution_resolver_from_env(
     for tenant_id, value in settings.tenant_configs.items():
         if not isinstance(tenant_id, str) or not tenant_id:
             raise RuntimeError(
-                f"{TENANT_EXECUTION_CONFIGS_ENV} keys must be non-empty tenant identifiers"
+                f"{_canonical_env_name(TENANT_EXECUTION_CONFIGS_ENV)} keys must be non-empty tenant identifiers"
             )
         if not isinstance(value, dict):
             raise RuntimeError(
-                f"{TENANT_EXECUTION_CONFIGS_ENV} values must be objects with llm/tools config"
+                f"{_canonical_env_name(TENANT_EXECUTION_CONFIGS_ENV)} values must be objects with llm/tools config"
             )
         tenant_configs[tenant_id] = parse_tenant_execution_config(
             tenant_id,
@@ -1056,37 +1063,43 @@ def build_execution_resolver_from_env(
 def _load_tenant_execution_configs_env(
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any] | None:
-    lookup = os.environ if env is None else env
+    lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
     raw = lookup.get(TENANT_EXECUTION_CONFIGS_ENV, "").strip()
     if not raw:
         return None
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{TENANT_EXECUTION_CONFIGS_ENV} must be valid JSON") from exc
+        raise RuntimeError(
+            f"{_canonical_env_name(TENANT_EXECUTION_CONFIGS_ENV)} must be valid JSON"
+        ) from exc
     if not isinstance(parsed, dict):
-        raise RuntimeError(f"{TENANT_EXECUTION_CONFIGS_ENV} must be a JSON object")
+        raise RuntimeError(
+            f"{_canonical_env_name(TENANT_EXECUTION_CONFIGS_ENV)} must be a JSON object"
+        )
     return interpolate_tenant_execution_env_placeholders(parsed, lookup)
 
 
 def _load_llm_profiles_env(
     env: Mapping[str, str] | None = None,
 ) -> dict[str, TenantLLMConfig]:
-    lookup = os.environ if env is None else env
+    lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
     raw = lookup.get(LLM_PROFILES_ENV, "").strip()
     if not raw:
         return {}
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{LLM_PROFILES_ENV} must be valid JSON") from exc
+        raise RuntimeError(f"{_canonical_env_name(LLM_PROFILES_ENV)} must be valid JSON") from exc
     if not isinstance(parsed, dict):
-        raise RuntimeError(f"{LLM_PROFILES_ENV} must be a JSON object")
+        raise RuntimeError(f"{_canonical_env_name(LLM_PROFILES_ENV)} must be a JSON object")
     interpolated = interpolate_tenant_execution_env_placeholders(parsed, lookup)
     profiles: dict[str, TenantLLMConfig] = {}
     for name, payload in interpolated.items():
         if not isinstance(name, str) or not name or not isinstance(payload, dict):
-            raise RuntimeError(f"{LLM_PROFILES_ENV} must map non-empty names to objects")
+            raise RuntimeError(
+                f"{_canonical_env_name(LLM_PROFILES_ENV)} must map non-empty names to objects"
+            )
         profiles[name] = _parse_tenant_llm_config(f"profile/{name}", payload)
     return profiles
 
@@ -1097,9 +1110,12 @@ def resolve_tenant_config_source(
     raw = (
         explicit_source
         if explicit_source is not None
-        else os.getenv(
-            TENANT_CONFIG_SOURCE_ENV,
-            TENANT_CONFIG_SOURCE_ENV_ONLY,
+        else (
+            preferred_mindweft_env(
+                "TENANT_CONFIG_SOURCE",
+                default=TENANT_CONFIG_SOURCE_ENV_ONLY,
+            )
+            or TENANT_CONFIG_SOURCE_ENV_ONLY
         )
     )
     source = raw.strip().lower()
@@ -1110,7 +1126,7 @@ def resolve_tenant_config_source(
     }:
         return source
     raise RuntimeError(
-        f"Unsupported {TENANT_CONFIG_SOURCE_ENV} '{raw}'. Expected "
+        f"Unsupported {_canonical_env_name(TENANT_CONFIG_SOURCE_ENV)} '{raw}'. Expected "
         f"'{TENANT_CONFIG_SOURCE_ENV_ONLY}', '{TENANT_CONFIG_SOURCE_STORE}', "
         f"or '{TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS}'."
     )
@@ -1256,7 +1272,7 @@ async def validate_tenant_execution_config(
 
 
 def _tenant_llm_config_from_env(env: Mapping[str, str] | None = None) -> TenantLLMConfig:
-    lookup = os.environ if env is None else env
+    lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
     provider = lookup.get("MINIGENT_LLM_PROVIDER", "mock").strip().lower()
     extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS", lookup)
     input_modalities = _input_modalities_from_env(lookup)
@@ -1307,7 +1323,7 @@ def _tenant_llm_config_from_env(env: Mapping[str, str] | None = None) -> TenantL
 
 
 def _json_string_map_env(name: str, env: Mapping[str, str] | None = None) -> dict[str, str]:
-    lookup = os.environ if env is None else env
+    lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
     raw = lookup.get(name, "").strip()
     if not raw:
         return {}
@@ -1325,7 +1341,7 @@ def _json_string_map_env(name: str, env: Mapping[str, str] | None = None) -> dic
 def _input_modalities_from_env(
     env: Mapping[str, str] | None = None,
 ) -> frozenset[str] | None:
-    lookup = os.environ if env is None else env
+    lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
     raw = lookup.get(LLM_INPUT_MODALITIES_ENV, "").strip()
     if not raw:
         return None
@@ -1334,7 +1350,7 @@ def _input_modalities_from_env(
     if not modalities or invalid:
         supported = ", ".join(sorted(SUPPORTED_INPUT_MODALITIES))
         raise RuntimeError(
-            f"{LLM_INPUT_MODALITIES_ENV} must be a comma-separated subset of: {supported}"
+            f"{_canonical_env_name(LLM_INPUT_MODALITIES_ENV)} must be a comma-separated subset of: {supported}"
         )
     return modalities
 
@@ -1964,8 +1980,8 @@ def _build_llm_adapter(
             raise RuntimeError("Tenant LLM provider 'generic-oauth' requires base_url")
         allow_global_credential_fallback = (
             tenant_id is not None
-            and tenant_id == os.environ.get(CODING_TENANT_ID_ENV)
-            and os.environ.get(CODING_OAUTH_GLOBAL_FALLBACK_ENV, "").strip().lower()
+            and tenant_id == preferred_mindweft_env("CODING_TENANT_ID")
+            and (preferred_mindweft_env("CODING_OAUTH_GLOBAL_FALLBACK") or "").strip().lower()
             in {"1", "true", "yes", "on"}
         )
         oauth_provider = GenericOAuthProvider(
@@ -2055,8 +2071,12 @@ def _positive_float_config(tenant_id: str, value: object, label: str) -> float:
     return parsed
 
 
+def _canonical_env_name(name: str) -> str:
+    return name.replace("MINIGENT_", "MINDWEFT_", 1)
+
+
 def _positive_float_env(name: str, default: float, env: Mapping[str, str] | None = None) -> float:
-    lookup = os.environ if env is None else env
+    lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
     raw = lookup.get(name, "").strip()
     if not raw:
         return default
@@ -2082,7 +2102,7 @@ def _bool_config(tenant_id: str, value: object, label: str) -> bool:
 
 
 def _bool_env(name: str, default: bool, env: Mapping[str, str] | None = None) -> bool:
-    lookup = os.environ if env is None else env
+    lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
     raw = lookup.get(name, "").strip().lower()
     if not raw:
         return default

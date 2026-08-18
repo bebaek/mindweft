@@ -271,8 +271,8 @@ def test_pi_runtime_adds_mcp_broker_extension_when_env_is_present(tmp_path: Path
                 "cwd": str(tmp_path),
                 "prompt": "hello",
                 "env": {
-                    "MINIGENT_MCP_BROKER_URL": "http://127.0.0.1:8000/mcp/peer/session",
-                    "MINIGENT_MCP_BROKER_TOKEN": "token-123",
+                    "MINDWEFT_MCP_BROKER_URL": "http://127.0.0.1:8000/mcp/peer/session",
+                    "MINDWEFT_MCP_BROKER_TOKEN": "token-123",
                 },
             },
         )
@@ -300,7 +300,7 @@ def test_pi_mcp_broker_tool_names_lists_remote_tools() -> None:
                 json.dumps(
                     {
                         "jsonrpc": "2.0",
-                        "id": "minigent-tool-list",
+                        "id": "mindweft-tool-list",
                         "result": {
                             "tools": [
                                 {"name": "calculator"},
@@ -323,7 +323,7 @@ def test_pi_mcp_broker_tool_names_lists_remote_tools() -> None:
                 "MINIGENT_MCP_BROKER_URL": f"http://127.0.0.1:{server.server_port}/mcp/peer/session",
                 "MINIGENT_MCP_BROKER_TOKEN": "token-123",
             }
-        ) == ["minigent_calculator", "minigent_echo"]
+        ) == ["mindweft_calculator", "mindweft_echo"]
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -426,12 +426,12 @@ def test_task_env_generates_opencode_mcp_config(tmp_path: Path) -> None:
         _wait_for_terminal_task(client, create_response.json()["task_id"])
         config = json.loads(env_file.read_text(encoding="utf-8"))
 
-    assert config["mcp"]["minigent"] == {
+    assert config["mcp"]["mindweft"] == {
         "type": "remote",
-        "url": "{env:MINIGENT_MCP_BROKER_URL}",
+        "url": "{env:MINDWEFT_MCP_BROKER_URL}",
         "enabled": True,
         "oauth": False,
-        "headers": {"Authorization": "Bearer {env:MINIGENT_MCP_BROKER_TOKEN}"},
+        "headers": {"Authorization": "Bearer {env:MINDWEFT_MCP_BROKER_TOKEN}"},
     }
 
 
@@ -476,7 +476,7 @@ def test_task_env_preserves_existing_opencode_config_content(tmp_path: Path, mon
 
     assert config["model"] == "test/model"
     assert config["mcp"]["other"] == {"type": "remote", "url": "https://example.com"}
-    assert config["mcp"]["minigent"]["type"] == "remote"
+    assert config["mcp"]["mindweft"]["type"] == "remote"
 
 
 def test_task_parses_jsonl_events_and_final_output(tmp_path: Path) -> None:

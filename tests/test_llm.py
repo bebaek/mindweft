@@ -11,6 +11,7 @@ from app.llm import (
     AnthropicMessagesAdapter,
     GenericOAuthResponsesAdapter,
     GoogleGeminiAdapter,
+    LLMSettings,
     MockLLMAdapter,
     OpenAICompatibleAdapter,
     _prune_historical_tool_messages_for_azure,
@@ -624,7 +625,7 @@ def test_openrouter_adapter_normalizes_provider_unavailable_error() -> None:
 def test_generic_oauth_adapter_normalizes_provider_bad_request_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("MINIGENT_LLM_ACCOUNT_ID_HEADER", raising=False)
+    monkeypatch.delenv("MINDWEFT_LLM_ACCOUNT_ID_HEADER", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["authorization"] == "Bearer access-token"
@@ -659,9 +660,9 @@ def test_generic_oauth_adapter_normalizes_provider_bad_request_error(
 def test_generic_oauth_codex_responses_requests_reasoning_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("MINIGENT_LLM_ACCOUNT_ID_HEADER", raising=False)
-    monkeypatch.delenv("MINIGENT_LLM_REASONING_EFFORT", raising=False)
-    monkeypatch.delenv("MINIGENT_LLM_REASONING_SUMMARY", raising=False)
+    monkeypatch.delenv("MINDWEFT_LLM_ACCOUNT_ID_HEADER", raising=False)
+    monkeypatch.delenv("MINDWEFT_LLM_REASONING_EFFORT", raising=False)
+    monkeypatch.delenv("MINDWEFT_LLM_REASONING_SUMMARY", raising=False)
     captured_payload: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -698,7 +699,7 @@ def test_generic_oauth_codex_responses_requests_reasoning_summary(
 def test_generic_oauth_responses_extracts_streamed_reasoning_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("MINIGENT_LLM_ACCOUNT_ID_HEADER", raising=False)
+    monkeypatch.delenv("MINDWEFT_LLM_ACCOUNT_ID_HEADER", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
         _ = request.read()
@@ -1213,7 +1214,7 @@ def test_google_gemini_adapter_prepends_user_context_for_compacted_leading_model
 def test_google_gemini_adapter_truncates_large_tool_result_for_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_LLM_MAX_TOOL_RESULT_CHARS", "1024")
+    monkeypatch.setenv("MINDWEFT_LLM_MAX_TOOL_RESULT_CHARS", "1024")
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read().decode())
@@ -1261,7 +1262,7 @@ def test_google_gemini_adapter_truncates_large_tool_result_for_context(
 
 
 def test_serialize_tool_result_truncates_large_results(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_LLM_MAX_TOOL_RESULT_CHARS", "1024")
+    monkeypatch.setenv("MINDWEFT_LLM_MAX_TOOL_RESULT_CHARS", "1024")
 
     serialized = serialize_tool_result({"content": "x" * 2000})
 
@@ -1423,8 +1424,30 @@ def test_load_provider_config_for_openrouter_includes_optional_headers(
     }
 
 
+def test_llm_settings_prefer_mindweft_and_accept_legacy_env() -> None:
+    preferred = LLMSettings.from_env(
+        {
+            "MINDWEFT_LLM_PROVIDER": "google",
+            "MINIGENT_LLM_PROVIDER": "openai",
+            "MINDWEFT_LLM_REASONING_EFFORT": "high",
+            "MINIGENT_LLM_REASONING_EFFORT": "low",
+        }
+    )
+    legacy = LLMSettings.from_env(
+        {
+            "MINIGENT_LLM_PROVIDER": "openai",
+            "MINIGENT_LLM_REASONING_EFFORT": "low",
+        }
+    )
+
+    assert preferred.provider == "google"
+    assert preferred.runtime.reasoning_effort == "high"
+    assert legacy.provider == "openai"
+    assert legacy.runtime.reasoning_effort == "low"
+
+
 def test_build_llm_adapter_from_env_supports_openai(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("MINDWEFT_LLM_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
 
     adapter = build_llm_adapter_from_env()
@@ -1433,7 +1456,7 @@ def test_build_llm_adapter_from_env_supports_openai(monkeypatch: pytest.MonkeyPa
 
 
 def test_build_llm_adapter_from_env_supports_google(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_LLM_PROVIDER", "google")
+    monkeypatch.setenv("MINDWEFT_LLM_PROVIDER", "google")
     monkeypatch.setenv("GEMINI_API_KEY", "google-key")
     monkeypatch.setenv("GEMINI_MODEL", "gemini-test")
 
@@ -1444,7 +1467,7 @@ def test_build_llm_adapter_from_env_supports_google(monkeypatch: pytest.MonkeyPa
 
 
 def test_build_llm_adapter_from_env_supports_anthropic(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("MINDWEFT_LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
     monkeypatch.setenv("ANTHROPIC_MODEL", "claude-test")
     monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "99")
@@ -1465,7 +1488,7 @@ def test_build_llm_adapter_from_env_supports_anthropic(monkeypatch: pytest.Monke
 def test_build_llm_adapter_from_env_rejects_missing_anthropic_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("MINDWEFT_LLM_PROVIDER", "anthropic")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
@@ -1473,7 +1496,7 @@ def test_build_llm_adapter_from_env_rejects_missing_anthropic_key(
 
 
 def test_build_llm_adapter_from_env_rejects_missing_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_LLM_PROVIDER", "openrouter")
+    monkeypatch.setenv("MINDWEFT_LLM_PROVIDER", "openrouter")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
@@ -2096,7 +2119,7 @@ def test_openai_compatible_adapter_writes_request_hash_debug_log(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request_log = tmp_path / "requests.jsonl"
-    monkeypatch.setenv("MINIGENT_LLM_DEBUG_REQUEST_LOG_PATH", str(request_log))
+    monkeypatch.setenv("MINDWEFT_LLM_DEBUG_REQUEST_LOG_PATH", str(request_log))
 
     adapter = OpenAICompatibleAdapter(
         base_url="https://example.com/v1",

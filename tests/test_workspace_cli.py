@@ -6,6 +6,7 @@ from minigent_workspace import cli
 
 
 def test_coding_config_export_builds_client_argv(monkeypatch) -> None:
+    monkeypatch.delenv("MINDWEFT_BASE_URL", raising=False)
     monkeypatch.delenv("MINIGENT_BASE_URL", raising=False)
     args = cli.parse_config_args(
         [
@@ -35,6 +36,16 @@ def test_coding_config_export_builds_client_argv(monkeypatch) -> None:
     ]
 
 
+def test_coding_config_export_prefers_mindweft_base_url(monkeypatch) -> None:
+    monkeypatch.setenv("MINDWEFT_BASE_URL", "http://canonical.example")
+    monkeypatch.setenv("MINIGENT_BASE_URL", "http://legacy.example")
+    args = cli.parse_config_args(["config", "export", "--env-file", ".env.coding"])
+
+    argv = cli.build_coding_config_export_client_argv(args)
+
+    assert argv[:2] == ["--base-url", "http://canonical.example"]
+
+
 def test_coding_config_export_uses_env_base_url(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_BASE_URL", "http://127.0.0.1:9100")
     args = cli.parse_config_args(["config", "export", "--env-file", ".env.coding"])
@@ -51,6 +62,7 @@ def test_coding_config_export_uses_env_base_url(monkeypatch) -> None:
 
 
 def test_coding_config_export_can_skip_env_file(monkeypatch) -> None:
+    monkeypatch.delenv("MINDWEFT_BASE_URL", raising=False)
     monkeypatch.delenv("MINIGENT_BASE_URL", raising=False)
     args = cli.parse_config_args(["config", "export", "--no-env-file"])
 

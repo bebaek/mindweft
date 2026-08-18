@@ -12,6 +12,19 @@ def test_interpolate_config_string_replaces_missing_values_with_empty_string() -
     assert mcp_specs.interpolate_config_string("${SET}:${MISSING}", {"SET": "value"}) == "value:"
 
 
+def test_resolve_mcp_servers_file_prefers_mindweft_environment(tmp_path: Path) -> None:
+    resolved = mcp_specs.resolve_mcp_servers_file(
+        None,
+        {
+            "MINDWEFT_CODING_MCP_SERVERS_FILE": "canonical.json",
+            "MINIGENT_CODING_MCP_SERVERS_FILE": "legacy.json",
+        },
+        base_dir=tmp_path,
+    )
+
+    assert resolved == (tmp_path / "canonical.json").resolve()
+
+
 def test_resolve_mcp_servers_file_resolves_relative_path(tmp_path: Path) -> None:
     assert (
         mcp_specs.resolve_mcp_servers_file(

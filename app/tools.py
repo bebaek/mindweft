@@ -10,7 +10,6 @@ import ipaddress
 import json
 import logging
 import operator
-import os
 import socket
 import time
 from collections.abc import Callable
@@ -37,14 +36,21 @@ from app.redaction import (
     sanitize_tool_result,
     sanitize_value_for_logging,
 )
+from minigent_config.unified_config import preferred_mindweft_env
 
 logger = logging.getLogger(__name__)
 
+MINDWEFT_MINIRAG_DB_PATH_ENV = "MINDWEFT_MINIRAG_DB_PATH"
+MINDWEFT_MINIRAG_BACKEND_ENV = "MINDWEFT_MINIRAG_BACKEND"
+MINDWEFT_MINIRAG_EMBEDDING_PROVIDER_ENV = "MINDWEFT_MINIRAG_EMBEDDING_PROVIDER"
+MINDWEFT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV = "MINDWEFT_MINIRAG_HYBRID_LEXICAL_WEIGHT"
+MINDWEFT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV = "MINDWEFT_MINIRAG_HYBRID_DENSE_WEIGHT"
 MINIGENT_MINIRAG_DB_PATH_ENV = "MINIGENT_MINIRAG_DB_PATH"
 MINIGENT_MINIRAG_BACKEND_ENV = "MINIGENT_MINIRAG_BACKEND"
 MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV = "MINIGENT_MINIRAG_EMBEDDING_PROVIDER"
 MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV = "MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT"
 MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV = "MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT"
+MINDWEFT_ENABLE_PEER_AGENT_TOOL_ENV = "MINDWEFT_ENABLE_PEER_AGENT_TOOL"
 MINIGENT_ENABLE_PEER_AGENT_TOOL_ENV = "MINIGENT_ENABLE_PEER_AGENT_TOOL"
 DEFAULT_LOCAL_TOOL_NAMES = {
     "echo",
@@ -709,13 +715,9 @@ def _evaluate_calculator_node(node: ast.AST) -> float | int:
 def _peer_agent_tool_enabled(explicit: bool | None = None) -> bool:
     if explicit is not None:
         return explicit
-    return _env_flag(MINIGENT_ENABLE_PEER_AGENT_TOOL_ENV, default=False)
-
-
-def _env_flag(name: str, *, default: bool) -> bool:
-    raw = os.getenv(name)
+    raw = preferred_mindweft_env("ENABLE_PEER_AGENT_TOOL")
     if raw is None or not raw.strip():
-        return default
+        return False
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -1057,11 +1059,11 @@ def _execute_retrieve_knowledge(
     if context is None or not context.tenant_id:
         raise HTTPException(status_code=500, detail="retrieve_knowledge requires tenant context")
 
-    db_path = os.getenv(MINIGENT_MINIRAG_DB_PATH_ENV, "").strip()
+    db_path = (preferred_mindweft_env("MINIRAG_DB_PATH") or "").strip()
     if not db_path:
         raise HTTPException(
             status_code=503,
-            detail=f"retrieve_knowledge requires {MINIGENT_MINIRAG_DB_PATH_ENV} to be configured",
+            detail=f"retrieve_knowledge requires {MINDWEFT_MINIRAG_DB_PATH_ENV} to be configured",
         )
 
     try:
@@ -1076,14 +1078,18 @@ def _execute_retrieve_knowledge(
     MiniRAG = minirag_retrieve.MiniRAG
     build_backend = minirag_retrieve.build_backend
     retrieve_knowledge = minirag_tool.retrieve_knowledge
-    backend_name = os.getenv(MINIGENT_MINIRAG_BACKEND_ENV, "lexical").strip().lower()
-    embedding_provider_name = os.getenv(MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV, "").strip() or None
+    backend_name = (
+        (preferred_mindweft_env("MINIRAG_BACKEND", default="lexical") or "lexical").strip().lower()
+    )
+    embedding_provider_name = (
+        preferred_mindweft_env("MINIRAG_EMBEDDING_PROVIDER") or ""
+    ).strip() or None
     hybrid_lexical_weight_raw = (
-        os.getenv(MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV, "").strip() or None
-    )
+        preferred_mindweft_env("MINIRAG_HYBRID_LEXICAL_WEIGHT") or ""
+    ).strip() or None
     hybrid_dense_weight_raw = (
-        os.getenv(MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV, "").strip() or None
-    )
+        preferred_mindweft_env("MINIRAG_HYBRID_DENSE_WEIGHT") or ""
+    ).strip() or None
     rag = MiniRAG(
         db_path=db_path,
         backend=build_backend(

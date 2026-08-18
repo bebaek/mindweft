@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import NamedTuple
 
+from minigent_config.unified_config import normalize_mindweft_env
+
 
 class WorkspaceScope(NamedTuple):
     name: str
@@ -28,15 +30,16 @@ def resolve_workspace_roots(
 
 
 def load_workspace_scopes_from_env(env: dict[str, str]) -> dict[str, WorkspaceScope]:
+    normalize_mindweft_env(env)
     raw = env.get("MINIGENT_CODING_WORKSPACE_SCOPES", "").strip()
     if not raw:
         return {}
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("MINIGENT_CODING_WORKSPACE_SCOPES must be valid JSON") from exc
+        raise RuntimeError("MINDWEFT_CODING_WORKSPACE_SCOPES must be valid JSON") from exc
     if not isinstance(payload, dict):
-        raise RuntimeError("MINIGENT_CODING_WORKSPACE_SCOPES must be a JSON object")
+        raise RuntimeError("MINDWEFT_CODING_WORKSPACE_SCOPES must be a JSON object")
     scopes: dict[str, WorkspaceScope] = {}
     for name, entry in payload.items():
         if not isinstance(name, str) or not name.strip():
@@ -64,6 +67,7 @@ def load_workspace_scopes_from_env(env: dict[str, str]) -> dict[str, WorkspaceSc
 
 
 def skill_workspace_scope_from_env(env: dict[str, str], tenant_id: str) -> str | None:
+    normalize_mindweft_env(env)
     raw_config = env.get("MINIGENT_TENANT_EXECUTION_CONFIGS")
     if not raw_config:
         return None
@@ -101,6 +105,7 @@ def resolve_active_workspace_scope(
     explicit_scope: str | None = None,
     validate_under_configured_roots: bool = False,
 ) -> tuple[list[Path], WorkspaceScope | None]:
+    normalize_mindweft_env(env)
     scopes = load_workspace_scopes_from_env(env)
     requested_scope = (
         explicit_scope
@@ -145,6 +150,7 @@ def resolve_workspace_selection(
     *,
     tenant_id: str,
 ) -> tuple[list[Path], WorkspaceScope | None]:
+    normalize_mindweft_env(env)
     env_workspace = env.get("MINIGENT_CODING_WORKSPACES") or env.get("MINIGENT_CODING_WORKSPACE")
     workspace_roots = resolve_workspace_roots(cli_workspaces, env_workspace)
     workspace_roots, active_workspace_scope = resolve_active_workspace_scope(

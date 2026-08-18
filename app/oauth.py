@@ -20,6 +20,7 @@ import jwt
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.private_keyring import load_encryption_keyring
+from minigent_config.unified_config import normalize_mindweft_env
 
 GENERIC_OAUTH_PROVIDER = "generic-oauth"
 OAUTH_STORE_PATH_ENV = "MINIGENT_OAUTH_STORE_PATH"
@@ -104,7 +105,7 @@ class GenericOAuthConfig:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> GenericOAuthConfig:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
             provider_id=_required_env(lookup, OAUTH_PROVIDER_ID_ENV),
             client_id=_required_env(lookup, OAUTH_CLIENT_ID_ENV),
@@ -123,7 +124,7 @@ class OAuthStoreSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> OAuthStoreSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(path=Path(_required_env(lookup, OAUTH_STORE_PATH_ENV)).expanduser())
 
 
@@ -134,7 +135,7 @@ class OAuthSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> OAuthSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
             store=OAuthStoreSettings.from_env(lookup),
             provider=GenericOAuthConfig.from_env(lookup),
@@ -221,7 +222,7 @@ class SQLiteEncryptedOAuthStore:
     def from_env(
         cls, env: Mapping[str, str] | None = None, *, flow_ttl_seconds: float = 600.0
     ) -> SQLiteEncryptedOAuthStore:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         active_key, keyring, active_version = load_encryption_keyring(
             lookup,
             single_key_env=OAUTH_ENCRYPTION_KEY_ENV,
@@ -581,7 +582,7 @@ class FileOAuthCredentialStore:
 def build_oauth_credential_store_from_env(
     env: Mapping[str, str] | None = None,
 ) -> OAuthCredentialStore:
-    lookup = os.environ if env is None else env
+    lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
     if (
         lookup.get(OAUTH_ENCRYPTION_KEY_ENV, "").strip()
         or lookup.get(OAUTH_ENCRYPTION_KEYS_ENV, "").strip()
@@ -593,7 +594,7 @@ def build_oauth_credential_store_from_env(
 def build_oauth_flow_store_from_env(
     env: Mapping[str, str] | None = None, *, ttl_seconds: float = 600.0
 ) -> OAuthFlowStore | SQLiteEncryptedOAuthStore:
-    lookup = os.environ if env is None else env
+    lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
     if (
         lookup.get(OAUTH_ENCRYPTION_KEY_ENV, "").strip()
         or lookup.get(OAUTH_ENCRYPTION_KEYS_ENV, "").strip()
@@ -815,10 +816,14 @@ def oauth_settings_from_env() -> OAuthSettings:
     return OAuthSettings.from_env()
 
 
+def _canonical_env_name(name: str) -> str:
+    return name.replace("MINIGENT_", "MINDWEFT_", 1)
+
+
 def _required_env(env: Mapping[str, str], name: str) -> str:
     value = env.get(name, "").strip()
     if not value:
-        raise RuntimeError(f"{name} is required")
+        raise RuntimeError(f"{_canonical_env_name(name)} is required")
     return value
 
 
@@ -830,7 +835,7 @@ def _json_string_map_env(env: Mapping[str, str], name: str) -> dict[str, str]:
     if not isinstance(payload, dict) or not all(
         isinstance(key, str) and isinstance(value, str) for key, value in payload.items()
     ):
-        raise RuntimeError(f"{name} must be a JSON object of string values")
+        raise RuntimeError(f"{_canonical_env_name(name)} must be a JSON object of string values")
     return dict(payload)
 
 

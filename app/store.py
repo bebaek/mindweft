@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import time
 from collections.abc import Mapping
@@ -26,7 +25,7 @@ from app.models import (
     utc_now,
 )
 from app.thread_titles import generate_thread_title
-from minigent_config.constants import THREAD_DB_PATH_ENV
+from minigent_config.unified_config import preferred_mindweft_env
 
 DEFAULT_RUN_LEASE_SECONDS = 30.0
 _CURRENT_RUN: ContextVar[tuple[str, str, str] | None] = ContextVar(
@@ -70,8 +69,7 @@ class ThreadStoreSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> ThreadStoreSettings:
-        lookup = os.environ if env is None else env
-        db_path = lookup.get(THREAD_DB_PATH_ENV, "").strip()
+        db_path = (preferred_mindweft_env("THREAD_DB_PATH", env) or "").strip()
         return cls(db_path=db_path or None)
 
 

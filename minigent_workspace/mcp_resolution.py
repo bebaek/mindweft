@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 from typing import NamedTuple
 
+from minigent_config.unified_config import normalize_mindweft_env
 from minigent_workspace.launch_commands import build_builtin_mcp_server_specs
 from minigent_workspace.mcp_specs import (
     CodingMCPServerSpec,
@@ -29,6 +30,7 @@ def resolve_workspace_mcp_servers(
     workspace_roots: list[Path],
     settings: WorkspaceRuntimeSettings,
 ) -> ResolvedMCPServers:
+    normalize_mindweft_env(env)
     source_file = resolve_mcp_servers_file(
         args.mcp_servers_file,
         env,

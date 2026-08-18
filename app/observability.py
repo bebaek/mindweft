@@ -24,6 +24,8 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 
+from minigent_config.unified_config import normalize_mindweft_env
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_PLAINTEXT_FORMAT = "%(levelname)s %(name)s: %(message)s"
@@ -47,7 +49,7 @@ class LoggingSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> LoggingSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
             level=lookup.get("MINIGENT_LOG_LEVEL", "INFO").upper(),
             output_format=lookup.get("MINIGENT_LOG_FORMAT", "plaintext").lower(),
@@ -76,10 +78,10 @@ class TracingSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> TracingSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
             enabled=_env_flag(lookup, "MINIGENT_OTEL_ENABLED", default=False),
-            service_name=lookup.get("MINIGENT_OTEL_SERVICE_NAME", "minigent"),
+            service_name=lookup.get("MINIGENT_OTEL_SERVICE_NAME", "mindweft"),
             exporter=lookup.get("MINIGENT_OTEL_EXPORTER", "console").lower(),
             otlp_endpoint=lookup.get("MINIGENT_OTEL_EXPORTER_OTLP_ENDPOINT"),
             otlp_headers={
@@ -241,7 +243,7 @@ def _build_span_exporter(settings: TracingSettings) -> SpanExporter:
             exporter_kwargs["headers"] = settings.otlp_headers
         return OTLPSpanExporter(**exporter_kwargs)
     raise RuntimeError(
-        f"Unsupported MINIGENT_OTEL_EXPORTER '{settings.exporter}'. Expected 'none', 'console', or 'otlp'."
+        f"Unsupported MINDWEFT_OTEL_EXPORTER '{settings.exporter}'. Expected 'none', 'console', or 'otlp'."
     )
 
 

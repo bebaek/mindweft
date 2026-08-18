@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import overload
 
 from minigent_client.audio import (
     RecordedAudio,
@@ -14,6 +15,20 @@ from minigent_client.audio import (
 )
 from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
 from minigent_config.environment import load_environment
+from minigent_config.unified_config import preferred_mindweft_env
+
+
+@overload
+def _voice_env(name: str) -> str | None: ...
+
+
+@overload
+def _voice_env(name: str, default: str) -> str: ...
+
+
+def _voice_env(name: str, default: str | None = None) -> str | None:
+    value = preferred_mindweft_env(name.removeprefix("MINIGENT_"))
+    return default if value is None else value
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--provider",
         choices=("openai", "openrouter", "faster-whisper"),
-        default=os.getenv("MINIGENT_VOICE_STT_PROVIDER", "openai"),
+        default=_voice_env("MINIGENT_VOICE_STT_PROVIDER", "openai"),
         help="Speech-to-text provider to use.",
     )
     parser.add_argument(
@@ -39,13 +54,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--stt-debug-path",
-        default=os.getenv("MINIGENT_VOICE_STT_DEBUG_PATH"),
+        default=_voice_env("MINIGENT_VOICE_STT_DEBUG_PATH"),
         help="Optional directory to write STT request/response debug artifacts.",
     )
     parser.add_argument(
         "--gain",
         type=float,
-        default=float(os.getenv("MINIGENT_VOICE_STT_GAIN", "1.0")),
+        default=float(_voice_env("MINIGENT_VOICE_STT_GAIN", "1.0")),
         help="Optional gain multiplier applied before STT.",
     )
     parser.add_argument(
@@ -56,13 +71,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pad-leading-ms",
         type=int,
-        default=int(os.getenv("MINIGENT_VOICE_STT_PAD_LEADING_MS", "0")),
+        default=int(_voice_env("MINIGENT_VOICE_STT_PAD_LEADING_MS", "0")),
         help="Prepend silence before STT.",
     )
     parser.add_argument(
         "--pad-trailing-ms",
         type=int,
-        default=int(os.getenv("MINIGENT_VOICE_STT_PAD_TRAILING_MS", "0")),
+        default=int(_voice_env("MINIGENT_VOICE_STT_PAD_TRAILING_MS", "0")),
         help="Append silence before STT.",
     )
     return parser.parse_args()
@@ -114,7 +129,7 @@ def build_provider_config(
             raise SystemExit("OPENAI_API_KEY is required for --provider openai")
         return SpeechProviderConfig(
             provider="openai",
-            model=model or os.getenv("MINIGENT_VOICE_STT_MODEL", "gpt-4o-mini-transcribe"),
+            model=model or _voice_env("MINIGENT_VOICE_STT_MODEL", "gpt-4o-mini-transcribe"),
             api_key=api_key,
             base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
             debug_path=stt_debug_path,
@@ -125,7 +140,7 @@ def build_provider_config(
             raise SystemExit("OPENROUTER_API_KEY is required for --provider openrouter")
         return SpeechProviderConfig(
             provider="openrouter",
-            model=model or os.getenv("MINIGENT_VOICE_STT_MODEL", "openai/gpt-audio"),
+            model=model or _voice_env("MINIGENT_VOICE_STT_MODEL", "openai/gpt-audio"),
             api_key=api_key,
             base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/"),
             app_name=os.getenv("OPENROUTER_APP_NAME"),
@@ -135,10 +150,10 @@ def build_provider_config(
     if normalized == "faster-whisper":
         return SpeechProviderConfig(
             provider="faster-whisper",
-            model=model or os.getenv("MINIGENT_VOICE_STT_MODEL", "base"),
-            device=os.getenv("MINIGENT_VOICE_STT_DEVICE"),
-            compute_type=os.getenv("MINIGENT_VOICE_STT_COMPUTE_TYPE"),
-            language=os.getenv("MINIGENT_VOICE_STT_LANGUAGE"),
+            model=model or _voice_env("MINIGENT_VOICE_STT_MODEL", "base"),
+            device=_voice_env("MINIGENT_VOICE_STT_DEVICE"),
+            compute_type=_voice_env("MINIGENT_VOICE_STT_COMPUTE_TYPE"),
+            language=_voice_env("MINIGENT_VOICE_STT_LANGUAGE"),
             debug_path=stt_debug_path,
         )
     raise SystemExit(f"Unsupported provider '{provider}'")

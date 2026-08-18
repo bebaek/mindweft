@@ -891,12 +891,12 @@ def create_app(
             elif config_source == TENANT_CONFIG_SOURCE_STORE:
                 if admin_store is None:
                     raise RuntimeError(
-                        "MINIGENT_ADMIN_DB_PATH or admin_store is required when "
+                        "MINDWEFT_ADMIN_DB_PATH or admin_store is required when "
                         "MINIGENT_TENANT_CONFIG_SOURCE=store"
                     )
                 if admin_encryption_key is None and admin_store_settings.db_path is not None:
                     raise RuntimeError(
-                        "MINIGENT_ADMIN_ENCRYPTION_KEY is required when "
+                        "MINDWEFT_ADMIN_ENCRYPTION_KEY is required when "
                         "MINIGENT_TENANT_CONFIG_SOURCE=store"
                     )
                 execution_resolver = StoreBackedTenantExecutionResolver(
@@ -909,12 +909,12 @@ def create_app(
             elif config_source == TENANT_CONFIG_SOURCE_STORE_WITH_DEFAULTS:
                 if admin_store is None:
                     raise RuntimeError(
-                        "MINIGENT_ADMIN_DB_PATH or admin_store is required when "
+                        "MINDWEFT_ADMIN_DB_PATH or admin_store is required when "
                         "MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults"
                     )
                 if admin_encryption_key is None and admin_store_settings.db_path is not None:
                     raise RuntimeError(
-                        "MINIGENT_ADMIN_ENCRYPTION_KEY is required when "
+                        "MINDWEFT_ADMIN_ENCRYPTION_KEY is required when "
                         "MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults"
                     )
                 execution_resolver = StoreBackedTenantExecutionResolver(

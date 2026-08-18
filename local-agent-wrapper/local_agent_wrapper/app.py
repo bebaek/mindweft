@@ -48,7 +48,7 @@ class Settings(BaseModel):
     tail_chars: int = 20_000
     event_limit: int = 50
     cancel_grace_seconds: float = 5.0
-    allowed_task_env_prefixes: tuple[str, ...] = ("MINIGENT_MCP_BROKER_",)
+    allowed_task_env_prefixes: tuple[str, ...] = ("MINDWEFT_MCP_BROKER_", "MINIGENT_MCP_BROKER_")
 
 
 class TaskRequest(BaseModel):
@@ -631,26 +631,34 @@ def _allowed_task_env(values: dict[str, str], allowed_prefixes: tuple[str, ...])
 
 def _process_env(task_env: dict[str, str]) -> dict[str, str]:
     env = {**os.environ, **task_env}
-    if _has_mcp_broker_env(env):
+    broker_url = _mcp_broker_env_value(env, "URL")
+    broker_token = _mcp_broker_env_value(env, "TOKEN")
+    if broker_url and broker_token:
+        env.setdefault("MINDWEFT_MCP_BROKER_URL", broker_url)
+        env.setdefault("MINDWEFT_MCP_BROKER_TOKEN", broker_token)
         env["OPENCODE_CONFIG_CONTENT"] = _opencode_config_content(
             env.get("OPENCODE_CONFIG_CONTENT")
         )
     return env
 
 
+def _mcp_broker_env_value(env: Mapping[str, str], suffix: str) -> str | None:
+    return env.get(f"MINDWEFT_MCP_BROKER_{suffix}") or env.get(f"MINIGENT_MCP_BROKER_{suffix}")
+
+
 def _has_mcp_broker_env(env: Mapping[str, str]) -> bool:
-    return bool(env.get("MINIGENT_MCP_BROKER_URL") and env.get("MINIGENT_MCP_BROKER_TOKEN"))
+    return bool(_mcp_broker_env_value(env, "URL") and _mcp_broker_env_value(env, "TOKEN"))
 
 
 def _pi_mcp_broker_tool_names(env: Mapping[str, str]) -> list[str]:
-    url = env.get("MINIGENT_MCP_BROKER_URL")
-    token = env.get("MINIGENT_MCP_BROKER_TOKEN")
+    url = _mcp_broker_env_value(env, "URL")
+    token = _mcp_broker_env_value(env, "TOKEN")
     if not url or not token:
         return []
     request = urllib.request.Request(
         url,
         data=json.dumps(
-            {"jsonrpc": "2.0", "id": "minigent-tool-list", "method": "tools/list", "params": {}}
+            {"jsonrpc": "2.0", "id": "mindweft-tool-list", "method": "tools/list", "params": {}}
         ).encode("utf-8"),
         headers={
             "content-type": "application/json",
@@ -683,11 +691,11 @@ def _pi_mcp_broker_tool_names(env: Mapping[str, str]) -> list[str]:
 def _pi_mcp_broker_tool_name(name: str) -> str:
     safe = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in name)
     safe = safe.strip("_-") or "tool"
-    return f"minigent_{safe}"
+    return f"mindweft_{safe}"
 
 
 def _pi_mcp_broker_extension_path() -> Path:
-    extension_dir = Path(tempfile.gettempdir()) / "minigent-local-agent-wrapper"
+    extension_dir = Path(tempfile.gettempdir()) / "mindweft-local-agent-wrapper"
     extension_dir.mkdir(parents=True, exist_ok=True)
     extension_path = extension_dir / "pi-mcp-broker-extension.ts"
     if (
@@ -714,8 +722,8 @@ type MCPContent = {
 };
 
 export default async function (pi: ExtensionAPI) {
-  const url = process.env.MINIGENT_MCP_BROKER_URL;
-  const token = process.env.MINIGENT_MCP_BROKER_TOKEN;
+  const url = process.env.MINDWEFT_MCP_BROKER_URL;
+  const token = process.env.MINDWEFT_MCP_BROKER_TOKEN;
   if (!url || !token) return;
 
   let nextId = 1;
@@ -732,7 +740,7 @@ export default async function (pi: ExtensionAPI) {
     });
     const body = await response.text();
     if (!response.ok) {
-      throw new Error(`Minigent MCP broker HTTP ${response.status}: ${body}`);
+      throw new Error(`Mindweft MCP broker HTTP ${response.status}: ${body}`);
     }
     const payload = body ? JSON.parse(body) : null;
     if (payload?.error) {
@@ -750,11 +758,11 @@ export default async function (pi: ExtensionAPI) {
     registered.push(registeredName);
     pi.registerTool({
       name: registeredName,
-      label: `Minigent ${tool.name}`,
-      description: tool.description ?? `Call Minigent MCP broker tool ${tool.name}`,
-      promptSnippet: tool.description ?? `Call Minigent MCP broker tool ${tool.name}`,
+      label: `Mindweft ${tool.name}`,
+      description: tool.description ?? `Call Mindweft MCP broker tool ${tool.name}`,
+      promptSnippet: tool.description ?? `Call Mindweft MCP broker tool ${tool.name}`,
       promptGuidelines: [
-        `Use ${registeredName} when the current Minigent thread needs the brokered ${tool.name} tool.`,
+        `Use ${registeredName} when the current Mindweft thread needs the brokered ${tool.name} tool.`,
       ],
       parameters: tool.inputSchema ?? { type: "object", properties: {} },
       async execute(_toolCallId, params, signal) {
@@ -777,7 +785,7 @@ export default async function (pi: ExtensionAPI) {
 
 function piToolName(name: string): string {
   const safe = name.replace(/[^a-zA-Z0-9_-]/g, "_").replace(/^[_-]+|[_-]+$/g, "") || "tool";
-  return `minigent_${safe}`;
+  return `mindweft_${safe}`;
 }
 
 function normalizeContent(value: unknown): MCPContent[] {
@@ -811,13 +819,13 @@ def _opencode_config_content(existing: str | None) -> str:
     mcp = config.get("mcp")
     if not isinstance(mcp, dict):
         mcp = {}
-    mcp["minigent"] = {
+    mcp["mindweft"] = {
         "type": "remote",
-        "url": "{env:MINIGENT_MCP_BROKER_URL}",
+        "url": "{env:MINDWEFT_MCP_BROKER_URL}",
         "enabled": True,
         "oauth": False,
         "headers": {
-            "Authorization": "Bearer {env:MINIGENT_MCP_BROKER_TOKEN}",
+            "Authorization": "Bearer {env:MINDWEFT_MCP_BROKER_TOKEN}",
         },
     }
     config["mcp"] = mcp
@@ -867,9 +875,9 @@ def settings_from_env() -> Settings:
     codex_json = os.getenv("CODEX_AGENT_JSON", "true").lower() not in {"0", "false", "no"}
     env_prefixes = tuple(
         prefix
-        for prefix in os.getenv("AGENT_ALLOWED_TASK_ENV_PREFIXES", "MINIGENT_MCP_BROKER_").split(
-            ","
-        )
+        for prefix in os.getenv(
+            "AGENT_ALLOWED_TASK_ENV_PREFIXES", "MINDWEFT_MCP_BROKER_,MINIGENT_MCP_BROKER_"
+        ).split(",")
         if prefix
     )
     return Settings(
@@ -903,7 +911,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await task_store.shutdown()
 
-    app = FastAPI(title="Minigent Local Agent Wrapper", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Mindweft Local Agent Wrapper", version="0.1.0", lifespan=lifespan)
     app.state.settings = resolved_settings
     app.state.task_store = task_store
 

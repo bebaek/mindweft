@@ -85,7 +85,7 @@ Stay within these roots for file inspection and edits unless the user explicitly
 
 Existing configs should continue to work:
 
-- If no scopes are configured, use `MINIGENT_CODING_WORKSPACES` / `MINIGENT_CODING_WORKSPACE` and existing TOML `coding.workspaces` behavior.
+- If no scopes are configured, use `MINDWEFT_CODING_WORKSPACES` / `MINDWEFT_CODING_WORKSPACE` and existing TOML `coding.workspaces` behavior.
 - Multi-root workspaces remain supported.
 - No existing skill is required to declare a scope.
 

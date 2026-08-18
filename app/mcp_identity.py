@@ -8,6 +8,8 @@ from typing import Mapping
 
 import jwt
 
+from minigent_config.unified_config import normalize_mindweft_env
+
 MCP_IDENTITY_ISSUER_ENV = "MINIGENT_MCP_IDENTITY_ISSUER"
 MCP_IDENTITY_PRIVATE_KEY_ENV = "MINIGENT_MCP_IDENTITY_PRIVATE_KEY"
 MCP_IDENTITY_KEY_ID_ENV = "MINIGENT_MCP_IDENTITY_KEY_ID"
@@ -30,7 +32,7 @@ class MCPIdentityTokenIssuer:
         audience: str,
         env: Mapping[str, str] | None = None,
     ) -> MCPIdentityTokenIssuer:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         issuer = lookup.get(MCP_IDENTITY_ISSUER_ENV, "").strip()
         private_key = lookup.get(MCP_IDENTITY_PRIVATE_KEY_ENV, "")
         key_id = lookup.get(MCP_IDENTITY_KEY_ID_ENV, "").strip()

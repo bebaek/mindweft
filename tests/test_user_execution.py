@@ -14,7 +14,33 @@ from app.main import create_app
 from app.mcp import MCPServerConfig, MCPServerInfo
 from app.models import LLMResponse, Message, MessageRole, ToolSpec
 from app.tools import ToolRegistry
-from app.user_execution import effective_execution_catalog, validate_user_execution_config
+from app.user_execution import (
+    UserExecutionConfig,
+    effective_execution_catalog,
+    ensure_default_personal_agent,
+    validate_user_execution_config,
+)
+
+
+def test_default_personal_agent_reuses_legacy_user_mcp_profile() -> None:
+    config = UserExecutionConfig.model_validate(
+        {
+            "capability_profiles": {
+                "items": [
+                    {
+                        "id": "user:minigent-user-tools",
+                        "name": "Legacy personal tools",
+                        "mcp_server_refs": ["shared:minigent-user-mcp"],
+                    }
+                ]
+            }
+        }
+    )
+
+    updated = ensure_default_personal_agent(config)
+
+    assert len(updated.capability_profiles.items) == 1
+    assert updated.agents.items[0].capability_profile_ref == "user:minigent-user-tools"
 
 
 class RecordingLLMAdapter(LLMAdapter):

@@ -20,8 +20,8 @@ pending. Personal capability profiles can use tenant-approved tools and user-own
 User-owned servers are restricted to public HTTPS destinations, revalidated on every request, and
 gated by the tenant custom-MCP policy. Static authorization or API-key headers can be stored in the
 write-only encrypted personal credential store and are resolved live for each thread run.
-Personal execution configs also receive a reserved `user:minigent-user-tools` capability profile
-referencing `shared:minigent-user-mcp`. This is an in-process, principal-scoped Mindweft tool
+Personal execution configs also receive a reserved `user:mindweft-user-tools` capability profile
+referencing `shared:mindweft-user-mcp`. This is an in-process, principal-scoped Mindweft tool
 provider, not a user-owned HTTP MCP server; it exposes the authenticated user's status, config,
 access, and credential-management operations without storing a loopback URL or credentials.
 

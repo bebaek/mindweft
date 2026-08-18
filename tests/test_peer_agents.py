@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.peer_agents import (
+    MINDWEFT_PEER_AGENTS_ENV,
     PEER_AGENTS_ENV,
     PeerAgentRegistry,
     PeerAgentSettings,
@@ -21,11 +22,28 @@ def test_peer_agent_settings_from_env_mapping_defaults_to_empty() -> None:
 
 def test_peer_agent_settings_from_env_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
-        PEER_AGENTS_ENV,
+        MINDWEFT_PEER_AGENTS_ENV,
         json.dumps([{"name": "codex", "base_url": "http://127.0.0.1:8010"}]),
     )
 
     assert peer_agent_settings_from_env().agents[0].name == "codex"
+
+
+def test_peer_agent_settings_prefer_mindweft_and_accept_legacy_env() -> None:
+    preferred = PeerAgentSettings.from_env(
+        {
+            MINDWEFT_PEER_AGENTS_ENV: json.dumps(
+                [{"name": "mindweft", "base_url": "http://127.0.0.1:8010"}]
+            ),
+            PEER_AGENTS_ENV: json.dumps([{"name": "legacy", "base_url": "http://127.0.0.1:8011"}]),
+        }
+    )
+    legacy = PeerAgentSettings.from_env(
+        {PEER_AGENTS_ENV: json.dumps([{"name": "legacy", "base_url": "http://127.0.0.1:8011"}])}
+    )
+
+    assert preferred.agents[0].name == "mindweft"
+    assert legacy.agents[0].name == "legacy"
 
 
 def test_parse_peer_agent_configs_accepts_valid_entries() -> None:

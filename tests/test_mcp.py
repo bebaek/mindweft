@@ -110,9 +110,32 @@ def test_mcp_settings_from_env_mapping_defaults_to_empty() -> None:
     assert MCPSettings.from_env({}) == MCPSettings(servers=[])
 
 
+def test_mcp_settings_prefer_mindweft_and_accept_legacy_env() -> None:
+    preferred = MCPSettings.from_env(
+        {
+            "MINDWEFT_MCP_SERVERS": json.dumps(
+                [{"name": "mindweft", "url": "https://mindweft.example/mcp"}]
+            ),
+            "MINIGENT_MCP_SERVERS": json.dumps(
+                [{"name": "legacy", "url": "https://legacy.example/mcp"}]
+            ),
+        }
+    )
+    legacy = MCPSettings.from_env(
+        {
+            "MINIGENT_MCP_SERVERS": json.dumps(
+                [{"name": "legacy", "url": "https://legacy.example/mcp"}]
+            )
+        }
+    )
+
+    assert preferred.servers[0].name == "mindweft"
+    assert legacy.servers[0].name == "legacy"
+
+
 def test_mcp_settings_from_env_reads_environment(monkeypatch) -> None:
     monkeypatch.setenv(
-        "MINIGENT_MCP_SERVERS",
+        "MINDWEFT_MCP_SERVERS",
         json.dumps([{"name": "demo", "url": "https://example.com/mcp"}]),
     )
 
@@ -121,7 +144,7 @@ def test_mcp_settings_from_env_reads_environment(monkeypatch) -> None:
 
 def test_load_mcp_server_configs_from_env(monkeypatch) -> None:
     monkeypatch.setenv(
-        "MINIGENT_MCP_SERVERS",
+        "MINDWEFT_MCP_SERVERS",
         json.dumps(
             [
                 {
@@ -156,7 +179,7 @@ def test_load_mcp_server_configs_from_env(monkeypatch) -> None:
 def test_load_mcp_server_config_parses_forwarded_identity() -> None:
     configs = load_mcp_server_configs_from_env(
         {
-            "MINIGENT_MCP_SERVERS": json.dumps(
+            "MINDWEFT_MCP_SERVERS": json.dumps(
                 [
                     {
                         "name": "private-calendar",

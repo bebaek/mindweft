@@ -1551,6 +1551,20 @@ def test_parse_agent_presets_rejects_ambiguous_or_empty_presets() -> None:
         )
 
 
+def test_client_config_prefers_mindweft_environment_names(monkeypatch) -> None:
+    monkeypatch.setenv("MINDWEFT_BASE_URL", "https://mindweft.example/")
+    monkeypatch.setenv("MINIGENT_BASE_URL", "https://legacy.example/")
+    monkeypatch.setenv("MINDWEFT_VOICE_WAKE_PHRASE", "mindweft")
+    monkeypatch.setenv("MINIGENT_VOICE_WAKE_PHRASE", "legacy")
+    monkeypatch.setenv("MINDWEFT_CLIENT_STREAM_RUNS", "true")
+
+    config = ClientConfig.from_env()
+
+    assert config.base_url == "https://mindweft.example"
+    assert config.wake_phrase == "mindweft"
+    assert config.stream_runs is True
+
+
 def test_minigent_client_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIGENT_BASE_URL", "http://127.0.0.1:9000/")
     monkeypatch.setenv("MINIGENT_VOICE_WAKE_PHRASE", "computer")

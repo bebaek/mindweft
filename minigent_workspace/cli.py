@@ -4,7 +4,7 @@ import argparse
 import os
 from pathlib import Path
 
-from minigent_config.unified_config import DEFAULT_CODING_DOTENV_FILE
+from minigent_config.unified_config import DEFAULT_CODING_DOTENV_FILE, preferred_mindweft_env
 
 
 def parse_config_args(argv: list[str]) -> argparse.Namespace:
@@ -30,7 +30,7 @@ def parse_config_args(argv: list[str]) -> argparse.Namespace:
     export_parser.add_argument(
         "--base-url",
         default=None,
-        help="Running Mindweft API URL. Defaults to MINIGENT_BASE_URL or http://127.0.0.1:8000.",
+        help="Running Mindweft API URL. Defaults to MINDWEFT_BASE_URL or http://127.0.0.1:8000.",
     )
     export_parser.add_argument(
         "--output",
@@ -52,7 +52,7 @@ def parse_config_args(argv: list[str]) -> argparse.Namespace:
 
 def build_coding_config_export_client_argv(args: argparse.Namespace) -> list[str]:
     argv: list[str] = []
-    base_url = args.base_url or os.getenv("MINIGENT_BASE_URL")
+    base_url = args.base_url or preferred_mindweft_env("BASE_URL")
     if base_url:
         argv.extend(["--base-url", base_url])
     if args.json:

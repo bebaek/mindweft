@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import quote
 
+from minigent_config.unified_config import normalize_mindweft_env
+
 _READINESS_DATABASE_ENVS: tuple[tuple[str, str], ...] = (
     ("thread_store", "MINIGENT_THREAD_DB_PATH"),
     ("mcp_broker_store", "MINIGENT_MCP_BROKER_DB_PATH"),
@@ -25,7 +27,7 @@ _OAUTH_ENCRYPTION_KEY_ENVS = (
 async def database_readiness_checks(
     env: Mapping[str, str] | None = None,
 ) -> dict[str, bool]:
-    lookup = os.environ if env is None else env
+    lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
     configured = [
         (name, value)
         for name, variable in _READINESS_DATABASE_ENVS

@@ -14,6 +14,7 @@ from jwt import InvalidTokenError, PyJWK
 
 from app.models import Principal
 from app.session_auth import has_session_cookie, principal_from_session_request
+from minigent_config.unified_config import normalize_mindweft_env
 
 USER_HEADER = "X-Mindweft-User-Id"
 TENANT_HEADER = "X-Mindweft-Tenant-Id"
@@ -57,7 +58,7 @@ class AuthSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> AuthSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         mode = (
             lookup.get(AUTH_MODE_ENV, AUTH_MODE_DEV_HEADERS).strip().lower()
             or AUTH_MODE_DEV_HEADERS
@@ -82,19 +83,21 @@ class AuthSettings:
 def validate_auth_settings() -> AuthSettings:
     settings = _load_auth_settings()
     if settings.mode == AUTH_MODE_STATIC_TOKENS and not settings.static_tokens:
-        raise RuntimeError(f"{AUTH_TOKENS_ENV} is required when {AUTH_MODE_ENV}=static-tokens")
+        raise RuntimeError(
+            f"{_canonical_env_name(AUTH_TOKENS_ENV)} is required when {_canonical_env_name(AUTH_MODE_ENV)}=static-tokens"
+        )
     if settings.mode == AUTH_MODE_JWT:
         algorithms = {algorithm.upper() for algorithm in settings.jwt_algorithms}
         if any(algorithm.startswith("HS") for algorithm in algorithms):
             if not settings.jwt_shared_secret:
                 raise RuntimeError(
-                    f"{JWT_SHARED_SECRET_ENV} is required for HMAC JWT algorithms in "
-                    f"{AUTH_MODE_ENV}=jwt"
+                    f"{_canonical_env_name(JWT_SHARED_SECRET_ENV)} is required for HMAC JWT algorithms in "
+                    f"{_canonical_env_name(AUTH_MODE_ENV)}=jwt"
                 )
         elif not settings.jwt_jwks_url:
             raise RuntimeError(
-                f"{JWT_JWKS_URL_ENV} is required for asymmetric JWT algorithms in "
-                f"{AUTH_MODE_ENV}=jwt"
+                f"{_canonical_env_name(JWT_JWKS_URL_ENV)} is required for asymmetric JWT algorithms in "
+                f"{_canonical_env_name(AUTH_MODE_ENV)}=jwt"
             )
     return settings
 
@@ -130,7 +133,7 @@ async def require_principal(
         return await _principal_from_jwt(authorization, settings)
 
     raise RuntimeError(
-        f"Unsupported {AUTH_MODE_ENV} '{settings.mode}'. Expected "
+        f"Unsupported {_canonical_env_name(AUTH_MODE_ENV)} '{settings.mode}'. Expected "
         f"'{AUTH_MODE_DEV_HEADERS}', '{AUTH_MODE_STATIC_TOKENS}', or '{AUTH_MODE_JWT}'."
     )
 
@@ -173,18 +176,20 @@ def _load_token_principals(env: Mapping[str, str] | None = None) -> dict[str, Pr
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{AUTH_TOKENS_ENV} must be valid JSON") from exc
+        raise RuntimeError(f"{_canonical_env_name(AUTH_TOKENS_ENV)} must be valid JSON") from exc
 
     if not isinstance(parsed, dict):
-        raise RuntimeError(f"{AUTH_TOKENS_ENV} must be a JSON object")
+        raise RuntimeError(f"{_canonical_env_name(AUTH_TOKENS_ENV)} must be a JSON object")
 
     principals: dict[str, Principal] = {}
     for token, value in parsed.items():
         if not isinstance(token, str) or not token:
-            raise RuntimeError(f"{AUTH_TOKENS_ENV} keys must be non-empty bearer tokens")
+            raise RuntimeError(
+                f"{_canonical_env_name(AUTH_TOKENS_ENV)} keys must be non-empty bearer tokens"
+            )
         if not isinstance(value, dict):
             raise RuntimeError(
-                f"{AUTH_TOKENS_ENV} values must be objects with user_id and tenant_id"
+                f"{_canonical_env_name(AUTH_TOKENS_ENV)} values must be objects with user_id and tenant_id"
             )
         principals[token] = Principal.model_validate(value)
     return principals
@@ -192,6 +197,10 @@ def _load_token_principals(env: Mapping[str, str] | None = None) -> dict[str, Pr
 
 def _load_auth_settings(env: Mapping[str, str] | None = None) -> AuthSettings:
     return AuthSettings.from_env(env)
+
+
+def _canonical_env_name(name: str) -> str:
+    return name.replace("MINIGENT_", "MINDWEFT_", 1)
 
 
 def _optional_env(name: str, env: Mapping[str, str] | None = None) -> str | None:
@@ -212,9 +221,9 @@ def _load_json_or_csv_list_env(name: str, env: Mapping[str, str] | None = None) 
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"{name} must be valid JSON") from exc
+            raise RuntimeError(f"{_canonical_env_name(name)} must be valid JSON") from exc
         if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
-            raise RuntimeError(f"{name} must be a JSON array of strings")
+            raise RuntimeError(f"{_canonical_env_name(name)} must be a JSON array of strings")
         return [item for item in parsed if item]
     return [item.strip() for item in raw.split(",") if item.strip()]
 
@@ -243,7 +252,9 @@ def _principal_from_headers(
 
 def _principal_from_static_token(authorization: str | None, settings: AuthSettings) -> Principal:
     if not settings.static_tokens:
-        raise RuntimeError(f"{AUTH_TOKENS_ENV} is required when {AUTH_MODE_ENV}=static-tokens")
+        raise RuntimeError(
+            f"{_canonical_env_name(AUTH_TOKENS_ENV)} is required when {_canonical_env_name(AUTH_MODE_ENV)}=static-tokens"
+        )
 
     bearer_token = _extract_bearer_token(authorization)
     principal = settings.static_tokens.get(bearer_token)
@@ -275,7 +286,7 @@ async def _resolve_jwt_signing_key(token: str, settings: AuthSettings) -> Any:
     if any(algorithm.startswith("HS") for algorithm in algorithms):
         if not settings.jwt_shared_secret:
             raise RuntimeError(
-                f"{JWT_SHARED_SECRET_ENV} is required for HMAC JWT algorithms in {AUTH_MODE_ENV}=jwt"
+                f"{_canonical_env_name(JWT_SHARED_SECRET_ENV)} is required for HMAC JWT algorithms in {_canonical_env_name(AUTH_MODE_ENV)}=jwt"
             )
         return settings.jwt_shared_secret
 
@@ -283,7 +294,7 @@ async def _resolve_jwt_signing_key(token: str, settings: AuthSettings) -> Any:
         return await _get_signing_key_from_jwks(token, settings)
 
     raise RuntimeError(
-        f"{JWT_JWKS_URL_ENV} is required for asymmetric JWT algorithms in {AUTH_MODE_ENV}=jwt"
+        f"{_canonical_env_name(JWT_JWKS_URL_ENV)} is required for asymmetric JWT algorithms in {_canonical_env_name(AUTH_MODE_ENV)}=jwt"
     )
 
 

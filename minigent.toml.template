@@ -103,7 +103,7 @@ shell_enabled = false
 
 [voice]
 # The first unified config pass intentionally keeps voice simple; detailed audio tuning
-# remains available through MINIGENT_VOICE_* env vars.
+# remains available through MINDWEFT_VOICE_* env vars.
 
 [quality]
 enabled = false

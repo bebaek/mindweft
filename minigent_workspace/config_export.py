@@ -10,6 +10,7 @@ from minigent_config.unified_config import (
     DEFAULT_CODING_DOTENV_FILE,
     DOTENV_FILE_ENV,
     load_unified_config_env,
+    normalize_mindweft_env,
     resolve_config_path,
 )
 from minigent_workspace import (
@@ -35,6 +36,7 @@ def export_local_coding_config(args: Namespace) -> dict[str, object]:
         )
     env_path = Path(env_file).expanduser() if env_file is not None else None
     env, env_base_dir = load_coding_workspace_export_env(env_path)
+    normalize_mindweft_env(env)
     workspace_roots = scopes.resolve_workspace_roots(
         None,
         env.get("MINIGENT_CODING_WORKSPACES") or env.get("MINIGENT_CODING_WORKSPACE"),

@@ -7,6 +7,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from minigent_config.unified_config import normalize_mindweft_env
+
 DEFAULT_BRIDGE_HOST = "127.0.0.1"
 DEFAULT_BRIDGE_PORT = 8765
 DEFAULT_MCP_GATEWAY_PATH_PREFIX = "/mcp"
@@ -169,6 +171,7 @@ def write_mcp_gateway_config(specs: list[CodingMCPServerSpec]) -> Path:
 def resolve_mcp_servers_file(
     cli_path: str | None, env: dict[str, str], *, base_dir: Path | None = None
 ) -> Path | None:
+    normalize_mindweft_env(env)
     raw_path = cli_path or env.get("MINIGENT_CODING_MCP_SERVERS_FILE")
     if not raw_path:
         return None
@@ -207,6 +210,7 @@ def load_coding_mcp_server_specs_from_json(
 
     specs: list[CodingMCPServerSpec] = []
     interpolation_env = dict(env or os.environ)
+    normalize_mindweft_env(interpolation_env)
     for index, raw_server in enumerate(raw_servers):
         if not isinstance(raw_server, dict):
             raise RuntimeError("each coding MCP server entry must be an object")

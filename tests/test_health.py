@@ -19,14 +19,15 @@ def test_database_readiness_checks_configured_sqlite_stores(tmp_path: Path) -> N
     checks = asyncio.run(
         database_readiness_checks(
             {
-                "MINIGENT_THREAD_DB_PATH": str(database),
-                "MINIGENT_MCP_BROKER_DB_PATH": str(database),
-                "MINIGENT_PRIVATE_VALUE_DB_PATH": str(database),
-                "MINIGENT_PRIVATE_CONSENT_DB_PATH": str(database),
-                "MINIGENT_ADMIN_DB_PATH": str(database),
-                "MINIGENT_RATE_LIMIT_DB_PATH": str(database),
-                "MINIGENT_OAUTH_STORE_PATH": str(database),
-                "MINIGENT_OAUTH_ENCRYPTION_KEYS": '{"1":"configured"}',
+                "MINDWEFT_THREAD_DB_PATH": str(database),
+                "MINIGENT_THREAD_DB_PATH": str(tmp_path / "legacy-missing.db"),
+                "MINDWEFT_MCP_BROKER_DB_PATH": str(database),
+                "MINDWEFT_PRIVATE_VALUE_DB_PATH": str(database),
+                "MINDWEFT_PRIVATE_CONSENT_DB_PATH": str(database),
+                "MINDWEFT_ADMIN_DB_PATH": str(database),
+                "MINDWEFT_RATE_LIMIT_DB_PATH": str(database),
+                "MINDWEFT_OAUTH_STORE_PATH": str(database),
+                "MINDWEFT_OAUTH_ENCRYPTION_KEYS": '{"1":"configured"}',
             }
         )
     )
@@ -61,7 +62,7 @@ def test_health_live_remains_shallow_when_readiness_fails(
         tool_registry=build_local_tool_registry(),
     )
     missing = tmp_path / "missing.db"
-    monkeypatch.setenv("MINIGENT_THREAD_DB_PATH", str(missing))
+    monkeypatch.setenv("MINDWEFT_THREAD_DB_PATH", str(missing))
 
     with TestClient(app) as client:
         legacy = client.get("/health")
@@ -161,7 +162,7 @@ def test_health_ready_succeeds_for_accessible_database(
     database = tmp_path / "threads.db"
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TABLE ready (value INTEGER)")
-    monkeypatch.setenv("MINIGENT_THREAD_DB_PATH", str(database))
+    monkeypatch.setenv("MINDWEFT_THREAD_DB_PATH", str(database))
 
     with TestClient(app) as client:
         response = client.get("/health/ready")
