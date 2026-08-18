@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pypi-release
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -89,10 +89,116 @@ jobs:
           retention-days: 7
           compression-level: 0
 
-  publish:
-    name: Publish distributions to PyPI
+  stage-github-release:
+    name: Stage draft GitHub release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out release notes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download validated distributions
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: python-distributions
+          path: dist/
+      - name: Render release notes from changelog
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VERSION="${VERSION#v}" python - <<'PY'
+          import os
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          lines = Path("CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+          heading = f"## [{version}]"
+          try:
+              start = next(index for index, line in enumerate(lines) if line.startswith(heading))
+          except StopIteration as error:
+              raise SystemExit(f"CHANGELOG.md has no release section for {version}") from error
+          end = next(
+              (
+                  index
+                  for index, line in enumerate(lines[start + 1 :], start + 1)
+                  if line.startswith("## [")
+              ),
+              len(lines),
+          )
+          section = "\n".join(lines[start + 1 : end]).strip()
+          if not section:
+              raise SystemExit(f"CHANGELOG.md release section for {version} is empty")
+          notes = (
+              f"Install from PyPI:\n\n```bash\npip install mindweft=={version}\n```\n\n"
+              f"{section}\n\n"
+              f"See the [migration guide](https://github.com/{os.environ['GITHUB_REPOSITORY']}/blob/"
+              f"{os.environ['GITHUB_REF_NAME']}/docs/migrating-from-minigent.md) for compatibility "
+              "and upgrade details.\n"
+          )
+          Path("release-notes.md").write_text(notes, encoding="utf-8")
+          PY
+      - name: Create or refresh draft release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if release_json="$(gh release view "$GITHUB_REF_NAME" --json isDraft,isImmutable 2>/dev/null)"; then
+            is_draft="$(jq -r .isDraft <<<"$release_json")"
+            is_immutable="$(jq -r .isImmutable <<<"$release_json")"
+            if [[ "$is_immutable" == true ]]; then
+              printf 'GitHub release %s is already immutable; verifying its assets.\n' \
+                "$GITHUB_REF_NAME"
+            elif [[ "$is_draft" == true ]]; then
+              gh release edit "$GITHUB_REF_NAME" \
+                --title "Mindweft ${GITHUB_REF_NAME#v}" \
+                --notes-file release-notes.md
+              gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            else
+              printf 'GitHub release %s is published but mutable; refusing to modify it.\n' \
+                "$GITHUB_REF_NAME" >&2
+              exit 1
+            fi
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --verify-tag \
+              --draft \
+              --title "Mindweft ${GITHUB_REF_NAME#v}" \
+              --notes-file release-notes.md
+          fi
+      - name: Verify staged GitHub release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$GITHUB_REF_NAME" --json assets > release-assets.json
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          local_files = sorted(path for path in Path("dist").iterdir() if path.is_file())
+          release = json.loads(Path("release-assets.json").read_text(encoding="utf-8"))
+          remote_digests = {
+              asset["name"]: asset["digest"] for asset in release["assets"] if asset["digest"]
+          }
+          local_digests = {
+              path.name: f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+              for path in local_files
+          }
+          if local_digests != remote_digests:
+              raise SystemExit(
+                  f"GitHub release asset mismatch: local={local_digests}, remote={remote_digests}"
+              )
+          print("GitHub release assets match the validated distributions")
+          PY
+
+  publish-pypi:
+    name: Publish distributions to PyPI
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: stage-github-release
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
@@ -106,5 +212,89 @@ jobs:
         with:
           name: python-distributions
           path: dist/
+      - name: Check whether exact artifacts are already on PyPI
+        id: pypi-state
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}" python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["VERSION"]
+          url = f"https://pypi.org/pypi/mindweft/{version}/json"
+          try:
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  payload = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+              with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+                  output.write("should-publish=true\n")
+              print(f"mindweft {version} is not yet published")
+          else:
+              remote_digests = {
+                  item["filename"]: item["digests"]["sha256"] for item in payload["urls"]
+              }
+              local_digests = {
+                  path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                  for path in Path("dist").iterdir()
+                  if path.is_file()
+              }
+              if local_digests != remote_digests:
+                  raise SystemExit(
+                      f"PyPI already has different artifacts for {version}: "
+                      f"local={local_digests}, remote={remote_digests}"
+                  )
+              with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+                  output.write("should-publish=false\n")
+              print(f"PyPI already contains the exact mindweft {version} artifacts")
+          PY
       - name: Publish distributions to PyPI
+        if: steps.pypi-state.outputs.should-publish == 'true'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+
+  publish-github-release:
+    name: Publish immutable GitHub release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Publish draft release
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_json="$(gh release view "$GITHUB_REF_NAME" --json isDraft,isImmutable)"
+          is_draft="$(jq -r .isDraft <<<"$release_json")"
+          is_immutable="$(jq -r .isImmutable <<<"$release_json")"
+          if [[ "$is_immutable" == true ]]; then
+            printf 'GitHub release %s is already immutable.\n' "$GITHUB_REF_NAME"
+          elif [[ "$is_draft" == true ]]; then
+            gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          else
+            printf 'GitHub release %s is published but mutable.\n' "$GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+      - name: Verify release immutability
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 10); do
+            if [[ "$(gh release view "$GITHUB_REF_NAME" --json isImmutable --jq .isImmutable)" == true ]]; then
+              printf 'GitHub release %s is immutable.\n' "$GITHUB_REF_NAME"
+              exit 0
+            fi
+            sleep 3
+          done
+          printf 'GitHub release %s did not become immutable.\n' "$GITHUB_REF_NAME" >&2
+          exit 1
