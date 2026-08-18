@@ -67,7 +67,8 @@ from app.user_execution import (
     effective_execution_catalog,
     has_personal_execution_refs,
 )
-from minigent_config.agent_skills import load_agent_skill_body
+from mindweft_config.agent_skills import load_agent_skill_body
+from mindweft_config.unified_config import normalize_mindweft_env
 
 RUNTIME_SYSTEM_PROMPT = (
     "Use tools when they are relevant and ground claims in tool results. "
@@ -95,7 +96,7 @@ class RuntimeSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> RuntimeSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
             max_iterations=_parse_max_iterations(lookup),
             tool_timeout_seconds=_parse_tool_timeout_seconds(lookup),
@@ -119,6 +120,10 @@ def tool_timeout_seconds_from_env() -> float:
     return RuntimeSettings.from_env().tool_timeout_seconds
 
 
+def _canonical_env_name(name: str) -> str:
+    return name.replace("MINIGENT_", "MINDWEFT_", 1)
+
+
 def _parse_context_compaction_enabled(env: Mapping[str, str]) -> bool:
     raw = env.get(CONTEXT_COMPACTION_ENABLED_ENV, "").strip().lower()
     if not raw:
@@ -127,7 +132,7 @@ def _parse_context_compaction_enabled(env: Mapping[str, str]) -> bool:
         return True
     if raw in {"0", "false", "no", "off"}:
         return False
-    raise RuntimeError(f"{CONTEXT_COMPACTION_ENABLED_ENV} must be a boolean")
+    raise RuntimeError(f"{_canonical_env_name(CONTEXT_COMPACTION_ENABLED_ENV)} must be a boolean")
 
 
 def _parse_max_iterations(env: Mapping[str, str]) -> int:
@@ -137,9 +142,11 @@ def _parse_max_iterations(env: Mapping[str, str]) -> int:
     try:
         value = int(raw)
     except ValueError as exc:
-        raise RuntimeError(f"{MAX_ITERATIONS_ENV} must be a positive integer") from exc
+        raise RuntimeError(
+            f"{_canonical_env_name(MAX_ITERATIONS_ENV)} must be a positive integer"
+        ) from exc
     if value < 1:
-        raise RuntimeError(f"{MAX_ITERATIONS_ENV} must be a positive integer")
+        raise RuntimeError(f"{_canonical_env_name(MAX_ITERATIONS_ENV)} must be a positive integer")
     return value
 
 
@@ -150,9 +157,13 @@ def _parse_tool_timeout_seconds(env: Mapping[str, str]) -> float:
     try:
         value = float(raw)
     except ValueError as exc:
-        raise RuntimeError(f"{TOOL_TIMEOUT_SECONDS_ENV} must be a positive number") from exc
+        raise RuntimeError(
+            f"{_canonical_env_name(TOOL_TIMEOUT_SECONDS_ENV)} must be a positive number"
+        ) from exc
     if value <= 0:
-        raise RuntimeError(f"{TOOL_TIMEOUT_SECONDS_ENV} must be a positive number")
+        raise RuntimeError(
+            f"{_canonical_env_name(TOOL_TIMEOUT_SECONDS_ENV)} must be a positive number"
+        )
     return value
 
 

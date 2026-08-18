@@ -30,13 +30,14 @@ def test_attachment_store_settings_from_env() -> None:
     assert defaults.cleanup_interval_seconds == 60 * 60
     assert AttachmentStoreSettings.from_env(
         {
-            "MINIGENT_ATTACHMENT_DB_PATH": "/data/attachments.db",
-            "MINIGENT_ATTACHMENT_MAX_PER_THREAD": "12",
-            "MINIGENT_ATTACHMENT_MAX_BYTES_PER_THREAD": "3456",
-            "MINIGENT_ATTACHMENT_MAX_PER_TENANT": "78",
-            "MINIGENT_ATTACHMENT_MAX_BYTES_PER_TENANT": "9012",
-            "MINIGENT_ATTACHMENT_PENDING_TTL_SECONDS": "34",
-            "MINIGENT_ATTACHMENT_CLEANUP_INTERVAL_SECONDS": "56",
+            "MINDWEFT_ATTACHMENT_DB_PATH": "/data/attachments.db",
+            "MINDWEFT_ATTACHMENT_MAX_PER_THREAD": "12",
+            "MINIGENT_ATTACHMENT_MAX_PER_THREAD": "99",
+            "MINDWEFT_ATTACHMENT_MAX_BYTES_PER_THREAD": "3456",
+            "MINDWEFT_ATTACHMENT_MAX_PER_TENANT": "78",
+            "MINDWEFT_ATTACHMENT_MAX_BYTES_PER_TENANT": "9012",
+            "MINDWEFT_ATTACHMENT_PENDING_TTL_SECONDS": "34",
+            "MINDWEFT_ATTACHMENT_CLEANUP_INTERVAL_SECONDS": "56",
         }
     ) == AttachmentStoreSettings(
         db_path="/data/attachments.db",
@@ -49,14 +50,26 @@ def test_attachment_store_settings_from_env() -> None:
     )
 
 
+def test_attachment_store_settings_accept_legacy_minigent_env() -> None:
+    settings = AttachmentStoreSettings.from_env(
+        {
+            "MINIGENT_ATTACHMENT_DB_PATH": "/data/legacy-attachments.db",
+            "MINIGENT_ATTACHMENT_MAX_PER_THREAD": "7",
+        }
+    )
+
+    assert settings.db_path == "/data/legacy-attachments.db"
+    assert settings.max_per_thread == 7
+
+
 def test_attachment_store_settings_parse_encryption_keyring() -> None:
     key = b"a" * 32
     settings = AttachmentStoreSettings.from_env(
         {
-            "MINIGENT_ATTACHMENT_DB_PATH": "/data/attachments.db",
-            "MINIGENT_ATTACHMENT_ENCRYPTION_KEY": _encoded_key(key),
-            "MINIGENT_ATTACHMENT_KEY_VERSION": "2",
-            "MINIGENT_ATTACHMENT_REENCRYPT_ON_STARTUP": "true",
+            "MINDWEFT_ATTACHMENT_DB_PATH": "/data/attachments.db",
+            "MINDWEFT_ATTACHMENT_ENCRYPTION_KEY": _encoded_key(key),
+            "MINDWEFT_ATTACHMENT_KEY_VERSION": "2",
+            "MINDWEFT_ATTACHMENT_REENCRYPT_ON_STARTUP": "true",
         }
     )
 
@@ -68,8 +81,8 @@ def test_attachment_store_settings_parse_encryption_keyring() -> None:
     with pytest.raises(RuntimeError, match="requires attachment encryption keys"):
         AttachmentStoreSettings.from_env(
             {
-                "MINIGENT_ATTACHMENT_DB_PATH": "/data/attachments.db",
-                "MINIGENT_ATTACHMENT_KEY_VERSION": "2",
+                "MINDWEFT_ATTACHMENT_DB_PATH": "/data/attachments.db",
+                "MINDWEFT_ATTACHMENT_KEY_VERSION": "2",
             }
         )
 

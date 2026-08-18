@@ -9,6 +9,9 @@ from typing import Any
 import httpx
 from fastapi import HTTPException
 
+from mindweft_config.unified_config import normalize_mindweft_env
+
+MINDWEFT_PEER_AGENTS_ENV = "MINDWEFT_PEER_AGENTS"
 PEER_AGENTS_ENV = "MINIGENT_PEER_AGENTS"
 PEER_AGENT_ARTIFACT_NAMES = frozenset(
     {
@@ -55,7 +58,7 @@ class PeerAgentSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> PeerAgentSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(agents=_parse_peer_agent_configs_env_value(lookup.get(PEER_AGENTS_ENV, "")))
 
 
@@ -283,19 +286,19 @@ def _parse_peer_agent_configs_env_value(raw_value: str) -> list[PeerAgentConfig]
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{PEER_AGENTS_ENV} must be valid JSON") from exc
+        raise RuntimeError(f"{MINDWEFT_PEER_AGENTS_ENV} must be valid JSON") from exc
     return parse_peer_agent_configs(payload)
 
 
 def parse_peer_agent_configs(payload: object) -> list[PeerAgentConfig]:
     if not isinstance(payload, list):
-        raise RuntimeError(f"{PEER_AGENTS_ENV} must be a JSON array")
+        raise RuntimeError(f"{MINDWEFT_PEER_AGENTS_ENV} must be a JSON array")
 
     configs: list[PeerAgentConfig] = []
     seen: set[str] = set()
     for item in payload:
         if not isinstance(item, dict):
-            raise RuntimeError(f"{PEER_AGENTS_ENV} entries must be JSON objects")
+            raise RuntimeError(f"{MINDWEFT_PEER_AGENTS_ENV} entries must be JSON objects")
         name = str(item.get("name", "")).strip()
         base_url = str(item.get("base_url", "")).strip().rstrip("/")
         description_value = item.get("description")
@@ -317,11 +320,11 @@ def parse_peer_agent_configs(payload: object) -> list[PeerAgentConfig]:
             else None
         )
         if not name:
-            raise RuntimeError(f"{PEER_AGENTS_ENV} entries require a non-empty name")
+            raise RuntimeError(f"{MINDWEFT_PEER_AGENTS_ENV} entries require a non-empty name")
         if name in seen:
-            raise RuntimeError(f"{PEER_AGENTS_ENV} contains duplicate agent name '{name}'")
+            raise RuntimeError(f"{MINDWEFT_PEER_AGENTS_ENV} contains duplicate agent name '{name}'")
         if not base_url:
-            raise RuntimeError(f"{PEER_AGENTS_ENV} entry '{name}' requires base_url")
+            raise RuntimeError(f"{MINDWEFT_PEER_AGENTS_ENV} entry '{name}' requires base_url")
         configs.append(
             PeerAgentConfig(
                 name=name,
@@ -348,7 +351,7 @@ def _optional_string_tuple(value: object, label: str) -> tuple[str, ...]:
     if value is None:
         return ()
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise RuntimeError(f"{PEER_AGENTS_ENV} {label} must be an array of strings")
+        raise RuntimeError(f"{MINDWEFT_PEER_AGENTS_ENV} {label} must be an array of strings")
     return tuple(item.strip() for item in value if item.strip())
 
 

@@ -4,7 +4,7 @@ Status: Implemented (see [Coding workspace setup](coding-workspace.md) for the c
 
 ## Context
 
-Minigent coding workflows can use MCP servers for workspace access, code navigation, and
+Mindweft coding workflows can use MCP servers for workspace access, code navigation, and
 other local capabilities. The current filesystem MCP used by the coding workspace is a
 third-party Node.js package. It provides basic file operations, but it does not expose
 arbitrary line-range reads, which can make agents inefficient when they need only a small
@@ -107,7 +107,7 @@ the exact current file contents from the filesystem layer.
 ## Future work
 
 - Prototype a minimal targeted-read companion MCP for line-range and around-line reads.
-- Evaluate `codebase-memory-mcp` on real Minigent coding tasks.
+- Evaluate `codebase-memory-mcp` on real Mindweft coding tasks.
 - Consider upstreaming targeted-read tools to the third-party filesystem MCP.
 - Add coding-agent instructions that prefer graph discovery, then targeted exact reads, then
   filesystem edits.

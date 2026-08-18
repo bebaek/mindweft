@@ -3,7 +3,7 @@
 The canonical implementation lives in :mod:`minigent_workspace.servers.shell`.
 """
 
-from minigent_workspace.servers.shell import (
+from mindweft_workspace.servers.shell import (
     DEFAULT_ENV_ALLOWLIST,
     DEFAULT_MAX_OUTPUT_CHARS,
     DEFAULT_TIMEOUT_SECONDS,

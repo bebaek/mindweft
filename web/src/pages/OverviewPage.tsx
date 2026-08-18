@@ -54,7 +54,7 @@ export function OverviewPage() {
         <article className="panel">
           <div className="panel-heading"><div><p className="eyebrow">Infrastructure</p><h2>Readiness checks</h2></div><span className="live-label"><i /> Live</span></div>
           {readiness.isError ? (
-            <p className="error-state">The Minigent API could not be reached.</p>
+            <p className="error-state">The Mindweft API could not be reached.</p>
           ) : checks.length ? (
             <ul className="check-list">{checks.map(([name, value]) => <li key={name}><span className={`status-dot ${value === "ok" ? "ok" : "failed"}`} /><span>{name.replaceAll("_", " ")}</span><strong>{value}</strong></li>)}</ul>
           ) : (

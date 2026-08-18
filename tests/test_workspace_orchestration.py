@@ -163,7 +163,7 @@ def test_run_workspace_processes_starts_api_and_prints_demo_commands(
             "8000",
         ],
         env={"PATH": "/bin"},
-        label="Minigent API",
+        label="Mindweft API",
     )
     demo.assert_called_once_with(
         "127.0.0.1",

@@ -1,6 +1,6 @@
 """Compatibility wrapper for the packaged coding workspace runner."""
 
-from minigent_workspace.application import main
+from mindweft_workspace.application import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

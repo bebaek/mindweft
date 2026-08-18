@@ -15,10 +15,22 @@ from mcp.shared.message import SessionMessage
 
 from app.llm import MockLLMAdapter
 from app.mcp import LEGACY_MCP_PROTOCOL_VERSION, MODERN_MCP_PROTOCOL_VERSION
-from app.mcp_broker import MCPBrokerSessionStore
+from app.mcp_broker import MCPBrokerSessionStore, MCPBrokerStoreSettings
 from app.models import Principal
 from app.store import InMemoryThreadStore
 from app.tools import build_local_tool_registry
+
+
+def test_mcp_broker_store_settings_prefers_mindweft_env() -> None:
+    assert MCPBrokerStoreSettings.from_env(
+        {
+            "MINDWEFT_MCP_BROKER_DB_PATH": " .data/mindweft-broker.db ",
+            "MINIGENT_MCP_BROKER_DB_PATH": ".data/legacy-broker.db",
+        }
+    ) == MCPBrokerStoreSettings(db_path=".data/mindweft-broker.db")
+    assert MCPBrokerStoreSettings.from_env(
+        {"MINIGENT_MCP_BROKER_DB_PATH": ".data/legacy-broker.db"}
+    ) == MCPBrokerStoreSettings(db_path=".data/legacy-broker.db")
 
 
 def test_mcp_broker_lists_and_calls_session_tools() -> None:
@@ -32,7 +44,7 @@ def test_mcp_broker_lists_and_calls_session_tools() -> None:
         tool_registry=registry,
         ttl_seconds=60,
     )
-    headers = {"Authorization": f"Bearer {session.token}"}
+    headers = {"X-Mindweft-MCP-Broker-Token": session.token}
     modern_metadata = {
         "io.modelcontextprotocol/protocolVersion": MODERN_MCP_PROTOCOL_VERSION,
         "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1.0.0"},
@@ -109,7 +121,7 @@ def test_mcp_broker_lists_and_calls_session_tools() -> None:
     assert discover.json()["result"]["supportedVersions"] == [MODERN_MCP_PROTOCOL_VERSION]
     assert discover.json()["result"]["resultType"] == "complete"
     assert initialize.status_code == 200
-    assert initialize.json()["result"]["serverInfo"]["name"] == "minigent-mcp-broker"
+    assert initialize.json()["result"]["serverInfo"]["name"] == "mindweft-mcp-broker"
     assert tools.status_code == 200
     assert [tool["name"] for tool in tools.json()["result"]["tools"]] == ["echo"]
     assert "resultType" not in tools.json()["result"]
@@ -117,7 +129,7 @@ def test_mcp_broker_lists_and_calls_session_tools() -> None:
     assert modern_tools.json()["result"]["resultType"] == "complete"
     assert (
         modern_tools.json()["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"]
-        == "minigent-mcp-broker"
+        == "mindweft-mcp-broker"
     )
     assert call.status_code == 200
     assert call.json()["result"]["structuredContent"] == {"echo": "hello"}
@@ -126,7 +138,7 @@ def test_mcp_broker_lists_and_calls_session_tools() -> None:
     assert modern_call.json()["result"]["resultType"] == "complete"
     assert (
         modern_call.json()["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"]
-        == "minigent-mcp-broker"
+        == "mindweft-mcp-broker"
     )
     assert invalid_call.json()["error"]["code"] == -32602
 
@@ -157,7 +169,7 @@ def test_official_sdk_client_interoperates_with_mcp_broker() -> None:
 
                 assert sdk_client.protocol_version == MODERN_MCP_PROTOCOL_VERSION
                 assert sdk_client.server_info is not None
-                assert sdk_client.server_info.name == "minigent-mcp-broker"
+                assert sdk_client.server_info.name == "mindweft-mcp-broker"
                 assert [tool.name for tool in tools.tools] == ["echo"]
                 assert result.structured_content == {"echo": "sdk"}
 

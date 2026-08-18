@@ -29,6 +29,7 @@ from app.private_values import (
     PRIVATE_VALUE_REENCRYPT_ON_STARTUP_ENV,
     PRIVATE_VALUE_TTL_SECONDS_ENV,
 )
+from mindweft_config.unified_config import normalize_mindweft_env
 
 _KIND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 _NONCE_BYTES = 12
@@ -84,7 +85,7 @@ class SQLiteEncryptedPrivateValueStore:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> SQLiteEncryptedPrivateValueStore:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         db_path = lookup.get(PRIVATE_VALUE_DB_PATH_ENV, "").strip()
         if not db_path:
             raise RuntimeError(f"{PRIVATE_VALUE_DB_PATH_ENV} is required")

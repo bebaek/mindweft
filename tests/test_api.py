@@ -28,6 +28,9 @@ from app.agent_backends import PeerBackendSettings, _sanitize_peer_task_event
 from app.attachments import InMemoryAttachmentStore
 from app.execution import (
     InMemoryTenantExecutionResolver,
+    TenantAgentBackendConfig,
+    TenantExecutionSettings,
+    TenantQualityConfig,
     build_execution_resolver_from_env,
     interpolate_tenant_execution_env_placeholders,
     parse_tenant_execution_config,
@@ -40,7 +43,12 @@ from app.main import (
     create_app,
 )
 from app.mcp import MCPServerInfo
-from app.mcp_broker import MINIGENT_MCP_BROKER_TOKEN_ENV, MINIGENT_MCP_BROKER_URL_ENV
+from app.mcp_broker import (
+    MINDWEFT_MCP_BROKER_TOKEN_ENV,
+    MINDWEFT_MCP_BROKER_URL_ENV,
+    MINIGENT_MCP_BROKER_TOKEN_ENV,
+    MINIGENT_MCP_BROKER_URL_ENV,
+)
 from app.models import (
     AuditRecord,
     ImagePart,
@@ -103,7 +111,21 @@ def test_peer_backend_settings_from_env_mapping_uses_defaults() -> None:
     }
 
 
-def test_peer_backend_settings_from_env_mapping_parses_values() -> None:
+def test_peer_backend_settings_from_env_mapping_prefers_mindweft_values() -> None:
+    settings = PeerBackendSettings.from_env(
+        {
+            "MINDWEFT_MCP_BROKER_BASE_URL": "http://127.0.0.1:9000/",
+            "MINIGENT_MCP_BROKER_BASE_URL": "http://legacy.invalid/",
+            "MINDWEFT_PEER_TOOL_ARG_ALLOWLIST": '{"read":["path"]}',
+            "MINIGENT_PEER_TOOL_ARG_ALLOWLIST": '{"ls":["path"]}',
+        }
+    )
+
+    assert settings.mcp_broker_base_url == "http://127.0.0.1:9000"
+    assert settings.safe_tool_arg_fields == {"read": ("path",)}
+
+
+def test_peer_backend_settings_from_env_mapping_accepts_legacy_values() -> None:
     settings = PeerBackendSettings.from_env(
         {
             "MINIGENT_MCP_BROKER_BASE_URL": "http://127.0.0.1:9000/",
@@ -113,6 +135,37 @@ def test_peer_backend_settings_from_env_mapping_parses_values() -> None:
 
     assert settings.mcp_broker_base_url == "http://127.0.0.1:9000"
     assert settings.safe_tool_arg_fields == {"read": ("path",)}
+
+
+def test_execution_settings_prefer_mindweft_and_accept_legacy_env() -> None:
+    backend = TenantAgentBackendConfig.from_env(
+        {
+            "MINDWEFT_AGENT_BACKEND": "peer_agent",
+            "MINIGENT_AGENT_BACKEND": "native",
+            "MINDWEFT_AGENT_BACKEND_PEER": "codex",
+            "MINDWEFT_AGENT_BACKEND_CWD": "/workspace",
+        }
+    )
+    quality = TenantQualityConfig.from_env(
+        {
+            "MINDWEFT_REMOTE_QUALITY_ENABLED": "true",
+            "MINIGENT_REMOTE_QUALITY_ENABLED": "false",
+        }
+    )
+    settings = TenantExecutionSettings.from_env(
+        {
+            "MINDWEFT_TENANT_CONFIG_SOURCE": "env",
+            "MINDWEFT_LLM_PROVIDER": "openai",
+            "MINIGENT_LLM_PROVIDER": "mock",
+        }
+    )
+    legacy = TenantAgentBackendConfig.from_env({"MINIGENT_AGENT_BACKEND": "native"})
+
+    assert backend.type == "peer_agent"
+    assert backend.peer == "codex"
+    assert quality.enabled is True
+    assert settings.default_llm.provider == "openai"
+    assert legacy.type == "native"
 
 
 def test_admin_store_settings_from_env_mapping_uses_defaults() -> None:
@@ -125,8 +178,8 @@ def test_admin_store_settings_from_env_mapping_uses_defaults() -> None:
 def test_admin_store_settings_from_env_mapping_parses_values() -> None:
     assert AdminStoreSettings.from_env(
         {
-            "MINIGENT_ADMIN_DB_PATH": " .data/admin.db ",
-            "MINIGENT_ADMIN_ENCRYPTION_KEY": " secret-key ",
+            "MINDWEFT_ADMIN_DB_PATH": " .data/admin.db ",
+            "MINDWEFT_ADMIN_ENCRYPTION_KEY": " secret-key ",
         }
     ) == AdminStoreSettings(
         db_path=".data/admin.db",
@@ -134,11 +187,24 @@ def test_admin_store_settings_from_env_mapping_parses_values() -> None:
     )
 
 
+def test_admin_store_settings_prefer_mindweft_and_accept_legacy_env() -> None:
+    preferred = AdminStoreSettings.from_env(
+        {
+            "MINDWEFT_ADMIN_DB_PATH": ".data/mindweft-admin.db",
+            "MINIGENT_ADMIN_DB_PATH": ".data/legacy-admin.db",
+        }
+    )
+    legacy = AdminStoreSettings.from_env({"MINIGENT_ADMIN_DB_PATH": ".data/legacy-admin.db"})
+
+    assert preferred.db_path == ".data/mindweft-admin.db"
+    assert legacy.db_path == ".data/legacy-admin.db"
+
+
 def test_admin_store_settings_from_env_mapping_treats_blank_as_none() -> None:
     assert AdminStoreSettings.from_env(
         {
-            "MINIGENT_ADMIN_DB_PATH": " ",
-            "MINIGENT_ADMIN_ENCRYPTION_KEY": "\t",
+            "MINDWEFT_ADMIN_DB_PATH": " ",
+            "MINDWEFT_ADMIN_ENCRYPTION_KEY": "\t",
         }
     ) == AdminStoreSettings(
         db_path=None,
@@ -149,7 +215,7 @@ def test_admin_store_settings_from_env_mapping_treats_blank_as_none() -> None:
 def test_admin_store_settings_from_env_parses_mcp_server_catalog() -> None:
     settings = AdminStoreSettings.from_env(
         {
-            "MINIGENT_ADMIN_MCP_SERVER_CATALOG": json.dumps(
+            "MINDWEFT_ADMIN_MCP_SERVER_CATALOG": json.dumps(
                 [
                     {
                         "id": "web-search",
@@ -199,8 +265,8 @@ def test_admin_store_settings_prefers_secret_mcp_server_catalog() -> None:
 
     settings = AdminStoreSettings.from_env(
         {
-            "MINIGENT_ADMIN_MCP_SERVER_CATALOG": json.dumps(public_catalog),
-            "MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET": json.dumps(secret_catalog),
+            "MINDWEFT_ADMIN_MCP_SERVER_CATALOG": json.dumps(public_catalog),
+            "MINDWEFT_ADMIN_MCP_SERVER_CATALOG_SECRET": json.dumps(secret_catalog),
             "PRIVATE_TOKEN": "secret-token",
         }
     )
@@ -215,7 +281,7 @@ def test_admin_store_settings_rejects_invalid_headers_in_mcp_server_catalog() ->
     with pytest.raises(RuntimeError, match="headers must be a string map"):
         AdminStoreSettings.from_env(
             {
-                "MINIGENT_ADMIN_MCP_SERVER_CATALOG": json.dumps(
+                "MINDWEFT_ADMIN_MCP_SERVER_CATALOG": json.dumps(
                     [
                         {
                             "id": "private",
@@ -234,8 +300,8 @@ def test_admin_store_settings_rejects_invalid_headers_in_mcp_server_catalog() ->
 
 
 def test_admin_store_settings_from_env_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_ADMIN_DB_PATH", ".data/admin.db")
-    monkeypatch.setenv("MINIGENT_ADMIN_ENCRYPTION_KEY", "secret-key")
+    monkeypatch.setenv("MINDWEFT_ADMIN_DB_PATH", ".data/admin.db")
+    monkeypatch.setenv("MINDWEFT_ADMIN_ENCRYPTION_KEY", "secret-key")
 
     assert admin_store_settings_from_env() == AdminStoreSettings(
         db_path=".data/admin.db",
@@ -327,13 +393,13 @@ def test_image_input_settings_from_env_mapping_uses_defaults() -> None:
 def test_image_input_settings_from_env_mapping_parses_values() -> None:
     settings = ImageInputSettings.from_env(
         {
-            "MINIGENT_IMAGE_INPUT_ENABLED": "yes",
-            "MINIGENT_IMAGE_INPUT_MAX_BYTES": "1234",
-            "MINIGENT_IMAGE_INPUT_MAX_IMAGES": "3",
-            "MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES": "2468",
-            "MINIGENT_IMAGE_INPUT_MAX_PIXELS": "4000000",
-            "MINIGENT_IMAGE_INPUT_MAX_DIMENSION": "4096",
-            "MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES": "image/png, image/avif",
+            "MINDWEFT_IMAGE_INPUT_ENABLED": "yes",
+            "MINDWEFT_IMAGE_INPUT_MAX_BYTES": "1234",
+            "MINDWEFT_IMAGE_INPUT_MAX_IMAGES": "3",
+            "MINDWEFT_IMAGE_INPUT_MAX_TOTAL_BYTES": "2468",
+            "MINDWEFT_IMAGE_INPUT_MAX_PIXELS": "4000000",
+            "MINDWEFT_IMAGE_INPUT_MAX_DIMENSION": "4096",
+            "MINDWEFT_IMAGE_INPUT_ALLOWED_MIME_TYPES": "image/png, image/avif",
         }
     )
 
@@ -348,16 +414,38 @@ def test_image_input_settings_from_env_mapping_parses_values() -> None:
     )
 
 
+def test_image_input_settings_prefer_mindweft_and_accept_legacy_env() -> None:
+    preferred = ImageInputSettings.from_env(
+        {
+            "MINDWEFT_IMAGE_INPUT_ENABLED": "true",
+            "MINIGENT_IMAGE_INPUT_ENABLED": "false",
+            "MINDWEFT_IMAGE_INPUT_MAX_IMAGES": "3",
+            "MINIGENT_IMAGE_INPUT_MAX_IMAGES": "1",
+        }
+    )
+    legacy = ImageInputSettings.from_env(
+        {
+            "MINIGENT_IMAGE_INPUT_ENABLED": "true",
+            "MINIGENT_IMAGE_INPUT_MAX_IMAGES": "2",
+        }
+    )
+
+    assert preferred.enabled is True
+    assert preferred.max_images == 3
+    assert legacy.enabled is True
+    assert legacy.max_images == 2
+
+
 def test_image_input_settings_from_env_mapping_rejects_invalid_values() -> None:
     with pytest.raises(RuntimeError) as exc_info:
         ImageInputSettings.from_env(
             {
-                "MINIGENT_IMAGE_INPUT_ENABLED": "true",
-                "MINIGENT_IMAGE_INPUT_MAX_BYTES": "0",
+                "MINDWEFT_IMAGE_INPUT_ENABLED": "true",
+                "MINDWEFT_IMAGE_INPUT_MAX_BYTES": "0",
             }
         )
 
-    assert str(exc_info.value) == "MINIGENT_IMAGE_INPUT_MAX_BYTES must be a positive integer"
+    assert str(exc_info.value) == "MINDWEFT_IMAGE_INPUT_MAX_BYTES must be a positive integer"
 
 
 def test_llm_input_modalities_reject_unknown_values() -> None:
@@ -369,13 +457,13 @@ def test_llm_input_modalities_reject_unknown_values() -> None:
 
 
 def test_config_reports_and_exports_image_input_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_BYTES", "1234")
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_IMAGES", "3")
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES", "2468")
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_PIXELS", "4000000")
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_DIMENSION", "4096")
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES", "image/png,image/webp")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_MAX_BYTES", "1234")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_MAX_IMAGES", "3")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_MAX_TOTAL_BYTES", "2468")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_MAX_PIXELS", "4000000")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_MAX_DIMENSION", "4096")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ALLOWED_MIME_TYPES", "image/png,image/webp")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     )
@@ -428,7 +516,7 @@ def test_add_message_rejects_image_when_disabled() -> None:
 
 
 def test_add_message_accepts_image_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     )
@@ -481,7 +569,7 @@ def test_add_message_rejects_unsafe_or_ambiguous_image_sources(
     image: dict[str, str],
     detail: str,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     )
@@ -500,9 +588,9 @@ def test_add_message_rejects_unsafe_or_ambiguous_image_sources(
 def test_add_message_enforces_image_count_and_total_size_limits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_IMAGES", "1")
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_TOTAL_BYTES", "1")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_MAX_IMAGES", "1")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_MAX_TOTAL_BYTES", "1")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     )
@@ -550,7 +638,7 @@ def test_attachment_upload_stores_reference_and_resolves_for_llm(
         def describe(self) -> dict[str, object]:
             return {"provider": "recording"}
 
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     adapter = RecordingAdapter()
     app = create_app(llm_adapter=adapter, tool_registry=build_local_tool_registry())
     client = TestClient(app)
@@ -615,7 +703,7 @@ def test_attachment_upload_stores_reference_and_resolves_for_llm(
 def test_attachment_upload_rate_limit_covers_both_endpoints(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     monkeypatch.setenv("MINIGENT_UPLOAD_RATE_LIMIT_TENANT_CAPACITY", "4")
     monkeypatch.setenv("MINIGENT_UPLOAD_RATE_LIMIT_TENANT_REFILL_PER_SECOND", "0.01")
     monkeypatch.setenv("MINIGENT_UPLOAD_RATE_LIMIT_USER_CAPACITY", "2")
@@ -662,7 +750,7 @@ def test_attachment_upload_rate_limit_covers_both_endpoints(
 def test_admin_attachment_statistics_are_aggregate_and_tenant_scoped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     app = create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     client = TestClient(app)
     thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
@@ -717,7 +805,7 @@ def test_admin_attachment_statistics_are_aggregate_and_tenant_scoped(
 
 
 def test_unreferenced_attachment_can_be_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     )
@@ -772,7 +860,7 @@ def test_scheduled_pending_attachment_cleanup_suppresses_noop_info_log(
 def test_pending_attachment_expires_when_message_never_references_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     monkeypatch.setenv("MINIGENT_ATTACHMENT_PENDING_TTL_SECONDS", "1")
     app = create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     client = TestClient(app)
@@ -800,7 +888,7 @@ def test_pending_attachment_expires_when_message_never_references_it(
 def test_attachment_reference_mark_rolls_back_when_message_persistence_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     app = create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     client = TestClient(app, raise_server_exceptions=False)
     thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
@@ -837,8 +925,8 @@ def test_attachment_reference_mark_rolls_back_when_message_persistence_fails(
 def test_binary_attachment_upload_enforces_type_and_stream_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_BYTES", "8")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_MAX_BYTES", "8")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     )
@@ -865,8 +953,8 @@ def test_binary_attachment_upload_enforces_type_and_stream_size(
 def test_binary_attachment_upload_enforces_pixel_and_dimension_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_MAX_PIXELS", "3")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_MAX_PIXELS", "3")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     )
@@ -898,7 +986,7 @@ def test_binary_attachment_upload_enforces_pixel_and_dimension_headers(
 
 
 def test_attachment_reference_is_scoped_to_thread(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     )
@@ -932,7 +1020,7 @@ def test_attachment_reference_is_scoped_to_thread(monkeypatch: pytest.MonkeyPatc
 def test_attachment_upload_enforces_thread_count_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     monkeypatch.setenv("MINIGENT_ATTACHMENT_MAX_PER_THREAD", "1")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
@@ -951,7 +1039,7 @@ def test_attachment_upload_enforces_thread_count_limit(
 def test_attachment_upload_enforces_tenant_count_limit_across_threads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     monkeypatch.setenv("MINIGENT_ATTACHMENT_MAX_PER_TENANT", "1")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
@@ -1113,7 +1201,7 @@ def test_web_client_static_files_are_served() -> None:
     response = client.get("/web/")
 
     assert response.status_code == 200
-    assert "Minigent Web Client" in response.text
+    assert "Mindweft Web Client" in response.text
     assert "./app.js" in response.text
 
 
@@ -1125,7 +1213,7 @@ def test_console_client_static_files_are_served() -> None:
     response = client.get("/console/")
 
     assert response.status_code == 200
-    assert "Minigent Console" in response.text
+    assert "Mindweft Console" in response.text
     assert "/console/assets/" in response.text
 
 
@@ -1319,7 +1407,7 @@ def test_thread_manual_compact_endpoint_summarizes_older_messages() -> None:
 
 
 def test_create_app_uses_runtime_max_iterations_from_env(monkeypatch) -> None:
-    monkeypatch.setenv("MINIGENT_MAX_ITERATIONS", "24")
+    monkeypatch.setenv("MINDWEFT_MAX_ITERATIONS", "24")
 
     app = create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
 
@@ -1938,7 +2026,7 @@ def test_peer_agent_backend_persists_peer_tool_events_in_raw_context() -> None:
                             "tool_name": "read",
                             "toolCallId": "call-read-1",
                             "status": "completed",
-                            "result": {"content": "# Minigent"},
+                            "result": {"content": "# Mindweft"},
                         },
                     ],
                 },
@@ -1984,7 +2072,7 @@ def test_peer_agent_backend_persists_peer_tool_events_in_raw_context() -> None:
     assert raw_context["messages"][2]["role"] == "tool"
     assert raw_context["messages"][2]["tool_name"] == "read"
     assert raw_context["messages"][2]["tool_call_id"] == "call-read-1"
-    assert "# Minigent" in raw_context["messages"][2]["content"]
+    assert "# Mindweft" in raw_context["messages"][2]["content"]
     assert "[assistant tool_call]\nname: read\nid: call-read-1" in raw_context["rendered"]
     assert "[tool_result]\nname: read\nid: call-read-1" in raw_context["rendered"]
 
@@ -2326,11 +2414,13 @@ def test_run_endpoint_can_use_peer_agent_backend(tmp_path: Path) -> None:
             assert payload["cwd"] == "/workspace/project"
             env = payload["env"]
             assert isinstance(env, dict)
-            assert env[MINIGENT_MCP_BROKER_URL_ENV].startswith("http://127.0.0.1:8000/mcp/peer/")
-            assert env[MINIGENT_MCP_BROKER_TOKEN_ENV]
+            assert env[MINDWEFT_MCP_BROKER_URL_ENV].startswith("http://127.0.0.1:8000/mcp/peer/")
+            assert env[MINDWEFT_MCP_BROKER_TOKEN_ENV]
+            assert env[MINIGENT_MCP_BROKER_URL_ENV] == env[MINDWEFT_MCP_BROKER_URL_ENV]
+            assert env[MINIGENT_MCP_BROKER_TOKEN_ENV] == env[MINDWEFT_MCP_BROKER_TOKEN_ENV]
             prompt = str(payload["prompt"])
-            assert "You are running as the execution backend for a Minigent thread." in prompt
-            assert "Minigent MCP broker:" in prompt
+            assert "You are running as the execution backend for a Mindweft thread." in prompt
+            assert "Mindweft MCP broker:" in prompt
             assert "[user]\nplease inspect the repo" in prompt
             task_id = str(payload["task_id"])
             with sqlite3.connect(database) as connection:
@@ -2393,7 +2483,7 @@ def test_run_endpoint_can_use_peer_agent_backend(tmp_path: Path) -> None:
 
 
 def test_peer_agent_backend_rejects_image_input(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     config = parse_tenant_execution_config(
         "tenant-1",
         {
@@ -2725,7 +2815,7 @@ def test_run_endpoint_can_disable_peer_agent_mcp_broker() -> None:
             requests.append(payload)
             assert payload is not None
             assert "env" not in payload
-            assert "Minigent MCP broker:" not in str(payload["prompt"])
+            assert "Mindweft MCP broker:" not in str(payload["prompt"])
             return httpx.Response(
                 200,
                 json={
@@ -3079,7 +3169,7 @@ def test_run_endpoint_returns_reply_when_tool_fails() -> None:
 
 
 def test_run_endpoint_returns_reply_when_tool_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_TOOL_TIMEOUT_SECONDS", "0.01")
+    monkeypatch.setenv("MINDWEFT_TOOL_TIMEOUT_SECONDS", "0.01")
 
     class TimeoutLLM(LLMAdapter):
         async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
@@ -3134,6 +3224,30 @@ def test_run_endpoint_returns_reply_when_tool_times_out(monkeypatch: pytest.Monk
     }
 
 
+def test_thread_endpoints_accept_mindweft_headers_with_precedence_over_legacy() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    headers = {
+        "X-Mindweft-User-Id": "canonical-user",
+        "X-Mindweft-Tenant-Id": "canonical-tenant",
+        "X-Minigent-User-Id": "legacy-user",
+        "X-Minigent-Tenant-Id": "legacy-tenant",
+    }
+
+    create_response = client.post("/threads", headers=headers)
+    assert create_response.status_code == 200
+    thread_id = create_response.json()["thread_id"]
+
+    add_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "hello"},
+        headers=headers,
+    )
+    assert add_response.status_code == 200
+    assert add_response.json()["created_by"] == "canonical-user"
+
+
 def test_thread_endpoints_require_authenticated_principal() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
@@ -3156,13 +3270,32 @@ def test_thread_endpoints_hide_cross_tenant_access() -> None:
     assert response.status_code == 404
 
 
+def test_auth_settings_prefer_mindweft_and_accept_legacy_env() -> None:
+    preferred = auth_module.AuthSettings.from_env(
+        {
+            "MINDWEFT_AUTH_MODE": "jwt",
+            "MINIGENT_AUTH_MODE": "static-tokens",
+            "MINDWEFT_JWT_ISSUER": "mindweft-issuer",
+            "MINIGENT_JWT_ISSUER": "legacy-issuer",
+        }
+    )
+    legacy = auth_module.AuthSettings.from_env(
+        {"MINIGENT_AUTH_MODE": "jwt", "MINIGENT_JWT_ISSUER": "legacy-issuer"}
+    )
+
+    assert preferred.mode == "jwt"
+    assert preferred.jwt_issuer == "mindweft-issuer"
+    assert legacy.mode == "jwt"
+    assert legacy.jwt_issuer == "legacy-issuer"
+
+
 def test_thread_endpoints_accept_bearer_token_auth(monkeypatch) -> None:
     monkeypatch.setenv(
-        "MINIGENT_AUTH_MODE",
+        "MINDWEFT_AUTH_MODE",
         "static-tokens",
     )
     monkeypatch.setenv(
-        "MINIGENT_AUTH_TOKENS",
+        "MINDWEFT_AUTH_TOKENS",
         (
             '{"token-1":{"user_id":"user-1","tenant_id":"tenant-1"},'
             '"token-2":{"user_id":"user-2","tenant_id":"tenant-2"}}'
@@ -3190,11 +3323,11 @@ def test_thread_endpoints_accept_bearer_token_auth(monkeypatch) -> None:
 
 def test_thread_endpoints_require_bearer_token_when_tokens_are_configured(monkeypatch) -> None:
     monkeypatch.setenv(
-        "MINIGENT_AUTH_MODE",
+        "MINDWEFT_AUTH_MODE",
         "static-tokens",
     )
     monkeypatch.setenv(
-        "MINIGENT_AUTH_TOKENS",
+        "MINDWEFT_AUTH_TOKENS",
         '{"token-1":{"user_id":"user-1","tenant_id":"tenant-1"}}',
     )
     client = TestClient(
@@ -3209,11 +3342,11 @@ def test_thread_endpoints_require_bearer_token_when_tokens_are_configured(monkey
 
 def test_thread_endpoints_reject_invalid_bearer_token(monkeypatch) -> None:
     monkeypatch.setenv(
-        "MINIGENT_AUTH_MODE",
+        "MINDWEFT_AUTH_MODE",
         "static-tokens",
     )
     monkeypatch.setenv(
-        "MINIGENT_AUTH_TOKENS",
+        "MINDWEFT_AUTH_TOKENS",
         '{"token-1":{"user_id":"user-1","tenant_id":"tenant-1"}}',
     )
     client = TestClient(
@@ -3228,11 +3361,11 @@ def test_thread_endpoints_reject_invalid_bearer_token(monkeypatch) -> None:
 
 def test_thread_endpoints_accept_hs256_jwt(monkeypatch: pytest.MonkeyPatch) -> None:
     shared_secret = "test-secret-0123456789abcdefghijklmnopqrstuvwxyz"
-    monkeypatch.setenv("MINIGENT_AUTH_MODE", "jwt")
-    monkeypatch.setenv("MINIGENT_JWT_ALGORITHMS", '["HS256"]')
-    monkeypatch.setenv("MINIGENT_JWT_SHARED_SECRET", shared_secret)
-    monkeypatch.setenv("MINIGENT_JWT_ISSUER", "https://issuer.example")
-    monkeypatch.setenv("MINIGENT_JWT_AUDIENCE", "minigent-api")
+    monkeypatch.setenv("MINDWEFT_AUTH_MODE", "jwt")
+    monkeypatch.setenv("MINDWEFT_JWT_ALGORITHMS", '["HS256"]')
+    monkeypatch.setenv("MINDWEFT_JWT_SHARED_SECRET", shared_secret)
+    monkeypatch.setenv("MINDWEFT_JWT_ISSUER", "https://issuer.example")
+    monkeypatch.setenv("MINDWEFT_JWT_AUDIENCE", "minigent-api")
 
     token = jwt.encode(_jwt_claims(), shared_secret, algorithm="HS256")
     client = TestClient(
@@ -3245,21 +3378,21 @@ def test_thread_endpoints_accept_hs256_jwt(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_create_app_fails_fast_for_jwt_without_key_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIGENT_AUTH_MODE", "jwt")
-    monkeypatch.delenv("MINIGENT_JWT_SHARED_SECRET", raising=False)
-    monkeypatch.delenv("MINIGENT_JWT_JWKS_URL", raising=False)
+    monkeypatch.setenv("MINDWEFT_AUTH_MODE", "jwt")
+    monkeypatch.delenv("MINDWEFT_JWT_SHARED_SECRET", raising=False)
+    monkeypatch.delenv("MINDWEFT_JWT_JWKS_URL", raising=False)
 
-    with pytest.raises(RuntimeError, match="MINIGENT_JWT_JWKS_URL is required"):
+    with pytest.raises(RuntimeError, match="MINDWEFT_JWT_JWKS_URL is required"):
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
 
 
 def test_thread_endpoints_reject_jwt_with_wrong_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
     shared_secret = "test-secret-0123456789abcdefghijklmnopqrstuvwxyz"
-    monkeypatch.setenv("MINIGENT_AUTH_MODE", "jwt")
-    monkeypatch.setenv("MINIGENT_JWT_ALGORITHMS", '["HS256"]')
-    monkeypatch.setenv("MINIGENT_JWT_SHARED_SECRET", shared_secret)
-    monkeypatch.setenv("MINIGENT_JWT_ISSUER", "https://issuer.example")
-    monkeypatch.setenv("MINIGENT_JWT_AUDIENCE", "minigent-api")
+    monkeypatch.setenv("MINDWEFT_AUTH_MODE", "jwt")
+    monkeypatch.setenv("MINDWEFT_JWT_ALGORITHMS", '["HS256"]')
+    monkeypatch.setenv("MINDWEFT_JWT_SHARED_SECRET", shared_secret)
+    monkeypatch.setenv("MINDWEFT_JWT_ISSUER", "https://issuer.example")
+    monkeypatch.setenv("MINDWEFT_JWT_AUDIENCE", "minigent-api")
 
     token = jwt.encode(
         _jwt_claims(issuer="https://other-issuer.example"),
@@ -3286,11 +3419,11 @@ def test_thread_endpoints_accept_rs256_jwt_via_jwks(monkeypatch: pytest.MonkeyPa
         assert url == "https://issuer.example/.well-known/jwks.json"
         return {"keys": [jwk]}
 
-    monkeypatch.setenv("MINIGENT_AUTH_MODE", "jwt")
-    monkeypatch.setenv("MINIGENT_JWT_ALGORITHMS", '["RS256"]')
-    monkeypatch.setenv("MINIGENT_JWT_JWKS_URL", "https://issuer.example/.well-known/jwks.json")
-    monkeypatch.setenv("MINIGENT_JWT_ISSUER", "https://issuer.example")
-    monkeypatch.setenv("MINIGENT_JWT_AUDIENCE", "minigent-api")
+    monkeypatch.setenv("MINDWEFT_AUTH_MODE", "jwt")
+    monkeypatch.setenv("MINDWEFT_JWT_ALGORITHMS", '["RS256"]')
+    monkeypatch.setenv("MINDWEFT_JWT_JWKS_URL", "https://issuer.example/.well-known/jwks.json")
+    monkeypatch.setenv("MINDWEFT_JWT_ISSUER", "https://issuer.example")
+    monkeypatch.setenv("MINDWEFT_JWT_AUDIENCE", "minigent-api")
     monkeypatch.setattr(auth_module, "_fetch_jwks_document", fake_fetch_jwks_document)
     auth_module._JWKS_CACHE.clear()
 
@@ -3720,7 +3853,7 @@ def test_threads_bind_named_llm_profiles(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_selected_llm_profile_enforces_declared_image_capability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     monkeypatch.setenv(
         "MINIGENT_TENANT_EXECUTION_CONFIGS",
         json.dumps(
@@ -3856,7 +3989,9 @@ provider = "mock"
             return {"provider": "recording"}
 
     monkeypatch.delenv("MINIGENT_TENANT_EXECUTION_CONFIGS", raising=False)
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.setenv("MINIGENT_CONFIG_FILE", str(config_path))
     monkeypatch.setenv("MINIGENT_THREAD_DB_PATH", str(tmp_path / "threads.db"))
     monkeypatch.setattr(
@@ -5228,7 +5363,7 @@ def test_tenant_context_requires_active_tenant_user_when_user_registry_required(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_TENANT_USER_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINDWEFT_TENANT_USER_REGISTRY_REQUIRED", "true")
     client = TestClient(
         create_app(
             admin_store=_sqlite_store(tmp_path),
@@ -5280,7 +5415,7 @@ def test_tenant_context_rejects_inactive_tenant_user_when_user_registry_required
     tmp_path: Path,
     status: str,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_TENANT_USER_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINDWEFT_TENANT_USER_REGISTRY_REQUIRED", "true")
     client = TestClient(
         create_app(
             admin_store=_sqlite_store(tmp_path),
@@ -5308,7 +5443,7 @@ def test_tenant_context_rejects_inactive_tenant_user_when_user_registry_required
 def test_tenant_context_requires_tenant_user_store_when_user_registry_required(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_TENANT_USER_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINDWEFT_TENANT_USER_REGISTRY_REQUIRED", "true")
     client = TestClient(
         create_app(
             llm_adapter=MockLLMAdapter(),
@@ -5326,7 +5461,7 @@ def test_tenant_context_includes_execution_config_version(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINDWEFT_TENANT_REGISTRY_REQUIRED", "true")
     client = TestClient(
         create_app(admin_store=_sqlite_store(tmp_path), tenant_config_source="store-with-defaults")
     )
@@ -5365,7 +5500,7 @@ def test_tenant_context_requires_active_tenant_when_registry_required(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINDWEFT_TENANT_REGISTRY_REQUIRED", "true")
     client = TestClient(
         create_app(
             admin_store=_sqlite_store(tmp_path),
@@ -5395,7 +5530,7 @@ def test_tenant_entitlements_enforce_thread_and_message_limits(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINDWEFT_TENANT_REGISTRY_REQUIRED", "true")
     client = TestClient(
         create_app(
             admin_store=_sqlite_store(tmp_path),
@@ -5442,7 +5577,7 @@ def test_tenant_entitlements_enforce_thread_run_limit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINDWEFT_TENANT_REGISTRY_REQUIRED", "true")
     client = TestClient(
         create_app(
             admin_store=_sqlite_store(tmp_path),
@@ -5483,7 +5618,7 @@ def test_tenant_entitlements_block_disabled_peer_agent_backend(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINDWEFT_TENANT_REGISTRY_REQUIRED", "true")
     store = _sqlite_store(tmp_path)
     client = TestClient(create_app(admin_store=store, tenant_config_source="store-with-defaults"))
     client.post(
@@ -5521,7 +5656,7 @@ def test_tenant_registry_required_blocks_inactive_tenants(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINDWEFT_TENANT_REGISTRY_REQUIRED", "true")
     store = _sqlite_store(tmp_path)
     client = TestClient(
         create_app(
@@ -5570,7 +5705,7 @@ def test_admin_api_returns_configured_mcp_server_catalog(
             },
         }
     ]
-    monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
+    monkeypatch.setenv("MINDWEFT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
     store = _sqlite_store(tmp_path)
     client = TestClient(create_app(admin_store=store, tenant_config_source="store"))
 
@@ -5627,7 +5762,7 @@ def test_admin_can_assign_mcp_catalog_per_tenant_and_policy_is_enforced(
             },
         },
     ]
-    monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
+    monkeypatch.setenv("MINDWEFT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
     store = _sqlite_store(tmp_path)
     app = create_app(admin_store=store, tenant_config_source="store")
     client = TestClient(app)
@@ -6643,20 +6778,20 @@ def test_store_mode_fails_closed_without_tenant_config(tmp_path: Path) -> None:
 def test_store_mode_requires_encryption_key_when_using_env_admin_store(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("MINIGENT_ADMIN_DB_PATH", str(tmp_path / "tenant-configs.db"))
-    monkeypatch.delenv("MINIGENT_ADMIN_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setenv("MINDWEFT_ADMIN_DB_PATH", str(tmp_path / "tenant-configs.db"))
+    monkeypatch.delenv("MINDWEFT_ADMIN_ENCRYPTION_KEY", raising=False)
 
-    with pytest.raises(RuntimeError, match="MINIGENT_ADMIN_ENCRYPTION_KEY"):
+    with pytest.raises(RuntimeError, match="MINDWEFT_ADMIN_ENCRYPTION_KEY"):
         create_app(tenant_config_source="store")
 
 
 def test_store_with_defaults_requires_encryption_key_when_using_env_admin_store(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("MINIGENT_ADMIN_DB_PATH", str(tmp_path / "tenant-configs.db"))
-    monkeypatch.delenv("MINIGENT_ADMIN_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setenv("MINDWEFT_ADMIN_DB_PATH", str(tmp_path / "tenant-configs.db"))
+    monkeypatch.delenv("MINDWEFT_ADMIN_ENCRYPTION_KEY", raising=False)
 
-    with pytest.raises(RuntimeError, match="MINIGENT_ADMIN_ENCRYPTION_KEY"):
+    with pytest.raises(RuntimeError, match="MINDWEFT_ADMIN_ENCRYPTION_KEY"):
         create_app(tenant_config_source="store-with-defaults")
 
 
@@ -6734,7 +6869,7 @@ def test_admin_can_assign_mcp_catalog_by_role_and_user(
             },
         },
     ]
-    monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
+    monkeypatch.setenv("MINDWEFT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
     store = _sqlite_store(tmp_path)
     app = create_app(admin_store=store, tenant_config_source="store")
     client = TestClient(app)
@@ -6831,7 +6966,7 @@ def test_mcp_catalog_fail_closed_requires_break_glass_and_previews_access(
             },
         }
     ]
-    monkeypatch.setenv("MINIGENT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
+    monkeypatch.setenv("MINDWEFT_ADMIN_MCP_SERVER_CATALOG", json.dumps(catalog))
     store = _sqlite_store(tmp_path)
     app = create_app(admin_store=store, tenant_config_source="store")
     client = TestClient(app)
@@ -6966,7 +7101,7 @@ def test_subject_catalog_assignments_are_inactive_without_tenant_policy(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv(
-        "MINIGENT_ADMIN_MCP_SERVER_CATALOG",
+        "MINDWEFT_ADMIN_MCP_SERVER_CATALOG",
         json.dumps(
             [
                 {

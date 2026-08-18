@@ -15,17 +15,30 @@ from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
 from app.private_consents import PrivateValueDisclosure
 from app.redaction import ToolResultRedactionPolicy
 from app.tools import (
-    MINIGENT_MINIRAG_BACKEND_ENV,
-    MINIGENT_MINIRAG_DB_PATH_ENV,
-    MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV,
-    MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV,
-    MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV,
+    MINDWEFT_MINIRAG_DB_PATH_ENV,
     ToolExecutionContext,
     ToolRegistry,
     build_local_tool_registry,
     build_tool_registry,
     build_tool_registry_from_env,
 )
+
+
+def test_tool_registry_accepts_unadvertised_compatibility_aliases() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "mindweft_tool",
+        "Canonical tool",
+        {"type": "object", "properties": {}},
+        lambda arguments, context=None: {"arguments": arguments, "context": context},
+    )
+    registry.register_alias("minigent_tool", "mindweft_tool")
+
+    combined = ToolRegistry.combine(registry)
+    result = asyncio.run(combined.execute("minigent_tool", {"value": 1}))
+
+    assert [spec.name for spec in combined.specs()] == ["mindweft_tool"]
+    assert result == {"arguments": {"value": 1}, "context": None}
 
 
 def test_tool_registry_denies_private_placeholders_by_default() -> None:
@@ -335,7 +348,7 @@ def test_peer_agent_task_tool_schema_includes_peer_choices() -> None:
 def test_local_registry_can_enable_peer_agent_task_tool_from_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_ENABLE_PEER_AGENT_TOOL", "true")
+    monkeypatch.setenv("MINDWEFT_ENABLE_PEER_AGENT_TOOL", "true")
 
     registry = build_local_tool_registry()
 
@@ -346,9 +359,9 @@ def test_local_registry_can_enable_peer_agent_task_tool_from_env(
 def test_peer_agent_task_tool_description_includes_env_peer_hints(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MINIGENT_ENABLE_PEER_AGENT_TOOL", "true")
+    monkeypatch.setenv("MINDWEFT_ENABLE_PEER_AGENT_TOOL", "true")
     monkeypatch.setenv(
-        "MINIGENT_PEER_AGENTS",
+        "MINDWEFT_PEER_AGENTS",
         json.dumps(
             [
                 {
@@ -368,6 +381,17 @@ def test_peer_agent_task_tool_description_includes_env_peer_hints(
     assert "codex" in spec.description
     assert "repository analysis" in spec.description
     assert "runs local commands" in spec.description
+
+
+def test_mindweft_peer_agent_tool_flag_takes_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINDWEFT_ENABLE_PEER_AGENT_TOOL", "false")
+    monkeypatch.setenv("MINIGENT_ENABLE_PEER_AGENT_TOOL", "true")
+
+    registry = build_local_tool_registry()
+
+    assert "peer_agent_task" not in {spec.name for spec in registry.specs()}
 
 
 def test_peer_agent_task_tool_schema_includes_env_peer_choices(
@@ -668,7 +692,7 @@ def test_tool_execution_can_fully_redact_sensitive_tools() -> None:
         "redacted": True,
         "tool_name": "custom_secret_tool",
         "result_type": "dict",
-        "note": "Tool result redacted by Minigent policy.",
+        "note": "Tool result redacted by Mindweft policy.",
     }
 
 
@@ -1069,10 +1093,11 @@ def test_peer_agent_task_tool_cancels_peer_when_coroutine_is_canceled(
 
 
 def test_retrieve_knowledge_requires_minirag_db_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(MINIGENT_MINIRAG_DB_PATH_ENV, raising=False)
+    monkeypatch.delenv(MINDWEFT_MINIRAG_DB_PATH_ENV, raising=False)
+    monkeypatch.delenv("MINIGENT_MINIRAG_DB_PATH", raising=False)
     registry = build_local_tool_registry(allowed_tools=["retrieve_knowledge"])
 
-    with pytest.raises(HTTPException, match=MINIGENT_MINIRAG_DB_PATH_ENV):
+    with pytest.raises(HTTPException, match=MINDWEFT_MINIRAG_DB_PATH_ENV):
         asyncio.run(
             registry.execute(
                 "retrieve_knowledge",
@@ -1083,14 +1108,17 @@ def test_retrieve_knowledge_requires_minirag_db_path(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.parametrize(
-    ("backend_name", "embedding_provider_name", "lexical_weight", "dense_weight"),
+    ("env_prefix", "backend_name", "embedding_provider_name", "lexical_weight", "dense_weight"),
     [
-        ("dense", "hash", None, None),
-        ("hybrid", "openrouter", "0.05", "0.95"),
+        ("MINDWEFT", "dense", "hash", None, None),
+        ("MINIGENT", "dense", "hash", None, None),
+        ("MINDWEFT", "hybrid", "openrouter", "0.05", "0.95"),
+        ("MINIGENT", "hybrid", "openrouter", "0.05", "0.95"),
     ],
 )
 def test_retrieve_knowledge_uses_backend_configuration(
     monkeypatch: pytest.MonkeyPatch,
+    env_prefix: str,
     backend_name: str,
     embedding_provider_name: str,
     lexical_weight: str | None,
@@ -1147,17 +1175,15 @@ def test_retrieve_knowledge_uses_backend_configuration(
             return fake_tool_module
         raise ImportError(name)
 
-    monkeypatch.setenv(MINIGENT_MINIRAG_DB_PATH_ENV, "/tmp/minirag.db")
-    monkeypatch.setenv(MINIGENT_MINIRAG_BACKEND_ENV, backend_name)
-    monkeypatch.setenv(MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV, embedding_provider_name)
+    monkeypatch.setenv(f"{env_prefix}_MINIRAG_DB_PATH", "/tmp/minirag.db")
+    monkeypatch.setenv(f"{env_prefix}_MINIRAG_BACKEND", backend_name)
+    monkeypatch.setenv(f"{env_prefix}_MINIRAG_EMBEDDING_PROVIDER", embedding_provider_name)
+    if env_prefix == "MINDWEFT":
+        monkeypatch.setenv("MINIGENT_MINIRAG_BACKEND", "legacy")
     if lexical_weight is not None:
-        monkeypatch.setenv(MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV, lexical_weight)
-    else:
-        monkeypatch.delenv(MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV, raising=False)
+        monkeypatch.setenv(f"{env_prefix}_MINIRAG_HYBRID_LEXICAL_WEIGHT", lexical_weight)
     if dense_weight is not None:
-        monkeypatch.setenv(MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV, dense_weight)
-    else:
-        monkeypatch.delenv(MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV, raising=False)
+        monkeypatch.setenv(f"{env_prefix}_MINIRAG_HYBRID_DENSE_WEIGHT", dense_weight)
     monkeypatch.setattr("app.tools.importlib.import_module", fake_import_module)
 
     registry = build_local_tool_registry(allowed_tools=["retrieve_knowledge"])

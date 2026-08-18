@@ -12,8 +12,71 @@ from minigent_config.environment import load_environment
 from minigent_config.unified_config import (
     apply_unified_config_to_env,
     load_unified_config_env,
+    normalize_mindweft_env,
+    preferred_mindweft_env,
     resolve_unified_config,
 )
+
+
+def test_preferred_mindweft_env_prefers_canonical_then_legacy() -> None:
+    assert (
+        preferred_mindweft_env(
+            "BASE_URL",
+            {"MINDWEFT_BASE_URL": "canonical", "MINIGENT_BASE_URL": "legacy"},
+        )
+        == "canonical"
+    )
+    assert preferred_mindweft_env("BASE_URL", {"MINIGENT_BASE_URL": "legacy"}) == "legacy"
+    assert preferred_mindweft_env("BASE_URL", {}, default="default") == "default"
+
+
+def test_normalize_mindweft_env_prefers_new_namespace(caplog) -> None:
+    env = {
+        "MINDWEFT_THREAD_DB_PATH": "mindweft.db",
+        "MINIGENT_THREAD_DB_PATH": "minigent.db",
+    }
+
+    normalize_mindweft_env(env, warn_conflicts=True)
+
+    assert env["MINIGENT_THREAD_DB_PATH"] == "mindweft.db"
+    assert env["MINDWEFT_THREAD_DB_PATH"] == "mindweft.db"
+    assert "MINDWEFT_THREAD_DB_PATH" in caplog.text
+    assert "mindweft.db" not in caplog.text
+    assert "minigent.db" not in caplog.text
+
+
+def test_resolve_unified_config_prefers_mindweft_files(tmp_path: Path) -> None:
+    (tmp_path / "minigent.toml").write_text(
+        '[llm]\nprovider = "mock"\nmodel = "legacy"\n', encoding="utf-8"
+    )
+    mindweft_config = tmp_path / "mindweft.toml"
+    mindweft_config.write_text('[llm]\nprovider = "mock"\nmodel = "canonical"\n', encoding="utf-8")
+
+    resolved = resolve_unified_config(base_dir=tmp_path, env={"HOME": str(tmp_path)})
+
+    assert resolved.config_path == mindweft_config
+    assert resolved.env["MINIGENT_LLM_MODEL"] == "canonical"
+
+
+def test_resolve_unified_config_accepts_mindweft_explicit_paths(tmp_path: Path) -> None:
+    config = tmp_path / "custom.toml"
+    config.write_text('[llm]\nprovider = "mock"\n', encoding="utf-8")
+    dotenv = tmp_path / "custom.env"
+    dotenv.write_text("MINDWEFT_THREAD_DB_PATH=mindweft.db\n", encoding="utf-8")
+
+    resolved = resolve_unified_config(
+        base_dir=tmp_path,
+        env={
+            "MINDWEFT_CONFIG_FILE": str(config),
+            "MINDWEFT_DOTENV_FILE": str(dotenv),
+        },
+        discover_default_files=False,
+    )
+
+    assert resolved.config_path == config
+    assert resolved.dotenv_path == dotenv
+    assert resolved.env["MINDWEFT_THREAD_DB_PATH"] == "mindweft.db"
+    assert resolved.env["MINIGENT_THREAD_DB_PATH"] == "mindweft.db"
 
 
 def test_unified_config_maps_common_desktop_settings(tmp_path: Path, monkeypatch) -> None:
@@ -53,7 +116,7 @@ mcp_server_specs = [{ name = "custom", transport = "stdio", command = ["custom-m
 
 [coding.workspace_scopes.minigent]
 roots = ["/Users/example/code/minigent"]
-description = "Minigent repo"
+description = "Mindweft repo"
 
 [mcp]
 servers = [{ name = "filesystem", url = "http://127.0.0.1:8765/mcp", headers = {} }]
@@ -82,7 +145,7 @@ enabled = false
     assert env["MINIGENT_CODING_WORKSPACES"] == "/Users/example/code,/tmp/work"
     assert env["MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE"] == "minigent"
     assert env["MINIGENT_CODING_WORKSPACE_SCOPES"] == (
-        '{"minigent":{"roots":["/Users/example/code/minigent"],"description":"Minigent repo"}}'
+        '{"minigent":{"roots":["/Users/example/code/minigent"],"description":"Mindweft repo"}}'
     )
     assert env["MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES"] == "uv ,pytest ,git "
     assert env["MINIGENT_CODING_MCP_SERVER_SPECS"] == (
@@ -588,7 +651,9 @@ def test_load_environment_precedence_real_env_then_dotenv_then_minigent_toml(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     config_path = tmp_path / "minigent.toml"
     config_path.write_text(
@@ -624,6 +689,7 @@ def test_load_environment_supports_custom_dotenv_file(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     (tmp_path / "minigent.toml").write_text(
         """
@@ -639,6 +705,7 @@ model = "from-toml"
         "MINIGENT_LLM_PROVIDER=mock\nMINIGENT_THREAD_DB_PATH=from-custom-dotenv.db\n",
         encoding="utf-8",
     )
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.setenv("MINIGENT_DOTENV_FILE", str(custom_dotenv))
     monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
@@ -656,7 +723,9 @@ def test_load_environment_can_disable_default_config_discovery(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("MINIGENT_LLM_MODEL", raising=False)
@@ -805,7 +874,9 @@ def test_coding_runner_env_applies_minigent_toml_then_env_file_override(
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINDWEFT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("MINDWEFT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_CODING_WORKSPACES", raising=False)
     monkeypatch.delenv("MINIGENT_CODING_SHELL_ENABLED", raising=False)

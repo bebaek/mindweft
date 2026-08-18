@@ -3,7 +3,7 @@
 The canonical implementation lives in :mod:`minigent_workspace.bridge.gateway`.
 """
 
-from minigent_workspace.bridge.gateway import (
+from mindweft_workspace.bridge.gateway import (
     DEFAULT_GATEWAY_PATH_PREFIX,
     GatewaySettings,
     bridge_settings_from_mapping,

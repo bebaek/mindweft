@@ -15,20 +15,20 @@ if [[ -z "${AGENT_COMMAND:-}" ]]; then
 fi
 AGENT_HOST="${AGENT_HOST:-127.0.0.1}"
 AGENT_PORT="${AGENT_PORT:-8010}"
-PEER_NAME="${MINIGENT_DEMO_PEER_NAME:-$AGENT_RUNTIME_NORMALIZED}"
-MINIGENT_HOST="${MINIGENT_HOST:-127.0.0.1}"
-MINIGENT_PORT="${MINIGENT_PORT:-8000}"
+PEER_NAME="${MINDWEFT_DEMO_PEER_NAME:-${MINIGENT_DEMO_PEER_NAME:-$AGENT_RUNTIME_NORMALIZED}}"
+MINDWEFT_HOST="${MINDWEFT_HOST:-${MINIGENT_HOST:-127.0.0.1}}"
+MINDWEFT_PORT="${MINDWEFT_PORT:-${MINIGENT_PORT:-8000}}"
 PROMPT="${1:-Summarize this repository in one paragraph. Do not edit files.}"
-LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/minigent-peer-tool-demo.XXXXXX")"
+LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mindweft-peer-tool-demo.XXXXXX")"
 
 WRAPPER_PID=""
-MINIGENT_PID=""
+MINDWEFT_PID=""
 
 cleanup() {
   local status=$?
-  if [[ -n "$MINIGENT_PID" ]] && kill -0 "$MINIGENT_PID" 2>/dev/null; then
-    kill "$MINIGENT_PID" 2>/dev/null || true
-    wait "$MINIGENT_PID" 2>/dev/null || true
+  if [[ -n "$MINDWEFT_PID" ]] && kill -0 "$MINDWEFT_PID" 2>/dev/null; then
+    kill "$MINDWEFT_PID" 2>/dev/null || true
+    wait "$MINDWEFT_PID" 2>/dev/null || true
   fi
   if [[ -n "$WRAPPER_PID" ]] && kill -0 "$WRAPPER_PID" 2>/dev/null; then
     kill "$WRAPPER_PID" 2>/dev/null || true
@@ -38,7 +38,7 @@ cleanup() {
     echo
     echo "demo failed; logs are in $LOG_DIR" >&2
     echo "agent wrapper log: $LOG_DIR/agent-wrapper.log" >&2
-    echo "minigent log: $LOG_DIR/minigent.log" >&2
+    echo "mindweft log: $LOG_DIR/mindweft.log" >&2
   fi
   exit "$status"
 }
@@ -67,8 +67,8 @@ uv run python scripts/check_peer_agent_demo.py \
   --agent-host "$AGENT_HOST" \
   --agent-port "$AGENT_PORT" \
   --peer-name "$PEER_NAME" \
-  --minigent-host "$MINIGENT_HOST" \
-  --minigent-port "$MINIGENT_PORT"
+  --mindweft-host "$MINDWEFT_HOST" \
+  --mindweft-port "$MINDWEFT_PORT"
 
 cd "$WRAPPER_DIR"
 AGENT_ALLOWED_WORKSPACES="$WORKSPACE" \
@@ -83,18 +83,18 @@ WRAPPER_PID=$!
 wait_for_url "agent wrapper" "http://$AGENT_HOST:$AGENT_PORT/health"
 
 cd "$ROOT_DIR"
-MINIGENT_ENABLE_PEER_AGENT_TOOL=true \
-MINIGENT_PEER_AGENTS="[{\"name\":\"$PEER_NAME\",\"base_url\":\"http://$AGENT_HOST:$AGENT_PORT\",\"description\":\"Local $AGENT_RUNTIME wrapper\",\"capabilities\":[\"repository analysis\",\"codebase inspection\",\"read-only command execution in the allowed workspace\"],\"side_effects\":[\"runs $AGENT_RUNTIME CLI commands on the local host\"],\"version\":\"0.1.0\"}]" \
+MINDWEFT_ENABLE_PEER_AGENT_TOOL=true \
+MINDWEFT_PEER_AGENTS="[{\"name\":\"$PEER_NAME\",\"base_url\":\"http://$AGENT_HOST:$AGENT_PORT\",\"description\":\"Local $AGENT_RUNTIME wrapper\",\"capabilities\":[\"repository analysis\",\"codebase inspection\",\"read-only command execution in the allowed workspace\"],\"side_effects\":[\"runs $AGENT_RUNTIME CLI commands on the local host\"],\"version\":\"0.1.0\"}]" \
   uv run uvicorn app.main:app \
-    --host "$MINIGENT_HOST" \
-    --port "$MINIGENT_PORT" \
-    >"$LOG_DIR/minigent.log" 2>&1 &
-MINIGENT_PID=$!
+    --host "$MINDWEFT_HOST" \
+    --port "$MINDWEFT_PORT" \
+    >"$LOG_DIR/mindweft.log" 2>&1 &
+MINDWEFT_PID=$!
 
-wait_for_url "minigent" "http://$MINIGENT_HOST:$MINIGENT_PORT/health"
+wait_for_url "mindweft" "http://$MINDWEFT_HOST:$MINDWEFT_PORT/health"
 
 uv run python scripts/demo_peer_agent_tool.py \
-  --base-url "http://$MINIGENT_HOST:$MINIGENT_PORT" \
+  --base-url "http://$MINDWEFT_HOST:$MINDWEFT_PORT" \
   --peer "$PEER_NAME" \
   --cwd "$WORKSPACE" \
   --prompt "$PROMPT"

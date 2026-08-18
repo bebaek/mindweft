@@ -15,7 +15,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pydantic import BaseModel, Field
 
 from app.private_keyring import load_encryption_keyring, parse_boolean
-from minigent_config.constants import ATTACHMENT_DB_PATH_ENV
+from mindweft_config.constants import ATTACHMENT_DB_PATH_ENV
+from mindweft_config.unified_config import normalize_mindweft_env
 
 ATTACHMENT_MAX_PER_THREAD_ENV = "MINIGENT_ATTACHMENT_MAX_PER_THREAD"
 ATTACHMENT_MAX_BYTES_PER_THREAD_ENV = "MINIGENT_ATTACHMENT_MAX_BYTES_PER_THREAD"
@@ -97,7 +98,7 @@ class AttachmentStoreSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> AttachmentStoreSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         value = lookup.get(ATTACHMENT_DB_PATH_ENV, "").strip()
         has_key_material = bool(
             lookup.get(ATTACHMENT_ENCRYPTION_KEY_ENV, "").strip()

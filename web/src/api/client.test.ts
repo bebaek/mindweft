@@ -63,7 +63,7 @@ describe("MinigentApiClient", () => {
     );
     const headers = new Headers(fetchMock.mock.calls[0][1]?.headers);
     expect(headers.has("Authorization")).toBe(false);
-    expect(headers.has("X-Minigent-User-Id")).toBe(false);
+    expect(headers.has("X-Mindweft-User-Id")).toBe(false);
   });
 
   it("creates and clears same-origin sessions", async () => {
@@ -103,9 +103,9 @@ describe("MinigentApiClient", () => {
     }).getHealth();
 
     const headers = new Headers(fetchMock.mock.calls[0][1]?.headers);
-    expect(headers.get("X-Minigent-Tenant-Id")).toBe("tenant-1");
-    expect(headers.get("X-Minigent-User-Id")).toBe("user-1");
-    expect(headers.get("X-Minigent-Admin")).toBe("true");
+    expect(headers.get("X-Mindweft-Tenant-Id")).toBe("tenant-1");
+    expect(headers.get("X-Mindweft-User-Id")).toBe("user-1");
+    expect(headers.get("X-Mindweft-Admin")).toBe("true");
   });
 
   it("parses NDJSON run events across stream chunks", async () => {
@@ -159,7 +159,7 @@ describe("MinigentApiClient", () => {
     expect(request[0]).toBe("/threads/thread-1/attachments/binary");
     expect(request[1]?.body).toBe(file);
     expect(headers.get("content-type")).toBe("image/png");
-    expect(headers.get("x-minigent-tenant-id")).toBe("tenant-1");
+    expect(headers.get("x-mindweft-tenant-id")).toBe("tenant-1");
   });
 
   it("encodes tenant thread filters and prune previews", async () => {

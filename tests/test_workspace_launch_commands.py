@@ -148,7 +148,7 @@ def test_text_bridge_command_runs_text_mcp_server(tmp_path: Path) -> None:
         "read_text_file_around",
         "search_text_file",
     ]
-    assert "from minigent_workspace.servers.text import main; raise SystemExit(main())" in command
+    assert "from mindweft_workspace.servers.text import main; raise SystemExit(main())" in command
     assert command[-2:] == ["--workspace", str(tmp_path)]
 
 
@@ -174,7 +174,7 @@ def test_shell_bridge_command_runs_shell_mcp_server(tmp_path: Path) -> None:
 
     assert "--allowed-tool" in command
     assert "run_command" in command
-    assert "from minigent_workspace.servers.shell import main; raise SystemExit(main())" in command
+    assert "from mindweft_workspace.servers.shell import main; raise SystemExit(main())" in command
     assert command[-2:] == ["--workspace", str(tmp_path)]
 
 
@@ -219,6 +219,17 @@ def test_shell_bridge_command_passes_allowed_command_prefixes(tmp_path: Path) ->
     assert [command[index + 1] for index in prefix_indexes] == ["git", "uv run pytest"]
 
 
+def test_shell_allowed_command_prefixes_prefer_mindweft_environment() -> None:
+    prefixes = launch_commands.shell_allowed_command_prefixes_from_env(
+        {
+            "MINDWEFT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES": "git, uv run pytest",
+            "MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES": "legacy",
+        }
+    )
+
+    assert prefixes == ["git", "uv run pytest"]
+
+
 def test_shell_allowed_command_prefixes_from_env() -> None:
     assert launch_commands.shell_allowed_command_prefixes_from_env(
         {"MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES": "git, uv run pytest, rg"}
@@ -239,7 +250,7 @@ def test_build_mcp_stdio_bridge_command_uses_declarative_spec() -> None:
 
     command = launch_commands.build_mcp_stdio_bridge_command(spec)
 
-    assert "from minigent_workspace.bridge.stdio import main; main()" in command
+    assert "from mindweft_workspace.bridge.stdio import main; main()" in command
     assert "--path" in command
     assert command[command.index("--path") + 1] == "/custom"
     assert command[command.index("--request-timeout") + 1] == "45"
@@ -252,7 +263,7 @@ def test_build_mcp_stdio_bridge_command_uses_declarative_spec() -> None:
 def test_build_mcp_gateway_command() -> None:
     command = launch_commands.build_mcp_gateway_command(Path("gateway.json"), "127.0.0.1", 8765)
 
-    assert "from minigent_workspace.bridge.gateway import main; main()" in command
+    assert "from mindweft_workspace.bridge.gateway import main; main()" in command
     assert command[command.index("--config") + 1] == "gateway.json"
     assert command[command.index("--host") + 1] == "127.0.0.1"
     assert command[command.index("--port") + 1] == "8765"

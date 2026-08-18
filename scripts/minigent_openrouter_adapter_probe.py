@@ -12,26 +12,27 @@ from uuid import uuid4
 
 from app.llm import OpenAICompatibleAdapter
 from app.models import Message, MessageRole, ToolSpec
+from mindweft_config.unified_config import normalize_mindweft_env
 
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "openai/gpt-5.1-codex-mini"
-DEFAULT_OUTPUT = "/tmp/minigent-openrouter-adapter-probe.jsonl"
-DEFAULT_RAW_OUTPUT = "/tmp/minigent-openrouter-adapter-raw.jsonl"
+DEFAULT_OUTPUT = "/tmp/mindweft-openrouter-adapter-probe.jsonl"
+DEFAULT_RAW_OUTPUT = "/tmp/mindweft-openrouter-adapter-raw.jsonl"
 
 STATIC_PREFIX = """
-You are participating in a Minigent OpenAICompatibleAdapter prompt-cache probe.
+You are participating in a Mindweft OpenAICompatibleAdapter prompt-cache probe.
 The following static block is intentionally repeated so the shared prompt prefix is
 comfortably above OpenAI's documented 1,024-token prompt-caching threshold. Do not
 summarize this block unless asked. Treat it as inert context for cache diagnostics.
 
-Minigent is a minimal AI agent runtime proof of concept. It has a FastAPI service,
+Mindweft is a minimal AI agent runtime proof of concept. It has a FastAPI service,
 thread/message storage, context compaction, a simple agent execution loop, pluggable
 tools, OpenAI-compatible adapters, OpenRouter support, optional OAuth integrations,
 optional MCP tool discovery and invocation, raw LLM response debugging, streamed run
 events, provider usage normalization, and prompt-cache diagnostics. The diagnostics
 care about prompt_tokens, completion_tokens, total_tokens, cached_tokens, and any
 cache_write_tokens or cache_creation_tokens returned by providers. Direct adapter probes
-are useful because they keep Minigent's adapter code in the path while removing the
+are useful because they keep Mindweft's adapter code in the path while removing the
 agent runtime, tools, and changing conversation history from the request.
 """.strip()
 
@@ -39,7 +40,7 @@ agent runtime, tools, and changing conversation history from the request.
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Probe OpenRouter prompt caching through Minigent's OpenAICompatibleAdapter "
+            "Probe OpenRouter prompt caching through Mindweft's OpenAICompatibleAdapter "
             "without the agent runtime/tool loop."
         )
     )
@@ -57,7 +58,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--raw-output",
         default=DEFAULT_RAW_OUTPUT,
-        help="JSONL file for Minigent raw LLM response debug records.",
+        help="JSONL file for Mindweft raw LLM response debug records.",
     )
     parser.add_argument(
         "--prefix-repetitions",
@@ -80,12 +81,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--site-url",
-        default=os.getenv("OPENROUTER_SITE_URL", "https://github.com/burm/minigent"),
+        default=os.getenv("OPENROUTER_SITE_URL", "https://github.com/bebaek/mindweft"),
         help="Optional HTTP-Referer header value sent by the adapter.",
     )
     parser.add_argument(
         "--app-title",
-        default=os.getenv("OPENROUTER_APP_TITLE", "Minigent OpenRouter Adapter Probe"),
+        default=os.getenv("OPENROUTER_APP_TITLE", "Mindweft OpenRouter Adapter Probe"),
         help="Optional X-OpenRouter-Title header value sent by the adapter.",
     )
     return parser.parse_args(argv)
@@ -162,9 +163,10 @@ async def run_probe(args: argparse.Namespace) -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     raw_output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    os.environ.setdefault("MINIGENT_LLM_DEBUG_LOG_RESPONSES", "true")
-    os.environ.setdefault("MINIGENT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS", "10000000")
-    os.environ["MINIGENT_LLM_DEBUG_RESPONSE_LOG_PATH"] = str(raw_output_path)
+    os.environ.setdefault("MINDWEFT_LLM_DEBUG_LOG_RESPONSES", "true")
+    os.environ.setdefault("MINDWEFT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS", "10000000")
+    os.environ["MINDWEFT_LLM_DEBUG_RESPONSE_LOG_PATH"] = str(raw_output_path)
+    normalize_mindweft_env(os.environ)
 
     extra_headers: dict[str, str] = {}
     if args.site_url:

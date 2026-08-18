@@ -55,6 +55,45 @@ jobs:
       - name: Run tests
         run: uv run --no-sync pytest
 
+  package:
+    name: Build and smoke-test distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: quality
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.29"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Build source and wheel distributions
+        run: uv build --out-dir dist
+      - name: Validate distribution contents and metadata
+        run: |
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          python scripts/verify_distribution_artifacts.py dist --version "$version"
+      - name: Install and smoke-test wheel in isolation
+        run: |
+          set -euo pipefail
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          smoke_dir="$(mktemp -d)"
+          trap 'rm -rf "$smoke_dir"' EXIT
+          uv venv "$smoke_dir/venv"
+          uv pip install --python "$smoke_dir/venv/bin/python" dist/mindweft-*.whl
+          (
+            cd "$smoke_dir"
+            "$smoke_dir/venv/bin/python" \
+              "$GITHUB_WORKSPACE/scripts/smoke_test_installed_distribution.py" \
+              --version "$version"
+          )
+
   frontend:
     name: Frontend checks
     runs-on: ubuntu-latest
@@ -85,13 +124,13 @@ jobs:
     name: Build and publish production image
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    needs: [quality, frontend]
+    needs: [quality, frontend, package]
     permissions:
       contents: read
       packages: write
     env:
       REGISTRY: ghcr.io
-      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/minigent-app
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/mindweft-app
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -110,14 +149,14 @@ jobs:
             {
               echo 'from<<EOF'
               echo "type=registry,ref=${IMAGE_NAME}:buildcache"
-              echo 'type=gha,scope=minigent'
+              echo 'type=gha,scope=mindweft'
               echo 'EOF'
               echo "to=type=registry,ref=${IMAGE_NAME}:buildcache,mode=max"
             } >> "$GITHUB_OUTPUT"
           else
             {
-              echo 'from=type=gha,scope=minigent'
-              echo 'to=type=gha,mode=max,scope=minigent'
+              echo 'from=type=gha,scope=mindweft'
+              echo 'to=type=gha,mode=max,scope=mindweft'
             } >> "$GITHUB_OUTPUT"
           fi
       - name: Log in to GitHub Container Registry
@@ -133,7 +172,7 @@ jobs:
           context: .
           platforms: linux/amd64
           load: true
-          tags: minigent-production-smoke:${{ github.sha }}
+          tags: mindweft-production-smoke:${{ github.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -141,10 +180,10 @@ jobs:
           cache-to: ${{ steps.image-cache.outputs.to }}
       - name: Smoke-test production container
         env:
-          SMOKE_IMAGE: minigent-production-smoke:${{ github.sha }}
+          SMOKE_IMAGE: mindweft-production-smoke:${{ github.sha }}
         run: |
           set -euo pipefail
-          container="minigent-production-smoke"
+          container="mindweft-production-smoke"
           cleanup() {
             docker rm --force "$container" >/dev/null 2>&1 || true
           }
@@ -171,7 +210,7 @@ jobs:
       - name: Publish smoke-tested production image
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
-          SMOKE_IMAGE: minigent-production-smoke:${{ github.sha }}
+          SMOKE_IMAGE: mindweft-production-smoke:${{ github.sha }}
         run: |
           set -euo pipefail
           commit_image="${IMAGE_NAME}:${GITHUB_SHA}"

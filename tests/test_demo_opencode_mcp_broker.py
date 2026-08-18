@@ -37,7 +37,7 @@ def test_demo_opencode_mcp_broker_builds_tool_smoke_prompt(monkeypatch) -> None:
             "--tenant-id",
             "demo-tenant",
             "--message",
-            "Use the Minigent MCP broker echo tool with text 'marker', then reply with only the echoed text. Do not edit files.",
+            "Use the Mindweft MCP broker echo tool with text 'marker', then reply with only the echoed text. Do not edit files.",
             "--expect-reply-contains",
             "marker",
         ]

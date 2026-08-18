@@ -12,7 +12,7 @@ SMOKE_TEXT = "minigent-broker-smoke-ok"
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Ask the OpenCode peer backend to use Minigent's MCP broker echo tool."
+        description="Ask the OpenCode peer backend to use Mindweft's MCP broker echo tool."
     )
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--user-id", default="demo-user")
@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
         args.tenant_id,
         "--message",
         (
-            "Use the Minigent MCP broker echo tool with text "
+            "Use the Mindweft MCP broker echo tool with text "
             f"'{args.smoke_text}', then reply with only the echoed text. "
             "Do not edit files."
         ),

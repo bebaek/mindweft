@@ -89,14 +89,14 @@ export function OAuthImportPanel({ tenantId }: { tenantId: string }) {
           <div><span>Source</span><strong>Pi openai-codex</strong></div>
           <div><span>Account</span><strong>{credential.data.account_id || "Available"}</strong></div>
           <div><span>Access token expires</span><strong>{formatDate(credential.data.expires_at)}</strong></div>
-          <p>Minigent refreshes this credential for this tenant. Continuing to use the same credential in Pi may invalidate one copy when refresh tokens rotate.</p>
+          <p>Mindweft refreshes this credential for this tenant. Continuing to use the same credential in Pi may invalidate one copy when refresh tokens rotate.</p>
         </div>
       ) : (
         <div className="oauth-import-instructions">
           <ol>
             <li>In Pi, run <code>/login</code> and select <strong>OpenAI (ChatGPT Plus/Pro)</strong>.</li>
             <li>Locate <code>~/.pi/agent/auth.json</code> on the machine where Pi is installed.</li>
-            <li>Transfer the credential to Minigent, then avoid using the same Pi credential concurrently.</li>
+            <li>Transfer the credential to Mindweft, then avoid using the same Pi credential concurrently.</li>
             <li>In Execution configuration, use provider <code>generic-oauth</code> and the Codex Responses URL <code>https://chatgpt.com/backend-api/codex/responses</code>.</li>
           </ol>
         </div>
@@ -104,7 +104,7 @@ export function OAuthImportPanel({ tenantId }: { tenantId: string }) {
 
       <label className="oauth-transfer-warning">
         <input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />
-        <span>I understand this copies a rotating OAuth credential. Pi and Minigent should not refresh the same credential concurrently.</span>
+        <span>I understand this copies a rotating OAuth credential. Pi and Mindweft should not refresh the same credential concurrently.</span>
       </label>
 
       {error && <p className="inline-error" role="alert">{error}</p>}

@@ -30,6 +30,26 @@ def test_resolve_workspace_runtime_settings_uses_defaults() -> None:
     )
 
 
+def test_resolve_workspace_runtime_settings_prefers_mindweft_environment() -> None:
+    args = cli.parse_args([])
+    env = {
+        "MINDWEFT_HOST": "canonical-api",
+        "MINIGENT_HOST": "legacy-api",
+        "MINDWEFT_PORT": "9100",
+        "MINIGENT_PORT": "9000",
+        "MINDWEFT_CODING_BRIDGE_HOST": "canonical-bridge",
+        "MINIGENT_CODING_BRIDGE_HOST": "legacy-bridge",
+        "MINDWEFT_CODING_SHELL_ENABLED": "true",
+    }
+
+    settings = runtime_settings.resolve_workspace_runtime_settings(args, env)
+
+    assert settings.api_host == "canonical-api"
+    assert settings.api_port == 9100
+    assert settings.bridge_host == "canonical-bridge"
+    assert settings.shell_enabled is True
+
+
 def test_resolve_workspace_runtime_settings_uses_environment() -> None:
     args = cli.parse_args([])
     env = {

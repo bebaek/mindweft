@@ -1,4 +1,4 @@
-# Minigent
+# Mindweft
 
 Minimal AI agent runtime POC from `DESIGN.md`.
 
@@ -30,7 +30,7 @@ The local tool registry includes:
 - `calculator`: evaluates basic arithmetic
 - `retrieve_knowledge`: opt-in tool that searches tenant-scoped MiniRAG knowledge when configured
 - `peer_agent_task`: submits a task to a configured federated peer agent and optionally
-  polls for completion when `MINIGENT_ENABLE_PEER_AGENT_TOOL=true`
+  polls for completion when `MINDWEFT_ENABLE_PEER_AGENT_TOOL=true`
 
 `fetch_url` is intended for lightweight web context and endpoint checks, not as a full
 `curl` replacement. It rejects non-HTTP schemes, private-network hosts, sensitive
@@ -113,10 +113,10 @@ with `Content-Type: application/x-ndjson`. The stream emits `run.started`, nativ
 progress such as `llm.request`, `tool.call`, and `tool.result`, peer-backend progress such
 as `peer.task.created`/`peer.task.poll`/`peer.task.event`/`peer.task.completed`, then either
 `assistant.message` and `run.completed`, or `run.error`. Peer task events are sanitized before
-streaming: Minigent forwards event type/status/tool metadata, emits only allowlisted tool
+streaming: Mindweft forwards event type/status/tool metadata, emits only allowlisted tool
 argument summaries, and strips raw tool arguments plus nested message content from peer agent
 JSON events. Configure the peer tool argument summary allowlist with
-`MINIGENT_PEER_TOOL_ARG_ALLOWLIST`, either as JSON such as
+`MINDWEFT_PEER_TOOL_ARG_ALLOWLIST`, either as JSON such as
 `{"read":["path","limit"],"grep":["pattern","path"]}` or as
 `read:path,limit;grep:pattern,path`; set it to `off` to suppress argument summaries.
 For local development only, set it to `all` or `*` to summarize every argument key after
@@ -135,25 +135,25 @@ no frontend build step or extra dependencies.
 
 ## Prompt Cache Diagnostics
 
-By default, Minigent keeps thread history append-only and disables automatic context
+By default, Mindweft keeps thread history append-only and disables automatic context
 compaction so provider-side prompt caches can reuse stable prefixes across turns. Use
 `POST /threads/{thread_id}/compact` or the interactive CLI `/compact` command to manually
 fold older raw messages into a deterministic thread summary while retaining the recent
-message tail. Set `MINIGENT_CONTEXT_COMPACTION_ENABLED=true` to re-enable rolling summaries
+message tail. Set `MINDWEFT_CONTEXT_COMPACTION_ENABLED=true` to re-enable rolling summaries
 and old-message compaction during runs for smaller prompts at the cost of resetting/changing
 the cacheable prefix.
 
-Minigent does not cache model replies locally. Native LLM adapters do preserve and report
+Mindweft does not cache model replies locally. Native LLM adapters do preserve and report
 provider-side prompt-cache usage when the provider includes it in response metadata.
-For provider debugging, set `MINIGENT_LLM_DEBUG_LOG_RESPONSES=true` to log raw LLM
-response bodies through the Minigent logger; responses may contain prompts, assistant
+For provider debugging, set `MINDWEFT_LLM_DEBUG_LOG_RESPONSES=true` to log raw LLM
+response bodies through the Mindweft logger; responses may contain prompts, assistant
 content, tool outputs, and usage metadata, so enable this only in trusted local/debug
 environments. Logs are truncated to 20000 characters by default; override with
-`MINIGENT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS`. Because normal logs redact/truncate long
-fields, set `MINIGENT_LLM_DEBUG_RESPONSE_LOG_PATH=/tmp/minigent-llm-raw.jsonl` to also
+`MINDWEFT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS`. Because normal logs redact/truncate long
+fields, set `MINDWEFT_LLM_DEBUG_RESPONSE_LOG_PATH=/tmp/mindweft-llm-raw.jsonl` to also
 write raw response bodies as JSONL records for detailed inspection. To inspect outbound
-LLM request stability, set `MINIGENT_LLM_DEBUG_REQUEST_LOG_PATH=/tmp/minigent-llm-requests.jsonl`;
-Minigent writes raw/canonical SHA-256 hashes, message/tool counts, and the full request
+LLM request stability, set `MINDWEFT_LLM_DEBUG_REQUEST_LOG_PATH=/tmp/mindweft-llm-requests.jsonl`;
+Mindweft writes raw/canonical SHA-256 hashes, message/tool counts, and the full request
 payload for each provider call. Request logs can expose prompts and tool data, so only
 enable them in trusted debug environments.
 
@@ -161,26 +161,26 @@ To run a repeatable cache probe against a running API and print the streamed usa
 counters, use:
 
 ```bash
-MINIGENT_LLM_DEBUG_LOG_RESPONSES=true \
-MINIGENT_LLM_DEBUG_RESPONSE_LOG_PATH=/tmp/minigent-llm-raw.jsonl \
+MINDWEFT_LLM_DEBUG_LOG_RESPONSES=true \
+MINDWEFT_LLM_DEBUG_RESPONSE_LOG_PATH=/tmp/mindweft-llm-raw.jsonl \
   uv run uvicorn app.main:app --reload
 
 uv run python scripts/investigate_prompt_cache.py --trace
 ```
 
 For the workspace-coding setup that can read local files, put the debug/cache settings in
-`.env.coding` and start Minigent with the workspace runner instead:
+`.env.coding` and start Mindweft with the workspace runner instead:
 
 ```bash
-MINIGENT_LLM_PROMPT_CACHE_KEY=thread
-MINIGENT_LLM_DEBUG_LOG_RESPONSES=true
-MINIGENT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS=200000
-MINIGENT_LLM_DEBUG_RESPONSE_LOG_PATH=/tmp/minigent-llm-raw.jsonl
-MINIGENT_LLM_DEBUG_REQUEST_LOG_PATH=/tmp/minigent-llm-requests.jsonl
+MINDWEFT_LLM_PROMPT_CACHE_KEY=thread
+MINDWEFT_LLM_DEBUG_LOG_RESPONSES=true
+MINDWEFT_LLM_DEBUG_LOG_RESPONSE_MAX_CHARS=200000
+MINDWEFT_LLM_DEBUG_RESPONSE_LOG_PATH=/tmp/mindweft-llm-raw.jsonl
+MINDWEFT_LLM_DEBUG_REQUEST_LOG_PATH=/tmp/mindweft-llm-requests.jsonl
 ```
 
 ```bash
-uv run minigent-coding-workspace --env-file .env.coding
+uv run mindweft-coding-workspace --env-file .env.coding
 uv run python scripts/investigate_prompt_cache.py --trace --pause 2 \
   --tenant-id demo-tenant --capability-profile inspect
 ```
@@ -189,7 +189,7 @@ The script creates a thread, runs several related README prompts, prints each ru
 `prompt`/`completion`/`total`/`cache_read`/`cache_write` counters, and emits a trace ID
 that can be used to correlate with raw `app.llm` response logs.
 
-To bypass Minigent entirely and inspect direct OpenRouter responses, use:
+To bypass Mindweft entirely and inspect direct OpenRouter responses, use:
 
 ```bash
 OPENROUTER_API_KEY=... \
@@ -204,7 +204,7 @@ with `usage: {"include": true}`, prints usage/cache summaries, and writes full r
 and raw response JSONL records for inspection. Add `--mock-tool-count 1` to include a
 stable mock function tool in each direct request.
 
-To keep Minigent's OpenAI-compatible adapter in the path while bypassing the full
+To keep Mindweft's OpenAI-compatible adapter in the path while bypassing the full
 agent/runtime/tool loop, use:
 
 ```bash
@@ -216,7 +216,7 @@ OPENROUTER_API_KEY=... \
 ```
 
 If the direct OpenRouter probe gets cache hits and this adapter probe also gets cache
-hits, Minigent's adapter request shape is cache-compatible and full agent runs are likely
+hits, Mindweft's adapter request shape is cache-compatible and full agent runs are likely
 missing cache hits because their long prefix is not stable enough. Add `--mock-tool-count 1`
 to test the adapter path with a stable mock function tool included in every request.
 OpenAI-compatible cache counters such as `prompt_tokens_details.cached_tokens` and
@@ -224,31 +224,31 @@ Responses-style `input_tokens_details.cached_tokens` are normalized to
 `cache_read_tokens`; provider cache-creation counters are normalized to
 `cache_write_tokens`. These counters are informational and depend on the selected model
 and provider enabling prompt caching for stable prompt prefixes. For generic OAuth
-Responses endpoints that support caller-selected cache buckets, Minigent sends the current
+Responses endpoints that support caller-selected cache buckets, Mindweft sends the current
 thread ID as `prompt_cache_key` and also sends Codex/Pi-style `session_id`, `session-id`,
 `thread-id`, and `x-client-request-id` headers. For the ChatGPT Codex Responses endpoint,
-Minigent also sends `include: ["reasoning.encrypted_content"]` and requests reasoning
+Mindweft also sends `include: ["reasoning.encrypted_content"]` and requests reasoning
 summaries with `reasoning: {"effort":"medium","summary":"auto"}` by default, matching
 Pi's visible-thinking request shape. Override those defaults with
-`MINIGENT_LLM_REASONING_EFFORT` and `MINIGENT_LLM_REASONING_SUMMARY`; set either value to
+`MINDWEFT_LLM_REASONING_EFFORT` and `MINDWEFT_LLM_REASONING_SUMMARY`; set either value to
 `off`, `none`, `null`, `false`, or `0` to omit that field. If the endpoint returns only
-encrypted reasoning state and no assistant message or tool call, Minigent automatically
+encrypted reasoning state and no assistant message or tool call, Mindweft automatically
 continues the Responses request with that reasoning state up to
-`MINIGENT_RESPONSES_REASONING_ONLY_RETRIES` times (default `3`) before returning a
+`MINDWEFT_RESPONSES_REASONING_ONLY_RETRIES` times (default `3`) before returning a
 structured retryable `provider_reasoning_only` error. Set
-`MINIGENT_LLM_PROMPT_CACHE_KEY` to a literal value to
+`MINDWEFT_LLM_PROMPT_CACHE_KEY` to a literal value to
 override the cache key, or to `thread`/`auto` to explicitly use thread-ID mode.
 For OpenRouter,
-Minigent requests usage metadata with `usage: {"include": true}` so compatible models
+Mindweft requests usage metadata with `usage: {"include": true}` so compatible models
 can report usage and cache counters.
 
 ## Google Gemini LLM Provider
 
-Minigent can call Gemini through Google's native `generateContent` API instead of the
+Mindweft can call Gemini through Google's native `generateContent` API instead of the
 OpenAI-compatible endpoint:
 
 ```dotenv
-MINIGENT_LLM_PROVIDER=google
+MINDWEFT_LLM_PROVIDER=google
 GEMINI_API_KEY=your-gemini-api-key
 GEMINI_MODEL=gemini-3.5-flash
 # Optional override; defaults to the Gemini API v1beta base.
@@ -262,21 +262,21 @@ corrupt or truncated compressed responses from an intermediary such as a proxy, 
 security appliance. Disable response compression for Gemini by setting:
 
 ```dotenv
-MINIGENT_LLM_EXTRA_HEADERS={"Accept-Encoding":"identity"}
+MINDWEFT_LLM_EXTRA_HEADERS={"Accept-Encoding":"identity"}
 ```
 
 For tenant execution config, use `llm.provider: "google"` and put the Gemini API key in
-`llm.api_key`. Minigent calls `POST /models/{model}:generateContent` and supports text
-responses plus native Gemini function calls for Minigent tools. Tool input schemas are sent
+`llm.api_key`. Mindweft calls `POST /models/{model}:generateContent` and supports text
+responses plus native Gemini function calls for Mindweft tools. Tool input schemas are sent
 as `parametersJsonSchema` so Gemini can accept full JSON Schema from MCP tools.
 
 ## Anthropic LLM Provider
 
-Minigent can call Anthropic's native Messages API instead of routing Claude models through
+Mindweft can call Anthropic's native Messages API instead of routing Claude models through
 OpenRouter or another OpenAI-compatible gateway:
 
 ```dotenv
-MINIGENT_LLM_PROVIDER=anthropic
+MINDWEFT_LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=your-anthropic-api-key
 ANTHROPIC_MODEL=claude-haiku-4-5
 # Optional overrides.
@@ -293,12 +293,12 @@ ANTHROPIC_THINKING_EFFORT=high
 ```
 
 For tenant execution config, use `llm.provider: "anthropic"` and put the Anthropic API key
-in `llm.api_key`. Minigent calls `POST /messages`, maps Minigent system messages to the
+in `llm.api_key`. Mindweft calls `POST /messages`, maps Mindweft system messages to the
 Messages API top-level `system` field, and supports text responses, image parts, and native
-Anthropic tool-use/tool-result content blocks for Minigent tools. Anthropic prompt caching
+Anthropic tool-use/tool-result content blocks for Mindweft tools. Anthropic prompt caching
 is enabled by default with top-level `cache_control: {"type":"ephemeral"}` so stable
 prompt prefixes can be cached and Anthropic usage fields such as
-`cache_read_input_tokens`/`cache_creation_input_tokens` are normalized to Minigent's
+`cache_read_input_tokens`/`cache_creation_input_tokens` are normalized to Mindweft's
 `cache_read_tokens`/`cache_write_tokens`; set `ANTHROPIC_PROMPT_CACHE_ENABLED=false` to
 omit `cache_control`. When Anthropic thinking is enabled, older Claude models receive
 `thinking: {"type":"enabled","budget_tokens":...}`. Claude Opus/Sonnet 4.6 and newer,
@@ -306,7 +306,7 @@ including Claude Opus 4.8, instead receive the supported adaptive shape
 `thinking: {"type":"adaptive","display":"summarized"}` with
 `output_config: {"effort":"high"}` by default; set `ANTHROPIC_THINKING_EFFORT` to tune the
 effort. Explicit `display: "summarized"` is required for visible thinking on Opus 4.8,
-whose API default is `omitted`. Minigent exposes returned `thinking` blocks through the
+whose API default is `omitted`. Mindweft exposes returned `thinking` blocks through the
 existing reasoning metadata/stream events and preserves Anthropic thinking blocks on
 tool-use turns so they can be replayed with the tool result.
 
@@ -326,41 +326,41 @@ content in the terminal.
 
 ## Generic OAuth LLM Provider
 
-Minigent can use a user-configured OAuth authorization-code + PKCE flow for LLM endpoints
+Mindweft can use a user-configured OAuth authorization-code + PKCE flow for LLM endpoints
 that accept bearer tokens. There are no provider defaults; all OAuth and LLM parameters
 must be supplied explicitly.
 
 ```dotenv
-MINIGENT_LLM_PROVIDER=generic-oauth
-MINIGENT_LLM_MODEL=your-model-id
-MINIGENT_LLM_URL=https://provider.example/v1/responses
-MINIGENT_LLM_EXTRA_HEADERS='{"x-provider-feature":"enabled"}'
+MINDWEFT_LLM_PROVIDER=generic-oauth
+MINDWEFT_LLM_MODEL=your-model-id
+MINDWEFT_LLM_URL=https://provider.example/v1/responses
+MINDWEFT_LLM_EXTRA_HEADERS='{"x-provider-feature":"enabled"}'
 # Optional: set a stable provider-side prompt-cache bucket for compatible Responses APIs.
-# By default, generic-oauth uses the Minigent thread ID, matching Codex's behavior.
+# By default, generic-oauth uses the Mindweft thread ID, matching Codex's behavior.
 # Set to a literal value to override, or to "thread"/"auto" to force thread-ID mode.
-MINIGENT_LLM_PROMPT_CACHE_KEY=thread
+MINDWEFT_LLM_PROMPT_CACHE_KEY=thread
 # Optional: set when the provider requires an account/org header populated from a JWT claim.
-MINIGENT_LLM_ACCOUNT_ID_HEADER=x-provider-account-id
+MINDWEFT_LLM_ACCOUNT_ID_HEADER=x-provider-account-id
 
-MINIGENT_OAUTH_STORE_PATH=/path/to/oauth.db
+MINDWEFT_OAUTH_STORE_PATH=/path/to/oauth.db
 # Configure either one 32-byte base64url key or a versioned keyring. A keyring supports rotation.
-MINIGENT_OAUTH_ENCRYPTION_KEYS='{"1":"BASE64URL_32_BYTE_KEY"}'
-MINIGENT_OAUTH_KEY_VERSION=1
+MINDWEFT_OAUTH_ENCRYPTION_KEYS='{"1":"BASE64URL_32_BYTE_KEY"}'
+MINDWEFT_OAUTH_KEY_VERSION=1
 # Optional one-time import source when migrating from the legacy JSON credential file.
-MINIGENT_OAUTH_LEGACY_STORE_PATH=/path/to/oauth.json
-MINIGENT_OAUTH_PROVIDER_ID=your-provider-id
-MINIGENT_OAUTH_CLIENT_ID=your-client-id
-MINIGENT_OAUTH_AUTHORIZE_URL=https://provider.example/oauth/authorize
-MINIGENT_OAUTH_TOKEN_URL=https://provider.example/oauth/token
-MINIGENT_OAUTH_REDIRECT_URI=http://127.0.0.1:8000/oauth/generic/callback
-MINIGENT_OAUTH_SCOPE="openid profile offline_access"
-MINIGENT_OAUTH_AUTH_PARAMS='{"prompt":"login"}'
-# Optional: dot-separated path inside the access-token JWT, used with MINIGENT_LLM_ACCOUNT_ID_HEADER.
-MINIGENT_OAUTH_ACCOUNT_ID_JWT_CLAIM=auth.account_id
+MINDWEFT_OAUTH_LEGACY_STORE_PATH=/path/to/oauth.json
+MINDWEFT_OAUTH_PROVIDER_ID=your-provider-id
+MINDWEFT_OAUTH_CLIENT_ID=your-client-id
+MINDWEFT_OAUTH_AUTHORIZE_URL=https://provider.example/oauth/authorize
+MINDWEFT_OAUTH_TOKEN_URL=https://provider.example/oauth/token
+MINDWEFT_OAUTH_REDIRECT_URI=http://127.0.0.1:8000/oauth/generic/callback
+MINDWEFT_OAUTH_SCOPE="openid profile offline_access"
+MINDWEFT_OAUTH_AUTH_PARAMS='{"prompt":"login"}'
+# Optional: dot-separated path inside the access-token JWT, used with MINDWEFT_LLM_ACCOUNT_ID_HEADER.
+MINDWEFT_OAUTH_ACCOUNT_ID_JWT_CLAIM=auth.account_id
 ```
 
 The tenant-owner console can also import Pi's `openai-codex` OAuth credential from
-`~/.pi/agent/auth.json`. The browser extracts only the `openai-codex` entry; Minigent validates and
+`~/.pi/agent/auth.json`. The browser extracts only the `openai-codex` entry; Mindweft validates and
 normalizes the Pi OAuth fields, encrypts them in the configured SQLite OAuth store, and keys them to
 the authenticated tenant. The raw auth file and tokens are never returned by the API or included in
 audit records.
@@ -371,7 +371,7 @@ and use `https://chatgpt.com/backend-api/codex/responses` as the LLM URL. The de
 OAuth client, token URL, and account-ID-header settings still apply to refreshes and requests.
 Encrypted OAuth storage is mandatory for tenant imports.
 
-Pi and Minigent must not independently refresh copies of the same credential. OpenAI refresh-token
+Pi and Mindweft must not independently refresh copies of the same credential. OpenAI refresh-token
 rotation can invalidate the other copy, so treat import as a credential transfer and avoid continuing
 to use that Pi login concurrently.
 
@@ -386,29 +386,29 @@ DELETE /admin/tenants/{tenant_id}/oauth/openai-codex
 The routes enforce active owner membership and same-tenant access. Import and deletion are audited
 without credential material.
 
-Start Minigent, then begin login from a browser:
+Start Mindweft, then begin login from a browser:
 
 ```text
 http://127.0.0.1:8000/oauth/generic/open
 ```
 
 Alternatively, `GET /oauth/generic/login` returns an `authorization_url` JSON field that
-can be opened manually. When `MINIGENT_OAUTH_ENCRYPTION_KEY` or
-`MINIGENT_OAUTH_ENCRYPTION_KEYS` is configured, the callback stores encrypted credentials and
-single-use PKCE flow state in the SQLite database at `MINIGENT_OAUTH_STORE_PATH`. The
+can be opened manually. When `MINDWEFT_OAUTH_ENCRYPTION_KEY` or
+`MINDWEFT_OAUTH_ENCRYPTION_KEYS` is configured, the callback stores encrypted credentials and
+single-use PKCE flow state in the SQLite database at `MINDWEFT_OAUTH_STORE_PATH`. The
 `generic-oauth` adapter coordinates refresh-token rotation through a transactional lease, so only
 one replica refreshes an expired credential while other replicas reload the winner's result. The
 same database lets a callback received by one replica consume a login flow started by another.
 
-For migration, set `MINIGENT_OAUTH_LEGACY_STORE_PATH` to the previous JSON file. Its provider
+For migration, set `MINDWEFT_OAUTH_LEGACY_STORE_PATH` to the previous JSON file. Its provider
 entries are imported only once and never overwrite later database updates. Remove the legacy file
 after verifying the import because that source remains plaintext. Versioned keys can be rotated by
 starting with old and new keys present, re-encrypting stored rows with
 `SQLiteEncryptedOAuthStore.reencrypt_to_active_key()`, and then retiring the old key.
 
-Without an OAuth encryption key, Minigent retains the compatibility JSON credential store and
+Without an OAuth encryption key, Mindweft retains the compatibility JSON credential store and
 in-memory login-flow store. JSON writes use atomic replacement, but that compatibility mode is not
-safe for multiple replicas. Minigent accepts callbacks at both `/oauth/generic/callback` and
+safe for multiple replicas. Mindweft accepts callbacks at both `/oauth/generic/callback` and
 `/auth/callback` for providers with fixed redirect path requirements.
 
 For same-machine testing, start the API and open:
@@ -435,7 +435,7 @@ local network.
 [`local-agent-wrapper`](/Users/burm/code/minigent/local-agent-wrapper) is a separate
 minimal package that exposes a local coding-agent CLI as a federated-agent-style HTTP
 member. It defaults to Pi Coding Agent and can be configured for OpenCode, Codex, or
-another CLI with a custom argv template. Minigent can route tasks to it through the
+another CLI with a custom argv template. Mindweft can route tasks to it through the
 `peer_agent_task` tool when peer-agent tooling is enabled.
 
 Run it locally with an explicit workspace allowlist:
@@ -461,26 +461,26 @@ JSON events. Set `AGENT_RUNTIME=opencode` for the built-in OpenCode profile,
 `AGENT_ARGS_TEMPLATE` for another CLI. Task responses include relative `links` and
 `artifacts` maps for discovery.
 
-Minigent can also use a configured peer agent as the primary thread execution backend
-instead of the built-in LLM/tool loop. Start the wrapper, register it in Minigent, and
+Mindweft can also use a configured peer agent as the primary thread execution backend
+instead of the built-in LLM/tool loop. Start the wrapper, register it in Mindweft, and
 select the `peer_agent` backend:
 
 ```dotenv
-MINIGENT_PEER_AGENTS='[{"name":"pi","base_url":"http://127.0.0.1:8010"}]'
-MINIGENT_AGENT_BACKEND=peer_agent
-MINIGENT_AGENT_BACKEND_PEER=pi
-MINIGENT_AGENT_BACKEND_CWD=/Users/burm/code/minigent
-MINIGENT_MCP_BROKER_BASE_URL=http://127.0.0.1:8000
-MINIGENT_MCP_BROKER_DB_PATH=/data/minigent-mcp-broker.db
-MINIGENT_MCP_BROKER_ENABLED=true
+MINDWEFT_PEER_AGENTS='[{"name":"pi","base_url":"http://127.0.0.1:8010"}]'
+MINDWEFT_AGENT_BACKEND=peer_agent
+MINDWEFT_AGENT_BACKEND_PEER=pi
+MINDWEFT_AGENT_BACKEND_CWD=/Users/burm/code/minigent
+MINDWEFT_MCP_BROKER_BASE_URL=http://127.0.0.1:8000
+MINDWEFT_MCP_BROKER_DB_PATH=/data/mindweft-mcp-broker.db
+MINDWEFT_MCP_BROKER_ENABLED=true
 ```
 
-With this mode, `POST /threads/{thread_id}/run` sends the Minigent thread context to the
+With this mode, `POST /threads/{thread_id}/run` sends the Mindweft thread context to the
 peer agent, including retained assistant tool-call records and tool results, polls until
 the task completes, stores sanitized peer tool-execution events as retained tool-call/tool-result
 messages, stores the peer `final_output` as the assistant message, and returns it as the run
 reply. Streamed peer runs forward task `usage` on `peer.task.completed` when the peer reports
-actual token counts. The peer-agent prompt protocol is currently text-only; Minigent rejects
+actual token counts. The peer-agent prompt protocol is currently text-only; Mindweft rejects
 threads containing image parts instead of silently dropping those images. Per-tenant execution
 config can use the same backend shape:
 
@@ -497,26 +497,26 @@ config can use the same backend shape:
 }
 ```
 
-The default backend remains `native`, which preserves the existing Minigent LLM/tool
+The default backend remains `native`, which preserves the existing Mindweft LLM/tool
 runtime.
 
 ## Remote Quality Enhancement
 
-Minigent can optionally ask a separate remote-quality model to critique a sanitized local
+Mindweft can optionally ask a separate remote-quality model to critique a sanitized local
 draft before the final assistant message is stored. The main runtime still produces the
 initial answer with the tenant's normal LLM and tools. The quality path is advisory only:
-Minigent sends a redacted/minimized draft to the quality model, receives critique, then
+Mindweft sends a redacted/minimized draft to the quality model, receives critique, then
 asks the primary LLM to revise using the private thread context. Raw thread history, tool
 outputs, and files are not sent to the quality model by this feature.
 
 It is disabled by default. Enable it for env-based config with:
 
 ```dotenv
-MINIGENT_REMOTE_QUALITY_ENABLED=true
-MINIGENT_REMOTE_QUALITY_PROVIDER=openrouter
-MINIGENT_REMOTE_QUALITY_MODEL=openai/gpt-5.4-mini
-MINIGENT_REMOTE_QUALITY_API_KEY=...
-MINIGENT_REMOTE_QUALITY_MODE=critique_draft
+MINDWEFT_REMOTE_QUALITY_ENABLED=true
+MINDWEFT_REMOTE_QUALITY_PROVIDER=openrouter
+MINDWEFT_REMOTE_QUALITY_MODEL=openai/gpt-5.4-mini
+MINDWEFT_REMOTE_QUALITY_API_KEY=...
+MINDWEFT_REMOTE_QUALITY_MODE=critique_draft
 ```
 
 Per-tenant execution config can include the same shape:
@@ -556,7 +556,7 @@ NDJSON run events, including `quality.sanitized`, `quality.remote_request`, and
 The same local llama.cpp path is available as an opt-in integration test:
 
 ```bash
-MINIGENT_RUN_LLAMA_CPP_INTEGRATION_TESTS=true \
+MINDWEFT_RUN_LLAMA_CPP_INTEGRATION_TESTS=true \
   LLAMA_CPP_BASE_URL=http://127.0.0.1:8080/v1 \
   LLAMA_CPP_MODEL=local-model \
   uv run pytest tests/test_demo_local_quality_integration.py
@@ -572,9 +572,9 @@ AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
 
 The Pi profile invokes `pi --mode json --no-session --tools read,grep,find,ls <prompt>`
 from the task workspace and extracts assistant `message_end` events as the task
-`final_output`. This keeps the default Pi peer profile read-only. When Minigent passes MCP
+`final_output`. This keeps the default Pi peer profile read-only. When Mindweft passes MCP
 broker environment variables, the wrapper adds a generated Pi extension that registers
-brokered Minigent tools and activates them alongside the read-only file-inspection tools.
+brokered Mindweft tools and activates them alongside the read-only file-inspection tools.
 Those brokered tools are exposed to Pi with a sanitized `minigent_` prefix. Set
 `AGENT_PI_TOOLS` as a comma-separated list to change the local Pi tools passed through
 `--tools` while preserving automatic MCP broker extension injection. Override with
@@ -583,39 +583,40 @@ model/provider flags, fully custom tool narrowing, or custom Pi skills/extension
 specific peer deployment; a custom args template replaces the built-in Pi profile and
 therefore must include any desired MCP extension wiring itself.
 
-Set `MINIGENT_MCP_BROKER_ENABLED=false` or `agent_backend.mcp_broker_enabled=false` if
-the peer agent should run without Minigent-brokered MCP tools.
+Set `MINDWEFT_MCP_BROKER_ENABLED=false` or `agent_backend.mcp_broker_enabled=false` if
+the peer agent should run without Mindweft-brokered MCP tools.
 
-When the peer-agent backend runs, Minigent mints a short-lived MCP broker session for
+When the peer-agent backend runs, Mindweft mints a short-lived MCP broker session for
 that thread and passes these environment variables to the wrapper task:
 
 ```dotenv
-MINIGENT_MCP_BROKER_URL=http://127.0.0.1:8000/mcp/peer/<session>
-MINIGENT_MCP_BROKER_TOKEN=<short-lived-token>
-MINIGENT_MCP_BROKER_SESSION=<session>
+MINDWEFT_MCP_BROKER_URL=http://127.0.0.1:8000/mcp/peer/<session>
+MINDWEFT_MCP_BROKER_TOKEN=<short-lived-token>
+MINDWEFT_MCP_BROKER_SESSION=<session>
 ```
 
-The broker exposes the thread's approved Minigent tools through MCP JSON-RPC and
-forwards allowed `tools/call` requests through Minigent's existing tool registry, so
+The broker exposes the thread's approved Mindweft tools through MCP JSON-RPC and
+forwards allowed `tools/call` requests through Mindweft's existing tool registry, so
 OpenCode does not receive upstream MCP server credentials. The official SDK v2 low-level server
 owns broker discovery, initialization, request validation, dispatch, and modern result envelopes;
-Minigent retains short-lived bearer authentication, session routing, frozen tool allowlists, and
+Mindweft retains short-lived bearer authentication, session routing, frozen tool allowlists, and
 execution context. Each authenticated HTTP request is adapted to an isolated SDK server exchange,
 so modern stateless clients and the legacy initialization shape remain compatible. SDK JSON-RPC
 models are also used for boundary errors, while modern-only result envelope fields are removed from
 legacy responses. When
-`MINIGENT_MCP_BROKER_DB_PATH` is configured, session identity, expiry, and the original approved
+`MINDWEFT_MCP_BROKER_DB_PATH` is configured, session identity, expiry, and the original approved
 tool-name set are stored in shared SQLite. Bearer tokens are persisted only as SHA-256 hashes, and
 a replica receiving a broker call reconstructs the tenant/thread tool registry locally while still
 enforcing the tool names frozen when the session was created. This allows broker URLs minted by one
 replica to be served by another. Without that setting, broker sessions remain process-local.
-The wrapper only accepts task environment variables whose names start with
-`MINIGENT_MCP_BROKER_` by default; override that allowlist with
+The wrapper accepts task environment variables whose names start with
+`MINDWEFT_MCP_BROKER_` or the legacy `MINIGENT_MCP_BROKER_` prefix by default; override that
+allowlist with
 `AGENT_ALLOWED_TASK_ENV_PREFIXES` if you add more task-scoped variables.
 
 For OpenCode tasks, the wrapper also generates per-task `OPENCODE_CONFIG_CONTENT` that
-adds a remote MCP server named `minigent` using the broker URL and bearer token. Existing
-`OPENCODE_CONFIG_CONTENT` JSON is preserved and merged with the generated `mcp.minigent`
+adds a remote MCP server named `mindweft` using the broker URL and bearer token. Existing
+`OPENCODE_CONFIG_CONTENT` JSON is preserved and merged with the generated `mcp.mindweft`
 entry.
 
 After starting both services with the peer-agent backend enabled, run a complete backend
@@ -633,7 +634,7 @@ uv run python scripts/demo_pi_backend.py \
   --message "Summarize this repository in one paragraph. Do not edit files."
 ```
 
-To start the Pi wrapper, start Minigent in peer-agent backend mode, and run that demo as
+To start the Pi wrapper, start Mindweft in peer-agent backend mode, and run that demo as
 one local stack:
 
 ```bash
@@ -646,33 +647,33 @@ Pass a custom prompt as the first argument:
 ./scripts/demo_pi_backend_stack.sh "Summarize the local-agent-wrapper package. Do not edit files."
 ```
 
-For an interactive development stack that keeps the Pi wrapper and Minigent running
+For an interactive development stack that keeps the Pi wrapper and Mindweft running
 without launching a demo prompt, use:
 
 ```bash
 ./scripts/dev_pi_peer_stack.sh
 ```
 
-By default, the wrapper allows tasks only in the Minigent checkout and Minigent sends peer
+By default, the wrapper allows tasks only in the Mindweft checkout and Mindweft sends peer
 backend tasks with that same working directory. Override the target working directory with
-`MINIGENT_PI_WORKSPACE`:
+`MINDWEFT_PI_WORKSPACE`:
 
 ```bash
-MINIGENT_PI_WORKSPACE=/Users/burm/code/some-project ./scripts/dev_pi_peer_stack.sh
+MINDWEFT_PI_WORKSPACE=/Users/burm/code/some-project ./scripts/dev_pi_peer_stack.sh
 ```
 
 If the wrapper should allow multiple roots, set `AGENT_ALLOWED_WORKSPACES` with the
 platform path separator, for example `:` on macOS/Linux, while keeping
-`MINIGENT_PI_WORKSPACE` as the task working directory:
+`MINDWEFT_PI_WORKSPACE` as the task working directory:
 
 ```bash
-MINIGENT_PI_WORKSPACE=/Users/burm/code/some-project \
+MINDWEFT_PI_WORKSPACE=/Users/burm/code/some-project \
 AGENT_ALLOWED_WORKSPACES="/Users/burm/code/minigent:/Users/burm/code/some-project" \
   ./scripts/dev_pi_peer_stack.sh
 ```
 
-Other useful overrides are `MINIGENT_HOST`, `MINIGENT_PORT`,
-`MINIGENT_PI_WRAPPER_PORT`, `MINIGENT_PI_PEER_NAME`, `AGENT_COMMAND`,
+Other useful overrides are `MINDWEFT_HOST`, `MINDWEFT_PORT`,
+`MINDWEFT_PI_WRAPPER_PORT`, `MINDWEFT_PI_PEER_NAME`, `AGENT_COMMAND`,
 `AGENT_RUNTIME`, and `AGENT_PI_TOOLS`. The development stack defaults
 `AGENT_PI_TOOLS` to `read,grep,find,ls,write,edit,bash`.
 
@@ -683,9 +684,9 @@ uv run python scripts/demo_opencode_mcp_broker.py
 uv run python scripts/demo_pi_mcp_broker.py
 ```
 
-In the Minigent API logs, look for `mcp_broker.tool_call` to confirm the peer called a
+In the Mindweft API logs, look for `mcp_broker.tool_call` to confirm the peer called a
 tool through the broker rather than only echoing the prompt text. The Pi stack script
-enables the MCP broker by default; set `MINIGENT_MCP_BROKER_ENABLED=false` to disable it.
+enables the MCP broker by default; set `MINDWEFT_MCP_BROKER_ENABLED=false` to disable it.
 
 A Docker Compose variant is available for the Pi backend plus MCP broker path. It builds
 the wrapper with `INSTALL_PI=true`, mounts this repository read-only, and keeps Pi state in
@@ -715,28 +716,28 @@ The wrapper has opt-in real CLI integration tests:
 
 ```bash
 cd local-agent-wrapper
-MINIGENT_RUN_OPENCODE_INTEGRATION_TESTS=true uv run pytest tests/test_opencode_integration.py
-MINIGENT_RUN_PI_INTEGRATION_TESTS=true uv run pytest tests/test_pi_integration.py
+MINDWEFT_RUN_OPENCODE_INTEGRATION_TESTS=true uv run pytest tests/test_opencode_integration.py
+MINDWEFT_RUN_PI_INTEGRATION_TESTS=true uv run pytest tests/test_pi_integration.py
 ```
 
 ## Docker Compose Deployment
 
 This repo now includes a production-oriented [`Dockerfile`](/Users/burm/code/minigent/Dockerfile)
-and [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) for running Minigent on a remote
+and [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) for running Mindweft on a remote
 host that already manages apps with Docker Compose.
 
 The runtime can persist thread state and message history in SQLite when
-`MINIGENT_THREAD_DB_PATH` points at a writable database path. SQLite-backed runs acquire an atomic
+`MINDWEFT_THREAD_DB_PATH` points at a writable database path. SQLite-backed runs acquire an atomic
 per-thread lease, heartbeat that lease while executing, and accept cancellation requests from any
 replica. Expired leases are recovered as errored runs at startup and by a five-second background
 sweep in every replica; run IDs fence late completion and message writes from stale owners. For a
-peer-agent run, Minigent generates a remote task ID and attaches it with the trusted peer base URL
+peer-agent run, Mindweft generates a remote task ID and attaches it with the trusted peer base URL
 to the lease before sending the create request. Compatible wrappers advertise
 `task.idempotent_create`, atomically create at most one process for that ID, return the existing task
 for an identical retry, reject conflicting reuse, and retain a canceled tombstone when cancellation
 arrives before creation. Stale recovery can therefore cancel the known ID even if the owner fails
 during task creation; a late create after cancellation returns `canceled` without starting a
-process. Minigent rejects a create response whose task ID differs from its reserved ID. Stale
+process. Mindweft rejects a create response whose task ID differs from its reserved ID. Stale
 recovery moves attached metadata into a durable cancellation outbox. User-requested cancellation,
 backend timeout, ambiguous creation outcome, and nonterminal peer failures first attempt immediate
 remote cancellation; if that request fails, the owner copies the attached metadata into the same
@@ -744,10 +745,10 @@ outbox before releasing its run lease. Replicas claim outbox entries with a leas
 remote cancellation requests, and retry failures with exponential backoff. A claimant crash can
 cause a repeated cancellation after its claim expires, so peer cancellation endpoints must remain
 idempotent; only one replica can hold an active claim at a time. Upgrade peer wrappers before this
-Minigent version; older wrappers that ignore or replace client task IDs are rejected. Without SQLite
+Mindweft version; older wrappers that ignore or replace client task IDs are rejected. Without SQLite
 thread storage, threads and run coordination remain in memory and are lost on restart. The optional
 admin control plane can also persist tenant execution config in SQLite when
-`MINIGENT_ADMIN_DB_PATH` points at a mounted volume.
+`MINDWEFT_ADMIN_DB_PATH` points at a mounted volume.
 
 The thread, attachment, rate-limit, OAuth, private-value, DAV, run-lease, and optional MCP broker stores support shared
 replica state when their SQLite paths are configured. Keep every replica on the same shared volume
@@ -768,21 +769,21 @@ token usage reported by streaming run events.
 Start from [.env.template](/Users/burm/code/minigent/.env.template), then set at least:
 
 ```dotenv
-MINIGENT_AUTH_MODE=jwt
-MINIGENT_LLM_PROVIDER=openai
+MINDWEFT_AUTH_MODE=jwt
+MINDWEFT_LLM_PROVIDER=openai
 OPENAI_API_KEY=...
-MINIGENT_LOG_FORMAT=json
-MINIGENT_THREAD_DB_PATH=/data/minigent-threads.db
-MINIGENT_ATTACHMENT_DB_PATH=/data/minigent-attachments.db
-MINIGENT_RATE_LIMIT_DB_PATH=/data/minigent-rate-limits.db
+MINDWEFT_LOG_FORMAT=json
+MINDWEFT_THREAD_DB_PATH=/data/mindweft-threads.db
+MINDWEFT_ATTACHMENT_DB_PATH=/data/mindweft-attachments.db
+MINDWEFT_RATE_LIMIT_DB_PATH=/data/mindweft-rate-limits.db
 ```
 
 Rate limits use shared atomic token buckets for attachment uploads and thread runs. Tenant and user
-buckets are configured independently with the `MINIGENT_UPLOAD_RATE_LIMIT_*` and
-`MINIGENT_RUN_RATE_LIMIT_*` capacity/refill settings. Capacity `0` disables a bucket. A rejected
+buckets are configured independently with the `MINDWEFT_UPLOAD_RATE_LIMIT_*` and
+`MINDWEFT_RUN_RATE_LIMIT_*` capacity/refill settings. Capacity `0` disables a bucket. A rejected
 request returns HTTP 429 with `Retry-After`; standard and streaming runs share the same run category,
 and binary and base64 attachment endpoints share the same upload category. Concurrent-run limits
-use `MINIGENT_RUN_CONCURRENCY_*` tenant/user capacities plus renewable expiry leases in the same
+use `MINDWEFT_RUN_CONCURRENCY_*` tenant/user capacities plus renewable expiry leases in the same
 SQLite store, and also cover private-consent resumes. Configure the shared rate-limit database
 whenever more than one replica is active.
 
@@ -794,11 +795,13 @@ docker compose up -d
 ```
 
 [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) now reads the image name from
-`MINIGENT_IMAGE` and falls back to a local `minigent:latest` tag. Set it in your
+`MINDWEFT_IMAGE` (then legacy `MINIGENT_IMAGE`) and falls back to a local `mindweft:latest` tag.
+The service and data-volume keys remain `minigent` so in-place upgrades retain Compose DNS,
+operator commands, and existing volume data. Set the image in your
 deployment environment before using a published image:
 
 ```dotenv
-MINIGENT_IMAGE=ghcr.io/<your-github-user-or-org>/minigent:latest
+MINDWEFT_IMAGE=ghcr.io/<your-github-user-or-org>/mindweft:latest
 ```
 
 If you want the host to run a published private image instead of building locally, log in
@@ -820,8 +823,10 @@ If you keep multiple deployment env files, point Compose at the one you want bot
 variable interpolation and for the container environment itself:
 
 ```bash
-MINIGENT_ENV_FILE=.env.docker docker compose --env-file .env.docker up -d
+MINDWEFT_ENV_FILE=.env.docker docker compose --env-file .env.docker up -d
 ```
+
+`MINDWEFT_ENV_FILE` takes precedence over the legacy `MINIGENT_ENV_FILE` interpolation variable.
 
 For the Dockerized setup used in this repo, prefer the wrapper script instead of typing
 that command each time:
@@ -838,7 +843,7 @@ Pass any extra `docker compose up` flags through to the script:
 
 ## Private GHCR Image Publish
 
-You can publish Minigent to a private GHCR package even if this source repo is not hosted
+You can publish Mindweft to a private GHCR package even if this source repo is not hosted
 on GitHub. GHCR only needs a GitHub user or organization namespace plus a token that can
 write packages.
 
@@ -871,7 +876,7 @@ PLATFORMS=linux/amd64,linux/arm64 \
 The script sources `.env` with `set -a` before applying defaults, then reads these environment variables:
 
 - `IMAGE_NAMESPACE` (required): GitHub user or organization that owns the package
-- `IMAGE_NAME` (default `minigent`): package/image name
+- `IMAGE_NAME` (default `mindweft`): package/image name
 - `IMAGE_TAG` (default `latest`): image tag to push
 - `PLATFORMS` (default `linux/amd64`): comma-separated buildx target platforms
 - `REGISTRY` (default `ghcr.io`): registry hostname
@@ -885,15 +890,15 @@ IMAGE_TAG=latest \
 ```
 
 It builds `local-agent-wrapper/Dockerfile` with Pi enabled and pushes
-`ghcr.io/<namespace>/minigent-local-agent-wrapper:<tag>` by default. It supports the same
+`ghcr.io/<namespace>/mindweft-local-agent-wrapper:<tag>` by default. It supports the same
 `REGISTRY`, `IMAGE_NAMESPACE`, `IMAGE_NAME`, `IMAGE_TAG`, and `PLATFORMS` variables, plus
 `INSTALL_PI` (default `true`) and `INSTALL_CODEX` (default `false`) build-arg overrides.
 
-For remote deployments, set `MINIGENT_IMAGE` in the deployment env file to the published
+For remote deployments, set `MINDWEFT_IMAGE` in the deployment env file to the published
 tag you want to run, then use `docker compose pull` followed by `docker compose up -d`.
 
 [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) uses whatever auth mode you set
-in `.env`; it does not override `MINIGENT_AUTH_MODE`. For local client testing,
+in `.env`; it does not override `MINDWEFT_AUTH_MODE`. For local client testing,
 `static-tokens` is the easiest path. For remote exposure, prefer `jwt` and include the
 required JWT verification settings in `.env`.
 
@@ -924,26 +929,26 @@ sidecars should retain their own readiness probes so Kubernetes removes the whol
 endpoints when any required container is unready.
 
 [`compose.yaml`](/Users/burm/code/minigent/compose.yaml) mounts a named volume at
-`/data`, so `MINIGENT_THREAD_DB_PATH=/data/minigent-threads.db` survives container
+`/data`, so `MINDWEFT_THREAD_DB_PATH=/data/mindweft-threads.db` survives container
 restarts.
 
 If you want the optional admin SQLite control plane too, add these settings to `.env`:
 
 ```dotenv
-MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults
-MINIGENT_ADMIN_DB_PATH=/data/minigent-admin.db
-MINIGENT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
+MINDWEFT_TENANT_CONFIG_SOURCE=store-with-defaults
+MINDWEFT_ADMIN_DB_PATH=/data/mindweft-admin.db
+MINDWEFT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
 ```
 
-When `MINIGENT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`,
-`MINIGENT_ADMIN_ENCRYPTION_KEY` is mandatory.
+When `MINDWEFT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`,
+`MINDWEFT_ADMIN_ENCRYPTION_KEY` is mandatory.
 
 For the client as a normal CLI app, install the package with the `voice` extra so the
-`minigent-client` command is available on your `PATH`:
+`mindweft-client` command is available on your `PATH`:
 
 ```bash
 uv tool install '.[voice]'
-minigent-client stdin --wake-phrase "hey minigent"
+mindweft-client stdin --wake-phrase "hey mindweft"
 ```
 
 That installs an isolated tool environment and links the console scripts into uv's tool
@@ -955,16 +960,18 @@ over SSH:
 
 ```bash
 ssh <user>@<host>
-cd /path/to/minigent
+cd /path/to/mindweft
 ./scripts/install-client-linux.sh --systemd-user
 ```
 
 The script installs Linux audio/build prerequisites, installs the package with the
 `voice` extra, writes `.env.voice` if it does not already exist, checks ALSA devices,
-and can install a `systemd --user` service. Edit `.env.voice` with the Minigent API URL,
+and can install a `systemd --user` service. The canonical service is `mindweft-client`; the
+installer disables and removes legacy `minigent-client`, `minigent-daemon`, and
+`minigent-voice-daemon` unit files before enabling it. Edit `.env.voice` with the Mindweft API URL,
 voice API token, and STT/TTS provider keys before starting passive audio in production.
 The generated env file enables a bell-style wake acknowledgement with
-`MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT=bell`; add that setting manually if you already
+`MINDWEFT_VOICE_WAKE_ACKNOWLEDGEMENT=bell`; add that setting manually if you already
 had an env file before running the installer.
 
 If the script adds your user to the `audio` group, log out and back in before starting
@@ -985,8 +992,8 @@ After editing `.env.voice`, run smoke tests in this order:
 If you installed the user service, manage it with:
 
 ```bash
-systemctl --user start minigent-client
-journalctl --user -u minigent-client -f
+systemctl --user start mindweft-client
+journalctl --user -u mindweft-client -f
 ```
 
 Use `--enable-linger` with the installer when the user service should continue running
@@ -996,9 +1003,9 @@ after the SSH user logs out:
 ./scripts/install-client-linux.sh --systemd-user --enable-linger
 ```
 
-If the remote host is only running the Minigent API and does not have the microphone,
+If the remote host is only running the Mindweft API and does not have the microphone,
 run the client on the local machine with audio hardware and point
-`MINIGENT_BASE_URL` at the remote API instead.
+`MINDWEFT_BASE_URL` at the remote API instead.
 
 If you want the installed tool to track your local checkout while you edit this repo, use
 an editable tool install instead:
@@ -1027,12 +1034,12 @@ options, voice modes, and configuration, see [CLI reference](cli.md).
 You can also enable local TTS on macOS with:
 
 ```bash
-MINIGENT_VOICE_TTS_PROVIDER=say
-MINIGENT_VOICE_TTS_VOICE=Samantha
-minigent-client manual-audio --once
+MINDWEFT_VOICE_TTS_PROVIDER=say
+MINDWEFT_VOICE_TTS_VOICE=Samantha
+mindweft-client manual-audio --once
 ```
 
-With `MINIGENT_VOICE_TTS_PROVIDER=say`, passive mode also supports wake-word barge-in:
+With `MINDWEFT_VOICE_TTS_PROVIDER=say`, passive mode also supports wake-word barge-in:
 saying the wake word again while the assistant is speaking will stop `say` and switch
 back to listening.
 
@@ -1047,45 +1054,45 @@ For higher-quality local TTS on macOS or Linux, install the voice extra and conf
 Piper with a model path or model name:
 
 ```bash
-MINIGENT_VOICE_TTS_PROVIDER=piper
-MINIGENT_VOICE_TTS_MODEL=en_US-lessac-medium
-minigent-client manual-audio --once
+MINDWEFT_VOICE_TTS_PROVIDER=piper
+MINDWEFT_VOICE_TTS_MODEL=en_US-lessac-medium
+mindweft-client manual-audio --once
 ```
 
-For multi-speaker Piper models, also set `MINIGENT_VOICE_TTS_SPEAKER`:
+For multi-speaker Piper models, also set `MINDWEFT_VOICE_TTS_SPEAKER`:
 
 ```bash
-MINIGENT_VOICE_TTS_PROVIDER=piper
-MINIGENT_VOICE_TTS_MODEL=/absolute/path/to/voice.onnx
-MINIGENT_VOICE_TTS_SPEAKER=0
-minigent-client manual-audio --once
+MINDWEFT_VOICE_TTS_PROVIDER=piper
+MINDWEFT_VOICE_TTS_MODEL=/absolute/path/to/voice.onnx
+MINDWEFT_VOICE_TTS_SPEAKER=0
+mindweft-client manual-audio --once
 ```
 
 `piper-tts` ships as part of the `voice` extra. When
-`MINIGENT_VOICE_TTS_MODEL` is a bare voice name like `en_US-lessac-medium`, the client
+`MINDWEFT_VOICE_TTS_MODEL` is a bare voice name like `en_US-lessac-medium`, the client
 downloads the `.onnx` and `.onnx.json` files on first use into
 `~/.cache/minigent/piper` by default. Override that cache directory with
-`MINIGENT_VOICE_TTS_MODEL_DIR` or `--tts-model-dir`. On macOS, Piper synthesis now plays
+`MINDWEFT_VOICE_TTS_MODEL_DIR` or `--tts-model-dir`. On macOS, Piper synthesis now plays
 back through the native `afplay` command so wake-word barge-in does not fight the live
 microphone PortAudio stream. On other platforms, Piper playback continues to use
 `sounddevice`.
 
-If the Minigent API or upstream LLM returns a transient error during a voice turn, the
+If the Mindweft API or upstream LLM returns a transient error during a voice turn, the
 client logs the failure, optionally speaks a short local error message, and returns to
 idle instead of exiting the process.
 
-Piper uses `MINIGENT_VOICE_TTS_SENTENCE_SILENCE=0.35` by default so Markdown lists and
+Piper uses `MINDWEFT_VOICE_TTS_SENTENCE_SILENCE=0.35` by default so Markdown lists and
 headers get an audible pause after they are converted into sentence boundaries. Increase
 it if bullets still sound too continuous, or set it to `0` to disable the extra pause.
-If the voice itself sounds too fast, set `MINIGENT_VOICE_TTS_LENGTH_SCALE` above `1.0`;
+If the voice itself sounds too fast, set `MINDWEFT_VOICE_TTS_LENGTH_SCALE` above `1.0`;
 for example:
 
 ```bash
-MINIGENT_VOICE_TTS_PROVIDER=piper
-MINIGENT_VOICE_TTS_MODEL=en_US-lessac-medium
-MINIGENT_VOICE_TTS_SENTENCE_SILENCE=0.55
-MINIGENT_VOICE_TTS_LENGTH_SCALE=1.15
-minigent-client manual-audio --once
+MINDWEFT_VOICE_TTS_PROVIDER=piper
+MINDWEFT_VOICE_TTS_MODEL=en_US-lessac-medium
+MINDWEFT_VOICE_TTS_SENTENCE_SILENCE=0.55
+MINDWEFT_VOICE_TTS_LENGTH_SCALE=1.15
+mindweft-client manual-audio --once
 ```
 
 The client currently supports four backends:
@@ -1095,21 +1102,21 @@ The client currently supports four backends:
 - `stdin`: text-driven wake phrase loop for cheap end-to-end testing
 - `manual-audio`: press Enter to activate the microphone, record until silence using
   Silero VAD, transcribe the utterance with OpenAI or OpenRouter speech-to-text, then send the text
-  into Minigent and print the assistant reply
+  into Mindweft and print the assistant reply
 - `passive-audio`: continuously listen for a wake word, keep a short pre-roll audio
   buffer, then record until silence and transcribe through the same speech pipeline
 
-`MINIGENT_VOICE_WAKE_PHRASE` is the text trigger for the `stdin` backend. `chat` does
+`MINDWEFT_VOICE_WAKE_PHRASE` is the text trigger for the `stdin` backend. `chat` does
 not use wake-word processing at all. In `passive-audio`, the actual wake trigger comes
-from the configured wake-word provider: `MINIGENT_VOICE_KEYWORD_PATH` for Porcupine or
-`MINIGENT_VOICE_OWW_MODEL` for openWakeWord.
+from the configured wake-word provider: `MINDWEFT_VOICE_KEYWORD_PATH` for Porcupine or
+`MINDWEFT_VOICE_OWW_MODEL` for openWakeWord.
 
 Examples:
 
 ```bash
-minigent-client chat
+mindweft-client chat
 
-minigent-client stdin --wake-phrase "hey minigent"
+mindweft-client stdin --wake-phrase "hey mindweft"
 # ignored
 hello there
 # activates and uses the rest of the line as the utterance
@@ -1120,32 +1127,32 @@ show me the transcript
 ```
 
 If the client should consistently send client-owned prompt context with each utterance,
-set `MINIGENT_VOICE_PROMPT_PREAMBLE`. The client prepends it to the prompt text it sends
-to Minigent; the server treats that as ordinary user content and does not validate or
+set `MINDWEFT_VOICE_PROMPT_PREAMBLE`. The client prepends it to the prompt text it sends
+to Mindweft; the server treats that as ordinary user content and does not validate or
 infer anything on its own.
 
 Example:
 
 ```bash
-MINIGENT_VOICE_PROMPT_PREAMBLE='timezone=America/Chicago
+MINDWEFT_VOICE_PROMPT_PREAMBLE='timezone=America/Chicago
 note=prefer local context' \
-minigent-client manual-audio --once
+mindweft-client manual-audio --once
 ```
 
-For coarse location specifically, `MINIGENT_VOICE_LOCATION` remains available as a
-compatibility convenience. When `MINIGENT_VOICE_PROMPT_PREAMBLE` is unset, the client
-converts `MINIGENT_VOICE_LOCATION` into client context automatically. If both are set,
-`MINIGENT_VOICE_PROMPT_PREAMBLE` wins.
+For coarse location specifically, `MINDWEFT_VOICE_LOCATION` remains available as a
+compatibility convenience. When `MINDWEFT_VOICE_PROMPT_PREAMBLE` is unset, the client
+converts `MINDWEFT_VOICE_LOCATION` into client context automatically. If both are set,
+`MINDWEFT_VOICE_PROMPT_PREAMBLE` wins.
 
-For prompt-level diagnostics, set `MINIGENT_VOICE_DEBUG_SHOW_PROMPT=true`. The client
+For prompt-level diagnostics, set `MINDWEFT_VOICE_DEBUG_SHOW_PROMPT=true`. The client
 will print the exact outbound user message after any location prefix is added and before
-it sends the request to Minigent.
+it sends the request to Mindweft.
 
 Manual audio example:
 
 ```bash
 OPENAI_API_KEY=...
-minigent-client manual-audio --once
+mindweft-client manual-audio --once
 ```
 
 If you want voice input without spoken assistant playback, disable TTS and keep the
@@ -1153,33 +1160,33 @@ assistant reply in the terminal:
 
 ```bash
 OPENAI_API_KEY=...
-MINIGENT_VOICE_TTS_PROVIDER=none
-minigent-client manual-audio --once
+MINDWEFT_VOICE_TTS_PROVIDER=none
+mindweft-client manual-audio --once
 ```
 
 Using OpenRouter for transcription:
 
 ```bash
 OPENROUTER_API_KEY=...
-MINIGENT_VOICE_STT_PROVIDER=openrouter
-MINIGENT_VOICE_STT_MODEL=openai/gpt-audio
-minigent-client manual-audio --once
+MINDWEFT_VOICE_STT_PROVIDER=openrouter
+MINDWEFT_VOICE_STT_MODEL=openai/gpt-audio
+mindweft-client manual-audio --once
 ```
 
 Using local faster-whisper transcription:
 
 ```bash
-MINIGENT_VOICE_STT_PROVIDER=faster-whisper
-MINIGENT_VOICE_STT_MODEL=base
-MINIGENT_VOICE_STT_DEVICE=cpu
-MINIGENT_VOICE_STT_COMPUTE_TYPE=int8
-MINIGENT_VOICE_STT_LANGUAGE=en
-minigent-client manual-audio --once
+MINDWEFT_VOICE_STT_PROVIDER=faster-whisper
+MINDWEFT_VOICE_STT_MODEL=base
+MINDWEFT_VOICE_STT_DEVICE=cpu
+MINDWEFT_VOICE_STT_COMPUTE_TYPE=int8
+MINDWEFT_VOICE_STT_LANGUAGE=en
+mindweft-client manual-audio --once
 ```
 
 In `manual-audio` mode, press Enter to start recording. The client stops recording after
-trailing silence or `MINIGENT_VOICE_MAX_RECORD_SECONDS`, transcribes the utterance, and
-then sends the transcript through the normal Minigent thread/run flow.
+trailing silence or `MINDWEFT_VOICE_MAX_RECORD_SECONDS`, transcribes the utterance, and
+then sends the transcript through the normal Mindweft thread/run flow.
 
 The current speech-to-text providers are:
 
@@ -1192,16 +1199,16 @@ starting point. The OpenAI-native transcription model ID `gpt-4o-mini-transcribe
 for OpenAI's `/audio/transcriptions` API and is not a valid OpenRouter model ID.
 
 For `faster-whisper`, `base` is a sensible starting point for command-style speech on a
-laptop. `MINIGENT_VOICE_STT_DEVICE=cpu` and `MINIGENT_VOICE_STT_COMPUTE_TYPE=int8` are
+laptop. `MINDWEFT_VOICE_STT_DEVICE=cpu` and `MINDWEFT_VOICE_STT_COMPUTE_TYPE=int8` are
 good conservative defaults. For short English voice commands, set
-`MINIGENT_VOICE_STT_LANGUAGE=en` instead of relying on auto-detection.
+`MINDWEFT_VOICE_STT_LANGUAGE=en` instead of relying on auto-detection.
 
 Passive wake-word example:
 
 ```bash
 PICOVOICE_ACCESS_KEY=...
-MINIGENT_VOICE_KEYWORD_PATH=/absolute/path/to/hey-minigent.ppn
-minigent-client passive-audio
+MINDWEFT_VOICE_KEYWORD_PATH=/absolute/path/to/hey-minigent.ppn
+mindweft-client passive-audio
 ```
 
 If you keep the client settings in `.env.voice.docker`, use the wrapper script:
@@ -1213,7 +1220,7 @@ If you keep the client settings in `.env.voice.docker`, use the wrapper script:
 It exports `.env.voice.docker` into the process environment, then runs:
 
 ```bash
-minigent-client passive-audio
+mindweft-client passive-audio
 ```
 
 Press `Ctrl-C` to stop the client cleanly. It will print `[idle] shutting down` and
@@ -1222,9 +1229,9 @@ exit without dumping a traceback from the audio backend.
 Free `openwakeword` example:
 
 ```bash
-MINIGENT_VOICE_WAKEWORD_PROVIDER=openwakeword
-MINIGENT_VOICE_OWW_MODEL=okay_nabu
-minigent-client passive-audio
+MINDWEFT_VOICE_WAKEWORD_PROVIDER=openwakeword
+MINDWEFT_VOICE_OWW_MODEL=okay_nabu
+mindweft-client passive-audio
 ```
 
 `passive-audio` keeps the microphone open, feeds chunks into the configured wake-word detector, and after the
@@ -1237,28 +1244,28 @@ Those controls help make passive captures look more like the known-good manual c
 path when audio-capable chat models are sensitive to tightly cropped speech.
 
 You can also configure an optional wake acknowledgement before recording starts. Set
-`MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT=bell` for a short alert sound on macOS or Linux,
+`MINDWEFT_VOICE_WAKE_ACKNOWLEDGEMENT=bell` for a short alert sound on macOS or Linux,
 with a terminal bell fallback if no local player/default sound is available, or set it
 to plain text such as `ready` to speak a short cue through the configured TTS provider.
-To force a specific sound file, set `MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND` to a
+To force a specific sound file, set `MINDWEFT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND` to a
 local audio file path.
 
 You can also configure an optional cue after microphone capture ends and before STT
 processing starts:
 
 ```bash
-MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT=bell
+MINDWEFT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT=bell
 ```
 
-Use `MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT_SOUND` to force a different sound
+Use `MINDWEFT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT_SOUND` to force a different sound
 file for that end-of-capture cue.
 
-If no speech arrives within `MINIGENT_VOICE_POST_WAKE_SPEECH_TIMEOUT_MS` after the wake
+If no speech arrives within `MINDWEFT_VOICE_POST_WAKE_SPEECH_TIMEOUT_MS` after the wake
 word, passive mode ignores that activation and returns to idle without sending audio to
 STT.
 
 To make short back-and-forth follow-ups feel more natural, set
-`MINIGENT_VOICE_FOLLOW_UP_TIMEOUT_MS` to keep listening briefly after the assistant
+`MINDWEFT_VOICE_FOLLOW_UP_TIMEOUT_MS` to keep listening briefly after the assistant
 finishes speaking. During that window, `passive-audio` accepts one follow-up utterance
 without requiring the wake word, then returns to normal wake-word mode after silence.
 
@@ -1266,9 +1273,9 @@ On macOS, you can also lower ambient system output only while the client is acti
 capturing an utterance or listening during that follow-up window:
 
 ```bash
-MINIGENT_VOICE_DUCKING_MODE=input-only
-MINIGENT_VOICE_DUCKED_OUTPUT_VOLUME=20
-minigent-client passive-audio
+MINDWEFT_VOICE_DUCKING_MODE=input-only
+MINDWEFT_VOICE_DUCKED_OUTPUT_VOLUME=20
+mindweft-client passive-audio
 ```
 
 This is system-wide ducking, not per-app mixing. The client does not duck during idle
@@ -1276,13 +1283,13 @@ wake-word monitoring, thinking, or assistant speech. That keeps built-in TTS at 
 normal output level, but it also means this feature does not literally duck every other
 app while leaving the client isolated on the same output device.
 
-If you need to inspect captured audio, set `MINIGENT_VOICE_DEBUG_CAPTURE_PATH` or pass
+If you need to inspect captured audio, set `MINDWEFT_VOICE_DEBUG_CAPTURE_PATH` or pass
 `--debug-capture-path`. The client will print capture metadata and write the last WAV
 capture there before transcription. That is useful for comparing `manual-audio` and
 `passive-audio` artifacts.
 
 If you need to inspect the OpenRouter STT request/response payloads, set
-`MINIGENT_VOICE_STT_DEBUG_PATH` or pass `--stt-debug-path`. The client and replay tool
+`MINDWEFT_VOICE_STT_DEBUG_PATH` or pass `--stt-debug-path`. The client and replay tool
 will write debug artifacts such as `request.json` and `response.json` there.
 
 When STT returns a bad assistant-style answer instead of a transcript, the client now
@@ -1311,57 +1318,59 @@ The current wake-word providers are:
 - `porcupine`: stronger out-of-the-box wake-word path, requires `PICOVOICE_ACCESS_KEY`
 - `openwakeword`: free local alternative using built-in `pyopen-wakeword` models such as `okay_nabu`
 
-Daemon-related env vars:
+Daemon-related env vars use the canonical `MINDWEFT_` prefix below. The corresponding
+legacy `MINIGENT_` names remain supported, but canonical values take precedence when both
+are set:
 
-- `MINIGENT_BASE_URL`
-- `MINIGENT_VOICE_WAKE_PHRASE`
-- `MINIGENT_VOICE_PROMPT_PREAMBLE`
-- `MINIGENT_VOICE_LOCATION`
-- `MINIGENT_VOICE_DEBUG_SHOW_PROMPT`
-- `MINIGENT_CLIENT_STREAM_RUNS`
-- `MINIGENT_CLIENT_SHOW_TOOL_RESULTS`
-- `MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT`
-- `MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND`
-- `MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT`
-- `MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT_SOUND`
-- `MINIGENT_VOICE_STT_PROVIDER`
-- `MINIGENT_VOICE_STT_DEVICE`
-- `MINIGENT_VOICE_STT_COMPUTE_TYPE`
-- `MINIGENT_VOICE_STT_LANGUAGE`
-- `MINIGENT_VOICE_TTS_PROVIDER`
-- `MINIGENT_VOICE_TTS_VOICE`
-- `MINIGENT_VOICE_TTS_MODEL`
-- `MINIGENT_VOICE_TTS_MODEL_DIR`
-- `MINIGENT_VOICE_TTS_SPEAKER`
-- `MINIGENT_VOICE_TTS_LENGTH_SCALE`
-- `MINIGENT_VOICE_TTS_SENTENCE_SILENCE`
-- `MINIGENT_VOICE_WAKEWORD_PROVIDER`
-- `MINIGENT_VOICE_SKILL`
-- `MINIGENT_CLIENT_AGENT_PRESETS`
-- `MINIGENT_VOICE_THREAD_ID`
-- `MINIGENT_VOICE_AUDIO_DEVICE`
-- `MINIGENT_VOICE_DEBUG_CAPTURE_PATH`
-- `MINIGENT_VOICE_STT_DEBUG_PATH`
-- `MINIGENT_VOICE_DUCKING_MODE`
-- `MINIGENT_VOICE_DUCKED_OUTPUT_VOLUME`
-- `MINIGENT_VOICE_AUDIO_SAMPLE_RATE`
-- `MINIGENT_VOICE_AUDIO_BLOCK_SIZE`
-- `MINIGENT_VOICE_END_SILENCE_MS`
-- `MINIGENT_VOICE_MAX_RECORD_SECONDS`
-- `MINIGENT_VOICE_FOLLOW_UP_TIMEOUT_MS`
-- `MINIGENT_VOICE_POST_WAKE_SETTLE_MS`
-- `MINIGENT_VOICE_WAKEWORD_PREROLL_MS`
-- `MINIGENT_VOICE_STT_PAD_LEADING_MS`
-- `MINIGENT_VOICE_STT_PAD_TRAILING_MS`
-- `MINIGENT_VOICE_VAD_THRESHOLD`
-- `MINIGENT_VOICE_STT_MODEL`
-- `MINIGENT_VOICE_KEYWORD_PATH`
-- `MINIGENT_VOICE_OWW_MODEL`
-- `MINIGENT_VOICE_OWW_THRESHOLD`
-- `MINIGENT_VOICE_API_TOKEN`
-- `MINIGENT_VOICE_USER_ID`
-- `MINIGENT_VOICE_TENANT_ID`
-- `MINIGENT_VOICE_ADMIN`
+- `MINDWEFT_BASE_URL`
+- `MINDWEFT_VOICE_WAKE_PHRASE`
+- `MINDWEFT_VOICE_PROMPT_PREAMBLE`
+- `MINDWEFT_VOICE_LOCATION`
+- `MINDWEFT_VOICE_DEBUG_SHOW_PROMPT`
+- `MINDWEFT_CLIENT_STREAM_RUNS`
+- `MINDWEFT_CLIENT_SHOW_TOOL_RESULTS`
+- `MINDWEFT_VOICE_WAKE_ACKNOWLEDGEMENT`
+- `MINDWEFT_VOICE_WAKE_ACKNOWLEDGEMENT_SOUND`
+- `MINDWEFT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT`
+- `MINDWEFT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT_SOUND`
+- `MINDWEFT_VOICE_STT_PROVIDER`
+- `MINDWEFT_VOICE_STT_DEVICE`
+- `MINDWEFT_VOICE_STT_COMPUTE_TYPE`
+- `MINDWEFT_VOICE_STT_LANGUAGE`
+- `MINDWEFT_VOICE_TTS_PROVIDER`
+- `MINDWEFT_VOICE_TTS_VOICE`
+- `MINDWEFT_VOICE_TTS_MODEL`
+- `MINDWEFT_VOICE_TTS_MODEL_DIR`
+- `MINDWEFT_VOICE_TTS_SPEAKER`
+- `MINDWEFT_VOICE_TTS_LENGTH_SCALE`
+- `MINDWEFT_VOICE_TTS_SENTENCE_SILENCE`
+- `MINDWEFT_VOICE_WAKEWORD_PROVIDER`
+- `MINDWEFT_VOICE_SKILL`
+- `MINDWEFT_CLIENT_AGENT_PRESETS`
+- `MINDWEFT_VOICE_THREAD_ID`
+- `MINDWEFT_VOICE_AUDIO_DEVICE`
+- `MINDWEFT_VOICE_DEBUG_CAPTURE_PATH`
+- `MINDWEFT_VOICE_STT_DEBUG_PATH`
+- `MINDWEFT_VOICE_DUCKING_MODE`
+- `MINDWEFT_VOICE_DUCKED_OUTPUT_VOLUME`
+- `MINDWEFT_VOICE_AUDIO_SAMPLE_RATE`
+- `MINDWEFT_VOICE_AUDIO_BLOCK_SIZE`
+- `MINDWEFT_VOICE_END_SILENCE_MS`
+- `MINDWEFT_VOICE_MAX_RECORD_SECONDS`
+- `MINDWEFT_VOICE_FOLLOW_UP_TIMEOUT_MS`
+- `MINDWEFT_VOICE_POST_WAKE_SETTLE_MS`
+- `MINDWEFT_VOICE_WAKEWORD_PREROLL_MS`
+- `MINDWEFT_VOICE_STT_PAD_LEADING_MS`
+- `MINDWEFT_VOICE_STT_PAD_TRAILING_MS`
+- `MINDWEFT_VOICE_VAD_THRESHOLD`
+- `MINDWEFT_VOICE_STT_MODEL`
+- `MINDWEFT_VOICE_KEYWORD_PATH`
+- `MINDWEFT_VOICE_OWW_MODEL`
+- `MINDWEFT_VOICE_OWW_THRESHOLD`
+- `MINDWEFT_VOICE_API_TOKEN`
+- `MINDWEFT_VOICE_USER_ID`
+- `MINDWEFT_VOICE_TENANT_ID`
+- `MINDWEFT_VOICE_ADMIN`
 - `OPENAI_API_KEY`
 - `OPENAI_BASE_URL`
 - `OPENROUTER_API_KEY`
@@ -1374,17 +1383,18 @@ You can put provider settings in a local `.env` file. Start from [.env.template]
 
 ## Authentication
 
-Authentication is controlled by `MINIGENT_AUTH_MODE`:
+Authentication is controlled by `MINDWEFT_AUTH_MODE`:
 
-- `dev-headers`: trust `X-Minigent-*` headers for local development
-- `static-tokens`: resolve bearer tokens from `MINIGENT_AUTH_TOKENS`
+- `dev-headers`: trust canonical `X-Mindweft-*` headers for local development; legacy
+  `X-Mindweft-*` headers remain accepted, with Mindweft values taking precedence
+- `static-tokens`: resolve bearer tokens from `MINDWEFT_AUTH_TOKENS`
 - `jwt`: verify bearer JWTs and map claims into a `Principal`
 
 ### Generic Console Sessions
 
 The production console can authenticate with deployment-managed static credentials without tying
-Minigent to a specific identity provider. This browser session layer works alongside any
-`MINIGENT_AUTH_MODE`; bearer tokens and JWTs remain available for API clients.
+Mindweft to a specific identity provider. This browser session layer works alongside any
+`MINDWEFT_AUTH_MODE`; bearer tokens and JWTs remain available for API clients.
 
 Generate a scrypt password hash interactively (the password is not echoed or stored):
 
@@ -1396,29 +1406,32 @@ Configure one or more usernames with hashed passwords and principals, plus an in
 session-signing secret of at least 32 bytes:
 
 ```dotenv
-MINIGENT_SESSION_CREDENTIALS={"admin":{"password_hash":"scrypt$16384$8$1$...","principal":{"user_id":"admin","tenant_id":"platform","is_admin":true}}}
-MINIGENT_SESSION_SECRET=replace-with-at-least-32-random-bytes
-MINIGENT_SESSION_TTL_SECONDS=28800
-MINIGENT_SESSION_COOKIE_SECURE=true
-MINIGENT_SESSION_ALLOWED_ORIGINS=https://minigent.example.com
+MINDWEFT_SESSION_CREDENTIALS={"admin":{"password_hash":"scrypt$16384$8$1$...","principal":{"user_id":"admin","tenant_id":"platform","is_admin":true}}}
+MINDWEFT_SESSION_SECRET=replace-with-at-least-32-random-bytes
+MINDWEFT_SESSION_TTL_SECONDS=28800
+MINDWEFT_SESSION_COOKIE_SECURE=true
+MINDWEFT_SESSION_ALLOWED_ORIGINS=https://mindweft.example.com
 ```
 
-`MINIGENT_SESSION_ALLOWED_ORIGINS` is optional and accepts a comma-separated list or JSON array.
-The request's same origin is always allowed. Successful login sets an `HttpOnly`, `SameSite=Strict`
-cookie. Cookie-authenticated mutations require a matching `Origin` header to prevent cross-site
+`MINDWEFT_SESSION_ALLOWED_ORIGINS` is optional and accepts a comma-separated list or JSON array.
+The request's same origin is always allowed. Successful login sets the canonical
+`mindweft_session` `HttpOnly`, `SameSite=Strict` cookie. Existing `minigent_session` cookies and
+legacy `minigent-console` token issuers remain accepted during migration; canonical cookies take
+precedence when both are present, and logout clears both names. Cookie-authenticated mutations
+require a matching `Origin` header to prevent cross-site
 request forgery. Passwords are verified with scrypt; store only generated hashes in deployment
 secrets. Login attempts are limited per normalized username using the configured shared rate-limit
-store; tune `MINIGENT_SESSION_LOGIN_RATE_LIMIT_CAPACITY` and
-`MINIGENT_SESSION_LOGIN_RATE_LIMIT_REFILL_PER_SECOND` when needed. Login, status, and logout
+store; tune `MINDWEFT_SESSION_LOGIN_RATE_LIMIT_CAPACITY` and
+`MINDWEFT_SESSION_LOGIN_RATE_LIMIT_REFILL_PER_SECOND` when needed. Login, status, and logout
 use `POST`, `GET`, and `DELETE /auth/session`, respectively.
 
 For a first-run administration deployment, also configure durable encrypted administration state
 and allow console execution changes to override environment defaults:
 
 ```dotenv
-MINIGENT_ADMIN_DB_PATH=/data/minigent-admin.db
-MINIGENT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
-MINIGENT_TENANT_CONFIG_SOURCE=store-with-defaults
+MINDWEFT_ADMIN_DB_PATH=/data/mindweft-admin.db
+MINDWEFT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
+MINDWEFT_TENANT_CONFIG_SOURCE=store-with-defaults
 ```
 
 After an `is_admin=true` credential signs in, an empty administration store presents the tenant
@@ -1458,26 +1471,26 @@ The corresponding API routes are:
 Production-oriented mode uses JWT verification:
 
 ```dotenv
-MINIGENT_AUTH_MODE=jwt
-MINIGENT_JWT_ISSUER=https://issuer.example
-MINIGENT_JWT_AUDIENCE=minigent-api
-MINIGENT_JWT_ALGORITHMS=["RS256"]
-MINIGENT_JWT_JWKS_URL=https://issuer.example/.well-known/jwks.json
+MINDWEFT_AUTH_MODE=jwt
+MINDWEFT_JWT_ISSUER=https://issuer.example
+MINDWEFT_JWT_AUDIENCE=mindweft-api
+MINDWEFT_JWT_ALGORITHMS=["RS256"]
+MINDWEFT_JWT_JWKS_URL=https://issuer.example/.well-known/jwks.json
 ```
 
-If `MINIGENT_AUTH_MODE=jwt` is set without either `MINIGENT_JWT_SHARED_SECRET` for HMAC
-algorithms or `MINIGENT_JWT_JWKS_URL` for asymmetric algorithms, the server now fails at
+If `MINDWEFT_AUTH_MODE=jwt` is set without either `MINDWEFT_JWT_SHARED_SECRET` for HMAC
+algorithms or `MINDWEFT_JWT_JWKS_URL` for asymmetric algorithms, the server now fails at
 startup with a configuration error instead of returning `500 Internal Server Error` from
 authenticated endpoints.
 
 For local JWT testing you can use `HS256`:
 
 ```dotenv
-MINIGENT_AUTH_MODE=jwt
-MINIGENT_JWT_ISSUER=minigent-dev
-MINIGENT_JWT_AUDIENCE=minigent-api
-MINIGENT_JWT_ALGORITHMS=["HS256"]
-MINIGENT_JWT_SHARED_SECRET=replace-with-a-long-dev-secret
+MINDWEFT_AUTH_MODE=jwt
+MINDWEFT_JWT_ISSUER=mindweft-dev
+MINDWEFT_JWT_AUDIENCE=mindweft-api
+MINDWEFT_JWT_ALGORITHMS=["HS256"]
+MINDWEFT_JWT_SHARED_SECRET=replace-with-a-long-dev-secret
 ```
 
 JWT claim mapping defaults to:
@@ -1493,8 +1506,8 @@ is_admin -> is_admin
 Static bearer-token auth is still available for simple environments:
 
 ```dotenv
-MINIGENT_AUTH_MODE=static-tokens
-MINIGENT_AUTH_TOKENS={"dev-token":{"user_id":"demo-user","tenant_id":"demo-tenant","is_admin":false}}
+MINDWEFT_AUTH_MODE=static-tokens
+MINDWEFT_AUTH_TOKENS={"dev-token":{"user_id":"demo-user","tenant_id":"demo-tenant","is_admin":false}}
 ```
 
 Send that token with:
@@ -1508,19 +1521,19 @@ Authorization: Bearer dev-token
 For local development without token verification:
 
 ```bash
-MINIGENT_AUTH_MODE=dev-headers
-X-Minigent-User-Id: user-123
-X-Minigent-Tenant-Id: tenant-abc
-X-Minigent-Admin: false
+MINDWEFT_AUTH_MODE=dev-headers
+X-Mindweft-User-Id: user-123
+X-Mindweft-Tenant-Id: tenant-abc
+X-Mindweft-Admin: false
 ```
 
 Thread lifecycle endpoints require the auth material for the active mode. Threads are isolated by `tenant_id`, and cross-tenant access returns `404`.
 
-`GET /tenant-context` returns the resolved tenant context for the authenticated caller. When the tenant registry is not required, the response always includes the principal and `tenant_id`; if an admin store is enabled and the tenant exists, Minigent enriches the context with registry fields, entitlement `features`, entitlement `limits`, and `entitlements_version`. When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, the endpoint and thread lifecycle endpoints require an active registry tenant. When `MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true`, those paths also require an active tenant membership for the authenticated `user_id` and expose optional membership fields on the tenant context.
+`GET /tenant-context` returns the resolved tenant context for the authenticated caller. When the tenant registry is not required, the response always includes the principal and `tenant_id`; if an admin store is enabled and the tenant exists, Mindweft enriches the context with registry fields, entitlement `features`, entitlement `limits`, and `entitlements_version`. When `MINDWEFT_TENANT_REGISTRY_REQUIRED=true`, the endpoint and thread lifecycle endpoints require an active registry tenant. When `MINDWEFT_TENANT_USER_REGISTRY_REQUIRED=true`, those paths also require an active tenant membership for the authenticated `user_id` and expose optional membership fields on the tenant context.
 
 ## Runtime Settings
 
-`MINIGENT_MAX_ITERATIONS` controls the maximum number of LLM loop passes for one
+`MINDWEFT_MAX_ITERATIONS` controls the maximum number of LLM loop passes for one
 `POST /threads/{thread_id}/run` call. The default is `16`.
 
 This count includes tool-call passes and the final assistant-response pass, so a run that
@@ -1530,16 +1543,16 @@ runaway-loop guard.
 
 ## Tenant Execution Config
 
-The runtime config source is controlled by `MINIGENT_TENANT_CONFIG_SOURCE`:
+The runtime config source is controlled by `MINDWEFT_TENANT_CONFIG_SOURCE`:
 
 - `env`: use only env-based execution config
 - `store`: use only the admin SQLite store and fail closed when a tenant has no config
 - `store-with-defaults`: use the admin store first, then fall back to env/default resolver
 
-Execution resources can be scoped per tenant with `MINIGENT_TENANT_EXECUTION_CONFIGS`:
+Execution resources can be scoped per tenant with `MINDWEFT_TENANT_EXECUTION_CONFIGS`:
 
 ```dotenv
-MINIGENT_TENANT_EXECUTION_CONFIGS={
+MINDWEFT_TENANT_EXECUTION_CONFIGS={
   "tenant-1":{
     "llm":{"provider":"mock"},
     "tools":{"allowed_local_tools":["echo","current_time"]}
@@ -1572,20 +1585,20 @@ Supported fields:
 - `capability_profiles.default_profile`, `capability_profiles.items`: explicit tool/MCP narrowing profiles
 - `agents.default_agent`, `agents.items`: named server-side presets that combine skills and capability profiles for clients; the default agent supplies missing skill/profile selections when a thread is created
 
-String values in `MINIGENT_TENANT_EXECUTION_CONFIGS` can reference environment values with
+String values in `MINDWEFT_TENANT_EXECUTION_CONFIGS` can reference environment values with
 `${NAME}` placeholders. Placeholder replacement is recursive across nested objects and arrays,
 and non-string JSON values are left unchanged. Missing variables expand to an empty string.
-This also applies when the JSON is loaded through `MINIGENT_TENANT_EXECUTION_CONFIGS_FILE`.
+This also applies when the JSON is loaded through `MINDWEFT_TENANT_EXECUTION_CONFIGS_FILE`.
 
 For a developer-oriented example that combines multiple skills with explicit capability profiles,
 see the commented block in [.env.template](/Users/burm/code/minigent/.env.template).
 
 #### Agent Skill instruction sources
 
-Minigent skills can either define native `system_prompt` text or point to a local
+Mindweft skills can either define native `system_prompt` text or point to a local
 Claude/Agent Skill `SKILL.md` file with `instruction_source`. Agent Skill sources preserve
 progressive disclosure: only metadata such as `name` and `description` is part of the skill
-catalog, and the `SKILL.md` body is read only when that Minigent skill is selected or used as
+catalog, and the `SKILL.md` body is read only when that Mindweft skill is selected or used as
 the default skill for a thread.
 
 ```json
@@ -1617,50 +1630,50 @@ Agent Skill metadata such as `allowed-tools` must not be treated as a permission
 Coding workspace setup, including the reusable runner, filesystem MCP bridge, and the
 recommended local-tool-vs-MCP boundary, is documented in [Coding workspace setup](coding-workspace.md).
 
-In short: keep built-in Minigent local tools for generic low-risk utilities. Expose
+In short: keep built-in Mindweft local tools for generic low-risk utilities. Expose
 workspace-specific capabilities such as filesystem access, editing, shell commands, tests,
 builds, and git operations through explicit MCP servers and capability profiles. The default
 coding runner profile remains read-only (`inspect`); shell access should be a separate trusted
-local MCP capability, not a default Minigent local tool.
+local MCP capability, not a default Mindweft local tool.
 
 The local tool `retrieve_knowledge` is not enabled by default because it requires a
 MiniRAG database and related backend setup. Enable it explicitly with
 `tools.allowed_local_tools` (or a skill/capability profile allowlist), install the
-MiniRAG package in the runtime environment, and set `MINIGENT_MINIRAG_DB_PATH` to a
+MiniRAG package in the runtime environment, and set `MINDWEFT_MINIRAG_DB_PATH` to a
 SQLite database created by `minirag ingest`.
 
 Recommended setup today:
 
-- `MINIGENT_MINIRAG_BACKEND=dense`
-- `MINIGENT_MINIRAG_EMBEDDING_PROVIDER=openrouter`
+- `MINDWEFT_MINIRAG_BACKEND=dense`
+- `MINDWEFT_MINIRAG_EMBEDDING_PROVIDER=openrouter`
 
 That matches the current best-performing `minirag` configuration on the FIQA external slices run so far.
 
 Optional retrieval tuning env vars:
 
-- `MINIGENT_MINIRAG_BACKEND`: `lexical`, `dense`, or `hybrid`
-- `MINIGENT_MINIRAG_EMBEDDING_PROVIDER`: `hash`, `openai`, or `openrouter`
-- `MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT`: optional lexical score weight for `hybrid`
-- `MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT`: optional dense score weight for `hybrid`
+- `MINDWEFT_MINIRAG_BACKEND`: `lexical`, `dense`, or `hybrid`
+- `MINDWEFT_MINIRAG_EMBEDDING_PROVIDER`: `hash`, `openai`, or `openrouter`
+- `MINDWEFT_MINIRAG_HYBRID_LEXICAL_WEIGHT`: optional lexical score weight for `hybrid`
+- `MINDWEFT_MINIRAG_HYBRID_DENSE_WEIGHT`: optional dense score weight for `hybrid`
 
 For local development with `uv`, install the MiniRAG package into the environment you use
-for Minigent before enabling `retrieve_knowledge`.
+for Mindweft before enabling `retrieve_knowledge`.
 
 Example:
 
 ```bash
-export MINIGENT_MINIRAG_BACKEND=dense
-export MINIGENT_MINIRAG_EMBEDDING_PROVIDER=openrouter
+export MINDWEFT_MINIRAG_BACKEND=dense
+export MINDWEFT_MINIRAG_EMBEDDING_PROVIDER=openrouter
 export OPENROUTER_API_KEY=...
 ```
 
 If you want to tune `hybrid` explicitly:
 
 ```bash
-export MINIGENT_MINIRAG_BACKEND=hybrid
-export MINIGENT_MINIRAG_EMBEDDING_PROVIDER=openrouter
-export MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT=0.05
-export MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT=0.95
+export MINDWEFT_MINIRAG_BACKEND=hybrid
+export MINDWEFT_MINIRAG_EMBEDDING_PROVIDER=openrouter
+export MINDWEFT_MINIRAG_HYBRID_LEXICAL_WEIGHT=0.05
+export MINDWEFT_MINIRAG_HYBRID_DENSE_WEIGHT=0.95
 ```
 
 In `store-with-defaults`, a `*` tenant record in the admin store acts as a default profile before env fallback is considered.
@@ -1672,12 +1685,12 @@ The admin API is an authenticated control plane for the tenant registry, tenant 
 Enable tenant execution config storage with:
 
 ```dotenv
-MINIGENT_ADMIN_DB_PATH=.data/minigent-admin.db
-MINIGENT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
+MINDWEFT_ADMIN_DB_PATH=.data/mindweft-admin.db
+MINDWEFT_ADMIN_ENCRYPTION_KEY=replace-with-a-long-random-secret
 # Optional: require request tenant IDs to exist and be active in the registry.
-MINIGENT_TENANT_REGISTRY_REQUIRED=false
+MINDWEFT_TENANT_REGISTRY_REQUIRED=false
 # Optional: require authenticated users to have active tenant membership.
-MINIGENT_TENANT_USER_REGISTRY_REQUIRED=false
+MINDWEFT_TENANT_USER_REGISTRY_REQUIRED=false
 ```
 
 Admin endpoints:
@@ -1718,9 +1731,9 @@ Admin endpoints:
 Admin access requires an authenticated principal with `is_admin=true`. In `dev-headers` mode that means:
 
 ```bash
-X-Minigent-User-Id: admin-user
-X-Minigent-Tenant-Id: admin-tenant
-X-Minigent-Admin: true
+X-Mindweft-User-Id: admin-user
+X-Mindweft-Tenant-Id: admin-tenant
+X-Mindweft-Admin: true
 ```
 
 Tenant registry endpoints manage durable tenant identity and lifecycle state. Tenant records include `id`, `slug`, `name`, `status`, `plan`, `region`, JSON `metadata`, actor fields, and timestamps. Slugs must be unique and contain lowercase letters,
@@ -1743,9 +1756,9 @@ skills, capability profiles, and agent presets, rather than collapsing it to a p
 payload. Successful updates and deletes invalidate the runtime resolver and append redacted tenant
 audit records.
 
-When `MINIGENT_TENANT_REGISTRY_REQUIRED=true`, public thread endpoints reject authenticated principals whose `tenant_id` is missing from the registry or not `active`. The default is `false` to preserve local and migration workflows. When `MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true`, request-time tenant context resolution also requires an active tenant membership for `(tenant_id, user_id)` and populates membership fields such as `membership_id`, `user_role`, and `user_status` on `TenantContext`.
+When `MINDWEFT_TENANT_REGISTRY_REQUIRED=true`, public thread endpoints reject authenticated principals whose `tenant_id` is missing from the registry or not `active`. The default is `false` to preserve local and migration workflows. When `MINDWEFT_TENANT_USER_REGISTRY_REQUIRED=true`, request-time tenant context resolution also requires an active tenant membership for `(tenant_id, user_id)` and populates membership fields such as `membership_id`, `user_role`, and `user_status` on `TenantContext`.
 
-Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. Admin deletion removes a thread and its messages and writes an audit record. The prune endpoint deletes matching tenant threads with `updated_at` older than required `updated_before`, with optional `status`, `profile`, and `skill` filters. Add `dry_run=true` to preview `candidate_thread_ids` without deleting threads or writing audit records. The audit endpoint lists deletion/prune records and tenant mutation records with actor, action, affected count, thread IDs, optional `resource_type`/`resource_id`, optional `old_values`/`new_values`, optional metadata, timestamp, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `action`, `actor`, `created_after`, and `created_before` query parameters. Tenant audit payloads redact secret-like keys such as `token`, `secret`, `key`, `authorization`, and `password`. With `MINIGENT_THREAD_DB_PATH` configured, these endpoints can inspect and manage persisted threads and audit records after process restarts.
+Thread inspection endpoints use the active thread store and are tenant-scoped by the `{tenant_id}` path parameter. The list endpoint returns metadata, message counts, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `status`, `profile`, `skill`, `created_after`, and `updated_after` query parameters. The detail endpoint returns metadata, compacted context state, and messages for one thread. Admin deletion removes a thread and its messages and writes an audit record. The prune endpoint deletes matching tenant threads with `updated_at` older than required `updated_before`, with optional `status`, `profile`, and `skill` filters. Add `dry_run=true` to preview `candidate_thread_ids` without deleting threads or writing audit records. The audit endpoint lists deletion/prune records and tenant mutation records with actor, action, affected count, thread IDs, optional `resource_type`/`resource_id`, optional `old_values`/`new_values`, optional metadata, timestamp, and pagination metadata (`limit`, `offset`, `total`, `next_offset`). It accepts `limit`, `offset`, `action`, `actor`, `created_after`, and `created_before` query parameters. Tenant audit payloads redact secret-like keys such as `token`, `secret`, `key`, `authorization`, and `password`. With `MINDWEFT_THREAD_DB_PATH` configured, these endpoints can inspect and manage persisted threads and audit records after process restarts.
 
 The React administration workspace exposes these thread operations with status/profile/skill/date
 filters, tenant-scoped detail views for compacted context and retained messages, a dry-run preview
@@ -1758,47 +1771,47 @@ The attachment statistics endpoint returns only tenant-level counts and byte tot
 The packaged CLI can inspect and manage the same tenant registry and thread data when authenticated as an admin:
 
 ```bash
-minigent --admin admin tenants list --status active --limit 50
-minigent --admin admin tenants create --id TENANT_ID --slug tenant-slug --name "Tenant Name" --status active
-minigent --admin admin tenants show TENANT_ID
-minigent --admin admin tenants update TENANT_ID --plan pro --metadata-json '{"owner":"support"}'
-minigent --admin admin tenants suspend TENANT_ID
-minigent --admin admin tenants activate TENANT_ID
-minigent --admin admin tenants archive TENANT_ID
-minigent --admin admin tenants delete TENANT_ID
-minigent --admin admin tenants seed --from execution-configs --status active --dry-run
-minigent --admin admin tenants seed --from execution-configs --status active
-minigent --admin admin tenants users list TENANT_ID --status active
-minigent --admin admin tenants users create TENANT_ID --user-id USER_ID --email user@example.com --role member --status active
-minigent --admin admin tenants users show TENANT_ID USER_RECORD_ID
-minigent --admin admin tenants users update TENANT_ID USER_RECORD_ID --role admin
-minigent --admin admin tenants users suspend TENANT_ID USER_RECORD_ID
-minigent --admin admin tenants users activate TENANT_ID USER_RECORD_ID
-minigent --admin admin tenants users delete TENANT_ID USER_RECORD_ID
-minigent --admin admin tenants entitlements show TENANT_ID
-minigent --admin admin tenants entitlements set TENANT_ID --features-json '{"mcp":true}' --limits-json '{"max_threads":100}'
-minigent --admin admin tenants entitlements validate TENANT_ID --features-json '{"mcp":true}'
-minigent --admin admin tenants entitlements delete TENANT_ID
-minigent --admin admin execution-config validate-file tenant-config.json
-minigent --admin admin execution-config import tenant-config.json --dry-run
-minigent --admin admin execution-config import tenant-config.json --upsert --seed-tenants
-minigent --admin admin execution-config export --out tenant-config.redacted.json
-minigent --admin admin execution-config export --tenant TENANT_ID
-minigent --admin admin threads list --tenant TENANT_ID --limit 50
-minigent --admin admin threads list --tenant TENANT_ID --status idle --profile default --skill coding
-minigent --admin admin threads show THREAD_ID --tenant TENANT_ID
-minigent --admin admin threads delete THREAD_ID --tenant TENANT_ID
-minigent --admin admin threads prune --tenant TENANT_ID --updated-before 2026-05-01T00:00:00Z
-minigent --admin admin threads prune --tenant TENANT_ID --updated-before 2026-05-01T00:00:00Z --dry-run
-minigent --admin admin audit list --tenant TENANT_ID --limit 50
-minigent --admin admin audit list --tenant TENANT_ID --action threads.prune --actor admin-user --created-after 2026-05-01T00:00:00Z
-minigent --api-token ADMIN_TOKEN admin threads list --tenant TENANT_ID --json
+mindweft --admin admin tenants list --status active --limit 50
+mindweft --admin admin tenants create --id TENANT_ID --slug tenant-slug --name "Tenant Name" --status active
+mindweft --admin admin tenants show TENANT_ID
+mindweft --admin admin tenants update TENANT_ID --plan pro --metadata-json '{"owner":"support"}'
+mindweft --admin admin tenants suspend TENANT_ID
+mindweft --admin admin tenants activate TENANT_ID
+mindweft --admin admin tenants archive TENANT_ID
+mindweft --admin admin tenants delete TENANT_ID
+mindweft --admin admin tenants seed --from execution-configs --status active --dry-run
+mindweft --admin admin tenants seed --from execution-configs --status active
+mindweft --admin admin tenants users list TENANT_ID --status active
+mindweft --admin admin tenants users create TENANT_ID --user-id USER_ID --email user@example.com --role member --status active
+mindweft --admin admin tenants users show TENANT_ID USER_RECORD_ID
+mindweft --admin admin tenants users update TENANT_ID USER_RECORD_ID --role admin
+mindweft --admin admin tenants users suspend TENANT_ID USER_RECORD_ID
+mindweft --admin admin tenants users activate TENANT_ID USER_RECORD_ID
+mindweft --admin admin tenants users delete TENANT_ID USER_RECORD_ID
+mindweft --admin admin tenants entitlements show TENANT_ID
+mindweft --admin admin tenants entitlements set TENANT_ID --features-json '{"mcp":true}' --limits-json '{"max_threads":100}'
+mindweft --admin admin tenants entitlements validate TENANT_ID --features-json '{"mcp":true}'
+mindweft --admin admin tenants entitlements delete TENANT_ID
+mindweft --admin admin execution-config validate-file tenant-config.json
+mindweft --admin admin execution-config import tenant-config.json --dry-run
+mindweft --admin admin execution-config import tenant-config.json --upsert --seed-tenants
+mindweft --admin admin execution-config export --out tenant-config.redacted.json
+mindweft --admin admin execution-config export --tenant TENANT_ID
+mindweft --admin admin threads list --tenant TENANT_ID --limit 50
+mindweft --admin admin threads list --tenant TENANT_ID --status idle --profile default --skill coding
+mindweft --admin admin threads show THREAD_ID --tenant TENANT_ID
+mindweft --admin admin threads delete THREAD_ID --tenant TENANT_ID
+mindweft --admin admin threads prune --tenant TENANT_ID --updated-before 2026-05-01T00:00:00Z
+mindweft --admin admin threads prune --tenant TENANT_ID --updated-before 2026-05-01T00:00:00Z --dry-run
+mindweft --admin admin audit list --tenant TENANT_ID --limit 50
+mindweft --admin admin audit list --tenant TENANT_ID --action threads.prune --actor admin-user --created-after 2026-05-01T00:00:00Z
+mindweft --api-token ADMIN_TOKEN admin threads list --tenant TENANT_ID --json
 ```
 
-Secrets such as LLM API keys and MCP headers are accepted on writes but redacted in read responses. If `MINIGENT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`, `MINIGENT_ADMIN_ENCRYPTION_KEY` is required and those secrets are encrypted before being written to SQLite. Updating or deleting a tenant config invalidates the in-process execution cache for that tenant so new runs pick up the change immediately.
+Secrets such as LLM API keys and MCP headers are accepted on writes but redacted in read responses. If `MINDWEFT_TENANT_CONFIG_SOURCE` is `store` or `store-with-defaults`, `MINDWEFT_ADMIN_ENCRYPTION_KEY` is required and those secrets are encrypted before being written to SQLite. Updating or deleting a tenant config invalidates the in-process execution cache for that tenant so new runs pick up the change immediately.
 
-`MINIGENT_ADMIN_MCP_SERVER_CATALOG` optionally configures the internal-service quick-add cards shown
-by the tenant execution editor. `MINIGENT_ADMIN_MCP_SERVER_CATALOG_SECRET` has the same format and
+`MINDWEFT_ADMIN_MCP_SERVER_CATALOG` optionally configures the internal-service quick-add cards shown
+by the tenant execution editor. `MINDWEFT_ADMIN_MCP_SERVER_CATALOG_SECRET` has the same format and
 takes precedence; use it when catalog templates contain credential headers so secret-management
 systems recognize the value as sensitive. It is a JSON array; each item has `id`, `title`,
 `description`, an optional `detail`, and a `server` object containing the tenant MCP server
@@ -1839,16 +1852,16 @@ servers are disabled, non-catalog servers are rejected. Policy changes are audit
 the tenant execution cache, so revoking an entry prevents subsequent runs even if an older stored
 execution configuration still references it.
 
-`MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS` optionally enables a provider-neutral external grant
+`MINDWEFT_ADMIN_EXTERNAL_GRANT_PROVIDERS` optionally enables a provider-neutral external grant
 control plane for platform administrators. When unset, no providers or grant panels are registered.
 The setting is a JSON array whose entries define `id`, `title`, optional `description`, `base_url`,
 forwarded-identity `audience`, non-empty `read_scopes` and `write_scopes`, and
 `allowed_permissions`. Generic endpoint defaults are `GET/PUT /v1/resource-grants` and
 `DELETE /v1/resource-grants/{resource_id}?user_id=...`; deployments can override `list_path`,
 `upsert_path`, and `delete_path`. Providers with a safe administrative resource catalog can set
-optional `resources_path`; Minigent uses it to show labels and resource-specific permissions while
+optional `resources_path`; Mindweft uses it to show labels and resource-specific permissions while
 preserving free-form entry for providers without discovery. Providers with an immutable audit API
-can also set optional `audit_path`; Minigent forwards `limit` and `before_id`, reads the provider
+can also set optional `audit_path`; Mindweft forwards `limit` and `before_id`, reads the provider
 history with the configured read scopes, and displays it alongside current grants. URLs are
 deployment-owned and reject embedded credentials, query strings, and non-HTTP schemes.
 
@@ -1857,12 +1870,12 @@ The platform-admin-only routes are `GET /admin/external-grant-providers`,
 `GET /admin/tenants/{tenant_id}/external-grants/{provider_id}/resources`,
 `GET /admin/tenants/{tenant_id}/external-grants/{provider_id}/audit`, and
 `DELETE /admin/tenants/{tenant_id}/external-grants/{provider_id}/{resource_id}?subject_id=...`.
-The browser grant panel joins provider resources and grants with Minigent's tenant-user directory.
+The browser grant panel joins provider resources and grants with Mindweft's tenant-user directory.
 New exact-subject grants can target only active tenant users; `*` is presented explicitly as
 "Everyone in tenant." The API independently rejects enabled grants for missing or inactive tenant
 users. Existing grants for missing or inactive users may still be disabled or deleted, allowing the
 panel's reconciliation report and confirmed bulk-disable action to deprovision stale access without
-silently mutating provider state. User labels and emails remain in Minigent's platform-admin UI;
+silently mutating provider state. User labels and emails remain in Mindweft's platform-admin UI;
 only canonical user IDs are forwarded to providers.
 
 Changing an existing tenant user to `suspended` or `deleted` atomically appends a durable
@@ -1876,26 +1889,26 @@ or assignments; those require explicit administrative action.
 
 Failures use exponential backoff and become `dead_letter` after eight attempts by default. Configure
 polling, retry limits, and stale-claim recovery with
-`MINIGENT_USER_DEPROVISIONING_INTERVAL_SECONDS`,
-`MINIGENT_USER_DEPROVISIONING_MAX_ATTEMPTS`, and
-`MINIGENT_USER_DEPROVISIONING_LEASE_SECONDS`. Tenant owners and platform administrators can inspect
+`MINDWEFT_USER_DEPROVISIONING_INTERVAL_SECONDS`,
+`MINDWEFT_USER_DEPROVISIONING_MAX_ATTEMPTS`, and
+`MINDWEFT_USER_DEPROVISIONING_LEASE_SECONDS`. Tenant owners and platform administrators can inspect
 `GET /admin/tenants/{tenant_id}/user-deprovisioning-events` (optionally filtered by `state`) and
 requeue pending or dead-letter work with
 `POST /admin/tenants/{tenant_id}/user-deprovisioning-events/{event_id}/retry`. Events retain the
 initiating actor, target status, attempt count, redacted failure summary, assignment-cleanup result,
 and count of grants disabled. The outbox is part of normal admin-database backup and restore.
 
-Minigent issues a fresh 30–300 second forwarded-identity token for each provider request and uses
+Mindweft issues a fresh 30–300 second forwarded-identity token for each provider request and uses
 only the configured read or write scopes. Provider credentials, scopes, and HTTP operations are
 never added to tenant execution configuration or exposed as model tools. Grant state remains
-authoritative at the provider; Minigent stores only its normal redacted administrative audit
+authoritative at the provider; Mindweft stores only its normal redacted administrative audit
 record. Provider availability is deliberately excluded from startup, readiness, chat execution,
 and tool discovery, so an outage affects only grant-administration requests.
 
 Example:
 
 ```bash
-MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS='[{"id":"example-grants","title":"Example grants","description":"Manage authoritative external grants.","base_url":"http://127.0.0.1:8769","audience":"example-grants","read_scopes":["grants:read"],"write_scopes":["grants:write"],"allowed_permissions":["read","read_write"],"resources_path":"/v1/resources","audit_path":"/v1/resource-grant-audit"}]'
+MINDWEFT_ADMIN_EXTERNAL_GRANT_PROVIDERS='[{"id":"example-grants","title":"Example grants","description":"Manage authoritative external grants.","base_url":"http://127.0.0.1:8769","audience":"example-grants","read_scopes":["grants:read"],"write_scopes":["grants:write"],"allowed_permissions":["read","read_write"],"resources_path":"/v1/resources","audit_path":"/v1/resource-grant-audit"}]'
 ```
 
 Header values are redacted before catalog
@@ -1907,11 +1920,11 @@ process environment at startup, allowing a catalog stored in a secret to referen
 key such as `NETWISE_API_TOKEN`. For example:
 
 ```bash
-MINIGENT_ADMIN_MCP_SERVER_CATALOG='[{"id":"web-search","title":"Web search","description":"Search web, news, and ranked page content.","detail":"Local Brave Search sidecar · 3 tools","server":{"name":"web-search","url":"http://127.0.0.1:8766/mcp","headers":{},"allowed_tools":["brave_web_search","brave_news_search","brave_llm_context"]}}]'
+MINDWEFT_ADMIN_MCP_SERVER_CATALOG='[{"id":"web-search","title":"Web search","description":"Search web, news, and ranked page content.","detail":"Local Brave Search sidecar · 3 tools","server":{"name":"web-search","url":"http://127.0.0.1:8766/mcp","headers":{},"allowed_tools":["brave_web_search","brave_news_search","brave_llm_context"]}}]'
 ```
 
 The admin CLI can bridge the static JSON and DB-backed modes. `admin execution-config import`
-accepts the same top-level tenant map used by `MINIGENT_TENANT_EXECUTION_CONFIGS`; it also
+accepts the same top-level tenant map used by `MINDWEFT_TENANT_EXECUTION_CONFIGS`; it also
 accepts a bundle with an `execution_configs` object. Imports validate each tenant before any
 write; use `--dry-run` to preview and `--upsert` to write valid configs. `--seed-tenants` can
 create missing registry records after a successful import. `admin execution-config export`
@@ -1927,7 +1940,7 @@ migration checks, not a full secret-bearing backup.
 OpenAI:
 
 ```bash
-MINIGENT_LLM_PROVIDER=openai
+MINDWEFT_LLM_PROVIDER=openai
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-5.4-mini
 ```
@@ -1935,7 +1948,7 @@ OPENAI_MODEL=gpt-5.4-mini
 OpenRouter:
 
 ```bash
-MINIGENT_LLM_PROVIDER=openrouter
+MINDWEFT_LLM_PROVIDER=openrouter
 OPENROUTER_API_KEY=...
 OPENROUTER_MODEL=openai/gpt-5.4-mini
 OPENROUTER_HTTP_REFERER=https://your-app.example
@@ -1951,10 +1964,10 @@ OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 
 ## MCP Config
 
-You can attach HTTP MCP servers by setting `MINIGENT_MCP_SERVERS` to a JSON array in `.env`.
-Minigent defaults new server entries to MCP `2026-07-28`: the outbound client uses the
+You can attach HTTP MCP servers by setting `MINDWEFT_MCP_SERVERS` to a JSON array in `.env`.
+Mindweft defaults new server entries to MCP `2026-07-28`: the outbound client uses the
 official MCP Python SDK v2 to probe `server/discover`, validate schemas/results, and fall back
-to the `2025-11-25` `initialize` handshake when discovery is rejected. Minigent wraps the SDK
+to the `2025-11-25` `initialize` handshake when discovery is rejected. Mindweft wraps the SDK
 with allowed-tool filtering, path policy, short-lived identity forwarding, redaction, and HTTP
 error mapping. Set an entry's `protocolVersion` to `2025-11-25` to skip the probe for a known
 legacy server.
@@ -1962,7 +1975,7 @@ legacy server.
 Example:
 
 ```dotenv
-MINIGENT_MCP_SERVERS=[{"name":"demo","url":"https://example.com/mcp","headers":{"Authorization":"Bearer token"}}]
+MINDWEFT_MCP_SERVERS=[{"name":"demo","url":"https://example.com/mcp","headers":{"Authorization":"Bearer token"}}]
 ```
 
 Discovered MCP tools are namespaced as `<server>.<tool>`, for example `demo.echo`.
@@ -1980,17 +1993,17 @@ Identity-aware MCP services can request a fresh user-scoped token on each tool c
 }
 ```
 
-Forwarded identity requires these Minigent process settings:
+Forwarded identity requires these Mindweft process settings:
 
 ```text
-MINIGENT_MCP_IDENTITY_ISSUER
-MINIGENT_MCP_IDENTITY_PRIVATE_KEY
-MINIGENT_MCP_IDENTITY_KEY_ID
-MINIGENT_MCP_IDENTITY_TOKEN_LIFETIME_SECONDS
+MINDWEFT_MCP_IDENTITY_ISSUER
+MINDWEFT_MCP_IDENTITY_PRIVATE_KEY
+MINDWEFT_MCP_IDENTITY_KEY_ID
+MINDWEFT_MCP_IDENTITY_TOKEN_LIFETIME_SECONDS
 ```
 
-The private key remains in Minigent; the MCP service receives only short-lived signed bearer
-tokens. Minigent derives `tenant_id` and `sub` from the authenticated runtime principal rather than
+The private key remains in Mindweft; the MCP service receives only short-lived signed bearer
+tokens. Mindweft derives `tenant_id` and `sub` from the authenticated runtime principal rather than
 tool arguments. Discovery uses a non-user `__mcp_discovery__` identity. Token lifetime defaults to
 300 seconds and cannot exceed 300 seconds. A server cannot combine `forward_identity` with a static
 `Authorization` header.
@@ -2001,7 +2014,7 @@ Current scope:
 - `tools/list`
 - `tools/call`
 
-Because this is a tools-only client, Minigent sends request/response traffic over POST and does
+Because this is a tools-only client, Mindweft sends request/response traffic over POST and does
 not open the optional long-lived GET event stream for server-initiated notifications. This keeps
 it compatible with the POST-only stdio bridge and shared gateway routes.
 
@@ -2012,14 +2025,14 @@ server as `connected`.
 
 ## Peer Agent Config
 
-Minigent can discover configured federated peer agents, proxy task requests to them, and
+Mindweft can discover configured federated peer agents, proxy task requests to them, and
 optionally expose them to the runtime through the `peer_agent_task` tool. Configure peers with
-`MINIGENT_PEER_AGENTS`:
+`MINDWEFT_PEER_AGENTS`:
 
 ```dotenv
-MINIGENT_PEER_AGENTS=[{"name":"pi","base_url":"http://127.0.0.1:8010","description":"Local Pi Coding Agent wrapper","capabilities":["repository analysis","codebase inspection"],"side_effects":["runs Pi CLI commands in the allowed workspace"],"version":"0.1.0"}]
+MINDWEFT_PEER_AGENTS=[{"name":"pi","base_url":"http://127.0.0.1:8010","description":"Local Pi Coding Agent wrapper","capabilities":["repository analysis","codebase inspection"],"side_effects":["runs Pi CLI commands in the allowed workspace"],"version":"0.1.0"}]
 # Required only when the agent runtime should be allowed to call peers as a tool:
-MINIGENT_ENABLE_PEER_AGENT_TOOL=true
+MINDWEFT_ENABLE_PEER_AGENT_TOOL=true
 ```
 
 The optional `capabilities`, `side_effects`, and `version` fields are included in the
@@ -2037,7 +2050,7 @@ Discovery endpoints:
 - `GET /peer-agents/{name}/tasks/{task_id}/artifacts/{artifact_name}`
 
 `GET /peer-agents/{name}/agent-card` fetches the peer's `/agent-card` endpoint and
-returns it through Minigent. Unknown peers return `404`; peer HTTP or JSON failures
+returns it through Mindweft. Unknown peers return `404`; peer HTTP or JSON failures
 return `502`. `POST /peer-agents/{name}/tasks` forwards the request JSON to the peer's
 `/tasks` endpoint, and `GET /peer-agents/{name}/tasks/{task_id}` forwards task status
 lookups to the peer. The cancel, task events, and artifact endpoints forward to the
@@ -2045,8 +2058,8 @@ peer's matching endpoints; artifact names are limited to `final-output`, `stdout
 `stderr-tail`, and `events`. These proxy endpoints are for manual federation demos; the
 agent runtime does not yet choose or invoke peers automatically.
 
-With the local agent wrapper and Minigent running, use the root demo script to submit and poll
-a peer task through Minigent:
+With the local agent wrapper and Mindweft running, use the root demo script to submit and poll
+a peer task through Mindweft:
 
 ```bash
 uv run python scripts/demo_peer_agent.py
@@ -2055,7 +2068,7 @@ uv run python scripts/demo_peer_agent.py
 Useful overrides:
 
 ```bash
-MINIGENT_BASE_URL=http://127.0.0.1:8000 \
+MINDWEFT_BASE_URL=http://127.0.0.1:8000 \
   uv run python scripts/demo_peer_agent.py \
   --peer pi \
   --cwd /Users/burm/code/minigent \
@@ -2063,7 +2076,7 @@ MINIGENT_BASE_URL=http://127.0.0.1:8000 \
   --prompt "Summarize this repository in one paragraph. Do not edit files."
 ```
 
-To demo cancellation through Minigent:
+To demo cancellation through Mindweft:
 
 ```bash
 uv run python scripts/demo_peer_agent.py \
@@ -2072,15 +2085,15 @@ uv run python scripts/demo_peer_agent.py \
 ```
 
 The same peer task surface is also available to the agent runtime as the local
-`peer_agent_task` tool when `MINIGENT_ENABLE_PEER_AGENT_TOOL=true` and the tool is
+`peer_agent_task` tool when `MINDWEFT_ENABLE_PEER_AGENT_TOOL=true` and the tool is
 allowed by tenant, skill, or capability-profile configuration. The tool requires `peer`,
 `cwd`, and `prompt`, accepts optional `poll`, `timeout_seconds`, and
 `poll_interval_seconds`, and returns compact task status plus truncated output fields.
-This is explicit tool-based delegation only; Minigent does not automatically choose peer
+This is explicit tool-based delegation only; Mindweft does not automatically choose peer
 agents outside normal tool calling.
 
-To demo the runtime tool path with the mock LLM, start Minigent with
-`MINIGENT_ENABLE_PEER_AGENT_TOOL=true` and run:
+To demo the runtime tool path with the mock LLM, start Mindweft with
+`MINDWEFT_ENABLE_PEER_AGENT_TOOL=true` and run:
 
 ```bash
 uv run python scripts/demo_peer_agent_tool.py
@@ -2092,7 +2105,7 @@ tool result, and final assistant reply. It also prints a compact `peer_summary` 
 the peer name, task ID, status, exit code, timeout/cancellation flags, duration, and
 short output/error previews before the full transcript.
 
-To run the local agent wrapper, Minigent, and the runtime tool demo as one local stack:
+To run the local agent wrapper, Mindweft, and the runtime tool demo as one local stack:
 
 ```bash
 ./scripts/demo_peer_agent_tool_stack.sh
@@ -2115,7 +2128,7 @@ uv run python scripts/check_peer_agent_demo.py --check-running
 The same end-to-end path is available as an opt-in integration test:
 
 ```bash
-MINIGENT_RUN_PEER_AGENT_INTEGRATION_TESTS=true \
+MINDWEFT_RUN_PEER_AGENT_INTEGRATION_TESTS=true \
   uv run pytest tests/test_peer_agent_tool_integration.py
 ```
 
@@ -2126,7 +2139,7 @@ and a usable local OpenCode login because that demo selects the wrapper's OpenCo
 inside the sidecar:
 
 ```bash
-MINIGENT_RUN_COMPOSE_INTEGRATION_TESTS=true \
+MINDWEFT_RUN_COMPOSE_INTEGRATION_TESTS=true \
   uv run pytest tests/test_peer_agent_tool_compose_integration.py
 ```
 
@@ -2151,7 +2164,7 @@ Pass a custom containerized peer prompt the same way:
 ```
 
 The Compose demo uses [compose.peer-demo.yaml](/Users/burm/code/minigent/compose.peer-demo.yaml).
-It exposes Minigent on `127.0.0.1:8000`, keeps the local agent wrapper internal to the Compose
+It exposes Mindweft on `127.0.0.1:8000`, keeps the local agent wrapper internal to the Compose
 network in its OpenCode profile, mounts this repository read-only at `/workspace/minigent`, and mounts
 `.opencode-container/data` plus `.opencode-container/config` as writable local OpenCode state.
 The prepared
@@ -2174,7 +2187,7 @@ ANTHROPIC_API_KEY=... ./scripts/demo_pi_backend_compose.sh
 ```
 
 It uses [compose.pi-backend-demo.yaml](/Users/burm/code/minigent/compose.pi-backend-demo.yaml),
-builds the wrapper image with Pi installed, enables Minigent's MCP broker, mounts this
+builds the wrapper image with Pi installed, enables Mindweft's MCP broker, mounts this
 repository read-only at `/workspace/minigent`, and stores Pi state in ignored
 `.pi-container/agent`. The demo runs `scripts/demo_pi_mcp_broker.py`, so a successful run
 also verifies the brokered `calculator` tool path. By default the script copies host Pi
@@ -2193,7 +2206,7 @@ docker compose -f compose.pi-backend-demo.yaml down
 
 ### Stdio MCP Bridge
 
-Many local MCP servers expose the MCP `stdio` transport instead of HTTP. Minigent includes
+Many local MCP servers expose the MCP `stdio` transport instead of HTTP. Mindweft includes
 a sidecar bridge that exposes one stdio MCP server as a local HTTP MCP endpoint:
 
 ```bash
@@ -2204,19 +2217,19 @@ minigent-mcp-stdio-bridge \
   -- npx -y @modelcontextprotocol/server-filesystem /tmp
 ```
 
-Then point Minigent at the bridge like any other HTTP MCP server:
+Then point Mindweft at the bridge like any other HTTP MCP server:
 
 ```dotenv
-MINIGENT_MCP_SERVERS=[{"name":"filesystem","url":"http://127.0.0.1:8765/mcp","headers":{}}]
+MINDWEFT_MCP_SERVERS=[{"name":"filesystem","url":"http://127.0.0.1:8765/mcp","headers":{}}]
 ```
 
 The bridge binds to `127.0.0.1` by default and accepts the stdio server command as an
 argv array after `--`; it does not run commands through a shell. It buffers stdio MCP
 responses up to 16 MiB by default so large single-line JSON tool results such as file reads
 can be forwarded; override this with `--stdio-stream-limit <bytes>` if a deployment needs a
-different cap. The bridge supports the tools-only MCP scope Minigent uses today and uses the
+different cap. The bridge supports the tools-only MCP scope Mindweft uses today and uses the
 official SDK v2 client for subprocess negotiation, stdio request correlation, and protocol result
-validation. Minigent still owns process restart, stream-size limits, tool filtering, and path
+validation. Mindweft still owns process restart, stream-size limits, tool filtering, and path
 policy. For MCP `2026-07-28`, the HTTP side accepts `server/discover`, `tools/list`, and
 `tools/call` without requiring an `MCP-Session-Id`; modern requests carry their protocol, client
 information, and client capabilities in `params._meta`. Legacy HTTP clients continue to use
@@ -2227,22 +2240,22 @@ responses and remove modern-only result envelope fields when serving legacy HTTP
 
 ## Observability
 
-Logging defaults to plaintext. Set `MINIGENT_LOG_FORMAT=json` for structured logs.
+Logging defaults to plaintext. Set `MINDWEFT_LOG_FORMAT=json` for structured logs.
 
 Useful logging env vars:
 
 ```bash
-MINIGENT_LOG_LEVEL=INFO
-MINIGENT_LOG_FORMAT=plaintext
-MINIGENT_LOG_PLAINTEXT_FORMAT=%(levelname)s %(name)s: %(message)s
-MINIGENT_LOG_JSON_ROOT_KEY=log
-MINIGENT_LOG_JSON_MESSAGE_KEY=message
-MINIGENT_LOG_JSON_LEVEL_KEY=level
-MINIGENT_LOG_JSON_LOGGER_KEY=logger
-MINIGENT_LOG_JSON_TIMESTAMP_KEY=timestamp
-MINIGENT_LOG_JSON_EXCEPTION_KEY=exception
-MINIGENT_LOG_JSON_FIELDS={"service":"minigent","env":"dev"}
-MINIGENT_LOG_JSON_INCLUDE_TRACE_CONTEXT=true
+MINDWEFT_LOG_LEVEL=INFO
+MINDWEFT_LOG_FORMAT=plaintext
+MINDWEFT_LOG_PLAINTEXT_FORMAT=%(levelname)s %(name)s: %(message)s
+MINDWEFT_LOG_JSON_ROOT_KEY=log
+MINDWEFT_LOG_JSON_MESSAGE_KEY=message
+MINDWEFT_LOG_JSON_LEVEL_KEY=level
+MINDWEFT_LOG_JSON_LOGGER_KEY=logger
+MINDWEFT_LOG_JSON_TIMESTAMP_KEY=timestamp
+MINDWEFT_LOG_JSON_EXCEPTION_KEY=exception
+MINDWEFT_LOG_JSON_FIELDS={"service":"mindweft","env":"dev"}
+MINDWEFT_LOG_JSON_INCLUDE_TRACE_CONTEXT=true
 ```
 
 Successful Uvicorn access logs for `GET /health`, `GET /health/live`, and
@@ -2253,15 +2266,15 @@ health` clients.
 OpenTelemetry tracing is optional:
 
 ```bash
-MINIGENT_OTEL_ENABLED=true
-MINIGENT_OTEL_SERVICE_NAME=minigent
-MINIGENT_OTEL_EXPORTER=console
-MINIGENT_OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.example/v1/traces
-MINIGENT_OTEL_EXPORTER_OTLP_HEADERS={"authorization":"Bearer token"}
-MINIGENT_OTEL_EXPORTER_OTLP_TIMEOUT_SECONDS=10
+MINDWEFT_OTEL_ENABLED=true
+MINDWEFT_OTEL_SERVICE_NAME=mindweft
+MINDWEFT_OTEL_EXPORTER=console
+MINDWEFT_OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.example/v1/traces
+MINDWEFT_OTEL_EXPORTER_OTLP_HEADERS={"authorization":"Bearer token"}
+MINDWEFT_OTEL_EXPORTER_OTLP_TIMEOUT_SECONDS=10
 ```
 
-Set `MINIGENT_OTEL_EXPORTER=none` to keep trace context active without exporting spans.
+Set `MINDWEFT_OTEL_EXPORTER=none` to keep trace context active without exporting spans.
 
 ## Test
 
@@ -2338,14 +2351,14 @@ Skills are execution overlays. They primarily customize the system prompt. Capab
 control the effective local-tool and MCP-server surface for a thread.
 
 Users can discover the current tenant's sanitized skill/profile/agent names and descriptions with
-`GET /execution-options`, `minigent options`, or the interactive `/options`, `/skills`, and
+`GET /execution-options`, `mindweft options`, or the interactive `/options`, `/skills`, and
 `/profiles` chat commands. This discovery surface intentionally omits skill prompts, MCP URLs,
 headers, secrets, and raw tool allowlist internals.
 
 Tenant tool config still defines the maximum available tools and MCP servers. A capability profile
 can narrow access for a thread, but it cannot expand access beyond the tenant configuration.
 
-For backward compatibility, Minigent still honors legacy skill-level `allowed_local_tools` and
+For backward compatibility, Mindweft still honors legacy skill-level `allowed_local_tools` and
 `mcp_server_names` when a thread selects exactly one such skill and no explicit capability profile
 is set. New configs should prefer prompt-only skills plus `capability_profiles`.
 
@@ -2354,15 +2367,15 @@ selected skill prompts in order. In other words, skill prompts are overlays, not
 for the runtime prompt, and `POST /threads` does not accept a raw `system_prompt` override.
 
 Clients can use server-side agent presets as named shortcuts for common skill/profile combinations.
-For example, `minigent-client chat` exposes them through `/agent` and creates a new thread with the
+For example, `mindweft-client chat` exposes them through `/agent` and creates a new thread with the
 preset's configured skills and capability profile.
 
 Use this tenant config with the mock adapter to demo default and explicit skills plus capability
 profiles:
 
 ```dotenv
-MINIGENT_AUTH_MODE=dev-headers
-MINIGENT_TENANT_EXECUTION_CONFIGS={
+MINDWEFT_AUTH_MODE=dev-headers
+MINDWEFT_TENANT_EXECUTION_CONFIGS={
   "demo-tenant":{
     "llm":{"provider":"mock"},
     "tools":{"allowed_local_tools":["echo","calculator","current_time"]},
@@ -2437,7 +2450,7 @@ append Home Assistant-specific operating guidance while narrowing the thread to 
 MCP server:
 
 ```dotenv
-MINIGENT_TENANT_EXECUTION_CONFIGS={
+MINDWEFT_TENANT_EXECUTION_CONFIGS={
   "demo-tenant":{
     "llm":{"provider":"openai","model":"gpt-4.1-mini","api_key":"..."},
     "tools":{
@@ -2519,4 +2532,4 @@ Local tools currently include:
 - `sleep`
 - `calculator`
 - `retrieve_knowledge`
-- `peer_agent_task` when `MINIGENT_ENABLE_PEER_AGENT_TOOL=true`
+- `peer_agent_task` when `MINDWEFT_ENABLE_PEER_AGENT_TOOL=true`

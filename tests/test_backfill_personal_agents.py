@@ -50,10 +50,10 @@ def test_backfill_personal_agents_is_idempotent_and_supports_dry_run(
     assert migrated.config["defaults"]["agent_ref"] == "user:personal-assistant"
     assert (
         migrated.config["agents"]["items"][0]["capability_profile_ref"]
-        == "user:minigent-user-tools"
+        == "user:mindweft-user-tools"
     )
     assert migrated.config["capability_profiles"]["items"][0]["mcp_server_refs"] == [
-        "shared:minigent-user-mcp"
+        "shared:mindweft-user-mcp"
     ]
 
     assert run(_args(db_path, dry_run=False)) == 0

@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from app.mcp import (
     LEGACY_MCP_PROTOCOL_VERSION,
     LEGACY_PRIVATE_VALUES_META_KEY,
+    MINIGENT_PRIVATE_VALUES_META_KEY,
     MODERN_MCP_PROTOCOL_VERSION,
     PRIVATE_VALUES_META_KEY,
     MCPHTTPClient,
@@ -109,9 +110,32 @@ def test_mcp_settings_from_env_mapping_defaults_to_empty() -> None:
     assert MCPSettings.from_env({}) == MCPSettings(servers=[])
 
 
+def test_mcp_settings_prefer_mindweft_and_accept_legacy_env() -> None:
+    preferred = MCPSettings.from_env(
+        {
+            "MINDWEFT_MCP_SERVERS": json.dumps(
+                [{"name": "mindweft", "url": "https://mindweft.example/mcp"}]
+            ),
+            "MINIGENT_MCP_SERVERS": json.dumps(
+                [{"name": "legacy", "url": "https://legacy.example/mcp"}]
+            ),
+        }
+    )
+    legacy = MCPSettings.from_env(
+        {
+            "MINIGENT_MCP_SERVERS": json.dumps(
+                [{"name": "legacy", "url": "https://legacy.example/mcp"}]
+            )
+        }
+    )
+
+    assert preferred.servers[0].name == "mindweft"
+    assert legacy.servers[0].name == "legacy"
+
+
 def test_mcp_settings_from_env_reads_environment(monkeypatch) -> None:
     monkeypatch.setenv(
-        "MINIGENT_MCP_SERVERS",
+        "MINDWEFT_MCP_SERVERS",
         json.dumps([{"name": "demo", "url": "https://example.com/mcp"}]),
     )
 
@@ -120,7 +144,7 @@ def test_mcp_settings_from_env_reads_environment(monkeypatch) -> None:
 
 def test_load_mcp_server_configs_from_env(monkeypatch) -> None:
     monkeypatch.setenv(
-        "MINIGENT_MCP_SERVERS",
+        "MINDWEFT_MCP_SERVERS",
         json.dumps(
             [
                 {
@@ -155,7 +179,7 @@ def test_load_mcp_server_configs_from_env(monkeypatch) -> None:
 def test_load_mcp_server_config_parses_forwarded_identity() -> None:
     configs = load_mcp_server_configs_from_env(
         {
-            "MINIGENT_MCP_SERVERS": json.dumps(
+            "MINDWEFT_MCP_SERVERS": json.dumps(
                 [
                     {
                         "name": "private-calendar",
@@ -333,7 +357,7 @@ def test_mcp_http_client_discovers_and_uses_modern_stateless_protocol() -> None:
         assert request["headers"]["mcp-protocol-version"] == MODERN_MCP_PROTOCOL_VERSION
         metadata = request["body"]["params"]["_meta"]
         assert metadata["io.modelcontextprotocol/protocolVersion"] == MODERN_MCP_PROTOCOL_VERSION
-        assert metadata["io.modelcontextprotocol/clientInfo"]["name"] == "minigent"
+        assert metadata["io.modelcontextprotocol/clientInfo"]["name"] == "mindweft"
         assert metadata["io.modelcontextprotocol/clientCapabilities"] == {}
     assert requests[2]["headers"]["mcp-method"] == "tools/call"
     assert requests[2]["headers"]["mcp-name"] == "echo"
@@ -532,6 +556,21 @@ def test_parse_mcp_tool_result_rejects_invalid_private_metadata() -> None:
             },
             tool_name="contacts.list",
         )
+
+
+def test_parse_mcp_tool_result_accepts_minigent_private_value_metadata() -> None:
+    result = parse_mcp_tool_result(
+        {
+            "structuredContent": {"name": "protected-name"},
+            "_meta": {MINIGENT_PRIVATE_VALUES_META_KEY: {"name-ref": "Example Name"}},
+        },
+        tool_name="contacts.list",
+    )
+
+    assert result == MCPPrivateToolResult(
+        model_content={"name": "protected-name"},
+        private_values={"name-ref": "Example Name"},
+    )
 
 
 def test_parse_mcp_tool_result_accepts_legacy_private_value_metadata() -> None:

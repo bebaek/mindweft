@@ -1,34 +1,46 @@
 # CLI Reference
 
-Minigent ships two CLI entrypoints that share the same client library:
+Mindweft ships two canonical CLI entrypoints that share the same client library:
 
-- **`minigent`** — one-shot commands for scripting and quick checks.
-- **`minigent-client`** — interactive chat, voice, and all one-shot commands.
+- **`mindweft`** — one-shot commands for scripting and quick checks.
+- **`mindweft-client`** — interactive chat, voice, and all one-shot commands.
+
+The legacy `minigent` and `minigent-client` names remain available as compatibility aliases.
 
 Inside the repo, prefix commands with `uv run`:
 
 ```bash
-uv run minigent run "hello"
-uv run minigent-client chat
+uv run mindweft run "hello"
+uv run mindweft-client chat
 ```
 
 After installing globally (`uv tool install '.[voice]'`), drop the `uv run` prefix.
 
-## `minigent-client` config file
+## Python API names
 
-Interactive `minigent-client` can load a TOML config file for stable local defaults. The
+New integrations should import `MindweftAPIClient` from `mindweft_client.api_client`,
+`MindweftAPIError` from `mindweft_client.errors`, `MindweftClientRuntime` from
+`mindweft_client.runtime`, and `MindweftSettings` from `app.settings`.
+Legacy import packages and compatibility symbols using the former product prefix remain aliases,
+so existing Python integrations do not need an immediate source migration.
+
+## `mindweft-client` config file
+
+Interactive `mindweft-client` can load a TOML config file for stable local defaults. The
 lookup order is:
 
 1. `--config <path>`
-2. `MINIGENT_CLIENT_CONFIG`
-3. `$XDG_CONFIG_HOME/minigent/client.toml` when `XDG_CONFIG_HOME` is absolute, otherwise
-   `~/.config/minigent/client.toml`
-4. `~/.minigent/client.toml` (legacy compatibility)
-5. `./.minigent-client.toml`
+2. `MINDWEFT_CLIENT_CONFIG` (or legacy `MINIGENT_CLIENT_CONFIG`)
+3. `$XDG_CONFIG_HOME/mindweft/client.toml` when `XDG_CONFIG_HOME` is absolute, otherwise
+   `~/.config/mindweft/client.toml`
+4. `$XDG_CONFIG_HOME/minigent/client.toml` or `~/.config/minigent/client.toml` (legacy)
+5. `~/.minigent/client.toml` (legacy)
+6. `./.mindweft-client.toml`
+7. `./.minigent-client.toml` (legacy)
 
-Mutable client state and prompt history are stored under `$XDG_STATE_HOME/minigent`, falling
-back to `~/.local/state/minigent`. Existing files under `~/.minigent` are read and migrated
-when their XDG-state equivalents do not exist.
+Mutable client state and prompt history are stored under `$XDG_STATE_HOME/mindweft`, falling
+back to `~/.local/state/mindweft`. An existing XDG `minigent` state directory remains in use
+until moved explicitly, and files under `~/.minigent` remain available for legacy migration.
 
 Environment variables still override file values, and CLI flags override both. Prefer
 keeping secrets such as API tokens and provider keys in environment variables rather than in
@@ -47,7 +59,7 @@ user_id = "demo-user"
 tenant_id = "demo-tenant"
 
 [voice]
-wake_phrase = "hey minigent"
+wake_phrase = "hey mindweft"
 stt_provider = "faster-whisper"
 stt_device = "cpu"
 tts_provider = "say"
@@ -84,22 +96,22 @@ uv tool install --reinstall --editable '.[voice]'
 
 ## One-shot commands
 
-All one-shot commands work on both `minigent` and `minigent-client`.
+All one-shot commands work on both `mindweft` and `mindweft-client`.
 
 ### Run a prompt
 
 ```bash
-minigent run "hello"
-echo "summarize this" | minigent run
-minigent run --json "hello"
-minigent run --stream "hello with progress"
-minigent run --stream --show-tool-results "hello"
-minigent run --stream --show-reasoning "hello"
-minigent run --stream --tokens live "hello"
-minigent run --thread <thread-id> "continue"
-minigent run --resume-last "continue"
-minigent run --image ./screenshot.png "describe this image"
-minigent run --image before.png --image after.png "compare these"
+mindweft run "hello"
+echo "summarize this" | mindweft run
+mindweft run --json "hello"
+mindweft run --stream "hello with progress"
+mindweft run --stream --show-tool-results "hello"
+mindweft run --stream --show-reasoning "hello"
+mindweft run --stream --tokens live "hello"
+mindweft run --thread <thread-id> "continue"
+mindweft run --resume-last "continue"
+mindweft run --image ./screenshot.png "describe this image"
+mindweft run --image before.png --image after.png "compare these"
 ```
 
 `run` reads from stdin when no prompt argument is provided. By default the assistant
@@ -121,17 +133,17 @@ reply prints to stdout with no extra noise. Useful flags:
 | `--skills <name>...` | Ordered list of prompt-overlay skills. |
 | `--capability-profile <name>` | Capability profile to apply. |
 | `--llm <name>` | Named LLM profile to bind to a new thread. |
-| `--image <path>` | Attach an image file; can be repeated. Requires server-side `[image_input].enabled = true` (or `MINIGENT_IMAGE_INPUT_ENABLED=true`) and a vision-capable model/provider. |
+| `--image <path>` | Attach an image file; can be repeated. Requires server-side `[image_input].enabled = true` (or `MINDWEFT_IMAGE_INPUT_ENABLED=true`) and a vision-capable model/provider. |
 | `--image-detail auto\|low\|high` | Vision detail hint for attached images. |
 
 ### Chat (one-shot)
 
 ```bash
-minigent chat "hello"
-minigent chat --stream "hello with progress"
-minigent chat --thread <thread-id> "continue"
-minigent chat --resume-last "continue"
-minigent chat --image ./diagram.png "what does this show?"
+mindweft chat "hello"
+mindweft chat --stream "hello with progress"
+mindweft chat --thread <thread-id> "continue"
+mindweft chat --resume-last "continue"
+mindweft chat --image ./diagram.png "what does this show?"
 ```
 
 Same flags as `run`, plus `--print-thread-id` and `--transcript` for printing the full
@@ -143,10 +155,10 @@ List the current tenant's user-visible skills and capability profiles before cre
 thread:
 
 ```bash
-minigent options
-minigent skills
-minigent capabilities
-minigent --json options
+mindweft options
+mindweft skills
+mindweft capabilities
+mindweft --json options
 ```
 
 These commands call `GET /execution-options`, which returns sanitized metadata only:
@@ -164,23 +176,23 @@ In interactive chat, use the matching slash commands:
 Use the reported names when creating threads:
 
 ```bash
-minigent threads create --skills coding-workspace concise --capability-profile inspect --llm claude
+mindweft threads create --skills coding-workspace concise --capability-profile inspect --llm claude
 ```
 
 ### Threads
 
 ```bash
-minigent threads                          # list locally remembered threads
-minigent threads show <thread-id>         # show a specific thread
-minigent threads create                   # create a new thread
-minigent threads delete <thread-id>       # delete a thread (requires --admin)
+mindweft threads                          # list locally remembered threads
+mindweft threads show <thread-id>         # show a specific thread
+mindweft threads create                   # create a new thread
+mindweft threads delete <thread-id>       # delete a thread (requires --admin)
 ```
 
 ### Resume
 
 ```bash
-minigent resume                           # resume the latest thread (interactive picker in TTY)
-minigent resume <thread-id>               # resume a specific thread
+mindweft resume                           # resume the latest thread (interactive picker in TTY)
+mindweft resume <thread-id>               # resume a specific thread
 ```
 
 In a TTY with multiple remembered threads, `resume` without an ID shows an interactive
@@ -189,18 +201,18 @@ picker. Use `--no-picker` to skip the picker and resume the latest thread direct
 ### Export
 
 ```bash
-minigent export --format markdown         # export the latest remembered thread
-minigent export <thread-id> --format json # export a specific thread
+mindweft export --format markdown         # export the latest remembered thread
+mindweft export <thread-id> --format json # export a specific thread
 ```
 
 ### Diagnostics
 
 ```bash
-minigent ping                             # quick API reachability check
-minigent config                           # show local config
-minigent config doctor                    # full local/server diagnostic
-minigent debug-bundle                     # masked bug-report bundle
-minigent debug-bundle --json --output debug-bundle.json
+mindweft ping                             # quick API reachability check
+mindweft config                           # show local config
+mindweft config doctor                    # full local/server diagnostic
+mindweft debug-bundle                     # masked bug-report bundle
+mindweft debug-bundle --json --output debug-bundle.json
 ```
 
 `ping` reports API reachability, auth status, MCP broker availability, and model/backend
@@ -213,20 +225,20 @@ Admin commands require `--admin`. Tenant registry commands manage durable tenant
 state:
 
 ```bash
-minigent --admin admin tenants list --status active
-minigent --admin admin tenants create --id <tenant-id> --slug <slug> --name "Tenant Name" --status active --provisioning-profile generic-v1
-minigent --admin admin tenants show <tenant-id>
-minigent --admin admin tenants update <tenant-id> --plan pro --metadata-json '{"owner":"support"}'
-minigent --admin admin tenants suspend <tenant-id>
-minigent --admin admin tenants activate <tenant-id>
-minigent --admin admin tenants archive <tenant-id>
-minigent --admin admin tenants delete <tenant-id>
-minigent --admin admin tenants seed --from execution-configs --status active --dry-run
-minigent --admin admin tenants seed --from execution-configs --status active
-minigent --admin admin tenants entitlements show <tenant-id>
-minigent --admin admin tenants entitlements set <tenant-id> --features-json '{"mcp":true}' --limits-json '{"max_threads":100}'
-minigent --admin admin tenants entitlements validate <tenant-id> --features-json '{"mcp":true}'
-minigent --admin admin tenants entitlements delete <tenant-id>
+mindweft --admin admin tenants list --status active
+mindweft --admin admin tenants create --id <tenant-id> --slug <slug> --name "Tenant Name" --status active --provisioning-profile generic-v1
+mindweft --admin admin tenants show <tenant-id>
+mindweft --admin admin tenants update <tenant-id> --plan pro --metadata-json '{"owner":"support"}'
+mindweft --admin admin tenants suspend <tenant-id>
+mindweft --admin admin tenants activate <tenant-id>
+mindweft --admin admin tenants archive <tenant-id>
+mindweft --admin admin tenants delete <tenant-id>
+mindweft --admin admin tenants seed --from execution-configs --status active --dry-run
+mindweft --admin admin tenants seed --from execution-configs --status active
+mindweft --admin admin tenants entitlements show <tenant-id>
+mindweft --admin admin tenants entitlements set <tenant-id> --features-json '{"mcp":true}' --limits-json '{"max_threads":100}'
+mindweft --admin admin tenants entitlements validate <tenant-id> --features-json '{"mcp":true}'
+mindweft --admin admin tenants entitlements delete <tenant-id>
 ```
 
 `--provisioning-profile generic-v1` atomically creates a conservative starter execution
@@ -237,17 +249,17 @@ capability profile, and only the `current_time` and `calculator` local tools. Om
 Thread and audit admin commands use `--tenant` to select the target tenant:
 
 ```bash
-minigent --admin admin threads list --tenant <tenant-id>
-minigent --admin admin threads show <thread-id> --tenant <tenant-id>
-minigent --admin admin threads delete <thread-id> --tenant <tenant-id>
-minigent --admin admin threads prune --tenant <tenant-id> --updated-before 2026-05-01T00:00:00Z --dry-run
-minigent --admin admin audit list --tenant <tenant-id>
+mindweft --admin admin threads list --tenant <tenant-id>
+mindweft --admin admin threads show <thread-id> --tenant <tenant-id>
+mindweft --admin admin threads delete <thread-id> --tenant <tenant-id>
+mindweft --admin admin threads prune --tenant <tenant-id> --updated-before 2026-05-01T00:00:00Z --dry-run
+mindweft --admin admin audit list --tenant <tenant-id>
 ```
 
 ## Interactive chat
 
 ```bash
-minigent-client chat
+mindweft-client chat
 ```
 
 The interactive chat uses `prompt_toolkit` for shell-style editing, persistent local input
@@ -260,7 +272,7 @@ history, and multiline input.
 | `Enter` | Submit | Insert newline |
 | `Esc+Enter` / `Ctrl+J` | Insert newline | Submit |
 
-Set `MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter` or pass `--chat-submit-mode alt-enter`
+Set `MINDWEFT_CLIENT_CHAT_SUBMIT_MODE=alt-enter` or pass `--chat-submit-mode alt-enter`
 to switch modes. Use `/editor` to compose a long prompt in `$VISUAL` or `$EDITOR`.
 Interactive prompts use terminal soft wrapping, so resizing a tmux pane or terminal does not
 store pane-width newlines in prompt history.
@@ -268,16 +280,16 @@ store pane-width newlines in prompt history.
 ### Chat flags
 
 ```bash
-minigent-client chat                        # plain terminal chat loop
-minigent-client chat --stream-runs          # live run/tool/peer progress to stderr
-minigent-client chat --resume-last          # resume the last remembered thread
-minigent-client chat --once                 # process one prompt then exit
-minigent-client chat --show-tool-results    # expanded tool output in streaming mode
-minigent-client chat --show-reasoning       # show model reasoning content
-minigent-client chat --tokens live          # live token usage display
+mindweft-client chat                        # plain terminal chat loop
+mindweft-client chat --stream-runs          # live run/tool/peer progress to stderr
+mindweft-client chat --resume-last          # resume the last remembered thread
+mindweft-client chat --once                 # process one prompt then exit
+mindweft-client chat --show-tool-results    # expanded tool output in streaming mode
+mindweft-client chat --show-reasoning       # show model reasoning content
+mindweft-client chat --tokens live          # live token usage display
 ```
 
-Or set `MINIGENT_CLIENT_STREAM_RUNS=true` for persistent streaming.
+Or set `MINDWEFT_CLIENT_STREAM_RUNS=true` for persistent streaming.
 
 ### Slash commands
 
@@ -301,7 +313,7 @@ Available during interactive chat:
 | `/tokens` | Show estimated current thread size. |
 | `/debug` | Toggle debug mode. |
 | `/editor` | Open `$EDITOR` for long prompt composition. |
-| `/image <path...>` | Queue one or more image files for the next message. Requires server-side `[image_input].enabled = true` (or `MINIGENT_IMAGE_INPUT_ENABLED=true`) and a vision-capable model/provider. |
+| `/image <path...>` | Queue one or more image files for the next message. Requires server-side `[image_input].enabled = true` (or `MINDWEFT_IMAGE_INPUT_ENABLED=true`) and a vision-capable model/provider. |
 | `/image paste`, `/image clipboard` | On macOS, use `pngpaste` to queue a PNG image from the system clipboard for the next message. |
 | `/image list` | Show images queued for the next message. |
 | `/image clear` | Clear queued images without sending them. |
@@ -316,10 +328,10 @@ append the invocation text after the template.
 
 ### Agent presets
 
-Configure presets with `MINIGENT_CLIENT_AGENT_PRESETS`:
+Configure presets with `MINDWEFT_CLIENT_AGENT_PRESETS`:
 
 ```dotenv
-MINIGENT_CLIENT_AGENT_PRESETS={"coding-inspect":{"skill_names":["coding-workspace"],"capability_profile":"inspect"},"home-assistant":{"skill_names":["home-assistant","concise"],"capability_profile":"home-assistant"}}
+MINDWEFT_CLIENT_AGENT_PRESETS={"coding-inspect":{"skill_names":["coding-workspace"],"capability_profile":"inspect"},"home-assistant":{"skill_names":["home-assistant","concise"],"capability_profile":"home-assistant"}}
 ```
 
 Selecting a preset with `/agent <name>` creates a new thread with that preset's
@@ -330,18 +342,18 @@ agent.
 ## Voice and stdin modes
 
 ```bash
-minigent-client stdin                       # plain stdin text loop
-minigent-client stdin --wake-phrase "hey minigent"
-minigent-client stdin --resume-last --once
-minigent-client manual-audio                # manual audio capture
-minigent-client passive-audio               # passive audio with wake word
-minigent-client voice                       # alias for manual-audio
+mindweft-client stdin                       # plain stdin text loop
+mindweft-client stdin --wake-phrase "hey mindweft"
+mindweft-client stdin --resume-last --once
+mindweft-client manual-audio                # manual audio capture
+mindweft-client passive-audio               # passive audio with wake word
+mindweft-client voice                       # alias for manual-audio
 ```
 
 The older `--backend chat|stdin|manual-audio|passive-audio` form remains supported:
 
 ```bash
-minigent-client --backend chat
+mindweft-client --backend chat
 ```
 
 Voice modes require the `voice` extra:
@@ -386,7 +398,7 @@ include client context.
 
 The CLI reports common API failures with short friendly errors on stderr:
 
-- Auth failures prompt you to check `MINIGENT_API_TOKEN`.
+- Auth failures prompt you to check `MINDWEFT_API_TOKEN`.
 - Connection failures suggest checking `--base-url` and whether the server is running.
 - Server/timeout/malformed-response failures are categorized without dumping raw HTTP
   bodies by default.
@@ -429,12 +441,12 @@ These flags work across all commands:
 
 | Variable | Description |
 | --- | --- |
-| `MINIGENT_BASE_URL` | Default API base URL. |
-| `MINIGENT_API_TOKEN` | Default bearer token. |
-| `MINIGENT_USER_ID` | Default user ID for trusted-header auth. |
-| `MINIGENT_TENANT_ID` | Default tenant ID for trusted-header auth. |
-| `MINIGENT_CLIENT_STREAM_RUNS` | Enable streaming by default (`true`/`false`). |
-| `MINIGENT_CLIENT_SHOW_TOOL_RESULTS` | Show tool results by default. |
-| `MINIGENT_CLIENT_CHAT_SUBMIT_MODE` | `enter` (default) or `alt-enter`. |
-| `MINIGENT_CLIENT_AGENT_PRESETS` | JSON object or array of client-side agent presets. Presets reference tenant-defined skills/capability profiles discoverable with `minigent options`. |
+| `MINDWEFT_BASE_URL` | Default API base URL. |
+| `MINDWEFT_API_TOKEN` | Default bearer token. |
+| `MINDWEFT_USER_ID` | Default user ID for trusted-header auth. |
+| `MINDWEFT_TENANT_ID` | Default tenant ID for trusted-header auth. |
+| `MINDWEFT_CLIENT_STREAM_RUNS` | Enable streaming by default (`true`/`false`). |
+| `MINDWEFT_CLIENT_SHOW_TOOL_RESULTS` | Show tool results by default. |
+| `MINDWEFT_CLIENT_CHAT_SUBMIT_MODE` | `enter` (default) or `alt-enter`. |
+| `MINDWEFT_CLIENT_AGENT_PRESETS` | JSON object or array of client-side agent presets. Presets reference tenant-defined skills/capability profiles discoverable with `mindweft options`. |
 | `NO_COLOR` | Disable ANSI styling. |

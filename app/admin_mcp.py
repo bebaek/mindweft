@@ -1,4 +1,4 @@
-"""Role-scoped Minigent administration tools and the external admin MCP surface."""
+"""Role-scoped Mindweft administration tools and the external admin MCP surface."""
 
 from __future__ import annotations
 
@@ -12,15 +12,37 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.admin_mutations import AdminMutationService
-from app.auth import require_principal
+from app.auth import (
+    ADMIN_HEADER,
+    LEGACY_ADMIN_HEADER,
+    LEGACY_TENANT_HEADER,
+    LEGACY_USER_HEADER,
+    TENANT_HEADER,
+    USER_HEADER,
+    require_principal,
+)
 from app.execution import ADMIN_EXECUTION_CONFIG_KEY
 from app.health import database_readiness_checks
 from app.models import Principal
 from app.tools import ToolExecutionContext, ToolRegistry
 
-ADMIN_CHAT_SETUP_TOOL = "minigent_admin_get_setup_status"
-ADMIN_CHAT_TENANT_TOOL = "minigent_admin_diagnose_tenant_setup"
-ADMIN_CHAT_CATALOG_TOOL = "minigent_admin_list_mcp_server_catalog_access"
+ADMIN_CHAT_SETUP_TOOL = "mindweft_admin_get_setup_status"
+ADMIN_CHAT_TENANT_TOOL = "mindweft_admin_diagnose_tenant_setup"
+ADMIN_CHAT_CATALOG_TOOL = "mindweft_admin_list_mcp_server_catalog_access"
+ADMIN_PROPOSE_TENANT_UPDATE_TOOL = "mindweft_admin_propose_tenant_update"
+ADMIN_PROPOSE_ENTITLEMENTS_TOOL = "mindweft_admin_propose_entitlements"
+ADMIN_PROPOSE_DOMAIN_ADD_TOOL = "mindweft_admin_propose_domain_add"
+ADMIN_CONFIRM_MUTATION_TOOL = "mindweft_admin_confirm_mutation"
+
+LEGACY_ADMIN_TOOL_ALIASES = {
+    "minigent_admin_get_setup_status": ADMIN_CHAT_SETUP_TOOL,
+    "minigent_admin_diagnose_tenant_setup": ADMIN_CHAT_TENANT_TOOL,
+    "minigent_admin_list_mcp_server_catalog_access": ADMIN_CHAT_CATALOG_TOOL,
+    "minigent_admin_propose_tenant_update": ADMIN_PROPOSE_TENANT_UPDATE_TOOL,
+    "minigent_admin_propose_entitlements": ADMIN_PROPOSE_ENTITLEMENTS_TOOL,
+    "minigent_admin_propose_domain_add": ADMIN_PROPOSE_DOMAIN_ADD_TOOL,
+    "minigent_admin_confirm_mutation": ADMIN_CONFIRM_MUTATION_TOOL,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,7 +52,7 @@ class AdminMCPRequestContext:
 
 
 _request_context: ContextVar[AdminMCPRequestContext | None] = ContextVar(
-    "minigent_admin_mcp_request_context",
+    "mindweft_admin_mcp_request_context",
     default=None,
 )
 
@@ -43,7 +65,7 @@ def current_admin_mcp_request_context() -> AdminMCPRequestContext:
 
 
 class AdminMCPAuthMiddleware:
-    """Authenticate every MCP request using Minigent's normal principal mechanism."""
+    """Authenticate every MCP request using Mindweft's normal principal mechanism."""
 
     def __init__(self, app: ASGIApp) -> None:
         self._app = app
@@ -53,9 +75,12 @@ class AdminMCPAuthMiddleware:
         principal = await require_principal(
             request,
             authorization=request.headers.get("Authorization"),
-            x_minigent_user_id=request.headers.get("X-Minigent-User-Id"),
-            x_minigent_tenant_id=request.headers.get("X-Minigent-Tenant-Id"),
-            x_minigent_admin=request.headers.get("X-Minigent-Admin"),
+            x_mindweft_user_id=request.headers.get(USER_HEADER),
+            x_mindweft_tenant_id=request.headers.get(TENANT_HEADER),
+            x_mindweft_admin=request.headers.get(ADMIN_HEADER),
+            x_minigent_user_id=request.headers.get(LEGACY_USER_HEADER),
+            x_minigent_tenant_id=request.headers.get(LEGACY_TENANT_HEADER),
+            x_minigent_admin=request.headers.get(LEGACY_ADMIN_HEADER),
         )
         if not principal.is_admin:
             raise HTTPException(status_code=403, detail="Admin access required")
@@ -305,13 +330,13 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
 
     registry.register(
         ADMIN_CHAT_SETUP_TOOL,
-        "Inspect this Minigent deployment's redacted readiness and safe setup findings.",
+        "Inspect this Mindweft deployment's redacted readiness and safe setup findings.",
         {"type": "object", "properties": {}, "additionalProperties": False},
         setup_handler,
     )
     registry.register(
         ADMIN_CHAT_TENANT_TOOL,
-        "Diagnose redacted execution and MCP catalog setup for a Minigent tenant.",
+        "Diagnose redacted execution and MCP catalog setup for a Mindweft tenant.",
         {
             "type": "object",
             "properties": {"tenant_id": {"type": "string"}},
@@ -322,7 +347,7 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
     )
     registry.register(
         ADMIN_CHAT_CATALOG_TOOL,
-        "Inspect redacted effective Minigent MCP catalog access for one tenant user.",
+        "Inspect redacted effective Mindweft MCP catalog access for one tenant user.",
         {
             "type": "object",
             "properties": {
@@ -335,7 +360,7 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
         catalog_handler,
     )
     registry.register(
-        "minigent_admin_propose_tenant_update",
+        ADMIN_PROPOSE_TENANT_UPDATE_TOOL,
         "Propose a tenant metadata change. This never writes; return the diff for confirmation.",
         {
             "type": "object",
@@ -346,7 +371,7 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
         propose_tenant_update_handler,
     )
     registry.register(
-        "minigent_admin_propose_entitlements",
+        ADMIN_PROPOSE_ENTITLEMENTS_TOOL,
         "Propose tenant feature and limit changes; this never writes until confirmed.",
         {
             "type": "object",
@@ -361,7 +386,7 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
         propose_entitlements_handler,
     )
     registry.register(
-        "minigent_admin_propose_domain_add",
+        ADMIN_PROPOSE_DOMAIN_ADD_TOOL,
         "Propose adding a tenant domain; this never writes until confirmed.",
         {
             "type": "object",
@@ -372,7 +397,7 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
         propose_domain_handler,
     )
     registry.register(
-        "minigent_admin_confirm_mutation",
+        ADMIN_CONFIRM_MUTATION_TOOL,
         "Apply one previously proposed mutation after explicit administrator confirmation.",
         {
             "type": "object",
@@ -382,14 +407,16 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
         },
         confirm_mutation_handler,
     )
+    for alias, target in LEGACY_ADMIN_TOOL_ALIASES.items():
+        registry.register_alias(alias, target)
     return registry
 
 
 def build_admin_mcp_server() -> MCPServer[Any]:
     server = MCPServer(
-        "Minigent Admin Operations",
+        "Mindweft Admin Operations",
         instructions=(
-            "This server is read-only. It reports redacted Minigent deployment and tenant "
+            "This server is read-only. It reports redacted Mindweft deployment and tenant "
             "configuration diagnostics for authenticated platform administrators. Never infer "
             "or request secrets, credential values, or authorization headers."
         ),

@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from mindweft_config.unified_config import preferred_mindweft_env
+
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -36,12 +38,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--agent-port", type=int, default=int(os.getenv("AGENT_PORT", "8010")))
     parser.add_argument(
         "--peer-name",
-        default=os.getenv("MINIGENT_DEMO_PEER_NAME", "pi"),
-        help="Expected peer name in Minigent's /peer-agents response.",
+        default=preferred_mindweft_env("DEMO_PEER_NAME", default="pi"),
+        help="Expected peer name in Mindweft's /peer-agents response.",
     )
-    parser.add_argument("--minigent-host", default=os.getenv("MINIGENT_HOST", "127.0.0.1"))
     parser.add_argument(
-        "--minigent-port", type=int, default=int(os.getenv("MINIGENT_PORT", "8000"))
+        "--mindweft-host",
+        "--minigent-host",
+        dest="mindweft_host",
+        default=preferred_mindweft_env("HOST", default="127.0.0.1"),
+    )
+    parser.add_argument(
+        "--mindweft-port",
+        "--minigent-port",
+        dest="mindweft_port",
+        type=int,
+        default=int(preferred_mindweft_env("PORT", default="8000") or "8000"),
     )
     parser.add_argument(
         "--check-running",
@@ -94,7 +105,7 @@ def run_checks(args: argparse.Namespace) -> list[CheckResult]:
         check_command("uv can run", ["uv", "--version"], cwd=root_dir),
         check_agent_command_help(args.agent_runtime, agent_command, cwd=root_dir),
         check_command(
-            "minigent imports",
+            "mindweft imports",
             ["uv", "run", "python", "-c", "import app.main"],
             cwd=root_dir,
         ),
@@ -108,7 +119,7 @@ def run_checks(args: argparse.Namespace) -> list[CheckResult]:
         checks.extend(check_running_services(args))
     else:
         checks.append(check_port_free("agent wrapper port", args.agent_host, args.agent_port))
-        checks.append(check_port_free("minigent port", args.minigent_host, args.minigent_port))
+        checks.append(check_port_free("mindweft port", args.mindweft_host, args.mindweft_port))
     return checks
 
 
@@ -165,13 +176,13 @@ def check_port_free(name: str, host: str, port: int) -> CheckResult:
 
 def check_running_services(args: argparse.Namespace) -> list[CheckResult]:
     agent_url = f"http://{args.agent_host}:{args.agent_port}"
-    minigent_url = f"http://{args.minigent_host}:{args.minigent_port}"
+    mindweft_url = f"http://{args.mindweft_host}:{args.mindweft_port}"
     results: list[CheckResult] = []
     if not args.skip_wrapper_health:
         results.append(check_url("agent wrapper health", f"{agent_url}/health"))
-    config = request_json_result("minigent config", f"{minigent_url}/config")
+    config = request_json_result("mindweft config", f"{mindweft_url}/config")
     results.append(config[0])
-    peers = request_json_result("minigent peer agents", f"{minigent_url}/peer-agents")
+    peers = request_json_result("mindweft peer agents", f"{mindweft_url}/peer-agents")
     results.append(peers[0])
     if config[1] is not None:
         local_tools = config[1].get("local_tools", [])

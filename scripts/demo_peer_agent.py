@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 import urllib.error
@@ -10,22 +9,24 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from mindweft_config.unified_config import preferred_mindweft_env
+
 TERMINAL_STATUSES = {"completed", "failed", "canceled"}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Submit and poll a peer-agent task through a running Minigent server."
+        description="Submit and poll a peer-agent task through a running Mindweft server."
     )
     parser.add_argument(
         "--base-url",
-        default=os.getenv("MINIGENT_BASE_URL", "http://127.0.0.1:8000"),
-        help="Base URL for the running Minigent API service.",
+        default=preferred_mindweft_env("BASE_URL", default="http://127.0.0.1:8000"),
+        help="Base URL for the running Mindweft API service.",
     )
     parser.add_argument(
         "--peer",
         default="pi",
-        help="Configured peer name from MINIGENT_PEER_AGENTS.",
+        help="Configured peer name from MINDWEFT_PEER_AGENTS.",
     )
     parser.add_argument(
         "--cwd",
@@ -53,7 +54,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--show-events",
         action="store_true",
-        help="Fetch and print peer task events through Minigent when the task finishes.",
+        help="Fetch and print peer task events through Mindweft when the task finishes.",
     )
     return parser.parse_args(argv)
 
@@ -75,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         print_http_error(exc)
         return 2
     except urllib.error.URLError as exc:
-        print(f"Minigent is not reachable at {base_url}: {exc}", file=sys.stderr)
+        print(f"Mindweft is not reachable at {base_url}: {exc}", file=sys.stderr)
         return 2
 
     print(f"health: {health}")
@@ -145,7 +146,7 @@ def request_json(method: str, url: str, payload: dict[str, Any] | None = None) -
 
 def print_http_error(exc: urllib.error.HTTPError) -> None:
     body = exc.read().decode("utf-8", errors="replace")
-    print(f"Minigent request failed: {exc.code} {body}", file=sys.stderr)
+    print(f"Mindweft request failed: {exc.code} {body}", file=sys.stderr)
 
 
 def print_result(

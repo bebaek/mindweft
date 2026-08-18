@@ -7,7 +7,7 @@ soft deletion via tenant status, tenant seeding from execution-config tenants, t
 domain registration, manual verification, and lookup APIs, tenant entitlement
 CRUD/validation APIs, request-time tenant context resolution, structured tenant audit
 metadata for tenant/domain/entitlement mutations, optional active-tenant enforcement with
-`MINIGENT_TENANT_REGISTRY_REQUIRED`, execution-config version exposure in tenant context,
+`MINDWEFT_TENANT_REGISTRY_REQUIRED`, execution-config version exposure in tenant context,
 execution-config admin CRUD/validation with in-process resolver invalidation, and runtime
 entitlement enforcement for `peer_agents`/`mcp` feature flags plus `max_threads`,
 `max_messages_per_thread`/`max_messages`, and `max_thread_runs` limits.
@@ -20,7 +20,7 @@ tenant-specific defaults out of environment/static configuration.
 
 ## Context
 
-Minigent supports tenant-scoped authentication, thread isolation, per-tenant execution
+Mindweft supports tenant-scoped authentication, thread isolation, per-tenant execution
 configuration, and an optional admin SQLite store. Dynamic tenant management extends that
 model with runtime-managed tenant identity, lifecycle state, domains, entitlements, admin
 operations, and audit metadata.
@@ -121,7 +121,7 @@ The current request-time tenant flow is:
 1. Authenticate the caller.
 2. Read the tenant ID from trusted principal/auth material.
 3. If the admin store is enabled, load the tenant registry record for the principal tenant.
-4. If `MINIGENT_TENANT_REGISTRY_REQUIRED` is enabled, reject missing or non-active tenants.
+4. If `MINDWEFT_TENANT_REGISTRY_REQUIRED` is enabled, reject missing or non-active tenants.
 5. Load tenant entitlements and execution-config version when a registry/admin store is
    available.
 6. Attach `TenantContext` to request state for handlers and runtime policy checks.
@@ -303,7 +303,7 @@ Status: implemented with compatibility fallback.
 
 Registry state, entitlements, and execution-config version are loaded during request-time
 tenant-context resolution when the admin store is enabled. Active-tenant enforcement is
-opt-in with `MINIGENT_TENANT_REGISTRY_REQUIRED`.
+opt-in with `MINDWEFT_TENANT_REGISTRY_REQUIRED`.
 
 ### Phase 4: Add admin tenant APIs
 

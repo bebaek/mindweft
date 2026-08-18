@@ -8,27 +8,27 @@ AGENT_RUNTIME="${AGENT_RUNTIME:-pi}"
 AGENT_COMMAND="${AGENT_COMMAND:-pi}"
 AGENT_HOST="${AGENT_HOST:-127.0.0.1}"
 AGENT_PORT="${AGENT_PORT:-8010}"
-PEER_NAME="${MINIGENT_DEMO_PEER_NAME:-pi}"
-MINIGENT_HOST="${MINIGENT_HOST:-127.0.0.1}"
-MINIGENT_PORT="${MINIGENT_PORT:-8000}"
+PEER_NAME="${MINDWEFT_DEMO_PEER_NAME:-${MINIGENT_DEMO_PEER_NAME:-pi}}"
+MINDWEFT_HOST="${MINDWEFT_HOST:-${MINIGENT_HOST:-127.0.0.1}}"
+MINDWEFT_PORT="${MINDWEFT_PORT:-${MINIGENT_PORT:-8000}}"
 KEEP_RUNNING=false
 if [[ "${1:-}" == "--keep-running" ]]; then
   KEEP_RUNNING=true
   shift
 fi
 PROMPT="${1:-Summarize this repository in one paragraph. Do not edit files.}"
-MCP_BROKER_ENABLED="${MINIGENT_MCP_BROKER_ENABLED:-true}"
-LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/minigent-pi-backend-demo.XXXXXX")"
+MCP_BROKER_ENABLED="${MINDWEFT_MCP_BROKER_ENABLED:-${MINIGENT_MCP_BROKER_ENABLED:-true}}"
+LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mindweft-pi-backend-demo.XXXXXX")"
 
 WRAPPER_PID=""
-MINIGENT_PID=""
+MINDWEFT_PID=""
 
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
-  if [[ -n "$MINIGENT_PID" ]] && kill -0 "$MINIGENT_PID" 2>/dev/null; then
-    kill "$MINIGENT_PID" 2>/dev/null || true
-    wait "$MINIGENT_PID" 2>/dev/null || true
+  if [[ -n "$MINDWEFT_PID" ]] && kill -0 "$MINDWEFT_PID" 2>/dev/null; then
+    kill "$MINDWEFT_PID" 2>/dev/null || true
+    wait "$MINDWEFT_PID" 2>/dev/null || true
   fi
   if [[ -n "$WRAPPER_PID" ]] && kill -0 "$WRAPPER_PID" 2>/dev/null; then
     kill "$WRAPPER_PID" 2>/dev/null || true
@@ -43,7 +43,7 @@ cleanup() {
     echo
     echo "demo failed; logs are in $LOG_DIR" >&2
     echo "agent wrapper log: $LOG_DIR/agent-wrapper.log" >&2
-    echo "minigent log: $LOG_DIR/minigent.log" >&2
+    echo "mindweft log: $LOG_DIR/mindweft.log" >&2
   fi
   exit "$status"
 }
@@ -72,8 +72,8 @@ uv run python scripts/check_peer_agent_demo.py \
   --agent-host "$AGENT_HOST" \
   --agent-port "$AGENT_PORT" \
   --peer-name "$PEER_NAME" \
-  --minigent-host "$MINIGENT_HOST" \
-  --minigent-port "$MINIGENT_PORT"
+  --mindweft-host "$MINDWEFT_HOST" \
+  --mindweft-port "$MINDWEFT_PORT"
 
 cd "$WRAPPER_DIR"
 AGENT_ALLOWED_WORKSPACES="$WORKSPACE" \
@@ -88,28 +88,28 @@ WRAPPER_PID=$!
 wait_for_url "agent wrapper" "http://$AGENT_HOST:$AGENT_PORT/health"
 
 cd "$ROOT_DIR"
-MINIGENT_AUTH_MODE=dev-headers \
-MINIGENT_PEER_AGENTS="[{\"name\":\"$PEER_NAME\",\"base_url\":\"http://$AGENT_HOST:$AGENT_PORT\",\"description\":\"Local $AGENT_RUNTIME wrapper\",\"capabilities\":[\"repository analysis\",\"codebase inspection\",\"read-only command execution in the allowed workspace\"],\"side_effects\":[\"runs $AGENT_RUNTIME CLI commands on the local host\"],\"version\":\"0.1.0\"}]" \
-MINIGENT_AGENT_BACKEND=peer_agent \
-MINIGENT_AGENT_BACKEND_PEER="$PEER_NAME" \
-MINIGENT_AGENT_BACKEND_CWD="$WORKSPACE" \
-MINIGENT_MCP_BROKER_ENABLED="$MCP_BROKER_ENABLED" \
+MINDWEFT_AUTH_MODE=dev-headers \
+MINDWEFT_PEER_AGENTS="[{\"name\":\"$PEER_NAME\",\"base_url\":\"http://$AGENT_HOST:$AGENT_PORT\",\"description\":\"Local $AGENT_RUNTIME wrapper\",\"capabilities\":[\"repository analysis\",\"codebase inspection\",\"read-only command execution in the allowed workspace\"],\"side_effects\":[\"runs $AGENT_RUNTIME CLI commands on the local host\"],\"version\":\"0.1.0\"}]" \
+MINDWEFT_AGENT_BACKEND=peer_agent \
+MINDWEFT_AGENT_BACKEND_PEER="$PEER_NAME" \
+MINDWEFT_AGENT_BACKEND_CWD="$WORKSPACE" \
+MINDWEFT_MCP_BROKER_ENABLED="$MCP_BROKER_ENABLED" \
   uv run uvicorn app.main:app \
-    --host "$MINIGENT_HOST" \
-    --port "$MINIGENT_PORT" \
-    >"$LOG_DIR/minigent.log" 2>&1 &
-MINIGENT_PID=$!
+    --host "$MINDWEFT_HOST" \
+    --port "$MINDWEFT_PORT" \
+    >"$LOG_DIR/mindweft.log" 2>&1 &
+MINDWEFT_PID=$!
 
-wait_for_url "minigent" "http://$MINIGENT_HOST:$MINIGENT_PORT/health"
+wait_for_url "mindweft" "http://$MINDWEFT_HOST:$MINDWEFT_PORT/health"
 
 uv run python scripts/demo_pi_backend.py \
-  --base-url "http://$MINIGENT_HOST:$MINIGENT_PORT" \
+  --base-url "http://$MINDWEFT_HOST:$MINDWEFT_PORT" \
   --message="$PROMPT"
 
 if [[ "$KEEP_RUNNING" == true ]]; then
   echo
   echo "services are still running:"
-  echo "- Minigent: http://$MINIGENT_HOST:$MINIGENT_PORT"
+  echo "- Mindweft: http://$MINDWEFT_HOST:$MINDWEFT_PORT"
   echo "- Pi wrapper: http://$AGENT_HOST:$AGENT_PORT"
   echo "- logs: $LOG_DIR"
   echo "Press Ctrl-C to stop."

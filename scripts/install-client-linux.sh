@@ -21,7 +21,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/install-client-linux.sh [options]
 
-Installs Minigent's chat/voice client dependencies on a Linux host and can create a
+Installs Mindweft's chat/voice client dependencies on a Linux host and can create a
 systemd user service for always-on passive audio.
 
 Options:
@@ -45,11 +45,11 @@ USAGE
 }
 
 log() {
-  printf '[minigent-client-install] %s\n' "$*"
+  printf '[mindweft-client-install] %s\n' "$*"
 }
 
 die() {
-  printf '[minigent-client-install] ERROR: %s\n' "$*" >&2
+  printf '[mindweft-client-install] ERROR: %s\n' "$*" >&2
   exit 1
 }
 
@@ -158,7 +158,7 @@ if ! have_cmd uv; then
 fi
 
 if [[ "$INSTALL_TOOL" -eq 1 ]]; then
-  log "Installing minigent-client with the voice extra"
+  log "Installing mindweft-client with the voice extra"
   (cd "$INSTALL_DIR" && uv tool install --reinstall --editable '.[voice]')
 fi
 
@@ -214,20 +214,20 @@ if [[ ! -f "$ENV_FILE" || "$FORCE_ENV" -eq 1 ]]; then
   mkdir -p "$(dirname "$ENV_FILE")"
   umask 077
   cat > "$ENV_FILE" <<'EOF'
-MINIGENT_BASE_URL=http://127.0.0.1:8000
-MINIGENT_VOICE_API_TOKEN=
+MINDWEFT_BASE_URL=http://127.0.0.1:8000
+MINDWEFT_VOICE_API_TOKEN=
 
-MINIGENT_VOICE_STT_PROVIDER=openai
+MINDWEFT_VOICE_STT_PROVIDER=openai
 OPENAI_API_KEY=
 
-MINIGENT_VOICE_TTS_PROVIDER=piper
-MINIGENT_VOICE_TTS_MODEL=en_US-lessac-medium
+MINDWEFT_VOICE_TTS_PROVIDER=piper
+MINDWEFT_VOICE_TTS_MODEL=en_US-lessac-medium
 
-MINIGENT_VOICE_WAKE_ACKNOWLEDGEMENT=bell
-# MINIGENT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT=bell
-MINIGENT_VOICE_WAKEWORD_PROVIDER=openwakeword
-MINIGENT_VOICE_OWW_MODEL=okay_nabu
-MINIGENT_VOICE_FOLLOW_UP_TIMEOUT_MS=6000
+MINDWEFT_VOICE_WAKE_ACKNOWLEDGEMENT=bell
+# MINDWEFT_VOICE_CAPTURE_ENDED_ACKNOWLEDGEMENT=bell
+MINDWEFT_VOICE_WAKEWORD_PROVIDER=openwakeword
+MINDWEFT_VOICE_OWW_MODEL=okay_nabu
+MINDWEFT_VOICE_FOLLOW_UP_TIMEOUT_MS=6000
 EOF
 else
   log "Keeping existing env file: $ENV_FILE"
@@ -237,20 +237,27 @@ if [[ "$RUN_AUDIO_TEST" -eq 1 ]]; then
   have_cmd arecord || die "arecord is required for --audio-test"
   have_cmd aplay || die "aplay is required for --audio-test"
   log "Recording five seconds from the default ALSA input"
-  arecord -D default -f cd -d 5 /tmp/minigent-audio-test.wav
-  log "Playing /tmp/minigent-audio-test.wav through the default ALSA output"
-  aplay /tmp/minigent-audio-test.wav
+  arecord -D default -f cd -d 5 /tmp/mindweft-audio-test.wav
+  log "Playing /tmp/mindweft-audio-test.wav through the default ALSA output"
+  aplay /tmp/mindweft-audio-test.wav
 fi
 
 if [[ "$SYSTEMD_USER" -eq 1 ]]; then
   SERVICE_DIR="$HOME/.config/systemd/user"
-  SERVICE_PATH="$SERVICE_DIR/minigent-client.service"
+  SERVICE_PATH="$SERVICE_DIR/mindweft-client.service"
+  LEGACY_CLIENT_SERVICE_PATH="$SERVICE_DIR/minigent-client.service"
   LEGACY_DAEMON_SERVICE_PATH="$SERVICE_DIR/minigent-daemon.service"
   LEGACY_VOICE_DAEMON_SERVICE_PATH="$SERVICE_DIR/minigent-voice-daemon.service"
   RUNNER="$INSTALL_DIR/scripts/run-client-linux.sh"
 
   [[ -x "$RUNNER" ]] || die "runner is not executable: $RUNNER"
   mkdir -p "$SERVICE_DIR"
+
+  if [[ -f "$LEGACY_CLIENT_SERVICE_PATH" ]]; then
+    log "Removing legacy minigent-client user service"
+    systemctl --user disable --now minigent-client >/dev/null 2>&1 || true
+    rm -f "$LEGACY_CLIENT_SERVICE_PATH"
+  fi
 
   if [[ -f "$LEGACY_DAEMON_SERVICE_PATH" ]]; then
     log "Removing legacy minigent-daemon user service"
@@ -267,15 +274,15 @@ if [[ "$SYSTEMD_USER" -eq 1 ]]; then
   log "Writing systemd user service to $SERVICE_PATH"
   cat > "$SERVICE_PATH" <<EOF
 [Unit]
-Description=Minigent chat/voice client
+Description=Mindweft chat/voice client
 After=network-online.target sound.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-Environment=MINIGENT_VOICE_ENV_FILE=$ENV_FILE
-Environment=MINIGENT_VOICE_BACKEND=$BACKEND
+Environment=MINDWEFT_VOICE_ENV_FILE=$ENV_FILE
+Environment=MINDWEFT_VOICE_BACKEND=$BACKEND
 ExecStart=$RUNNER
 Restart=on-failure
 RestartSec=5
@@ -285,7 +292,7 @@ WantedBy=default.target
 EOF
 
   systemctl --user daemon-reload
-  systemctl --user enable minigent-client
+  systemctl --user enable mindweft-client
 
   if [[ "$ENABLE_LINGER" -eq 1 ]]; then
     log "Enabling linger for $USER"
@@ -294,17 +301,17 @@ EOF
 
   if [[ "$AUDIO_GROUP_ADDED" -eq 1 ]] || { getent group audio >/dev/null 2>&1 && ! session_in_group audio; }; then
     log "Service installed but not started because this session is not yet in the audio group"
-    log "Log out and back in, then run: systemctl --user start minigent-client"
+    log "Log out and back in, then run: systemctl --user start mindweft-client"
   else
     log "Starting systemd user service"
-    systemctl --user restart minigent-client
+    systemctl --user restart mindweft-client
   fi
 fi
 
 log "Done"
 log "Edit env file: $ENV_FILE"
-log "Manual smoke test: cd $INSTALL_DIR && MINIGENT_VOICE_ENV_FILE=$ENV_FILE scripts/run-client-linux.sh --backend stdin"
-log "Audio smoke test: cd $INSTALL_DIR && MINIGENT_VOICE_ENV_FILE=$ENV_FILE scripts/run-client-linux.sh --backend manual-audio --once"
+log "Manual smoke test: cd $INSTALL_DIR && MINDWEFT_VOICE_ENV_FILE=$ENV_FILE scripts/run-client-linux.sh --backend stdin"
+log "Audio smoke test: cd $INSTALL_DIR && MINDWEFT_VOICE_ENV_FILE=$ENV_FILE scripts/run-client-linux.sh --backend manual-audio --once"
 if [[ "$SYSTEMD_USER" -eq 1 ]]; then
-  log "Service logs: journalctl --user -u minigent-client -f"
+  log "Service logs: journalctl --user -u mindweft-client -f"
 fi

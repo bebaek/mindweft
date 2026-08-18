@@ -17,6 +17,7 @@ from app.models import (
     TenantUser,
     TenantUserStatus,
 )
+from mindweft_config.unified_config import normalize_mindweft_env
 
 TENANT_REGISTRY_REQUIRED_ENV = "MINIGENT_TENANT_REGISTRY_REQUIRED"
 TENANT_USER_REGISTRY_REQUIRED_ENV = "MINIGENT_TENANT_USER_REGISTRY_REQUIRED"
@@ -30,7 +31,7 @@ class TenantRegistrySettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> TenantRegistrySettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
             tenant_registry_required=_parse_bool_env(lookup, TENANT_REGISTRY_REQUIRED_ENV),
             tenant_user_registry_required=_parse_bool_env(
@@ -51,6 +52,10 @@ def tenant_user_registry_required_from_env() -> bool:
     return TenantRegistrySettings.from_env().tenant_user_registry_required
 
 
+def _canonical_env_name(name: str) -> str:
+    return name.replace("MINIGENT_", "MINDWEFT_", 1)
+
+
 def _parse_bool_env(env: Mapping[str, str], name: str) -> bool:
     value = env.get(name, "").strip().lower()
     if not value:
@@ -59,7 +64,7 @@ def _parse_bool_env(env: Mapping[str, str], name: str) -> bool:
         return True
     if value in {"0", "false", "no", "off"}:
         return False
-    raise RuntimeError(f"{name} must be a boolean")
+    raise RuntimeError(f"{_canonical_env_name(name)} must be a boolean")
 
 
 async def require_tenant_context(

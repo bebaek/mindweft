@@ -1,15 +1,15 @@
 # Backfill existing personal agents
 
 This runbook backfills the stable `user:personal-assistant` agent and the built-in
-`shared:minigent-user-mcp` capability for existing user execution configurations. The migration
-creates a `user:minigent-user-tools` capability profile and attaches it to the personal assistant.
+`shared:mindweft-user-mcp` capability for existing user execution configurations. The migration
+creates a `user:mindweft-user-tools` capability profile and attaches it to the personal assistant.
 It is idempotent: users with an explicit `defaults.agent_ref` are not replaced, and rerunning the
 command does not create duplicate resources.
 
 ## Safety
 
 - Run against the admin SQLite database used by the deployment.
-- Obtain `MINIGENT_ADMIN_ENCRYPTION_KEY` from the deployment secret manager; do not place it in
+- Obtain `MINDWEFT_ADMIN_ENCRYPTION_KEY` from the deployment secret manager; do not place it in
   the command line, shell history, logs, or this repository.
 - Start with `--dry-run` and a single tenant or user canary.
 - The command uses the stored config version as an optimistic-concurrency guard. A concurrent
@@ -20,8 +20,8 @@ command does not create duplicate resources.
 ## Prerequisites
 
 ```bash
-export MINIGENT_ADMIN_DB_PATH=/srv/minigent/.data/admin.db
-export MINIGENT_ADMIN_ENCRYPTION_KEY='loaded from the deployment secret manager'
+export MINDWEFT_ADMIN_DB_PATH=/srv/mindweft/.data/admin.db
+export MINDWEFT_ADMIN_ENCRYPTION_KEY='loaded from the deployment secret manager'
 ```
 
 The database must be offline or otherwise protected from SQLite-level operational conflicts while
@@ -84,7 +84,7 @@ curl -H 'Authorization: Bearer …' \
 ```
 
 Confirm that `defaults.agent_ref` is `user:personal-assistant`, the personal assistant references
-`user:minigent-user-tools`, and that profile references `shared:minigent-user-mcp`. A new thread
+`user:mindweft-user-tools`, and that profile references `shared:mindweft-user-mcp`. A new thread
 should expose the `minigent_user_mcp.*` tools and use the personal execution options. Do not paste
 authenticated responses into tickets or logs.
 

@@ -32,13 +32,17 @@ ADMIN_HEADERS = {
 }
 
 
-def test_external_grant_provider_settings_are_optional_and_validated() -> None:
+@pytest.mark.parametrize(
+    "providers_env",
+    ["MINDWEFT_ADMIN_EXTERNAL_GRANT_PROVIDERS", EXTERNAL_GRANT_PROVIDERS_ENV],
+)
+def test_external_grant_provider_settings_are_optional_and_validated(providers_env: str) -> None:
     assert build_external_grant_provider_registry_from_env({}).list() == []
     env = {
-        "MINIGENT_MCP_IDENTITY_ISSUER": "minigent",
-        "MINIGENT_MCP_IDENTITY_PRIVATE_KEY": "test-private-key",
-        "MINIGENT_MCP_IDENTITY_KEY_ID": "test-key",
-        EXTERNAL_GRANT_PROVIDERS_ENV: json.dumps(
+        "MINDWEFT_MCP_IDENTITY_ISSUER": "mindweft",
+        "MINDWEFT_MCP_IDENTITY_PRIVATE_KEY": "test-private-key",
+        "MINDWEFT_MCP_IDENTITY_KEY_ID": "test-key",
+        providers_env: json.dumps(
             [
                 {
                     "id": "example-grants",
@@ -65,6 +69,29 @@ def test_external_grant_provider_settings_are_optional_and_validated() -> None:
     assert provider.resources_path == "/v1/resources"
     assert provider.audit_path == "/v1/resource-grant-audit"
     assert "test-private-key" not in repr(provider)
+
+
+def test_mcp_identity_settings_prefer_mindweft_and_accept_legacy_env() -> None:
+    preferred = MCPIdentityTokenIssuer.from_env(
+        audience="service",
+        env={
+            "MINDWEFT_MCP_IDENTITY_ISSUER": "mindweft",
+            "MINIGENT_MCP_IDENTITY_ISSUER": "legacy",
+            "MINDWEFT_MCP_IDENTITY_PRIVATE_KEY": "private-key",
+            "MINDWEFT_MCP_IDENTITY_KEY_ID": "key-id",
+        },
+    )
+    legacy = MCPIdentityTokenIssuer.from_env(
+        audience="service",
+        env={
+            "MINIGENT_MCP_IDENTITY_ISSUER": "legacy",
+            "MINIGENT_MCP_IDENTITY_PRIVATE_KEY": "private-key",
+            "MINIGENT_MCP_IDENTITY_KEY_ID": "key-id",
+        },
+    )
+
+    assert preferred.issuer == "mindweft"
+    assert legacy.issuer == "legacy"
 
 
 @pytest.mark.parametrize(

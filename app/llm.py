@@ -18,6 +18,7 @@ from fastapi import HTTPException
 
 from app.models import ImagePart, LLMResponse, Message, MessageRole, TextPart, ToolCall, ToolSpec
 from app.oauth import GENERIC_OAUTH_PROVIDER, GenericOAuthProvider
+from mindweft_config.unified_config import normalize_mindweft_env
 
 logger = logging.getLogger(__name__)
 LLM_DEBUG_LOG_RESPONSES_ENV = "MINIGENT_LLM_DEBUG_LOG_RESPONSES"
@@ -987,7 +988,7 @@ class LLMRuntimeSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> LLMRuntimeSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
             account_id_header=_optional_env("MINIGENT_LLM_ACCOUNT_ID_HEADER", lookup),
             prompt_cache_key=_optional_env(LLM_PROMPT_CACHE_KEY_ENV, lookup),
@@ -1065,7 +1066,7 @@ class LLMSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> LLMSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         extra_headers = _json_string_map_env("MINIGENT_LLM_EXTRA_HEADERS", lookup)
         return cls(
             provider=lookup.get("MINIGENT_LLM_PROVIDER", "mock").lower(),
@@ -1121,9 +1122,9 @@ def build_llm_adapter(settings: LLMSettings) -> LLMAdapter:
         return MockLLMAdapter()
     if provider == GENERIC_OAUTH_PROVIDER:
         if not settings.generic_oauth.model:
-            raise RuntimeError("MINIGENT_LLM_MODEL is required")
+            raise RuntimeError("MINDWEFT_LLM_MODEL is required")
         if not settings.generic_oauth.url:
-            raise RuntimeError("MINIGENT_LLM_URL is required")
+            raise RuntimeError("MINDWEFT_LLM_URL is required")
         logger.info(
             "LLM config: provider=%s model=%s url=%s",
             provider,
@@ -1138,7 +1139,7 @@ def build_llm_adapter(settings: LLMSettings) -> LLMAdapter:
     if provider in {"google", "google-generative-ai", "gemini"}:
         if not settings.google.api_key:
             raise RuntimeError(
-                "GEMINI_API_KEY or GOOGLE_API_KEY is required when MINIGENT_LLM_PROVIDER=google"
+                "GEMINI_API_KEY or GOOGLE_API_KEY is required when MINDWEFT_LLM_PROVIDER=google"
             )
         logger.info(
             "LLM config: provider=%s model=%s base_url=%s",
@@ -1154,7 +1155,7 @@ def build_llm_adapter(settings: LLMSettings) -> LLMAdapter:
         )
     if provider == "anthropic":
         if not settings.anthropic.api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY is required when MINIGENT_LLM_PROVIDER=anthropic")
+            raise RuntimeError("ANTHROPIC_API_KEY is required when MINDWEFT_LLM_PROVIDER=anthropic")
         logger.info(
             "LLM config: provider=%s model=%s base_url=%s",
             provider,
@@ -1206,17 +1207,17 @@ def load_provider_config(provider: str, env: Mapping[str, str] | None = None) ->
 def _provider_config_for_settings(settings: LLMSettings) -> ProviderConfig:
     if settings.provider == "openai":
         if not settings.openai.api_key:
-            raise RuntimeError("OPENAI_API_KEY is required when MINIGENT_LLM_PROVIDER=openai")
+            raise RuntimeError("OPENAI_API_KEY is required when MINDWEFT_LLM_PROVIDER=openai")
         return settings.openai
 
     if settings.provider == "openrouter":
         if not settings.openrouter.api_key:
             raise RuntimeError(
-                "OPENROUTER_API_KEY is required when MINIGENT_LLM_PROVIDER=openrouter"
+                "OPENROUTER_API_KEY is required when MINDWEFT_LLM_PROVIDER=openrouter"
             )
         return settings.openrouter
 
-    raise RuntimeError(f"Unsupported MINIGENT_LLM_PROVIDER '{settings.provider}'")
+    raise RuntimeError(f"Unsupported MINDWEFT_LLM_PROVIDER '{settings.provider}'")
 
 
 def _openai_provider_config_from_env(env: Mapping[str, str]) -> ProviderConfig:

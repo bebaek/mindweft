@@ -42,10 +42,14 @@ def test_legacy_gateway_imports_delegate_to_workspace_package() -> None:
 @pytest.mark.parametrize(
     ("script_name", "module_name"),
     [
-        ("minigent-text-mcp", "minigent_workspace.servers.text"),
-        ("minigent-shell-mcp", "minigent_workspace.servers.shell"),
-        ("minigent-mcp-stdio-bridge", "minigent_workspace.bridge.stdio"),
-        ("minigent-mcp-stdio-gateway", "minigent_workspace.bridge.gateway"),
+        ("mindweft-text-mcp", "mindweft_workspace.servers.text"),
+        ("mindweft-shell-mcp", "mindweft_workspace.servers.shell"),
+        ("mindweft-mcp-stdio-bridge", "mindweft_workspace.bridge.stdio"),
+        ("mindweft-mcp-stdio-gateway", "mindweft_workspace.bridge.gateway"),
+        ("minigent-text-mcp", "mindweft_workspace.servers.text"),
+        ("minigent-shell-mcp", "mindweft_workspace.servers.shell"),
+        ("minigent-mcp-stdio-bridge", "mindweft_workspace.bridge.stdio"),
+        ("minigent-mcp-stdio-gateway", "mindweft_workspace.bridge.gateway"),
     ],
 )
 def test_workspace_server_console_scripts_use_canonical_modules(

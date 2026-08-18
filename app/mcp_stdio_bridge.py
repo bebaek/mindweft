@@ -3,7 +3,7 @@
 The canonical implementation lives in :mod:`minigent_workspace.bridge.stdio`.
 """
 
-from minigent_workspace.bridge.stdio import (
+from mindweft_workspace.bridge.stdio import (
     DEFAULT_HOST,
     DEFAULT_PATH,
     DEFAULT_PORT,

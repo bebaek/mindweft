@@ -34,7 +34,9 @@ from app.tools import DEFAULT_LOCAL_TOOL_NAMES
 _USER_RESOURCE_ID_PATTERN = re.compile(r"^user:[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$")
 _RESOURCE_REF_PATTERN = re.compile(r"^(?:user|shared):[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$")
 DEFAULT_PERSONAL_AGENT_ID = "user:personal-assistant"
-PERSONAL_USER_MCP_PROFILE_ID = "user:minigent-user-tools"
+PERSONAL_USER_MCP_PROFILE_ID = "user:mindweft-user-tools"
+LEGACY_PERSONAL_USER_MCP_PROFILE_ID = "user:minigent-user-tools"
+MINDWEFT_USER_MCP_REF = "shared:mindweft-user-mcp"
 MINIGENT_USER_MCP_REF = "shared:minigent-user-mcp"
 _CREDENTIAL_REF_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$")
 _FORBIDDEN_CREDENTIAL_HEADER_NAMES = frozenset(
@@ -381,21 +383,21 @@ class UserExecutionConfig(UserExecutionModel):
 
 
 def ensure_default_personal_agent(config: UserExecutionConfig) -> UserExecutionConfig:
-    """Add the stable personal assistant and Minigent user-MCP profile idempotently."""
+    """Add the stable personal assistant and Mindweft user-MCP profile idempotently."""
     profile = next(
         (
             item
             for item in config.capability_profiles.items
-            if item.id == PERSONAL_USER_MCP_PROFILE_ID
+            if item.id in {PERSONAL_USER_MCP_PROFILE_ID, LEGACY_PERSONAL_USER_MCP_PROFILE_ID}
         ),
         None,
     )
     if profile is None:
         profile = UserCapabilityProfileDefinition(
             id=PERSONAL_USER_MCP_PROFILE_ID,
-            name="Minigent personal tools",
-            description="Manage your personal Minigent configuration and MCP access.",
-            mcp_server_refs=[MINIGENT_USER_MCP_REF],
+            name="Mindweft personal tools",
+            description="Manage your personal Mindweft configuration and MCP access.",
+            mcp_server_refs=[MINDWEFT_USER_MCP_REF],
         )
         config.capability_profiles.items.append(profile)
 
@@ -409,11 +411,11 @@ def ensure_default_personal_agent(config: UserExecutionConfig) -> UserExecutionC
             name="Personal assistant",
             description="Uses your personal configuration on top of tenant defaults.",
             skill_refs=list(config.defaults.skill_refs or []),
-            capability_profile_ref=PERSONAL_USER_MCP_PROFILE_ID,
+            capability_profile_ref=profile.id,
         )
         config.agents.items.append(personal_agent)
     elif personal_agent.capability_profile_ref is None:
-        personal_agent.capability_profile_ref = PERSONAL_USER_MCP_PROFILE_ID
+        personal_agent.capability_profile_ref = profile.id
 
     if config.defaults.agent_ref is None:
         config.defaults.agent_ref = DEFAULT_PERSONAL_AGENT_ID
@@ -724,7 +726,7 @@ class EffectiveExecutionCatalog:
                 )
                 continue
             server_name = ref.removeprefix("shared:")
-            if ref == MINIGENT_USER_MCP_REF:
+            if ref in {MINDWEFT_USER_MCP_REF, MINIGENT_USER_MCP_REF}:
                 continue
             if server_name not in tenant_mcp_server_names:
                 raise UserExecutionResolutionError(

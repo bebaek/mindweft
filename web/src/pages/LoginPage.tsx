@@ -26,11 +26,11 @@ export function LoginPage() {
   return (
     <main className="login-page">
       <section className="login-card" aria-labelledby="login-title">
-        <div className="login-brand"><span className="brand-mark">M</span><div><strong>Minigent</strong><small>Agent operations</small></div></div>
+        <div className="login-brand"><span className="brand-mark">M</span><div><strong>Mindweft</strong><small>Agent operations</small></div></div>
         <div>
           <p className="eyebrow">Secure administration</p>
           <h1 id="login-title">Sign in</h1>
-          <p>Use the credentials configured by your Minigent administrator.</p>
+          <p>Use the credentials configured by your Mindweft administrator.</p>
         </div>
         <form onSubmit={(event) => { void submit(event); }}>
           <label>Username<input autoComplete="username" autoFocus required value={username} onChange={(event) => setUsername(event.target.value)} /></label>

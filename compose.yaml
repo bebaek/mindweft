@@ -1,16 +1,18 @@
 services:
+  # Keep the legacy service name so upgrades preserve Compose DNS and operator commands.
   minigent:
-    image: ${MINIGENT_IMAGE:-minigent:latest}
+    image: ${MINDWEFT_IMAGE:-${MINIGENT_IMAGE:-mindweft:latest}}
     build:
       context: .
     restart: unless-stopped
     env_file:
-      - ${MINIGENT_ENV_FILE:-.env}
+      - ${MINDWEFT_ENV_FILE:-${MINIGENT_ENV_FILE:-.env}}
     environment:
-      MINIGENT_LOG_FORMAT: json
+      MINDWEFT_LOG_FORMAT: json
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
+      # Preserve the legacy volume name so existing deployment data is reused.
       - minigent-data:/data
     healthcheck:
       test:

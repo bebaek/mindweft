@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.metadata
 
+import pytest
+
 from app import cli as legacy_cli
 from minigent_client import (
     admin_commands,
@@ -84,9 +86,10 @@ def test_config_commands_reexport_extracted_serialization_helpers() -> None:
     assert config_commands.mask_value is config_masking.mask_value
 
 
-def test_console_script_entry_point_loads_canonical_application() -> None:
+@pytest.mark.parametrize("script_name", ["mindweft", "minigent"])
+def test_console_script_entry_points_load_canonical_application(script_name: str) -> None:
     scripts = importlib.metadata.entry_points(group="console_scripts")
-    entry_point = next(script for script in scripts if script.name == "minigent")
+    entry_point = next(script for script in scripts if script.name == script_name)
 
     assert entry_point.load() is application.main
 

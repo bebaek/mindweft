@@ -1,22 +1,33 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from mcp.types import LATEST_PROTOCOL_VERSION
 
-from app.admin_mcp import ADMIN_CHAT_SETUP_TOOL
+from app.admin_mcp import (
+    ADMIN_CHAT_SETUP_TOOL,
+    LEGACY_ADMIN_TOOL_ALIASES,
+    build_admin_chat_tool_registry,
+)
 from app.admin_mutations import AdminMutationService
 from app.admin_store import SQLiteTenantConfigStore
 from app.execution import ADMIN_EXECUTION_CONFIG_KEY
 from app.llm import MockLLMAdapter
 from app.main import create_app
+from app.models import Principal
 from app.tools import build_local_tool_registry
 
 ADMIN_HEADERS = {
     "X-Minigent-User-Id": "admin-1",
     "X-Minigent-Tenant-Id": "tenant-1",
     "X-Minigent-Admin": "true",
+}
+MINDWEFT_ADMIN_HEADERS = {
+    "X-Mindweft-User-Id": "admin-1",
+    "X-Mindweft-Tenant-Id": "tenant-1",
+    "X-Mindweft-Admin": "true",
 }
 USER_HEADERS = {
     "X-Minigent-User-Id": "user-1",
@@ -53,7 +64,9 @@ def test_admin_mcp_requires_admin_and_exposes_only_read_tools() -> None:
         rejected = _request(client, 1, "server/discover", {"_meta": MCP_METADATA}, USER_HEADERS)
         assert rejected.status_code == 403
 
-        discovered = _request(client, 2, "server/discover", {"_meta": MCP_METADATA}, ADMIN_HEADERS)
+        discovered = _request(
+            client, 2, "server/discover", {"_meta": MCP_METADATA}, MINDWEFT_ADMIN_HEADERS
+        )
         listed = _request(client, 3, "tools/list", {"_meta": MCP_METADATA}, ADMIN_HEADERS)
         status = _request(
             client,
@@ -171,7 +184,19 @@ def test_admin_mutation_confirmation_supports_domains_entitlements_and_rejects_s
             )
 
 
-def test_admin_chat_can_call_minigent_admin_tools_in_process() -> None:
+def test_admin_chat_registry_advertises_only_canonical_mindweft_tools() -> None:
+    registry = build_admin_chat_tool_registry(
+        SimpleNamespace(state=SimpleNamespace(admin_store=None)),
+        Principal(user_id="admin-1", tenant_id="tenant-1", is_admin=True),
+    )
+    names = {spec.name for spec in registry.specs()}
+
+    assert set(LEGACY_ADMIN_TOOL_ALIASES.values()) <= names
+    assert all(name.startswith("mindweft_admin_") for name in names)
+    assert not names.intersection(LEGACY_ADMIN_TOOL_ALIASES)
+
+
+def test_admin_chat_can_call_mindweft_admin_tools_in_process() -> None:
     app = create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
     with TestClient(app) as client:
         admin_reply = _chat_with_tool(client, ADMIN_HEADERS, ADMIN_CHAT_SETUP_TOOL)
@@ -313,8 +338,8 @@ def test_admin_chat_uses_deployment_execution_when_tenant_has_no_config(tmp_path
 def test_admin_chat_does_not_require_a_tenant_membership(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MINIGENT_TENANT_REGISTRY_REQUIRED", "true")
-    monkeypatch.setenv("MINIGENT_TENANT_USER_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINDWEFT_TENANT_REGISTRY_REQUIRED", "true")
+    monkeypatch.setenv("MINDWEFT_TENANT_USER_REGISTRY_REQUIRED", "true")
     app = create_app(
         admin_store=SQLiteTenantConfigStore(str(tmp_path / "admin.db")),
         tenant_config_source="store",

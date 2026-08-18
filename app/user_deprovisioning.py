@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from app.admin_store import SQLiteTenantConfigStore, UserDeprovisioningEvent
 from app.external_grants import ExternalGrantProviderError, ExternalGrantProviderRegistry
+from mindweft_config.unified_config import preferred_mindweft_env
 
 logger = logging.getLogger(__name__)
 
@@ -135,27 +135,31 @@ class UserDeprovisioningProcessor:
             await asyncio.sleep(self.settings.interval_seconds)
 
 
+def _canonical_env_name(name: str) -> str:
+    return name.replace("MINIGENT_", "MINDWEFT_", 1)
+
+
 def _positive_int_env(name: str, default: int) -> int:
-    raw = os.environ.get(name)
+    raw = preferred_mindweft_env(name.removeprefix("MINIGENT_"))
     if raw is None:
         return default
     try:
         value = int(raw)
     except ValueError as exc:
-        raise RuntimeError(f"{name} must be a positive integer") from exc
+        raise RuntimeError(f"{_canonical_env_name(name)} must be a positive integer") from exc
     if value < 1:
-        raise RuntimeError(f"{name} must be a positive integer")
+        raise RuntimeError(f"{_canonical_env_name(name)} must be a positive integer")
     return value
 
 
 def _positive_float_env(name: str, default: float) -> float:
-    raw = os.environ.get(name)
+    raw = preferred_mindweft_env(name.removeprefix("MINIGENT_"))
     if raw is None:
         return default
     try:
         value = float(raw)
     except ValueError as exc:
-        raise RuntimeError(f"{name} must be positive") from exc
+        raise RuntimeError(f"{_canonical_env_name(name)} must be positive") from exc
     if value <= 0:
-        raise RuntimeError(f"{name} must be positive")
+        raise RuntimeError(f"{_canonical_env_name(name)} must be positive")
     return value

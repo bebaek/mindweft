@@ -1,1 +1,3 @@
-"""Stdio-to-HTTP MCP bridge and gateway implementations."""
+"""Legacy compatibility namespace for :mod:`mindweft_workspace.bridge`."""
+
+from mindweft_workspace.bridge import *  # noqa: F403

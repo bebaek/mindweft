@@ -31,7 +31,7 @@ def enforce_image_dimensions(
     max_pixels: int,
     max_dimension: int,
 ) -> tuple[int, int] | None:
-    """Validate dimensions for image formats whose headers Minigent understands.
+    """Validate dimensions for image formats whose headers Mindweft understands.
 
     Returns ``None`` for explicitly configured formats without a dimension parser.
     """

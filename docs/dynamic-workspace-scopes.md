@@ -2,7 +2,7 @@
 
 ## Status
 
-Planning note for an MVP. This document captures the discussed design for letting Minigent's coding workflow narrow the visible workspace based on the active skill or profile.
+Planning note for an MVP. This document captures the discussed design for letting Mindweft's coding workflow narrow the visible workspace based on the active skill or profile.
 
 ## Problem
 
@@ -43,7 +43,7 @@ default_workspace_scope = "minigent"
 
 [coding.workspace_scopes.minigent]
 roots = ["/Users/burm/code/minigent"]
-description = "Minigent runtime and coding workspace development"
+description = "Mindweft runtime and coding workspace development"
 
 [coding.workspace_scopes.dotfiles]
 roots = ["/Users/burm/dotfiles"]
@@ -85,7 +85,7 @@ Stay within these roots for file inspection and edits unless the user explicitly
 
 Existing configs should continue to work:
 
-- If no scopes are configured, use `MINIGENT_CODING_WORKSPACES` / `MINIGENT_CODING_WORKSPACE` and existing TOML `coding.workspaces` behavior.
+- If no scopes are configured, use `MINDWEFT_CODING_WORKSPACES` / `MINDWEFT_CODING_WORKSPACE` and existing TOML `coding.workspaces` behavior.
 - Multi-root workspaces remain supported.
 - No existing skill is required to declare a scope.
 
@@ -110,7 +110,7 @@ Skills can opt into scopes in a lightweight way. A future skill metadata shape c
 ```yaml
 ---
 name: minigent-coding
-description: Work on the Minigent repository
+description: Work on the Mindweft repository
 workspace_scope: minigent
 ---
 ```
@@ -137,7 +137,7 @@ The runner can read that metadata when assembling the coding instructions. If a 
    - explicit scope overrides default;
    - unknown scope fails clearly;
    - invalid paths are rejected or warned according to existing workspace validation behavior.
-6. Update `docs/coding-workspace.md` and `docs/minigent-toml.md` after implementation.
+6. Update `docs/coding-workspace.md` and `docs/mindweft-toml.md` after implementation.
 
 ## Acceptance Criteria
 

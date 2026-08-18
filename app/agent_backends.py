@@ -23,7 +23,9 @@ from app.execution import (
     build_tool_registry_for_skill,
 )
 from app.mcp_broker import (
-    MINIGENT_MCP_BROKER_BASE_URL_ENV,
+    MINDWEFT_MCP_BROKER_SESSION_ENV,
+    MINDWEFT_MCP_BROKER_TOKEN_ENV,
+    MINDWEFT_MCP_BROKER_URL_ENV,
     MINIGENT_MCP_BROKER_SESSION_ENV,
     MINIGENT_MCP_BROKER_TOKEN_ENV,
     MINIGENT_MCP_BROKER_URL_ENV,
@@ -41,8 +43,10 @@ from app.user_execution import (
     effective_execution_catalog,
     has_personal_execution_refs,
 )
+from mindweft_config.unified_config import preferred_mindweft_env
 
 _TERMINAL_PEER_STATUSES = {"completed", "failed", "canceled"}
+MINDWEFT_PEER_TOOL_ARG_ALLOWLIST_ENV = "MINDWEFT_PEER_TOOL_ARG_ALLOWLIST"
 PEER_TOOL_ARG_ALLOWLIST_ENV = "MINIGENT_PEER_TOOL_ARG_ALLOWLIST"
 _MAX_PEER_TOOL_ARGS_SUMMARY_CHARS = 80
 _DEFAULT_SAFE_PEER_TOOL_ARG_FIELDS: dict[str, tuple[str, ...]] = {
@@ -65,11 +69,14 @@ class PeerBackendSettings:
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> PeerBackendSettings:
         lookup = os.environ if env is None else env
-        base_url = lookup.get(MINIGENT_MCP_BROKER_BASE_URL_ENV, "http://127.0.0.1:8000").rstrip("/")
+        base_url = (
+            preferred_mindweft_env("MCP_BROKER_BASE_URL", lookup, default="http://127.0.0.1:8000")
+            or "http://127.0.0.1:8000"
+        ).rstrip("/")
         return cls(
             mcp_broker_base_url=base_url,
             safe_tool_arg_fields=_safe_peer_tool_arg_fields_from_raw(
-                lookup.get(PEER_TOOL_ARG_ALLOWLIST_ENV, "")
+                preferred_mindweft_env("PEER_TOOL_ARG_ALLOWLIST", lookup, default="") or ""
             ),
         )
 
@@ -197,7 +204,7 @@ class AgentBackendRouter(AgentBackend):
                 else {}
             )
             if broker_env:
-                broker_session_id = broker_env[MINIGENT_MCP_BROKER_SESSION_ENV]
+                broker_session_id = broker_env[MINDWEFT_MCP_BROKER_SESSION_ENV]
                 payload["env"] = broker_env
                 payload["prompt"] = prompt + _mcp_broker_prompt_suffix()
             task_id = f"task_{uuid4().hex}"
@@ -335,8 +342,12 @@ class AgentBackendRouter(AgentBackend):
             ttl_seconds=ttl_seconds,
         )
         base_url = peer_backend_settings_from_env().mcp_broker_base_url
+        broker_url = f"{base_url}/mcp/peer/{session.session_id}"
         return {
-            MINIGENT_MCP_BROKER_URL_ENV: f"{base_url}/mcp/peer/{session.session_id}",
+            MINDWEFT_MCP_BROKER_URL_ENV: broker_url,
+            MINDWEFT_MCP_BROKER_TOKEN_ENV: session.token,
+            MINDWEFT_MCP_BROKER_SESSION_ENV: session.session_id,
+            MINIGENT_MCP_BROKER_URL_ENV: broker_url,
             MINIGENT_MCP_BROKER_TOKEN_ENV: session.token,
             MINIGENT_MCP_BROKER_SESSION_ENV: session.session_id,
         }
@@ -428,7 +439,7 @@ class AgentBackendRouter(AgentBackend):
         messages = self._store.list_messages(principal.tenant_id, thread_id)
         context = self._store.get_thread_context(principal.tenant_id, thread_id)
         sections = [
-            "You are running as the execution backend for a Minigent thread.",
+            "You are running as the execution backend for a Mindweft thread.",
             "Use the provided conversation as context and return the final assistant reply for the latest user request.",
         ]
         thread = self._store.get_thread(principal.tenant_id, thread_id)
@@ -932,8 +943,8 @@ async def _emit_run_event(
 
 def _mcp_broker_prompt_suffix() -> str:
     return (
-        "\n\nMinigent MCP broker:\n"
-        f"- URL is available in ${MINIGENT_MCP_BROKER_URL_ENV}.\n"
-        f"- Bearer token is available in ${MINIGENT_MCP_BROKER_TOKEN_ENV}.\n"
-        "Use this broker only for tools needed to answer the current Minigent thread."
+        "\n\nMindweft MCP broker:\n"
+        f"- URL is available in ${MINDWEFT_MCP_BROKER_URL_ENV}.\n"
+        f"- Bearer token is available in ${MINDWEFT_MCP_BROKER_TOKEN_ENV}.\n"
+        "Use this broker only for tools needed to answer the current Mindweft thread."
     )

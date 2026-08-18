@@ -11,6 +11,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app.models import ToolCall
+from mindweft_config.unified_config import normalize_mindweft_env
 
 DEFAULT_CONSENT_REQUEST_TTL_SECONDS = 600.0
 DEFAULT_CONSENT_GRANT_TTL_SECONDS = 300.0
@@ -488,7 +489,7 @@ class InMemoryPrivateValueConsentStore:
 def build_private_value_consent_store_from_env(
     env: Mapping[str, str] | None = None,
 ) -> PrivateValueConsentStore:
-    lookup = os.environ if env is None else env
+    lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
     if not lookup.get(PRIVATE_CONSENT_DB_PATH_ENV, "").strip():
         return InMemoryPrivateValueConsentStore()
     from app.private_consent_sqlite import SQLiteEncryptedPrivateValueConsentStore

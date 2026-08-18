@@ -19,7 +19,7 @@ DEFAULT_API_PORT = 8000
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Start a local filesystem MCP bridge plus Minigent, then drive a mock "
+            "Start a local filesystem MCP bridge plus Mindweft, then drive a mock "
             "thread through filesystem MCP tool calls."
         )
     )
@@ -40,13 +40,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--keep-running",
         action="store_true",
-        help="Leave the bridge and Minigent processes running after the demo.",
+        help="Leave the bridge and Mindweft processes running after the demo.",
     )
     parser.add_argument(
         "--startup-timeout",
         type=float,
         default=30.0,
-        help="Seconds to wait for Minigent to become reachable.",
+        help="Seconds to wait for Mindweft to become reachable.",
     )
     return parser.parse_args(argv)
 
@@ -67,8 +67,8 @@ def main(argv: list[str] | None = None) -> int:
     tenant_config = build_tenant_config(args.tenant_id, bridge_url)
     env = {
         **os.environ,
-        "MINIGENT_AUTH_MODE": "dev-headers",
-        "MINIGENT_TENANT_EXECUTION_CONFIGS": json.dumps(tenant_config, separators=(",", ":")),
+        "MINDWEFT_AUTH_MODE": "dev-headers",
+        "MINDWEFT_TENANT_EXECUTION_CONFIGS": json.dumps(tenant_config, separators=(",", ":")),
     }
 
     processes: list[subprocess.Popen[str]] = []
@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
             [
                 sys.executable,
                 "-c",
-                "from minigent_workspace.bridge.stdio import main; main()",
+                "from mindweft_workspace.bridge.stdio import main; main()",
                 "--name",
                 "fs-workspace",
                 "--port",
@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
                 str(args.api_port),
             ],
             env=env,
-            label="Minigent API",
+            label="Mindweft API",
         )
         processes.append(api)
 
@@ -281,14 +281,14 @@ def wait_for_minigent(
         except Exception as exc:  # noqa: BLE001 - startup polling should tolerate transient failures.
             last_error = exc
             time.sleep(0.5)
-    raise TimeoutError(f"Minigent did not become reachable at {base_url}: {last_error}")
+    raise TimeoutError(f"Mindweft did not become reachable at {base_url}: {last_error}")
 
 
 def build_headers(user_id: str, tenant_id: str) -> dict[str, str]:
     return {
-        "X-Minigent-User-Id": user_id,
-        "X-Minigent-Tenant-Id": tenant_id,
-        "X-Minigent-Admin": "false",
+        "X-Mindweft-User-Id": user_id,
+        "X-Mindweft-Tenant-Id": tenant_id,
+        "X-Mindweft-Admin": "false",
     }
 
 

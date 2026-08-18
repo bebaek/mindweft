@@ -809,7 +809,7 @@ async function offerPrivateValueActionReconciliation(threadId, consentId) {
   }
   const toolName = action.tool_name || "tool";
   appendNotice(
-    `${toolName} may have completed, but Minigent could not confirm the outcome. ` +
+    `${toolName} may have completed, but Mindweft could not confirm the outcome. ` +
       "Check the external system before retrying.",
   );
   setRunStatus("Action outcome unknown", { completed: true, forceVisible: true });
@@ -906,9 +906,9 @@ function authHeaders() {
     return { Authorization: `Bearer ${state.apiToken}` };
   }
   return {
-    "X-Minigent-User-Id": state.userId,
-    "X-Minigent-Tenant-Id": state.tenantId,
-    "X-Minigent-Admin": "false",
+    "X-Mindweft-User-Id": state.userId,
+    "X-Mindweft-Tenant-Id": state.tenantId,
+    "X-Mindweft-Admin": "false",
   };
 }
 

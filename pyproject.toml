@@ -1,8 +1,25 @@
 [project]
-name = "minigent"
+name = "mindweft"
 version = "0.1.0"
-description = "Minimal AI agent runtime POC"
+description = "Local-first AI agent runtime with HTTP, CLI, MCP, and coding-workspace interfaces"
+readme = { file = "README.md", content-type = "text/markdown" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
+keywords = ["ai", "agents", "fastapi", "llm", "mcp"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console",
+  "Framework :: FastAPI",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
   "cryptography>=50.0.0,<51",
   "fastapi>=0.141.1,<1.0",
@@ -20,7 +37,18 @@ dependencies = [
   "uvicorn>=0.52.3,<1.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/bebaek/mindweft"
+Issues = "https://github.com/bebaek/mindweft/issues"
+
 [project.scripts]
+mindweft = "mindweft_client.application:main"
+mindweft-coding-workspace = "mindweft_workspace.application:main"
+mindweft-mcp-stdio-bridge = "mindweft_workspace.bridge.stdio:main"
+mindweft-mcp-stdio-gateway = "mindweft_workspace.bridge.gateway:main"
+mindweft-shell-mcp = "mindweft_workspace.servers.shell:main"
+mindweft-text-mcp = "mindweft_workspace.servers.text:main"
+mindweft-client = "mindweft_client.cli:main"
 minigent = "minigent_client.application:main"
 minigent-coding-workspace = "minigent_workspace.application:main"
 minigent-mcp-stdio-bridge = "minigent_workspace.bridge.stdio:main"
@@ -52,7 +80,17 @@ requires = ["setuptools>=84.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["app*", "minigent_client*", "minigent_mcp*", "minigent_workspace*", "minigent_config*"]
+include = [
+  "app*",
+  "mindweft_client*",
+  "mindweft_config*",
+  "mindweft_mcp*",
+  "mindweft_workspace*",
+  "minigent_client*",
+  "minigent_config*",
+  "minigent_mcp*",
+  "minigent_workspace*",
+]
 
 [tool.setuptools.package-data]
 app = ["static/web/*", "static/console/*", "static/console/assets/*"]
@@ -81,7 +119,17 @@ indent-style = "space"
 line-ending = "lf"
 
 [tool.basedpyright]
-include = ["app", "minigent_client", "minigent_mcp", "minigent_workspace", "minigent_config"]
+include = [
+  "app",
+  "mindweft_client",
+  "mindweft_config",
+  "mindweft_mcp",
+  "mindweft_workspace",
+  "minigent_client",
+  "minigent_config",
+  "minigent_mcp",
+  "minigent_workspace",
+]
 typeCheckingMode = "standard"
 pythonVersion = "3.11"
 
@@ -89,5 +137,5 @@ pythonVersion = "3.11"
 testpaths = ["tests"]
 markers = [
   "integration: opt-in tests that start local services or call external CLIs",
-  "e2e: end-to-end tests that start a live Minigent server",
+  "e2e: end-to-end tests that start a live Mindweft server",
 ]

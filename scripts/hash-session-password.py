@@ -9,7 +9,7 @@ from app.session_auth import hash_password
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate a scrypt password hash for MINIGENT_SESSION_CREDENTIALS."
+        description="Generate a scrypt password hash for MINDWEFT_SESSION_CREDENTIALS."
     )
     parser.parse_args()
     password = getpass.getpass("Password: ")

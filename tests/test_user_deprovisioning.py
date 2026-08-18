@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from app.admin_store import SQLiteTenantConfigStore
 from app.external_grants import (
     ExternalGrant,
@@ -14,6 +16,25 @@ from app.user_deprovisioning import (
     UserDeprovisioningProcessor,
     UserDeprovisioningSettings,
 )
+
+
+def test_user_deprovisioning_settings_prefer_mindweft_and_accept_legacy_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINDWEFT_USER_DEPROVISIONING_INTERVAL_SECONDS", "1.5")
+    monkeypatch.setenv("MINIGENT_USER_DEPROVISIONING_INTERVAL_SECONDS", "9")
+    monkeypatch.setenv("MINDWEFT_USER_DEPROVISIONING_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("MINIGENT_USER_DEPROVISIONING_MAX_ATTEMPTS", "8")
+    preferred = UserDeprovisioningSettings.from_env()
+
+    monkeypatch.delenv("MINDWEFT_USER_DEPROVISIONING_INTERVAL_SECONDS")
+    monkeypatch.delenv("MINDWEFT_USER_DEPROVISIONING_MAX_ATTEMPTS")
+    legacy = UserDeprovisioningSettings.from_env()
+
+    assert preferred.interval_seconds == 1.5
+    assert preferred.max_attempts == 3
+    assert legacy.interval_seconds == 9
+    assert legacy.max_attempts == 8
 
 
 def _store_with_user(path: Path) -> SQLiteTenantConfigStore:

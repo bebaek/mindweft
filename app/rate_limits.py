@@ -11,6 +11,8 @@ from threading import RLock
 from typing import Protocol
 from uuid import uuid4
 
+from mindweft_config.unified_config import normalize_mindweft_env
+
 RATE_LIMIT_DB_PATH_ENV = "MINIGENT_RATE_LIMIT_DB_PATH"
 UPLOAD_TENANT_CAPACITY_ENV = "MINIGENT_UPLOAD_RATE_LIMIT_TENANT_CAPACITY"
 UPLOAD_TENANT_REFILL_ENV = "MINIGENT_UPLOAD_RATE_LIMIT_TENANT_REFILL_PER_SECOND"
@@ -63,7 +65,7 @@ class RateLimitSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> RateLimitSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         settings = cls(
             db_path=lookup.get(RATE_LIMIT_DB_PATH_ENV, "").strip() or None,
             uploads=_policy_from_env(

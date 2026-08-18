@@ -6,21 +6,28 @@ from pathlib import Path
 
 import pytest
 
-RUN_COMPOSE_INTEGRATION_ENV = "MINIGENT_RUN_COMPOSE_INTEGRATION_TESTS"
+RUN_COMPOSE_INTEGRATION_ENV = "MINDWEFT_RUN_COMPOSE_INTEGRATION_TESTS"
 
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.mark.skipif(
-    os.getenv(RUN_COMPOSE_INTEGRATION_ENV, "").strip().lower() not in {"1", "true", "yes", "on"},
+    (
+        os.getenv(RUN_COMPOSE_INTEGRATION_ENV)
+        or os.getenv("MINIGENT_RUN_COMPOSE_INTEGRATION_TESTS", "")
+    )
+    .strip()
+    .lower()
+    not in {"1", "true", "yes", "on"},
     reason=f"Set {RUN_COMPOSE_INTEGRATION_ENV}=true to run peer-agent Compose integration tests",
 )
 def test_peer_agent_tool_compose_demo_completes() -> None:
     root = Path(__file__).resolve().parents[1]
     env = {
         **os.environ,
-        "MINIGENT_PORT": os.getenv("MINIGENT_COMPOSE_TEST_PORT", "18080"),
+        "MINDWEFT_PORT": os.getenv("MINDWEFT_COMPOSE_TEST_PORT")
+        or os.getenv("MINIGENT_COMPOSE_TEST_PORT", "18080"),
     }
     prompt = "Reply exactly: compose-opencode-ok"
 

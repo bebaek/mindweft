@@ -238,7 +238,7 @@ function MCPAccessPanel({
             {servers.length === 0 && <p className="personalization-empty">No effective MCP servers are available.</p>}
           </div>
           <div className="mcp-access-actions">
-            <button type="button" onClick={() => void copy(`MCP endpoint: ${endpointUrl}\nUse your Minigent bearer authentication.`, "instructions")}>Copy client instructions</button>
+            <button type="button" onClick={() => void copy(`MCP endpoint: ${endpointUrl}\nUse your Mindweft bearer authentication.`, "instructions")}>Copy client instructions</button>
             {copied && <small role="status">Copied {copied}</small>}
           </div>
         </>

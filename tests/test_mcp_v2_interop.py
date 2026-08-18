@@ -36,7 +36,7 @@ def test_official_mcp_v2_client_interoperates_with_text_server(tmp_path: Path) -
 
             assert client.protocol_version == MODERN_MCP_PROTOCOL_VERSION
             assert client.server_info is not None
-            assert client.server_info.name == "minigent-text-mcp"
+            assert client.server_info.name == "mindweft-text-mcp"
             assert [tool.name for tool in tools.tools] == [
                 "read_text_file_lines",
                 "read_text_file_around",
@@ -107,7 +107,7 @@ def test_official_mcp_v2_client_interoperates_with_shell_server(tmp_path: Path) 
 
             assert client.protocol_version == MODERN_MCP_PROTOCOL_VERSION
             assert client.server_info is not None
-            assert client.server_info.name == "minigent-shell-mcp"
+            assert client.server_info.name == "mindweft-shell-mcp"
             assert [tool.name for tool in tools.tools] == ["run_command"]
             assert tools.tools[0].input_schema["required"] == ["command"]
             assert tools.tools[0].input_schema["properties"]["cwd"]["description"] == (

@@ -19,14 +19,16 @@ import pytest
 from minigent_client.api_client import MinigentAPIClient
 from minigent_client.config import ClientConfig, PrincipalConfig
 
-RUN_E2E_ENV = "MINIGENT_RUN_E2E_TESTS"
+RUN_E2E_ENV = "MINDWEFT_RUN_E2E_TESTS"
+LEGACY_RUN_E2E_ENV = "MINIGENT_RUN_E2E_TESTS"
+RUN_E2E_VALUE = os.getenv(RUN_E2E_ENV) or os.getenv(LEGACY_RUN_E2E_ENV, "")
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.e2e,
     pytest.mark.skipif(
-        os.getenv(RUN_E2E_ENV, "").strip().lower() not in {"1", "true", "yes", "on"},
-        reason=f"Set {RUN_E2E_ENV}=true to run Minigent e2e tests",
+        RUN_E2E_VALUE.strip().lower() not in {"1", "true", "yes", "on"},
+        reason=f"Set {RUN_E2E_ENV}=true to run Mindweft e2e tests",
     ),
 ]
 
@@ -119,7 +121,7 @@ allowed_local_tools = ["calculator"]
             ],
             cwd=tmp_path,
             env={
-                **os.environ,
+                **_clean_mindweft_environment(),
                 "MINIGENT_BASE_URL": source_base_url,
                 "MINIGENT_DOTENV_FILE": str(source_dotenv_path),
                 "PYTHONPATH": str(repo_root),
@@ -285,7 +287,7 @@ def _started_minigent_server(
     port = _unused_tcp_port()
     base_url = f"http://127.0.0.1:{port}"
     env = {
-        **os.environ,
+        **_clean_mindweft_environment(),
         "MINIGENT_BASE_URL": base_url,
         "PYTHONPATH": str(repo_root),
         **env_overrides,
@@ -332,6 +334,14 @@ def _started_minigent_server(
             print(stderr, file=sys.stderr)
 
 
+def _clean_mindweft_environment() -> dict[str, str]:
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("MINDWEFT_", "MINIGENT_"))
+    }
+
+
 def _unused_tcp_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -345,7 +355,7 @@ def _wait_for_health(base_url: str, process: subprocess.Popen[str]) -> None:
         if process.poll() is not None:
             stdout, stderr = process.communicate(timeout=1)
             raise RuntimeError(
-                "Minigent e2e server exited before becoming healthy\n"
+                "Mindweft e2e server exited before becoming healthy\n"
                 f"stdout:\n{stdout}\n"
                 f"stderr:\n{stderr}"
             )
@@ -357,7 +367,7 @@ def _wait_for_health(base_url: str, process: subprocess.Popen[str]) -> None:
         except Exception as exc:  # noqa: BLE001 - preserve last startup failure detail.
             last_error = exc
         time.sleep(0.1)
-    raise RuntimeError(f"Minigent e2e server did not become healthy: {last_error!r}")
+    raise RuntimeError(f"Mindweft e2e server did not become healthy: {last_error!r}")
 
 
 def _client_config(base_url: str, *, stream_runs: bool) -> ClientConfig:

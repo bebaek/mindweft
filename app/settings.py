@@ -19,6 +19,7 @@ from app.peer_agents import PeerAgentSettings
 from app.rate_limits import RateLimitSettings
 from app.runtime import RuntimeSettings
 from app.store import ThreadStoreSettings
+from mindweft_config.unified_config import normalize_mindweft_env
 
 IMAGE_INPUT_ENABLED_ENV = "MINIGENT_IMAGE_INPUT_ENABLED"
 IMAGE_INPUT_MAX_BYTES_ENV = "MINIGENT_IMAGE_INPUT_MAX_BYTES"
@@ -49,7 +50,7 @@ class ImageInputSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> ImageInputSettings:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
             enabled=_parse_image_input_enabled(lookup),
             max_bytes=_parse_positive_int(
@@ -74,7 +75,7 @@ class ImageInputSettings:
 
 
 @dataclass(frozen=True)
-class MinigentSettings:
+class MindweftSettings:
     admin_store: AdminStoreSettings
     agent_backend: TenantAgentBackendConfig
     attachment_store: AttachmentStoreSettings
@@ -92,8 +93,8 @@ class MinigentSettings:
     tracing: TracingSettings
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> MinigentSettings:
-        lookup = os.environ if env is None else env
+    def from_env(cls, env: Mapping[str, str] | None = None) -> MindweftSettings:
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
             admin_store=AdminStoreSettings.from_env(lookup),
             agent_backend=TenantAgentBackendConfig.from_env(lookup),
@@ -113,8 +114,12 @@ class MinigentSettings:
         )
 
 
-def load_settings(env: Mapping[str, str] | None = None) -> MinigentSettings:
-    return MinigentSettings.from_env(env)
+# Backward-compatible public alias.
+MinigentSettings = MindweftSettings
+
+
+def load_settings(env: Mapping[str, str] | None = None) -> MindweftSettings:
+    return MindweftSettings.from_env(env)
 
 
 def image_input_settings_from_env() -> ImageInputSettings:
@@ -152,6 +157,10 @@ def _image_input_export_public_dict(settings: ImageInputSettings) -> dict[str, o
     return exported
 
 
+def _canonical_env_name(name: str) -> str:
+    return name.replace("MINIGENT_", "MINDWEFT_", 1)
+
+
 def _parse_image_input_enabled(env: Mapping[str, str]) -> bool:
     value = env.get(IMAGE_INPUT_ENABLED_ENV)
     if value is None:
@@ -163,7 +172,7 @@ def _parse_image_input_enabled(env: Mapping[str, str]) -> bool:
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    raise RuntimeError(f"{IMAGE_INPUT_ENABLED_ENV} must be a boolean")
+    raise RuntimeError(f"{_canonical_env_name(IMAGE_INPUT_ENABLED_ENV)} must be a boolean")
 
 
 def _parse_image_input_allowed_mime_types(env: Mapping[str, str]) -> frozenset[str]:
@@ -180,7 +189,7 @@ def _parse_positive_int(env: Mapping[str, str], name: str, default: int) -> int:
     try:
         value = int(configured)
     except ValueError as exc:
-        raise RuntimeError(f"{name} must be a positive integer") from exc
+        raise RuntimeError(f"{_canonical_env_name(name)} must be a positive integer") from exc
     if value < 1:
-        raise RuntimeError(f"{name} must be a positive integer")
+        raise RuntimeError(f"{_canonical_env_name(name)} must be a positive integer")
     return value

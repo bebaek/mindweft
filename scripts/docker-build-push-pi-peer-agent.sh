@@ -3,7 +3,7 @@ set -euo pipefail
 
 REGISTRY="${REGISTRY:-ghcr.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE to your GitHub user or org}"
-IMAGE_NAME="${IMAGE_NAME:-minigent-local-agent-wrapper}"
+IMAGE_NAME="${IMAGE_NAME:-mindweft-local-agent-wrapper}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 PLATFORMS="${PLATFORMS:-linux/amd64}"
 INSTALL_PI="${INSTALL_PI:-true}"

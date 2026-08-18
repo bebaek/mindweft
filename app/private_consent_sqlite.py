@@ -36,6 +36,7 @@ from app.private_consents import (
     PrivateValueDisclosureAuditRecord,
 )
 from app.private_keyring import load_encryption_keyring, parse_boolean
+from mindweft_config.unified_config import normalize_mindweft_env
 
 _NONCE_BYTES = 12
 
@@ -94,7 +95,7 @@ class SQLiteEncryptedPrivateValueConsentStore:
     def from_env(
         cls, env: Mapping[str, str] | None = None
     ) -> SQLiteEncryptedPrivateValueConsentStore:
-        lookup = os.environ if env is None else env
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         db_path = lookup.get(PRIVATE_CONSENT_DB_PATH_ENV, "").strip()
         if not db_path:
             raise RuntimeError(f"{PRIVATE_CONSENT_DB_PATH_ENV} is required")

@@ -1,0 +1,109 @@
+# Unified Mindweft config facade.
+# Copy this file to mindweft.toml and keep secrets in your shell, OS keychain, or .env.
+# Existing MINDWEFT_* / provider env vars still override values from this file.
+
+profile = "local-coding"
+
+[app]
+host = "127.0.0.1"
+port = 8000
+# The coding runner defaults thread storage under $XDG_STATE_HOME/mindweft.
+# thread_db_path = "/custom/path/threads.db"
+# max_iterations = 16
+# tool_timeout_seconds = 60
+
+[auth]
+mode = "development"
+
+[llm]
+default = "mock"
+
+[llm.providers.mock]
+provider = "mock"
+input_modalities = ["text"]
+
+# Add named profiles here, then select one with `mindweft chat --llm openrouter`,
+# `mindweft run --llm openrouter`, or the browser settings panel.
+# [llm.providers.openrouter]
+# provider = "openrouter"
+# model = "anthropic/claude-sonnet-4.5"
+# input_modalities = ["text", "image"]
+# api_key_env = "OPENROUTER_API_KEY"
+# base_url = "https://openrouter.ai/api/v1"
+#
+# [llm.providers.anthropic]
+# provider = "anthropic"
+# model = "claude-opus-5"
+# input_modalities = ["text", "image"]
+# api_key_env = "ANTHROPIC_API_KEY"
+# base_url = "https://api.anthropic.com/v1"
+# thinking_enabled = true
+# thinking_effort = "high"
+
+[image_input]
+# Enable image attachments from the CLI and browser when using a vision-capable model/provider.
+enabled = false
+# max_bytes = 5242880
+# max_images = 8
+# max_total_bytes = 20971520
+# max_pixels = 64000000
+# max_dimension = 16384
+# allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
+
+[attachments]
+# Use persistent SQLite in multi-replica or restart-safe deployments.
+# db_path = "/data/mindweft-attachments.db"
+# max_per_thread = 100
+# max_bytes_per_thread = 268435456
+# max_per_tenant = 1000
+# max_bytes_per_tenant = 1073741824
+# pending_ttl_seconds = 86400
+# cleanup_interval_seconds = 3600
+# Encryption keys are environment-only; see MINDWEFT_ATTACHMENT_ENCRYPTION_KEYS.
+
+[rate_limits]
+# Set a shared SQLite path when enabling limits across multiple replicas.
+# db_path = "/data/mindweft-rate-limits.db"
+# A capacity of 0 disables that tenant or user bucket.
+# upload_tenant_capacity = 0
+# upload_tenant_refill_per_second = 0.0166666667
+# upload_user_capacity = 0
+# upload_user_refill_per_second = 0.0166666667
+# run_tenant_capacity = 0
+# run_tenant_refill_per_second = 0.0166666667
+# run_user_capacity = 0
+# run_user_refill_per_second = 0.0166666667
+# concurrent_run_tenant_capacity = 0
+# concurrent_run_user_capacity = 0
+# concurrent_run_lease_seconds = 60
+# concurrent_run_heartbeat_seconds = 20
+
+[coding]
+enabled = true
+workspaces = ["/Users/you/code"]
+shell_enabled = false
+# shell_allowed_command_prefixes = ["uv ", "pytest ", "git "]
+# bridge_deny_globs = ["**/.env*", "**/.git/**"]
+# bridge_allow_globs = ["**/.env*.template"]
+# default_workspace_scope = "my-app"
+# [coding.workspace_scopes.my-app]
+# roots = ["/Users/you/code/my-app"]
+# description = "Primary app repository"
+
+[agent_skills]
+# Import local Claude/Agent Skill packages. Each child directory should contain SKILL.md.
+# dirs = ["./skills", "~/.claude/skills"]
+
+[mcp]
+# Private placeholders are denied at tool boundaries by default. For an explicitly trusted
+# server/tool, allow only the argument paths that may be resolved after model generation:
+# servers = [
+#   { name = "trusted-mail", url = "http://127.0.0.1:8765/mcp", headers = {}, allowed_tools = ["send"], private_value_policy = "deny", private_value_tool_policies = { send = { mode = "resolve_selected", argument_paths = ["recipient.email", "cc[*].email"] } } },
+# ]
+
+[voice]
+# The first unified config pass intentionally keeps voice simple; detailed audio tuning
+# remains available through MINDWEFT_VOICE_* env vars.
+
+[quality]
+enabled = false

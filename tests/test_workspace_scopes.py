@@ -36,6 +36,26 @@ def test_resolve_workspace_selection_uses_cli_roots_and_scope(tmp_path: Path) ->
     assert scope.name == "selected"
 
 
+def test_resolve_workspace_selection_prefers_mindweft_environment_root(tmp_path: Path) -> None:
+    canonical = tmp_path / "canonical"
+    legacy = tmp_path / "legacy"
+    canonical.mkdir()
+    legacy.mkdir()
+
+    roots, scope = scopes.resolve_workspace_selection(
+        None,
+        None,
+        {
+            "MINDWEFT_CODING_WORKSPACES": str(canonical),
+            "MINIGENT_CODING_WORKSPACES": str(legacy),
+        },
+        tenant_id="demo-tenant",
+    )
+
+    assert roots == [canonical.resolve()]
+    assert scope is None
+
+
 def test_resolve_workspace_selection_prefers_plural_environment_root(tmp_path: Path) -> None:
     plural = tmp_path / "plural"
     singular = tmp_path / "singular"
@@ -131,8 +151,8 @@ def test_load_workspace_scopes_preserves_description(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("raw", "message"),
     [
-        ("{", "MINIGENT_CODING_WORKSPACE_SCOPES must be valid JSON"),
-        ("[]", "MINIGENT_CODING_WORKSPACE_SCOPES must be a JSON object"),
+        ("{", "MINDWEFT_CODING_WORKSPACE_SCOPES must be valid JSON"),
+        ("[]", "MINDWEFT_CODING_WORKSPACE_SCOPES must be a JSON object"),
         ('{"repo":{"roots":[]}}', "roots must be a non-empty string array"),
         ('{"repo":{"roots":["/tmp"],"description":3}}', "description must be a string"),
     ],

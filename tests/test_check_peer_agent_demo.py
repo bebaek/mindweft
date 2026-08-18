@@ -32,8 +32,8 @@ def args_for(tmp_path: Path, *, check_running: bool = False) -> argparse.Namespa
         agent_host="127.0.0.1",
         agent_port=8010,
         peer_name="opencode",
-        minigent_host="127.0.0.1",
-        minigent_port=8000,
+        mindweft_host="127.0.0.1",
+        mindweft_port=8000,
         check_running=check_running,
         skip_wrapper_health=False,
     )
@@ -57,7 +57,7 @@ def test_check_peer_agent_demo_preflight_passes_with_free_ports(monkeypatch, tmp
     results = checker.run_checks(args_for(tmp_path))
 
     assert all(result.ok for result in results)
-    assert [result.name for result in results][-2:] == ["agent wrapper port", "minigent port"]
+    assert [result.name for result in results][-2:] == ["agent wrapper port", "mindweft port"]
 
 
 def test_check_peer_agent_demo_reports_busy_port(monkeypatch, tmp_path) -> None:
@@ -79,7 +79,7 @@ def test_check_peer_agent_demo_reports_busy_port(monkeypatch, tmp_path) -> None:
 
     results = checker.run_checks(args_for(tmp_path))
 
-    assert any(not result.ok and result.name == "minigent port" for result in results)
+    assert any(not result.ok and result.name == "mindweft port" for result in results)
 
 
 def test_check_peer_agent_demo_running_mode_validates_config(monkeypatch, tmp_path) -> None:

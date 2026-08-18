@@ -1,4 +1,4 @@
-# Minigent Local Agent Wrapper
+# Mindweft Local Agent Wrapper
 
 Minimal POC wrapper that exposes a local coding-agent CLI process as a small federated-agent-style HTTP service. It defaults to Pi Coding Agent, but the command profile can be switched to OpenCode, Codex, or a custom argv template.
 
@@ -15,7 +15,7 @@ It proves the local peer-agent boundary:
 Build the default Pi-capable image:
 
 ```bash
-docker build -t minigent-local-agent-wrapper:latest .
+docker build -t mindweft-local-agent-wrapper:latest .
 ```
 
 From the repository root, build and push the Pi-capable image to GHCR with:
@@ -30,13 +30,13 @@ The image installs the `opencode-ai` and Pi Coding Agent npm packages and runs t
 `agent` user. To also include the optional Codex CLI in the same image, build with:
 
 ```bash
-docker build --build-arg INSTALL_CODEX=true -t minigent-local-agent-wrapper:codex .
+docker build --build-arg INSTALL_CODEX=true -t mindweft-local-agent-wrapper:codex .
 ```
 
 To build an OpenCode-only image without Pi, build with:
 
 ```bash
-docker build --build-arg INSTALL_PI=false -t minigent-local-agent-wrapper:opencode .
+docker build --build-arg INSTALL_PI=false -t mindweft-local-agent-wrapper:opencode .
 ```
 
 For the default `AGENT_RUNTIME=pi`, provide Pi credentials with either API-key environment variables
@@ -104,10 +104,12 @@ AGENT_ALLOWED_WORKSPACES=/Users/burm/code/minigent \
 The built-in Pi profile invokes
 `pi --mode json --no-session --tools read,grep,find,ls <prompt>` with the task process
 `cwd` set to the requested allowed workspace. This keeps the default Pi peer profile
-read-only. When task env includes `MINIGENT_MCP_BROKER_URL` and
-`MINIGENT_MCP_BROKER_TOKEN`, the wrapper also passes a generated `--extension` file that
-registers brokered Minigent tools with Pi and activates them alongside the read-only
-file-inspection tools. Brokered tool names are exposed to Pi with a `minigent_` prefix
+read-only. When task env includes `MINDWEFT_MCP_BROKER_URL` and
+`MINDWEFT_MCP_BROKER_TOKEN`, the wrapper also passes a generated `--extension` file that
+registers brokered Mindweft tools with Pi and activates them alongside the read-only
+file-inspection tools. Legacy `MINIGENT_MCP_BROKER_URL` and `MINIGENT_MCP_BROKER_TOKEN`
+task environment values remain accepted. Brokered tool names are exposed to Pi with a
+`mindweft_` prefix
 and sanitized to provider-compatible characters. The wrapper parses Pi JSONL
 `message_end` assistant events for
 `final_output`. Set `AGENT_PI_TOOLS=read,grep,find,ls,write,edit,bash` if you want the
@@ -223,6 +225,6 @@ uv run pytest
 Run real CLI integration tests only when the matching local CLI is installed and configured:
 
 ```bash
-MINIGENT_RUN_OPENCODE_INTEGRATION_TESTS=true uv run pytest tests/test_opencode_integration.py
-MINIGENT_RUN_PI_INTEGRATION_TESTS=true uv run pytest tests/test_pi_integration.py
+MINDWEFT_RUN_OPENCODE_INTEGRATION_TESTS=true uv run pytest tests/test_opencode_integration.py
+MINDWEFT_RUN_PI_INTEGRATION_TESTS=true uv run pytest tests/test_pi_integration.py
 ```

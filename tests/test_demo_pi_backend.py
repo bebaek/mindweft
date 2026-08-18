@@ -66,9 +66,9 @@ def test_demo_pi_backend_drives_run_endpoint(monkeypatch, capsys) -> None:
         "http://minigent.test/threads",
         None,
         {
-            "X-Minigent-User-Id": "demo-user",
-            "X-Minigent-Tenant-Id": "demo-tenant",
-            "X-Minigent-Admin": "false",
+            "X-Mindweft-User-Id": "demo-user",
+            "X-Mindweft-Tenant-Id": "demo-tenant",
+            "X-Mindweft-Admin": "false",
         },
     )
     output = capsys.readouterr().out
@@ -133,7 +133,7 @@ def test_demo_pi_backend_reports_native_backend(monkeypatch, capsys) -> None:
     exit_code = demo.main(["--base-url", "http://minigent.test"])
 
     assert exit_code == 2
-    assert "Minigent is not configured for the peer_agent backend" in capsys.readouterr().err
+    assert "Mindweft is not configured for the peer_agent backend" in capsys.readouterr().err
 
 
 def test_demo_pi_backend_warns_for_non_pi_peer(monkeypatch, capsys) -> None:

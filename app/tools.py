@@ -10,7 +10,6 @@ import ipaddress
 import json
 import logging
 import operator
-import os
 import socket
 import time
 from collections.abc import Callable
@@ -37,14 +36,21 @@ from app.redaction import (
     sanitize_tool_result,
     sanitize_value_for_logging,
 )
+from mindweft_config.unified_config import preferred_mindweft_env
 
 logger = logging.getLogger(__name__)
 
+MINDWEFT_MINIRAG_DB_PATH_ENV = "MINDWEFT_MINIRAG_DB_PATH"
+MINDWEFT_MINIRAG_BACKEND_ENV = "MINDWEFT_MINIRAG_BACKEND"
+MINDWEFT_MINIRAG_EMBEDDING_PROVIDER_ENV = "MINDWEFT_MINIRAG_EMBEDDING_PROVIDER"
+MINDWEFT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV = "MINDWEFT_MINIRAG_HYBRID_LEXICAL_WEIGHT"
+MINDWEFT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV = "MINDWEFT_MINIRAG_HYBRID_DENSE_WEIGHT"
 MINIGENT_MINIRAG_DB_PATH_ENV = "MINIGENT_MINIRAG_DB_PATH"
 MINIGENT_MINIRAG_BACKEND_ENV = "MINIGENT_MINIRAG_BACKEND"
 MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV = "MINIGENT_MINIRAG_EMBEDDING_PROVIDER"
 MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV = "MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT"
 MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV = "MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT"
+MINDWEFT_ENABLE_PEER_AGENT_TOOL_ENV = "MINDWEFT_ENABLE_PEER_AGENT_TOOL"
 MINIGENT_ENABLE_PEER_AGENT_TOOL_ENV = "MINIGENT_ENABLE_PEER_AGENT_TOOL"
 DEFAULT_LOCAL_TOOL_NAMES = {
     "echo",
@@ -115,6 +121,7 @@ class ToolRegistry:
             ],
         ] = {}
         self._private_value_policies: dict[str, MCPPrivateValuePolicy] = {}
+        self._aliases: dict[str, str] = {}
         self._trusted_input_preprocessors: set[str] = set()
         self._mcp_servers: list[dict[str, Any]] = []
 
@@ -135,10 +142,19 @@ class ToolRegistry:
             result_redaction_policy,
         )
         self._private_value_policies[name] = private_value_policy or MCPPrivateValuePolicy()
+        self._aliases.pop(name, None)
         if trusted_input_preprocessor:
             self._trusted_input_preprocessors.add(name)
         else:
             self._trusted_input_preprocessors.discard(name)
+
+    def register_alias(self, alias: str, target: str) -> None:
+        """Accept an unadvertised compatibility alias for a registered tool."""
+        if target not in self._tools:
+            raise ValueError(f"Cannot alias unknown tool '{target}'")
+        if alias in self._tools or alias in self._aliases:
+            raise ValueError(f"Tool name or alias '{alias}' is already registered")
+        self._aliases[alias] = target
 
     def specs(self) -> list[ToolSpec]:
         return [tool[0] for tool in self._tools.values()]
@@ -149,7 +165,7 @@ class ToolRegistry:
         )
 
     def is_trusted_input_preprocessor(self, name: str) -> bool:
-        return name in self._trusted_input_preprocessors
+        return self._aliases.get(name, name) in self._trusted_input_preprocessors
 
     async def execute(
         self,
@@ -158,7 +174,8 @@ class ToolRegistry:
         *,
         context: ToolExecutionContext | None = None,
     ) -> Any:
-        tool = self._tools.get(name)
+        resolved_name = self._aliases.get(name, name)
+        tool = self._tools.get(resolved_name)
         if tool is None:
             raise HTTPException(status_code=400, detail=f"Unknown tool '{name}'")
         sanitized_arguments = _sanitize_tool_arguments(
@@ -172,11 +189,11 @@ class ToolRegistry:
             handler = tool[1]
             handler_arguments = _prepare_private_tool_arguments(
                 arguments,
-                policy=self._private_value_policies[name],
+                policy=self._private_value_policies[resolved_name],
                 resolver=context.private_value_resolver if context is not None else None,
                 validator=context.private_value_validator if context is not None else None,
                 authorizer=context.private_value_authorizer if context is not None else None,
-                tool_name=name,
+                tool_name=resolved_name,
             )
             handler_context = (
                 ToolExecutionContext(
@@ -228,12 +245,15 @@ class ToolRegistry:
             return cls()
         combined = cls(result_redaction_policy=registries[0]._result_redaction_policy)
         for registry in registries:
-            duplicate_names = set(combined._tools) & set(registry._tools)
+            occupied_names = set(combined._tools) | set(combined._aliases)
+            incoming_names = set(registry._tools) | set(registry._aliases)
+            duplicate_names = occupied_names & incoming_names
             if duplicate_names:
                 names = ", ".join(sorted(duplicate_names))
                 raise ValueError(f"Cannot combine duplicate tool names: {names}")
             combined._tools.update(registry._tools)
             combined._private_value_policies.update(registry._private_value_policies)
+            combined._aliases.update(registry._aliases)
             combined._trusted_input_preprocessors.update(registry._trusted_input_preprocessors)
             combined._mcp_servers.extend(registry._mcp_servers)
         return combined
@@ -709,13 +729,9 @@ def _evaluate_calculator_node(node: ast.AST) -> float | int:
 def _peer_agent_tool_enabled(explicit: bool | None = None) -> bool:
     if explicit is not None:
         return explicit
-    return _env_flag(MINIGENT_ENABLE_PEER_AGENT_TOOL_ENV, default=False)
-
-
-def _env_flag(name: str, *, default: bool) -> bool:
-    raw = os.getenv(name)
+    raw = preferred_mindweft_env("ENABLE_PEER_AGENT_TOOL")
     if raw is None or not raw.strip():
-        return default
+        return False
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -1057,11 +1073,11 @@ def _execute_retrieve_knowledge(
     if context is None or not context.tenant_id:
         raise HTTPException(status_code=500, detail="retrieve_knowledge requires tenant context")
 
-    db_path = os.getenv(MINIGENT_MINIRAG_DB_PATH_ENV, "").strip()
+    db_path = (preferred_mindweft_env("MINIRAG_DB_PATH") or "").strip()
     if not db_path:
         raise HTTPException(
             status_code=503,
-            detail=f"retrieve_knowledge requires {MINIGENT_MINIRAG_DB_PATH_ENV} to be configured",
+            detail=f"retrieve_knowledge requires {MINDWEFT_MINIRAG_DB_PATH_ENV} to be configured",
         )
 
     try:
@@ -1076,14 +1092,18 @@ def _execute_retrieve_knowledge(
     MiniRAG = minirag_retrieve.MiniRAG
     build_backend = minirag_retrieve.build_backend
     retrieve_knowledge = minirag_tool.retrieve_knowledge
-    backend_name = os.getenv(MINIGENT_MINIRAG_BACKEND_ENV, "lexical").strip().lower()
-    embedding_provider_name = os.getenv(MINIGENT_MINIRAG_EMBEDDING_PROVIDER_ENV, "").strip() or None
+    backend_name = (
+        (preferred_mindweft_env("MINIRAG_BACKEND", default="lexical") or "lexical").strip().lower()
+    )
+    embedding_provider_name = (
+        preferred_mindweft_env("MINIRAG_EMBEDDING_PROVIDER") or ""
+    ).strip() or None
     hybrid_lexical_weight_raw = (
-        os.getenv(MINIGENT_MINIRAG_HYBRID_LEXICAL_WEIGHT_ENV, "").strip() or None
-    )
+        preferred_mindweft_env("MINIRAG_HYBRID_LEXICAL_WEIGHT") or ""
+    ).strip() or None
     hybrid_dense_weight_raw = (
-        os.getenv(MINIGENT_MINIRAG_HYBRID_DENSE_WEIGHT_ENV, "").strip() or None
-    )
+        preferred_mindweft_env("MINIRAG_HYBRID_DENSE_WEIGHT") or ""
+    ).strip() or None
     rag = MiniRAG(
         db_path=db_path,
         backend=build_backend(

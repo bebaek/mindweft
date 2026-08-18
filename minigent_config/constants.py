@@ -1,4 +1,8 @@
-"""Environment variable names shared across runtime boundaries."""
+"""Legacy compatibility alias for :mod:`mindweft_config.constants`."""
 
-ATTACHMENT_DB_PATH_ENV = "MINIGENT_ATTACHMENT_DB_PATH"
-THREAD_DB_PATH_ENV = "MINIGENT_THREAD_DB_PATH"
+from importlib import import_module as _import_module
+from sys import modules as _modules
+
+from mindweft_config.constants import *  # noqa: F403
+
+_modules[__name__] = _import_module("mindweft_config.constants")

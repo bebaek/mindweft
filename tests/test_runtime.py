@@ -1492,9 +1492,9 @@ def test_runtime_settings_from_env_mapping_uses_defaults() -> None:
 def test_runtime_settings_from_env_mapping_parses_values() -> None:
     settings = RuntimeSettings.from_env(
         {
-            "MINIGENT_MAX_ITERATIONS": "24",
-            "MINIGENT_TOOL_TIMEOUT_SECONDS": "2.5",
-            "MINIGENT_CONTEXT_COMPACTION_ENABLED": "true",
+            "MINDWEFT_MAX_ITERATIONS": "24",
+            "MINDWEFT_TOOL_TIMEOUT_SECONDS": "2.5",
+            "MINDWEFT_CONTEXT_COMPACTION_ENABLED": "true",
         }
     )
 
@@ -1505,22 +1505,42 @@ def test_runtime_settings_from_env_mapping_parses_values() -> None:
     )
 
 
+def test_runtime_settings_prefer_mindweft_and_accept_legacy_env() -> None:
+    preferred = RuntimeSettings.from_env(
+        {
+            "MINDWEFT_MAX_ITERATIONS": "24",
+            "MINIGENT_MAX_ITERATIONS": "8",
+            "MINDWEFT_TOOL_TIMEOUT_SECONDS": "2.5",
+            "MINIGENT_TOOL_TIMEOUT_SECONDS": "9",
+        }
+    )
+    legacy = RuntimeSettings.from_env(
+        {"MINIGENT_MAX_ITERATIONS": "12", "MINIGENT_TOOL_TIMEOUT_SECONDS": "3"}
+    )
+
+    assert preferred.max_iterations == 24
+    assert preferred.tool_timeout_seconds == 2.5
+    assert legacy.max_iterations == 12
+    assert legacy.tool_timeout_seconds == 3
+
+
 def test_runtime_settings_from_env_mapping_rejects_invalid_values() -> None:
     try:
         RuntimeSettings.from_env(
             {
-                "MINIGENT_MAX_ITERATIONS": "24",
-                "MINIGENT_TOOL_TIMEOUT_SECONDS": "0",
-                "MINIGENT_CONTEXT_COMPACTION_ENABLED": "true",
+                "MINDWEFT_MAX_ITERATIONS": "24",
+                "MINDWEFT_TOOL_TIMEOUT_SECONDS": "0",
+                "MINDWEFT_CONTEXT_COMPACTION_ENABLED": "true",
             }
         )
     except RuntimeError as exc:
-        assert str(exc) == "MINIGENT_TOOL_TIMEOUT_SECONDS must be a positive number"
+        assert str(exc) == "MINDWEFT_TOOL_TIMEOUT_SECONDS must be a positive number"
     else:  # pragma: no cover - assertion guard
         raise AssertionError("Expected RuntimeError")
 
 
 def test_max_iterations_from_env_uses_practical_default(monkeypatch) -> None:
+    monkeypatch.delenv("MINDWEFT_MAX_ITERATIONS", raising=False)
     monkeypatch.delenv("MINIGENT_MAX_ITERATIONS", raising=False)
 
     assert max_iterations_from_env() == DEFAULT_MAX_ITERATIONS
@@ -1528,18 +1548,18 @@ def test_max_iterations_from_env_uses_practical_default(monkeypatch) -> None:
 
 
 def test_max_iterations_from_env_accepts_positive_integer(monkeypatch) -> None:
-    monkeypatch.setenv("MINIGENT_MAX_ITERATIONS", "24")
+    monkeypatch.setenv("MINDWEFT_MAX_ITERATIONS", "24")
 
     assert max_iterations_from_env() == 24
 
 
 def test_max_iterations_from_env_rejects_invalid_value(monkeypatch) -> None:
-    monkeypatch.setenv("MINIGENT_MAX_ITERATIONS", "0")
+    monkeypatch.setenv("MINDWEFT_MAX_ITERATIONS", "0")
 
     try:
         max_iterations_from_env()
     except RuntimeError as exc:
-        assert str(exc) == "MINIGENT_MAX_ITERATIONS must be a positive integer"
+        assert str(exc) == "MINDWEFT_MAX_ITERATIONS must be a positive integer"
     else:  # pragma: no cover - assertion guard
         raise AssertionError("Expected RuntimeError")
 

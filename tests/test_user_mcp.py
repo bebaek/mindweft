@@ -13,6 +13,10 @@ USER_HEADERS = {
     "X-Minigent-User-Id": "user-1",
     "X-Minigent-Tenant-Id": "tenant-1",
 }
+MINDWEFT_USER_HEADERS = {
+    "X-Mindweft-User-Id": "user-1",
+    "X-Mindweft-Tenant-Id": "tenant-1",
+}
 OTHER_USER_HEADERS = {
     "X-Minigent-User-Id": "user-2",
     "X-Minigent-Tenant-Id": "tenant-1",
@@ -53,7 +57,9 @@ def test_user_mcp_requires_active_non_admin_user_and_lists_only_user_tools(tmp_p
         rejected_admin = _request(
             client, 1, "server/discover", {"_meta": MCP_METADATA}, ADMIN_HEADERS
         )
-        discovered = _request(client, 2, "server/discover", {"_meta": MCP_METADATA}, USER_HEADERS)
+        discovered = _request(
+            client, 2, "server/discover", {"_meta": MCP_METADATA}, MINDWEFT_USER_HEADERS
+        )
         listed = _request(client, 3, "tools/list", {"_meta": MCP_METADATA}, USER_HEADERS)
         status = _request(
             client,

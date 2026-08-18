@@ -24,7 +24,7 @@ def live_minigent_server(tmp_path: Path, repo_root: Path) -> Iterator[str]:
     port = _unused_tcp_port()
     base_url = f"http://127.0.0.1:{port}"
     env = {
-        **os.environ,
+        **_clean_mindweft_environment(),
         "MINIGENT_CONFIG_DISCOVERY": "disabled",
         "MINIGENT_AUTH_MODE": "dev-headers",
         "MINIGENT_LLM_PROVIDER": "mock",
@@ -67,6 +67,14 @@ def live_minigent_server(tmp_path: Path, repo_root: Path) -> Iterator[str]:
             print(stderr, file=sys.stderr)
 
 
+def _clean_mindweft_environment() -> dict[str, str]:
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("MINDWEFT_", "MINIGENT_"))
+    }
+
+
 def _unused_tcp_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -80,7 +88,7 @@ def _wait_for_health(base_url: str, process: subprocess.Popen[str]) -> None:
         if process.poll() is not None:
             stdout, stderr = process.communicate(timeout=1)
             raise RuntimeError(
-                "Minigent e2e server exited before becoming healthy\n"
+                "Mindweft e2e server exited before becoming healthy\n"
                 f"stdout:\n{stdout}\n"
                 f"stderr:\n{stderr}"
             )
@@ -92,4 +100,4 @@ def _wait_for_health(base_url: str, process: subprocess.Popen[str]) -> None:
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             last_error = exc
         time.sleep(0.1)
-    raise RuntimeError(f"Minigent e2e server did not become healthy: {last_error!r}")
+    raise RuntimeError(f"Mindweft e2e server did not become healthy: {last_error!r}")

@@ -10,8 +10,8 @@ def test_coding_workspace_state_defaults_use_xdg_state_home(tmp_path: Path) -> N
 
     environment.apply_coding_workspace_state_defaults(env)
 
-    assert env["MINIGENT_ATTACHMENT_DB_PATH"] == str(tmp_path / "minigent" / "attachments.db")
-    assert env["MINIGENT_THREAD_DB_PATH"] == str(tmp_path / "minigent" / "threads.db")
+    assert env["MINIGENT_ATTACHMENT_DB_PATH"] == str(tmp_path / "mindweft" / "attachments.db")
+    assert env["MINIGENT_THREAD_DB_PATH"] == str(tmp_path / "mindweft" / "threads.db")
 
 
 def test_coding_workspace_state_defaults_use_home_fallback(tmp_path: Path) -> None:
@@ -20,11 +20,35 @@ def test_coding_workspace_state_defaults_use_home_fallback(tmp_path: Path) -> No
     environment.apply_coding_workspace_state_defaults(env)
 
     assert env["MINIGENT_ATTACHMENT_DB_PATH"] == str(
-        tmp_path / ".local" / "state" / "minigent" / "attachments.db"
+        tmp_path / ".local" / "state" / "mindweft" / "attachments.db"
     )
     assert env["MINIGENT_THREAD_DB_PATH"] == str(
-        tmp_path / ".local" / "state" / "minigent" / "threads.db"
+        tmp_path / ".local" / "state" / "mindweft" / "threads.db"
     )
+
+
+def test_coding_workspace_state_defaults_reuse_existing_minigent_state(tmp_path: Path) -> None:
+    legacy_state = tmp_path / ".local" / "state" / "minigent"
+    legacy_state.mkdir(parents=True)
+    env = {"HOME": str(tmp_path)}
+
+    environment.apply_coding_workspace_state_defaults(env)
+
+    assert env["MINIGENT_ATTACHMENT_DB_PATH"] == str(legacy_state / "attachments.db")
+    assert env["MINIGENT_THREAD_DB_PATH"] == str(legacy_state / "threads.db")
+
+
+def test_coding_workspace_state_defaults_accept_mindweft_overrides(tmp_path: Path) -> None:
+    thread_path = tmp_path / "mindweft-threads.db"
+    env = {
+        "HOME": str(tmp_path),
+        "MINDWEFT_THREAD_DB_PATH": str(thread_path),
+    }
+
+    environment.apply_coding_workspace_state_defaults(env)
+
+    assert env["MINIGENT_THREAD_DB_PATH"] == str(thread_path)
+    assert env["MINDWEFT_THREAD_DB_PATH"] == str(thread_path)
 
 
 def test_coding_workspace_state_defaults_preserve_storage_overrides(tmp_path: Path) -> None:

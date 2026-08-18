@@ -1,23 +1,8 @@
-from __future__ import annotations
+"""Legacy compatibility alias for :mod:`mindweft_client.ring_buffer`."""
 
-from collections import deque
-from dataclasses import dataclass, field
+from importlib import import_module as _import_module
+from sys import modules as _modules
 
+from mindweft_client.ring_buffer import *  # noqa: F403
 
-@dataclass
-class AudioRingBuffer:
-    max_bytes: int
-    _chunks: deque[bytes] = field(default_factory=deque)
-    _size_bytes: int = 0
-
-    def append(self, chunk: bytes) -> None:
-        if not chunk:
-            return
-        self._chunks.append(chunk)
-        self._size_bytes += len(chunk)
-        while self._size_bytes > self.max_bytes and self._chunks:
-            removed = self._chunks.popleft()
-            self._size_bytes -= len(removed)
-
-    def snapshot(self) -> list[bytes]:
-        return list(self._chunks)
+_modules[__name__] = _import_module("mindweft_client.ring_buffer")
