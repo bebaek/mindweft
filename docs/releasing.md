@@ -61,17 +61,19 @@ Before the first public package release:
 10. Create release notes from `CHANGELOG.md` and include the migration guide when compatibility
     behavior changes.
 
-## Automated PyPI publishing
+## Automated package publishing
 
 The `.github/workflows/release.yml` workflow publishes tags matching `v*` through PyPI Trusted
-Publishing. Before using it:
+Publishing and GitHub immutable releases. Before using it:
 
-1. Configure the `mindweft` project (or a pending project) on PyPI with the GitHub publisher owner
-   `bebaek`, repository `mindweft`, workflow `release.yml`, and environment `pypi`.
+1. Configure the `mindweft` project on PyPI with the GitHub publisher owner `bebaek`, repository
+   `mindweft`, workflow `release.yml`, and environment `pypi`.
 2. Configure the GitHub `pypi` environment to allow release tags such as `v*`; requiring a
    maintainer's approval is recommended.
-3. Merge the release preparation change to `main` and wait for its CI checks to pass.
-4. Create an annotated or signed tag whose version exactly matches `project.version`, then push it:
+3. Enable immutable releases in the repository settings and protect `v*` tags from updates and
+   deletion.
+4. Merge the release preparation change to `main` and wait for its CI checks to pass.
+5. Create an annotated or signed tag whose version exactly matches `project.version`, then push it:
 
    ```bash
    git tag -a v0.1.0 -m "Mindweft 0.1.0"
@@ -79,9 +81,19 @@ Publishing. Before using it:
    ```
 
 The workflow rejects tags whose version differs from `pyproject.toml` or whose commit is not
-reachable from `origin/main`. It builds and smoke-tests the distributions in an unprivileged job,
-passes only those artifacts to the environment-protected publishing job, and obtains a short-lived
-PyPI credential through GitHub OIDC. No PyPI token should be stored in GitHub Secrets.
+reachable from `origin/main`. It then:
+
+1. Builds, validates, and smoke-tests the distributions in an unprivileged job.
+2. Creates a draft GitHub release from the matching `CHANGELOG.md` section and attaches the exact
+   validated artifacts.
+3. Verifies the draft assets by SHA-256 digest.
+4. Publishes those artifacts to PyPI with a short-lived GitHub OIDC credential.
+5. Publishes the fully populated GitHub draft, which makes the release and its assets immutable.
+
+If PyPI already contains the version, a rerun proceeds only when every remote artifact digest
+matches the validated files. Likewise, a rerun may refresh a draft release but refuses to modify a
+published mutable release. No PyPI token should be stored in GitHub Secrets, and release artifacts
+must never be rebuilt between these stages.
 
 ## Publication safety
 

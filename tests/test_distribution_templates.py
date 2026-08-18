@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -77,3 +78,37 @@ def test_container_publish_scripts_default_to_mindweft_images() -> None:
     assert "/mindweft-app" in workflow
     assert "mindweft-production-smoke" in workflow
     assert "scope=mindweft" in workflow
+
+
+def test_github_actions_are_pinned_to_full_commit_shas() -> None:
+    action_pattern = re.compile(r"^\s*uses:\s*([^\s#]+)", re.MULTILINE)
+    sha_pattern = re.compile(r"[0-9a-f]{40}")
+
+    for workflow_path in sorted((PROJECT_ROOT / ".github" / "workflows").glob("*.yml")):
+        workflow = workflow_path.read_text(encoding="utf-8")
+        for action in action_pattern.findall(workflow):
+            if action.startswith("./"):
+                continue
+            _, separator, revision = action.rpartition("@")
+            assert separator and sha_pattern.fullmatch(revision), (
+                f"{workflow_path.relative_to(PROJECT_ROOT)} has an unpinned action: {action}"
+            )
+
+
+def test_release_workflow_stages_artifacts_before_publishing() -> None:
+    workflow = (PROJECT_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+
+    build_index = workflow.index("name: Build and validate distributions")
+    draft_index = workflow.index("name: Stage draft GitHub release")
+    pypi_index = workflow.index("name: Publish distributions to PyPI")
+    github_index = workflow.index("name: Publish immutable GitHub release")
+
+    assert build_index < draft_index < pypi_index < github_index
+    assert "environment:\n      name: pypi" in workflow
+    assert "id-token: write" in workflow
+    assert workflow.count("contents: write") == 2
+    assert "--draft" in workflow
+    assert "Verify staged GitHub release assets" in workflow
+    assert "Check whether exact artifacts are already on PyPI" in workflow
+    assert "Verify release immutability" in workflow
+    assert "password:" not in workflow
