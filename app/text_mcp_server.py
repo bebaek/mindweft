@@ -3,7 +3,7 @@
 The canonical implementation lives in :mod:`minigent_workspace.servers.text`.
 """
 
-from minigent_workspace.servers.text import (
+from mindweft_workspace.servers.text import (
     DEFAULT_MAX_CHARS,
     DEFAULT_MAX_MATCHES,
     READ_TEXT_FILE_AROUND_DESCRIPTION,

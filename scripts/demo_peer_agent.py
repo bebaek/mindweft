@@ -9,7 +9,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from minigent_config.unified_config import preferred_mindweft_env
+from mindweft_config.unified_config import preferred_mindweft_env
 
 TERMINAL_STATUSES = {"completed", "failed", "canceled"}
 

@@ -14,7 +14,7 @@ from jwt import InvalidTokenError, PyJWK
 
 from app.models import Principal
 from app.session_auth import has_session_cookie, principal_from_session_request
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 USER_HEADER = "X-Mindweft-User-Id"
 TENANT_HEADER = "X-Mindweft-Tenant-Id"

@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from app.llm import OpenAICompatibleAdapter
 from app.models import Message, MessageRole, ToolSpec
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "openai/gpt-5.1-codex-mini"

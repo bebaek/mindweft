@@ -8,7 +8,7 @@ from typing import Mapping
 
 import jwt
 
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 MCP_IDENTITY_ISSUER_ENV = "MINIGENT_MCP_IDENTITY_ISSUER"
 MCP_IDENTITY_PRIVATE_KEY_ENV = "MINIGENT_MCP_IDENTITY_PRIVATE_KEY"

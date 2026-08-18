@@ -8,7 +8,7 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
-from minigent_config.unified_config import preferred_mindweft_env
+from mindweft_config.unified_config import preferred_mindweft_env
 
 RequestJson = Callable[
     [str, str, dict[str, Any] | None, dict[str, str] | None, float],

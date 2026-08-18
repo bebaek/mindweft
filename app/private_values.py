@@ -10,7 +10,7 @@ from typing import Protocol
 
 from fastapi import HTTPException
 
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 PII_PLACEHOLDER_PATTERN = re.compile(
     r"\{\{pii:(?P<kind>[a-z][a-z0-9_]*):(?P<reference>[A-Za-z0-9_-]+)\}\}"

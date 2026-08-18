@@ -24,7 +24,7 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 logger = logging.getLogger(__name__)
 

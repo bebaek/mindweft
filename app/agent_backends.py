@@ -43,7 +43,7 @@ from app.user_execution import (
     effective_execution_catalog,
     has_personal_execution_refs,
 )
-from minigent_config.unified_config import preferred_mindweft_env
+from mindweft_config.unified_config import preferred_mindweft_env
 
 _TERMINAL_PEER_STATUSES = {"completed", "failed", "canceled"}
 MINDWEFT_PEER_TOOL_ARG_ALLOWLIST_ENV = "MINDWEFT_PEER_TOOL_ARG_ALLOWLIST"

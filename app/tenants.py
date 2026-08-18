@@ -17,7 +17,7 @@ from app.models import (
     TenantUser,
     TenantUserStatus,
 )
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 TENANT_REGISTRY_REQUIRED_ENV = "MINIGENT_TENANT_REGISTRY_REQUIRED"
 TENANT_USER_REGISTRY_REQUIRED_ENV = "MINIGENT_TENANT_USER_REGISTRY_REQUIRED"

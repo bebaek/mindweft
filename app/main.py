@@ -137,7 +137,7 @@ from app.user_mcp import (
     build_user_mcp_server,
     build_user_mcp_tool_registry,
 )
-from minigent_config.environment import load_environment
+from mindweft_config.environment import load_environment
 
 __all__ = [
     "DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES",

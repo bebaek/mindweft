@@ -36,7 +36,7 @@ from app.private_consents import (
     PrivateValueDisclosureAuditRecord,
 )
 from app.private_keyring import load_encryption_keyring, parse_boolean
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 _NONCE_BYTES = 12
 

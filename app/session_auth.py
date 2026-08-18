@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.models import Principal
 from app.rate_limits import RateLimitPolicy
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 SESSION_CREDENTIALS_ENV = "MINIGENT_SESSION_CREDENTIALS"
 SESSION_SECRET_ENV = "MINIGENT_SESSION_SECRET"

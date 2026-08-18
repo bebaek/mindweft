@@ -24,8 +24,8 @@ from mcp.shared.message import SessionMessage
 
 from app.models import Principal
 from app.tools import ToolExecutionContext, ToolRegistry
-from minigent_config.unified_config import preferred_mindweft_env
-from minigent_mcp.protocol import (
+from mindweft_config.unified_config import preferred_mindweft_env
+from mindweft_mcp.protocol import (
     LEGACY_MCP_PROTOCOL_VERSION,
     MODERN_MCP_PROTOCOL_VERSION,
     mcp_jsonrpc_error,

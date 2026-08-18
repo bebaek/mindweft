@@ -28,9 +28,9 @@ from app.redaction import (
     redact_url_secrets,
     redact_urls_in_text,
 )
-from minigent_config.unified_config import normalize_mindweft_env
-from minigent_mcp import protocol as _mcp_protocol
-from minigent_mcp.path_policy import (
+from mindweft_config.unified_config import normalize_mindweft_env
+from mindweft_mcp import protocol as _mcp_protocol
+from mindweft_mcp.path_policy import (
     MCPPathPolicy,
     filter_directory_listing_text,
     iter_path_arguments,

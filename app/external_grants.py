@@ -10,7 +10,7 @@ from urllib.parse import quote, urlencode, urlsplit
 import httpx
 
 from app.mcp_identity import MCPIdentityTokenIssuer
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 EXTERNAL_GRANT_PROVIDERS_ENV = "MINIGENT_ADMIN_EXTERNAL_GRANT_PROVIDERS"
 _PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")

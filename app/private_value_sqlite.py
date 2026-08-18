@@ -29,7 +29,7 @@ from app.private_values import (
     PRIVATE_VALUE_REENCRYPT_ON_STARTUP_ENV,
     PRIVATE_VALUE_TTL_SECONDS_ENV,
 )
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 _KIND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 _NONCE_BYTES = 12

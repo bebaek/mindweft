@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import quote
 
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 _READINESS_DATABASE_ENVS: tuple[tuple[str, str], ...] = (
     ("thread_store", "MINIGENT_THREAD_DB_PATH"),

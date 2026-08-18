@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from minigent_workspace import application as _application
-from minigent_workspace import cli as _cli
-from minigent_workspace import environment as _environment
-from minigent_workspace import launch_commands as _launch_commands
-from minigent_workspace import mcp_resolution as _mcp_resolution
-from minigent_workspace import mcp_specs as _mcp_specs
-from minigent_workspace import orchestration as _orchestration
-from minigent_workspace import output as _output
-from minigent_workspace import processes as _processes
-from minigent_workspace import runtime_plan as _runtime_plan
-from minigent_workspace import runtime_settings as _runtime_settings
-from minigent_workspace import scopes as _workspace_scopes
-from minigent_workspace import tenant_config as _tenant_config
+from mindweft_workspace import application as _application
+from mindweft_workspace import cli as _cli
+from mindweft_workspace import environment as _environment
+from mindweft_workspace import launch_commands as _launch_commands
+from mindweft_workspace import mcp_resolution as _mcp_resolution
+from mindweft_workspace import mcp_specs as _mcp_specs
+from mindweft_workspace import orchestration as _orchestration
+from mindweft_workspace import output as _output
+from mindweft_workspace import processes as _processes
+from mindweft_workspace import runtime_plan as _runtime_plan
+from mindweft_workspace import runtime_settings as _runtime_settings
+from mindweft_workspace import scopes as _workspace_scopes
+from mindweft_workspace import tenant_config as _tenant_config
 
 WorkspaceScope = _workspace_scopes.WorkspaceScope
 resolve_workspace_roots = _workspace_scopes.resolve_workspace_roots

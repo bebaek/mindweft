@@ -11,7 +11,7 @@ from threading import RLock
 from typing import Protocol
 from uuid import uuid4
 
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 RATE_LIMIT_DB_PATH_ENV = "MINIGENT_RATE_LIMIT_DB_PATH"
 UPLOAD_TENANT_CAPACITY_ENV = "MINIGENT_UPLOAD_RATE_LIMIT_TENANT_CAPACITY"

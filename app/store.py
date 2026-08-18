@@ -25,7 +25,7 @@ from app.models import (
     utc_now,
 )
 from app.thread_titles import generate_thread_title
-from minigent_config.unified_config import preferred_mindweft_env
+from mindweft_config.unified_config import preferred_mindweft_env
 
 DEFAULT_RUN_LEASE_SECONDS = 30.0
 _CURRENT_RUN: ContextVar[tuple[str, str, str] | None] = ContextVar(

@@ -8,7 +8,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from minigent_config.unified_config import preferred_mindweft_env
+from mindweft_config.unified_config import preferred_mindweft_env
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

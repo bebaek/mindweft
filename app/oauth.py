@@ -20,7 +20,7 @@ import jwt
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.private_keyring import load_encryption_keyring
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 GENERIC_OAUTH_PROVIDER = "generic-oauth"
 OAUTH_STORE_PATH_ENV = "MINIGENT_OAUTH_STORE_PATH"

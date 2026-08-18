@@ -11,7 +11,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app.models import ToolCall
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 DEFAULT_CONSENT_REQUEST_TTL_SECONDS = 600.0
 DEFAULT_CONSENT_GRANT_TTL_SECONDS = 300.0

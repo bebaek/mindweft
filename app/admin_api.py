@@ -64,7 +64,7 @@ from app.oauth import (
     tenant_oauth_credential_key,
 )
 from app.session_auth import validate_session_auth_settings
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 ADMIN_DB_PATH_ENV = "MINIGENT_ADMIN_DB_PATH"
 ADMIN_ENCRYPTION_KEY_ENV = "MINIGENT_ADMIN_ENCRYPTION_KEY"

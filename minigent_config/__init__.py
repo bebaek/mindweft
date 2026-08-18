@@ -1,1 +1,3 @@
-"""Shared Minigent configuration and Agent Skill utilities."""
+"""Legacy compatibility namespace for :mod:`mindweft_config`."""
+
+from mindweft_config import *  # noqa: F403

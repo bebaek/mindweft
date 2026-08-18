@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from app.admin_store import SQLiteTenantConfigStore, UserExecutionConfigConflictError
 from app.user_execution import ensure_default_personal_agent, validate_user_execution_config
-from minigent_config.unified_config import preferred_mindweft_env
+from mindweft_config.unified_config import preferred_mindweft_env
 
 
 @dataclass

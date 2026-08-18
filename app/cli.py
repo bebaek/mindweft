@@ -2,8 +2,8 @@
 
 import sys
 
-from minigent_client.application import main
-from minigent_client.one_shot_cli import urllib
+from mindweft_client.application import main
+from mindweft_client.one_shot_cli import urllib
 
 __all__ = ["main", "urllib"]
 

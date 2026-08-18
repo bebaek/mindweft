@@ -44,7 +44,7 @@ from app.oauth import (
 )
 from app.redaction import ToolResultRedactionPolicy, parse_tool_result_redaction_policy
 from app.tools import DEFAULT_LOCAL_TOOL_NAMES, LOCAL_TOOL_NAMES, ToolRegistry, build_tool_registry
-from minigent_config.unified_config import normalize_mindweft_env, preferred_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env, preferred_mindweft_env
 
 TENANT_EXECUTION_CONFIGS_ENV = "MINIGENT_TENANT_EXECUTION_CONFIGS"
 TENANT_CONFIG_SOURCE_ENV = "MINIGENT_TENANT_CONFIG_SOURCE"

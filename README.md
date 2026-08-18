@@ -52,6 +52,12 @@ uv run mindweft chat
 ```
 
 The legacy `minigent` and `minigent-client` commands remain available as compatibility aliases.
+Canonical Python imports are also available from `mindweft_client`, `mindweft_config`,
+`mindweft_mcp`, and `mindweft_workspace` now own the implementations. The corresponding
+`minigent_*` import packages remain available as compatibility aliases and resolve public modules
+to the same implementation objects.
+The installable distribution is named `mindweft`; legacy `minigent_*` import packages and
+`minigent-*` console aliases remain included for source and command compatibility.
 
 For the reusable coding-workspace runner, copy `.env.coding.template` to `.env.coding`.
 When storage paths are not configured, the runner uses durable thread and attachment databases

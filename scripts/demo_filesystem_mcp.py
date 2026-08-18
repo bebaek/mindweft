@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
             [
                 sys.executable,
                 "-c",
-                "from minigent_workspace.bridge.stdio import main; main()",
+                "from mindweft_workspace.bridge.stdio import main; main()",
                 "--name",
                 "fs-workspace",
                 "--port",

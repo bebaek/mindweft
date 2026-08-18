@@ -18,7 +18,7 @@ from fastapi import HTTPException
 
 from app.models import ImagePart, LLMResponse, Message, MessageRole, TextPart, ToolCall, ToolSpec
 from app.oauth import GENERIC_OAUTH_PROVIDER, GenericOAuthProvider
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 logger = logging.getLogger(__name__)
 LLM_DEBUG_LOG_RESPONSES_ENV = "MINIGENT_LLM_DEBUG_LOG_RESPONSES"

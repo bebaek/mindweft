@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 from fastapi import HTTPException
 
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 MINDWEFT_PEER_AGENTS_ENV = "MINDWEFT_PEER_AGENTS"
 PEER_AGENTS_ENV = "MINIGENT_PEER_AGENTS"

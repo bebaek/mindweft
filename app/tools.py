@@ -36,7 +36,7 @@ from app.redaction import (
     sanitize_tool_result,
     sanitize_value_for_logging,
 )
-from minigent_config.unified_config import preferred_mindweft_env
+from mindweft_config.unified_config import preferred_mindweft_env
 
 logger = logging.getLogger(__name__)
 

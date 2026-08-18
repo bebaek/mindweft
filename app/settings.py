@@ -19,7 +19,7 @@ from app.peer_agents import PeerAgentSettings
 from app.rate_limits import RateLimitSettings
 from app.runtime import RuntimeSettings
 from app.store import ThreadStoreSettings
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.unified_config import normalize_mindweft_env
 
 IMAGE_INPUT_ENABLED_ENV = "MINIGENT_IMAGE_INPUT_ENABLED"
 IMAGE_INPUT_MAX_BYTES_ENV = "MINIGENT_IMAGE_INPUT_MAX_BYTES"

@@ -18,10 +18,11 @@ After installing globally (`uv tool install '.[voice]'`), drop the `uv run` pref
 
 ## Python API names
 
-New integrations should import `MindweftAPIClient`, `MindweftAPIError`,
-`MindweftClientRuntime`, and `MindweftSettings` from their existing modules. The corresponding
-`Minigent*` symbols remain available as aliases, so existing Python integrations do not need an
-immediate source migration.
+New integrations should import `MindweftAPIClient` from `mindweft_client.api_client`,
+`MindweftAPIError` from `mindweft_client.errors`, `MindweftClientRuntime` from
+`mindweft_client.runtime`, and `MindweftSettings` from `app.settings`.
+Legacy import packages and compatibility symbols using the former product prefix remain aliases,
+so existing Python integrations do not need an immediate source migration.
 
 ## `mindweft-client` config file
 

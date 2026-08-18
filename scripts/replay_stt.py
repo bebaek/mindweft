@@ -6,16 +6,16 @@ import sys
 from pathlib import Path
 from typing import overload
 
-from minigent_client.audio import (
+from mindweft_client.audio import (
     RecordedAudio,
     apply_gain,
     load_recorded_audio_from_wav,
     normalize_peak,
     pad_with_silence,
 )
-from minigent_client.stt import SpeechProviderConfig, build_transcription_adapter
-from minigent_config.environment import load_environment
-from minigent_config.unified_config import preferred_mindweft_env
+from mindweft_client.stt import SpeechProviderConfig, build_transcription_adapter
+from mindweft_config.environment import load_environment
+from mindweft_config.unified_config import preferred_mindweft_env
 
 
 @overload

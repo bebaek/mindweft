@@ -67,8 +67,8 @@ from app.user_execution import (
     effective_execution_catalog,
     has_personal_execution_refs,
 )
-from minigent_config.agent_skills import load_agent_skill_body
-from minigent_config.unified_config import normalize_mindweft_env
+from mindweft_config.agent_skills import load_agent_skill_body
+from mindweft_config.unified_config import normalize_mindweft_env
 
 RUNTIME_SYSTEM_PROMPT = (
     "Use tools when they are relevant and ground claims in tool results. "

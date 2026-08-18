@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.admin_store import SQLiteTenantConfigStore, UserDeprovisioningEvent
 from app.external_grants import ExternalGrantProviderError, ExternalGrantProviderRegistry
-from minigent_config.unified_config import preferred_mindweft_env
+from mindweft_config.unified_config import preferred_mindweft_env
 
 logger = logging.getLogger(__name__)
 
