@@ -440,7 +440,7 @@ def run_admin_execution_config_export(
         config = response.get("config")
         if not isinstance(config, dict):
             raise RuntimeError(
-                f"Minigent admin execution-config response for tenant '{tenant_id}' must include config"
+                f"Mindweft admin execution-config response for tenant '{tenant_id}' must include config"
             )
         configs[tenant_id] = config
     output: dict[str, Any] = configs

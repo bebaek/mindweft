@@ -19,9 +19,9 @@ DEFAULT_PROMPTS = [
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Drive repeated streamed Minigent runs and print provider usage/cache counters. "
-            "For raw provider payloads, start the Minigent server with "
-            "MINIGENT_LLM_DEBUG_LOG_RESPONSES=true."
+            "Drive repeated streamed Mindweft runs and print provider usage/cache counters. "
+            "For raw provider payloads, start the Mindweft server with "
+            "MINDWEFT_LLM_DEBUG_LOG_RESPONSES=true."
         )
     )
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
@@ -137,9 +137,9 @@ def build_auth_headers(args: argparse.Namespace) -> dict[str, str]:
     if args.api_token:
         return {"Authorization": f"Bearer {args.api_token}"}
     return {
-        "X-Minigent-User-Id": args.user_id,
-        "X-Minigent-Tenant-Id": args.tenant_id,
-        "X-Minigent-Admin": "true" if args.admin else "false",
+        "X-Mindweft-User-Id": args.user_id,
+        "X-Mindweft-Tenant-Id": args.tenant_id,
+        "X-Mindweft-Admin": "true" if args.admin else "false",
     }
 
 
@@ -233,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"trace_id={trace_id}")
     print(
         "raw response logging: start the API with "
-        "MINIGENT_LLM_DEBUG_LOG_RESPONSES=true "
+        "MINDWEFT_LLM_DEBUG_LOG_RESPONSES=true "
         "and inspect app.llm logs for matching requests."
     )
 

@@ -17,10 +17,10 @@ _ENV_PLACEHOLDER_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 class CodingMCPServerSpec:
     """Declarative MCP server entry for the coding workspace runner.
 
-    Stdio servers are launched behind Minigent's stdio-to-HTTP bridge or gateway. HTTP
+    Stdio servers are launched behind Mindweft's stdio-to-HTTP bridge or gateway. HTTP
     servers are registered in tenant config; when ``managed`` is true, the runner also
     starts their ``command`` as a child process and can wait on ``health_url`` before
-    starting the Minigent API.
+    starting the Mindweft API.
 
     For stdio servers, ``host``/``port``/``path`` describe the compatibility mode where
     the runner starts one HTTP bridge per stdio server. They are not used by the shared

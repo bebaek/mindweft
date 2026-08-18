@@ -1,18 +1,19 @@
 services:
+  # Keep the legacy service name for Compose command and DNS compatibility.
   minigent:
     build:
       context: .
     environment:
-      MINIGENT_LLM_PROVIDER: mock
-      MINIGENT_AUTH_MODE: dev-headers
-      MINIGENT_AGENT_BACKEND: peer_agent
-      MINIGENT_AGENT_BACKEND_PEER: pi
-      MINIGENT_AGENT_BACKEND_CWD: /workspace/minigent
-      MINIGENT_MCP_BROKER_ENABLED: "true"
-      MINIGENT_MCP_BROKER_BASE_URL: http://minigent:8000
-      MINIGENT_PEER_AGENTS: '[{"name":"pi","base_url":"http://local-agent-wrapper:8010","description":"Local Pi Coding Agent wrapper sidecar","capabilities":["repository analysis","codebase inspection","read-only command execution in the mounted workspace","Minigent MCP broker tools"],"side_effects":["runs Pi CLI commands inside the wrapper container"],"version":"0.1.0"}]'
+      MINDWEFT_LLM_PROVIDER: mock
+      MINDWEFT_AUTH_MODE: dev-headers
+      MINDWEFT_AGENT_BACKEND: peer_agent
+      MINDWEFT_AGENT_BACKEND_PEER: pi
+      MINDWEFT_AGENT_BACKEND_CWD: /workspace/mindweft
+      MINDWEFT_MCP_BROKER_ENABLED: "true"
+      MINDWEFT_MCP_BROKER_BASE_URL: http://minigent:8000
+      MINDWEFT_PEER_AGENTS: '[{"name":"pi","base_url":"http://local-agent-wrapper:8010","description":"Local Pi Coding Agent wrapper sidecar","capabilities":["repository analysis","codebase inspection","read-only command execution in the mounted workspace","Mindweft MCP broker tools"],"side_effects":["runs Pi CLI commands inside the wrapper container"],"version":"0.1.0"}]'
     ports:
-      - "127.0.0.1:${MINIGENT_PORT:-8000}:8000"
+      - "127.0.0.1:${MINDWEFT_PORT:-${MINIGENT_PORT:-8000}}:8000"
     depends_on:
       local-agent-wrapper:
         condition: service_healthy
@@ -36,7 +37,7 @@ services:
         INSTALL_PI: "true"
     environment:
       AGENT_RUNTIME: pi
-      AGENT_ALLOWED_WORKSPACES: /workspace/minigent
+      AGENT_ALLOWED_WORKSPACES: /workspace/mindweft
       AGENT_COMMAND: pi
       PI_CODING_AGENT_DIR: /home/agent/.pi/agent
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -46,7 +47,7 @@ services:
     expose:
       - "8010"
     volumes:
-      - .:/workspace/minigent:ro
+      - .:/workspace/mindweft:ro
       - ./.pi-container/agent:/home/agent/.pi/agent
     healthcheck:
       test:

@@ -9,7 +9,7 @@ command does not create duplicate resources.
 ## Safety
 
 - Run against the admin SQLite database used by the deployment.
-- Obtain `MINIGENT_ADMIN_ENCRYPTION_KEY` from the deployment secret manager; do not place it in
+- Obtain `MINDWEFT_ADMIN_ENCRYPTION_KEY` from the deployment secret manager; do not place it in
   the command line, shell history, logs, or this repository.
 - Start with `--dry-run` and a single tenant or user canary.
 - The command uses the stored config version as an optimistic-concurrency guard. A concurrent
@@ -20,8 +20,8 @@ command does not create duplicate resources.
 ## Prerequisites
 
 ```bash
-export MINIGENT_ADMIN_DB_PATH=/srv/minigent/.data/admin.db
-export MINIGENT_ADMIN_ENCRYPTION_KEY='loaded from the deployment secret manager'
+export MINDWEFT_ADMIN_DB_PATH=/srv/mindweft/.data/admin.db
+export MINDWEFT_ADMIN_ENCRYPTION_KEY='loaded from the deployment secret manager'
 ```
 
 The database must be offline or otherwise protected from SQLite-level operational conflicts while

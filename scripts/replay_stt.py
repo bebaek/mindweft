@@ -18,7 +18,7 @@ from minigent_config.environment import load_environment
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Replay a prerecorded WAV file through the Minigent STT adapters."
+        description="Replay a prerecorded WAV file through the Mindweft STT adapters."
     )
     parser.add_argument("wav_path", help="Path to a mono 16-bit PCM WAV file.")
     parser.add_argument(

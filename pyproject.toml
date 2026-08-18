@@ -21,6 +21,13 @@ dependencies = [
 ]
 
 [project.scripts]
+mindweft = "minigent_client.application:main"
+mindweft-coding-workspace = "minigent_workspace.application:main"
+mindweft-mcp-stdio-bridge = "minigent_workspace.bridge.stdio:main"
+mindweft-mcp-stdio-gateway = "minigent_workspace.bridge.gateway:main"
+mindweft-shell-mcp = "minigent_workspace.servers.shell:main"
+mindweft-text-mcp = "minigent_workspace.servers.text:main"
+mindweft-client = "minigent_client.cli:main"
 minigent = "minigent_client.application:main"
 minigent-coding-workspace = "minigent_workspace.application:main"
 minigent-mcp-stdio-bridge = "minigent_workspace.bridge.stdio:main"
@@ -89,5 +96,5 @@ pythonVersion = "3.11"
 testpaths = ["tests"]
 markers = [
   "integration: opt-in tests that start local services or call external CLIs",
-  "e2e: end-to-end tests that start a live Minigent server",
+  "e2e: end-to-end tests that start a live Mindweft server",
 ]

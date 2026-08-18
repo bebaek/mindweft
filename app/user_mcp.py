@@ -16,7 +16,15 @@ from app.admin_store import (
     UserExecutionConfigConflictError,
     UserExecutionCredentialConflictError,
 )
-from app.auth import require_principal
+from app.auth import (
+    ADMIN_HEADER,
+    LEGACY_ADMIN_HEADER,
+    LEGACY_TENANT_HEADER,
+    LEGACY_USER_HEADER,
+    TENANT_HEADER,
+    USER_HEADER,
+    require_principal,
+)
 from app.execution import redact_tenant_execution_payload
 from app.models import AuditRecord, Principal
 from app.tenants import require_active_tenant_principal
@@ -63,9 +71,12 @@ class UserMCPAuthMiddleware:
         principal = await require_principal(
             request,
             authorization=request.headers.get("Authorization"),
-            x_minigent_user_id=request.headers.get("X-Minigent-User-Id"),
-            x_minigent_tenant_id=request.headers.get("X-Minigent-Tenant-Id"),
-            x_minigent_admin=request.headers.get("X-Minigent-Admin"),
+            x_mindweft_user_id=request.headers.get(USER_HEADER),
+            x_mindweft_tenant_id=request.headers.get(TENANT_HEADER),
+            x_mindweft_admin=request.headers.get(ADMIN_HEADER),
+            x_minigent_user_id=request.headers.get(LEGACY_USER_HEADER),
+            x_minigent_tenant_id=request.headers.get(LEGACY_TENANT_HEADER),
+            x_minigent_admin=request.headers.get(LEGACY_ADMIN_HEADER),
         )
         if principal.is_admin:
             raise HTTPException(
@@ -535,7 +546,7 @@ def build_user_mcp_tool_registry(app: Any, principal: Principal) -> ToolRegistry
 
 def build_user_mcp_server() -> MCPServer[Any]:
     server = MCPServer(
-        "Minigent User Operations",
+        "Mindweft User Operations",
         instructions=(
             "This server is principal-scoped. It reports the authenticated user's redacted execution "
             "configuration and effective MCP access, and may update the user's own configuration. "

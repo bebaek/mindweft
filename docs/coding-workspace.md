@@ -1,14 +1,14 @@
 # Coding workspace setup
 
-Minigent can run as a local coding assistant by combining tenant capability profiles with
+Mindweft can run as a local coding assistant by combining tenant capability profiles with
 workspace-scoped MCP servers. The default stack is deliberately read-only; expand it only for
 trusted local workspaces.
 
 ## Tool boundary: local tools vs MCP tools
 
-Keep Minigent's built-in local tools for low-risk, generic utilities such as `current_time`,
+Keep Mindweft's built-in local tools for low-risk, generic utilities such as `current_time`,
 `calculator`, and optional retrieval. Workspace tools should normally be exposed through MCP
-servers instead of Minigent local tools.
+servers instead of Mindweft local tools.
 
 Use MCP for coding capabilities because they are workspace-specific and high-risk:
 
@@ -16,8 +16,8 @@ Use MCP for coding capabilities because they are workspace-specific and high-ris
 - shell commands, test runs, builds, linters, and git operations
 - any tool that should be scoped to one workspace root or sandbox
 
-A shell command tool should therefore be an MCP capability, not a default Minigent local tool.
-Running shell commands from the Minigent API process would expose the API process environment
+A shell command tool should therefore be an MCP capability, not a default Mindweft local tool.
+Running shell commands from the Mindweft API process would expose the API process environment
 and OS permissions. Running shell through a dedicated MCP server keeps the command runner
 separate, lets capability profiles decide who can use it, and leaves room for stronger
 isolation such as a restricted user, container, or other sandbox.
@@ -33,7 +33,7 @@ its MCP server is independently sandboxed and stripped of sensitive environment 
 
 ## Read-only filesystem access
 
-Prefer filesystem access through MCP servers instead of built-in Minigent local tools. File
+Prefer filesystem access through MCP servers instead of built-in Mindweft local tools. File
 access is workspace-specific and high-risk, so keep it behind explicit MCP server config,
 workspace-root restrictions, and capability profiles.
 
@@ -43,11 +43,11 @@ A good first filesystem server is the reference package:
 npx -y @modelcontextprotocol/server-filesystem /path/to/workspace
 ```
 
-That server is stdio-based, while Minigent consumes MCP over Streamable HTTP. Run it behind
+That server is stdio-based, while Mindweft consumes MCP over Streamable HTTP. Run it behind
 an HTTP bridge, restricted to the intended workspace root:
 
 ```bash
-minigent-mcp-stdio-bridge \
+mindweft-mcp-stdio-bridge \
   --name fs-workspace \
   --port 8765 \
   --allowed-tool list_allowed_directories \
@@ -62,11 +62,11 @@ minigent-mcp-stdio-bridge \
 ```
 
 Then expose it to only the profiles that need codebase access. The optional `allowed_tools`
-field on each MCP server narrows the tools Minigent registers and can call from that server;
+field on each MCP server narrows the tools Mindweft registers and can call from that server;
 the example below keeps the workspace profile read-only:
 
 ```dotenv
-MINIGENT_TENANT_EXECUTION_CONFIGS={
+MINDWEFT_TENANT_EXECUTION_CONFIGS={
   "demo-tenant":{
     "llm":{"provider":"mock"},
     "tools":{
@@ -114,15 +114,15 @@ them to separate profiles such as `inspect`, `edit`, and `test`.
 
 To run this as a reusable local coding-assistant stack, copy the coding env template and start
 the convenience runner. It loads `.env.coding` by default, starts the filesystem stdio bridge,
-starts the Minigent API, and prints a ready-to-run demo client command:
+starts the Mindweft API, and prints a ready-to-run demo client command:
 
 ```bash
 cp .env.coding.template .env.coding
-# edit MINIGENT_CODING_WORKSPACES=/path/to/workspace
-uv run minigent-coding-workspace --env-file .env.coding
+# edit MINDWEFT_CODING_WORKSPACES=/path/to/workspace
+uv run mindweft-coding-workspace --env-file .env.coding
 ```
 
-Use `uv run minigent-coding-workspace --no-env-file` when you want to inherit only the
+Use `uv run mindweft-coding-workspace --no-env-file` when you want to inherit only the
 process environment and unified config, without reading a coding dotenv file.
 
 ### Optional encrypted coding env with SOPS
@@ -151,35 +151,38 @@ environment. `--no-env-file` keeps the runner from also loading `.env.coding`:
 ```bash
 SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/keys.txt" \
 sops exec-env .coding.sops.env \
-  'uv run minigent-coding-workspace --no-env-file'
+  'uv run mindweft-coding-workspace --no-env-file'
 ```
 
-Use the same pattern for one-off real-provider skill demos by pointing `MINIGENT_CONFIG_FILE`
+Use the same pattern for one-off real-provider skill demos by pointing `MINDWEFT_CONFIG_FILE`
 at a local TOML config and keeping provider keys in `.coding.sops.env`. Do not commit
 decrypted dotenv files or place API keys in `minigent.toml`; `.coding.sops*.env` is ignored
 for local encrypted dotenv files.
 
 The coding workspace runner defaults thread and image attachment storage to
-`$XDG_STATE_HOME/minigent/threads.db` and `$XDG_STATE_HOME/minigent/attachments.db`, falling
-back to `~/.local/state/minigent/threads.db` and
-`~/.local/state/minigent/attachments.db`. This keeps threads and image references valid across
-local API restarts without requiring storage paths in `minigent.toml`. Set
-`MINIGENT_THREAD_DB_PATH` or `[app].thread_db_path`, and `MINIGENT_ATTACHMENT_DB_PATH` or
-`[attachments].db_path`, only to override those coding-runner defaults. Non-coding Minigent API
+`$XDG_STATE_HOME/mindweft/threads.db` and `$XDG_STATE_HOME/mindweft/attachments.db`, falling
+back to `~/.local/state/mindweft/threads.db` and
+`~/.local/state/mindweft/attachments.db`. If the Mindweft directory does not yet exist but the
+corresponding `$XDG_STATE_HOME/minigent` directory does, the runner keeps using that legacy
+directory until it is moved explicitly. This keeps threads and image references valid across
+local API restarts without automatically moving live SQLite files. Set `MINDWEFT_THREAD_DB_PATH`
+(or legacy `MINIGENT_THREAD_DB_PATH`) or `[app].thread_db_path`, and
+`MINDWEFT_ATTACHMENT_DB_PATH` (or legacy `MINIGENT_ATTACHMENT_DB_PATH`) or
+`[attachments].db_path`, only to override those coding-runner defaults. Non-coding Mindweft API
 deployments retain their existing explicit storage behavior.
 
 To expose multiple roots through the same filesystem MCP server, set
-`MINIGENT_CODING_WORKSPACES` to a comma-separated list or repeat `--workspace` on the runner
-CLI. The older singular `MINIGENT_CODING_WORKSPACE` key is still accepted for compatibility.
+`MINDWEFT_CODING_WORKSPACES` to a comma-separated list or repeat `--workspace` on the runner
+CLI. The older singular `MINDWEFT_CODING_WORKSPACE` key is still accepted for compatibility.
 Generated tenant configs include the resolved roots in the coding-workspace skill prompt so
 the model can distinguish each configured workspace root:
 
 ```dotenv
-MINIGENT_CODING_WORKSPACES=/path/to/repo1,/path/to/repo2
+MINDWEFT_CODING_WORKSPACES=/path/to/repo1,/path/to/repo2
 ```
 
 ```bash
-uv run minigent-coding-workspace --workspace /path/to/repo1 --workspace /path/to/repo2
+uv run mindweft-coding-workspace --workspace /path/to/repo1 --workspace /path/to/repo2
 ```
 
 When trusted-local shell support is enabled, shell `cwd` values may be under any configured
@@ -201,7 +204,7 @@ default_workspace_scope = "minigent"
 
 [coding.workspace_scopes.minigent]
 roots = ["/Users/example/code/minigent"]
-description = "Minigent runtime and coding workspace development"
+description = "Mindweft runtime and coding workspace development"
 
 [coding.workspace_scopes.dotfiles]
 roots = ["/Users/example/dotfiles"]
@@ -210,9 +213,9 @@ description = "Personal shell/editor configuration"
 
 Resolution order is:
 
-1. `--workspace-scope` or `MINIGENT_CODING_WORKSPACE_SCOPE`;
+1. `--workspace-scope` or `MINDWEFT_CODING_WORKSPACE_SCOPE`;
 2. the active default skill's `workspace_scope` / `workspaceScope`, when present in tenant config;
-3. `coding.default_workspace_scope` / `MINIGENT_CODING_DEFAULT_WORKSPACE_SCOPE`;
+3. `coding.default_workspace_scope` / `MINDWEFT_CODING_DEFAULT_WORKSPACE_SCOPE`;
 4. all configured workspace roots when no scope is selected.
 
 Unknown scope names fail before the runner starts. When a scope is active, the generated
@@ -220,15 +223,15 @@ coding prompt includes `Active workspace scope: <name>` and tells the model to s
 those roots unless the user explicitly asks to switch scope.
 
 The runner starts the bridge with read-only filesystem tools by default. If you provide
-`MINIGENT_TENANT_EXECUTION_CONFIGS` with an `allowed_tools` list for the configured
+`MINDWEFT_TENANT_EXECUTION_CONFIGS` with an `allowed_tools` list for the configured
 `fs-workspace` server, the runner mirrors that list into the bridge's `--allowed-tool` filter
 so fuller coding profiles can expose additional filesystem MCP tools. It also mirrors the
 server `path_policy` into the bridge's `--deny-glob` and `--allow-glob` filters. You can
 override the bridge path policy directly with comma-separated globs:
 
 ```dotenv
-MINIGENT_CODING_BRIDGE_DENY_GLOBS=**/.env*,**/.git/**,**/.venv/**,**/.pytest_cache/**,**/.ruff_cache/**,**/.uv-cache/**
-MINIGENT_CODING_BRIDGE_ALLOW_GLOBS=**/.env*.template,**/.env*.driver.sh
+MINDWEFT_CODING_BRIDGE_DENY_GLOBS=**/.env*,**/.git/**,**/.venv/**,**/.pytest_cache/**,**/.ruff_cache/**,**/.uv-cache/**
+MINDWEFT_CODING_BRIDGE_ALLOW_GLOBS=**/.env*.template,**/.env*.driver.sh
 ```
 
 Direct bridge env vars take precedence over the mirrored tenant path policy.
@@ -238,9 +241,9 @@ Direct bridge env vars take precedence over the mirrored tenant path policy.
 For more than the built-in filesystem/text/shell tools, keep MCP server launch/connect
 definitions directly in `minigent.toml` with `[[coding.mcp_server_specs]]`. This keeps the
 unified config self-contained instead of pointing at a secondary MCP server file. Generated
-server entries default to MCP `2026-07-28`: Minigent's official SDK v2 client probes
+server entries default to MCP `2026-07-28`: Mindweft's official SDK v2 client probes
 `server/discover`, uses stateless per-request metadata when supported, and falls back to the
-`2025-11-25` initialization/session flow for older servers. Minigent applies tool and path
+`2025-11-25` initialization/session flow for older servers. Mindweft applies tool and path
 policy around the SDK client. The stdio bridge and shared gateway translate both HTTP-facing
 forms through an SDK v2 client connected to each stdio subprocess, so modern requests do not
 need bridge-issued `MCP-Session-Id` headers while legacy requests remain session-checked. The
@@ -258,20 +261,20 @@ request does not invalidate another active client. Each server entry can define:
 - `host`, `port`, and `path`: local bridge bind settings for `http` servers and for the
   legacy compatibility mode where the runner starts one bridge process per stdio server. The
   tenant `url` defaults to `http://<host>:<port><path>` unless `url` is set explicitly.
-  When `MINIGENT_CODING_MCP_GATEWAY_ENABLED=true`, stdio server entries do not need these
+  When `MINDWEFT_CODING_MCP_GATEWAY_ENABLED=true`, stdio server entries do not need these
   fields; generated tenant URLs use the shared gateway path `/<prefix>/<server-name>`.
 - `profiles`: capability profiles that should include this server, such as `inspect`, `edit`,
   or `test`.
 - `allowed_tools` and `path_policy`: tool filters and bridge/tool path filters.
 - `env`: extra process environment for stdio servers and managed HTTP servers.
-- `headers`: HTTP headers to send when Minigent calls the server URL.
-- `managed`: for `transport: "http"`, start `command` as a child process before Minigent.
+- `headers`: HTTP headers to send when Mindweft calls the server URL.
+- `managed`: for `transport: "http"`, start `command` as a child process before Mindweft.
   Defaults to `false`; unmanaged HTTP entries are only registered as external endpoints.
 - `health_url`: optional URL to poll for a managed HTTP server before starting the API.
 - `startup_timeout_seconds`: optional managed HTTP health-check timeout; defaults to `30`.
 - `request_timeout`: optional stdio bridge/gateway timeout while waiting for one MCP response;
   defaults to `30`.
-- `timeout_seconds`: optional Minigent HTTP client timeout for calls to this MCP server;
+- `timeout_seconds`: optional Mindweft HTTP client timeout for calls to this MCP server;
   defaults to `request_timeout` for coding MCP server specs and to `30` in tenant configs.
 
 - `restart_on_timeout`: optional bool for stdio gateway entries. When true, the gateway
@@ -370,26 +373,26 @@ allowed_tools = [
 For multi-server setups, prefer the shared gateway:
 
 ```dotenv
-MINIGENT_CODING_MCP_GATEWAY_ENABLED=true
-MINIGENT_CODING_MCP_GATEWAY_PORT=8765
-MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX=/mcp
+MINDWEFT_CODING_MCP_GATEWAY_ENABLED=true
+MINDWEFT_CODING_MCP_GATEWAY_PORT=8765
+MINDWEFT_CODING_MCP_GATEWAY_PATH_PREFIX=/mcp
 ```
 
 Start the runner as usual:
 
 ```bash
-uv run minigent-coding-workspace --env-file .env.coding
+uv run mindweft-coding-workspace --env-file .env.coding
 ```
 
 To export a restartable TOML for the full local coding stack, merge the API-owned config with
 the locally resolved runner config:
 
 ```bash
-uv run minigent --env-file .env.coding config export --local-coding --output minigent.toml
+uv run mindweft --env-file .env.coding config export --local-coding --output minigent.toml
 # Equivalent coding-runner wrapper:
-uv run minigent-coding-workspace config export --env-file .env.coding --output minigent.toml
+uv run mindweft-coding-workspace config export --env-file .env.coding --output minigent.toml
 # Export without reading a coding dotenv file:
-uv run minigent-coding-workspace config export --no-env-file --output minigent.toml
+uv run mindweft-coding-workspace config export --no-env-file --output minigent.toml
 ```
 
 On first use, ask the coding agent to index the repository, for example: "Index this
@@ -404,9 +407,9 @@ The exact `allowed_tools` list should match the installed `codebase-memory-mcp` 
 listed tool is unavailable, remove it from `allowed_tools` or omit `allowed_tools` to expose the
 server's full tool list to the selected profile.
 
-When the runner generates `MINIGENT_TENANT_EXECUTION_CONFIGS`, it derives
+When the runner generates `MINDWEFT_TENANT_EXECUTION_CONFIGS`, it derives
 `tools.mcp_servers` and `capability_profiles.items[*].mcp_server_names` from the inline
-`coding.mcp_server_specs`. If you provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, the
+`coding.mcp_server_specs`. If you provide `MINDWEFT_TENANT_EXECUTION_CONFIGS` yourself, the
 inline specs still control process startup, but your explicit tenant config remains
 authoritative for tool registration and profiles.
 
@@ -415,9 +418,9 @@ compatibility; if `port` is omitted, the runner assigns sequential local bridge 
 multi-server setups, prefer a single local gateway process:
 
 ```dotenv
-MINIGENT_CODING_MCP_GATEWAY_ENABLED=true
-MINIGENT_CODING_MCP_GATEWAY_PORT=8765
-MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX=/mcp
+MINDWEFT_CODING_MCP_GATEWAY_ENABLED=true
+MINDWEFT_CODING_MCP_GATEWAY_PORT=8765
+MINDWEFT_CODING_MCP_GATEWAY_PATH_PREFIX=/mcp
 ```
 
 With the gateway enabled, generated tenant config uses URLs shaped like:
@@ -428,7 +431,7 @@ http://127.0.0.1:8765/mcp/text-workspace
 http://127.0.0.1:8765/mcp/shell-workspace
 ```
 
-If you provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, update the `tools.mcp_servers`
+If you provide `MINDWEFT_TENANT_EXECUTION_CONFIGS` yourself, update the `tools.mcp_servers`
 URLs to the gateway paths; the runner does not rewrite explicit tenant config. In gateway
 mode, per-server `host`, `port`, `path`, and `url` fields in the stdio server specs are legacy
 compatibility settings and are not needed unless you also run without the gateway.
@@ -440,13 +443,13 @@ a warning before startup because those calls would otherwise fail with gateway 4
 You can also run the gateway directly with a gateway config file:
 
 ```bash
-uv run minigent-mcp-stdio-gateway --config .data/mcp-gateway.json --port 8765
+uv run mindweft-mcp-stdio-gateway --config .data/mcp-gateway.json --port 8765
 ```
 
 ### Targeted text reads
 
-The convenience runner can also start Minigent's small targeted text-read MCP server. Its stdio
-protocol transport and request validation use the official MCP Python SDK v2, while Minigent's
+The convenience runner can also start Mindweft's small targeted text-read MCP server. Its stdio
+protocol transport and request validation use the official MCP Python SDK v2, while Mindweft's
 workspace policy layer continues to enforce path containment and text/output limits. This server
 complements the authoritative filesystem MCP by exposing efficient exact reads for known files
 and regions:
@@ -456,12 +459,12 @@ and regions:
 - `search_text_file(path, pattern, before, after, max_matches)` searches within one text file
   and returns matching line contexts.
 
-Enable it with `MINIGENT_CODING_TEXT_ENABLED=true` or `--enable-text`. When the runner
+Enable it with `MINDWEFT_CODING_TEXT_ENABLED=true` or `--enable-text`. When the runner
 generates the tenant config, it starts a second read-only MCP bridge named `text-workspace`
 on port `8767` and adds it to the default `inspect` capability profile:
 
 ```bash
-uv run minigent-coding-workspace --env-file .env.coding --enable-text
+uv run mindweft-coding-workspace --env-file .env.coding --enable-text
 uv run python scripts/demo_client.py \
   --tenant-id demo-tenant \
   --capability-profile inspect \
@@ -475,12 +478,12 @@ MCP layer as the source of truth for file writes and broader file operations.
 To enable targeted text reads from `.env.coding`, use:
 
 ```dotenv
-MINIGENT_CODING_TEXT_ENABLED=true
-MINIGENT_CODING_TEXT_BRIDGE_NAME=text-workspace
-MINIGENT_CODING_TEXT_BRIDGE_PORT=8767
+MINDWEFT_CODING_TEXT_ENABLED=true
+MINDWEFT_CODING_TEXT_BRIDGE_NAME=text-workspace
+MINDWEFT_CODING_TEXT_BRIDGE_PORT=8767
 ```
 
-If you provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, include the text MCP server in
+If you provide `MINDWEFT_TENANT_EXECUTION_CONFIGS` yourself, include the text MCP server in
 `tools.mcp_servers` and add it to the relevant capability profile. For example:
 
 ```json
@@ -530,13 +533,13 @@ If you provide `MINIGENT_TENANT_EXECUTION_CONFIGS` yourself, include the text MC
 }
 ```
 
-To enable trusted-local shell commands, set `MINIGENT_CODING_SHELL_ENABLED=true` or pass
+To enable trusted-local shell commands, set `MINDWEFT_CODING_SHELL_ENABLED=true` or pass
 `--enable-shell`. When the runner generates the tenant config, this starts a second MCP bridge
 named `shell-workspace` on port `8766` and adds a non-default `test` capability profile that
 can call `shell-workspace.run_command`:
 
 ```bash
-uv run minigent-coding-workspace --env-file .env.coding --enable-shell
+uv run mindweft-coding-workspace --env-file .env.coding --enable-shell
 uv run python scripts/demo_client.py \
   --tenant-id demo-tenant \
   --capability-profile test \
@@ -544,11 +547,11 @@ uv run python scripts/demo_client.py \
 ```
 
 The shell MCP server uses the official MCP Python SDK v2 for its stdio protocol transport and
-request validation. Minigent's shell policy layer still requires command working directories to
+request validation. Mindweft's shell policy layer still requires command working directories to
 stay under one of the configured workspace roots, passes through only a small environment
 allowlist, disables stdin, enforces a timeout, and truncates stdout/stderr. Keep
 `[app].tool_timeout_seconds` greater than or equal to the shell MCP
-`request_timeout`/`timeout_seconds`; `minigent config doctor` warns when the outer runtime
+`request_timeout`/`timeout_seconds`; `mindweft config doctor` warns when the outer runtime
 timeout is shorter. Commands run through `/bin/sh` by default. If you define `shell-workspace`
 explicitly in unified config and want zsh, configure the server command itself:
 
@@ -572,7 +575,7 @@ restart_on_timeout = true
 You can also add a command-prefix allowlist:
 
 ```dotenv
-MINIGENT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES=git,rg,find,ls,pwd,uv run pytest,uv run ruff check,uv run basedpyright
+MINDWEFT_CODING_SHELL_ALLOWED_COMMAND_PREFIXES=git,rg,find,ls,pwd,uv run pytest,uv run ruff check,uv run basedpyright
 ```
 
 That blocks commands whose strings do not exactly match or start with one of those prefixes,
@@ -590,9 +593,9 @@ configured coding tenant; normal tenant execution remains strictly tenant-scoped
 ## Smoke test
 
 To smoke-test the flow without creating an env file, run the one-shot filesystem MCP demo
-script. It starts the same bridge and a local Minigent API process, creates an `inspect`
+script. It starts the same bridge and a local Mindweft API process, creates an `inspect`
 thread, then calls the filesystem MCP `list_directory` and `read_file` tools through
-Minigent's mock adapter:
+Mindweft's mock adapter:
 
 ```bash
 uv run python scripts/demo_filesystem_mcp.py --workspace /path/to/workspace

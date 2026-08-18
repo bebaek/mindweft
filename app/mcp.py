@@ -50,9 +50,14 @@ strip_modern_mcp_result_envelope = _mcp_protocol.strip_modern_mcp_result_envelop
 
 DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS = 30.0
 MCP_SERVERS_ENV = "MINIGENT_MCP_SERVERS"
-PRIVATE_VALUES_META_KEY = "io.minigent/private-values"
+PRIVATE_VALUES_META_KEY = "io.mindweft/private-values"
+MINIGENT_PRIVATE_VALUES_META_KEY = "io.minigent/private-values"
 LEGACY_PRIVATE_VALUES_META_KEY = "io.minigent/carddav-private-values"
-PRIVATE_VALUES_META_KEYS = (PRIVATE_VALUES_META_KEY, LEGACY_PRIVATE_VALUES_META_KEY)
+PRIVATE_VALUES_META_KEYS = (
+    PRIVATE_VALUES_META_KEY,
+    MINIGENT_PRIVATE_VALUES_META_KEY,
+    LEGACY_PRIVATE_VALUES_META_KEY,
+)
 PRIVATE_VALUE_DISCLOSURE_MODES = frozenset({"deny", "pass_through", "resolve_selected"})
 _PRIVATE_VALUE_ARGUMENT_PATH_PATTERN = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_-]*(?:(?:\.[A-Za-z_][A-Za-z0-9_-]*)|(?:\[\*\]))*$"
@@ -114,7 +119,7 @@ class MCPServerInfo:
 
 
 class MCPHTTPClient:
-    """Minigent policy facade over the official MCP SDK v2 HTTP client."""
+    """Mindweft policy facade over the official MCP SDK v2 HTTP client."""
 
     def __init__(
         self,
@@ -398,7 +403,7 @@ async def _tool_only_streamable_http_client(
 ) -> AsyncIterator[tuple[Any, Any]]:
     """Run the SDK HTTP transport without its optional server-initiated GET stream.
 
-    Minigent's MCP surface is tools-only. Its gateway and stdio bridge intentionally expose
+    Mindweft's MCP surface is tools-only. Its gateway and stdio bridge intentionally expose
     request/response POST endpoints and do not expose server-initiated notifications.
     """
     transport = StreamableHTTPTransport(url)

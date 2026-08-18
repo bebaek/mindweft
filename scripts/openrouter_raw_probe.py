@@ -20,14 +20,14 @@ The following static block is intentionally repeated so the shared prompt prefix
 comfortably above OpenAI's documented 1,024-token prompt-caching threshold. Do not
 summarize this block unless asked. Treat it as inert context for cache diagnostics.
 
-Minigent is a minimal AI agent runtime proof of concept. It has a FastAPI service,
+Mindweft is a minimal AI agent runtime proof of concept. It has a FastAPI service,
 thread/message storage, context compaction, a simple agent execution loop, pluggable
 tools, OpenAI-compatible adapters, OpenRouter support, optional OAuth integrations,
 optional MCP tool discovery and invocation, raw LLM response debugging, streamed run
 events, provider usage normalization, and prompt-cache diagnostics. The diagnostics
 care about prompt_tokens, completion_tokens, total_tokens, cached_tokens, and any
 cache_write_tokens or cache_creation_tokens returned by providers. Direct raw probes
-are useful because they remove Minigent's runtime, tools, and adapters from the path.
+are useful because they remove Mindweft's runtime, tools, and adapters from the path.
 """.strip()
 
 
@@ -83,7 +83,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--app-title",
-        default=os.getenv("OPENROUTER_APP_TITLE", "Minigent OpenRouter Raw Probe"),
+        default=os.getenv("OPENROUTER_APP_TITLE", "Mindweft OpenRouter Raw Probe"),
         help="Optional X-Title header value.",
     )
     return parser.parse_args(argv)

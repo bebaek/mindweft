@@ -13,7 +13,7 @@ SMOKE_RESULT = "24071975173449"
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Ask the Pi peer backend to use Minigent's MCP broker calculator tool."
+        description="Ask the Pi peer backend to use Mindweft's MCP broker calculator tool."
     )
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--user-id", default="demo-user")
@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
         args.tenant_id,
         "--message",
         (
-            "Use the Minigent MCP broker calculator tool to calculate "
+            "Use the Mindweft MCP broker calculator tool to calculate "
             f"{args.expression}, then reply with only the numeric result. "
             "Do not edit files."
         ),

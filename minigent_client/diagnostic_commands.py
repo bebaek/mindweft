@@ -255,7 +255,7 @@ def _debug_dict(value: object) -> dict[str, Any]:
 
 
 def _format_debug_bundle(bundle: dict[str, object]) -> str:
-    lines = ["Minigent debug bundle", ""]
+    lines = ["Mindweft debug bundle", ""]
     version_info = _debug_dict(bundle.get("version"))
     platform_info = _debug_dict(bundle.get("platform"))
     client_info = _debug_dict(bundle.get("client"))

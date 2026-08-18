@@ -92,7 +92,7 @@ class ChatPromptSession(Protocol):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the Minigent client for chat and voice.")
+    parser = argparse.ArgumentParser(description="Run the Mindweft client for chat and voice.")
     parser.add_argument(
         "--backend",
         choices=("chat", "stdin", "manual-audio", "passive-audio"),
@@ -102,12 +102,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         default=None,
-        help="Path to a TOML client config file. Defaults to MINIGENT_CLIENT_CONFIG, $XDG_CONFIG_HOME/minigent/client.toml (or ~/.config/minigent/client.toml), legacy ~/.minigent/client.toml, or ./.minigent-client.toml.",
+        help=(
+            "Path to a TOML client config file. Defaults to MINDWEFT_CLIENT_CONFIG, "
+            "$XDG_CONFIG_HOME/mindweft/client.toml (or ~/.config/mindweft/client.toml), "
+            "then legacy Minigent locations."
+        ),
     )
     parser.add_argument(
         "--base-url",
         default=None,
-        help="Base URL for the Minigent API. Defaults to MINIGENT_BASE_URL or http://127.0.0.1:8000.",
+        help="Base URL for the Mindweft API. Defaults to MINIGENT_BASE_URL or http://127.0.0.1:8000.",
     )
     parser.add_argument(
         "--wake-phrase",
@@ -117,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stream-runs",
         action="store_true",
-        help="Use Minigent's NDJSON run stream endpoint and print run/tool/peer progress.",
+        help="Use Mindweft's NDJSON run stream endpoint and print run/tool/peer progress.",
     )
     parser.add_argument(
         "--show-tool-results",
@@ -164,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--api-token",
         default=None,
-        help="Bearer token for Minigent auth. If omitted, trusted dev headers are used.",
+        help="Bearer token for Mindweft auth. If omitted, trusted dev headers are used.",
     )
     parser.add_argument("--user-id", default=None, help="User ID for trusted dev headers.")
     parser.add_argument("--tenant-id", default=None, help="Tenant ID for trusted dev headers.")
@@ -1930,7 +1934,7 @@ def _read_editor_chat_prompt(*, output_stream: ChatOutputStream) -> str | None:
     with tempfile.TemporaryDirectory(prefix="minigent-prompt-") as prompt_dir:
         prompt_path = Path(prompt_dir) / "prompt.md"
         prompt_path.write_text(
-            "\n# Write your Minigent prompt above. Lines starting with # are ignored.\n",
+            "\n# Write your Mindweft prompt above. Lines starting with # are ignored.\n",
             encoding="utf-8",
         )
         try:

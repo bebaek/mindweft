@@ -20,7 +20,7 @@ tenant-specific defaults out of environment/static configuration.
 
 ## Context
 
-Minigent supports tenant-scoped authentication, thread isolation, per-tenant execution
+Mindweft supports tenant-scoped authentication, thread isolation, per-tenant execution
 configuration, and an optional admin SQLite store. Dynamic tenant management extends that
 model with runtime-managed tenant identity, lifecycle state, domains, entitlements, admin
 operations, and audit metadata.

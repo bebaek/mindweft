@@ -91,7 +91,7 @@ jobs:
       packages: write
     env:
       REGISTRY: ghcr.io
-      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/minigent-app
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/mindweft-app
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -110,14 +110,14 @@ jobs:
             {
               echo 'from<<EOF'
               echo "type=registry,ref=${IMAGE_NAME}:buildcache"
-              echo 'type=gha,scope=minigent'
+              echo 'type=gha,scope=mindweft'
               echo 'EOF'
               echo "to=type=registry,ref=${IMAGE_NAME}:buildcache,mode=max"
             } >> "$GITHUB_OUTPUT"
           else
             {
-              echo 'from=type=gha,scope=minigent'
-              echo 'to=type=gha,mode=max,scope=minigent'
+              echo 'from=type=gha,scope=mindweft'
+              echo 'to=type=gha,mode=max,scope=mindweft'
             } >> "$GITHUB_OUTPUT"
           fi
       - name: Log in to GitHub Container Registry
@@ -133,7 +133,7 @@ jobs:
           context: .
           platforms: linux/amd64
           load: true
-          tags: minigent-production-smoke:${{ github.sha }}
+          tags: mindweft-production-smoke:${{ github.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -141,10 +141,10 @@ jobs:
           cache-to: ${{ steps.image-cache.outputs.to }}
       - name: Smoke-test production container
         env:
-          SMOKE_IMAGE: minigent-production-smoke:${{ github.sha }}
+          SMOKE_IMAGE: mindweft-production-smoke:${{ github.sha }}
         run: |
           set -euo pipefail
-          container="minigent-production-smoke"
+          container="mindweft-production-smoke"
           cleanup() {
             docker rm --force "$container" >/dev/null 2>&1 || true
           }
@@ -171,7 +171,7 @@ jobs:
       - name: Publish smoke-tested production image
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
-          SMOKE_IMAGE: minigent-production-smoke:${{ github.sha }}
+          SMOKE_IMAGE: mindweft-production-smoke:${{ github.sha }}
         run: |
           set -euo pipefail
           commit_image="${IMAGE_NAME}:${GITHUB_SHA}"

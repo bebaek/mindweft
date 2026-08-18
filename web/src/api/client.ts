@@ -1639,9 +1639,9 @@ export class MinigentApiClient {
     if (this.#authentication.mode === "bearer") {
       headers.set("Authorization", `Bearer ${this.#authentication.token}`);
     } else if (this.#authentication.mode === "development") {
-      headers.set("X-Minigent-Tenant-Id", this.#authentication.tenantId);
-      headers.set("X-Minigent-User-Id", this.#authentication.userId);
-      if (this.#authentication.isAdmin) headers.set("X-Minigent-Admin", "true");
+      headers.set("X-Mindweft-Tenant-Id", this.#authentication.tenantId);
+      headers.set("X-Mindweft-User-Id", this.#authentication.userId);
+      if (this.#authentication.isAdmin) headers.set("X-Mindweft-Admin", "true");
     }
     return headers;
   }

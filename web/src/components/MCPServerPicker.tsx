@@ -23,7 +23,7 @@ export function MCPServerPicker({
 
   return <section className="mcp-server-picker" aria-labelledby="internal-mcp-title">
     <div className="mcp-server-picker-heading">
-      <div><strong id="internal-mcp-title">Internal services</strong><span>Enable tools advertised by this Minigent deployment.</span></div>
+      <div><strong id="internal-mcp-title">Internal services</strong><span>Enable tools advertised by this Mindweft deployment.</span></div>
       <span className="mcp-server-picker-badge">Quick add</span>
     </div>
     {pending && <p className="mcp-server-picker-status">Loading available services…</p>}

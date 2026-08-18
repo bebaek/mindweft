@@ -26,8 +26,10 @@ SESSION_COOKIE_SECURE_ENV = "MINIGENT_SESSION_COOKIE_SECURE"
 SESSION_ALLOWED_ORIGINS_ENV = "MINIGENT_SESSION_ALLOWED_ORIGINS"
 SESSION_LOGIN_RATE_LIMIT_CAPACITY_ENV = "MINIGENT_SESSION_LOGIN_RATE_LIMIT_CAPACITY"
 SESSION_LOGIN_RATE_LIMIT_REFILL_ENV = "MINIGENT_SESSION_LOGIN_RATE_LIMIT_REFILL_PER_SECOND"
-SESSION_COOKIE_NAME = "minigent_session"
-SESSION_TOKEN_ISSUER = "minigent-console"
+SESSION_COOKIE_NAME = "mindweft_session"
+LEGACY_SESSION_COOKIE_NAME = "minigent_session"
+SESSION_TOKEN_ISSUER = "mindweft-console"
+LEGACY_SESSION_TOKEN_ISSUER = "minigent-console"
 
 _SCRYPT_N = 2**14
 _SCRYPT_R = 8
@@ -239,8 +241,19 @@ def build_session_auth_router() -> APIRouter:
             samesite="strict",
             path="/",
         )
+        response.delete_cookie(
+            LEGACY_SESSION_COOKIE_NAME,
+            httponly=True,
+            secure=settings.cookie_secure,
+            samesite="strict",
+            path="/",
+        )
 
     return router
+
+
+def has_session_cookie(request: Request) -> bool:
+    return SESSION_COOKIE_NAME in request.cookies or LEGACY_SESSION_COOKIE_NAME in request.cookies
 
 
 def principal_from_session_request(
@@ -251,6 +264,8 @@ def principal_from_session_request(
 ) -> Principal | None:
     settings = settings or validate_session_auth_settings()
     token = request.cookies.get(SESSION_COOKIE_NAME)
+    if token is None:
+        token = request.cookies.get(LEGACY_SESSION_COOKIE_NAME)
     if not token:
         if required:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -264,7 +279,7 @@ def principal_from_session_request(
             token,
             settings.secret,
             algorithms=["HS256"],
-            issuer=SESSION_TOKEN_ISSUER,
+            issuer=(SESSION_TOKEN_ISSUER, LEGACY_SESSION_TOKEN_ISSUER),
             options={
                 "require": [
                     "exp",

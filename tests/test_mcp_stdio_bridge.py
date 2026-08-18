@@ -286,7 +286,7 @@ def test_sdk_http_client_interoperates_with_sdk_text_server_through_bridge(
             "text.search_text_file",
         ]
         assert client.server_info().protocol_version == "2026-07-28"
-        assert client.server_info().server_name == "minigent-text-mcp"
+        assert client.server_info().server_name == "mindweft-text-mcp"
 
     asyncio.run(run())
 

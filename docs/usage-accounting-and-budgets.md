@@ -8,7 +8,7 @@ codes, and defaults below are proposals until implementation lands.
 
 ## Motivation
 
-Minigent already receives provider usage metadata and emits usage in run results and stream
+Mindweft already receives provider usage metadata and emits usage in run results and stream
 events. It also has shared request-rate limits, shared concurrent-run leases, tenant attachment
 quotas, and per-thread entitlement limits. Those controls do not answer longer-period questions
 such as:
@@ -48,7 +48,7 @@ reservation and settlement.
 
 The first version should enforce token budgets rather than currency budgets. Token accounting is
 available across more providers and avoids embedding a price catalog that changes independently of
-Minigent releases.
+Mindweft releases.
 
 Record the provider's available dimensions separately:
 

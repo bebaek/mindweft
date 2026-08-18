@@ -1,20 +1,23 @@
 # User MCP
 
-Minigent exposes a Streamable HTTP MCP v2 endpoint at `/user-mcp` for an authenticated active
+Mindweft exposes a Streamable HTTP MCP v2 endpoint at `/user-mcp` for an authenticated active
 tenant user. It is separate from the administrator-only `/mcp` endpoint.
 
 ## Authentication and scope
 
-The endpoint uses the normal Minigent authentication configuration. A request must authenticate
+The endpoint uses the normal Mindweft authentication configuration. A request must authenticate
 as an active tenant user. The MCP tools derive `tenant_id` and `user_id` from that authenticated
 principal; they do not accept user or tenant selectors.
 
 Development-header deployments can send:
 
 ```text
-X-Minigent-User-Id: user-1
-X-Minigent-Tenant-Id: tenant-1
+X-Mindweft-User-Id: user-1
+X-Mindweft-Tenant-Id: tenant-1
 ```
+
+Legacy `X-Minigent-*` development headers remain accepted; if both namespaces are present,
+the corresponding `X-Mindweft-*` value takes precedence.
 
 Static-token and JWT deployments use their normal `Authorization: Bearer ...` authentication.
 Administrator principals should use `/mcp` for platform operations instead.
@@ -60,5 +63,5 @@ GET /me/mcp-access
 
 
 Point a Streamable HTTP MCP v2 client at the deployment's `/user-mcp` path and configure the same
-bearer authentication used for the Minigent API. The endpoint supports modern MCP discovery and
+bearer authentication used for the Mindweft API. The endpoint supports modern MCP discovery and
 tool calls over stateless Streamable HTTP.

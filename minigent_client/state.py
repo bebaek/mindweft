@@ -9,8 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-STATE_DIR_NAME = "minigent"
-LEGACY_STATE_DIR_NAME = ".minigent"
+STATE_DIR_NAME = "mindweft"
+LEGACY_STATE_DIR_NAME = "minigent"
+ANCIENT_STATE_DIR_NAME = ".minigent"
 STATE_FILE_NAME = "cli-state.json"
 XDG_STATE_HOME_ENV = "XDG_STATE_HOME"
 PROMPT_COMMANDS_KEY = "prompt_commands"
@@ -19,20 +20,38 @@ PROMPT_COMMANDS_KEY = "prompt_commands"
 _PROMPT_COMMAND_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]{0,63}$")
 
 
-def state_dir_path(env: Mapping[str, str] | None = None) -> Path:
-    lookup = os.environ if env is None else env
-    configured_home = lookup.get(XDG_STATE_HOME_ENV, "").strip()
+def _xdg_state_dir(name: str, env: Mapping[str, str]) -> Path:
+    configured_home = env.get(XDG_STATE_HOME_ENV, "").strip()
     if configured_home:
         state_home = Path(configured_home).expanduser()
         if state_home.is_absolute():
-            return state_home / STATE_DIR_NAME
-    configured_user_home = lookup.get("HOME", "").strip()
+            return state_home / name
+    configured_user_home = env.get("HOME", "").strip()
     user_home = Path(configured_user_home).expanduser() if configured_user_home else Path.home()
-    return user_home / ".local" / "state" / STATE_DIR_NAME
+    return user_home / ".local" / "state" / name
 
 
-def legacy_state_dir_path() -> Path:
-    return Path.home() / LEGACY_STATE_DIR_NAME
+def state_dir_path(env: Mapping[str, str] | None = None) -> Path:
+    """Return Mindweft state, falling back to an existing Minigent directory."""
+
+    lookup = os.environ if env is None else env
+    canonical = _xdg_state_dir(STATE_DIR_NAME, lookup)
+    legacy = _xdg_state_dir(LEGACY_STATE_DIR_NAME, lookup)
+    if not canonical.exists() and legacy.exists():
+        return legacy
+    return canonical
+
+
+def legacy_state_dir_path(env: Mapping[str, str] | None = None) -> Path:
+    lookup = os.environ if env is None else env
+    legacy = _xdg_state_dir(LEGACY_STATE_DIR_NAME, lookup)
+    if legacy.exists():
+        return legacy
+    return ancient_state_dir_path()
+
+
+def ancient_state_dir_path() -> Path:
+    return Path.home() / ANCIENT_STATE_DIR_NAME
 
 
 def state_file_path() -> Path:

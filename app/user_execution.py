@@ -381,7 +381,7 @@ class UserExecutionConfig(UserExecutionModel):
 
 
 def ensure_default_personal_agent(config: UserExecutionConfig) -> UserExecutionConfig:
-    """Add the stable personal assistant and Minigent user-MCP profile idempotently."""
+    """Add the stable personal assistant and Mindweft user-MCP profile idempotently."""
     profile = next(
         (
             item
@@ -393,8 +393,8 @@ def ensure_default_personal_agent(config: UserExecutionConfig) -> UserExecutionC
     if profile is None:
         profile = UserCapabilityProfileDefinition(
             id=PERSONAL_USER_MCP_PROFILE_ID,
-            name="Minigent personal tools",
-            description="Manage your personal Minigent configuration and MCP access.",
+            name="Mindweft personal tools",
+            description="Manage your personal Mindweft configuration and MCP access.",
             mcp_server_refs=[MINIGENT_USER_MCP_REF],
         )
         config.capability_profiles.items.append(profile)

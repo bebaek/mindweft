@@ -11,7 +11,7 @@ from typing import Any
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Drive a running Minigent server from the command line."
+        description="Drive a running Mindweft server from the command line."
     )
     parser.add_argument(
         "--base-url",
@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--api-token",
         default=None,
-        help="Bearer token sent via Authorization header. Prefer this when MINIGENT_AUTH_TOKENS is configured.",
+        help="Bearer token sent via Authorization header. Prefer this when MINDWEFT_AUTH_TOKENS is configured.",
     )
     parser.add_argument(
         "--trace",
@@ -131,9 +131,9 @@ def build_trace_headers(trace_id: str | None) -> dict[str, str]:
 
 def build_principal_headers(user_id: str, tenant_id: str, is_admin: bool) -> dict[str, str]:
     return {
-        "X-Minigent-User-Id": user_id,
-        "X-Minigent-Tenant-Id": tenant_id,
-        "X-Minigent-Admin": "true" if is_admin else "false",
+        "X-Mindweft-User-Id": user_id,
+        "X-Mindweft-Tenant-Id": tenant_id,
+        "X-Mindweft-Admin": "true" if is_admin else "false",
     }
 
 

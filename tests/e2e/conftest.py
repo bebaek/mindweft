@@ -80,7 +80,7 @@ def _wait_for_health(base_url: str, process: subprocess.Popen[str]) -> None:
         if process.poll() is not None:
             stdout, stderr = process.communicate(timeout=1)
             raise RuntimeError(
-                "Minigent e2e server exited before becoming healthy\n"
+                "Mindweft e2e server exited before becoming healthy\n"
                 f"stdout:\n{stdout}\n"
                 f"stderr:\n{stderr}"
             )
@@ -92,4 +92,4 @@ def _wait_for_health(base_url: str, process: subprocess.Popen[str]) -> None:
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             last_error = exc
         time.sleep(0.1)
-    raise RuntimeError(f"Minigent e2e server did not become healthy: {last_error!r}")
+    raise RuntimeError(f"Mindweft e2e server did not become healthy: {last_error!r}")

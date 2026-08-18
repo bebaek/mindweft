@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 
@@ -9,6 +10,9 @@ from app.admin_store import SQLiteTenantConfigStore
 from app.llm import MockLLMAdapter
 from app.main import create_app
 from app.session_auth import (
+    LEGACY_SESSION_COOKIE_NAME,
+    LEGACY_SESSION_TOKEN_ISSUER,
+    SESSION_COOKIE_NAME,
     SessionAuthSettings,
     hash_password,
     validate_session_auth_settings,
@@ -121,6 +125,7 @@ def test_login_creates_admin_session_and_logout_clears_it(tmp_path, monkeypatch)
         "is_admin": True,
     }
     cookie = login.headers["set-cookie"]
+    assert cookie.startswith(f"{SESSION_COOKIE_NAME}=")
     assert "HttpOnly" in cookie
     assert "SameSite=strict" in cookie
 
@@ -134,6 +139,55 @@ def test_login_creates_admin_session_and_logout_clears_it(tmp_path, monkeypatch)
     logout = client.delete("/auth/session", headers={"Origin": "http://testserver"})
     assert logout.status_code == 204
     assert client.get("/auth/session").json()["authenticated"] is False
+
+
+def test_legacy_session_cookie_and_issuer_remain_valid(tmp_path, monkeypatch) -> None:
+    client = _client(tmp_path, monkeypatch)
+    login = client.post(
+        "/auth/session",
+        json={"username": "admin", "password": "correct horse battery staple"},
+        headers={"Origin": "http://testserver"},
+    )
+    assert login.status_code == 200
+    canonical_token = client.cookies.get(SESSION_COOKIE_NAME)
+    assert canonical_token is not None
+    payload = jwt.decode(canonical_token, options={"verify_signature": False})
+    payload["iss"] = LEGACY_SESSION_TOKEN_ISSUER
+    legacy_token = jwt.encode(payload, "s" * 32, algorithm="HS256")
+
+    client.cookies.clear()
+    client.cookies.set(LEGACY_SESSION_COOKIE_NAME, legacy_token)
+
+    session = client.get("/auth/session")
+    assert session.status_code == 200
+    assert session.json()["authenticated"] is True
+    assert client.get("/admin/tenants").status_code == 200
+
+    logout = client.delete("/auth/session", headers={"Origin": "http://testserver"})
+    assert logout.status_code == 204
+    cleared_cookies = logout.headers.get_list("set-cookie")
+    assert any(cookie.startswith(f"{SESSION_COOKIE_NAME}=") for cookie in cleared_cookies)
+    assert any(cookie.startswith(f"{LEGACY_SESSION_COOKIE_NAME}=") for cookie in cleared_cookies)
+
+
+def test_canonical_session_cookie_takes_precedence_over_legacy(tmp_path, monkeypatch) -> None:
+    client = _client(tmp_path, monkeypatch)
+    login = client.post(
+        "/auth/session",
+        json={"username": "admin", "password": "correct horse battery staple"},
+        headers={"Origin": "http://testserver"},
+    )
+    assert login.status_code == 200
+    valid_token = client.cookies.get(SESSION_COOKIE_NAME)
+    assert valid_token is not None
+
+    client.cookies.clear()
+    client.cookies.set(LEGACY_SESSION_COOKIE_NAME, valid_token)
+    client.cookies.set(SESSION_COOKIE_NAME, "invalid")
+
+    session = client.get("/auth/session")
+    assert session.status_code == 200
+    assert session.json()["authenticated"] is False
 
 
 def test_login_rejects_bad_credentials_and_cross_origin_requests(tmp_path, monkeypatch) -> None:

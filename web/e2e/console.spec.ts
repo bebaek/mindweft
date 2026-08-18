@@ -415,7 +415,7 @@ test("loads the production console and passes an accessibility scan", async ({ p
   await installApiMocks(page);
   await page.goto("./");
 
-  await expect(page).toHaveTitle("Minigent Console");
+  await expect(page).toHaveTitle("Mindweft Console");
   await expect(page.getByRole("heading", { name: "Build, observe, and govern your agents." })).toBeVisible();
   await expect(page.getByText("Ready", { exact: true })).toBeVisible();
   await expect(page.getByText("3 checks passing")).toBeVisible();
@@ -615,7 +615,7 @@ test("runs a streamed conversation without accessibility violations", async ({ p
   });
   await expect(page.getByRole("img", { name: "release-diagram.png" })).toBeVisible();
   await page.getByLabel("Image detail for release-diagram.png").selectOption("high");
-  await page.getByLabel("Message Minigent").fill("Prepare the release");
+  await page.getByLabel("Message Mindweft").fill("Prepare the release");
   await page.getByRole("button", { name: "Send message" }).click();
 
   await expect(page.getByText("The deployment plan is ready.").last()).toBeVisible();
@@ -640,7 +640,7 @@ test("approves one-time private-value disclosure and resumes the action", async 
   await installWorkspaceMocks(page, { consent: true });
   await page.goto("./");
   await navigateToWorkspace(page);
-  await page.getByLabel("Message Minigent").fill("Send this to my contact");
+  await page.getByLabel("Message Mindweft").fill("Send this to my contact");
   await page.getByRole("button", { name: "Send message" }).click();
 
   const consent = page.getByRole("dialog", { name: "Allow this exact tool action?" });
@@ -661,7 +661,7 @@ test("denies private-value disclosure without resuming the action", async ({ pag
   await installWorkspaceMocks(page, { consent: true });
   await page.goto("./");
   await navigateToWorkspace(page);
-  await page.getByLabel("Message Minigent").fill("Do not disclose this");
+  await page.getByLabel("Message Mindweft").fill("Do not disclose this");
   await page.getByRole("button", { name: "Send message" }).click();
   const consent = page.getByRole("dialog", { name: "Allow this exact tool action?" });
 
@@ -678,7 +678,7 @@ test("requires reconciliation when an approved action outcome is unknown", async
   await installWorkspaceMocks(page, { consent: true, uncertainResume: true });
   await page.goto("./");
   await navigateToWorkspace(page);
-  await page.getByLabel("Message Minigent").fill("Send this to my contact");
+  await page.getByLabel("Message Mindweft").fill("Send this to my contact");
   await page.getByRole("button", { name: "Send message" }).click();
   const consent = page.getByRole("dialog");
   await consent.getByRole("button", { name: "Approve once and continue" }).click();

@@ -42,6 +42,10 @@ def test_legacy_gateway_imports_delegate_to_workspace_package() -> None:
 @pytest.mark.parametrize(
     ("script_name", "module_name"),
     [
+        ("mindweft-text-mcp", "minigent_workspace.servers.text"),
+        ("mindweft-shell-mcp", "minigent_workspace.servers.shell"),
+        ("mindweft-mcp-stdio-bridge", "minigent_workspace.bridge.stdio"),
+        ("mindweft-mcp-stdio-gateway", "minigent_workspace.bridge.gateway"),
         ("minigent-text-mcp", "minigent_workspace.servers.text"),
         ("minigent-shell-mcp", "minigent_workspace.servers.shell"),
         ("minigent-mcp-stdio-bridge", "minigent_workspace.bridge.stdio"),

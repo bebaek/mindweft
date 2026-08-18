@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENV_FILE="${MINIGENT_VOICE_ENV_FILE:-.env.voice}"
-BACKEND="${MINIGENT_VOICE_BACKEND:-passive-audio}"
+ENV_FILE="${MINDWEFT_VOICE_ENV_FILE:-${MINIGENT_VOICE_ENV_FILE:-.env.voice}}"
+BACKEND="${MINDWEFT_VOICE_BACKEND:-${MINIGENT_VOICE_BACKEND:-passive-audio}}"
 
 PATH="$HOME/.local/bin:$PATH"
 if command -v uv >/dev/null 2>&1; then
@@ -17,11 +17,11 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/run-client-linux.sh [--env-file PATH] [--backend BACKEND] [client args...]
 
-Loads a client env file, then runs minigent-client.
+Loads a client env file, then runs mindweft-client.
 
 Environment overrides:
-  MINIGENT_VOICE_ENV_FILE   Env file path. Default: .env.voice
-  MINIGENT_VOICE_BACKEND    Client backend. Default: passive-audio
+  MINDWEFT_VOICE_ENV_FILE   Env file path. Default: .env.voice
+  MINDWEFT_VOICE_BACKEND    Client backend. Default: passive-audio
 USAGE
 }
 
@@ -55,4 +55,4 @@ set -a
 source "$ENV_FILE"
 set +a
 
-exec minigent-client "$BACKEND" "$@"
+exec mindweft-client "$BACKEND" "$@"

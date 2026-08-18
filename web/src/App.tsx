@@ -12,6 +12,9 @@ import { PersonalizationPage } from "./pages/PersonalizationPage";
 type Page = "overview" | "workspace" | "personal" | "settings" | "admin";
 type Theme = "light" | "dark";
 
+const THEME_STORAGE_KEY = "mindweft-theme";
+const LEGACY_THEME_STORAGE_KEY = "minigent-theme";
+
 const pages: Record<Page, { label: string; description: string }> = {
   overview: { label: "Overview", description: "Runtime health and delivery status" },
   workspace: { label: "Workspace", description: "Threads and agent runs" },
@@ -46,7 +49,8 @@ export function App() {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
     try {
-      window.localStorage.setItem("minigent-theme", theme);
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+      window.localStorage.removeItem(LEGACY_THEME_STORAGE_KEY);
     } catch {
       // Theme persistence is optional when browser storage is unavailable.
     }
@@ -69,7 +73,7 @@ export function App() {
     <div className="app-shell">
       <a className="skip-link" href="#main-content">Skip to content</a>
       <aside className={`sidebar ${mobileNavOpen ? "is-open" : ""}`}>
-        <div className="brand"><span className="brand-mark">M</span><div><strong>Minigent</strong><small>Agent operations</small></div></div>
+        <div className="brand"><span className="brand-mark">M</span><div><strong>Mindweft</strong><small>Agent operations</small></div></div>
         <nav aria-label="Primary navigation">
           {visiblePages.map((key) => (
             <button key={key} className={page === key ? "active" : ""} onClick={() => navigate(key)}>
@@ -77,7 +81,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-footer"><span className="environment-dot" /><div><strong>Minigent API</strong><small>Same-origin connection</small></div></div>
+        <div className="sidebar-footer"><span className="environment-dot" /><div><strong>Mindweft API</strong><small>Same-origin connection</small></div></div>
       </aside>
       {mobileNavOpen && <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
 
@@ -131,7 +135,8 @@ export function App() {
 
 function initialTheme(): Theme {
   try {
-    const stored = window.localStorage.getItem("minigent-theme");
+    const canonical = window.localStorage.getItem(THEME_STORAGE_KEY);
+    const stored = canonical ?? window.localStorage.getItem(LEGACY_THEME_STORAGE_KEY);
     if (stored === "light" || stored === "dark") return stored;
   } catch {
     // Fall through to the system preference.

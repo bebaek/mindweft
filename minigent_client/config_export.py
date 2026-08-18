@@ -11,7 +11,7 @@ def export_unified_config_from_server(server_config: dict[str, Any]) -> dict[str
     export: dict[str, object] = {
         "profile": "exported",
         "_comments": [
-            "Generated from a running Minigent server via /config.",
+            "Generated from a running Mindweft server via /config.",
             "This is a best-effort export from public server config output.",
             "Secrets and original source files are not recoverable; set API keys in your environment.",
         ],

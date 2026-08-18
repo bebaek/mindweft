@@ -1,4 +1,4 @@
-"""Role-scoped Minigent administration tools and the external admin MCP surface."""
+"""Role-scoped Mindweft administration tools and the external admin MCP surface."""
 
 from __future__ import annotations
 
@@ -12,7 +12,15 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.admin_mutations import AdminMutationService
-from app.auth import require_principal
+from app.auth import (
+    ADMIN_HEADER,
+    LEGACY_ADMIN_HEADER,
+    LEGACY_TENANT_HEADER,
+    LEGACY_USER_HEADER,
+    TENANT_HEADER,
+    USER_HEADER,
+    require_principal,
+)
 from app.execution import ADMIN_EXECUTION_CONFIG_KEY
 from app.health import database_readiness_checks
 from app.models import Principal
@@ -43,7 +51,7 @@ def current_admin_mcp_request_context() -> AdminMCPRequestContext:
 
 
 class AdminMCPAuthMiddleware:
-    """Authenticate every MCP request using Minigent's normal principal mechanism."""
+    """Authenticate every MCP request using Mindweft's normal principal mechanism."""
 
     def __init__(self, app: ASGIApp) -> None:
         self._app = app
@@ -53,9 +61,12 @@ class AdminMCPAuthMiddleware:
         principal = await require_principal(
             request,
             authorization=request.headers.get("Authorization"),
-            x_minigent_user_id=request.headers.get("X-Minigent-User-Id"),
-            x_minigent_tenant_id=request.headers.get("X-Minigent-Tenant-Id"),
-            x_minigent_admin=request.headers.get("X-Minigent-Admin"),
+            x_mindweft_user_id=request.headers.get(USER_HEADER),
+            x_mindweft_tenant_id=request.headers.get(TENANT_HEADER),
+            x_mindweft_admin=request.headers.get(ADMIN_HEADER),
+            x_minigent_user_id=request.headers.get(LEGACY_USER_HEADER),
+            x_minigent_tenant_id=request.headers.get(LEGACY_TENANT_HEADER),
+            x_minigent_admin=request.headers.get(LEGACY_ADMIN_HEADER),
         )
         if not principal.is_admin:
             raise HTTPException(status_code=403, detail="Admin access required")
@@ -305,13 +316,13 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
 
     registry.register(
         ADMIN_CHAT_SETUP_TOOL,
-        "Inspect this Minigent deployment's redacted readiness and safe setup findings.",
+        "Inspect this Mindweft deployment's redacted readiness and safe setup findings.",
         {"type": "object", "properties": {}, "additionalProperties": False},
         setup_handler,
     )
     registry.register(
         ADMIN_CHAT_TENANT_TOOL,
-        "Diagnose redacted execution and MCP catalog setup for a Minigent tenant.",
+        "Diagnose redacted execution and MCP catalog setup for a Mindweft tenant.",
         {
             "type": "object",
             "properties": {"tenant_id": {"type": "string"}},
@@ -322,7 +333,7 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
     )
     registry.register(
         ADMIN_CHAT_CATALOG_TOOL,
-        "Inspect redacted effective Minigent MCP catalog access for one tenant user.",
+        "Inspect redacted effective Mindweft MCP catalog access for one tenant user.",
         {
             "type": "object",
             "properties": {
@@ -387,9 +398,9 @@ def build_admin_chat_tool_registry(app: Any, principal: Principal) -> ToolRegist
 
 def build_admin_mcp_server() -> MCPServer[Any]:
     server = MCPServer(
-        "Minigent Admin Operations",
+        "Mindweft Admin Operations",
         instructions=(
-            "This server is read-only. It reports redacted Minigent deployment and tenant "
+            "This server is read-only. It reports redacted Mindweft deployment and tenant "
             "configuration diagnostics for authenticated platform administrators. Never infer "
             "or request secrets, credential values, or authorization headers."
         ),

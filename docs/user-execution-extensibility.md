@@ -21,7 +21,7 @@ User-owned servers are restricted to public HTTPS destinations, revalidated on e
 gated by the tenant custom-MCP policy. Static authorization or API-key headers can be stored in the
 write-only encrypted personal credential store and are resolved live for each thread run.
 Personal execution configs also receive a reserved `user:minigent-user-tools` capability profile
-referencing `shared:minigent-user-mcp`. This is an in-process, principal-scoped Minigent tool
+referencing `shared:minigent-user-mcp`. This is an in-process, principal-scoped Mindweft tool
 provider, not a user-owned HTTP MCP server; it exposes the authenticated user's status, config,
 access, and credential-management operations without storing a loopback URL or credentials.
 
@@ -30,7 +30,7 @@ before implementation.
 
 ## Context
 
-Minigent currently resolves execution configuration by tenant. A tenant execution config owns
+Mindweft currently resolves execution configuration by tenant. A tenant execution config owns
 its LLM settings, tools and MCP servers, skills, capability profiles, and agent presets. A thread
 can select configured skill names, a capability profile, an LLM profile, or an agent preset, but
 those resources must already exist in the tenant config.
@@ -59,7 +59,7 @@ catalog of everything a user may create.
 ## Non-goals for the first iteration
 
 - A public marketplace for agents, skills, or MCP servers.
-- Executing arbitrary uploaded native code inside the Minigent process.
+- Executing arbitrary uploaded native code inside the Mindweft process.
 - Automatically trusting third-party tools with private values or privileged identity forwarding.
 - Cross-tenant sharing.
 - Collaborative editing or branching of the same resource.
@@ -277,7 +277,7 @@ user_tool_credentials
   updated_at
 ```
 
-The exact encrypted credential schema can reuse or generalize Minigent's existing encrypted OAuth
+The exact encrypted credential schema can reuse or generalize Mindweft's existing encrypted OAuth
 storage. Execution-config APIs expose only opaque credential references and safe metadata.
 
 ## Effective execution resolution
@@ -587,5 +587,5 @@ thread records, or API responses. Interactive OAuth connection and refresh flows
   model-preference feature?
 - Which resource edits should increment a thread-visible version when only descriptions change?
 - Should live resolution be configurable per thread before full immutable revision storage exists?
-- What import/export format should be portable across Minigent installations without carrying
+- What import/export format should be portable across Mindweft installations without carrying
   credentials?

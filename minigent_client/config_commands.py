@@ -73,7 +73,7 @@ from minigent_workspace.config_export import export_local_coding_config
 DEFAULT_CONFIG_PROFILE = "local-coding"
 CONFIG_INIT_PROFILES = ("basic-chat", "openrouter", "local-coding", "voice")
 
-DEFAULT_CONFIG_TEMPLATE = f"""# Unified Minigent config facade.
+DEFAULT_CONFIG_TEMPLATE = f"""# Unified Mindweft config facade.
 # Keep secrets in your shell, OS keychain, or {DEFAULT_DOTENV_FILE}.
 # Existing MINIGENT_* / provider env vars still override values from this file.
 
@@ -113,7 +113,7 @@ shell_enabled = false
 enabled = false
 """
 
-BASIC_CHAT_CONFIG_TEMPLATE = f"""# Basic local Minigent config.
+BASIC_CHAT_CONFIG_TEMPLATE = f"""# Basic local Mindweft config.
 # Uses the mock LLM provider so no API key is required.
 
 profile = "basic-chat"
@@ -137,7 +137,7 @@ enabled = false
 enabled = false
 """
 
-OPENROUTER_CONFIG_TEMPLATE = f"""# Minigent config for OpenRouter-backed chat.
+OPENROUTER_CONFIG_TEMPLATE = f"""# Mindweft config for OpenRouter-backed chat.
 # Keep OPENROUTER_API_KEY in your environment or {DEFAULT_DOTENV_FILE}; do not commit it.
 
 profile = "openrouter"
@@ -163,7 +163,7 @@ enabled = false
 enabled = false
 """
 
-VOICE_CONFIG_TEMPLATE = f"""# Minigent voice-oriented config facade.
+VOICE_CONFIG_TEMPLATE = f"""# Mindweft voice-oriented config facade.
 # Detailed audio/VAD tuning remains available through MINIGENT_VOICE_* env vars.
 
 profile = "voice"

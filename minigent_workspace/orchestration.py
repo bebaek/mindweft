@@ -95,7 +95,7 @@ def run_workspace_processes(
                         str(api_port),
                     ],
                     env=env,
-                    label="Minigent API",
+                    label="Mindweft API",
                 )
             )
             print_demo_commands(

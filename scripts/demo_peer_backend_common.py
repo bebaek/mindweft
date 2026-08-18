@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import urllib.error
 import urllib.request
 from collections.abc import Callable
 from typing import Any
+
+from minigent_config.unified_config import preferred_mindweft_env
 
 RequestJson = Callable[
     [str, str, dict[str, Any] | None, dict[str, str] | None, float],
@@ -21,12 +22,12 @@ def parse_args(
     peer_label: str,
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Drive Minigent's peer_agent backend through /threads/{id}/run."
+        description="Drive Mindweft's peer_agent backend through /threads/{id}/run."
     )
     parser.add_argument(
         "--base-url",
-        default=os.getenv("MINIGENT_BASE_URL", "http://127.0.0.1:8000"),
-        help="Base URL for the running Minigent API service.",
+        default=preferred_mindweft_env("BASE_URL", default="http://127.0.0.1:8000"),
+        help="Base URL for the running Mindweft API service.",
     )
     parser.add_argument("--user-id", default="demo-user")
     parser.add_argument("--tenant-id", default="demo-tenant")
@@ -67,16 +68,16 @@ def run_peer_backend_demo(
         print_http_error(exc)
         return 2
     except urllib.error.URLError as exc:
-        print(f"Minigent is not reachable at {base_url}: {exc}", file=sys.stderr)
+        print(f"Mindweft is not reachable at {base_url}: {exc}", file=sys.stderr)
         return 2
 
     backend = config.get("agent_backend", {}) if isinstance(config, dict) else {}
     print(f"agent_backend: {backend}")
     if backend.get("type") != "peer_agent":
         print(
-            "Minigent is not configured for the peer_agent backend. Set "
-            "MINIGENT_AGENT_BACKEND=peer_agent, MINIGENT_AGENT_BACKEND_PEER, "
-            "and MINIGENT_AGENT_BACKEND_CWD.",
+            "Mindweft is not configured for the peer_agent backend. Set "
+            "MINDWEFT_AGENT_BACKEND=peer_agent, MINDWEFT_AGENT_BACKEND_PEER, "
+            "and MINDWEFT_AGENT_BACKEND_CWD.",
             file=sys.stderr,
         )
         return 2
@@ -120,7 +121,7 @@ def run_peer_backend_demo(
         print_http_error(exc)
         return 2
     except TimeoutError:
-        print("Minigent run timed out", file=sys.stderr)
+        print("Mindweft run timed out", file=sys.stderr)
         return 2
 
     reply = str(run_response["reply"])
@@ -150,9 +151,9 @@ def build_auth_headers(args: argparse.Namespace) -> dict[str, str]:
     if args.api_token:
         return {"Authorization": f"Bearer {args.api_token}"}
     return {
-        "X-Minigent-User-Id": args.user_id,
-        "X-Minigent-Tenant-Id": args.tenant_id,
-        "X-Minigent-Admin": "false",
+        "X-Mindweft-User-Id": args.user_id,
+        "X-Mindweft-Tenant-Id": args.tenant_id,
+        "X-Mindweft-Admin": "false",
     }
 
 
@@ -178,4 +179,4 @@ def request_json(
 
 def print_http_error(exc: urllib.error.HTTPError) -> None:
     body = exc.read().decode("utf-8", errors="replace")
-    print(f"Minigent request failed: {exc.code} {body}", file=sys.stderr)
+    print(f"Mindweft request failed: {exc.code} {body}", file=sys.stderr)

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/compose.peer-demo.yaml"
-MINIGENT_PORT="${MINIGENT_PORT:-8000}"
+MINDWEFT_PORT="${MINDWEFT_PORT:-${MINIGENT_PORT:-8000}}"
 PROMPT="Reply exactly: compose-opencode-ok"
 KEEP_RUNNING=false
 
@@ -47,13 +47,13 @@ cd "$ROOT_DIR"
 docker compose -f "$COMPOSE_FILE" up -d --build
 
 uv run python scripts/check_peer_agent_demo.py \
-  --minigent-port "$MINIGENT_PORT" \
+  --mindweft-port "$MINDWEFT_PORT" \
   --peer-name opencode \
   --skip-wrapper-health \
   --check-running
 
 uv run python scripts/demo_peer_agent_tool.py \
-  --base-url "http://127.0.0.1:$MINIGENT_PORT" \
+  --base-url "http://127.0.0.1:$MINDWEFT_PORT" \
   --peer opencode \
-  --cwd /workspace/minigent \
+  --cwd /workspace/mindweft \
   --prompt "$PROMPT"

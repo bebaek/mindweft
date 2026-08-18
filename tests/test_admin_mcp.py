@@ -18,6 +18,11 @@ ADMIN_HEADERS = {
     "X-Minigent-Tenant-Id": "tenant-1",
     "X-Minigent-Admin": "true",
 }
+MINDWEFT_ADMIN_HEADERS = {
+    "X-Mindweft-User-Id": "admin-1",
+    "X-Mindweft-Tenant-Id": "tenant-1",
+    "X-Mindweft-Admin": "true",
+}
 USER_HEADERS = {
     "X-Minigent-User-Id": "user-1",
     "X-Minigent-Tenant-Id": "tenant-1",
@@ -53,7 +58,9 @@ def test_admin_mcp_requires_admin_and_exposes_only_read_tools() -> None:
         rejected = _request(client, 1, "server/discover", {"_meta": MCP_METADATA}, USER_HEADERS)
         assert rejected.status_code == 403
 
-        discovered = _request(client, 2, "server/discover", {"_meta": MCP_METADATA}, ADMIN_HEADERS)
+        discovered = _request(
+            client, 2, "server/discover", {"_meta": MCP_METADATA}, MINDWEFT_ADMIN_HEADERS
+        )
         listed = _request(client, 3, "tools/list", {"_meta": MCP_METADATA}, ADMIN_HEADERS)
         status = _request(
             client,

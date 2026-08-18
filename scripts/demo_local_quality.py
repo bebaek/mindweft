@@ -13,8 +13,8 @@ from app.llm import OpenAICompatibleAdapter
 from app.tools import ToolRegistry
 
 AUTH_HEADERS = {
-    "X-Minigent-User-Id": "demo-user",
-    "X-Minigent-Tenant-Id": "demo-tenant",
+    "X-Mindweft-User-Id": "demo-user",
+    "X-Mindweft-Tenant-Id": "demo-tenant",
 }
 DEFAULT_MESSAGE = (
     "Explain whether a local-first agent can use a remote reviewer safely. "
@@ -26,7 +26,7 @@ DEFAULT_MESSAGE = (
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run an in-process Minigent demo with llama.cpp as the private/main LLM "
+            "Run an in-process Mindweft demo with llama.cpp as the private/main LLM "
             "and optional sanitized remote quality critique."
         )
     )
@@ -56,7 +56,7 @@ def build_client(args: argparse.Namespace) -> TestClient:
     # Importing app.main constructs its module-level ASGI app. Keep that import-time
     # app isolated from the user's .env so this demo does not initialize unrelated MCP
     # servers or remote LLM config before creating the explicit demo app below.
-    os.environ["MINIGENT_TENANT_EXECUTION_CONFIGS"] = json.dumps(
+    os.environ["MINDWEFT_TENANT_EXECUTION_CONFIGS"] = json.dumps(
         {"*": {"llm": {"provider": "mock"}, "tools": {"allowed_local_tools": []}}}
     )
     from app.main import create_app

@@ -661,7 +661,7 @@ def create_bridge_app(settings: BridgeSettings) -> FastAPI:
         finally:
             await bridge.stop()
 
-    app = FastAPI(title="Minigent Stdio MCP Bridge", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Mindweft Stdio MCP Bridge", version="0.1.0", lifespan=lifespan)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

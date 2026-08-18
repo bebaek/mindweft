@@ -46,7 +46,7 @@ def test_demo_pi_mcp_broker_builds_tool_smoke_prompt(monkeypatch) -> None:
             "--tenant-id",
             "demo-tenant",
             "--message",
-            "Use the Minigent MCP broker calculator tool to calculate 2 * 3, then reply with only the numeric result. Do not edit files.",
+            "Use the Mindweft MCP broker calculator tool to calculate 2 * 3, then reply with only the numeric result. Do not edit files.",
             "--expect-reply-contains",
             "6",
         ]

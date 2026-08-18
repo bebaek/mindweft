@@ -28,9 +28,9 @@ class PrincipalConfig:
         if self.api_token:
             return {"Authorization": f"Bearer {self.api_token}"}
         return {
-            "X-Minigent-User-Id": self.user_id,
-            "X-Minigent-Tenant-Id": self.tenant_id,
-            "X-Minigent-Admin": "true" if self.is_admin else "false",
+            "X-Mindweft-User-Id": self.user_id,
+            "X-Mindweft-Tenant-Id": self.tenant_id,
+            "X-Mindweft-Admin": "true" if self.is_admin else "false",
         }
 
 
@@ -318,14 +318,20 @@ WAKEWORD_CONFIG_FIELD_ALIASES: dict[str, str] = {
 }
 
 
+CLIENT_CONFIG_ENV = "MINDWEFT_CLIENT_CONFIG"
+LEGACY_CLIENT_CONFIG_ENV = "MINIGENT_CLIENT_CONFIG"
+
+
 def default_client_config_paths() -> tuple[Path, ...]:
     configured_home = os.getenv("XDG_CONFIG_HOME", "").strip()
     config_home = Path(configured_home).expanduser() if configured_home else None
     if config_home is None or not config_home.is_absolute():
         config_home = Path.home() / ".config"
     return (
+        config_home / "mindweft" / "client.toml",
         config_home / "minigent" / "client.toml",
         Path.home() / ".minigent" / "client.toml",
+        Path.cwd() / ".mindweft-client.toml",
         Path.cwd() / ".minigent-client.toml",
     )
 
@@ -333,11 +339,15 @@ def default_client_config_paths() -> tuple[Path, ...]:
 def load_client_config_overrides(
     config_path: str | os.PathLike[str] | None = None,
 ) -> tuple[dict[str, Any], str | None]:
-    explicit_path = config_path or _clean_optional(os.getenv("MINIGENT_CLIENT_CONFIG"))
+    explicit_path = (
+        config_path
+        or _clean_optional(os.getenv(CLIENT_CONFIG_ENV))
+        or _clean_optional(os.getenv(LEGACY_CLIENT_CONFIG_ENV))
+    )
     if explicit_path is not None:
         path = Path(explicit_path).expanduser()
         if not path.exists():
-            raise FileNotFoundError(f"Minigent client config file not found: {path}")
+            raise FileNotFoundError(f"Mindweft client config file not found: {path}")
         return parse_client_config_file(path), str(path)
     for path in default_client_config_paths():
         if path.exists():
@@ -350,7 +360,7 @@ def parse_client_config_file(path: str | os.PathLike[str]) -> dict[str, Any]:
     with config_path.open("rb") as handle:
         raw = tomllib.load(handle)
     if not isinstance(raw, dict):
-        raise ValueError("Minigent client config file must contain a TOML table")
+        raise ValueError("Mindweft client config file must contain a TOML table")
     return parse_client_config(raw)
 
 
@@ -370,24 +380,24 @@ def parse_client_config(raw: dict[str, Any]) -> dict[str, Any]:
     principal = raw.get("principal")
     if principal is not None:
         if not isinstance(principal, dict):
-            raise ValueError("[principal] in Minigent client config must be a table")
+            raise ValueError("[principal] in Mindweft client config must be a table")
         overrides["principal"] = _parse_principal_config(principal)
 
     voice = raw.get("voice")
     if voice is not None:
         if not isinstance(voice, dict):
-            raise ValueError("[voice] in Minigent client config must be a table")
+            raise ValueError("[voice] in Mindweft client config must be a table")
         _apply_named_table(voice, VOICE_CONFIG_FIELD_ALIASES, overrides)
         wakeword = voice.get("wakeword")
         if wakeword is not None:
             if not isinstance(wakeword, dict):
-                raise ValueError("[voice.wakeword] in Minigent client config must be a table")
+                raise ValueError("[voice.wakeword] in Mindweft client config must be a table")
             _apply_named_table(wakeword, WAKEWORD_CONFIG_FIELD_ALIASES, overrides)
 
     agents = raw.get("agents")
     if agents is not None:
         if not isinstance(agents, dict):
-            raise ValueError("[agents] in Minigent client config must be a table")
+            raise ValueError("[agents] in Mindweft client config must be a table")
         overrides["agent_presets"] = parse_agent_presets(agents)
     return overrides
 

@@ -194,7 +194,7 @@ def _truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
 
 def build_shell_sdk_server(server: ShellMCPServer) -> MCPServer[Any]:
     sdk_server = MCPServer(
-        "minigent-shell-mcp",
+        "mindweft-shell-mcp",
         version="0.1.0",
         instructions="Trusted-local workspace-scoped shell command execution.",
     )

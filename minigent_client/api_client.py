@@ -55,7 +55,7 @@ class MinigentAPIClient:
     def health(self) -> dict[str, Any]:
         response = self.request_json("GET", f"{self._config.base_url}/health")
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent health response must be an object")
+            raise RuntimeError("Mindweft health response must be an object")
         return cast(dict[str, Any], response)
 
     def config(self, *, export: bool = False) -> dict[str, Any]:
@@ -64,13 +64,13 @@ class MinigentAPIClient:
             url = f"{url}?export=true"
         response = self.request_json("GET", url)
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent config response must be an object")
+            raise RuntimeError("Mindweft config response must be an object")
         return cast(dict[str, Any], response)
 
     def execution_options(self) -> dict[str, Any]:
         response = self.request_json("GET", f"{self._config.base_url}/execution-options")
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent execution-options response must be an object")
+            raise RuntimeError("Mindweft execution-options response must be an object")
         return cast(dict[str, Any], response)
 
     def list_admin_tenants(
@@ -93,7 +93,7 @@ class MinigentAPIClient:
         )
         response = self.request_json("GET", f"{self._config.base_url}/admin/tenants{query}")
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin tenant-list response must be an object")
+            raise RuntimeError("Mindweft admin tenant-list response must be an object")
         return cast(dict[str, Any], response)
 
     def create_admin_tenant(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -103,13 +103,13 @@ class MinigentAPIClient:
             payload=payload,
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin tenant-create response must be an object")
+            raise RuntimeError("Mindweft admin tenant-create response must be an object")
         return cast(dict[str, Any], response)
 
     def get_admin_tenant(self, tenant_id: str) -> dict[str, Any]:
         response = self.request_json("GET", f"{self._config.base_url}/admin/tenants/{tenant_id}")
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin tenant response must be an object")
+            raise RuntimeError("Mindweft admin tenant response must be an object")
         return cast(dict[str, Any], response)
 
     def update_admin_tenant(self, tenant_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -119,7 +119,7 @@ class MinigentAPIClient:
             payload=payload,
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin tenant-update response must be an object")
+            raise RuntimeError("Mindweft admin tenant-update response must be an object")
         return cast(dict[str, Any], response)
 
     def transition_admin_tenant(self, tenant_id: str, transition: str) -> dict[str, Any]:
@@ -128,13 +128,13 @@ class MinigentAPIClient:
             f"{self._config.base_url}/admin/tenants/{tenant_id}/{transition}",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin tenant-transition response must be an object")
+            raise RuntimeError("Mindweft admin tenant-transition response must be an object")
         return cast(dict[str, Any], response)
 
     def delete_admin_tenant(self, tenant_id: str) -> dict[str, Any]:
         response = self.request_json("DELETE", f"{self._config.base_url}/admin/tenants/{tenant_id}")
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin tenant-delete response must be an object")
+            raise RuntimeError("Mindweft admin tenant-delete response must be an object")
         return cast(dict[str, Any], response)
 
     def seed_admin_tenants(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -144,7 +144,7 @@ class MinigentAPIClient:
             payload=payload,
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin tenant-seed response must be an object")
+            raise RuntimeError("Mindweft admin tenant-seed response must be an object")
         return cast(dict[str, Any], response)
 
     def list_admin_tenant_users(
@@ -171,7 +171,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/admin/tenants/{tenant_id}/users{query}",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin tenant-user-list response must be an object")
+            raise RuntimeError("Mindweft admin tenant-user-list response must be an object")
         return cast(dict[str, Any], response)
 
     def create_admin_tenant_user(self, tenant_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -181,7 +181,7 @@ class MinigentAPIClient:
             payload=payload,
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin tenant-user-create response must be an object")
+            raise RuntimeError("Mindweft admin tenant-user-create response must be an object")
         return cast(dict[str, Any], response)
 
     def get_admin_tenant_user(self, tenant_id: str, user_record_id: str) -> dict[str, Any]:
@@ -190,7 +190,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/admin/tenants/{tenant_id}/users/{user_record_id}",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin tenant-user response must be an object")
+            raise RuntimeError("Mindweft admin tenant-user response must be an object")
         return cast(dict[str, Any], response)
 
     def update_admin_tenant_user(
@@ -202,7 +202,7 @@ class MinigentAPIClient:
             payload=payload,
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin tenant-user-update response must be an object")
+            raise RuntimeError("Mindweft admin tenant-user-update response must be an object")
         return cast(dict[str, Any], response)
 
     def transition_admin_tenant_user(
@@ -213,7 +213,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/admin/tenants/{tenant_id}/users/{user_record_id}/{transition}",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin tenant-user-transition response must be an object")
+            raise RuntimeError("Mindweft admin tenant-user-transition response must be an object")
         return cast(dict[str, Any], response)
 
     def delete_admin_tenant_user(self, tenant_id: str, user_record_id: str) -> dict[str, Any]:
@@ -222,7 +222,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/admin/tenants/{tenant_id}/users/{user_record_id}",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin tenant-user-delete response must be an object")
+            raise RuntimeError("Mindweft admin tenant-user-delete response must be an object")
         return cast(dict[str, Any], response)
 
     def get_admin_tenant_entitlements(self, tenant_id: str) -> dict[str, Any]:
@@ -231,7 +231,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/admin/tenants/{tenant_id}/entitlements",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin entitlements response must be an object")
+            raise RuntimeError("Mindweft admin entitlements response must be an object")
         return cast(dict[str, Any], response)
 
     def put_admin_tenant_entitlements(
@@ -243,7 +243,7 @@ class MinigentAPIClient:
             payload=payload,
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin entitlement update response must be an object")
+            raise RuntimeError("Mindweft admin entitlement update response must be an object")
         return cast(dict[str, Any], response)
 
     def validate_admin_tenant_entitlements(
@@ -255,7 +255,7 @@ class MinigentAPIClient:
             payload=payload,
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin entitlement validation response must be an object")
+            raise RuntimeError("Mindweft admin entitlement validation response must be an object")
         return cast(dict[str, Any], response)
 
     def delete_admin_tenant_entitlements(self, tenant_id: str) -> None:
@@ -271,12 +271,12 @@ class MinigentAPIClient:
         )
         if not isinstance(response, dict):
             raise RuntimeError(
-                "Minigent admin execution-config tenant-list response must be an object"
+                "Mindweft admin execution-config tenant-list response must be an object"
             )
         tenants = response.get("tenants")
         if not isinstance(tenants, list) or not all(isinstance(item, str) for item in tenants):
             raise RuntimeError(
-                "Minigent admin execution-config tenant-list response must include tenants"
+                "Mindweft admin execution-config tenant-list response must include tenants"
             )
         return cast(list[str], tenants)
 
@@ -286,7 +286,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/admin/tenants/{tenant_id}/execution-config",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin execution-config response must be an object")
+            raise RuntimeError("Mindweft admin execution-config response must be an object")
         return cast(dict[str, Any], response)
 
     def put_admin_tenant_execution_config(
@@ -298,7 +298,7 @@ class MinigentAPIClient:
             payload={"config": config},
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin execution-config update response must be an object")
+            raise RuntimeError("Mindweft admin execution-config update response must be an object")
         return cast(dict[str, Any], response)
 
     def validate_admin_tenant_execution_config(
@@ -311,7 +311,7 @@ class MinigentAPIClient:
         )
         if not isinstance(response, dict):
             raise RuntimeError(
-                "Minigent admin execution-config validation response must be an object"
+                "Mindweft admin execution-config validation response must be an object"
             )
         return cast(dict[str, Any], response)
 
@@ -337,7 +337,7 @@ class MinigentAPIClient:
             payload=payload,
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent create-thread response must be an object")
+            raise RuntimeError("Mindweft create-thread response must be an object")
         thread = cast(dict[str, Any], response)
         thread_id = thread.get("thread_id")
         if isinstance(thread_id, str) and thread_id:
@@ -350,7 +350,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/threads?limit={limit}&offset={offset}",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent list-threads response must be an object")
+            raise RuntimeError("Mindweft list-threads response must be an object")
         return cast(dict[str, Any], response)
 
     def generate_thread_title(self, thread_id: str) -> dict[str, Any]:
@@ -359,7 +359,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/threads/{thread_id}/title/generate",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent generate-thread-title response must be an object")
+            raise RuntimeError("Mindweft generate-thread-title response must be an object")
         return cast(dict[str, Any], response)
 
     def rename_thread(self, thread_id: str, title: str) -> dict[str, Any]:
@@ -369,7 +369,7 @@ class MinigentAPIClient:
             payload={"title": title},
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent rename-thread response must be an object")
+            raise RuntimeError("Mindweft rename-thread response must be an object")
         return cast(dict[str, Any], response)
 
     def get_thread(self, thread_id: str) -> dict[str, Any]:
@@ -378,7 +378,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/threads/{thread_id}/messages",
         )
         if not isinstance(messages, list):
-            raise RuntimeError("Minigent thread messages response must be a list")
+            raise RuntimeError("Mindweft thread messages response must be a list")
         return {"thread_id": thread_id, "messages": messages}
 
     def delete_thread(self, thread_id: str) -> None:
@@ -414,7 +414,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/admin/tenants/{tenant_id}/threads{query}",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin thread-list response must be an object")
+            raise RuntimeError("Mindweft admin thread-list response must be an object")
         return cast(dict[str, Any], response)
 
     def get_admin_thread(self, tenant_id: str, thread_id: str) -> dict[str, Any]:
@@ -423,7 +423,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/admin/tenants/{tenant_id}/threads/{thread_id}",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin thread-detail response must be an object")
+            raise RuntimeError("Mindweft admin thread-detail response must be an object")
         return cast(dict[str, Any], response)
 
     def delete_admin_thread(self, tenant_id: str, thread_id: str) -> dict[str, Any]:
@@ -432,7 +432,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/admin/tenants/{tenant_id}/threads/{thread_id}",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin thread-delete response must be an object")
+            raise RuntimeError("Mindweft admin thread-delete response must be an object")
         return cast(dict[str, Any], response)
 
     def prune_admin_threads(
@@ -459,7 +459,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/admin/tenants/{tenant_id}/threads/prune{query}",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin thread-prune response must be an object")
+            raise RuntimeError("Mindweft admin thread-prune response must be an object")
         return cast(dict[str, Any], response)
 
     def list_admin_audit_records(
@@ -488,7 +488,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/admin/tenants/{tenant_id}/audit-records{query}",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent admin audit-record-list response must be an object")
+            raise RuntimeError("Mindweft admin audit-record-list response must be an object")
         return cast(dict[str, Any], response)
 
     @property
@@ -530,7 +530,7 @@ class MinigentAPIClient:
             self._discard_uploaded_attachments(thread_id, uploaded_attachment_ids)
             raise
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent add-message response must be an object")
+            raise RuntimeError("Mindweft add-message response must be an object")
         return cast(dict[str, Any], response)
 
     def ensure_thread(self) -> str:
@@ -539,7 +539,7 @@ class MinigentAPIClient:
         response = self.create_thread(skill_name=self._config.skill_name)
         thread_id = response["thread_id"]
         if not isinstance(thread_id, str) or not thread_id:
-            raise RuntimeError("Minigent create-thread response must include thread_id")
+            raise RuntimeError("Mindweft create-thread response must include thread_id")
         return thread_id
 
     def upload_attachment(
@@ -555,7 +555,7 @@ class MinigentAPIClient:
             payload={"mime_type": mime_type, "data": data},
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent attachment response must be an object")
+            raise RuntimeError("Mindweft attachment response must be an object")
         return cast(dict[str, Any], response)
 
     def delete_attachment(self, thread_id: str, attachment_id: str) -> None:
@@ -604,7 +604,7 @@ class MinigentAPIClient:
                 )
                 attachment_id = attachment.get("attachment_id")
                 if not isinstance(attachment_id, str) or not attachment_id:
-                    raise RuntimeError("Minigent attachment response must include attachment_id")
+                    raise RuntimeError("Mindweft attachment response must include attachment_id")
                 attachment_ids.append(attachment_id)
                 clean_part.pop("data", None)
                 clean_part["attachment_id"] = attachment_id
@@ -633,10 +633,10 @@ class MinigentAPIClient:
             f"{self._config.base_url}/threads/{resolved_thread_id}/run",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent run response must be an object")
+            raise RuntimeError("Mindweft run response must be an object")
         reply = response["reply"]
         if not isinstance(reply, str):
-            raise RuntimeError("Minigent reply must be a string")
+            raise RuntimeError("Mindweft reply must be a string")
         return reply, None
 
     def list_pending_private_value_consents(
@@ -648,7 +648,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-consents/pending",
         )
         if not isinstance(response, list) or not all(isinstance(item, dict) for item in response):
-            raise RuntimeError("Minigent pending-consent response must be an array of objects")
+            raise RuntimeError("Mindweft pending-consent response must be an array of objects")
         return cast(list[dict[str, Any]], response)
 
     def decide_private_value_consent(
@@ -666,7 +666,7 @@ class MinigentAPIClient:
             payload={"approve": approve, "one_shot": one_shot},
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent consent-decision response must be an object")
+            raise RuntimeError("Mindweft consent-decision response must be an object")
         return cast(dict[str, Any], response)
 
     def resume_private_value_consent(
@@ -681,7 +681,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-consents/{consent_id}/resume",
         )
         if not isinstance(response, dict) or not isinstance(response.get("reply"), str):
-            raise RuntimeError("Minigent consent-resume response must include a reply")
+            raise RuntimeError("Mindweft consent-resume response must include a reply")
         return response["reply"], None
 
     def list_private_value_actions(self, thread_id: str | None = None) -> list[dict[str, Any]]:
@@ -691,7 +691,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-actions",
         )
         if not isinstance(response, list) or not all(isinstance(item, dict) for item in response):
-            raise RuntimeError("Minigent private-value action response must be an array of objects")
+            raise RuntimeError("Mindweft private-value action response must be an array of objects")
         return cast(list[dict[str, Any]], response)
 
     def discard_private_value_action(
@@ -706,7 +706,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/threads/{resolved_thread_id}/private-value-actions/{consent_id}",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent discarded-action response must be an object")
+            raise RuntimeError("Mindweft discarded-action response must be an object")
         return cast(dict[str, Any], response)
 
     def compact_thread(self, thread_id: str) -> dict[str, Any]:
@@ -715,7 +715,7 @@ class MinigentAPIClient:
             f"{self._config.base_url}/threads/{thread_id}/compact",
         )
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent compact-thread response must be an object")
+            raise RuntimeError("Mindweft compact-thread response must be an object")
         return cast(dict[str, Any], response)
 
     def cancel_current_run(self, thread_id: str | None = None) -> dict[str, Any] | None:
@@ -729,7 +729,7 @@ class MinigentAPIClient:
         if response is None:
             return None
         if not isinstance(response, dict):
-            raise RuntimeError("Minigent cancel-run response must be an object")
+            raise RuntimeError("Mindweft cancel-run response must be an object")
         return cast(dict[str, Any], response)
 
     def _run_thread_stream(self, thread_id: str) -> tuple[str, dict[str, Any] | None]:
@@ -746,7 +746,7 @@ class MinigentAPIClient:
                 if event_type == "assistant.message":
                     content = event.get("content")
                     if not isinstance(content, str):
-                        raise RuntimeError("Minigent stream assistant message must be a string")
+                        raise RuntimeError("Mindweft stream assistant message must be a string")
                     reply = content
                     metadata = event.get("metadata")
                 elif event_type == "run.warning":
@@ -766,7 +766,7 @@ class MinigentAPIClient:
         if reply is None:
             if saw_warning:
                 return "", metadata
-            raise RuntimeError("Minigent run stream ended without an assistant message")
+            raise RuntimeError("Mindweft run stream ended without an assistant message")
         return reply, metadata
 
     def request_ndjson_events(
@@ -805,7 +805,7 @@ class MinigentAPIClient:
             raise _timeout_error(method, url, str(exc)) from exc
         except json.JSONDecodeError as exc:
             raise MinigentAPIError(
-                "The Minigent API returned malformed streaming data.",
+                "The Mindweft API returned malformed streaming data.",
                 category="malformed_response",
                 detail=f"{method} {url} returned invalid NDJSON: {exc}",
             ) from exc
@@ -845,7 +845,7 @@ class MinigentAPIClient:
             raise _timeout_error(method, url, str(exc)) from exc
         except json.JSONDecodeError as exc:
             raise MinigentAPIError(
-                "The Minigent API returned malformed JSON.",
+                "The Mindweft API returned malformed JSON.",
                 category="malformed_response",
                 detail=f"{method} {url} returned invalid JSON: {exc}",
             ) from exc
@@ -926,20 +926,20 @@ def _api_error_from_status(
         )
     if status_code == 401:
         return MinigentAPIError(
-            "Authentication failed. Check MINIGENT_API_TOKEN or your Minigent principal headers.",
+            "Authentication failed. Check MINIGENT_API_TOKEN or your Mindweft principal headers.",
             category="authentication_failed",
             detail=technical_detail,
             status_code=status_code,
         )
     if status_code == 403:
         return MinigentAPIError(
-            "Permission denied. Your Minigent principal is not allowed to perform this action.",
+            "Permission denied. Your Mindweft principal is not allowed to perform this action.",
             category="permission_denied",
             detail=technical_detail,
             status_code=status_code,
         )
     if status_code == 404:
-        message = "Minigent resource not found. Check the thread ID or base URL."
+        message = "Mindweft resource not found. Check the thread ID or base URL."
         if detail_text:
             message = f"{message} {detail_text}"
         return MinigentAPIError(
@@ -950,13 +950,13 @@ def _api_error_from_status(
         )
     if status_code in {408, 504}:
         return MinigentAPIError(
-            "The Minigent request timed out. Try again or check the API server.",
+            "The Mindweft request timed out. Try again or check the API server.",
             category="timeout",
             detail=technical_detail,
             status_code=status_code,
         )
     if status_code is not None and status_code >= 500:
-        message = f"Minigent server error ({status_code})."
+        message = f"Mindweft server error ({status_code})."
         if detail_text:
             message = f"{message} {detail_text}"
         return MinigentAPIError(
@@ -965,9 +965,9 @@ def _api_error_from_status(
             detail=technical_detail,
             status_code=status_code,
         )
-    message = "Minigent request failed."
+    message = "Mindweft request failed."
     if status_code is not None:
-        message = f"Minigent request failed ({status_code})."
+        message = f"Mindweft request failed ({status_code})."
     if detail_text:
         message = f"{message} {detail_text}"
     return MinigentAPIError(
@@ -986,7 +986,7 @@ def _api_error_from_url_error(
     if isinstance(reason, TimeoutError) or "timed out" in reason_text.lower():
         return _timeout_error(method, url, reason_text)
     return MinigentAPIError(
-        "Cannot reach the Minigent API. Check --base-url and make sure the server is running.",
+        "Cannot reach the Mindweft API. Check --base-url and make sure the server is running.",
         category="server_unavailable",
         detail=f"{method} {url} failed: {reason_text}",
     )
@@ -994,7 +994,7 @@ def _api_error_from_url_error(
 
 def _timeout_error(method: str, url: str, detail: str) -> MinigentAPIError:
     return MinigentAPIError(
-        "The Minigent request timed out. Try again or check the API server.",
+        "The Mindweft request timed out. Try again or check the API server.",
         category="timeout",
         detail=f"{method} {url} timed out: {detail}",
     )

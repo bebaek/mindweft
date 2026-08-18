@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from app.mcp import (
     LEGACY_MCP_PROTOCOL_VERSION,
     LEGACY_PRIVATE_VALUES_META_KEY,
+    MINIGENT_PRIVATE_VALUES_META_KEY,
     MODERN_MCP_PROTOCOL_VERSION,
     PRIVATE_VALUES_META_KEY,
     MCPHTTPClient,
@@ -532,6 +533,21 @@ def test_parse_mcp_tool_result_rejects_invalid_private_metadata() -> None:
             },
             tool_name="contacts.list",
         )
+
+
+def test_parse_mcp_tool_result_accepts_minigent_private_value_metadata() -> None:
+    result = parse_mcp_tool_result(
+        {
+            "structuredContent": {"name": "protected-name"},
+            "_meta": {MINIGENT_PRIVATE_VALUES_META_KEY: {"name-ref": "Example Name"}},
+        },
+        tool_name="contacts.list",
+    )
+
+    assert result == MCPPrivateToolResult(
+        model_content={"name": "protected-name"},
+        private_values={"name-ref": "Example Name"},
+    )
 
 
 def test_parse_mcp_tool_result_accepts_legacy_private_value_metadata() -> None:

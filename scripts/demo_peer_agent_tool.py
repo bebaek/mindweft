@@ -2,22 +2,23 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
 
+from minigent_config.unified_config import preferred_mindweft_env
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Drive the peer_agent_task tool through a running Minigent server."
+        description="Drive the peer_agent_task tool through a running Mindweft server."
     )
     parser.add_argument(
         "--base-url",
-        default=os.getenv("MINIGENT_BASE_URL", "http://127.0.0.1:8000"),
-        help="Base URL for the running Minigent API service.",
+        default=preferred_mindweft_env("BASE_URL", default="http://127.0.0.1:8000"),
+        help="Base URL for the running Mindweft API service.",
     )
     parser.add_argument("--peer", default="pi")
     parser.add_argument("--cwd", default=str(Path(__file__).resolve().parents[1]))
@@ -31,7 +32,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--http-timeout",
         type=float,
         default=None,
-        help="HTTP timeout for Minigent requests. Defaults to timeout + 30 seconds.",
+        help="HTTP timeout for Mindweft requests. Defaults to timeout + 30 seconds.",
     )
     parser.add_argument("--user-id", default="demo-user")
     parser.add_argument("--tenant-id", default="demo-tenant")
@@ -57,18 +58,18 @@ def main(argv: list[str] | None = None) -> int:
         print_http_error(exc)
         return 2
     except urllib.error.URLError as exc:
-        print(f"Minigent is not reachable at {base_url}: {exc}", file=sys.stderr)
+        print(f"Mindweft is not reachable at {base_url}: {exc}", file=sys.stderr)
         return 2
     except TimeoutError:
-        print(f"Minigent request timed out at {base_url}", file=sys.stderr)
+        print(f"Mindweft request timed out at {base_url}", file=sys.stderr)
         return 2
 
     local_tools = config.get("local_tools", []) if isinstance(config, dict) else []
     print(f"local_tools: {local_tools}")
     if "peer_agent_task" not in local_tools:
         print(
-            "peer_agent_task is not enabled. Restart Minigent with "
-            "MINIGENT_ENABLE_PEER_AGENT_TOOL=true.",
+            "peer_agent_task is not enabled. Restart Mindweft with "
+            "MINDWEFT_ENABLE_PEER_AGENT_TOOL=true.",
             file=sys.stderr,
         )
         return 2
@@ -80,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
         print_http_error(exc)
         return 2
     except TimeoutError:
-        print(f"Minigent request timed out at {base_url}", file=sys.stderr)
+        print(f"Mindweft request timed out at {base_url}", file=sys.stderr)
         return 2
 
     thread_id = str(thread["thread_id"])
@@ -117,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         print_http_error(exc)
         return 2
     except TimeoutError:
-        print(f"Minigent run timed out after {http_timeout} seconds", file=sys.stderr)
+        print(f"Mindweft run timed out after {http_timeout} seconds", file=sys.stderr)
         return 2
 
     print(f"thread_id: {thread_id}")
@@ -147,9 +148,9 @@ def build_auth_headers(args: argparse.Namespace) -> dict[str, str]:
     if args.api_token:
         return {"Authorization": f"Bearer {args.api_token}"}
     return {
-        "X-Minigent-User-Id": args.user_id,
-        "X-Minigent-Tenant-Id": args.tenant_id,
-        "X-Minigent-Admin": "false",
+        "X-Mindweft-User-Id": args.user_id,
+        "X-Mindweft-Tenant-Id": args.tenant_id,
+        "X-Mindweft-Admin": "false",
     }
 
 
@@ -175,7 +176,7 @@ def request_json(
 
 def print_http_error(exc: urllib.error.HTTPError) -> None:
     body = exc.read().decode("utf-8", errors="replace")
-    print(f"Minigent request failed: {exc.code} {body}", file=sys.stderr)
+    print(f"Mindweft request failed: {exc.code} {body}", file=sys.stderr)
 
 
 def find_peer_agent_tool_result(transcript: Any) -> dict[str, Any] | None:

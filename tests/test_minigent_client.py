@@ -42,6 +42,7 @@ from minigent_client.config import (
     ClientConfig,
     PrincipalConfig,
     default_client_config_paths,
+    load_client_config_overrides,
     parse_agent_presets,
 )
 from minigent_client.debug import CaptureDebugConfig, CaptureDebugger
@@ -171,8 +172,27 @@ def test_default_client_config_paths_honor_xdg_config_home(
 
     paths = default_client_config_paths()
 
-    assert paths[0] == config_home / "minigent" / "client.toml"
-    assert paths[1] == tmp_path / "home" / ".minigent" / "client.toml"
+    assert paths[0] == config_home / "mindweft" / "client.toml"
+    assert paths[1] == config_home / "minigent" / "client.toml"
+    assert paths[2] == tmp_path / "home" / ".minigent" / "client.toml"
+    assert paths[3] == Path.cwd() / ".mindweft-client.toml"
+    assert paths[4] == Path.cwd() / ".minigent-client.toml"
+
+
+def test_client_config_prefers_mindweft_env_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    canonical = tmp_path / "mindweft-client.toml"
+    canonical.write_text('base_url = "https://mindweft.example"\n', encoding="utf-8")
+    legacy = tmp_path / "minigent-client.toml"
+    legacy.write_text('base_url = "https://minigent.example"\n', encoding="utf-8")
+    monkeypatch.setenv("MINDWEFT_CLIENT_CONFIG", str(canonical))
+    monkeypatch.setenv("MINIGENT_CLIENT_CONFIG", str(legacy))
+
+    overrides, source = load_client_config_overrides()
+
+    assert overrides["base_url"] == "https://mindweft.example"
+    assert source == str(canonical)
 
 
 def test_persistent_client_state_round_trips_last_thread(tmp_path: Path) -> None:
@@ -219,7 +239,7 @@ def test_persistent_client_state_migrates_legacy_default_path(
     state = PersistentClientState.load()
 
     assert state.get_last_thread("scope") == "legacy-thread"
-    assert state.path == tmp_path / "xdg-state" / "minigent" / "cli-state.json"
+    assert state.path == tmp_path / "xdg-state" / "mindweft" / "cli-state.json"
     assert state.path.exists()
 
 
@@ -1462,6 +1482,16 @@ def test_resolve_piper_model_path_downloads_named_voice(
     assert downloaded["download_dir"] == tmp_path / ".cache" / "minigent" / "piper"
 
 
+def test_principal_config_emits_mindweft_development_headers() -> None:
+    principal = PrincipalConfig(user_id="user-1", tenant_id="tenant-1", is_admin=True)
+
+    assert principal.build_headers() == {
+        "X-Mindweft-User-Id": "user-1",
+        "X-Mindweft-Tenant-Id": "tenant-1",
+        "X-Mindweft-Admin": "true",
+    }
+
+
 def test_principal_config_prefers_bearer_token() -> None:
     principal = PrincipalConfig(
         user_id="user-1",
@@ -1815,9 +1845,9 @@ def test_minigent_client_sends_raw_message_when_location_is_unset(
                 "metadata": {"raw_user_prompt": "what time is it"},
             },
             "headers": {
-                "X-minigent-user-id": "user-1",
-                "X-minigent-tenant-id": "tenant-1",
-                "X-minigent-admin": "false",
+                "X-mindweft-user-id": "user-1",
+                "X-mindweft-tenant-id": "tenant-1",
+                "X-mindweft-admin": "false",
                 "Content-type": "application/json",
             },
         }
@@ -2264,9 +2294,9 @@ def test_minigent_client_can_run_thread_with_ndjson_stream(
             "url": "http://127.0.0.1:8000/threads/thread-123/run/stream",
             "headers": {
                 "Accept": "application/x-ndjson",
-                "X-minigent-user-id": "user-1",
-                "X-minigent-tenant-id": "tenant-1",
-                "X-minigent-admin": "false",
+                "X-mindweft-user-id": "user-1",
+                "X-mindweft-tenant-id": "tenant-1",
+                "X-mindweft-admin": "false",
             },
         }
     ]
@@ -2570,7 +2600,7 @@ def test_minigent_client_stream_run_errors_raise_runtime_error(
         )
     )
 
-    with pytest.raises(RuntimeError, match=r"Minigent server error \(502\). upstream"):
+    with pytest.raises(RuntimeError, match=r"Mindweft server error \(502\). upstream"):
         client.run_thread()
 
 
@@ -4209,7 +4239,7 @@ def test_build_chat_prompt_session_uses_thread_scoped_history(
     history_path = history_calls[0][1]
     assert isinstance(history_path, str)
     assert history_path.startswith(
-        str(tmp_path / ".local" / "state" / "minigent" / "client-chat-history.d")
+        str(tmp_path / ".local" / "state" / "mindweft" / "client-chat-history.d")
     )
     assert history_path.endswith("thread_one")
 
@@ -4225,7 +4255,7 @@ def test_chat_history_file_path_migrates_legacy_history(
 
     path = voice_cli.chat_history_file_path()
 
-    assert path == tmp_path / "xdg-state" / "minigent" / "client-chat-history"
+    assert path == tmp_path / "xdg-state" / "mindweft" / "client-chat-history"
     assert path.read_text(encoding="utf-8") == "legacy prompt history\n"
 
 
@@ -4376,7 +4406,7 @@ def test_build_chat_prompt_session_uses_thread_history_dir_when_legacy_history_f
     history_path = history_calls[0][1]
     assert isinstance(history_path, str)
     assert history_path.startswith(
-        str(tmp_path / ".local" / "state" / "minigent" / "client-chat-history.d")
+        str(tmp_path / ".local" / "state" / "mindweft" / "client-chat-history.d")
     )
     assert history_path.endswith("thread-one")
 
@@ -4601,7 +4631,7 @@ def test_run_chat_loop_summarizes_stream_errors_already_rendered(
 
         def run_thread(self) -> tuple[str, dict[str, object] | None]:
             raise MinigentAPIError(
-                "Minigent server error (502). upstream exploded",
+                "Mindweft server error (502). upstream exploded",
                 category="server_error",
                 detail="run.error event: status_code=502 detail=upstream exploded",
                 status_code=502,
@@ -4625,7 +4655,7 @@ def test_minigent_client_runtime_summarizes_stream_errors_already_rendered() -> 
     class FailingMinigentClient(FakeMinigentClient):
         def run_thread(self) -> tuple[str, dict[str, object] | None]:
             raise MinigentAPIError(
-                "Minigent server error (502). upstream exploded",
+                "Mindweft server error (502). upstream exploded",
                 category="server_error",
                 detail="run.error event: status_code=502 detail=upstream exploded",
                 status_code=502,
@@ -4754,7 +4784,7 @@ def test_run_chat_loop_resume_last_forgets_missing_thread_and_reports_error(
             assert content == "hello again"
             send_thread_ids.append(self.thread_id)
             raise MinigentAPIError(
-                "Minigent resource not found. Thread 'thread-missing' not found",
+                "Mindweft resource not found. Thread 'thread-missing' not found",
                 category="not_found",
                 status_code=404,
             )
@@ -4925,7 +4955,7 @@ def test_run_chat_loop_rebuilds_prompt_history_after_thread_switch(
     assert history_thread_ids[:2] == [None, "existing-thread"]
     assert messages == [("existing-thread", "hello")]
     assert Path.home() == tmp_path / "home"
-    assert (tmp_path / "home" / ".local" / "state" / "minigent" / "cli-state.json").exists()
+    assert (tmp_path / "home" / ".local" / "state" / "mindweft" / "cli-state.json").exists()
 
 
 def test_run_chat_loop_handles_local_chat_commands(
@@ -5325,7 +5355,7 @@ def test_run_chat_loop_handles_thread_shell_commands(
     assert "[idle] * new-thread  Question for new-thread" in output
     assert '[idle] renamed new-thread to "renamed thread"\n' in output
     assert "[idle] new-thread (clipboard unavailable)\n" in output
-    assert "# Minigent transcript\n\nThread: `new-thread`" in output
+    assert "# Mindweft transcript\n\nThread: `new-thread`" in output
     assert "[idle] switched to existing-thread\n" in output
     assert "[idle] debug on\n" in output
 

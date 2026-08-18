@@ -7,7 +7,7 @@ from dotenv import dotenv_values
 
 from minigent_client.state import state_dir_path
 from minigent_config.constants import ATTACHMENT_DB_PATH_ENV, THREAD_DB_PATH_ENV
-from minigent_config.unified_config import apply_unified_config_to_env
+from minigent_config.unified_config import apply_unified_config_to_env, normalize_mindweft_env
 
 DEFAULT_ATTACHMENT_DB_FILE = "attachments.db"
 DEFAULT_THREAD_DB_FILE = "threads.db"
@@ -15,6 +15,7 @@ DEFAULT_THREAD_DB_FILE = "threads.db"
 
 def apply_coding_workspace_state_defaults(env: dict[str, str]) -> None:
     """Use durable user-local API storage unless the deployment overrides it."""
+    normalize_mindweft_env(env, warn_conflicts=True)
     state_dir = state_dir_path(env)
     env.setdefault(
         ATTACHMENT_DB_PATH_ENV,
@@ -27,13 +28,14 @@ def apply_coding_workspace_state_defaults(env: dict[str, str]) -> None:
 
 
 def load_env_file(env_file: str | None, *, warn_if_missing: bool = True) -> dict[str, str]:
-    env = dict(os.environ)
+    env = normalize_mindweft_env(dict(os.environ), warn_conflicts=True)
     if env_file is None:
         source_env = dict(env)
         apply_unified_config_to_env(source_env, base_dir=Path.cwd())
         for key, value in source_env.items():
             env.setdefault(key, value)
         apply_file_env_values(env, base_dir=Path.cwd())
+        normalize_mindweft_env(env, warn_conflicts=True)
         return env
 
     path = Path(env_file)
@@ -49,10 +51,12 @@ def load_env_file(env_file: str | None, *, warn_if_missing: bool = True) -> dict
             if value is not None:
                 env[key] = value
         apply_file_env_values(env, base_dir=path.parent)
+        normalize_mindweft_env(env, warn_conflicts=True)
     else:
         if warn_if_missing:
             print(f"env file not found; continuing with current environment: {env_file}")
         apply_file_env_values(env, base_dir=Path.cwd())
+        normalize_mindweft_env(env, warn_conflicts=True)
     return env
 
 
@@ -69,6 +73,9 @@ def apply_file_env_values(env: dict[str, str], *, base_dir: Path) -> None:
             "MINIGENT_CONFIG_FILE",
             "MINIGENT_DOTENV_FILE",
             "MINIGENT_CODING_MCP_SERVERS_FILE",
+            "MINDWEFT_CONFIG_FILE",
+            "MINDWEFT_DOTENV_FILE",
+            "MINDWEFT_CODING_MCP_SERVERS_FILE",
         }:
             continue
         target_key = file_key[: -len("_FILE")]

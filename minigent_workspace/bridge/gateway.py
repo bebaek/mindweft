@@ -58,7 +58,7 @@ def create_gateway_app(settings: GatewaySettings) -> FastAPI:
             for bridge in reversed(started):
                 await bridge.stop()
 
-    app = FastAPI(title="Minigent Stdio MCP Gateway", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Mindweft Stdio MCP Gateway", version="0.1.0", lifespan=lifespan)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

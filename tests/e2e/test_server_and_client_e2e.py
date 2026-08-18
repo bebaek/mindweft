@@ -26,7 +26,7 @@ pytestmark = [
     pytest.mark.e2e,
     pytest.mark.skipif(
         os.getenv(RUN_E2E_ENV, "").strip().lower() not in {"1", "true", "yes", "on"},
-        reason=f"Set {RUN_E2E_ENV}=true to run Minigent e2e tests",
+        reason=f"Set {RUN_E2E_ENV}=true to run Mindweft e2e tests",
     ),
 ]
 
@@ -345,7 +345,7 @@ def _wait_for_health(base_url: str, process: subprocess.Popen[str]) -> None:
         if process.poll() is not None:
             stdout, stderr = process.communicate(timeout=1)
             raise RuntimeError(
-                "Minigent e2e server exited before becoming healthy\n"
+                "Mindweft e2e server exited before becoming healthy\n"
                 f"stdout:\n{stdout}\n"
                 f"stderr:\n{stderr}"
             )
@@ -357,7 +357,7 @@ def _wait_for_health(base_url: str, process: subprocess.Popen[str]) -> None:
         except Exception as exc:  # noqa: BLE001 - preserve last startup failure detail.
             last_error = exc
         time.sleep(0.1)
-    raise RuntimeError(f"Minigent e2e server did not become healthy: {last_error!r}")
+    raise RuntimeError(f"Mindweft e2e server did not become healthy: {last_error!r}")
 
 
 def _client_config(base_url: str, *, stream_runs: bool) -> ClientConfig:

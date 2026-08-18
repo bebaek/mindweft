@@ -428,7 +428,7 @@ class AgentBackendRouter(AgentBackend):
         messages = self._store.list_messages(principal.tenant_id, thread_id)
         context = self._store.get_thread_context(principal.tenant_id, thread_id)
         sections = [
-            "You are running as the execution backend for a Minigent thread.",
+            "You are running as the execution backend for a Mindweft thread.",
             "Use the provided conversation as context and return the final assistant reply for the latest user request.",
         ]
         thread = self._store.get_thread(principal.tenant_id, thread_id)
@@ -932,8 +932,8 @@ async def _emit_run_event(
 
 def _mcp_broker_prompt_suffix() -> str:
     return (
-        "\n\nMinigent MCP broker:\n"
+        "\n\nMindweft MCP broker:\n"
         f"- URL is available in ${MINIGENT_MCP_BROKER_URL_ENV}.\n"
         f"- Bearer token is available in ${MINIGENT_MCP_BROKER_TOKEN_ENV}.\n"
-        "Use this broker only for tools needed to answer the current Minigent thread."
+        "Use this broker only for tools needed to answer the current Mindweft thread."
     )

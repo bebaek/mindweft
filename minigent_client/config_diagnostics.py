@@ -13,7 +13,7 @@ from minigent_client.api_client import MinigentAPIClient
 from minigent_client.errors import MinigentAPIError
 from minigent_client.output import print_json
 from minigent_config.unified_config import (
-    DEFAULT_CONFIG_FILE,
+    MINDWEFT_CONFIG_FILE,
     load_unified_config_env,
     resolve_config_path,
     resolve_dotenv_path,
@@ -63,7 +63,7 @@ def run_config_doctor(
 
     if trace_id is not None:
         print(f"trace_id={trace_id}")
-    print("Minigent config doctor")
+    print("Mindweft config doctor")
     print("")
     for check in checks:
         print(format_check(check))
@@ -151,7 +151,7 @@ def _unified_config_checks() -> list[DiagnosticCheck]:
             DiagnosticCheck(
                 "warning",
                 "Unified config file",
-                f"not found; run `minigent config init` to create {DEFAULT_CONFIG_FILE}",
+                f"not found; run `mindweft config init` to create {MINDWEFT_CONFIG_FILE}",
             )
         )
         return checks

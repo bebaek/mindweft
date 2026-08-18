@@ -107,7 +107,7 @@ def _fully_redacted_tool_result(value: Any, *, tool_name: str | None) -> dict[st
         "redacted": True,
         "tool_name": tool_name,
         "result_type": type(value).__name__,
-        "note": "Tool result redacted by Minigent policy.",
+        "note": "Tool result redacted by Mindweft policy.",
     }
 
 

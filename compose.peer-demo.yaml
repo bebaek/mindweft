@@ -1,14 +1,15 @@
 services:
+  # Keep the legacy service name for Compose command and DNS compatibility.
   minigent:
     build:
       context: .
     environment:
-      MINIGENT_LLM_PROVIDER: mock
-      MINIGENT_AUTH_MODE: dev-headers
-      MINIGENT_ENABLE_PEER_AGENT_TOOL: "true"
-      MINIGENT_PEER_AGENTS: '[{"name":"opencode","base_url":"http://local-agent-wrapper:8010","description":"Local OpenCode wrapper sidecar","capabilities":["repository analysis","codebase inspection","read-only command execution in the mounted workspace"],"side_effects":["runs OpenCode CLI commands inside the wrapper container"],"version":"0.1.0"}]'
+      MINDWEFT_LLM_PROVIDER: mock
+      MINDWEFT_AUTH_MODE: dev-headers
+      MINDWEFT_ENABLE_PEER_AGENT_TOOL: "true"
+      MINDWEFT_PEER_AGENTS: '[{"name":"opencode","base_url":"http://local-agent-wrapper:8010","description":"Local OpenCode wrapper sidecar","capabilities":["repository analysis","codebase inspection","read-only command execution in the mounted workspace"],"side_effects":["runs OpenCode CLI commands inside the wrapper container"],"version":"0.1.0"}]'
     ports:
-      - "127.0.0.1:${MINIGENT_PORT:-8000}:8000"
+      - "127.0.0.1:${MINDWEFT_PORT:-${MINIGENT_PORT:-8000}}:8000"
     depends_on:
       local-agent-wrapper:
         condition: service_healthy
@@ -30,13 +31,13 @@ services:
       context: ./local-agent-wrapper
     environment:
       AGENT_RUNTIME: opencode
-      AGENT_ALLOWED_WORKSPACES: /workspace/minigent
+      AGENT_ALLOWED_WORKSPACES: /workspace/mindweft
       AGENT_COMMAND: opencode
       AGENT_ARGS_TEMPLATE: run --format json --model ${OPENCODE_MODEL:-openai/gpt-5.2} --dir {cwd} {prompt}
     expose:
       - "8010"
     volumes:
-      - .:/workspace/minigent:ro
+      - .:/workspace/mindweft:ro
       - ./.opencode-container/data:/home/agent/.local/share/opencode
       - ./.opencode-container/config:/home/agent/.config/opencode
     healthcheck:

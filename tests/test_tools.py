@@ -668,7 +668,7 @@ def test_tool_execution_can_fully_redact_sensitive_tools() -> None:
         "redacted": True,
         "tool_name": "custom_secret_tool",
         "result_type": "dict",
-        "note": "Tool result redacted by Minigent policy.",
+        "note": "Tool result redacted by Mindweft policy.",
     }
 
 

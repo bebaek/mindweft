@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from dotenv import dotenv_values
 
@@ -17,15 +18,63 @@ from minigent_config.schema import parse_unified_config
 CONFIG_FILE_ENV = "MINIGENT_CONFIG_FILE"
 DOTENV_FILE_ENV = "MINIGENT_DOTENV_FILE"
 CONFIG_DISCOVERY_ENV = "MINIGENT_CONFIG_DISCOVERY"
+MINDWEFT_CONFIG_FILE_ENV = "MINDWEFT_CONFIG_FILE"
+MINDWEFT_DOTENV_FILE_ENV = "MINDWEFT_DOTENV_FILE"
+MINDWEFT_CONFIG_DISCOVERY_ENV = "MINDWEFT_CONFIG_DISCOVERY"
 XDG_CONFIG_HOME_ENV = "XDG_CONFIG_HOME"
 DEFAULT_CONFIG_FILE = "minigent.toml"
+MINDWEFT_CONFIG_FILE = "mindweft.toml"
 DEFAULT_USER_CONFIG_DIR = "minigent"
+MINDWEFT_USER_CONFIG_DIR = "mindweft"
 DEFAULT_DOTENV_FILE = ".env"
 DEFAULT_CODING_DOTENV_FILE = ".env.coding"
 DEFAULT_THREAD_DB_PATH = ".data/minigent-threads.db"
 DEFAULT_VOICE_THREAD_DB_PATH = ".data/minigent-voice-threads.db"
 LLM_PROFILES_ENV = "MINIGENT_LLM_PROFILES"
 LLM_DEFAULT_PROFILE_ENV = "MINIGENT_LLM_DEFAULT_PROFILE"
+
+logger = logging.getLogger(__name__)
+
+_EnvMapping = TypeVar("_EnvMapping", bound=MutableMapping[str, str])
+
+
+def preferred_mindweft_env(
+    suffix: str,
+    env: Mapping[str, str] | None = None,
+    *,
+    default: str | None = None,
+) -> str | None:
+    """Read a canonical Mindweft variable with a Minigent compatibility fallback."""
+
+    lookup = os.environ if env is None else env
+    canonical_key = f"MINDWEFT_{suffix}"
+    if canonical_key in lookup:
+        return lookup[canonical_key]
+    return lookup.get(f"MINIGENT_{suffix}", default)
+
+
+def normalize_mindweft_env(env: _EnvMapping, *, warn_conflicts: bool = False) -> _EnvMapping:
+    """Project canonical ``MINDWEFT_*`` settings onto legacy runtime keys.
+
+    The runtime still reads ``MINIGENT_*`` internally during the compatibility
+    window. Keeping both names in the mapping lets diagnostics report the
+    caller's original input while ensuring the new namespace always wins.
+    """
+
+    for key, value in list(env.items()):
+        if not key.startswith("MINDWEFT_"):
+            continue
+        legacy_key = f"MINIGENT_{key.removeprefix('MINDWEFT_')}"
+        legacy_value = env.get(legacy_key)
+        if warn_conflicts and legacy_value is not None and legacy_value != value:
+            logger.warning(
+                "Both %s and %s are set; using %s",
+                key,
+                legacy_key,
+                key,
+            )
+        env[legacy_key] = value
+    return env
 
 
 @dataclass(frozen=True)
@@ -168,6 +217,7 @@ def apply_startup_config(
     """
 
     base_dir = Path.cwd() if cwd is None else cwd
+    normalize_mindweft_env(os.environ, warn_conflicts=True)
     initial_keys = set(os.environ)
     resolved = resolve_unified_config(
         base_dir=base_dir,
@@ -175,7 +225,7 @@ def apply_startup_config(
         discover_default_files=discover_default_files,
     )
     config_env = dict(resolved.env)
-    dotenv_env = _load_dotenv_values(resolved.dotenv_path)
+    dotenv_env = normalize_mindweft_env(_load_dotenv_values(resolved.dotenv_path))
     for key in dotenv_env:
         config_env.pop(key, None)
     _apply_env(config_env, protected_keys=initial_keys)
@@ -200,14 +250,14 @@ def resolve_unified_config(
     an off-like value (``0``, ``false``, ``no``, ``off``, ``disabled``, or ``explicit``).
     """
 
-    lookup_env = dict(os.environ if env is None else env)
+    lookup_env = normalize_mindweft_env(dict(os.environ if env is None else env))
     discover_defaults = _should_discover_default_files(
         lookup_env, discover_default_files=discover_default_files
     )
     dotenv_path = resolve_dotenv_path(
         base_dir=base_dir, env=lookup_env, discover_default_file=discover_defaults
     )
-    dotenv_env = _load_dotenv_values(dotenv_path)
+    dotenv_env = normalize_mindweft_env(_load_dotenv_values(dotenv_path))
     source_env = dict(lookup_env)
     source_env.update(dotenv_env)
     config_path = resolve_config_path(
@@ -228,10 +278,11 @@ def apply_unified_config_to_env(
     an explicit child-process environment rather than relying on os.environ mutation.
     """
 
+    normalize_mindweft_env(env, warn_conflicts=True)
     resolved = resolve_unified_config(
         base_dir=base_dir, env=env, discover_default_files=discover_default_files
     )
-    dotenv_keys = set(_load_dotenv_values(resolved.dotenv_path))
+    dotenv_keys = set(normalize_mindweft_env(_load_dotenv_values(resolved.dotenv_path)))
     for key, value in resolved.env.items():
         if key not in dotenv_keys:
             env.setdefault(key, value)
@@ -263,7 +314,10 @@ def resolve_dotenv_path(
     discover_default_file: bool = True,
 ) -> Path | None:
     lookup_env = os.environ if env is None else env
-    configured = lookup_env.get(DOTENV_FILE_ENV, "").strip()
+    configured = (
+        lookup_env.get(MINDWEFT_DOTENV_FILE_ENV, "").strip()
+        or lookup_env.get(DOTENV_FILE_ENV, "").strip()
+    )
     if configured:
         path = Path(configured).expanduser()
         return path if path.is_absolute() else base_dir / path
@@ -271,6 +325,19 @@ def resolve_dotenv_path(
         return None
     default_path = base_dir / DEFAULT_DOTENV_FILE
     return default_path if default_path.exists() else None
+
+
+def default_mindweft_user_config_path(env: Mapping[str, str] | None = None) -> Path:
+    lookup_env = os.environ if env is None else env
+    configured_home = lookup_env.get(XDG_CONFIG_HOME_ENV, "").strip()
+    if configured_home:
+        config_home = Path(configured_home).expanduser()
+        if config_home.is_absolute():
+            return config_home / MINDWEFT_USER_CONFIG_DIR / MINDWEFT_CONFIG_FILE
+
+    configured_user_home = lookup_env.get("HOME", "").strip()
+    user_home = Path(configured_user_home).expanduser() if configured_user_home else Path.home()
+    return user_home / ".config" / MINDWEFT_USER_CONFIG_DIR / MINDWEFT_CONFIG_FILE
 
 
 def default_user_config_path(env: Mapping[str, str] | None = None) -> Path:
@@ -293,15 +360,24 @@ def resolve_config_path(
     discover_default_file: bool = True,
 ) -> Path | None:
     lookup_env = os.environ if env is None else env
-    configured = lookup_env.get(CONFIG_FILE_ENV, "").strip()
+    configured = (
+        lookup_env.get(MINDWEFT_CONFIG_FILE_ENV, "").strip()
+        or lookup_env.get(CONFIG_FILE_ENV, "").strip()
+    )
     if configured:
         path = Path(configured).expanduser()
         return path if path.is_absolute() else base_dir / path
     if not discover_default_file:
         return None
+    mindweft_local_path = base_dir / MINDWEFT_CONFIG_FILE
+    if mindweft_local_path.exists():
+        return mindweft_local_path
     local_path = base_dir / DEFAULT_CONFIG_FILE
     if local_path.exists():
         return local_path
+    mindweft_user_path = default_mindweft_user_config_path(lookup_env)
+    if mindweft_user_path.exists():
+        return mindweft_user_path
     user_path = default_user_config_path(lookup_env)
     return user_path if user_path.exists() else None
 

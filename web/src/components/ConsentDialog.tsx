@@ -86,11 +86,11 @@ export function ConsentDialog({ threadId, request, onResolved, onError }: Consen
           <p className="eyebrow">Action outcome unknown</p>
           <h2 id="consent-title">Check the external system before continuing.</h2>
           <p>
-            <strong>{request.tool_name}</strong> was claimed and may have completed, but Minigent
+            <strong>{request.tool_name}</strong> was claimed and may have completed, but Mindweft
             could not confirm the result. Retrying could repeat an external side effect.
           </p>
           <div className="consent-notice">
-            Discarding removes only Minigent’s local action record. It does not undo an external action.
+            Discarding removes only Mindweft’s local action record. It does not undo an external action.
           </div>
           <div className="consent-actions single">
             <button type="button" className="consent-deny" disabled={busy} onClick={() => void discard()}>

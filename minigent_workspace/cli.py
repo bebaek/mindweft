@@ -30,7 +30,7 @@ def parse_config_args(argv: list[str]) -> argparse.Namespace:
     export_parser.add_argument(
         "--base-url",
         default=None,
-        help="Running Minigent API URL. Defaults to MINIGENT_BASE_URL or http://127.0.0.1:8000.",
+        help="Running Mindweft API URL. Defaults to MINIGENT_BASE_URL or http://127.0.0.1:8000.",
     )
     export_parser.add_argument(
         "--output",
@@ -95,7 +95,7 @@ def run_config_command(argv: list[str]) -> int:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run Minigent as a coding assistant with a workspace-scoped filesystem MCP server. "
+            "Run Mindweft as a coding assistant with a workspace-scoped filesystem MCP server. "
             f"Loads {DEFAULT_CODING_DOTENV_FILE} by default."
         )
     )
@@ -220,11 +220,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--skip-api",
         action="store_true",
-        help="Only run the filesystem MCP bridge; do not start Minigent API.",
+        help="Only run the filesystem MCP bridge; do not start Mindweft API.",
     )
     parser.add_argument(
         "--skip-bridge",
         action="store_true",
-        help="Only run Minigent API; assumes the filesystem MCP bridge is already running.",
+        help="Only run Mindweft API; assumes the filesystem MCP bridge is already running.",
     )
     return parser.parse_args(argv)

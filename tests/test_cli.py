@@ -651,7 +651,7 @@ def test_export_thread_as_markdown(monkeypatch: Any, tmp_path: Path, capsys: Any
     assert cli.main(["export", "thread-2"]) == 0
 
     assert capsys.readouterr().out == (
-        "# Minigent transcript\n\nThread: `thread-2`\n\n## User\n\nhello\n\n## Assistant\n\nhi\n"
+        "# Mindweft transcript\n\nThread: `thread-2`\n\n## User\n\nhello\n\n## Assistant\n\nhi\n"
     )
 
 
@@ -713,7 +713,7 @@ def test_cli_verbose_errors_include_technical_detail(
     assert exit_code == 1
     captured = capsys.readouterr()
     assert (
-        "Error: Minigent server error (502). LLM provider returned no message content"
+        "Error: Mindweft server error (502). LLM provider returned no message content"
         in captured.err
     )
     assert "Detail: POST http://127.0.0.1:8000/threads failed: 502" in captured.err
@@ -733,22 +733,22 @@ def test_cli_json_errors_are_structured(monkeypatch: Any, tmp_path: Path, capsys
     assert output == {
         "error": {
             "category": "server_unavailable",
-            "message": "Cannot reach the Minigent API. Check --base-url and make sure the server is running.",
+            "message": "Cannot reach the Mindweft API. Check --base-url and make sure the server is running.",
         }
     }
 
 
-def test_config_init_writes_minigent_toml(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+def test_config_init_writes_mindweft_toml(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     monkeypatch.chdir(tmp_path)
 
     exit_code = cli.main(["config", "init"])
 
     assert exit_code == 0
-    assert (tmp_path / "minigent.toml").exists()
-    content = (tmp_path / "minigent.toml").read_text(encoding="utf-8")
+    assert (tmp_path / "mindweft.toml").exists()
+    content = (tmp_path / "mindweft.toml").read_text(encoding="utf-8")
     assert "[llm]" in content
     assert "thread_db_path" not in content
-    assert capsys.readouterr().out == "Wrote minigent.toml (local-coding)\n"
+    assert capsys.readouterr().out == "Wrote mindweft.toml (local-coding)\n"
 
 
 def test_config_init_writes_requested_profile(
@@ -759,11 +759,11 @@ def test_config_init_writes_requested_profile(
     exit_code = cli.main(["config", "init", "--profile", "openrouter"])
 
     assert exit_code == 0
-    content = (tmp_path / "minigent.toml").read_text(encoding="utf-8")
+    content = (tmp_path / "mindweft.toml").read_text(encoding="utf-8")
     assert 'profile = "openrouter"' in content
     assert 'provider = "openrouter"' in content
     assert 'api_key_env = "OPENROUTER_API_KEY"' in content
-    assert capsys.readouterr().out == "Wrote minigent.toml (openrouter)\n"
+    assert capsys.readouterr().out == "Wrote mindweft.toml (openrouter)\n"
 
 
 def test_config_init_profile_supports_output_and_force(
@@ -785,13 +785,13 @@ def test_config_init_profile_supports_output_and_force(
 
 def test_config_init_refuses_to_overwrite(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "minigent.toml").write_text('profile = "custom"\n', encoding="utf-8")
+    (tmp_path / "mindweft.toml").write_text('profile = "custom"\n', encoding="utf-8")
 
     exit_code = cli.main(["config", "init"])
 
     assert exit_code == 1
     assert "already exists; use --force" in capsys.readouterr().err
-    assert (tmp_path / "minigent.toml").read_text(encoding="utf-8") == 'profile = "custom"\n'
+    assert (tmp_path / "mindweft.toml").read_text(encoding="utf-8") == 'profile = "custom"\n'
 
 
 def test_config_print_resolved_masks_secrets(
@@ -901,7 +901,7 @@ def test_config_export_prints_toml_from_server(monkeypatch: Any, capsys: Any) ->
 
     assert exit_code == 0
     output = capsys.readouterr().out
-    assert "Generated from a running Minigent server" in output
+    assert "Generated from a running Mindweft server" in output
     assert 'profile = "exported"' in output
     assert "[llm]" in output
     assert 'provider = "openrouter"' in output
@@ -1303,7 +1303,7 @@ servers = [{ name = "dup", url = "http://one.example/mcp" }, { name = "dup" }]
 def test_config_doctor_reports_local_and_server_checks(
     monkeypatch: Any, tmp_path: Path, capsys: Any
 ) -> None:
-    # Isolate from cwd-local and user-level Minigent config files.
+    # Isolate from cwd-local and user-level Mindweft config files.
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("MINIGENT_CONFIG_FILE", raising=False)
     monkeypatch.delenv("MINIGENT_DOTENV_FILE", raising=False)
@@ -1336,7 +1336,7 @@ def test_config_doctor_reports_local_and_server_checks(
     ]
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert "Minigent config doctor" in captured.out
+    assert "Mindweft config doctor" in captured.out
     assert "✓ Base URL configured: http://127.0.0.1:8000" in captured.out
     assert (
         "✓ Trusted principal headers configured: user=demo-user tenant=demo-tenant" in captured.out
@@ -1399,7 +1399,7 @@ def test_ping_returns_nonzero_for_unreachable_server(monkeypatch: Any, capsys: A
     assert exit_code == 1
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert "✗ API reachable: Cannot reach the Minigent API." in captured.out
+    assert "✗ API reachable: Cannot reach the Mindweft API." in captured.out
 
 
 def test_debug_bundle_json_masks_secrets_and_reports_diagnostics(
@@ -1472,7 +1472,7 @@ def test_debug_bundle_output_writes_human_report(
     captured = capsys.readouterr()
     assert captured.out == f"Wrote debug bundle to {output_path}\n"
     report = output_path.read_text(encoding="utf-8")
-    assert "Minigent debug bundle" in report
+    assert "Mindweft debug bundle" in report
     assert "backend: native" in report
     assert "model: mock-model" in report
 
@@ -1532,7 +1532,7 @@ def test_admin_tenants_list_sends_filters(monkeypatch: Any, capsys: Any) -> None
             calls[0][2],
         )
     ]
-    assert calls[0][2]["X-minigent-admin"] == "true"
+    assert calls[0][2]["X-mindweft-admin"] == "true"
     output = capsys.readouterr().out
     assert "total=42 limit=10 offset=20 next_offset=30" in output
     assert "tenant-a slug=tenant-a name=Tenant A status=active plan=pro region=us" in output
@@ -2303,7 +2303,7 @@ def test_admin_threads_list_json(monkeypatch: Any, capsys: Any) -> None:
 
     assert exit_code == 0
     assert calls[0][0:2] == ("GET", "http://127.0.0.1:8000/admin/tenants/tenant-a/threads")
-    assert calls[0][2]["X-minigent-admin"] == "true"
+    assert calls[0][2]["X-mindweft-admin"] == "true"
     assert json.loads(capsys.readouterr().out) == response
 
 

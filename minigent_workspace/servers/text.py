@@ -190,7 +190,7 @@ def _slice_lines(lines: list[str], start_line: int, end_line: int, *, max_chars:
 
 def build_text_sdk_server(server: TextMCPServer) -> MCPServer[Any]:
     sdk_server = MCPServer(
-        "minigent-text-mcp",
+        "mindweft-text-mcp",
         version="0.1.0",
         instructions="Workspace-scoped targeted text reading and search.",
     )

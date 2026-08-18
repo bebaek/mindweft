@@ -6,7 +6,7 @@ Proposal / design note.
 
 ## Summary
 
-Minigent already has a basic form of context reduction through thread context compaction:
+Mindweft already has a basic form of context reduction through thread context compaction:
 older messages can be folded into a thread summary while a recent message tail remains in
 the active LLM prompt. This proposal extends that model into true context offloading by
 preserving compacted raw context outside the active prompt and making it retrievable when
@@ -17,7 +17,7 @@ debuggability, or task continuity.
 
 ## Current behavior
 
-Today, Minigent prompt construction is roughly:
+Today, Mindweft prompt construction is roughly:
 
 1. runtime system prompt,
 2. optional skill prompts,
@@ -198,7 +198,7 @@ Returned results should include:
 
 ### 5. Offload large tool results as artifacts
 
-Tool outputs are often the largest source of prompt bloat. Minigent should support storing
+Tool outputs are often the largest source of prompt bloat. Mindweft should support storing
 large tool outputs separately while keeping a compact digest in the active message.
 
 Active message example:
@@ -330,7 +330,7 @@ internal URLs, or accidental secrets. The design should enforce:
 
 ## Recommendation
 
-Keep Minigent's current prompt-cache-friendly default: no automatic compaction unless the
+Keep Mindweft's current prompt-cache-friendly default: no automatic compaction unless the
 operator opts in. Add true context offloading incrementally by first archiving compacted raw
 spans, then adding retrieval and large tool-output artifacts.
 

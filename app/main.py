@@ -545,7 +545,7 @@ def _image_bytes_match_mime_type(data: bytes, mime_type: str) -> bool:
             and data[4:8] == b"ftyp"
             and any(brand in data[8:32] for brand in (b"avif", b"avis", b"heic", b"heix", b"mif1"))
         )
-    # Custom configured image MIME types remain permitted when Minigent has no
+    # Custom configured image MIME types remain permitted when Mindweft has no
     # signature matcher for them.
     return True
 
@@ -839,7 +839,7 @@ def create_app(
             await user_mcp_lifespan.__aexit__(None, None, None)
             await admin_mcp_lifespan.__aexit__(None, None, None)
 
-    app = FastAPI(title="Minimal AI Agent Runtime", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Mindweft Agent Runtime", version="0.1.0", lifespan=lifespan)
     app.state.session_auth_settings = session_auth_settings
     app.add_middleware(SecurityHeadersMiddleware)
     configure_tracing(app, settings.tracing)
@@ -1201,7 +1201,7 @@ def create_app(
             "provider": oauth_provider.provider_id,
             "authorization_url": login.authorization_url,
             "state": login.state,
-            "instructions": "Open authorization_url in a browser, complete OAuth login, then return to Minigent.",
+            "instructions": "Open authorization_url in a browser, complete OAuth login, then return to Mindweft.",
         }
 
     @app.get("/oauth/generic/callback", response_class=HTMLResponse)

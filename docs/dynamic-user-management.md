@@ -16,7 +16,7 @@ See [User execution extensibility](user-execution-extensibility.md) for that des
 
 Focus: tenant user and membership management, not full identity management.
 
-Minigent already has tenant-scoped authentication, tenant registry records, admin APIs,
+Mindweft already has tenant-scoped authentication, tenant registry records, admin APIs,
 audit records, tenant context resolution, and tenant-scoped thread storage. Basic dynamic
 user management should build on that foundation by adding durable tenant membership state
 that can be managed at runtime and optionally enforced during request-time tenant context
@@ -41,7 +41,7 @@ full identity-provider scope in the first iteration.
 - Audit all membership mutations.
 - Preserve current auth behavior during migration.
 - Optionally require active tenant membership before business logic runs.
-- Keep identity-provider concerns decoupled from Minigent membership state.
+- Keep identity-provider concerns decoupled from Mindweft membership state.
 - Support a first-class, principal-scoped execution overlay for personal agents, skills,
   capability profiles, and third-party tools without requiring tenant config edits.
 
@@ -60,7 +60,7 @@ These can be layered on later. The first version should be a tenant membership r
 
 ## Terminology
 
-- **Identity**: the externally authenticated person or service account. Minigent should not
+- **Identity**: the externally authenticated person or service account. Mindweft should not
   own passwords or external identity lifecycle in the first iteration.
 - **User ID**: stable identifier from authenticated principal material or an admin-created
   membership record.
@@ -126,7 +126,7 @@ Opt-in flag:
 MINIGENT_TENANT_USER_REGISTRY_REQUIRED=true
 ```
 
-When disabled, Minigent should continue trusting authenticated principal material for user
+When disabled, Mindweft should continue trusting authenticated principal material for user
 identity and tenant ID. This keeps local development and existing trusted deployments working
 while operators migrate membership data.
 

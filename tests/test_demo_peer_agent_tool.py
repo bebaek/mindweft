@@ -94,9 +94,9 @@ def test_demo_peer_agent_tool_drives_runtime_tool_path(monkeypatch, capsys) -> N
         "http://minigent.test/threads",
         None,
         {
-            "X-Minigent-User-Id": "demo-user",
-            "X-Minigent-Tenant-Id": "demo-tenant",
-            "X-Minigent-Admin": "false",
+            "X-Mindweft-User-Id": "demo-user",
+            "X-Mindweft-Tenant-Id": "demo-tenant",
+            "X-Mindweft-Admin": "false",
         },
     )
     output = capsys.readouterr().out

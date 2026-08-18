@@ -149,6 +149,23 @@ it("renders the production console shell and readiness status", async () => {
   const themeToggle = screen.getByRole("button", { name: "Switch to dark mode" });
   fireEvent.click(themeToggle);
   expect(document.documentElement.dataset.theme).toBe("dark");
-  expect(window.localStorage.getItem("minigent-theme")).toBe("dark");
+  expect(window.localStorage.getItem("mindweft-theme")).toBe("dark");
+  expect(window.localStorage.getItem("minigent-theme")).toBeNull();
   expect(screen.getByRole("button", { name: "Switch to light mode" })).toBeInTheDocument();
+});
+
+it("migrates the legacy Minigent theme preference", async () => {
+  window.localStorage.setItem("minigent-theme", "dark");
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider><App /></AuthProvider>
+    </QueryClientProvider>,
+  );
+
+  expect(await screen.findByText("Ready")).toBeInTheDocument();
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  expect(window.localStorage.getItem("mindweft-theme")).toBe("dark");
+  expect(window.localStorage.getItem("minigent-theme")).toBeNull();
 });

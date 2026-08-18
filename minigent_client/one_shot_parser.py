@@ -3,11 +3,11 @@ from __future__ import annotations
 import argparse
 
 from minigent_client.config_commands import CONFIG_INIT_PROFILES, DEFAULT_CONFIG_PROFILE
-from minigent_config.unified_config import DEFAULT_CODING_DOTENV_FILE, DEFAULT_CONFIG_FILE
+from minigent_config.unified_config import DEFAULT_CODING_DOTENV_FILE, MINDWEFT_CONFIG_FILE
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Command-line client for a running Minigent API.")
+    parser = argparse.ArgumentParser(description="Command-line client for a running Mindweft API.")
     parser.add_argument(
         "--base-url",
         default="http://127.0.0.1:8000",
@@ -787,12 +787,12 @@ def build_parser() -> argparse.ArgumentParser:
     config_subparsers = config_parser.add_subparsers(dest="config_command")
     config_subparsers.add_parser("show", help="Show resolved API configuration as JSON.")
     config_init_parser = config_subparsers.add_parser(
-        "init", help=f"Create a starter {DEFAULT_CONFIG_FILE} in the current directory."
+        "init", help=f"Create a starter {MINDWEFT_CONFIG_FILE} in the current directory."
     )
     config_init_parser.add_argument(
         "--output",
-        default=DEFAULT_CONFIG_FILE,
-        help=f"Path to write. Defaults to ./{DEFAULT_CONFIG_FILE}.",
+        default=MINDWEFT_CONFIG_FILE,
+        help=f"Path to write. Defaults to ./{MINDWEFT_CONFIG_FILE}.",
     )
     config_init_parser.add_argument(
         "--profile",

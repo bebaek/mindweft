@@ -1,12 +1,12 @@
 # Admin operations MCP
 
-Minigent exposes a read-only Streamable HTTP MCP v2 endpoint at `/mcp`. It runs in the
+Mindweft exposes a read-only Streamable HTTP MCP v2 endpoint at `/mcp`. It runs in the
 same FastAPI process as the REST and admin APIs, and is intended for an authenticated platform
 administrator or an administrator-operated agent to diagnose a complicated deployment safely.
 
 ## Authentication and authorization
 
-The endpoint uses the normal Minigent authentication configuration. Every MCP request is
+The endpoint uses the normal Mindweft authentication configuration. Every MCP request is
 authenticated independently, and every tool requires a principal with `is_admin: true`. It does
 not accept a separate MCP-only credential and it does not use a privileged loopback call to the
 REST API.
@@ -14,10 +14,13 @@ REST API.
 For a development-header deployment, a client must send:
 
 ```text
-X-Minigent-User-Id: admin-1
-X-Minigent-Tenant-Id: tenant-1
-X-Minigent-Admin: true
+X-Mindweft-User-Id: admin-1
+X-Mindweft-Tenant-Id: tenant-1
+X-Mindweft-Admin: true
 ```
+
+Legacy `X-Minigent-*` development headers remain accepted; if both namespaces are present,
+the corresponding `X-Mindweft-*` value takes precedence.
 
 Static-token and JWT deployments use their normal `Authorization: Bearer ...` authentication.
 Production deployments should use static tokens or JWT rather than development headers.
@@ -78,6 +81,6 @@ explicit preview plus a tenant-bound, single-use confirmation flow.
 
 ## Client configuration
 
-Point an MCP v2 Streamable HTTP client at the Minigent deployment's `/mcp` path and configure the
-same bearer authentication it uses for the Minigent API. The endpoint supports modern MCP v2
+Point an MCP v2 Streamable HTTP client at the Mindweft deployment's `/mcp` path and configure the
+same bearer authentication it uses for the Mindweft API. The endpoint supports modern MCP v2
 discovery and tool calls over stateless Streamable HTTP.

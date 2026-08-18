@@ -13,11 +13,14 @@ from fastapi import Depends, Header, HTTPException, Request
 from jwt import InvalidTokenError, PyJWK
 
 from app.models import Principal
-from app.session_auth import SESSION_COOKIE_NAME, principal_from_session_request
+from app.session_auth import has_session_cookie, principal_from_session_request
 
-USER_HEADER = "X-Minigent-User-Id"
-TENANT_HEADER = "X-Minigent-Tenant-Id"
-ADMIN_HEADER = "X-Minigent-Admin"
+USER_HEADER = "X-Mindweft-User-Id"
+TENANT_HEADER = "X-Mindweft-Tenant-Id"
+ADMIN_HEADER = "X-Mindweft-Admin"
+LEGACY_USER_HEADER = "X-Minigent-User-Id"
+LEGACY_TENANT_HEADER = "X-Minigent-Tenant-Id"
+LEGACY_ADMIN_HEADER = "X-Minigent-Admin"
 AUTHORIZATION_HEADER = "Authorization"
 AUTH_MODE_ENV = "MINIGENT_AUTH_MODE"
 AUTH_TOKENS_ENV = "MINIGENT_AUTH_TOKENS"
@@ -99,22 +102,27 @@ def validate_auth_settings() -> AuthSettings:
 async def require_principal(
     request: Request,
     authorization: str | None = Header(default=None),
+    x_mindweft_user_id: str | None = Header(default=None),
+    x_mindweft_tenant_id: str | None = Header(default=None),
+    x_mindweft_admin: str | None = Header(default=None),
     x_minigent_user_id: str | None = Header(default=None),
     x_minigent_tenant_id: str | None = Header(default=None),
     x_minigent_admin: str | None = Header(default=None),
 ) -> Principal:
     settings = validate_auth_settings()
 
-    if authorization is None and request.cookies.get(SESSION_COOKIE_NAME):
+    if authorization is None and has_session_cookie(request):
         session_principal = principal_from_session_request(request)
         if session_principal is not None:
             return session_principal
 
     if settings.mode == AUTH_MODE_DEV_HEADERS:
         return _principal_from_headers(
-            x_minigent_user_id=x_minigent_user_id,
-            x_minigent_tenant_id=x_minigent_tenant_id,
-            x_minigent_admin=x_minigent_admin,
+            user_id=(x_mindweft_user_id if x_mindweft_user_id is not None else x_minigent_user_id),
+            tenant_id=(
+                x_mindweft_tenant_id if x_mindweft_tenant_id is not None else x_minigent_tenant_id
+            ),
+            admin=x_mindweft_admin if x_mindweft_admin is not None else x_minigent_admin,
         )
     if settings.mode == AUTH_MODE_STATIC_TOKENS:
         return _principal_from_static_token(authorization, settings)
@@ -213,11 +221,11 @@ def _load_json_or_csv_list_env(name: str, env: Mapping[str, str] | None = None) 
 
 def _principal_from_headers(
     *,
-    x_minigent_user_id: str | None,
-    x_minigent_tenant_id: str | None,
-    x_minigent_admin: str | None,
+    user_id: str | None,
+    tenant_id: str | None,
+    admin: str | None,
 ) -> Principal:
-    if not x_minigent_user_id or not x_minigent_tenant_id:
+    if not user_id or not tenant_id:
         raise HTTPException(
             status_code=401,
             detail=(
@@ -227,9 +235,9 @@ def _principal_from_headers(
         )
 
     return Principal(
-        user_id=x_minigent_user_id,
-        tenant_id=x_minigent_tenant_id,
-        is_admin=_parse_bool_header(x_minigent_admin),
+        user_id=user_id,
+        tenant_id=tenant_id,
+        is_admin=_parse_bool_header(admin),
     )
 
 

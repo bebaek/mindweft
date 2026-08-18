@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from app.admin_store import SQLiteTenantConfigStore, UserExecutionConfigConflictError
 from app.user_execution import ensure_default_personal_agent, validate_user_execution_config
+from minigent_config.unified_config import preferred_mindweft_env
 
 
 @dataclass
@@ -25,8 +26,8 @@ class Summary:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db-path", default=os.getenv("MINIGENT_ADMIN_DB_PATH"))
-    parser.add_argument("--encryption-key-env", default="MINIGENT_ADMIN_ENCRYPTION_KEY")
+    parser.add_argument("--db-path", default=preferred_mindweft_env("ADMIN_DB_PATH"))
+    parser.add_argument("--encryption-key-env", default="MINDWEFT_ADMIN_ENCRYPTION_KEY")
     parser.add_argument("--tenant-id")
     parser.add_argument("--user-id")
     parser.add_argument("--batch-size", type=int, default=100)
@@ -77,7 +78,7 @@ def _list_records(store: SQLiteTenantConfigStore, args: argparse.Namespace):
 
 def run(args: argparse.Namespace) -> int:
     if not args.db_path:
-        print("error: --db-path or MINIGENT_ADMIN_DB_PATH is required", file=sys.stderr)
+        print("error: --db-path or MINDWEFT_ADMIN_DB_PATH is required", file=sys.stderr)
         return 2
     if args.batch_size < 1 or args.max_conflicts < 0:
         print(
@@ -86,7 +87,11 @@ def run(args: argparse.Namespace) -> int:
         )
         return 2
 
-    encryption_key = os.getenv(args.encryption_key_env)
+    encryption_key = (
+        preferred_mindweft_env("ADMIN_ENCRYPTION_KEY")
+        if args.encryption_key_env == "MINDWEFT_ADMIN_ENCRYPTION_KEY"
+        else os.getenv(args.encryption_key_env)
+    )
     store = SQLiteTenantConfigStore(args.db_path, encryption_key=encryption_key)
     summary = Summary()
     for record in _list_records(store, args):

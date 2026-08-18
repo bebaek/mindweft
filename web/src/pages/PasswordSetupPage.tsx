@@ -37,7 +37,7 @@ export function PasswordSetupPage({ token }: { token: string }) {
   return (
     <main className="login-page">
       <section className="login-card" aria-labelledby="password-setup-title">
-        <div className="login-brand"><span className="brand-mark">M</span><div><strong>Minigent</strong><small>Agent operations</small></div></div>
+        <div className="login-brand"><span className="brand-mark">M</span><div><strong>Mindweft</strong><small>Agent operations</small></div></div>
         <div>
           <p className="eyebrow">Account activation</p>
           <h1 id="password-setup-title">Choose a password</h1>

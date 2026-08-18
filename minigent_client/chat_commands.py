@@ -453,7 +453,7 @@ def run_resume(
 
 
 def _format_markdown_transcript(thread_id: str, messages: list[dict[str, Any]]) -> str:
-    lines = ["# Minigent transcript", "", f"Thread: `{thread_id}`", ""]
+    lines = ["# Mindweft transcript", "", f"Thread: `{thread_id}`", ""]
     for message in messages:
         role = str(message.get("role") or "message").replace("_", " ").title()
         tool_name = message.get("tool_name")

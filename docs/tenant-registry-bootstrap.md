@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Minigent has two related but independent sources of tenant state:
+Mindweft has two related but independent sources of tenant state:
 
 - execution configuration, which controls runtime LLM, tool, and MCP behavior; and
 - the durable admin tenant registry, which controls mutable metadata, domains,
@@ -78,12 +78,12 @@ Example dry-run result:
 Keep the API operation explicit and admin-authorized. Add a matching CLI command:
 
 ```bash
-minigent admin tenants seed --from execution-configs --dry-run
-minigent admin tenants seed --from execution-configs \
+mindweft admin tenants seed --from execution-configs --dry-run
+mindweft admin tenants seed --from execution-configs \
   --status active --plan pro --region demo
 
 # Resolve a known derived-slug collision explicitly:
-minigent admin tenants seed --from execution-configs \
+mindweft admin tenants seed --from execution-configs \
   --tenant demo-tenant \
   --slug-override demo-tenant=demo-primary \
   --conflict-policy fail

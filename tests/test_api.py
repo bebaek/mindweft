@@ -1113,7 +1113,7 @@ def test_web_client_static_files_are_served() -> None:
     response = client.get("/web/")
 
     assert response.status_code == 200
-    assert "Minigent Web Client" in response.text
+    assert "Mindweft Web Client" in response.text
     assert "./app.js" in response.text
 
 
@@ -1125,7 +1125,7 @@ def test_console_client_static_files_are_served() -> None:
     response = client.get("/console/")
 
     assert response.status_code == 200
-    assert "Minigent Console" in response.text
+    assert "Mindweft Console" in response.text
     assert "/console/assets/" in response.text
 
 
@@ -1938,7 +1938,7 @@ def test_peer_agent_backend_persists_peer_tool_events_in_raw_context() -> None:
                             "tool_name": "read",
                             "toolCallId": "call-read-1",
                             "status": "completed",
-                            "result": {"content": "# Minigent"},
+                            "result": {"content": "# Mindweft"},
                         },
                     ],
                 },
@@ -1984,7 +1984,7 @@ def test_peer_agent_backend_persists_peer_tool_events_in_raw_context() -> None:
     assert raw_context["messages"][2]["role"] == "tool"
     assert raw_context["messages"][2]["tool_name"] == "read"
     assert raw_context["messages"][2]["tool_call_id"] == "call-read-1"
-    assert "# Minigent" in raw_context["messages"][2]["content"]
+    assert "# Mindweft" in raw_context["messages"][2]["content"]
     assert "[assistant tool_call]\nname: read\nid: call-read-1" in raw_context["rendered"]
     assert "[tool_result]\nname: read\nid: call-read-1" in raw_context["rendered"]
 
@@ -2329,8 +2329,8 @@ def test_run_endpoint_can_use_peer_agent_backend(tmp_path: Path) -> None:
             assert env[MINIGENT_MCP_BROKER_URL_ENV].startswith("http://127.0.0.1:8000/mcp/peer/")
             assert env[MINIGENT_MCP_BROKER_TOKEN_ENV]
             prompt = str(payload["prompt"])
-            assert "You are running as the execution backend for a Minigent thread." in prompt
-            assert "Minigent MCP broker:" in prompt
+            assert "You are running as the execution backend for a Mindweft thread." in prompt
+            assert "Mindweft MCP broker:" in prompt
             assert "[user]\nplease inspect the repo" in prompt
             task_id = str(payload["task_id"])
             with sqlite3.connect(database) as connection:
@@ -2725,7 +2725,7 @@ def test_run_endpoint_can_disable_peer_agent_mcp_broker() -> None:
             requests.append(payload)
             assert payload is not None
             assert "env" not in payload
-            assert "Minigent MCP broker:" not in str(payload["prompt"])
+            assert "Mindweft MCP broker:" not in str(payload["prompt"])
             return httpx.Response(
                 200,
                 json={
@@ -3132,6 +3132,30 @@ def test_run_endpoint_returns_reply_when_tool_times_out(monkeypatch: pytest.Monk
             '"timeout_seconds": 0.01}}'
         )
     }
+
+
+def test_thread_endpoints_accept_mindweft_headers_with_precedence_over_legacy() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    headers = {
+        "X-Mindweft-User-Id": "canonical-user",
+        "X-Mindweft-Tenant-Id": "canonical-tenant",
+        "X-Minigent-User-Id": "legacy-user",
+        "X-Minigent-Tenant-Id": "legacy-tenant",
+    }
+
+    create_response = client.post("/threads", headers=headers)
+    assert create_response.status_code == 200
+    thread_id = create_response.json()["thread_id"]
+
+    add_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "hello"},
+        headers=headers,
+    )
+    assert add_response.status_code == 200
+    assert add_response.json()["created_by"] == "canonical-user"
 
 
 def test_thread_endpoints_require_authenticated_principal() -> None:

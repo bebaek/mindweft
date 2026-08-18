@@ -360,12 +360,12 @@ export function WorkspacePage() {
           {messages.isPending && selectedThreadId && <p className="loading-messages">Loading conversation…</p>}
           {visibleChatMessages(messages.data, streamedReply).map((message) => (
             <article className={`chat-message ${message.role}`} key={message.id}>
-              <span className="message-author">{message.role === "user" ? "You" : "Minigent"}</span>
+              <span className="message-author">{message.role === "user" ? "You" : "Mindweft"}</span>
               {message.content && (message.role === "assistant" ? <RenderedAssistantMessage content={message.content} /> : <div className="message-content plain-message-content">{message.content}</div>)}
               <MessageImages message={message} />
             </article>
           ))}
-          {streamedReply !== null && <article className="chat-message assistant streaming"><span className="message-author">Minigent</span><RenderedAssistantMessage content={streamedReply} /></article>}
+          {streamedReply !== null && <article className="chat-message assistant streaming"><span className="message-author">Mindweft</span><RenderedAssistantMessage content={streamedReply} /></article>}
           {isRunning && streamedReply === null && <div className="thinking-row"><i /><i /><i /><span>Working</span></div>}
           {error && <div className="conversation-error" role="alert">{error}</div>}
           <div ref={messagesEndRef} />
@@ -440,8 +440,8 @@ export function WorkspacePage() {
             />
           </label>
           <textarea
-            aria-label="Message Minigent"
-            placeholder="Ask Minigent anything…"
+            aria-label="Message Mindweft"
+            placeholder="Ask Mindweft anything…"
             value={draft}
             rows={1}
             disabled={isRunning}
