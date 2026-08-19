@@ -48,7 +48,7 @@ class UserMCPRequestContext:
 
 
 _request_context: ContextVar[UserMCPRequestContext | None] = ContextVar(
-    "minigent_user_mcp_request_context",
+    "mindweft_user_mcp_request_context",
     default=None,
 )
 
@@ -438,7 +438,7 @@ def delete_user_execution_credential(
 def build_user_mcp_tool_registry(app: Any, principal: Principal) -> ToolRegistry:
     """Build principal-scoped user-MCP tools for in-process agent execution."""
     registry = ToolRegistry()
-    prefix = "minigent_user_mcp"
+    prefix = "mindweft_user_mcp"
 
     def register(name: str, description: str, schema: dict[str, Any], handler: Any) -> None:
         registry.register(
