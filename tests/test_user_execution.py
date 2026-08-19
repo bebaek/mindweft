@@ -773,14 +773,14 @@ def test_personal_capability_profile_narrows_runtime_tools(tmp_path: Path) -> No
     assert adapter.tool_requests
     assert {tool.name for tool in adapter.tool_requests[-1]} == {
         "echo",
-        "minigent_user_mcp.get_user_execution_status",
-        "minigent_user_mcp.get_user_execution_config",
-        "minigent_user_mcp.validate_user_execution_config",
-        "minigent_user_mcp.list_user_mcp_access",
-        "minigent_user_mcp.put_user_execution_config",
-        "minigent_user_mcp.delete_user_execution_config",
-        "minigent_user_mcp.put_user_execution_credential",
-        "minigent_user_mcp.delete_user_execution_credential",
+        "mindweft_user_mcp.get_user_execution_status",
+        "mindweft_user_mcp.get_user_execution_config",
+        "mindweft_user_mcp.validate_user_execution_config",
+        "mindweft_user_mcp.list_user_mcp_access",
+        "mindweft_user_mcp.put_user_execution_config",
+        "mindweft_user_mcp.delete_user_execution_config",
+        "mindweft_user_mcp.put_user_execution_credential",
+        "mindweft_user_mcp.delete_user_execution_credential",
     }
 
 

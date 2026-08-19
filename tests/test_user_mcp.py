@@ -95,10 +95,10 @@ def test_in_process_user_mcp_config_result_is_json_safe(tmp_path: Path) -> None:
     app = create_app(admin_store=store)
     registry = build_user_mcp_tool_registry(app, Principal(tenant_id="tenant-1", user_id="user-1"))
 
-    result = asyncio.run(registry.execute("minigent_user_mcp.get_user_execution_config", {}))
+    result = asyncio.run(registry.execute("mindweft_user_mcp.get_user_execution_config", {}))
     updated = asyncio.run(
         registry.execute(
-            "minigent_user_mcp.put_user_execution_config",
+            "mindweft_user_mcp.put_user_execution_config",
             {"config": {}, "expected_version": 1},
         )
     )

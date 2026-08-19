@@ -77,15 +77,15 @@ For a migrated user, verify through an authenticated API client:
 
 ```bash
 curl -H 'Authorization: Bearer …' \
-  https://minigent.example/me/execution-config
+  https://mindweft.example/me/execution-config
 
 curl -H 'Authorization: Bearer …' \
-  https://minigent.example/me/agents
+  https://mindweft.example/me/agents
 ```
 
 Confirm that `defaults.agent_ref` is `user:personal-assistant`, the personal assistant references
 `user:mindweft-user-tools`, and that profile references `shared:mindweft-user-mcp`. A new thread
-should expose the `minigent_user_mcp.*` tools and use the personal execution options. Do not paste
+should expose the `mindweft_user_mcp.*` tools and use the personal execution options. Do not paste
 authenticated responses into tickets or logs.
 
 ## Handling results
