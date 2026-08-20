@@ -473,7 +473,7 @@ test("uses readable typography tokens for chat and controls", async ({ page }) =
   }
 });
 
-test("gives the chat message input the full composer row", async ({ page }) => {
+test("prioritizes conversation space after a thread is selected", async ({ page }) => {
   await installApiMocks(page);
   await installWorkspaceMocks(page);
   await page.goto("./");
@@ -481,15 +481,35 @@ test("gives the chat message input the full composer row", async ({ page }) => {
   await openConversations(page);
   await page.getByRole("button", { name: "Review the deployment plan" }).click();
 
+  const mobile = (page.viewportSize()?.width ?? 0) <= 720;
+  const runtimeSelectors = page.locator(".composer-runtime-selectors");
+  if (mobile) await expect(runtimeSelectors).toBeHidden();
+  else await expect(runtimeSelectors).toBeVisible();
+  const workspaceBox = await page.locator(".workspace-page").boundingBox();
+  const messageBox = await page.locator(".message-scroll").boundingBox();
   const composerBox = await page.locator(".chat-composer").boundingBox();
-  const selectorBox = await page.locator(".composer-runtime-selectors").boundingBox();
   const inputBox = await page.getByLabel(/^Message /).boundingBox();
+  const attachBox = await page.getByLabel("Attach images").locator("..").boundingBox();
+  const sendBox = await page.getByRole("button", { name: "Send message" }).boundingBox();
 
+  expect(workspaceBox).not.toBeNull();
+  expect(messageBox).not.toBeNull();
   expect(composerBox).not.toBeNull();
-  expect(selectorBox).not.toBeNull();
   expect(inputBox).not.toBeNull();
-  expect(inputBox!.width).toBeGreaterThan(composerBox!.width * 0.7);
-  expect(inputBox!.y).toBeGreaterThanOrEqual(selectorBox!.y + selectorBox!.height - 1);
+  expect(attachBox).not.toBeNull();
+  expect(sendBox).not.toBeNull();
+  expect(inputBox!.width).toBeGreaterThan(composerBox!.width * 0.55);
+  expect(Math.abs(inputBox!.y + inputBox!.height / 2 - (sendBox!.y + sendBox!.height / 2))).toBeLessThan(4);
+  expect(Math.abs(inputBox!.y + inputBox!.height / 2 - (attachBox!.y + attachBox!.height / 2))).toBeLessThan(4);
+  if (mobile) {
+    const headerBox = await page.locator(".conversation-header").boundingBox();
+    const contextBox = await page.getByRole("button", { name: "Context", exact: true }).boundingBox();
+    expect(headerBox).not.toBeNull();
+    expect(contextBox).not.toBeNull();
+    expect(contextBox!.x + contextBox!.width).toBeLessThanOrEqual(headerBox!.x + headerBox!.width - 10);
+    expect(composerBox!.height).toBeLessThan(100);
+    expect(messageBox!.height).toBeGreaterThan(workspaceBox!.height * 0.75);
+  }
 });
 
 test("keeps overview, authentication, and administration legible in dark mode", async ({ page }) => {
