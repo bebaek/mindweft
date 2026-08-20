@@ -544,7 +544,7 @@ test("keeps overview, authentication, and administration legible in dark mode", 
   }
 });
 
-test("keeps workspace dialogs legible in dark mode", async ({ page }) => {
+test("keeps the workspace sidebar and dialogs legible in dark mode", async ({ page }) => {
   await installApiMocks(page);
   await installWorkspaceMocks(page, { consent: true });
   await page.addInitScript(() => window.localStorage.setItem("minigent-theme", "dark"));
@@ -552,7 +552,13 @@ test("keeps workspace dialogs legible in dark mode", async ({ page }) => {
   await navigateToWorkspace(page);
 
   await openConversations(page);
-  await page.getByRole("button", { name: "Review the deployment plan" }).click();
+  const threadButton = page.getByRole("button", { name: "Review the deployment plan" });
+  await threadButton.hover();
+  await expect(threadButton).toHaveCSS("background-color", "rgb(32, 42, 35)");
+  await expect(threadButton.locator(".thread-title")).toHaveCSS("color", "rgb(231, 237, 232)");
+  expect((await new AxeBuilder({ page }).include(".thread-rail").analyze()).violations).toEqual([]);
+
+  await threadButton.click();
   await expect(page.getByRole("heading", { name: "Deployment review" })).toBeVisible();
   await expect(page.getByRole("table")).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
@@ -1046,10 +1052,16 @@ test("inspects, deletes, prunes, and audits tenant threads", async ({ page }) =>
   await page.goto("./");
   await navigateToAdmin(page);
   await expect(page.getByText("2 threads", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Switch to dark mode" }).click();
+  const threadRow = page.getByRole("button", { name: /thread-old-review/ });
+  await threadRow.hover();
+  await expect(threadRow).toHaveCSS("background-color", "rgb(32, 42, 35)");
+  expect((await new AxeBuilder({ page }).include(".thread-table").analyze()).violations).toEqual([]);
+  await page.getByRole("button", { name: "Switch to light mode" }).click();
   await page.getByLabel("Skill", { exact: true }).fill("review");
   await page.getByRole("button", { name: "Apply filters" }).click();
   await expect(page.getByText("1 thread", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /thread-old-review/ }).click();
+  await threadRow.click();
   const detail = page.getByRole("dialog", { name: /thread-o/ });
   await expect(detail.getByText("Reviewed deployment readiness and remaining risks.")).toBeVisible();
   await expect(detail.getByText("Review the deployment plan")).toBeVisible();
@@ -1073,7 +1085,12 @@ test("inspects, deletes, prunes, and audits tenant threads", async ({ page }) =>
 
   await page.getByRole("button", { name: "Audit log" }).click();
   await expect(page.getByText("3 audit records", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Switch to dark mode" }).click();
   const pruneAudit = page.getByRole("button", { name: /Threads · Prune/ });
+  await pruneAudit.hover();
+  await expect(pruneAudit).toHaveCSS("background-color", "rgb(32, 42, 35)");
+  expect((await new AxeBuilder({ page }).include(".audit-list").analyze()).violations).toEqual([]);
+  await page.getByRole("button", { name: "Switch to light mode" }).click();
   await pruneAudit.click();
   await expect(page.getByText("thread-old-research")).toBeVisible();
   await page.getByLabel("Action").fill("threads.delete");
