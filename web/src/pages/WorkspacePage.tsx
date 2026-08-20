@@ -1,14 +1,16 @@
 import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type {
-  ImagePart,
-  Message,
-  PrivateValueConsentRequest,
-  RunEvent,
-  ThreadListItem,
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ApiError,
+  type ExecutionOptionsResponse,
+  type ImagePart,
+  type Message,
+  type PrivateValueConsentRequest,
+  type RunEvent,
+  type ThreadListItem,
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
-import { visibleChatMessages } from "./workspaceMessages";
+import { visibleChatMessages, withDefaultAgent } from "./workspaceMessages";
 import { ContextDialog } from "../components/ContextDialog";
 import { ConsentDialog } from "../components/ConsentDialog";
 
@@ -34,6 +36,7 @@ export function WorkspacePage() {
   const queryClient = useQueryClient();
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState("");
+  const [defaultAgentFeedback, setDefaultAgentFeedback] = useState<{ message: string; error: boolean } | null>(null);
   const [selectedLlmProfile, setSelectedLlmProfile] = useState("");
   const [draft, setDraft] = useState("");
   const [isRunning, setIsRunning] = useState(false);
@@ -73,6 +76,36 @@ export function WorkspacePage() {
     retry: false,
     staleTime: 60_000,
   });
+  const saveDefaultAgent = useMutation({
+    mutationFn: async (agentRef: string) => {
+      let currentConfig;
+      try {
+        currentConfig = await api.getUserExecutionConfig();
+      } catch (caught) {
+        if (!(caught instanceof ApiError && caught.status === 404)) throw caught;
+      }
+      return api.updateUserExecutionConfig(
+        withDefaultAgent(currentConfig?.config, agentRef),
+        currentConfig?.version,
+      );
+    },
+    onSuccess: (saved, agentRef) => {
+      queryClient.setQueryData(["user-execution-config", authentication], saved);
+      queryClient.setQueryData<ExecutionOptionsResponse>(
+        ["execution-options", authentication],
+        (current) => current ? { ...current, agents: { ...current.agents, default: agentRef } } : current,
+      );
+      setSelectedAgent("");
+      setDefaultAgentFeedback({ message: "Default saved for future conversations.", error: false });
+      void queryClient.invalidateQueries({ queryKey: ["execution-options"] });
+    },
+    onError: (caught) => {
+      setDefaultAgentFeedback({
+        message: caught instanceof Error ? caught.message : "Could not save the default agent.",
+        error: true,
+      });
+    },
+  });
   const threads = useQuery({
     queryKey: ["threads", authentication],
     queryFn: ({ signal }) => api.listThreads(50, signal),
@@ -95,6 +128,9 @@ export function WorkspacePage() {
   }, [messages.data, streamedReply, activity]);
 
   const effectiveAgent = selectedAgent || executionOptions.data?.agents.default || "";
+  const canSaveDefaultAgent = Boolean(
+    selectedAgent && selectedAgent !== executionOptions.data?.agents.default,
+  );
 
 
   useEffect(
@@ -397,22 +433,40 @@ export function WorkspacePage() {
             </div>
           )}
           <div className="composer-runtime-selectors">
-            <label className="agent-selector">
-              <span>Agent</span>
-              <select
-                aria-label="Agent"
-                value={effectiveAgent}
-                disabled={selectedThreadId !== null || isRunning || executionOptions.isPending}
-                onChange={(event) => setSelectedAgent(event.target.value)}
-              >
-                {!executionOptions.data?.agents.items.length && <option value="">Default agent</option>}
-                {executionOptions.data?.agents.items.map((agent) => {
-                  const value = agent.id ?? agent.name;
-                  const profile = agent.llm_profile ? ` · ${agent.llm_profile.replace(/^shared:/, "")}` : "";
-                  return <option key={value} value={value}>{agent.display_name ?? agent.name}{profile}</option>;
-                })}
-              </select>
-            </label>
+            <div className="agent-selector-setting">
+              <label className="agent-selector">
+                <span>Agent</span>
+                <select
+                  aria-label="Agent"
+                  value={effectiveAgent}
+                  disabled={selectedThreadId !== null || isRunning || executionOptions.isPending}
+                  onChange={(event) => {
+                    setSelectedAgent(event.target.value);
+                    setDefaultAgentFeedback(null);
+                  }}
+                >
+                  {!executionOptions.data?.agents.items.length && <option value="">Default agent</option>}
+                  {executionOptions.data?.agents.items.map((agent) => {
+                    const value = agent.id ?? agent.name;
+                    const profile = agent.llm_profile ? ` · ${agent.llm_profile.replace(/^shared:/, "")}` : "";
+                    return <option key={value} value={value}>{agent.display_name ?? agent.name}{profile}</option>;
+                  })}
+                </select>
+              </label>
+              {canSaveDefaultAgent && (
+                <button
+                  type="button"
+                  className="save-default-agent"
+                  disabled={saveDefaultAgent.isPending}
+                  onClick={() => saveDefaultAgent.mutate(selectedAgent)}
+                >{saveDefaultAgent.isPending ? "Saving…" : "Make default"}</button>
+              )}
+              {defaultAgentFeedback && (
+                <small className={defaultAgentFeedback.error ? "error" : ""} role={defaultAgentFeedback.error ? "alert" : "status"}>
+                  {defaultAgentFeedback.message}
+                </small>
+              )}
+            </div>
             <label className="agent-selector">
               <span>Model profile</span>
               <select

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Message } from "../api/client";
-import { visibleChatMessages } from "./workspaceMessages";
+import { visibleChatMessages, withDefaultAgent } from "./workspaceMessages";
 
 function message(id: string, role: Message["role"], content: string): Message {
   return {
@@ -11,6 +11,24 @@ function message(id: string, role: Message["role"], content: string): Message {
     created_at: "2026-01-01T00:00:00Z",
   };
 }
+
+describe("withDefaultAgent", () => {
+  it("preserves personal configuration while replacing either default-agent key style", () => {
+    expect(withDefaultAgent({
+      defaults: { agentRef: "user:old", skill_refs: ["user:research"] },
+      agents: { items: [{ id: "user:researcher" }] },
+    }, "user:researcher")).toEqual({
+      defaults: { agent_ref: "user:researcher", skill_refs: ["user:research"] },
+      agents: { items: [{ id: "user:researcher" }] },
+    });
+  });
+
+  it("creates defaults for a user without saved execution configuration", () => {
+    expect(withDefaultAgent(undefined, "shared:general")).toEqual({
+      defaults: { agent_ref: "shared:general" },
+    });
+  });
+});
 
 describe("visibleChatMessages", () => {
   it("hides the persisted copy while the same final reply is still streamed", () => {
