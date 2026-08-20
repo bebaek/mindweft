@@ -402,7 +402,8 @@ environment variables belong on the external sidecar, not the Mindweft process.
 The API serves the new TypeScript/React console at `/console/`. The initial production UI
 foundation includes a responsive, accessible application shell with persistent light/dark theme
 selection, live readiness checks, a
-conversation workspace with thread history, message composition, NDJSON run streaming, activity
+conversation workspace with thread history, message composition, server-persisted per-user default
+agent selection, NDJSON run streaming, activity
 inspection, cancellation controls, context usage inspection, raw model-context previews, and
 confirmed compaction. On narrow screens, the conversation rail is collapsed by default and available
 from the Conversations menu so the active chat retains the screen space. The console also supports
