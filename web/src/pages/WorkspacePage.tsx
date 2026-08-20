@@ -378,7 +378,7 @@ export function WorkspacePage() {
           </details>
         )}
 
-        <form className="chat-composer" onSubmit={(event) => void sendMessage(event)}>
+        <form className={`chat-composer${selectedThreadId === null ? "" : " has-thread"}`} onSubmit={(event) => void sendMessage(event)}>
           {pendingImages.length > 0 && (
             <div className="pending-images">
               {pendingImages.map((image, index) => (
