@@ -544,7 +544,7 @@ test("keeps overview, authentication, and administration legible in dark mode", 
   }
 });
 
-test("keeps workspace dialogs legible in dark mode", async ({ page }) => {
+test("keeps the workspace sidebar and dialogs legible in dark mode", async ({ page }) => {
   await installApiMocks(page);
   await installWorkspaceMocks(page, { consent: true });
   await page.addInitScript(() => window.localStorage.setItem("minigent-theme", "dark"));
@@ -552,7 +552,13 @@ test("keeps workspace dialogs legible in dark mode", async ({ page }) => {
   await navigateToWorkspace(page);
 
   await openConversations(page);
-  await page.getByRole("button", { name: "Review the deployment plan" }).click();
+  const threadButton = page.getByRole("button", { name: "Review the deployment plan" });
+  await threadButton.hover();
+  await expect(threadButton).toHaveCSS("background-color", "rgb(32, 42, 35)");
+  await expect(threadButton.locator(".thread-title")).toHaveCSS("color", "rgb(231, 237, 232)");
+  expect((await new AxeBuilder({ page }).include(".thread-rail").analyze()).violations).toEqual([]);
+
+  await threadButton.click();
   await expect(page.getByRole("heading", { name: "Deployment review" })).toBeVisible();
   await expect(page.getByRole("table")).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
