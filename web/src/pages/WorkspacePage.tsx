@@ -11,6 +11,7 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
 import { visibleChatMessages, withDefaultAgent } from "./workspaceMessages";
+import { runErrorMessage } from "./runEvents";
 import { ContextDialog } from "../components/ContextDialog";
 import { ConsentDialog } from "../components/ConsentDialog";
 
@@ -165,8 +166,9 @@ export function WorkspacePage() {
       setStreamedReply(event.content ?? "");
       addActivity("Assistant response received", event);
     } else if (event.type === "run.error") {
-      setError(event.detail ?? "The run failed");
-      addActivity(event.detail ?? "Run failed", event);
+      const message = runErrorMessage(event.detail);
+      setError(message);
+      addActivity(message, event);
     } else {
       addActivity(formatRunEvent(event), event);
     }

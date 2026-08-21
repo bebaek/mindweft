@@ -756,7 +756,7 @@ export interface PrivateValueAction {
 export interface RunEvent {
   type: string;
   content?: string;
-  detail?: string;
+  detail?: unknown;
   status_code?: number;
   [key: string]: unknown;
 }
