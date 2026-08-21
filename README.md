@@ -585,6 +585,7 @@ it deliberately.
 - [Dynamic tenant management](docs/dynamic-tenant-management.md)
 - [Dynamic user management](docs/dynamic-user-management.md)
 - [Deferred usage accounting and budget design](docs/usage-accounting-and-budgets.md)
+- [User data retention proposal](docs/user-data-retention-proposal.md)
 - [Layered MCP tool stack](docs/layered-mcp-tool-stack.md)
 - [Migrating from legacy Minigent](docs/migrating-from-minigent.md)
 - [Release process](docs/releasing.md)
