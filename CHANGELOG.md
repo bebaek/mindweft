@@ -8,6 +8,11 @@ package version is `0.1.0`.
 
 ## [Unreleased]
 
+### Fixed
+
+- The production console now renders structured streaming run errors, including provider
+  authentication failures, as user-facing messages instead of crashing the conversation view.
+
 ### Changed
 
 - Principal-scoped built-in user MCP tools now use the canonical `mindweft_user_mcp.*` prefix
