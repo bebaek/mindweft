@@ -123,9 +123,11 @@ def build_session_auth_router() -> APIRouter:
     router = APIRouter(prefix="/auth", tags=["authentication"])
 
     @router.get("/session", response_model=SessionStatusResponse)
-    async def session_status(request: Request) -> SessionStatusResponse:
+    async def session_status(request: Request, response: Response) -> SessionStatusResponse:
         settings = validate_session_auth_settings()
-        principal = principal_from_session_request(request, settings=settings, required=False)
+        principal = principal_from_session_request(
+            request, settings=settings, required=False, response=response
+        )
         return SessionStatusResponse(
             enabled=settings.enabled,
             authenticated=principal is not None,
@@ -262,6 +264,7 @@ def principal_from_session_request(
     *,
     settings: SessionAuthSettings | None = None,
     required: bool = True,
+    response: Response | None = None,
 ) -> Principal | None:
     settings = settings or validate_session_auth_settings()
     token = request.cookies.get(SESSION_COOKIE_NAME)
@@ -302,6 +305,20 @@ def principal_from_session_request(
         if required:
             raise HTTPException(status_code=401, detail="Invalid or expired session") from None
         return None
+    if response is not None and isinstance(payload.get("exp"), (int, float)):
+        # Keep an actively used browser session alive without making idle sessions
+        # permanent. The browser periodically calls GET /auth/session, so this
+        # renews the JWT and its cookie before the existing token expires.
+        remaining = int(payload["exp"]) - int(time.time())
+        if remaining <= max(1, settings.ttl_seconds // 2):
+            refreshed = _encode_session(
+                principal,
+                settings,
+                username=payload["username"],
+                source=payload["source"],
+                credential_version=payload["credential_version"],
+            )
+            _set_session_cookie(response, refreshed, settings)
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         require_same_origin(request, settings)
     return principal
