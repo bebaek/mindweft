@@ -16,7 +16,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const api = useMemo(() => new MinigentApiClient(authentication), [authentication]);
 
   const refreshSession = useCallback(async () => {
-    setSession((current) => ({ ...current, loading: true, error: null }));
+    setSession((current) => ({
+      ...current,
+      loading: current.authenticated ? false : true,
+      error: null,
+    }));
     try {
       const status = await new MinigentApiClient({ mode: "session" }).getSession();
       setSession({
@@ -65,6 +69,16 @@ export function AuthProvider({ children }: PropsWithChildren) {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    // Refresh the server-side session cookie while the console is open. The
+    // endpoint only renews tokens close to expiry, so this does not extend an
+    // idle session indefinitely.
+    const interval = window.setInterval(() => {
+      void refreshSession();
+    }, 5 * 60 * 1000);
+    return () => window.clearInterval(interval);
+  }, [refreshSession]);
 
   const login = useCallback(async (username: string, password: string) => {
     const status = await new MinigentApiClient({ mode: "session" }).login(username, password);
