@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Message } from "../api/client";
-import { visibleChatMessages, withDefaultAgent } from "./workspaceMessages";
+import { persistedToolSteps, visibleChatMessages, withDefaultAgent } from "./workspaceMessages";
 
 function message(id: string, role: Message["role"], content: string): Message {
   return {
@@ -27,6 +27,29 @@ describe("withDefaultAgent", () => {
     expect(withDefaultAgent(undefined, "shared:general")).toEqual({
       defaults: { agent_ref: "shared:general" },
     });
+  });
+});
+
+describe("persistedToolSteps", () => {
+  it("pairs historical tool calls and results by call id", () => {
+    const user = message("user-1", "user", "Check the thermostat");
+    const call = { ...message("call-1", "assistant", ""), tool_name: "get_state", tool_call_id: "tool-1", tool_arguments: { entity_id: "climate.thermostat" } };
+    const result = { ...message("result-1", "tool", '{"state":"cool"}'), tool_name: "get_state", tool_call_id: "tool-1" };
+    const assistant = message("assistant-1", "assistant", "The thermostat is online.");
+
+    expect(persistedToolSteps([user, call, result, assistant], assistant.id)).toEqual([
+      { toolCall: call, result, status: "success" },
+    ]);
+  });
+
+  it("keeps unmatched historical calls pending and detects errors", () => {
+    const user = message("user-1", "user", "Check devices");
+    const failedCall = { ...message("call-1", "assistant", ""), tool_name: "get_state", tool_call_id: "failed" };
+    const failedResult = { ...message("result-1", "tool", '{"error":"Unavailable"}'), tool_call_id: "failed" };
+    const pendingCall = { ...message("call-2", "assistant", ""), tool_name: "get_state", tool_call_id: "pending" };
+    const assistant = message("assistant-1", "assistant", "I could not check every device.");
+
+    expect(persistedToolSteps([user, failedCall, failedResult, pendingCall, assistant], assistant.id).map((step) => step.status)).toEqual(["error", "pending"]);
   });
 });
 
