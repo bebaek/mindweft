@@ -10,7 +10,7 @@ import {
   type ThreadListItem,
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
-import { visibleChatMessages, withDefaultAgent } from "./workspaceMessages";
+import { visibleChatMessages, persistedToolSteps, withDefaultAgent, type PersistedToolStep } from "./workspaceMessages";
 import { runErrorMessage } from "./runEvents";
 import { ContextDialog } from "../components/ContextDialog";
 import { ConsentDialog } from "../components/ConsentDialog";
@@ -459,6 +459,7 @@ export function WorkspacePage() {
               <span className="message-author">{message.role === "user" ? "You" : "Mindweft"}</span>
               {message.content && (message.role === "assistant" ? <RenderedAssistantMessage content={message.content} /> : <div className="message-content plain-message-content">{message.content}</div>)}
               <MessageImages message={message} />
+              {message.role === "assistant" && <PersistedToolActivity steps={persistedToolSteps(messages.data, message.id)} />}
             </article>
           ))}
           {streamedReply !== null && <article className="chat-message assistant streaming"><span className="message-author">Mindweft</span><RenderedAssistantMessage content={streamedReply} /></article>}
@@ -641,6 +642,36 @@ function activityStatusIcon(status: ActivityStatus): string {
   if (status === "success") return "\u2713";
   if (status === "error") return "!";
   return "\u00b7";
+}
+
+function PersistedToolActivity({ steps }: { steps: PersistedToolStep[] }) {
+  if (steps.length === 0) return null;
+  const failed = steps.filter((step) => step.status === "error").length;
+  return (
+    <details className="persisted-tool-activity">
+      <summary>
+        <span>{failed ? "Tool activity · attention needed" : "Tool activity"}</span>
+        <small>{steps.length} step{steps.length === 1 ? "" : "s"}</small>
+      </summary>
+      <ol className="persisted-tool-list">
+        {steps.map((step) => (
+          <li className={`activity-${step.status}`} key={step.toolCall.id}>
+            <span aria-hidden="true">{activityStatusIcon(step.status)}</span>
+            <div className="activity-item-content">
+              <strong>{step.toolCall.tool_name ?? "tool"}</strong>
+              <details className="activity-details">
+                <summary>Details</summary>
+                {step.toolCall.tool_arguments !== undefined && (
+                  <ActivityPayload label="Arguments" value={step.toolCall.tool_arguments} />
+                )}
+                {step.result && <ActivityPayload label="Result" value={step.result.content} />}
+              </details>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
 }
 
 function ActivityPayload({ label, value }: { label: string; value: unknown }) {

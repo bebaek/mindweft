@@ -264,7 +264,15 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 34px 56px; }
 .activity-tray summary small { overflow:hidden; color:var(--muted); font-size:var(--text-sm); text-overflow:ellipsis; white-space:nowrap; }
 .activity-tray summary::after { content:"+"; margin-left:auto; } .activity-tray[open] summary::after { content:"−"; }
 .activity-tray ol { display:grid; gap:8px; margin:0; padding:0 23px 13px 42px; list-style:none; }
-.activity-tray li { position:relative; color:var(--muted); font-size:var(--text-sm); }
+.persisted-tool-activity { width:min(100%,620px); margin-top:11px; border:1px solid var(--line); border-radius:9px; color:var(--muted); background:var(--paper); font-size:var(--text-sm); }
+.persisted-tool-activity>summary { display:flex; align-items:center; gap:8px; padding:8px 10px; cursor:pointer; list-style:none; }
+.persisted-tool-activity>summary::-webkit-details-marker { display:none; }
+.persisted-tool-activity>summary span { color:var(--ink); font-weight:650; }
+.persisted-tool-activity>summary small { margin-left:auto; }
+.persisted-tool-list { display:grid; gap:7px; margin:0; padding:0 12px 10px 30px; list-style:none; }
+.persisted-tool-list>li { position:relative; }
+.persisted-tool-list>li>span { position:absolute; left:-19px; top:3px; display:grid; place-items:center; width:12px; height:12px; border-radius:50%; color:#547b60; background:#dcebdd; font-size:10px; font-weight:800; }
+.persisted-tool-list>li.activity-error>span { color:#fff; background:var(--danger); }
 .activity-tray li>span { position:absolute; left:-16px; top:3px; display:grid; place-items:center; width:12px; height:12px; border-radius:50%; color:#547b60; background:#dcebdd; font-size:10px; font-weight:800; }
 .activity-tray li.activity-pending>span { color:#8a6c31; background:#f3e6c4; animation:activity-pulse 1.2s infinite ease-in-out; }
 .activity-tray li.activity-error,.activity-tray li.error { color:var(--danger); }
@@ -603,7 +611,7 @@ html[data-theme="dark"] :where(
   .inspected-message,.thread-context,.setup-link-result
 ) { color:var(--ink); background:var(--white); border-color:var(--line); }
 html[data-theme="dark"] :where(
-  .thread-rail,.conversation,.activity-tray,.activity-details,.context-dialog-body,.raw-context pre,.empty-threads,
+  .thread-rail,.conversation,.activity-tray,.activity-details,.persisted-tool-activity,.context-dialog-body,.raw-context pre,.empty-threads,
   .operations-loading,.operations-empty,.execution-config-empty,.mcp-server-picker,
   .capability-mcp-editor,.execution-json-field textarea,.oauth-import-instructions,.oauth-credential-summary>div,
   .audit-details,.inspected-message.tool,.message-image-loading,.message-image-error
