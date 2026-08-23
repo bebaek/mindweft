@@ -10,6 +10,9 @@ package version is `0.1.0`.
 
 ### Fixed
 
+- Thread forks now copy unexpired private values referenced by inherited context into the child
+  within the authenticated user's scope, without cloning pending consent actions or extending value
+  expiry.
 - The production console now renders structured streaming run errors, including provider
   authentication failures, as user-facing messages instead of crashing the conversation view.
 

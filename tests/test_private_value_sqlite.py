@@ -25,6 +25,89 @@ def test_private_value_store_factory_defaults_to_memory() -> None:
     assert isinstance(store, InMemoryPrivateValueStore)
 
 
+def test_encrypted_private_value_store_copies_selected_references_with_original_expiry(
+    tmp_path: Path,
+) -> None:
+    now = [100.0]
+    store = SQLiteEncryptedPrivateValueStore(
+        tmp_path / "private-copy.db",
+        KEY,
+        ttl_seconds=5,
+        clock=lambda: now[0],
+    )
+    store.add(
+        "tenant",
+        "source",
+        {"copied": "sensitive", "omitted": "other"},
+        user_id="user",
+        kinds={"copied": "email", "omitted": "phone"},
+    )
+    copied_placeholder = "{" * 2 + "pii:email:copied" + "}" * 2
+    omitted_placeholder = "{" * 2 + "pii:phone:omitted" + "}" * 2
+    now[0] = 103.0
+
+    copied = store.copy_references(
+        "tenant",
+        "source",
+        "child",
+        {"copied", "missing"},
+        user_id="user",
+    )
+
+    assert copied == 1
+    assert all(
+        b"sensitive" not in candidate.read_bytes()
+        for candidate in tmp_path.glob("private-copy.db*")
+    )
+    assert (
+        store.resolve_for_tool(
+            "tenant",
+            "child",
+            copied_placeholder,
+            user_id="user",
+        )
+        == "sensitive"
+    )
+    assert (
+        store.render_for_user(
+            "tenant",
+            "child",
+            omitted_placeholder,
+            user_id="user",
+        )
+        == omitted_placeholder
+    )
+    assert (
+        store.render_for_user(
+            "tenant",
+            "child",
+            copied_placeholder,
+            user_id="other-user",
+        )
+        == copied_placeholder
+    )
+    store.clear_thread("tenant", "source")
+    assert (
+        store.render_for_user(
+            "tenant",
+            "child",
+            copied_placeholder,
+            user_id="user",
+        )
+        == "sensitive"
+    )
+    now[0] = 106.0
+    assert (
+        store.render_for_user(
+            "tenant",
+            "child",
+            copied_placeholder,
+            user_id="user",
+        )
+        == copied_placeholder
+    )
+
+
 def test_encrypted_private_value_store_requires_key_when_configured(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="ENCRYPTION_KEY.*required"):
         build_private_value_store_from_env(

@@ -280,6 +280,139 @@ class SQLiteEncryptedPrivateValueStore:
             substitute=True,
         )
 
+    def copy_references(
+        self,
+        tenant_id: str,
+        source_thread_id: str,
+        child_thread_id: str,
+        references: set[str],
+        *,
+        user_id: str = "",
+    ) -> int:
+        if not references:
+            return 0
+        now = self._clock()
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._delete_expired(connection, now)
+            rows = [
+                row
+                for row in connection.execute(
+                    """
+                    SELECT reference, kind, nonce, ciphertext, key_version, created_at, expires_at
+                    FROM private_values
+                    WHERE tenant_id = ? AND user_id = ? AND thread_id = ?
+                    """,
+                    (tenant_id, user_id, source_thread_id),
+                ).fetchall()
+                if str(row[0]) in references
+            ]
+            if not rows:
+                connection.commit()
+                return 0
+            existing_count = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) FROM private_values
+                    WHERE tenant_id = ? AND user_id = ? AND thread_id = ?
+                    """,
+                    (tenant_id, user_id, child_thread_id),
+                ).fetchone()[0]
+            )
+            existing_references = {
+                str(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT reference FROM private_values
+                    WHERE tenant_id = ? AND user_id = ? AND thread_id = ?
+                    """,
+                    (tenant_id, user_id, child_thread_id),
+                )
+            }
+            new_references = {str(row[0]) for row in rows} - existing_references
+            if existing_count + len(new_references) > self._max_refs_per_thread:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Private value reference limit exceeded for thread",
+                )
+            copied = 0
+            for row in rows:
+                reference = str(row[0])
+                kind = str(row[1])
+                value = self._decrypt(
+                    tenant_id,
+                    user_id,
+                    source_thread_id,
+                    reference,
+                    kind,
+                    bytes(row[2]),
+                    bytes(row[3]),
+                    int(row[4]),
+                )
+                existing = connection.execute(
+                    """
+                    SELECT kind, nonce, ciphertext, key_version
+                    FROM private_values
+                    WHERE tenant_id = ? AND user_id = ? AND thread_id = ? AND reference = ?
+                    """,
+                    (tenant_id, user_id, child_thread_id, reference),
+                ).fetchone()
+                if existing is not None:
+                    existing_kind = str(existing[0])
+                    existing_value = self._decrypt(
+                        tenant_id,
+                        user_id,
+                        child_thread_id,
+                        reference,
+                        existing_kind,
+                        bytes(existing[1]),
+                        bytes(existing[2]),
+                        int(existing[3]),
+                    )
+                    if existing_kind != kind or existing_value != value:
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"Private value reference collision for '{reference}'",
+                        )
+                    copied += 1
+                    continue
+                nonce = os.urandom(_NONCE_BYTES)
+                ciphertext = self._aesgcms[self._key_version].encrypt(
+                    nonce,
+                    value.encode("utf-8"),
+                    _associated_data(
+                        tenant_id,
+                        user_id,
+                        child_thread_id,
+                        reference,
+                        kind,
+                        self._key_version,
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO private_values (
+                        tenant_id, user_id, thread_id, reference, kind, nonce, ciphertext,
+                        key_version, created_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        tenant_id,
+                        user_id,
+                        child_thread_id,
+                        reference,
+                        kind,
+                        nonce,
+                        ciphertext,
+                        self._key_version,
+                        float(row[5]),
+                        float(row[6]),
+                    ),
+                )
+                copied += 1
+            connection.commit()
+            return copied
+
     def clear_thread(self, tenant_id: str, thread_id: str) -> None:
         with self._lock, closing(self._connect()) as connection:
             connection.execute(
