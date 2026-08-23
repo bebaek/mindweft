@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Message } from "../api/client";
-import { persistedToolSteps, visibleChatMessages, withDefaultAgent } from "./workspaceMessages";
+import { persistedToolSteps, reasoningSummary, visibleChatMessages, withDefaultAgent } from "./workspaceMessages";
 
 function message(id: string, role: Message["role"], content: string): Message {
   return {
@@ -27,6 +27,13 @@ describe("withDefaultAgent", () => {
     expect(withDefaultAgent(undefined, "shared:general")).toEqual({
       defaults: { agent_ref: "shared:general" },
     });
+  });
+});
+
+describe("reasoningSummary", () => {
+  it("extracts direct and Responses API summaries", () => {
+    expect(reasoningSummary({ reasoning_content: "Inspecting the device state." })).toBe("Inspecting the device state.");
+    expect(reasoningSummary({ generic_oauth_responses_output_items: [{ type: "reasoning", summary: [{ text: "Checking connectivity." }] }] })).toBe("Checking connectivity.");
   });
 });
 

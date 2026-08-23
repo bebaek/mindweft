@@ -10,7 +10,8 @@ import {
   type ThreadListItem,
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
-import { visibleChatMessages, persistedToolSteps, withDefaultAgent, type PersistedToolStep } from "./workspaceMessages";
+import { reasoningSummary, persistedToolSteps, visibleChatMessages, withDefaultAgent, type PersistedToolStep } from "./workspaceMessages";
+
 import { runErrorMessage } from "./runEvents";
 import { ContextDialog } from "../components/ContextDialog";
 import { ConsentDialog } from "../components/ConsentDialog";
@@ -52,6 +53,7 @@ export function WorkspacePage() {
   const [draft, setDraft] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
+  const [showThinking, setShowThinking] = useState(false);
   const [streamedReply, setStreamedReply] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
@@ -220,6 +222,10 @@ export function WorkspacePage() {
       });
     } else if (event.type === "llm.progress") {
       return;
+    } else if (event.type === "reasoning") {
+      if (typeof event.content === "string" && event.content.trim()) {
+        addActivity("Thinking summary", event, { result: event.content, status: "info" });
+      }
     } else if (event.type === "assistant.message") {
       setStreamedReply(event.content ?? "");
       addActivity("Assistant response received", event);
@@ -445,7 +451,8 @@ export function WorkspacePage() {
           <button type="button" className="thread-rail-toggle" aria-label="Show conversations" onClick={() => setMobileThreadRailOpen(true)}>☰</button>
           <div><span className={`run-dot ${isRunning ? "active" : ""}`} /><div><h1>{selectedTitle(threads.data?.threads, selectedThreadId)}</h1><small>{isRunning ? "Agent is working" : selectedThreadId ? "Ready" : "New conversation"}</small></div></div>
           <div className="conversation-actions">
-            {activity.length > 0 && <span className="activity-count">{activity.length} event{activity.length === 1 ? "" : "s"}</span>}
+            {activity.filter((item) => showThinking || item.type !== "reasoning").length > 0 && <span className="activity-count">{activity.filter((item) => showThinking || item.type !== "reasoning").length} event{activity.filter((item) => showThinking || item.type !== "reasoning").length === 1 ? "" : "s"}</span>}
+            <button type="button" className={showThinking ? "active" : ""} onClick={() => setShowThinking((visible) => !visible)}>Thinking {showThinking ? "on" : "off"}</button>
             <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => void renameSelectedThread()}>Rename</button>
             <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => setContextOpen(true)}>Context</button>
           </div>
@@ -459,6 +466,7 @@ export function WorkspacePage() {
               <span className="message-author">{message.role === "user" ? "You" : "Mindweft"}</span>
               {message.content && (message.role === "assistant" ? <RenderedAssistantMessage content={message.content} /> : <div className="message-content plain-message-content">{message.content}</div>)}
               <MessageImages message={message} />
+              {message.role === "assistant" && showThinking && reasoningSummary(message.metadata) && <details className="thinking-summary"><summary>Thinking summary</summary><p>{reasoningSummary(message.metadata)}</p></details>}
               {message.role === "assistant" && <PersistedToolActivity steps={persistedToolSteps(messages.data, message.id)} />}
             </article>
           ))}
@@ -468,10 +476,10 @@ export function WorkspacePage() {
           <div ref={messagesEndRef} />
         </div>
 
-        {activity.length > 0 && (
+        {activity.filter((item) => showThinking || item.type !== "reasoning").length > 0 && (
           <details className="activity-tray">
             <summary><span>Run activity</span><small>{activity.at(-1)?.label}</small></summary>
-            <ol>{activity.map((item) => (
+            <ol>{activity.filter((item) => showThinking || item.type !== "reasoning").map((item) => (
               <li className={`activity-${item.status}${item.error ? " error" : ""}`} key={item.id}>
                 <span aria-hidden="true">{activityStatusIcon(item.status)}</span>
                 <div className="activity-item-content">

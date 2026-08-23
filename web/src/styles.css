@@ -264,7 +264,9 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 34px 56px; }
 .activity-tray summary small { overflow:hidden; color:var(--muted); font-size:var(--text-sm); text-overflow:ellipsis; white-space:nowrap; }
 .activity-tray summary::after { content:"+"; margin-left:auto; } .activity-tray[open] summary::after { content:"−"; }
 .activity-tray ol { display:grid; gap:8px; margin:0; padding:0 23px 13px 42px; list-style:none; }
-.persisted-tool-activity { width:min(100%,620px); margin-top:11px; border:1px solid var(--line); border-radius:9px; color:var(--muted); background:var(--paper); font-size:var(--text-sm); }
+.thinking-summary { width:min(100%,620px); margin-top:10px; border:1px solid var(--line); border-radius:9px; color:var(--muted); background:var(--paper); font-size:var(--text-sm); }
+.thinking-summary summary { padding:8px 10px; cursor:pointer; font-weight:650; }
+.thinking-summary p { margin:0; padding:0 10px 10px; white-space:pre-wrap; line-height:1.55; }
 .persisted-tool-activity>summary { display:flex; align-items:center; gap:8px; padding:8px 10px; cursor:pointer; list-style:none; }
 .persisted-tool-activity>summary::-webkit-details-marker { display:none; }
 .persisted-tool-activity>summary span { color:var(--ink); font-weight:650; }
@@ -315,6 +317,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 34px 56px; }
 .conversation-actions { display:flex!important; align-items:center; gap:8px!important; }
 .conversation-actions>button { padding:6px 9px; border:1px solid var(--line); border-radius:8px; color:var(--muted); background:var(--white); cursor:pointer; font-size:var(--text-sm); font-weight:700; }
 .conversation-actions>button:disabled { cursor:default; opacity:.45; }
+.conversation-actions>button.active { color:var(--forest); border-color:#8dae91; background:#eaf3e7; }
 .context-dialog { width:min(720px,calc(100vw - 28px)); max-height:min(820px,calc(100vh - 28px)); padding:0; overflow:hidden; border:0; border-radius:18px; color:var(--ink); background:var(--paper); box-shadow:0 30px 80px rgba(9,17,11,.28); }
 .context-dialog::backdrop { background:rgba(13,21,16,.62); backdrop-filter:blur(3px); }
 .context-dialog-header { display:flex; align-items:flex-start; justify-content:space-between; padding:25px 27px 20px; border-bottom:1px solid var(--line); background:var(--white); }
@@ -611,7 +614,7 @@ html[data-theme="dark"] :where(
   .inspected-message,.thread-context,.setup-link-result
 ) { color:var(--ink); background:var(--white); border-color:var(--line); }
 html[data-theme="dark"] :where(
-  .thread-rail,.conversation,.activity-tray,.activity-details,.persisted-tool-activity,.context-dialog-body,.raw-context pre,.empty-threads,
+  .thread-rail,.conversation,.activity-tray,.activity-details,.persisted-tool-activity,.thinking-summary,.context-dialog-body,.raw-context pre,.empty-threads,
   .operations-loading,.operations-empty,.execution-config-empty,.mcp-server-picker,
   .capability-mcp-editor,.execution-json-field textarea,.oauth-import-instructions,.oauth-credential-summary>div,
   .audit-details,.inspected-message.tool,.message-image-loading,.message-image-error

@@ -15,6 +15,26 @@ export function withDefaultAgent(
   return next;
 }
 
+export function reasoningSummary(metadata: Record<string, unknown> | null | undefined): string | null {
+  if (!metadata) return null;
+  const direct = metadata.reasoning_content;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const items = metadata.generic_oauth_responses_output_items;
+  if (!Array.isArray(items)) return null;
+  const summaries: string[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== "object" || (item as Record<string, unknown>).type !== "reasoning") continue;
+    const summary = (item as Record<string, unknown>).summary;
+    if (!Array.isArray(summary)) continue;
+    for (const part of summary) {
+      if (!part || typeof part !== "object") continue;
+      const text = (part as Record<string, unknown>).text;
+      if (typeof text === "string" && text.trim()) summaries.push(text.trim());
+    }
+  }
+  return summaries.length > 0 ? summaries.join("\n\n") : null;
+}
+
 export interface PersistedToolStep {
   toolCall: Message;
   result?: Message;
