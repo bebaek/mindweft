@@ -220,8 +220,6 @@ class ThreadStore(Protocol):
         summarized_message_count: int,
     ) -> ThreadContext: ...
 
-    def compact_thread_messages(self, tenant_id: str, thread_id: str) -> ThreadContext: ...
-
     def start_run(self, tenant_id: str, thread_id: str) -> Thread: ...
 
     def owned_run_id(self, tenant_id: str, thread_id: str) -> str | None: ...
@@ -624,21 +622,6 @@ class InMemoryThreadStore:
             context = self._contexts[thread_id]
             context.summary = summary
             context.summarized_message_count = summarized_message_count
-            context.updated_at = utc_now()
-            thread.updated_at = utc_now()
-            return context.model_copy(deep=True)
-
-    def compact_thread_messages(self, tenant_id: str, thread_id: str) -> ThreadContext:
-        with self._lock:
-            self._require_current_run(tenant_id, thread_id)
-            thread = self._require_thread(tenant_id, thread_id)
-            context = self._contexts[thread_id]
-            if context.summarized_message_count <= 0:
-                return context.model_copy(deep=True)
-            self._messages[thread_id] = self._messages[thread_id][
-                context.summarized_message_count :
-            ]
-            context.summarized_message_count = 0
             context.updated_at = utc_now()
             thread.updated_at = utc_now()
             return context.model_copy(deep=True)
@@ -1320,30 +1303,6 @@ class SQLiteThreadStore:
             context = self._require_context(conn, thread_id)
             context.summary = summary
             context.summarized_message_count = summarized_message_count
-            context.updated_at = utc_now()
-            thread.updated_at = utc_now()
-            self._save_context(conn, context)
-            self._save_thread(conn, thread)
-            return context
-
-    def compact_thread_messages(self, tenant_id: str, thread_id: str) -> ThreadContext:
-        with self._lock, self._connection() as conn:
-            self._require_current_run(conn, tenant_id, thread_id)
-            thread = self._require_thread(conn, tenant_id, thread_id)
-            context = self._require_context(conn, thread_id)
-            if context.summarized_message_count <= 0:
-                return context
-            rows = conn.execute(
-                "SELECT position FROM messages WHERE thread_id = ? ORDER BY position ASC LIMIT ?",
-                (thread_id, context.summarized_message_count),
-            ).fetchall()
-            if rows:
-                max_deleted_position = rows[-1][0]
-                conn.execute(
-                    "DELETE FROM messages WHERE thread_id = ? AND position <= ?",
-                    (thread_id, max_deleted_position),
-                )
-            context.summarized_message_count = 0
             context.updated_at = utc_now()
             thread.updated_at = utc_now()
             self._save_context(conn, context)

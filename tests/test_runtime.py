@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.admin_store import SQLiteTenantConfigStore
+from app.attachments import InMemoryAttachmentStore
 from app.execution import (
     DEFAULT_TENANT_KEY,
     FixedTenantExecutionResolver,
@@ -24,6 +25,7 @@ from app.execution import (
 from app.llm import LLMAdapter, MockLLMAdapter
 from app.mcp import MCPPrivateToolResult, MCPPrivateValuePolicy, MCPServerConfig, MCPServerInfo
 from app.models import (
+    ImagePart,
     LLMResponse,
     Message,
     MessageRole,
@@ -44,7 +46,7 @@ from app.runtime import (
     RuntimeSettings,
     max_iterations_from_env,
 )
-from app.store import InMemoryThreadStore
+from app.store import InMemoryThreadStore, SQLiteThreadStore
 from app.tools import ToolExecutionContext, ToolRegistry, build_local_tool_registry
 
 PRINCIPAL = Principal(user_id="user-1", tenant_id="tenant-1")
@@ -57,6 +59,7 @@ def test_runtime_returns_assistant_reply_for_plain_user_message() -> None:
         store=store, llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry()
     )
     thread = store.create_thread(PRINCIPAL.tenant_id)
+    assert runtime._context_compaction_enabled is False
     store.append_message(
         PRINCIPAL.tenant_id,
         Message(
@@ -732,6 +735,7 @@ def test_runtime_summarizes_older_messages_and_keeps_recent_tail_verbatim() -> N
         llm_adapter=InspectingLLM(),
         tool_registry=build_local_tool_registry(),
         recent_message_limit=4,
+        context_compaction_enabled=True,
     )
     thread = store.create_thread(PRINCIPAL.tenant_id)
     for index in range(6):
@@ -768,18 +772,75 @@ def test_runtime_summarizes_older_messages_and_keeps_recent_tail_verbatim() -> N
         "assistant-5",
     ]
     context = store.get_thread_context(PRINCIPAL.tenant_id, thread.thread_id)
-    assert context.summarized_message_count == 0
+    assert context.summarized_message_count == 8
     assert "user-3" in context.summary
     assert "assistant-3" in context.summary
     assert [
         message.content for message in store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
     ] == [
-        "user-4",
-        "assistant-4",
-        "user-5",
-        "assistant-5",
+        *[content for index in range(6) for content in (f"user-{index}", f"assistant-{index}")],
         "ok",
     ]
+
+
+def test_automatic_compaction_preserves_summarized_attachments() -> None:
+    store = InMemoryThreadStore()
+    attachment_store = InMemoryAttachmentStore()
+    runtime = AgentRuntime(
+        store=store,
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=build_local_tool_registry(),
+        recent_message_limit=2,
+        context_compaction_enabled=True,
+        attachment_store=attachment_store,
+    )
+    thread = store.create_thread(PRINCIPAL.tenant_id)
+    attachment = attachment_store.put(
+        PRINCIPAL.tenant_id,
+        thread.thread_id,
+        mime_type="image/png",
+        data=b"image-data",
+        created_by=PRINCIPAL.user_id,
+    )
+    assert attachment_store.mark_referenced(
+        PRINCIPAL.tenant_id,
+        thread.thread_id,
+        attachment.attachment_id,
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.USER,
+            content="old image",
+            parts=[ImagePart(mime_type="image/png", attachment_id=attachment.attachment_id)],
+        ),
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.ASSISTANT, content="old answer"),
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.USER, content="recent user"),
+    )
+    store.append_message(
+        PRINCIPAL.tenant_id,
+        Message(thread_id=thread.thread_id, role=MessageRole.ASSISTANT, content="recent answer"),
+    )
+
+    asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
+
+    context = store.get_thread_context(PRINCIPAL.tenant_id, thread.thread_id)
+    assert context.summarized_message_count == 2
+    assert len(store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)) == 5
+    record = attachment_store.get(
+        PRINCIPAL.tenant_id,
+        thread.thread_id,
+        attachment.attachment_id,
+    )
+    assert record is not None
+    assert record.data == b"image-data"
 
 
 def test_runtime_can_disable_context_compaction_for_append_only_cache_prefixes() -> None:
@@ -873,10 +934,10 @@ def test_runtime_manual_compaction_works_when_automatic_compaction_is_disabled()
 
     assert "user-0" in context.summary
     assert "assistant-1" in context.summary
-    assert context.summarized_message_count == 0
+    assert context.summarized_message_count == 4
     assert [
         message.content for message in store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
-    ] == ["user-2", "assistant-2"]
+    ] == [content for index in range(3) for content in (f"user-{index}", f"assistant-{index}")]
 
     asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
@@ -932,9 +993,15 @@ def test_runtime_manual_compaction_keeps_tool_call_pairs_together() -> None:
     runtime.compact_thread(PRINCIPAL, thread.thread_id)
 
     retained = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
-    assert [message.role for message in retained] == [MessageRole.USER]
-    assert retained[0].content == "new user"
+    assert [message.role for message in retained] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+        MessageRole.TOOL,
+        MessageRole.ASSISTANT,
+        MessageRole.USER,
+    ]
     context = store.get_thread_context(PRINCIPAL.tenant_id, thread.thread_id)
+    assert context.summarized_message_count == 4
     assert "Assistant requested tool echo" in context.summary
     assert 'Tool echo returned {"echo":"hello"}' in context.summary
 
@@ -959,6 +1026,7 @@ def test_runtime_uses_prompt_budget_to_compact_more_than_default_tail() -> None:
         recent_message_limit=8,
         min_recent_message_limit=2,
         target_prompt_tokens=80,
+        context_compaction_enabled=True,
     )
     thread = store.create_thread(PRINCIPAL.tenant_id)
     long_text = "x" * 160
@@ -992,18 +1060,26 @@ def test_runtime_uses_prompt_budget_to_compact_more_than_default_tail() -> None:
         f"assistant-4 {long_text}",
     ]
     context = store.get_thread_context(PRINCIPAL.tenant_id, thread.thread_id)
-    assert context.summarized_message_count == 0
+    assert context.summarized_message_count > 0
     assert "user-3" in context.summary
     assert "user-0" in context.summary
 
 
-def test_runtime_drops_summarized_messages_from_store_after_multiple_turns() -> None:
-    store = InMemoryThreadStore()
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_runtime_preserves_summarized_messages_in_store_after_multiple_turns(
+    store_kind: str, tmp_path: Path
+) -> None:
+    store = (
+        InMemoryThreadStore()
+        if store_kind == "memory"
+        else SQLiteThreadStore(tmp_path / "automatic-compaction.db")
+    )
     runtime = AgentRuntime(
         store=store,
         llm_adapter=MockLLMAdapter(),
         tool_registry=build_local_tool_registry(),
         recent_message_limit=4,
+        context_compaction_enabled=True,
     )
     thread = store.create_thread(PRINCIPAL.tenant_id)
 
@@ -1020,12 +1096,13 @@ def test_runtime_drops_summarized_messages_from_store_after_multiple_turns() -> 
         asyncio.run(runtime.run_thread(PRINCIPAL, thread.thread_id))
 
     stored_messages = store.list_messages(PRINCIPAL.tenant_id, thread.thread_id)
-    assert len(stored_messages) <= 5
+    assert len(stored_messages) == 12
     assert stored_messages[-1].content == "Mock reply: user-5"
 
     context = store.get_thread_context(PRINCIPAL.tenant_id, thread.thread_id)
-    assert context.summarized_message_count == 0
+    assert context.summarized_message_count == 8
     assert "user-0" in context.summary
+    assert context.summary.count("User: user-0") == 1
     assert "Mock reply: user-2" in context.summary
 
 

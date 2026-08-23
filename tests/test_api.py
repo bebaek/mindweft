@@ -1824,6 +1824,36 @@ def test_thread_manual_compact_endpoint_rejects_running_thread() -> None:
     assert response.json()["detail"] == "Cannot compact a running thread"
 
 
+def test_manual_compaction_counts_full_omitted_prefix_after_automatic_projection() -> None:
+    store = InMemoryThreadStore()
+    source = store.create_thread("tenant-1")
+    for index in range(14):
+        store.append_message(
+            "tenant-1",
+            Message(thread_id=source.thread_id, role=MessageRole.USER, content=f"message-{index}"),
+        )
+    store.update_thread_context(
+        "tenant-1",
+        source.thread_id,
+        summary="Earlier automatic summary.",
+        summarized_message_count=4,
+    )
+    client = TestClient(
+        create_app(
+            thread_store=store,
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+
+    response = client.post(f"/threads/{source.thread_id}/compact", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["compacted_message_count"] == 6
+    assert response.json()["message_count"] == 8
+    assert len(store.list_messages("tenant-1", source.thread_id)) == 14
+
+
 def test_create_app_uses_runtime_max_iterations_from_env(monkeypatch) -> None:
     monkeypatch.setenv("MINDWEFT_MAX_ITERATIONS", "24")
 

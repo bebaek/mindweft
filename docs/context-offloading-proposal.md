@@ -37,7 +37,9 @@ Compaction is available through:
 
 Automatic compaction is disabled by default. This preserves stable prompt prefixes and can
 improve provider-side prompt-cache reuse. Manual compaction remains available when a user
-or operator wants smaller prompts.
+or operator wants a summarized child fork with a smaller prompt. When automatic compaction is
+enabled, it updates only the thread's model-visible summary boundary; all raw messages and
+attachments remain stored in the thread.
 
 The current compaction implementation is intentionally simple and deterministic. It
 summarizes older messages into clipped lines and retains a recent message tail. It also
@@ -47,14 +49,15 @@ avoids splitting completed tool-call/tool-result pairs across a compaction bound
 
 The current model is prompt compaction, not full context offloading.
 
-Once messages are compacted, raw historical details are removed from active message storage
-in the current thread stores. The thread summary may preserve useful high-level context,
-but summaries are lossy. This creates several issues for long-running or tool-heavy agent
-sessions:
+Compaction preserves raw historical messages but excludes the summarized prefix from subsequent
+model prompts. The thread summary is lossy, so the assistant still cannot recover omitted details
+without a first-class retrieval mechanism. This creates several issues for long-running or
+tool-heavy agent sessions:
 
 - detailed user requirements may be lost;
 - large tool outputs may dominate active prompt context before compaction;
-- debugging exact historical behavior is harder after compaction;
+- model-visible summaries may obscure exact historical behavior even though raw history remains
+  inspectable;
 - the assistant has no first-class way to retrieve specific details from compacted spans;
 - automatic compaction trades smaller prompts against prompt-cache stability.
 
@@ -94,10 +97,11 @@ assistant turn, usually through a tool call or controlled internal retrieval ste
 
 ## Proposed design
 
-### 1. Preserve compacted spans in an offload archive
+### 1. Index summarized spans in an offload archive
 
-Before compacted messages are removed from active message storage, persist them as an
-offloaded span.
+Raw messages now remain in thread storage after compaction. A future offload archive can index or
+materialize summarized spans for efficient retrieval and eventual hot-storage tiering without being
+a prerequisite for preserving history.
 
 Example archive record:
 

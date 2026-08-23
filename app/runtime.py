@@ -180,6 +180,10 @@ class CompactionPlan:
         return self.summarize_upto - self.source_context.summarized_message_count
 
     @property
+    def omitted_message_count(self) -> int:
+        return self.summarize_upto
+
+    @property
     def retained_messages(self) -> list[Message]:
         return self.source_messages[self.summarize_upto :]
 
@@ -216,7 +220,7 @@ class AgentRuntime:
         max_summary_chars: int = 4000,
         target_prompt_tokens: int = 3000,
         quality_enhancer: QualityEnhancer | None = None,
-        context_compaction_enabled: bool = True,
+        context_compaction_enabled: bool = False,
         private_value_store: PrivateValueStore | None = None,
         input_pii_protector: LocalPIIProtector | None = None,
         private_value_consent_store: PrivateValueConsentStore | None = None,
@@ -1217,20 +1221,12 @@ class AgentRuntime:
             _summarize_messages(messages[context.summarized_message_count : summarize_upto]),
             max_chars=self._max_summary_chars,
         )
-        self._store.update_thread_context(
+        return self._store.update_thread_context(
             principal.tenant_id,
             thread_id,
             summary=new_summary,
             summarized_message_count=summarize_upto,
         )
-        compacted = self._store.compact_thread_messages(principal.tenant_id, thread_id)
-        self._delete_compacted_attachments(
-            principal.tenant_id,
-            thread_id,
-            messages,
-            summarize_upto,
-        )
-        return compacted
 
     def plan_thread_compaction(self, principal: Principal, thread_id: str) -> CompactionPlan:
         messages = self._store.list_messages(principal.tenant_id, thread_id)
@@ -1262,32 +1258,12 @@ class AgentRuntime:
         if plan.compacted_message_count <= 0:
             return plan.source_context
 
-        self._store.update_thread_context(
+        return self._store.update_thread_context(
             principal.tenant_id,
             thread_id,
             summary=plan.summary,
             summarized_message_count=plan.summarize_upto,
         )
-        compacted = self._store.compact_thread_messages(principal.tenant_id, thread_id)
-        self._delete_compacted_attachments(
-            principal.tenant_id,
-            thread_id,
-            plan.source_messages,
-            plan.summarize_upto,
-        )
-        return compacted
-
-    def _delete_compacted_attachments(
-        self,
-        tenant_id: str,
-        thread_id: str,
-        messages: list[Message],
-        summarize_upto: int,
-    ) -> None:
-        removed_ids = _attachment_ids(messages[:summarize_upto])
-        retained_ids = _attachment_ids(messages[summarize_upto:])
-        for attachment_id in removed_ids - retained_ids:
-            self._attachment_store.delete(tenant_id, thread_id, attachment_id)
 
     def _compute_summarize_upto(self, messages: list[Message], context: ThreadContext) -> int:
         max_summarize_upto = max(0, len(messages) - self._min_recent_message_limit)
@@ -1312,15 +1288,6 @@ class AgentRuntime:
             summarize_upto,
             min_boundary=context.summarized_message_count,
         )
-
-
-def _attachment_ids(messages: list[Message]) -> set[str]:
-    return {
-        part.attachment_id
-        for message in messages
-        for part in (message.parts or [])
-        if isinstance(part, ImagePart) and part.attachment_id
-    }
 
 
 async def _emit_run_event(

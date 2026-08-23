@@ -139,9 +139,10 @@ By default, Mindweft keeps thread history append-only and disables automatic con
 compaction so provider-side prompt caches can reuse stable prefixes across turns. Use
 `POST /threads/{thread_id}/compact` or the interactive CLI `/compact` command to manually
 fold older raw messages into a deterministic thread summary while retaining the recent
-message tail. Set `MINDWEFT_CONTEXT_COMPACTION_ENABLED=true` to re-enable rolling summaries
-and old-message compaction during runs for smaller prompts at the cost of resetting/changing
-the cacheable prefix.
+message tail in a summarized child fork while preserving the source. Set
+`MINDWEFT_CONTEXT_COMPACTION_ENABLED=true` to enable rolling in-thread summaries during runs for
+smaller prompts at the cost of resetting/changing the cacheable prefix. Automatic compaction updates
+only the model-visible summary boundary; raw messages and attachments remain stored and exportable.
 
 Mindweft does not cache model replies locally. Native LLM adapters do preserve and report
 provider-side prompt-cache usage when the provider includes it in response metadata.

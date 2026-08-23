@@ -2082,7 +2082,7 @@ def create_app(
             "fork_message_id": fork_message_id,
             "compacted_through_message_id": compacted_through_message_id,
             "summary": child_context.summary,
-            "compacted_message_count": plan.compacted_message_count,
+            "compacted_message_count": plan.omitted_message_count,
             "message_count": len(child_messages),
             "usage_before": before_usage,
             "usage": estimate_thread_context_usage(child_messages, context=child_context),
