@@ -405,6 +405,10 @@ messages through the selected point with provenance IDs, and records `parent_thr
 Referenced image attachments are cloned into the child thread. Unexpired private values referenced
 by inherited messages or summarized context are copied within the authenticated user's scope without
 extending their expiry; pending private-tool consent actions remain only on the source thread.
+Manual `POST /threads/{thread_id}/compact` uses the same lineage model: when compaction is needed it
+creates a summarized child containing the retained recent suffix, returns the child as `thread_id`,
+and leaves the source messages and source-owned data unchanged. Short threads return a no-op response
+without creating a child, and running threads cannot be manually compacted.
 
 ## Clients
 

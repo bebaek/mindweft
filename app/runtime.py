@@ -168,6 +168,32 @@ def _parse_tool_timeout_seconds(env: Mapping[str, str]) -> float:
     return value
 
 
+@dataclass(frozen=True)
+class CompactionPlan:
+    source_context: ThreadContext
+    source_messages: list[Message]
+    summary: str
+    summarize_upto: int
+
+    @property
+    def compacted_message_count(self) -> int:
+        return self.summarize_upto - self.source_context.summarized_message_count
+
+    @property
+    def retained_messages(self) -> list[Message]:
+        return self.source_messages[self.summarize_upto :]
+
+    @property
+    def fork_message_id(self) -> str | None:
+        return self.source_messages[-1].id if self.source_messages else None
+
+    @property
+    def compacted_through_message_id(self) -> str | None:
+        if self.summarize_upto <= 0:
+            return None
+        return self.source_messages[self.summarize_upto - 1].id
+
+
 def load_active_skill_instructions(skill: TenantSkillConfig) -> str:
     if skill.system_prompt is not None:
         return skill.system_prompt
@@ -1206,7 +1232,7 @@ class AgentRuntime:
         )
         return compacted
 
-    def compact_thread(self, principal: Principal, thread_id: str) -> ThreadContext:
+    def plan_thread_compaction(self, principal: Principal, thread_id: str) -> CompactionPlan:
         messages = self._store.list_messages(principal.tenant_id, thread_id)
         context = self._store.get_thread_context(principal.tenant_id, thread_id)
         summarize_upto = _safe_compaction_boundary(
@@ -1217,26 +1243,37 @@ class AgentRuntime:
             ),
             min_boundary=context.summarized_message_count,
         )
-        if summarize_upto <= context.summarized_message_count:
-            return context
-
-        new_summary = _merge_summaries(
-            context.summary,
-            _summarize_messages(messages[context.summarized_message_count : summarize_upto]),
-            max_chars=self._max_summary_chars,
+        summary = context.summary
+        if summarize_upto > context.summarized_message_count:
+            summary = _merge_summaries(
+                context.summary,
+                _summarize_messages(messages[context.summarized_message_count : summarize_upto]),
+                max_chars=self._max_summary_chars,
+            )
+        return CompactionPlan(
+            source_context=context,
+            source_messages=messages,
+            summary=summary,
+            summarize_upto=summarize_upto,
         )
+
+    def compact_thread(self, principal: Principal, thread_id: str) -> ThreadContext:
+        plan = self.plan_thread_compaction(principal, thread_id)
+        if plan.compacted_message_count <= 0:
+            return plan.source_context
+
         self._store.update_thread_context(
             principal.tenant_id,
             thread_id,
-            summary=new_summary,
-            summarized_message_count=summarize_upto,
+            summary=plan.summary,
+            summarized_message_count=plan.summarize_upto,
         )
         compacted = self._store.compact_thread_messages(principal.tenant_id, thread_id)
         self._delete_compacted_attachments(
             principal.tenant_id,
             thread_id,
-            messages,
-            summarize_upto,
+            plan.source_messages,
+            plan.summarize_upto,
         )
         return compacted
 

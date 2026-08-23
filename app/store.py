@@ -102,6 +102,18 @@ class ThreadStore(Protocol):
         attachment_id_map: Mapping[str, str] | None = None,
     ) -> Thread: ...
 
+    def fork_compacted_thread(
+        self,
+        tenant_id: str,
+        source_thread_id: str,
+        *,
+        fork_message_id: str,
+        compacted_through_message_id: str,
+        summary: str,
+        child_thread_id: str | None = None,
+        attachment_id_map: Mapping[str, str] | None = None,
+    ) -> Thread: ...
+
     def prune_threads(
         self,
         tenant_id: str,
@@ -317,6 +329,47 @@ class InMemoryThreadStore:
             )
             self._messages[resolved_child_id] = _copy_fork_messages(
                 prefix,
+                resolved_child_id,
+                attachment_id_map=attachment_id_map,
+            )
+            return child.model_copy(deep=True)
+
+    def fork_compacted_thread(
+        self,
+        tenant_id: str,
+        source_thread_id: str,
+        *,
+        fork_message_id: str,
+        compacted_through_message_id: str,
+        summary: str,
+        child_thread_id: str | None = None,
+        attachment_id_map: Mapping[str, str] | None = None,
+    ) -> Thread:
+        with self._lock:
+            source = self._require_thread(tenant_id, source_thread_id)
+            if source.status == ThreadStatus.RUNNING:
+                raise HTTPException(status_code=409, detail="Cannot compact a running thread")
+            retained = _compacted_fork_suffix(
+                self._messages[source_thread_id],
+                fork_message_id,
+                compacted_through_message_id,
+            )
+            resolved_child_id = child_thread_id or str(uuid4())
+            if resolved_child_id in self._threads:
+                raise HTTPException(status_code=409, detail="Fork thread ID already exists")
+            child = _forked_thread(
+                source,
+                resolved_child_id,
+                fork_message_id,
+                compacted_through_message_id=compacted_through_message_id,
+            )
+            self._threads[resolved_child_id] = child
+            self._contexts[resolved_child_id] = ThreadContext(
+                thread_id=resolved_child_id,
+                summary=summary,
+            )
+            self._messages[resolved_child_id] = _copy_fork_messages(
+                retained,
                 resolved_child_id,
                 attachment_id_map=attachment_id_map,
             )
@@ -889,7 +942,10 @@ class SQLiteThreadStore:
         attachment_id_map: Mapping[str, str] | None = None,
     ) -> Thread:
         with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             source = self._require_thread(conn, tenant_id, source_thread_id)
+            if source.status == ThreadStatus.RUNNING:
+                raise HTTPException(status_code=409, detail="Cannot compact a running thread")
             rows = conn.execute(
                 "SELECT payload FROM messages WHERE thread_id = ? ORDER BY position ASC",
                 (source_thread_id,),
@@ -920,6 +976,63 @@ class SQLiteThreadStore:
             )
             copied_messages = _copy_fork_messages(
                 prefix,
+                resolved_child_id,
+                attachment_id_map=attachment_id_map,
+            )
+            conn.executemany(
+                "INSERT INTO messages (thread_id, payload) VALUES (?, ?)",
+                ((resolved_child_id, _dump_model(message)) for message in copied_messages),
+            )
+            return child
+
+    def fork_compacted_thread(
+        self,
+        tenant_id: str,
+        source_thread_id: str,
+        *,
+        fork_message_id: str,
+        compacted_through_message_id: str,
+        summary: str,
+        child_thread_id: str | None = None,
+        attachment_id_map: Mapping[str, str] | None = None,
+    ) -> Thread:
+        with self._lock, self._connection() as conn:
+            source = self._require_thread(conn, tenant_id, source_thread_id)
+            rows = conn.execute(
+                "SELECT payload FROM messages WHERE thread_id = ? ORDER BY position ASC",
+                (source_thread_id,),
+            ).fetchall()
+            source_messages = [Message.model_validate(json.loads(row[0])) for row in rows]
+            retained = _compacted_fork_suffix(
+                source_messages,
+                fork_message_id,
+                compacted_through_message_id,
+            )
+            resolved_child_id = child_thread_id or str(uuid4())
+            if (
+                conn.execute(
+                    "SELECT 1 FROM threads WHERE thread_id = ?", (resolved_child_id,)
+                ).fetchone()
+                is not None
+            ):
+                raise HTTPException(status_code=409, detail="Fork thread ID already exists")
+            child = _forked_thread(
+                source,
+                resolved_child_id,
+                fork_message_id,
+                compacted_through_message_id=compacted_through_message_id,
+            )
+            child_context = ThreadContext(thread_id=resolved_child_id, summary=summary)
+            conn.execute(
+                "INSERT INTO threads (thread_id, tenant_id, payload) VALUES (?, ?, ?)",
+                (resolved_child_id, tenant_id, _dump_model(child)),
+            )
+            conn.execute(
+                "INSERT INTO thread_contexts (thread_id, payload) VALUES (?, ?)",
+                (resolved_child_id, _dump_model(child_context)),
+            )
+            copied_messages = _copy_fork_messages(
+                retained,
                 resolved_child_id,
                 attachment_id_map=attachment_id_map,
             )
@@ -1765,6 +1878,39 @@ def _fork_message_prefix(messages: list[Message], at_message_id: str) -> list[Me
     return messages[: boundary + 1]
 
 
+def _compacted_fork_suffix(
+    messages: list[Message],
+    fork_message_id: str,
+    compacted_through_message_id: str,
+) -> list[Message]:
+    head = next(
+        (index for index, message in enumerate(messages) if message.id == fork_message_id),
+        None,
+    )
+    if head is None:
+        raise HTTPException(status_code=404, detail=f"Message '{fork_message_id}' not found")
+    if head != len(messages) - 1:
+        raise HTTPException(status_code=409, detail="Source thread changed during compaction")
+    cutoff = next(
+        (
+            index
+            for index, message in enumerate(messages[:head])
+            if message.id == compacted_through_message_id
+        ),
+        None,
+    )
+    if cutoff is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Message '{compacted_through_message_id}' not found",
+        )
+    if cutoff + 1 <= head and _is_completed_tool_pair(messages[cutoff], messages[cutoff + 1]):
+        raise HTTPException(
+            status_code=422, detail="Compaction cannot split a tool call and result"
+        )
+    return messages[cutoff + 1 : head + 1]
+
+
 def _is_completed_tool_pair(assistant_message: Message, tool_message: Message) -> bool:
     return (
         assistant_message.role == MessageRole.ASSISTANT
@@ -1775,7 +1921,13 @@ def _is_completed_tool_pair(assistant_message: Message, tool_message: Message) -
     )
 
 
-def _forked_thread(source: Thread, child_thread_id: str, at_message_id: str) -> Thread:
+def _forked_thread(
+    source: Thread,
+    child_thread_id: str,
+    at_message_id: str,
+    *,
+    compacted_through_message_id: str | None = None,
+) -> Thread:
     return Thread(
         thread_id=child_thread_id,
         tenant_id=source.tenant_id,
@@ -1789,6 +1941,7 @@ def _forked_thread(source: Thread, child_thread_id: str, at_message_id: str) -> 
         llm_profile=source.llm_profile,
         parent_thread_id=source.thread_id,
         fork_message_id=at_message_id,
+        compacted_through_message_id=compacted_through_message_id,
     )
 
 

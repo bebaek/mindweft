@@ -6,9 +6,10 @@ interface ContextDialogProps {
   threadId: string | null;
   open: boolean;
   onClose: () => void;
+  onThreadCompacted: (threadId: string) => void;
 }
 
-export function ContextDialog({ threadId, open, onClose }: ContextDialogProps) {
+export function ContextDialog({ threadId, open, onClose, onThreadCompacted }: ContextDialogProps) {
   const { api, authentication } = useAuth();
   const queryClient = useQueryClient();
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -21,11 +22,15 @@ export function ContextDialog({ threadId, open, onClose }: ContextDialogProps) {
   });
   const compact = useMutation({
     mutationFn: () => api.compactThread(threadId!),
-    onSuccess: () => {
+    onSuccess: (result) => {
       setConfirmCompact(false);
       void queryClient.invalidateQueries({ queryKey: ["thread-context", threadId] });
       void queryClient.invalidateQueries({ queryKey: ["messages", threadId] });
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
+      if (result.thread_id !== threadId) {
+        onThreadCompacted(result.thread_id);
+        onClose();
+      }
     },
   });
 
@@ -82,7 +87,7 @@ export function ContextDialog({ threadId, open, onClose }: ContextDialogProps) {
           <div className="context-actions">
             {confirmCompact ? (
               <div className="compact-confirm">
-                <p>Older messages will be replaced by a summary. Continue?</p>
+                <p>Older messages will be summarized into a new child thread. The source thread will be preserved. Continue?</p>
                 <button type="button" onClick={() => setConfirmCompact(false)}>Cancel</button>
                 <button type="button" className="compact-primary" disabled={compact.isPending} onClick={() => compact.mutate()}>
                   {compact.isPending ? "Compacting…" : "Confirm compaction"}

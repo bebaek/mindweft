@@ -540,7 +540,15 @@ class RememberingMindweftAPIClient:
 
     def compact_thread(self, thread_id: str) -> dict[str, Any]:
         response = self._client.compact_thread(thread_id)  # type: ignore[attr-defined]
-        return response if isinstance(response, dict) else {}
+        normalized = response if isinstance(response, dict) else {}
+        compacted_thread_id = normalized.get("thread_id")
+        if isinstance(compacted_thread_id, str) and compacted_thread_id != thread_id:
+            remember_client_thread(
+                self._remembering_config,
+                compacted_thread_id,
+                title="Compacted thread",
+            )
+        return normalized
 
     def send_user_message(
         self, content: str, *, parts: list[dict[str, Any]] | None = None
@@ -1841,10 +1849,15 @@ def _handle_chat_compact(
         return
     compacted = response.get("compacted_message_count") if isinstance(response, dict) else None
     retained = response.get("message_count") if isinstance(response, dict) else None
+    compacted_thread_id = response.get("thread_id") if isinstance(response, dict) else None
     if isinstance(compacted, int) and isinstance(retained, int):
-        output_stream.write(
-            f"[idle] compacted {compacted} messages; retained {retained} raw messages\n"
-        )
+        if compacted > 0 and isinstance(compacted_thread_id, str):
+            output_stream.write(
+                f"[idle] compacted {compacted} messages into child {compacted_thread_id}; "
+                f"retained {retained} raw messages; source preserved\n"
+            )
+        else:
+            output_stream.write("[idle] no messages needed compaction\n")
     else:
         output_stream.write(f"[idle] compacted thread {thread_id}\n")
     output_stream.flush()

@@ -609,7 +609,12 @@ export function WorkspacePage() {
           <small>Enter to send · Shift+Enter for a new line</small>
         </form>
       </div>
-      <ContextDialog threadId={selectedThreadId} open={contextOpen} onClose={() => setContextOpen(false)} />
+      <ContextDialog
+        threadId={selectedThreadId}
+        open={contextOpen}
+        onClose={() => setContextOpen(false)}
+        onThreadCompacted={setSelectedThreadId}
+      />
       <ConsentDialog
         threadId={selectedThreadId}
         request={consentRequest ?? pendingConsents.data?.[0] ?? null}
