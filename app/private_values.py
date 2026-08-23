@@ -94,6 +94,16 @@ class PrivateValueStore(Protocol):
         self, tenant_id: str, thread_id: str, text: str, *, user_id: str = ""
     ) -> str: ...
 
+    def copy_references(
+        self,
+        tenant_id: str,
+        source_thread_id: str,
+        child_thread_id: str,
+        references: set[str],
+        *,
+        user_id: str = "",
+    ) -> int: ...
+
     def clear_thread(self, tenant_id: str, thread_id: str) -> None: ...
 
 
@@ -327,6 +337,48 @@ class InMemoryPrivateValueStore:
             return thread_values[match.group("reference")].value
 
         return PII_PLACEHOLDER_PATTERN.sub(replace, text)
+
+    def copy_references(
+        self,
+        tenant_id: str,
+        source_thread_id: str,
+        child_thread_id: str,
+        references: set[str],
+        *,
+        user_id: str = "",
+    ) -> int:
+        if not references:
+            return 0
+        source_key = (tenant_id, user_id, source_thread_id)
+        child_key = (tenant_id, user_id, child_thread_id)
+        self._prune_thread(source_key)
+        self._prune_thread(child_key)
+        source_values = self._values.get(source_key, {})
+        selected = {
+            reference: entry
+            for reference, entry in source_values.items()
+            if reference in references
+        }
+        if not selected:
+            return 0
+        child_values = self._values.setdefault(child_key, {})
+        new_references = set(selected) - set(child_values)
+        if len(child_values) + len(new_references) > self._max_refs_per_thread:
+            raise HTTPException(
+                status_code=502,
+                detail="Private value reference limit exceeded for thread",
+            )
+        for reference, entry in selected.items():
+            existing = child_values.get(reference)
+            if existing is not None:
+                if existing.value != entry.value or existing.kind != entry.kind:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Private value reference collision for '{reference}'",
+                    )
+                continue
+            child_values[reference] = entry
+        return len(selected)
 
     def clear_thread(self, tenant_id: str, thread_id: str) -> None:
         keys = [key for key in self._values if key[0] == tenant_id and key[2] == thread_id]

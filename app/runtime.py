@@ -335,6 +335,21 @@ class AgentRuntime:
             )
         return rendered
 
+    def copy_private_values(
+        self,
+        principal: Principal,
+        source_thread_id: str,
+        child_thread_id: str,
+        references: set[str],
+    ) -> int:
+        return self._private_value_store.copy_references(
+            principal.tenant_id,
+            source_thread_id,
+            child_thread_id,
+            references,
+            user_id=principal.user_id,
+        )
+
     def clear_private_values(self, principal: Principal, thread_id: str) -> None:
         self._private_value_store.clear_thread(principal.tenant_id, thread_id)
         self._private_value_consent_store.clear_thread(principal.tenant_id, thread_id)

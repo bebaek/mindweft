@@ -66,6 +66,7 @@ from app.models import (
     ToolSpec,
 )
 from app.peer_agents import PeerAgentRegistry, parse_peer_agent_configs
+from app.private_consents import PendingPrivateToolAction
 from app.rate_limits import InMemoryRateLimiter, RunConcurrencyPolicy
 from app.runtime import AgentRuntime
 from app.store import InMemoryThreadStore, SQLiteThreadStore
@@ -1430,6 +1431,116 @@ def test_thread_fork_endpoint_copies_prefix_and_records_lineage() -> None:
         "branch here",
         "old answer",
     ]
+
+
+def test_thread_fork_endpoint_copies_referenced_private_values_only() -> None:
+    store = InMemoryThreadStore()
+    source = store.create_thread("tenant-1", execution_user_id="user-1")
+    copied_placeholder = "{" * 2 + "pii:email:copied-ref" + "}" * 2
+    omitted_placeholder = "{" * 2 + "pii:phone:omitted-ref" + "}" * 2
+    boundary = store.append_message(
+        "tenant-1",
+        Message(
+            thread_id=source.thread_id,
+            role=MessageRole.USER,
+            content=f"Contact {copied_placeholder}",
+        ),
+    )
+    store.append_message(
+        "tenant-1",
+        Message(
+            thread_id=source.thread_id,
+            role=MessageRole.USER,
+            content=f"Later {omitted_placeholder}",
+        ),
+    )
+    app = create_app(
+        thread_store=store,
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=build_local_tool_registry(),
+    )
+    private_store = app.state.runtime._private_value_store
+    private_store.add(
+        "tenant-1",
+        source.thread_id,
+        {"copied-ref": "sensitive", "omitted-ref": "other"},
+        user_id="user-1",
+        kinds={"copied-ref": "email", "omitted-ref": "phone"},
+    )
+    consent_store = app.state.runtime._private_value_consent_store
+    pending_action = PendingPrivateToolAction(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        thread_id=source.thread_id,
+        tool_call=ToolCall(id="call-1", name="echo", arguments={"text": copied_placeholder}),
+    )
+    consent_store.save_pending_action("consent-1", pending_action)
+    client = TestClient(app)
+
+    response = client.post(
+        f"/threads/{source.thread_id}/fork",
+        json={"at_message_id": boundary.id},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 201
+    child_id = response.json()["thread_id"]
+    assert (
+        private_store.resolve_for_tool(
+            "tenant-1",
+            child_id,
+            copied_placeholder,
+            user_id="user-1",
+        )
+        == "sensitive"
+    )
+    assert (
+        private_store.render_for_user(
+            "tenant-1",
+            child_id,
+            omitted_placeholder,
+            user_id="user-1",
+        )
+        == omitted_placeholder
+    )
+    assert (
+        private_store.render_for_user(
+            "tenant-1",
+            child_id,
+            copied_placeholder,
+            user_id="user-2",
+        )
+        == copied_placeholder
+    )
+    assert (
+        consent_store.get_pending_action(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id=source.thread_id,
+            consent_id="consent-1",
+        )
+        == pending_action
+    )
+    assert (
+        consent_store.get_pending_action(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            thread_id=child_id,
+            consent_id="consent-1",
+        )
+        is None
+    )
+
+    assert client.delete(f"/threads/{source.thread_id}", headers=AUTH_HEADERS).status_code == 204
+    assert (
+        private_store.render_for_user(
+            "tenant-1",
+            child_id,
+            copied_placeholder,
+            user_id="user-1",
+        )
+        == "sensitive"
+    )
 
 
 def test_thread_fork_endpoint_clones_attachments() -> None:

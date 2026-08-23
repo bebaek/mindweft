@@ -92,6 +92,7 @@ from app.models import (
 from app.oauth import GenericOAuthProvider, build_oauth_flow_store_from_env
 from app.observability import configure_logging, configure_tracing
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry
+from app.private_values import PII_PLACEHOLDER_PATTERN
 from app.quality import QualityEnhancer
 from app.rate_limits import (
     RateLimiter,
@@ -492,6 +493,22 @@ def _clone_fork_attachments(
         ):
             raise HTTPException(status_code=500, detail="Failed to reference forked attachment")
     return attachment_id_map
+
+
+def _fork_private_value_references(messages: list[Message], summary: str) -> set[str]:
+    serialized_messages = [
+        json.dumps(
+            message.model_dump(mode="json"),
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+        for message in messages
+    ]
+    return {
+        match.group("reference")
+        for text in [summary, *serialized_messages]
+        for match in PII_PLACEHOLDER_PATTERN.finditer(text)
+    }
 
 
 def _validate_and_normalize_message_request(
@@ -1620,7 +1637,16 @@ def create_app(
             thread_id,
         )
         fork_messages = _messages_through(source_messages, body.at_message_id)
+        source_context = request.app.state.store.get_thread_context(
+            principal.tenant_id,
+            thread_id,
+        )
+        private_value_references = _fork_private_value_references(
+            fork_messages,
+            source_context.summary,
+        )
         child_thread_id = str(uuid4())
+        child_created = False
         try:
             attachment_id_map = _clone_fork_attachments(
                 request,
@@ -1629,6 +1655,12 @@ def create_app(
                 child_thread_id=child_thread_id,
                 messages=fork_messages,
             )
+            request.app.state.runtime.copy_private_values(
+                principal,
+                thread_id,
+                child_thread_id,
+                private_value_references,
+            )
             child = request.app.state.store.fork_thread(
                 principal.tenant_id,
                 thread_id,
@@ -1636,7 +1668,9 @@ def create_app(
                 child_thread_id=child_thread_id,
                 attachment_id_map=attachment_id_map,
             )
+            child_created = True
         except AttachmentLimitExceeded as exc:
+            request.app.state.runtime.clear_private_values(principal, child_thread_id)
             request.app.state.attachment_store.delete_thread(
                 principal.tenant_id,
                 child_thread_id,
@@ -1646,10 +1680,13 @@ def create_app(
                 detail="attachment storage limit prevents forking this thread",
             ) from exc
         except Exception:
+            request.app.state.runtime.clear_private_values(principal, child_thread_id)
             request.app.state.attachment_store.delete_thread(
                 principal.tenant_id,
                 child_thread_id,
             )
+            if child_created:
+                request.app.state.store.delete_thread(principal.tenant_id, child_thread_id)
             raise
         return ForkThreadResponse(
             thread_id=child.thread_id,
