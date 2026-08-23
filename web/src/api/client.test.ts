@@ -74,6 +74,30 @@ describe("MinigentApiClient", () => {
     );
   });
 
+  it("loads immediate thread lineage", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        thread: { thread_id: "thread-child", title: "Child", status: "idle", message_count: 2, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" },
+        parent: { thread_id: "thread-parent", title: "Parent", status: "idle", message_count: 3, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" },
+        children: [],
+        siblings: [],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const result = await new MinigentApiClient({ mode: "session" }).getThreadLineage(
+      "thread/child",
+    );
+
+    expect(result.parent?.title).toBe("Parent");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/threads/thread%2Fchild/lineage",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
   it("uses secure same-origin credentials by default", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ status: "ok" }), {

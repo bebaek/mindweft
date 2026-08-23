@@ -179,6 +179,9 @@ export interface ThreadListItem {
   skill_name?: string | null;
   capability_profile?: string | null;
   llm_profile?: string | null;
+  parent_thread_id?: string | null;
+  fork_message_id?: string | null;
+  compacted_through_message_id?: string | null;
   message_count: number;
   created_at: string;
   updated_at: string;
@@ -260,6 +263,13 @@ export interface RawThreadContext {
   messages: Message[];
   rendered: string;
   usage: ThreadContextUsage;
+}
+
+export interface ThreadLineageResponse {
+  thread: ThreadListItem;
+  parent: ThreadListItem | null;
+  children: ThreadListItem[];
+  siblings: ThreadListItem[];
 }
 
 export interface ForkThreadResponse {
@@ -1544,6 +1554,13 @@ export class MinigentApiClient {
   getThreadContext(threadId: string, signal?: AbortSignal): Promise<RawThreadContext> {
     return this.#request<RawThreadContext>(
       `/threads/${encodeURIComponent(threadId)}/context/raw`,
+      { signal },
+    );
+  }
+
+  getThreadLineage(threadId: string, signal?: AbortSignal): Promise<ThreadLineageResponse> {
+    return this.#request<ThreadLineageResponse>(
+      `/threads/${encodeURIComponent(threadId)}/lineage`,
       { signal },
     );
   }

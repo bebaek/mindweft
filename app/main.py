@@ -83,6 +83,7 @@ from app.models import (
     TenantContext,
     TextPart,
     Thread,
+    ThreadLineageResponse,
     ThreadListItem,
     ThreadListResponse,
     ThreadStatus,
@@ -1432,6 +1433,48 @@ def create_app(
             total=store.count_threads(principal.tenant_id),
             limit=limit,
             offset=offset,
+        )
+
+    @app.get("/threads/{thread_id}/lineage", response_model=ThreadLineageResponse)
+    async def get_thread_lineage(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> ThreadLineageResponse:
+        store = request.app.state.store
+        current = store.get_thread(principal.tenant_id, thread_id)
+        tenant_threads = store.list_threads(principal.tenant_id)
+        threads_by_id = {thread.thread_id: thread for thread in tenant_threads}
+        parent = (
+            threads_by_id.get(current.parent_thread_id)
+            if current.parent_thread_id is not None
+            else None
+        )
+        children = sorted(
+            (thread for thread in tenant_threads if thread.parent_thread_id == current.thread_id),
+            key=lambda thread: thread.created_at,
+        )
+        siblings = sorted(
+            (
+                thread
+                for thread in tenant_threads
+                if current.parent_thread_id is not None
+                and thread.parent_thread_id == current.parent_thread_id
+                and thread.thread_id != current.thread_id
+            ),
+            key=lambda thread: thread.created_at,
+        )
+        return ThreadLineageResponse(
+            thread=_thread_list_item(store, principal.tenant_id, current),
+            parent=(
+                _thread_list_item(store, principal.tenant_id, parent)
+                if parent is not None
+                else None
+            ),
+            children=[_thread_list_item(store, principal.tenant_id, child) for child in children],
+            siblings=[
+                _thread_list_item(store, principal.tenant_id, sibling) for sibling in siblings
+            ],
         )
 
     @app.post(

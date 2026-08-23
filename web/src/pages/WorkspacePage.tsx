@@ -137,6 +137,12 @@ export function WorkspacePage() {
     enabled: selectedThreadId !== null,
     retry: false,
   });
+  const lineage = useQuery({
+    queryKey: ["thread-lineage", selectedThreadId, authentication],
+    queryFn: ({ signal }) => api.getThreadLineage(selectedThreadId!, signal),
+    enabled: selectedThreadId !== null,
+    retry: false,
+  });
   const forkThread = useMutation({
     mutationFn: ({ threadId, messageId }: { threadId: string; messageId: string }) =>
       api.forkThread(threadId, messageId),
@@ -146,6 +152,7 @@ export function WorkspacePage() {
       setBranchNotice(`Branched from “${sourceTitle}”. The source thread was preserved.`);
       setSelectedThreadId(result.thread_id);
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
+      void queryClient.invalidateQueries({ queryKey: ["thread-lineage"] });
     },
     onError: (caught) => {
       setBranchNotice(null);
@@ -409,6 +416,16 @@ export function WorkspacePage() {
     }
   }
 
+  function openThread(threadId: string) {
+    if (isRunning) return;
+    setMobileThreadRailOpen(false);
+    setSelectedThreadId(threadId);
+    setStreamedReply(null);
+    setActivity([]);
+    setError(null);
+    setBranchNotice(null);
+  }
+
   function newThread() {
     if (isRunning) return;
     setMobileThreadRailOpen(false);
@@ -449,16 +466,7 @@ export function WorkspacePage() {
               key={thread.thread_id}
               thread={thread}
               active={thread.thread_id === selectedThreadId}
-              onClick={() => {
-                if (!isRunning) {
-                  setMobileThreadRailOpen(false);
-                  setSelectedThreadId(thread.thread_id);
-                  setStreamedReply(null);
-                  setActivity([]);
-                  setError(null);
-                  setBranchNotice(null);
-                }
-              }}
+              onClick={() => openThread(thread.thread_id)}
             />
           ))}
           {!threads.isPending && !threads.data?.threads.length && (
@@ -479,6 +487,38 @@ export function WorkspacePage() {
             <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => setContextOpen(true)}>Context</button>
           </div>
         </header>
+
+        <div className="thread-lineage-slot">
+          {lineage.data && (
+          lineage.data.parent
+          || lineage.data.thread.parent_thread_id
+          || lineage.data.children.length > 0
+          || lineage.data.siblings.length > 0
+        ) && (
+          <nav className="thread-lineage" aria-label="Conversation branches">
+            <div className="lineage-origin">
+              {lineage.data.parent ? (
+                <><span>Branched from</span><button type="button" disabled={isRunning} onClick={() => openThread(lineage.data.parent!.thread_id)}>{lineage.data.parent.title}</button></>
+              ) : lineage.data.thread.parent_thread_id ? (
+                <span>Source conversation unavailable</span>
+              ) : (
+                <span>Original conversation</span>
+              )}
+            </div>
+            {(lineage.data.siblings.length > 0 || lineage.data.children.length > 0) && (
+              <details className="lineage-related">
+                <summary>{lineage.data.siblings.length + lineage.data.children.length} related branch{lineage.data.siblings.length + lineage.data.children.length === 1 ? "" : "es"}</summary>
+                <div>
+                  {lineage.data.siblings.length > 0 && <strong>Sibling branches</strong>}
+                  {lineage.data.siblings.map((thread) => <button type="button" key={thread.thread_id} disabled={isRunning} onClick={() => openThread(thread.thread_id)}>{thread.title}</button>)}
+                  {lineage.data.children.length > 0 && <strong>Child branches</strong>}
+                  {lineage.data.children.map((thread) => <button type="button" key={thread.thread_id} disabled={isRunning} onClick={() => openThread(thread.thread_id)}>{thread.title}</button>)}
+                </div>
+              </details>
+            )}
+            </nav>
+          )}
+        </div>
 
         <div className="message-scroll" aria-live="polite" tabIndex={0}>
           {!selectedThreadId && !isRunning && <Welcome />}
@@ -660,7 +700,7 @@ function ThreadButton({ thread, active, onClick }: { thread: ThreadListItem; act
   const shortId = thread.thread_id.slice(0, 4);
   return (
     <button className={`thread-button ${active ? "active" : ""}`} type="button" onClick={onClick} title={`${title} · ${context} · ${thread.thread_id}`}>
-      <span className="thread-title">{title}</span>
+      <span className="thread-title">{title}{thread.parent_thread_id && <em className="thread-branch-badge">Branch</em>}</span>
       <span className="thread-meta"><small>{context} · {thread.message_count} msg · {shortId}</small><time dateTime={thread.updated_at}>{relativeTime(thread.updated_at)}</time></span>
     </button>
   );

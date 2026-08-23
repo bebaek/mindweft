@@ -223,6 +223,13 @@ class ThreadListItem(BaseModel):
     updated_at: datetime
 
 
+class ThreadLineageResponse(BaseModel):
+    thread: ThreadListItem
+    parent: ThreadListItem | None = None
+    children: list[ThreadListItem] = Field(default_factory=list)
+    siblings: list[ThreadListItem] = Field(default_factory=list)
+
+
 class ThreadListResponse(BaseModel):
     threads: list[ThreadListItem]
     total: int

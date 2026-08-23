@@ -10,6 +10,9 @@ package version is `0.1.0`.
 
 ### Added
 
+- Thread lineage can now be retrieved through a tenant-scoped API and navigated persistently in the
+  browser through parent, sibling, and child controls; interactive CLI chat adds `/lineage`,
+  `/parent`, and `/children [number]` without requiring thread IDs.
 - Browser messages now provide a **Branch from here** action, and interactive CLI branching supports
   the latest visible message, numbered recent-message selection, an interactive picker, and an
   advanced explicit message-ID option.

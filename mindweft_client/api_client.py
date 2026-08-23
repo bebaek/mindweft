@@ -372,6 +372,15 @@ class MindweftAPIClient:
             raise RuntimeError("Mindweft rename-thread response must be an object")
         return cast(dict[str, Any], response)
 
+    def get_thread_lineage(self, thread_id: str) -> dict[str, Any]:
+        response = self.request_json(
+            "GET",
+            f"{self._config.base_url}/threads/{thread_id}/lineage",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Mindweft thread-lineage response must be an object")
+        return cast(dict[str, Any], response)
+
     def get_thread(self, thread_id: str) -> dict[str, Any]:
         messages = self.request_json(
             "GET",

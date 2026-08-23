@@ -117,6 +117,22 @@ async function installWorkspaceMocks(
       await route.fulfill({ contentType: "application/json", body: '{"thread_id":"thread-new"}' });
       return;
     }
+    const lineageMatch = path.match(/^\/threads\/([^/]+)\/lineage$/);
+    if (lineageMatch) {
+      const lineageThread = {
+        thread_id: lineageMatch[1],
+        title: lineageMatch[1] === "thread-1" ? "Review the deployment plan" : "New conversation",
+        status: "idle",
+        message_count: messages.get(lineageMatch[1])?.length ?? 0,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: new Date().toISOString(),
+      };
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ thread: lineageThread, parent: null, children: [], siblings: [] }),
+      });
+      return;
+    }
     const messageMatch = path.match(/^\/threads\/([^/]+)\/messages$/);
     if (messageMatch) {
       const threadId = messageMatch[1];
