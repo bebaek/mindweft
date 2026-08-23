@@ -94,6 +94,9 @@ names remain supported for deployment and local-state compatibility.
 curl -X GET 'http://127.0.0.1:8000/threads?limit=20&q=refresh&archived=false' \
   -H 'Authorization: Bearer dev-token'
 
+curl -X GET 'http://127.0.0.1:8000/search/threads?q=refresh+failure&scope=all&limit=20' \
+  -H 'Authorization: Bearer dev-token'
+
 curl -X POST http://127.0.0.1:8000/threads \
   -H 'Authorization: Bearer dev-token'
 
@@ -119,6 +122,12 @@ Thread lists support case-insensitive title search through `q`, hide archived co
 default, and accept `archived` and `pinned` filters. Pinned conversations sort before recent
 unpinned conversations. Pinning or archiving one thread does not modify its parent, children, or
 siblings; archived lineage members remain directly reachable from related conversations.
+
+Full-conversation search is available through `GET /search/threads`. Its `scope` can be `title`,
+`messages`, or `all`; message search includes only user and assistant text, returns bounded snippets,
+and excludes system prompts, tool arguments, and tool results. SQLite deployments maintain an FTS5
+index with a startup backfill and automatically fall back to a normalized scan when FTS5 is
+unavailable.
 
 Thread titles are stored canonically by the service. The first message supplies an immediate
 fallback title. After each successful run, Mindweft asynchronously asks the thread's selected

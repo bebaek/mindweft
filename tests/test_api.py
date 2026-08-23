@@ -1330,6 +1330,144 @@ def test_thread_library_search_pin_and_archive() -> None:
     assert restored.json()["pinned_at"] is None
 
 
+def test_thread_content_search_returns_bounded_user_and_assistant_matches() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    content_thread = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    title_thread = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.patch(
+        f"/threads/{content_thread}/title",
+        json={"title": "Operations notes"},
+        headers=AUTH_HEADERS,
+    )
+    client.patch(
+        f"/threads/{title_thread}/title",
+        json={"title": "Deployment failure checklist"},
+        headers=AUTH_HEADERS,
+    )
+    message = client.post(
+        f"/threads/{content_thread}/messages",
+        json={"content": "Investigate the deployment failure before the release window."},
+        headers=AUTH_HEADERS,
+    ).json()
+
+    response = client.get(
+        "/search/threads?q=DEPLOYMENT%20FAILURE&scope=all",
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert body["results"][0]["thread"]["thread_id"] == title_thread
+    content_result = next(
+        result for result in body["results"] if result["thread"]["thread_id"] == content_thread
+    )
+    assert content_result["match_count"] == 1
+    assert content_result["matches"] == [
+        {
+            "message_id": message["id"],
+            "role": "user",
+            "snippet": "Investigate the deployment failure before the release window.",
+            "created_at": message["created_at"],
+        }
+    ]
+    messages_only = client.get(
+        "/search/threads?q=deployment%20failure&scope=messages",
+        headers=AUTH_HEADERS,
+    ).json()
+    assert [result["thread"]["thread_id"] for result in messages_only["results"]] == [
+        content_thread
+    ]
+    title_only = client.get(
+        "/search/threads?q=deployment%20failure&scope=title",
+        headers=AUTH_HEADERS,
+    ).json()
+    assert [result["thread"]["thread_id"] for result in title_only["results"]] == [title_thread]
+    paged = client.get(
+        "/search/threads?q=deployment%20failure&scope=all&limit=1&offset=1",
+        headers=AUTH_HEADERS,
+    ).json()
+    assert paged["total"] == 2
+    assert paged["limit"] == 1
+    assert paged["offset"] == 1
+    assert [result["thread"]["thread_id"] for result in paged["results"]] == [content_thread]
+    assert (
+        client.get(
+            "/search/threads?q=deployment%20failure&scope=all",
+            headers=OTHER_TENANT_HEADERS,
+        ).json()["total"]
+        == 0
+    )
+
+
+def test_thread_content_search_bounds_snippets() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": f"{'prefix ' * 80}rareterm {'suffix ' * 80}"},
+        headers=AUTH_HEADERS,
+    )
+
+    response = client.get(
+        "/search/threads?q=rareterm&scope=messages",
+        headers=AUTH_HEADERS,
+    )
+
+    snippet = response.json()["results"][0]["matches"][0]["snippet"]
+    assert len(snippet) <= 182
+    assert snippet.startswith("…")
+    assert snippet.endswith("…")
+    assert "rareterm" in snippet
+
+
+def test_thread_content_search_respects_archived_filter_and_sqlite_backfill(tmp_path: Path) -> None:
+    db_path = tmp_path / "search.db"
+    first_client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            thread_store=SQLiteThreadStore(db_path),
+        )
+    )
+    thread_id = first_client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    first_client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "The lighthouse protocol belongs in archived notes."},
+        headers=AUTH_HEADERS,
+    )
+    first_client.patch(
+        f"/threads/{thread_id}/organization",
+        json={"archived": True},
+        headers=AUTH_HEADERS,
+    )
+
+    second_client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            thread_store=SQLiteThreadStore(db_path),
+        )
+    )
+
+    assert (
+        second_client.get(
+            "/search/threads?q=lighthouse&scope=messages", headers=AUTH_HEADERS
+        ).json()["total"]
+        == 0
+    )
+    archived = second_client.get(
+        "/search/threads?q=lighthouse&scope=messages&archived=true",
+        headers=AUTH_HEADERS,
+    ).json()
+    assert archived["total"] == 1
+    assert archived["results"][0]["thread"]["thread_id"] == thread_id
+
+
 def test_update_thread_organization_requires_a_change() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())

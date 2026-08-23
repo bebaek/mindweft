@@ -161,6 +161,13 @@ threads sorted before the recent unpinned list. `PATCH /threads/{thread_id}/orga
 not changed implicitly. The browser conversation rail provides title search, pinned/recent
 sections, and an archived view.
 
+`GET /search/threads` searches titles, messages, or both and returns thread summaries with bounded
+matching snippets. Only user and assistant message text is searchable; system messages, tool calls,
+tool arguments, and tool results are excluded. Results remain tenant-scoped and omit archived
+threads unless `archived=true`. SQLite thread stores maintain an FTS5 index as messages are added,
+forked, pruned, or deleted and rebuild it for existing messages at startup. If the local SQLite
+build does not provide FTS5, the same API uses a normalized scan so behavior remains available.
+
 Mindweft does not cache model replies locally. Native LLM adapters do preserve and report
 provider-side prompt-cache usage when the provider includes it in response metadata.
 For provider debugging, set `MINDWEFT_LLM_DEBUG_LOG_RESPONSES=true` to log raw LLM

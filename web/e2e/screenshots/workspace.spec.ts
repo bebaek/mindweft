@@ -32,6 +32,25 @@ test("searches, pins, archives, and restores conversations", async ({ page }) =>
   await expect(page.getByText("No matching conversations.")).toBeVisible();
 });
 
+test("searches message content and navigates to the matching message", async ({ page }) => {
+  await installDemoWorkspaceMocks(page);
+  await page.goto("/", { waitUntil: "networkidle" });
+
+  const menu = page.getByRole("button", { name: "Open navigation" });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole("button", { name: "Workspace" }).click();
+  const conversations = page.getByRole("button", { name: "Show conversations" });
+  if (await conversations.isVisible()) await conversations.click();
+
+  await page.getByRole("combobox", { name: "Conversation search scope" }).selectOption("all");
+  await page.getByRole("searchbox", { name: "Search conversations" }).fill("focused launch sequence");
+  const result = page.getByRole("button", { name: /Plan the product launch/ });
+  await expect(result).toContainText("focused launch sequence");
+  await result.click();
+
+  await expect(page.locator("#message-message-2")).toHaveClass(/search-highlight/);
+});
+
 test("selects an explicit model profile for a new conversation", async ({ page }) => {
   await installDemoWorkspaceMocks(page);
   await page.goto("/", { waitUntil: "networkidle" });

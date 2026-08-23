@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from collections.abc import Mapping
@@ -191,6 +192,14 @@ class ThreadStore(Protocol):
     def count_messages(self, tenant_id: str, thread_id: str) -> int: ...
 
     def list_messages(self, tenant_id: str, thread_id: str) -> list[Message]: ...
+
+    def search_messages(
+        self,
+        tenant_id: str,
+        *,
+        query: str,
+        archived: bool = False,
+    ) -> list[Message]: ...
 
     def append_message(self, tenant_id: str, message: Message) -> Message: ...
 
@@ -571,6 +580,29 @@ class InMemoryThreadStore:
             self._require_thread(tenant_id, thread_id)
             return list(self._messages[thread_id])
 
+    def search_messages(
+        self,
+        tenant_id: str,
+        *,
+        query: str,
+        archived: bool = False,
+    ) -> list[Message]:
+        terms = _search_terms(query)
+        if not terms:
+            return []
+        with self._lock:
+            eligible_thread_ids = {
+                thread.thread_id
+                for thread in self._threads.values()
+                if thread.tenant_id == tenant_id and (thread.archived_at is not None) == archived
+            }
+            return [
+                message.model_copy(deep=True)
+                for thread_id in eligible_thread_ids
+                for message in self._messages[thread_id]
+                if _message_matches_search(message, terms)
+            ]
+
     def append_message(self, tenant_id: str, message: Message) -> Message:
         with self._lock:
             self._require_current_run(tenant_id, message.thread_id)
@@ -929,6 +961,7 @@ class SQLiteThreadStore:
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = Lock()
         self._instance_id = uuid4().hex
+        self._fts_available = False
         self._initialize()
 
     def create_thread(
@@ -965,6 +998,8 @@ class SQLiteThreadStore:
     def delete_thread(self, tenant_id: str, thread_id: str) -> None:
         with self._lock, self._connection() as conn:
             self._require_thread(conn, tenant_id, thread_id)
+            if self._fts_available:
+                conn.execute("DELETE FROM message_search WHERE thread_id = ?", (thread_id,))
             conn.execute("DELETE FROM threads WHERE thread_id = ?", (thread_id,))
 
     def fork_thread(
@@ -1014,10 +1049,7 @@ class SQLiteThreadStore:
                 resolved_child_id,
                 attachment_id_map=attachment_id_map,
             )
-            conn.executemany(
-                "INSERT INTO messages (thread_id, payload) VALUES (?, ?)",
-                ((resolved_child_id, _dump_model(message)) for message in copied_messages),
-            )
+            self._insert_messages(conn, tenant_id, resolved_child_id, copied_messages)
             return child
 
     def fork_compacted_thread(
@@ -1071,10 +1103,7 @@ class SQLiteThreadStore:
                 resolved_child_id,
                 attachment_id_map=attachment_id_map,
             )
-            conn.executemany(
-                "INSERT INTO messages (thread_id, payload) VALUES (?, ?)",
-                ((resolved_child_id, _dump_model(message)) for message in copied_messages),
-            )
+            self._insert_messages(conn, tenant_id, resolved_child_id, copied_messages)
             return child
 
     def prune_threads(
@@ -1095,6 +1124,11 @@ class SQLiteThreadStore:
                 capability_profile=capability_profile,
                 skill=skill,
             )
+            if self._fts_available:
+                conn.executemany(
+                    "DELETE FROM message_search WHERE thread_id = ?",
+                    [(thread.thread_id,) for thread in threads],
+                )
             conn.executemany(
                 "DELETE FROM threads WHERE thread_id = ?",
                 [(thread.thread_id,) for thread in threads],
@@ -1273,14 +1307,67 @@ class SQLiteThreadStore:
             ).fetchall()
             return [Message.model_validate(json.loads(row[0])) for row in rows]
 
+    def search_messages(
+        self,
+        tenant_id: str,
+        *,
+        query: str,
+        archived: bool = False,
+    ) -> list[Message]:
+        terms = _search_terms(query)
+        if not terms:
+            return []
+        with self._lock, self._connection() as conn:
+            eligible_thread_ids = {
+                thread.thread_id
+                for thread in self._load_matching_threads(
+                    conn,
+                    tenant_id,
+                    status=None,
+                    capability_profile=None,
+                    skill=None,
+                    created_after=None,
+                    updated_after=None,
+                    archived=archived,
+                )
+            }
+            if not eligible_thread_ids:
+                return []
+            if self._fts_available:
+                match_query = " AND ".join(f'"{term}"*' for term in terms)
+                rows = conn.execute(
+                    """
+                    SELECT messages.payload
+                    FROM message_search
+                    JOIN messages ON messages.position = CAST(message_search.position AS INTEGER)
+                    WHERE message_search MATCH ? AND message_search.tenant_id = ?
+                    ORDER BY bm25(message_search), messages.position
+                    """,
+                    (match_query, tenant_id),
+                ).fetchall()
+            else:
+                placeholders = ",".join("?" for _ in eligible_thread_ids)
+                rows = conn.execute(
+                    f"SELECT payload FROM messages WHERE thread_id IN ({placeholders}) ORDER BY position",
+                    tuple(eligible_thread_ids),
+                ).fetchall()
+            return [
+                message
+                for row in rows
+                if (message := Message.model_validate(json.loads(row[0]))).thread_id
+                in eligible_thread_ids
+                and _message_matches_search(message, terms)
+            ]
+
     def append_message(self, tenant_id: str, message: Message) -> Message:
         with self._lock, self._connection() as conn:
             self._require_current_run(conn, tenant_id, message.thread_id)
             thread = self._require_thread(conn, tenant_id, message.thread_id)
-            conn.execute(
+            cursor = conn.execute(
                 "INSERT INTO messages (thread_id, payload) VALUES (?, ?)",
                 (message.thread_id, _dump_model(message)),
             )
+            self._index_message(conn, tenant_id, _last_insert_position(cursor), message)
             now = utc_now()
             thread.updated_at = now
             if (
@@ -1756,6 +1843,78 @@ class SQLiteThreadStore:
             )
             _ensure_audit_record_columns(conn)
             _ensure_thread_run_columns(conn)
+            self._initialize_message_search(conn)
+
+    def _initialize_message_search(self, conn: sqlite3.Connection) -> None:
+        try:
+            conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(
+                    position UNINDEXED,
+                    thread_id UNINDEXED,
+                    tenant_id UNINDEXED,
+                    content,
+                    tokenize = 'unicode61'
+                )
+                """
+            )
+        except sqlite3.OperationalError:
+            self._fts_available = False
+            return
+        self._fts_available = True
+        conn.execute("DELETE FROM message_search")
+        rows = conn.execute(
+            """
+            SELECT messages.position, threads.tenant_id, messages.payload
+            FROM messages
+            JOIN threads ON threads.thread_id = messages.thread_id
+            ORDER BY messages.position
+            """
+        ).fetchall()
+        for position, tenant_id, payload in rows:
+            self._index_message(
+                conn,
+                str(tenant_id),
+                int(position),
+                Message.model_validate(json.loads(payload)),
+            )
+
+    def _index_message(
+        self,
+        conn: sqlite3.Connection,
+        tenant_id: str,
+        position: int,
+        message: Message,
+    ) -> None:
+        if (
+            not self._fts_available
+            or message.role not in {MessageRole.USER, MessageRole.ASSISTANT}
+            or message.tool_name is not None
+            or message.tool_call_id is not None
+            or message.tool_arguments is not None
+        ):
+            return
+        conn.execute(
+            """
+            INSERT INTO message_search (position, thread_id, tenant_id, content)
+            VALUES (?, ?, ?, ?)
+            """,
+            (str(position), message.thread_id, tenant_id, message.content),
+        )
+
+    def _insert_messages(
+        self,
+        conn: sqlite3.Connection,
+        tenant_id: str,
+        thread_id: str,
+        messages: list[Message],
+    ) -> None:
+        for message in messages:
+            cursor = conn.execute(
+                "INSERT INTO messages (thread_id, payload) VALUES (?, ?)",
+                (thread_id, _dump_model(message)),
+            )
+            self._index_message(conn, tenant_id, _last_insert_position(cursor), message)
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -2044,6 +2203,29 @@ def build_thread_store_from_env() -> ThreadStore:
     if settings.db_path is not None:
         return SQLiteThreadStore(settings.db_path)
     return InMemoryThreadStore()
+
+
+def _last_insert_position(cursor: sqlite3.Cursor) -> int:
+    if cursor.lastrowid is None:
+        raise RuntimeError("SQLite message insert did not return a row ID")
+    return cursor.lastrowid
+
+
+def _search_terms(query: str) -> list[str]:
+    return list(dict.fromkeys(term.casefold() for term in re.findall(r"\w+", query, re.UNICODE)))
+
+
+def _message_matches_search(message: Message, terms: list[str]) -> bool:
+    if message.role not in {MessageRole.USER, MessageRole.ASSISTANT}:
+        return False
+    if (
+        message.tool_name is not None
+        or message.tool_call_id is not None
+        or message.tool_arguments is not None
+    ):
+        return False
+    content = message.content.casefold()
+    return all(term in content for term in terms)
 
 
 def _thread_matches_filters(

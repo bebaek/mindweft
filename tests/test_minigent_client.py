@@ -2256,6 +2256,7 @@ def test_minigent_api_client_searches_and_organizes_threads(
     )
 
     client.list_threads(limit=10, q="launch plan", archived=True, pinned=True)
+    client.search_threads("deployment failure", scope="messages", archived=True)
     organized = client.update_thread_organization("thread-1", pinned=True)
 
     assert requests[0] == (
@@ -2264,6 +2265,11 @@ def test_minigent_api_client_searches_and_organizes_threads(
         None,
     )
     assert requests[1] == (
+        "GET",
+        "http://127.0.0.1:8000/search/threads?q=deployment+failure&scope=messages&archived=true&limit=20&offset=0",
+        None,
+    )
+    assert requests[2] == (
         "PATCH",
         "http://127.0.0.1:8000/threads/thread-1/organization",
         {"pinned": True},
@@ -5233,8 +5239,9 @@ def test_run_chat_loop_handles_local_chat_commands(
     assert output_stream.getvalue() == (
         "[user] [idle] chat commands: /help, /new, /agent [current|preset], "
         "/llm [current|profile], /options, /skills, /profiles, "
-        "/threads [search <query>|archived], /switch <id>, "
-        "/rename <title>, /pin, /unpin, /archive, /restore, /copy-id, /cancel, "
+        "/threads [search [--messages|--titles] <query>|archived], "
+        "/switch <id>, /rename <title>, /pin, /unpin, /archive, /restore, "
+        "/copy-id, /cancel, "
         "/fork [number|--pick|--message-id UUID], /lineage, /parent, /children [number], "
         "/compact, /actions, "
         "/discard-action <consent-id>, /export [markdown|json], /tokens, "
@@ -5513,6 +5520,41 @@ def test_handle_chat_threads_displays_recent_threads_last(
         "[idle] * thread-newest  Newest thread  2026-05-20T02:00:00Z  messages=2\n"
     )
     assert [item.thread_id for item in threads] == ["thread-newest", "thread-oldest"]
+
+
+def test_handle_chat_threads_searches_message_content() -> None:
+    calls: list[tuple[str, str, int]] = []
+
+    class SearchClient:
+        thread_id = "thread-current"
+
+        def search_threads(self, query: str, *, scope: str, limit: int) -> dict[str, object]:
+            calls.append((query, scope, limit))
+            return {
+                "results": [
+                    {
+                        "thread": {"thread_id": "thread-match", "title": "Deployment review"},
+                        "matches": [
+                            {"role": "assistant", "snippet": "Check the deployment failure logs."}
+                        ],
+                    }
+                ]
+            }
+
+    output_stream = StringIO()
+
+    voice_cli._handle_chat_threads(
+        "/threads search --messages deployment failure",
+        SearchClient(),
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+        output_stream,
+    )
+
+    assert calls == [("deployment failure", "messages", 50)]
+    assert output_stream.getvalue() == (
+        "[idle] 1. Deployment review  thread-match\n"
+        "[idle]    assistant: Check the deployment failure logs.\n"
+    )
 
 
 def test_write_numbered_thread_history_omits_idle_prefix() -> None:

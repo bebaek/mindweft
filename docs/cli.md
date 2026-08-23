@@ -182,7 +182,9 @@ mindweft threads create --skills coding-workspace concise --capability-profile i
 ### Threads
 
 ```bash
-mindweft threads list --search "launch plan" # search active threads by title
+mindweft threads list --search "launch plan" # search active thread titles
+mindweft threads search "deployment failure" # search titles and user/assistant messages
+mindweft threads search "deployment failure" --scope messages
 mindweft threads list --pinned                # list pinned active threads
 mindweft threads list --archived              # list archived threads
 mindweft threads show <thread-id>              # show a specific thread
@@ -310,7 +312,9 @@ Available during interactive chat:
 | `/agent <preset>` | Create and switch to a new thread using that preset. |
 | `/threads` | List and interactively select a thread (TTY), ordered oldest-to-newest so recent threads remain next to the prompt. |
 | `/threads <selector>` | Switch to a thread by ID or unique title/date substring. |
-| `/threads search <query>` | Search active server-side threads by title. |
+| `/threads search <query>` | Search active server-side titles and user/assistant messages, with bounded matching snippets. |
+| `/threads search --messages <query>` | Search only user and assistant message text. |
+| `/threads search --titles <query>` | Search only titles. |
 | `/threads archived` | List archived server-side threads. |
 | `/switch <id>` | Switch to a specific thread. |
 | `/rename <title>` | Rename the current thread. |

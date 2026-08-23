@@ -425,6 +425,44 @@ def run_threads_list(
     return 0
 
 
+def run_threads_search(
+    args: argparse.Namespace,
+    client: MindweftAPIClient,
+    trace_id: str | None,
+) -> int:
+    response = client.search_threads(
+        args.query,
+        scope=args.scope,
+        archived=args.archived,
+        limit=100,
+    )
+    if args.json:
+        output = dict(response)
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    results = response.get("results")
+    if not isinstance(results, list) or not results:
+        print("No matching threads.")
+        return 0
+    for index, result in enumerate(results, start=1):
+        if not isinstance(result, dict):
+            continue
+        thread = result.get("thread")
+        if not isinstance(thread, dict):
+            continue
+        print(f"{index}. {thread.get('title') or 'Untitled thread'}  {thread.get('thread_id')}")
+        matches = result.get("matches")
+        if isinstance(matches, list):
+            for match in matches:
+                if isinstance(match, dict):
+                    print(f"   {match.get('role', 'message')}: {match.get('snippet', '')}")
+    return 0
+
+
 def run_threads_organization(
     args: argparse.Namespace,
     client: MindweftAPIClient,
