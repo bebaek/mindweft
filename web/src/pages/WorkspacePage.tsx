@@ -26,10 +26,13 @@ interface PendingImage {
   detail: "auto" | "low" | "high";
 }
 
+type ActivityStatus = "pending" | "success" | "error" | "info";
+
 interface ActivityItem {
   id: number;
   type: string;
   label: string;
+  status: ActivityStatus;
   toolName?: string;
   toolCallId?: string;
   arguments?: unknown;
@@ -157,6 +160,7 @@ export function WorkspacePage() {
         id: activityId.current,
         type: event?.type ?? "status",
         label,
+        status: details.status ?? (event?.type === "run.error" ? "error" : "info"),
         error: event?.type === "run.error",
         ...details,
       },
@@ -182,6 +186,7 @@ export function WorkspacePage() {
         toolCallId: eventToolCallId(event),
         arguments: event.arguments,
         startedAt: Date.now(),
+        status: "pending",
       });
     } else if (event.type === "tool.result") {
       const toolCallId = eventToolCallId(event);
@@ -197,6 +202,7 @@ export function WorkspacePage() {
             toolName: eventToolName(event),
             toolCallId,
             result: event.result,
+            status: event.is_error === true ? "error" : "success",
             error: event.is_error === true,
           }];
         }
@@ -207,6 +213,7 @@ export function WorkspacePage() {
           label: `${item.toolName ?? eventToolName(event)} ${event.is_error === true ? "failed" : "completed"}`,
           result: event.result,
           durationMs: item.startedAt === undefined ? undefined : Math.max(0, completedAt - item.startedAt),
+          status: event.is_error === true ? "error" : "success",
           error: event.is_error === true,
         };
         return updated;
@@ -464,8 +471,8 @@ export function WorkspacePage() {
           <details className="activity-tray">
             <summary><span>Run activity</span><small>{activity.at(-1)?.label}</small></summary>
             <ol>{activity.map((item) => (
-              <li className={item.error ? "error" : ""} key={item.id}>
-                <span />
+              <li className={`activity-${item.status}${item.error ? " error" : ""}`} key={item.id}>
+                <span aria-hidden="true">{activityStatusIcon(item.status)}</span>
                 <div className="activity-item-content">
                   <strong>{item.label}</strong>
                   {item.durationMs !== undefined && <small>{formatDuration(item.durationMs)}</small>}
@@ -627,6 +634,13 @@ function relativeTime(value: string) {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${String(hours)}h`;
   return `${String(Math.floor(hours / 24))}d`;
+}
+
+function activityStatusIcon(status: ActivityStatus): string {
+  if (status === "pending") return "\u2026";
+  if (status === "success") return "\u2713";
+  if (status === "error") return "!";
+  return "\u00b7";
 }
 
 function ActivityPayload({ label, value }: { label: string; value: unknown }) {
