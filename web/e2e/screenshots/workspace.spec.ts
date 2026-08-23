@@ -2,6 +2,36 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import { installDemoWorkspaceMocks } from "../fixtures/demo-api-mocks";
 
+test("searches, pins, archives, and restores conversations", async ({ page }) => {
+  await installDemoWorkspaceMocks(page);
+  await page.goto("/", { waitUntil: "networkidle" });
+
+  const menu = page.getByRole("button", { name: "Open navigation" });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole("button", { name: "Workspace" }).click();
+  async function showConversations() {
+    const toggle = page.getByRole("button", { name: "Show conversations" });
+    if (await toggle.isVisible()) await toggle.click();
+  }
+  await showConversations();
+
+  await page.getByRole("searchbox", { name: "Search conversations" }).fill("product launch");
+  await expect(page.getByRole("button", { name: /Plan the product launch/ })).toBeVisible();
+  await page.getByRole("button", { name: /Plan the product launch/ }).click();
+  await page.getByRole("button", { name: "Pin", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Unpin", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Archive", exact: true }).click();
+  await showConversations();
+  await expect(page.getByText("No matching conversations.")).toBeVisible();
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
+  await expect(page.getByRole("button", { name: /Plan the product launch/ })).toBeVisible();
+  await page.getByRole("button", { name: /Plan the product launch/ }).click();
+  await page.getByRole("button", { name: "Restore", exact: true }).click();
+  await showConversations();
+  await expect(page.getByText("No matching conversations.")).toBeVisible();
+});
+
 test("selects an explicit model profile for a new conversation", async ({ page }) => {
   await installDemoWorkspaceMocks(page);
   await page.goto("/", { waitUntil: "networkidle" });

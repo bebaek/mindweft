@@ -60,6 +60,8 @@ export function WorkspacePage() {
   const [branchNotice, setBranchNotice] = useState<string | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [mobileThreadRailOpen, setMobileThreadRailOpen] = useState(false);
+  const [threadSearch, setThreadSearch] = useState("");
+  const [showArchivedThreads, setShowArchivedThreads] = useState(false);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [consentRequest, setConsentRequest] = useState<PrivateValueConsentRequest | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -122,8 +124,11 @@ export function WorkspacePage() {
     },
   });
   const threads = useQuery({
-    queryKey: ["threads", authentication],
-    queryFn: ({ signal }) => api.listThreads(50, signal),
+    queryKey: ["threads", authentication, threadSearch, showArchivedThreads],
+    queryFn: ({ signal }) => api.listThreads(50, signal, {
+      ...(threadSearch.trim() ? { q: threadSearch.trim() } : {}),
+      archived: showArchivedThreads,
+    }),
     retry: false,
     refetchInterval: (query) => {
       const selected = query.state.data?.threads.find((thread) => thread.thread_id === selectedThreadId);
@@ -157,6 +162,23 @@ export function WorkspacePage() {
     onError: (caught) => {
       setBranchNotice(null);
       setError(caught instanceof Error ? caught.message : "Could not branch from this message.");
+    },
+  });
+  const organizeThread = useMutation({
+    mutationFn: ({ threadId, organization }: {
+      threadId: string;
+      organization: { pinned?: boolean; archived?: boolean };
+    }) => api.updateThreadOrganization(threadId, organization),
+    onSuccess: (updated, variables) => {
+      setError(null);
+      if (variables.organization.archived === true && updated.thread_id === selectedThreadId) {
+        newThread();
+      }
+      void queryClient.invalidateQueries({ queryKey: ["threads"] });
+      void queryClient.invalidateQueries({ queryKey: ["thread-lineage"] });
+    },
+    onError: (caught) => {
+      setError(caught instanceof Error ? caught.message : "Could not organize conversation.");
     },
   });
 
@@ -452,6 +474,12 @@ export function WorkspacePage() {
     }
   }
 
+  const listedThreads = threads.data?.threads ?? [];
+  const pinnedThreads = listedThreads.filter((thread) => thread.pinned_at);
+  const recentThreads = listedThreads.filter((thread) => !thread.pinned_at);
+  const selectedThread = listedThreads.find((thread) => thread.thread_id === selectedThreadId)
+    ?? lineage.data?.thread;
+
   return (
     <section className="workspace-page">
       <aside className={`thread-rail ${mobileThreadRailOpen ? "is-open" : ""}`} aria-label="Conversations">
@@ -459,9 +487,26 @@ export function WorkspacePage() {
           <div><p className="eyebrow">Workspace</p><h2>Conversations</h2></div>
           <button type="button" onClick={newThread} aria-label="New conversation">+</button>
         </div>
+        <div className="thread-library-controls">
+          <input
+            type="search"
+            value={threadSearch}
+            onChange={(event) => setThreadSearch(event.target.value)}
+            placeholder="Search titles"
+            aria-label="Search conversations"
+          />
+          <button
+            type="button"
+            aria-pressed={showArchivedThreads}
+            onClick={() => setShowArchivedThreads((visible) => !visible)}
+          >
+            {showArchivedThreads ? "Show active" : "Archived"}
+          </button>
+        </div>
         {threads.isError && <p className="rail-error">Connect to load conversations.</p>}
         <div className="thread-list">
-          {threads.data?.threads.map((thread) => (
+          {pinnedThreads.length > 0 && <p className="thread-section-label">Pinned</p>}
+          {pinnedThreads.map((thread) => (
             <ThreadButton
               key={thread.thread_id}
               thread={thread}
@@ -469,8 +514,25 @@ export function WorkspacePage() {
               onClick={() => openThread(thread.thread_id)}
             />
           ))}
-          {!threads.isPending && !threads.data?.threads.length && (
-            <p className="empty-threads">No conversations yet.<br />Start with a message.</p>
+          {recentThreads.length > 0 && pinnedThreads.length > 0 && (
+            <p className="thread-section-label">{showArchivedThreads ? "Archived" : "Recent"}</p>
+          )}
+          {recentThreads.map((thread) => (
+            <ThreadButton
+              key={thread.thread_id}
+              thread={thread}
+              active={thread.thread_id === selectedThreadId}
+              onClick={() => openThread(thread.thread_id)}
+            />
+          ))}
+          {!threads.isPending && !listedThreads.length && (
+            <p className="empty-threads">
+              {threadSearch.trim()
+                ? "No matching conversations."
+                : showArchivedThreads
+                  ? "No archived conversations."
+                  : <>No conversations yet.<br />Start with a message.</>}
+            </p>
           )}
         </div>
       </aside>
@@ -479,10 +541,30 @@ export function WorkspacePage() {
       <div className="conversation">
         <header className="conversation-header">
           <button type="button" className="thread-rail-toggle" aria-label="Show conversations" onClick={() => setMobileThreadRailOpen(true)}>☰</button>
-          <div><span className={`run-dot ${isRunning ? "active" : ""}`} /><div><h1>{selectedTitle(threads.data?.threads, selectedThreadId)}</h1><small>{isRunning ? "Agent is working" : selectedThreadId ? "Ready" : "New conversation"}</small></div></div>
+          <div><span className={`run-dot ${isRunning ? "active" : ""}`} /><div><h1>{selectedThread?.title ?? "Untitled conversation"}</h1><small>{isRunning ? "Agent is working" : selectedThreadId ? "Ready" : "New conversation"}</small></div></div>
           <div className="conversation-actions">
             {activity.filter((item) => showThinking || item.type !== "reasoning").length > 0 && <span className="activity-count">{activity.filter((item) => showThinking || item.type !== "reasoning").length} event{activity.filter((item) => showThinking || item.type !== "reasoning").length === 1 ? "" : "s"}</span>}
             <button type="button" className={showThinking ? "active" : ""} onClick={() => setShowThinking((visible) => !visible)}>Thinking {showThinking ? "on" : "off"}</button>
+            <button
+              type="button"
+              disabled={!selectedThread || isRunning || organizeThread.isPending}
+              onClick={() => selectedThread && organizeThread.mutate({
+                threadId: selectedThread.thread_id,
+                organization: { pinned: !selectedThread.pinned_at },
+              })}
+            >
+              {selectedThread?.pinned_at ? "Unpin" : "Pin"}
+            </button>
+            <button
+              type="button"
+              disabled={!selectedThread || isRunning || organizeThread.isPending}
+              onClick={() => selectedThread && organizeThread.mutate({
+                threadId: selectedThread.thread_id,
+                organization: { archived: !selectedThread.archived_at },
+              })}
+            >
+              {selectedThread?.archived_at ? "Restore" : "Archive"}
+            </button>
             <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => void renameSelectedThread()}>Rename</button>
             <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => setContextOpen(true)}>Context</button>
           </div>

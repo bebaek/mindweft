@@ -175,6 +175,8 @@ export interface ThreadListItem {
   title: string;
   title_source?: "generated" | "semantic" | "manual" | null;
   title_updated_at?: string | null;
+  pinned_at?: string | null;
+  archived_at?: string | null;
   status: ThreadStatus;
   skill_name?: string | null;
   capability_profile?: string | null;
@@ -1466,8 +1468,16 @@ export class MinigentApiClient {
     return this.#request<PublicConfig>("/config", { signal });
   }
 
-  listThreads(limit = 50, signal?: AbortSignal): Promise<ThreadListResponse> {
-    return this.#request<ThreadListResponse>(`/threads?limit=${String(limit)}`, { signal });
+  listThreads(
+    limit = 50,
+    signal?: AbortSignal,
+    options: { q?: string; archived?: boolean; pinned?: boolean } = {},
+  ): Promise<ThreadListResponse> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (options.q) params.set("q", options.q);
+    if (options.archived) params.set("archived", "true");
+    if (options.pinned !== undefined) params.set("pinned", String(options.pinned));
+    return this.#request<ThreadListResponse>(`/threads?${params.toString()}`, { signal });
   }
 
   createThread(
@@ -1489,6 +1499,18 @@ export class MinigentApiClient {
     return this.#request(`/threads/${encodeURIComponent(threadId)}/title`, {
       method: "PATCH",
       body: JSON.stringify({ title }),
+      signal,
+    });
+  }
+
+  updateThreadOrganization(
+    threadId: string,
+    organization: { pinned?: boolean; archived?: boolean },
+    signal?: AbortSignal,
+  ): Promise<ThreadListItem> {
+    return this.#request<ThreadListItem>(`/threads/${encodeURIComponent(threadId)}/organization`, {
+      method: "PATCH",
+      body: JSON.stringify(organization),
       signal,
     });
   }

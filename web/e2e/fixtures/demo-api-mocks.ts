@@ -9,6 +9,8 @@ export async function installDemoWorkspaceMocks(page: Page) {
     message_count: 2,
     created_at: "2026-08-07T12:00:00Z",
     updated_at: new Date().toISOString(),
+    pinned_at: null as string | null,
+    archived_at: null as string | null,
   };
   const messages = [
     {
@@ -99,7 +101,30 @@ export async function installDemoWorkspaceMocks(page: Page) {
       return;
     }
     if (url.pathname === "/threads" && route.request().method() === "GET") {
-      await route.fulfill(fulfill({ threads: [thread], total: 1, limit: 50, offset: 0 }));
+      const wantsArchived = url.searchParams.get("archived") === "true";
+      const query = url.searchParams.get("q")?.toLowerCase() ?? "";
+      const matches = Boolean(thread.archived_at) === wantsArchived
+        && (!query || thread.title.toLowerCase().includes(query));
+      await route.fulfill(fulfill({
+        threads: matches ? [thread] : [],
+        total: matches ? 1 : 0,
+        limit: 50,
+        offset: 0,
+      }));
+      return;
+    }
+    if (
+      url.pathname === "/threads/thread-1/organization"
+      && route.request().method() === "PATCH"
+    ) {
+      const body = route.request().postDataJSON() as { pinned?: boolean; archived?: boolean };
+      if (body.pinned !== undefined) {
+        thread.pinned_at = body.pinned ? new Date().toISOString() : null;
+      }
+      if (body.archived !== undefined) {
+        thread.archived_at = body.archived ? new Date().toISOString() : null;
+      }
+      await route.fulfill(fulfill(thread));
       return;
     }
     if (url.pathname === "/threads/thread-1/lineage") {

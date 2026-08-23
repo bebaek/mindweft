@@ -154,6 +154,13 @@ for the latest visible message, `/fork --pick` to select from the 20 most recent
 workflows. Use `/lineage`, `/parent`, and `/children [number]` to inspect and navigate relationships
 without handling thread IDs.
 
+`GET /threads` supports case-insensitive title search with `q`, active/archived selection with
+`archived`, and an optional `pinned` filter. Active threads are returned by default, with pinned
+threads sorted before the recent unpinned list. `PATCH /threads/{thread_id}/organization` accepts
+`pinned` and `archived` booleans; these states apply only to that thread, so lineage members are
+not changed implicitly. The browser conversation rail provides title search, pinned/recent
+sections, and an archived view.
+
 Mindweft does not cache model replies locally. Native LLM adapters do preserve and report
 provider-side prompt-cache usage when the provider includes it in response metadata.
 For provider debugging, set `MINDWEFT_LLM_DEBUG_LOG_RESPONSES=true` to log raw LLM

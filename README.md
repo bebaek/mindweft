@@ -91,7 +91,7 @@ names remain supported for deployment and local-state compatibility.
 ## Basic API flow
 
 ```bash
-curl -X GET 'http://127.0.0.1:8000/threads?limit=20' \
+curl -X GET 'http://127.0.0.1:8000/threads?limit=20&q=refresh&archived=false' \
   -H 'Authorization: Bearer dev-token'
 
 curl -X POST http://127.0.0.1:8000/threads \
@@ -109,7 +109,16 @@ curl -X PATCH http://127.0.0.1:8000/threads/<thread_id>/title \
   -H 'Authorization: Bearer dev-token' \
   -H 'content-type: application/json' \
   -d '{"title":"Investigate token refresh failures"}'
+curl -X PATCH http://127.0.0.1:8000/threads/<thread_id>/organization \
+  -H 'Authorization: Bearer dev-token' \
+  -H 'content-type: application/json' \
+  -d '{"pinned":true,"archived":false}'
 ```
+
+Thread lists support case-insensitive title search through `q`, hide archived conversations by
+default, and accept `archived` and `pinned` filters. Pinned conversations sort before recent
+unpinned conversations. Pinning or archiving one thread does not modify its parent, children, or
+siblings; archived lineage members remain directly reachable from related conversations.
 
 Thread titles are stored canonically by the service. The first message supplies an immediate
 fallback title. After each successful run, Mindweft asynchronously asks the thread's selected

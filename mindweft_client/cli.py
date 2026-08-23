@@ -991,6 +991,9 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         if utterance.startswith("/rename"):
             _handle_chat_rename(utterance, client, config, output_stream)
             continue
+        if utterance in {"/pin", "/unpin", "/archive", "/restore"}:
+            _handle_chat_organization(utterance, client, output_stream)
+            continue
         if utterance == "/copy-id":
             _handle_chat_copy_id(client, output_stream)
             continue
@@ -1147,7 +1150,8 @@ def _chat_abort_message(config: ClientConfig) -> str:
 def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
         "[idle] chat commands: /help, /new, /agent [current|preset], /llm [current|profile], "
-        "/options, /skills, /profiles, /threads, /switch <id>, /rename <title>, /copy-id, /cancel, "
+        "/options, /skills, /profiles, /threads [search <query>|archived], /switch <id>, "
+        "/rename <title>, /pin, /unpin, /archive, /restore, /copy-id, /cancel, "
         "/fork [number|--pick|--message-id UUID], /lineage, /parent, /children [number], "
         "/compact, /actions, "
         "/discard-action <consent-id>, /export [markdown|json], /tokens, "
@@ -1569,6 +1573,23 @@ def _handle_chat_threads(
     output_stream: ChatOutputStream,
 ) -> None:
     selector = utterance.removeprefix("/threads").strip()
+    if selector == "archived" or selector.startswith("search "):
+        query = selector.removeprefix("search ").strip() if selector.startswith("search ") else None
+        try:
+            response = client.list_threads(q=query, archived=selector == "archived")
+        except RuntimeError as exc:
+            output_stream.write(f"[idle] thread search failed: {exc}\n")
+            output_stream.flush()
+            return
+        threads = thread_history_items_from_api(response)
+        if not threads:
+            output_stream.write("[idle] no matching threads\n")
+            output_stream.flush()
+            return
+        _write_thread_history_list(
+            threads, current_thread_id=client.thread_id, output_stream=output_stream
+        )
+        return
     if selector:
         _switch_to_thread(selector, client, config, output_stream)
         return
@@ -1751,6 +1772,36 @@ def _handle_chat_rename(
         if not _rename_client_thread(config, thread_id, title):
             remember_client_thread(config, thread_id, title=title)
         output_stream.write(f'[idle] renamed {thread_id} to "{title}"\n')
+    output_stream.flush()
+
+
+def _handle_chat_organization(
+    utterance: str,
+    client: RememberingMindweftAPIClient,
+    output_stream: ChatOutputStream,
+) -> None:
+    thread_id = client.thread_id
+    if not thread_id:
+        output_stream.write("[idle] no current thread\n")
+        output_stream.flush()
+        return
+    command = utterance.removeprefix("/")
+    organization = {
+        "pinned": command == "pin" if command in {"pin", "unpin"} else None,
+        "archived": command == "archive" if command in {"archive", "restore"} else None,
+    }
+    try:
+        client.update_thread_organization(thread_id, **organization)
+    except RuntimeError as exc:
+        output_stream.write(f"[idle] {command} failed: {exc}\n")
+    else:
+        labels = {
+            "pin": "pinned",
+            "unpin": "unpinned",
+            "archive": "archived",
+            "restore": "restored",
+        }
+        output_stream.write(f"[idle] {labels[command]} {thread_id}\n")
     output_stream.flush()
 
 

@@ -1079,6 +1079,12 @@ def test_sqlite_thread_store_persists_threads_and_messages(tmp_path: Path) -> No
     )
     run_response = first_client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
     assert run_response.status_code == 200
+    organized = first_client.patch(
+        f"/threads/{thread_id}/organization",
+        json={"pinned": True, "archived": True},
+        headers=AUTH_HEADERS,
+    )
+    assert organized.status_code == 200
 
     second_client = TestClient(
         create_app(
@@ -1096,6 +1102,12 @@ def test_sqlite_thread_store_persists_threads_and_messages(tmp_path: Path) -> No
     assert messages[0]["content"] == "hello before restart"
     assert messages[0]["metadata"] == {"raw_user_prompt": "hello before restart"}
     assert messages[1]["content"] == "Mock reply: hello before restart"
+    archived_threads = second_client.get("/threads?archived=true", headers=AUTH_HEADERS).json()[
+        "threads"
+    ]
+    assert archived_threads[0]["thread_id"] == thread_id
+    assert archived_threads[0]["pinned_at"]
+    assert archived_threads[0]["archived_at"]
 
 
 def test_sqlite_thread_store_persists_structured_audit_records(tmp_path: Path) -> None:
@@ -1259,6 +1271,79 @@ def test_list_threads_returns_recent_thread_summaries() -> None:
     first = next(thread for thread in all_threads if thread["thread_id"] == first_thread_id)
     assert first["title"].endswith("…")
     assert len(first["title"]) == 64
+
+
+def test_thread_library_search_pin_and_archive() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    alpha_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    beta_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    for thread_id, title in ((alpha_id, "Alpha launch plan"), (beta_id, "Beta review")):
+        response = client.patch(
+            f"/threads/{thread_id}/title",
+            json={"title": title},
+            headers=AUTH_HEADERS,
+        )
+        assert response.status_code == 200
+
+    pinned = client.patch(
+        f"/threads/{alpha_id}/organization",
+        json={"pinned": True},
+        headers=AUTH_HEADERS,
+    )
+
+    assert pinned.status_code == 200
+    assert pinned.json()["pinned_at"]
+    assert pinned.json()["archived_at"] is None
+    listed = client.get("/threads", headers=AUTH_HEADERS).json()
+    assert [thread["thread_id"] for thread in listed["threads"]] == [alpha_id, beta_id]
+    searched = client.get("/threads?q=LAUNCH", headers=AUTH_HEADERS).json()
+    assert searched["total"] == 1
+    assert searched["threads"][0]["thread_id"] == alpha_id
+    pinned_only = client.get("/threads?pinned=true", headers=AUTH_HEADERS).json()
+    assert [thread["thread_id"] for thread in pinned_only["threads"]] == [alpha_id]
+
+    archived = client.patch(
+        f"/threads/{alpha_id}/organization",
+        json={"archived": True},
+        headers=AUTH_HEADERS,
+    )
+
+    assert archived.status_code == 200
+    assert archived.json()["archived_at"]
+    assert [
+        thread["thread_id"]
+        for thread in client.get("/threads", headers=AUTH_HEADERS).json()["threads"]
+    ] == [beta_id]
+    archived_list = client.get("/threads?archived=true", headers=AUTH_HEADERS).json()
+    assert archived_list["total"] == 1
+    assert archived_list["threads"][0]["thread_id"] == alpha_id
+
+    restored = client.patch(
+        f"/threads/{alpha_id}/organization",
+        json={"archived": False, "pinned": False},
+        headers=AUTH_HEADERS,
+    )
+    assert restored.status_code == 200
+    assert restored.json()["archived_at"] is None
+    assert restored.json()["pinned_at"] is None
+
+
+def test_update_thread_organization_requires_a_change() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    response = client.patch(
+        f"/threads/{thread_id}/organization",
+        json={},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "pinned or archived is required"
 
 
 def test_run_generates_semantic_title_after_concrete_exchange() -> None:

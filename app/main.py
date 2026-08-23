@@ -88,6 +88,7 @@ from app.models import (
     ThreadListResponse,
     ThreadStatus,
     ThreadTitleResponse,
+    UpdateThreadOrganizationRequest,
     UpdateThreadTitleRequest,
 )
 from app.oauth import GenericOAuthProvider, build_oauth_flow_store_from_env
@@ -394,6 +395,8 @@ def _thread_list_item(store: ThreadStore, tenant_id: str, thread: Thread) -> Thr
         title=thread.title or _thread_title(messages),
         title_source=thread.title_source,
         title_updated_at=thread.title_updated_at,
+        pinned_at=thread.pinned_at,
+        archived_at=thread.archived_at,
         status=thread.status,
         skill_name=thread.skill_name,
         skill_names=thread.skill_names,
@@ -1419,6 +1422,9 @@ def create_app(
     async def list_threads(
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
+        q: str | None = None,
+        archived: bool = False,
+        pinned: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> ThreadListResponse:
@@ -1426,11 +1432,26 @@ def create_app(
             raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
         if offset < 0:
             raise HTTPException(status_code=400, detail="offset must be greater than or equal to 0")
+        if q is not None and len(q) > 120:
+            raise HTTPException(status_code=400, detail="q must be at most 120 characters")
         store = request.app.state.store
-        threads = store.list_threads(principal.tenant_id, limit=limit, offset=offset)
+        normalized_query = q.strip() if q is not None else None
+        threads = store.list_threads(
+            principal.tenant_id,
+            q=normalized_query or None,
+            archived=archived,
+            pinned=pinned,
+            limit=limit,
+            offset=offset,
+        )
         return ThreadListResponse(
             threads=[_thread_list_item(store, principal.tenant_id, thread) for thread in threads],
-            total=store.count_threads(principal.tenant_id),
+            total=store.count_threads(
+                principal.tenant_id,
+                q=normalized_query or None,
+                archived=archived,
+                pinned=pinned,
+            ),
             limit=limit,
             offset=offset,
         )
@@ -1548,6 +1569,27 @@ def create_app(
             title_source=thread.title_source,
             title_updated_at=thread.title_updated_at,
         )
+
+    @app.patch(
+        "/threads/{thread_id}/organization",
+        response_model=ThreadListItem,
+    )
+    async def update_thread_organization(
+        thread_id: str,
+        body: UpdateThreadOrganizationRequest,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> ThreadListItem:
+        if body.pinned is None and body.archived is None:
+            raise HTTPException(status_code=400, detail="pinned or archived is required")
+        store = request.app.state.store
+        thread = store.set_thread_organization(
+            principal.tenant_id,
+            thread_id,
+            pinned=body.pinned,
+            archived=body.archived,
+        )
+        return _thread_list_item(store, principal.tenant_id, thread)
 
     @app.post("/threads", response_model=CreateThreadResponse)
     async def create_thread(

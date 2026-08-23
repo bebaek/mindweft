@@ -28,6 +28,7 @@ from mindweft_client.chat_commands import (
     run_threads_create,
     run_threads_delete,
     run_threads_list,
+    run_threads_organization,
     run_threads_retitle,
     run_threads_show,
 )
@@ -70,6 +71,8 @@ def dispatch_command(
             return run_threads_retitle(args, client, trace_id)
         if args.threads_command == "show":
             return run_threads_show(args, client, trace_id)
+        if args.threads_command in {"pin", "unpin", "archive", "restore"}:
+            return run_threads_organization(args, client, trace_id)
         if args.threads_command == "delete":
             return run_threads_delete(args, client, base_url, trace_id)
     if args.command == "admin":

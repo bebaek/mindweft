@@ -150,6 +150,8 @@ class Thread(BaseModel):
     title: str | None = None
     title_source: Literal["generated", "semantic", "manual"] | None = None
     title_updated_at: datetime | None = None
+    pinned_at: datetime | None = None
+    archived_at: datetime | None = None
     skill_name: str | None = None
     skill_names: list[str] | None = None
     capability_profile: str | None = None
@@ -210,6 +212,8 @@ class ThreadListItem(BaseModel):
     title: str
     title_source: Literal["generated", "semantic", "manual"] | None = None
     title_updated_at: datetime | None = None
+    pinned_at: datetime | None = None
+    archived_at: datetime | None = None
     status: ThreadStatus
     skill_name: str | None = None
     skill_names: list[str] | None = None
@@ -249,6 +253,12 @@ class CreateThreadRequest(BaseModel):
 class UpdateThreadTitleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=120)
+
+
+class UpdateThreadOrganizationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pinned: bool | None = None
+    archived: bool | None = None
 
 
 class GenerateThreadTitleResponse(BaseModel):
