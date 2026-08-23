@@ -18,6 +18,8 @@ package version is `0.1.0`.
 
 ### Fixed
 
+- The browser **Branch from here** action now uses a high-contrast foreground and background on hover
+  and keyboard focus.
 - Thread forks now copy unexpired private values referenced by inherited context into the child
   within the authenticated user's scope, without cloning pending consent actions or extending value
   expiry.
