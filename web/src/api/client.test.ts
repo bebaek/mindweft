@@ -120,6 +120,25 @@ describe("MinigentApiClient", () => {
     }));
   });
 
+  it("searches message content with an encoded scope", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ results: [], total: 0, limit: 20, offset: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await new MinigentApiClient({ mode: "session" }).searchThreads(
+      "deployment failure",
+      undefined,
+      { scope: "messages", archived: true },
+    );
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/search/threads?q=deployment+failure&scope=messages&limit=20&archived=true",
+    );
+  });
+
   it("uses secure same-origin credentials by default", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ status: "ok" }), {

@@ -275,6 +275,16 @@ def build_parser() -> argparse.ArgumentParser:
     threads_list_parser.add_argument(
         "--pinned", action="store_true", help="List only pinned threads."
     )
+    threads_search_parser = threads_subparsers.add_parser(
+        "search", help="Search conversation titles and messages."
+    )
+    threads_search_parser.add_argument("query", help="Search query.")
+    threads_search_parser.add_argument(
+        "--scope", choices=["title", "messages", "all"], default="all"
+    )
+    threads_search_parser.add_argument(
+        "--archived", action="store_true", help="Search archived threads instead of active threads."
+    )
 
     threads_create_parser = threads_subparsers.add_parser("create", help="Create a new thread.")
     threads_create_parser.add_argument(

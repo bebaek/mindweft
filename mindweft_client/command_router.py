@@ -30,6 +30,7 @@ from mindweft_client.chat_commands import (
     run_threads_list,
     run_threads_organization,
     run_threads_retitle,
+    run_threads_search,
     run_threads_show,
 )
 from mindweft_client.config import ClientConfig
@@ -69,6 +70,8 @@ def dispatch_command(
             return run_threads_create(args, client, base_url, trace_id)
         if args.threads_command == "retitle":
             return run_threads_retitle(args, client, trace_id)
+        if args.threads_command == "search":
+            return run_threads_search(args, client, trace_id)
         if args.threads_command == "show":
             return run_threads_show(args, client, trace_id)
         if args.threads_command in {"pin", "unpin", "archive", "restore"}:

@@ -1150,8 +1150,8 @@ def _chat_abort_message(config: ClientConfig) -> str:
 def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
         "[idle] chat commands: /help, /new, /agent [current|preset], /llm [current|profile], "
-        "/options, /skills, /profiles, /threads [search <query>|archived], /switch <id>, "
-        "/rename <title>, /pin, /unpin, /archive, /restore, /copy-id, /cancel, "
+        "/options, /skills, /profiles, /threads [search [--messages|--titles] <query>|archived], "
+        "/switch <id>, /rename <title>, /pin, /unpin, /archive, /restore, /copy-id, /cancel, "
         "/fork [number|--pick|--message-id UUID], /lineage, /parent, /children [number], "
         "/compact, /actions, "
         "/discard-action <consent-id>, /export [markdown|json], /tokens, "
@@ -1573,17 +1573,37 @@ def _handle_chat_threads(
     output_stream: ChatOutputStream,
 ) -> None:
     selector = utterance.removeprefix("/threads").strip()
-    if selector == "archived" or selector.startswith("search "):
-        query = selector.removeprefix("search ").strip() if selector.startswith("search ") else None
+    if selector.startswith("search "):
+        search_query = selector.removeprefix("search ").strip()
+        scope = "all"
+        if search_query.startswith("--messages "):
+            scope = "messages"
+            search_query = search_query.removeprefix("--messages ").strip()
+        elif search_query.startswith("--titles "):
+            scope = "title"
+            search_query = search_query.removeprefix("--titles ").strip()
+        if not search_query:
+            output_stream.write("[idle] usage: /threads search [--messages|--titles] <query>\n")
+            output_stream.flush()
+            return
         try:
-            response = client.list_threads(q=query, archived=selector == "archived")
+            response = client.search_threads(search_query, scope=scope, limit=50)
         except RuntimeError as exc:
             output_stream.write(f"[idle] thread search failed: {exc}\n")
             output_stream.flush()
             return
+        _write_thread_search_results(response, output_stream)
+        return
+    if selector == "archived":
+        try:
+            response = client.list_threads(archived=True)
+        except RuntimeError as exc:
+            output_stream.write(f"[idle] archived thread list failed: {exc}\n")
+            output_stream.flush()
+            return
         threads = thread_history_items_from_api(response)
         if not threads:
-            output_stream.write("[idle] no matching threads\n")
+            output_stream.write("[idle] no archived threads\n")
             output_stream.flush()
             return
         _write_thread_history_list(
@@ -1606,6 +1626,32 @@ def _handle_chat_threads(
     _write_thread_history_list(
         threads, current_thread_id=client.thread_id, output_stream=output_stream
     )
+
+
+def _write_thread_search_results(
+    response: dict[str, object],
+    output_stream: ChatOutputStream,
+) -> None:
+    results = response.get("results")
+    if not isinstance(results, list) or not results:
+        output_stream.write("[idle] no matching threads\n")
+        output_stream.flush()
+        return
+    for index, result in enumerate(results, start=1):
+        if not isinstance(result, dict) or not isinstance(result.get("thread"), dict):
+            continue
+        thread = result["thread"]
+        output_stream.write(
+            f"[idle] {index}. {thread.get('title') or 'Untitled thread'}  {thread.get('thread_id')}\n"
+        )
+        matches = result.get("matches")
+        if isinstance(matches, list):
+            for match in matches:
+                if isinstance(match, dict):
+                    output_stream.write(
+                        f"[idle]    {match.get('role', 'message')}: {match.get('snippet', '')}\n"
+                    )
+    output_stream.flush()
 
 
 def _write_thread_history_list(

@@ -8,6 +8,7 @@ import {
   type PrivateValueConsentRequest,
   type RunEvent,
   type ThreadListItem,
+  type ThreadSearchResult,
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
 import { reasoningSummary, persistedToolSteps, visibleChatMessages, withDefaultAgent, type PersistedToolStep } from "./workspaceMessages";
@@ -61,6 +62,8 @@ export function WorkspacePage() {
   const [contextOpen, setContextOpen] = useState(false);
   const [mobileThreadRailOpen, setMobileThreadRailOpen] = useState(false);
   const [threadSearch, setThreadSearch] = useState("");
+  const [threadSearchScope, setThreadSearchScope] = useState<"title" | "all">("title");
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [showArchivedThreads, setShowArchivedThreads] = useState(false);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [consentRequest, setConsentRequest] = useState<PrivateValueConsentRequest | null>(null);
@@ -124,11 +127,29 @@ export function WorkspacePage() {
     },
   });
   const threads = useQuery({
-    queryKey: ["threads", authentication, threadSearch, showArchivedThreads],
-    queryFn: ({ signal }) => api.listThreads(50, signal, {
-      ...(threadSearch.trim() ? { q: threadSearch.trim() } : {}),
-      archived: showArchivedThreads,
-    }),
+    queryKey: ["threads", authentication, threadSearch, threadSearchScope, showArchivedThreads],
+    queryFn: async ({ signal }) => {
+      const query = threadSearch.trim();
+      if (query && threadSearchScope === "all") {
+        const search = await api.searchThreads(query, signal, {
+          scope: "all",
+          archived: showArchivedThreads,
+          limit: 50,
+        });
+        return {
+          threads: search.results.map((result) => result.thread),
+          total: search.total,
+          limit: search.limit,
+          offset: search.offset,
+          searchResults: search.results,
+        };
+      }
+      const listed = await api.listThreads(50, signal, {
+        ...(query ? { q: query } : {}),
+        archived: showArchivedThreads,
+      });
+      return { ...listed, searchResults: [] as ThreadSearchResult[] };
+    },
     retry: false,
     refetchInterval: (query) => {
       const selected = query.state.data?.threads.find((thread) => thread.thread_id === selectedThreadId);
@@ -185,6 +206,14 @@ export function WorkspacePage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [messages.data, streamedReply, activity]);
+
+  useEffect(() => {
+    if (!highlightedMessageId || !messages.data) return;
+    const element = document.getElementById(`message-${highlightedMessageId}`);
+    element?.scrollIntoView({ block: "center", behavior: "smooth" });
+    const timeout = window.setTimeout(() => setHighlightedMessageId(null), 2400);
+    return () => window.clearTimeout(timeout);
+  }, [highlightedMessageId, messages.data]);
 
   const effectiveAgent = selectedAgent || executionOptions.data?.agents.default || "";
   const canSaveDefaultAgent = Boolean(
@@ -438,10 +467,11 @@ export function WorkspacePage() {
     }
   }
 
-  function openThread(threadId: string) {
+  function openThread(threadId: string, messageId?: string) {
     if (isRunning) return;
     setMobileThreadRailOpen(false);
     setSelectedThreadId(threadId);
+    setHighlightedMessageId(messageId ?? null);
     setStreamedReply(null);
     setActivity([]);
     setError(null);
@@ -452,6 +482,7 @@ export function WorkspacePage() {
     if (isRunning) return;
     setMobileThreadRailOpen(false);
     setSelectedThreadId(null);
+    setHighlightedMessageId(null);
     setSelectedLlmProfile("");
     setStreamedReply(null);
     setActivity([]);
@@ -475,6 +506,9 @@ export function WorkspacePage() {
   }
 
   const listedThreads = threads.data?.threads ?? [];
+  const searchResults = new Map(
+    (threads.data?.searchResults ?? []).map((result) => [result.thread.thread_id, result]),
+  );
   const pinnedThreads = listedThreads.filter((thread) => thread.pinned_at);
   const recentThreads = listedThreads.filter((thread) => !thread.pinned_at);
   const selectedThread = listedThreads.find((thread) => thread.thread_id === selectedThreadId)
@@ -488,11 +522,19 @@ export function WorkspacePage() {
           <button type="button" onClick={newThread} aria-label="New conversation">+</button>
         </div>
         <div className="thread-library-controls">
+          <select
+            value={threadSearchScope}
+            onChange={(event) => setThreadSearchScope(event.target.value as "title" | "all")}
+            aria-label="Conversation search scope"
+          >
+            <option value="title">Titles</option>
+            <option value="all">All messages</option>
+          </select>
           <input
             type="search"
             value={threadSearch}
             onChange={(event) => setThreadSearch(event.target.value)}
-            placeholder="Search titles"
+            placeholder={threadSearchScope === "title" ? "Search titles" : "Search conversations"}
             aria-label="Search conversations"
           />
           <button
@@ -511,7 +553,11 @@ export function WorkspacePage() {
               key={thread.thread_id}
               thread={thread}
               active={thread.thread_id === selectedThreadId}
-              onClick={() => openThread(thread.thread_id)}
+              snippet={searchResults.get(thread.thread_id)?.matches[0]?.snippet}
+              onClick={() => openThread(
+                thread.thread_id,
+                searchResults.get(thread.thread_id)?.matches[0]?.message_id,
+              )}
             />
           ))}
           {recentThreads.length > 0 && pinnedThreads.length > 0 && (
@@ -522,7 +568,11 @@ export function WorkspacePage() {
               key={thread.thread_id}
               thread={thread}
               active={thread.thread_id === selectedThreadId}
-              onClick={() => openThread(thread.thread_id)}
+              snippet={searchResults.get(thread.thread_id)?.matches[0]?.snippet}
+              onClick={() => openThread(
+                thread.thread_id,
+                searchResults.get(thread.thread_id)?.matches[0]?.message_id,
+              )}
             />
           ))}
           {!threads.isPending && !listedThreads.length && (
@@ -606,7 +656,11 @@ export function WorkspacePage() {
           {!selectedThreadId && !isRunning && <Welcome />}
           {messages.isPending && selectedThreadId && <p className="loading-messages">Loading conversation…</p>}
           {visibleChatMessages(messages.data, streamedReply).map((message) => (
-            <article className={`chat-message ${message.role}`} key={message.id}>
+            <article
+              id={`message-${message.id}`}
+              className={`chat-message ${message.role} ${highlightedMessageId === message.id ? "search-highlight" : ""}`}
+              key={message.id}
+            >
               <span className="message-author">{message.role === "user" ? "You" : "Mindweft"}</span>
               {message.content && (message.role === "assistant" ? <RenderedAssistantMessage content={message.content} /> : <div className="message-content plain-message-content">{message.content}</div>)}
               <MessageImages message={message} />
@@ -776,13 +830,24 @@ export function WorkspacePage() {
   );
 }
 
-function ThreadButton({ thread, active, onClick }: { thread: ThreadListItem; active: boolean; onClick: () => void }) {
+function ThreadButton({
+  thread,
+  active,
+  snippet,
+  onClick,
+}: {
+  thread: ThreadListItem;
+  active: boolean;
+  snippet?: string;
+  onClick: () => void;
+}) {
   const title = thread.title?.trim() || "New conversation";
   const context = thread.skill_name?.replace(/^(?:shared|user):/, "") || thread.capability_profile?.replace(/^(?:shared|user):/, "") || thread.llm_profile?.replace(/^shared:/, "") || "Default";
   const shortId = thread.thread_id.slice(0, 4);
   return (
     <button className={`thread-button ${active ? "active" : ""}`} type="button" onClick={onClick} title={`${title} · ${context} · ${thread.thread_id}`}>
       <span className="thread-title">{title}{thread.parent_thread_id && <em className="thread-branch-badge">Branch</em>}</span>
+      {snippet && <span className="thread-search-snippet">{snippet}</span>}
       <span className="thread-meta"><small>{context} · {thread.message_count} msg · {shortId}</small><time dateTime={thread.updated_at}>{relativeTime(thread.updated_at)}</time></span>
     </button>
   );

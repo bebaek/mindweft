@@ -21,6 +21,56 @@ from app.store import (
 
 
 @pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_thread_search_only_indexes_user_and_assistant_content(
+    store_kind: str, tmp_path: Path
+) -> None:
+    store = (
+        InMemoryThreadStore()
+        if store_kind == "memory"
+        else SQLiteThreadStore(tmp_path / "search-threads.db")
+    )
+    thread = store.create_thread("tenant-a")
+    for role, content in (
+        (MessageRole.SYSTEM, "private system lighthouse"),
+        (MessageRole.TOOL, "private tool lighthouse"),
+        (MessageRole.USER, "user-visible lighthouse"),
+        (MessageRole.ASSISTANT, "assistant-visible lighthouse"),
+    ):
+        store.append_message(
+            "tenant-a",
+            Message(thread_id=thread.thread_id, role=role, content=content),
+        )
+    store.append_message(
+        "tenant-a",
+        Message(
+            thread_id=thread.thread_id,
+            role=MessageRole.ASSISTANT,
+            content="private assistant tool lighthouse",
+            tool_name="lookup",
+            tool_call_id="call-1",
+            tool_arguments={"query": "lighthouse"},
+        ),
+    )
+    other = store.create_thread("tenant-b")
+    store.append_message(
+        "tenant-b",
+        Message(thread_id=other.thread_id, role=MessageRole.USER, content="other lighthouse"),
+    )
+
+    matches = store.search_messages("tenant-a", query="lighthouse")
+
+    assert [message.role for message in matches] == [MessageRole.USER, MessageRole.ASSISTANT]
+    assert all(message.thread_id == thread.thread_id for message in matches)
+    if isinstance(store, SQLiteThreadStore):
+        store._fts_available = False
+        fallback_matches = store.search_messages("tenant-a", query="lighthouse")
+        assert [message.role for message in fallback_matches] == [
+            MessageRole.USER,
+            MessageRole.ASSISTANT,
+        ]
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
 def test_thread_store_fork_copies_prefix_and_preserves_source(
     store_kind: str, tmp_path: Path
 ) -> None:
@@ -88,6 +138,9 @@ def test_thread_store_fork_copies_prefix_and_preserves_source(
     assert store.get_thread_context("tenant-a", child.thread_id).summary == (
         "Earlier imported context."
     )
+    assert child.thread_id in {
+        message.thread_id for message in store.search_messages("tenant-a", query="first")
+    }
 
 
 @pytest.mark.parametrize("store_kind", ["memory", "sqlite"])

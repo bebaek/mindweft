@@ -196,6 +196,26 @@ export interface ThreadListResponse {
   offset: number;
 }
 
+export interface ThreadSearchMatch {
+  message_id: string;
+  role: "user" | "assistant";
+  snippet: string;
+  created_at: string;
+}
+
+export interface ThreadSearchResult {
+  thread: ThreadListItem;
+  match_count: number;
+  matches: ThreadSearchMatch[];
+}
+
+export interface ThreadSearchResponse {
+  results: ThreadSearchResult[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface ImagePart {
   type: "image";
   mime_type: string;
@@ -1478,6 +1498,20 @@ export class MinigentApiClient {
     if (options.archived) params.set("archived", "true");
     if (options.pinned !== undefined) params.set("pinned", String(options.pinned));
     return this.#request<ThreadListResponse>(`/threads?${params.toString()}`, { signal });
+  }
+
+  searchThreads(
+    query: string,
+    signal?: AbortSignal,
+    options: { scope?: "title" | "messages" | "all"; archived?: boolean; limit?: number } = {},
+  ): Promise<ThreadSearchResponse> {
+    const params = new URLSearchParams({
+      q: query,
+      scope: options.scope ?? "all",
+      limit: String(options.limit ?? 20),
+    });
+    if (options.archived) params.set("archived", "true");
+    return this.#request<ThreadSearchResponse>(`/search/threads?${params.toString()}`, { signal });
   }
 
   createThread(

@@ -10,6 +10,9 @@ package version is `0.1.0`.
 
 ### Added
 
+- Full-conversation search now supports title, message, and combined scopes with tenant/archive
+  isolation, bounded user/assistant snippets, SQLite FTS5 indexing and backfill with a scan fallback,
+  browser match navigation, and one-shot and interactive CLI controls.
 - Conversation libraries now support tenant-scoped title search, persistent pinning and archiving,
   pinned-first browser sections, an archived browser view, and matching one-shot and interactive
   CLI controls without changing related branches.

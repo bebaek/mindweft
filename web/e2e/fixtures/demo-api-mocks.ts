@@ -96,6 +96,31 @@ export async function installDemoWorkspaceMocks(page: Page) {
   );
   await page.route("**/threads**", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === "/search/threads" && route.request().method() === "GET") {
+      const query = url.searchParams.get("q")?.toLowerCase() ?? "";
+      const matchingMessages = messages.filter((message) =>
+        ["user", "assistant"].includes(message.role)
+        && message.content.toLowerCase().includes(query),
+      );
+      const matches = matchingMessages.length > 0
+        && Boolean(thread.archived_at) === (url.searchParams.get("archived") === "true");
+      await route.fulfill(fulfill({
+        results: matches ? [{
+          thread,
+          match_count: matchingMessages.length,
+          matches: matchingMessages.slice(0, 3).map((message) => ({
+            message_id: message.id,
+            role: message.role,
+            snippet: message.content.replaceAll("\n", " ").slice(0, 180),
+            created_at: message.created_at,
+          })),
+        }] : [],
+        total: matches ? 1 : 0,
+        limit: 20,
+        offset: 0,
+      }));
+      return;
+    }
     if (url.pathname === "/threads" && route.request().method() === "POST") {
       await route.fulfill(fulfill({ thread_id: "thread-new" }));
       return;

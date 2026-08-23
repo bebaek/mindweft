@@ -241,6 +241,26 @@ class ThreadListResponse(BaseModel):
     offset: int
 
 
+class ThreadSearchMatch(BaseModel):
+    message_id: str
+    role: Literal["user", "assistant"]
+    snippet: str
+    created_at: datetime
+
+
+class ThreadSearchResult(BaseModel):
+    thread: ThreadListItem
+    match_count: int
+    matches: list[ThreadSearchMatch] = Field(default_factory=list)
+
+
+class ThreadSearchResponse(BaseModel):
+    results: list[ThreadSearchResult]
+    total: int
+    limit: int
+    offset: int
+
+
 class CreateThreadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     agent_name: str | None = None

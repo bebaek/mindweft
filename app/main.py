@@ -86,6 +86,9 @@ from app.models import (
     ThreadLineageResponse,
     ThreadListItem,
     ThreadListResponse,
+    ThreadSearchMatch,
+    ThreadSearchResponse,
+    ThreadSearchResult,
     ThreadStatus,
     ThreadTitleResponse,
     UpdateThreadOrganizationRequest,
@@ -409,6 +412,21 @@ def _thread_list_item(store: ThreadStore, tenant_id: str, thread: Thread) -> Thr
         created_at=thread.created_at,
         updated_at=thread.updated_at,
     )
+
+
+def _search_snippet(content: str, query: str, *, max_chars: int = 180) -> str:
+    compact = " ".join(content.split())
+    if len(compact) <= max_chars:
+        return compact
+    terms = [term for term in query.casefold().split() if term]
+    lowered = compact.casefold()
+    positions = [lowered.find(term) for term in terms]
+    first_match = min((position for position in positions if position >= 0), default=0)
+    start = max(0, first_match - max_chars // 3)
+    end = min(len(compact), start + max_chars)
+    start = max(0, end - max_chars)
+    snippet = compact[start:end].strip()
+    return f"{'…' if start else ''}{snippet}{'…' if end < len(compact) else ''}"
 
 
 def _thread_title(messages: list[Message]) -> str:
@@ -1417,6 +1435,86 @@ def create_app(
             artifact_name,
         )
         return Response(content=artifact.content, media_type=artifact.media_type)
+
+    @app.get("/search/threads", response_model=ThreadSearchResponse)
+    async def search_threads(
+        request: Request,
+        q: str,
+        principal: Principal = Depends(require_active_tenant_principal),
+        scope: str = "all",
+        archived: bool = False,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> ThreadSearchResponse:
+        query = q.strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="q is required")
+        if len(query) > 200:
+            raise HTTPException(status_code=400, detail="q must be at most 200 characters")
+        if scope not in {"title", "messages", "all"}:
+            raise HTTPException(status_code=400, detail="scope must be title, messages, or all")
+        if limit < 1 or limit > 100:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+        if offset < 0:
+            raise HTTPException(status_code=400, detail="offset must be greater than or equal to 0")
+
+        store = request.app.state.store
+        threads = store.list_threads(principal.tenant_id, archived=archived)
+        threads_by_id = {thread.thread_id: thread for thread in threads}
+        normalized_query = query.casefold()
+        title_matches = {
+            thread.thread_id
+            for thread in threads
+            if scope in {"title", "all"}
+            and normalized_query in (thread.title or "New conversation").casefold()
+        }
+        messages_by_thread: dict[str, list[Message]] = {}
+        if scope in {"messages", "all"}:
+            for message in store.search_messages(
+                principal.tenant_id,
+                query=query,
+                archived=archived,
+            ):
+                messages_by_thread.setdefault(message.thread_id, []).append(message)
+
+        matching_thread_ids = title_matches | set(messages_by_thread)
+        results: list[ThreadSearchResult] = []
+        for thread_id in matching_thread_ids:
+            thread = threads_by_id.get(thread_id)
+            if thread is None:
+                continue
+            message_matches = messages_by_thread.get(thread_id, [])
+            results.append(
+                ThreadSearchResult(
+                    thread=_thread_list_item(store, principal.tenant_id, thread),
+                    match_count=len(message_matches) + (1 if thread_id in title_matches else 0),
+                    matches=[
+                        ThreadSearchMatch(
+                            message_id=message.id,
+                            role=("user" if message.role == MessageRole.USER else "assistant"),
+                            snippet=_search_snippet(message.content, query),
+                            created_at=message.created_at,
+                        )
+                        for message in message_matches[:3]
+                        if message.role in {MessageRole.USER, MessageRole.ASSISTANT}
+                    ],
+                )
+            )
+        results.sort(
+            key=lambda result: (
+                result.thread.thread_id in title_matches,
+                result.match_count,
+                result.thread.pinned_at is not None,
+                result.thread.updated_at,
+            ),
+            reverse=True,
+        )
+        return ThreadSearchResponse(
+            results=results[offset : offset + limit],
+            total=len(results),
+            limit=limit,
+            offset=offset,
+        )
 
     @app.get("/threads", response_model=ThreadListResponse)
     async def list_threads(

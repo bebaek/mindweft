@@ -370,6 +370,32 @@ class MindweftAPIClient:
             raise RuntimeError("Mindweft list-threads response must be an object")
         return cast(dict[str, Any], response)
 
+    def search_threads(
+        self,
+        query: str,
+        *,
+        scope: str = "all",
+        archived: bool = False,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        encoded_query = _build_query(
+            {
+                "q": query,
+                "scope": scope,
+                "archived": "true" if archived else None,
+                "limit": limit,
+                "offset": offset,
+            }
+        )
+        response = self.request_json(
+            "GET",
+            f"{self._config.base_url}/search/threads{encoded_query}",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Mindweft thread-search response must be an object")
+        return cast(dict[str, Any], response)
+
     def generate_thread_title(self, thread_id: str) -> dict[str, Any]:
         response = self.request_json(
             "POST",
