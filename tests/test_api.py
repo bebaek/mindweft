@@ -1378,6 +1378,160 @@ def test_list_threads_validates_pagination() -> None:
     assert client.get("/threads?offset=-1", headers=AUTH_HEADERS).status_code == 400
 
 
+def test_thread_fork_endpoint_copies_prefix_and_records_lineage() -> None:
+    store = InMemoryThreadStore()
+    source = store.create_thread(
+        "tenant-1",
+        execution_user_id="user-1",
+        skill_names=["research"],
+        capability_profile="tools",
+        llm_profile="primary",
+    )
+    first = store.append_message(
+        "tenant-1",
+        Message(thread_id=source.thread_id, role=MessageRole.USER, content="branch here"),
+    )
+    store.append_message(
+        "tenant-1",
+        Message(thread_id=source.thread_id, role=MessageRole.ASSISTANT, content="old answer"),
+    )
+    client = TestClient(
+        create_app(
+            thread_store=store,
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+
+    response = client.post(
+        f"/threads/{source.thread_id}/fork",
+        json={"at_message_id": first.id},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    child_id = payload["thread_id"]
+    assert payload == {
+        "thread_id": child_id,
+        "parent_thread_id": source.thread_id,
+        "fork_message_id": first.id,
+    }
+    child = store.get_thread("tenant-1", child_id)
+    assert child.parent_thread_id == source.thread_id
+    assert child.fork_message_id == first.id
+    assert child.skill_names == ["research"]
+    assert child.capability_profile == "tools"
+    assert child.llm_profile == "primary"
+    child_messages = store.list_messages("tenant-1", child_id)
+    assert [message.content for message in child_messages] == ["branch here"]
+    assert child_messages[0].source_message_id == first.id
+    assert [message.content for message in store.list_messages("tenant-1", source.thread_id)] == [
+        "branch here",
+        "old answer",
+    ]
+
+
+def test_thread_fork_endpoint_clones_attachments() -> None:
+    store = InMemoryThreadStore()
+    attachment_store = InMemoryAttachmentStore()
+    source = store.create_thread("tenant-1", execution_user_id="user-1")
+    attachment = attachment_store.put(
+        "tenant-1",
+        source.thread_id,
+        mime_type="image/png",
+        data=base64.b64decode(PNG_1X1_BASE64),
+        created_by="user-1",
+    )
+    assert attachment_store.mark_referenced("tenant-1", source.thread_id, attachment.attachment_id)
+    message = store.append_message(
+        "tenant-1",
+        Message(
+            thread_id=source.thread_id,
+            role=MessageRole.USER,
+            content="inspect image",
+            parts=[
+                ImagePart(
+                    mime_type="image/png",
+                    attachment_id=attachment.attachment_id,
+                )
+            ],
+        ),
+    )
+    client = TestClient(
+        create_app(
+            thread_store=store,
+            attachment_store=attachment_store,
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+
+    response = client.post(
+        f"/threads/{source.thread_id}/fork",
+        json={"at_message_id": message.id},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 201
+    child_id = response.json()["thread_id"]
+    child_message = store.list_messages("tenant-1", child_id)[0]
+    assert child_message.parts is not None
+    child_part = child_message.parts[0]
+    assert isinstance(child_part, ImagePart)
+    assert child_part.attachment_id != attachment.attachment_id
+    cloned = attachment_store.get("tenant-1", child_id, child_part.attachment_id or "")
+    assert cloned is not None
+    assert cloned.data == base64.b64decode(PNG_1X1_BASE64)
+
+
+def test_thread_fork_endpoint_rejects_split_tool_call_and_other_tenant() -> None:
+    store = InMemoryThreadStore()
+    source = store.create_thread("tenant-1")
+    tool_call = store.append_message(
+        "tenant-1",
+        Message(
+            thread_id=source.thread_id,
+            role=MessageRole.ASSISTANT,
+            content="",
+            tool_name="echo",
+            tool_call_id="call-1",
+            tool_arguments={"text": "hello"},
+        ),
+    )
+    store.append_message(
+        "tenant-1",
+        Message(
+            thread_id=source.thread_id,
+            role=MessageRole.TOOL,
+            content='{"echo":"hello"}',
+            tool_name="echo",
+            tool_call_id="call-1",
+        ),
+    )
+    client = TestClient(
+        create_app(
+            thread_store=store,
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+
+    split_response = client.post(
+        f"/threads/{source.thread_id}/fork",
+        json={"at_message_id": tool_call.id},
+        headers=AUTH_HEADERS,
+    )
+    tenant_response = client.post(
+        f"/threads/{source.thread_id}/fork",
+        json={"at_message_id": tool_call.id},
+        headers=OTHER_TENANT_HEADERS,
+    )
+
+    assert split_response.status_code == 422
+    assert tenant_response.status_code == 404
+
+
 def test_thread_manual_compact_endpoint_summarizes_older_messages() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())

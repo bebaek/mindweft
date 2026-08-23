@@ -10,9 +10,125 @@ import pytest
 from fastapi import HTTPException
 
 import app.store as store_module
-from app.models import ThreadStatus
+from app.models import Message, MessageRole, ThreadStatus
 from app.peer_agents import PeerAgentRegistry
-from app.store import SQLiteThreadStore, ThreadStoreSettings, thread_store_settings_from_env
+from app.store import (
+    InMemoryThreadStore,
+    SQLiteThreadStore,
+    ThreadStoreSettings,
+    thread_store_settings_from_env,
+)
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_thread_store_fork_copies_prefix_and_preserves_source(
+    store_kind: str, tmp_path: Path
+) -> None:
+    store = (
+        InMemoryThreadStore()
+        if store_kind == "memory"
+        else SQLiteThreadStore(tmp_path / "fork-threads.db")
+    )
+    source = store.create_thread(
+        "tenant-a",
+        execution_user_id="user-a",
+        skill_names=["research"],
+        capability_profile="tools",
+        llm_profile="primary",
+    )
+    first = store.append_message(
+        "tenant-a",
+        Message(thread_id=source.thread_id, role=MessageRole.USER, content="first"),
+    )
+    store.append_message(
+        "tenant-a",
+        Message(thread_id=source.thread_id, role=MessageRole.ASSISTANT, content="answer"),
+    )
+    store.append_message(
+        "tenant-a",
+        Message(thread_id=source.thread_id, role=MessageRole.USER, content="later"),
+    )
+    store.update_thread_context(
+        "tenant-a",
+        source.thread_id,
+        summary="Earlier imported context.",
+        summarized_message_count=0,
+    )
+
+    child = store.fork_thread(
+        "tenant-a",
+        source.thread_id,
+        at_message_id=first.id,
+    )
+
+    assert child.parent_thread_id == source.thread_id
+    assert child.fork_message_id == first.id
+    assert child.execution_user_id == "user-a"
+    assert child.skill_names == ["research"]
+    assert child.capability_profile == "tools"
+    assert child.llm_profile == "primary"
+    child_messages = store.list_messages("tenant-a", child.thread_id)
+    assert [message.content for message in child_messages] == ["first"]
+    assert child_messages[0].id != first.id
+    assert child_messages[0].source_message_id == first.id
+    assert child_messages[0].thread_id == child.thread_id
+    store.append_message(
+        "tenant-a",
+        Message(thread_id=child.thread_id, role=MessageRole.USER, content="child only"),
+    )
+    assert [message.content for message in store.list_messages("tenant-a", child.thread_id)] == [
+        "first",
+        "child only",
+    ]
+    assert [message.content for message in store.list_messages("tenant-a", source.thread_id)] == [
+        "first",
+        "answer",
+        "later",
+    ]
+    assert store.get_thread_context("tenant-a", child.thread_id).summary == (
+        "Earlier imported context."
+    )
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_thread_store_fork_rejects_split_tool_call(store_kind: str, tmp_path: Path) -> None:
+    store = (
+        InMemoryThreadStore()
+        if store_kind == "memory"
+        else SQLiteThreadStore(tmp_path / "fork-tool-threads.db")
+    )
+    source = store.create_thread("tenant-a")
+    tool_call = store.append_message(
+        "tenant-a",
+        Message(
+            thread_id=source.thread_id,
+            role=MessageRole.ASSISTANT,
+            content="",
+            tool_name="echo",
+            tool_call_id="call-1",
+            tool_arguments={"text": "hello"},
+        ),
+    )
+    tool_result = store.append_message(
+        "tenant-a",
+        Message(
+            thread_id=source.thread_id,
+            role=MessageRole.TOOL,
+            content='{"echo":"hello"}',
+            tool_name="echo",
+            tool_call_id="call-1",
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        store.fork_thread("tenant-a", source.thread_id, at_message_id=tool_call.id)
+
+    assert exc_info.value.status_code == 422
+    child = store.fork_thread("tenant-a", source.thread_id, at_message_id=tool_result.id)
+    assert [message.role for message in store.list_messages("tenant-a", child.thread_id)] == [
+        MessageRole.ASSISTANT,
+        MessageRole.TOOL,
+    ]
 
 
 def test_thread_store_settings_from_env_mapping_uses_defaults() -> None:

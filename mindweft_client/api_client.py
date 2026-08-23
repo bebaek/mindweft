@@ -709,6 +709,20 @@ class MindweftAPIClient:
             raise RuntimeError("Mindweft discarded-action response must be an object")
         return cast(dict[str, Any], response)
 
+    def fork_thread(self, thread_id: str, *, at_message_id: str) -> dict[str, Any]:
+        response = self.request_json(
+            "POST",
+            f"{self._config.base_url}/threads/{thread_id}/fork",
+            payload={"at_message_id": at_message_id},
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Mindweft fork-thread response must be an object")
+        forked = cast(dict[str, Any], response)
+        forked_thread_id = forked.get("thread_id")
+        if isinstance(forked_thread_id, str) and forked_thread_id:
+            self._thread_id = forked_thread_id
+        return forked
+
     def compact_thread(self, thread_id: str) -> dict[str, Any]:
         response = self.request_json(
             "POST",
