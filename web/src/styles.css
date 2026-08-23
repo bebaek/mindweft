@@ -264,6 +264,9 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 34px 56px; }
 .activity-tray summary small { overflow:hidden; color:var(--muted); font-size:var(--text-sm); text-overflow:ellipsis; white-space:nowrap; }
 .activity-tray summary::after { content:"+"; margin-left:auto; } .activity-tray[open] summary::after { content:"−"; }
 .activity-tray ol { display:grid; gap:8px; margin:0; padding:0 23px 13px 42px; list-style:none; }
+.thinking-live { width:min(100%,620px); margin:4px 0 14px; padding:10px 12px; border-left:3px solid #8dae91; border-radius:0 9px 9px 0; color:var(--muted); background:var(--paper); font-size:var(--text-sm); }
+.thinking-live>span { display:block; margin-bottom:4px; color:var(--ink); font-weight:700; }
+.thinking-live p { margin:0; white-space:pre-wrap; line-height:1.55; }
 .thinking-summary { width:min(100%,620px); margin-top:10px; border:1px solid var(--line); border-radius:9px; color:var(--muted); background:var(--paper); font-size:var(--text-sm); }
 .thinking-summary summary { padding:8px 10px; cursor:pointer; font-weight:650; }
 .thinking-summary p { margin:0; padding:0 10px 10px; white-space:pre-wrap; line-height:1.55; }
@@ -614,7 +617,7 @@ html[data-theme="dark"] :where(
   .inspected-message,.thread-context,.setup-link-result
 ) { color:var(--ink); background:var(--white); border-color:var(--line); }
 html[data-theme="dark"] :where(
-  .thread-rail,.conversation,.activity-tray,.activity-details,.persisted-tool-activity,.thinking-summary,.context-dialog-body,.raw-context pre,.empty-threads,
+  .thread-rail,.conversation,.activity-tray,.activity-details,.persisted-tool-activity,.thinking-summary,.thinking-live,.context-dialog-body,.raw-context pre,.empty-threads,
   .operations-loading,.operations-empty,.execution-config-empty,.mcp-server-picker,
   .capability-mcp-editor,.execution-json-field textarea,.oauth-import-instructions,.oauth-credential-summary>div,
   .audit-details,.inspected-message.tool,.message-image-loading,.message-image-error

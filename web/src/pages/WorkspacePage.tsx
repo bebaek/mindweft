@@ -54,6 +54,7 @@ export function WorkspacePage() {
   const [isRunning, setIsRunning] = useState(false);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [showThinking, setShowThinking] = useState(false);
+  const [liveThinking, setLiveThinking] = useState<string | null>(null);
   const [streamedReply, setStreamedReply] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
@@ -225,6 +226,7 @@ export function WorkspacePage() {
     } else if (event.type === "reasoning") {
       if (typeof event.content === "string" && event.content.trim()) {
         addActivity("Thinking summary", event, { result: event.content, status: "info" });
+        setLiveThinking(event.content.trim());
       }
     } else if (event.type === "assistant.message") {
       setStreamedReply(event.content ?? "");
@@ -247,6 +249,7 @@ export function WorkspacePage() {
     setError(null);
     setDraft("");
     setStreamedReply(null);
+    setLiveThinking(null);
     setActivity([]);
     pendingConsentRef.current = null;
     setConsentRequest(null);
@@ -289,6 +292,7 @@ export function WorkspacePage() {
       await queryClient.invalidateQueries({ queryKey: ["messages", threadId] });
       addActivity("Run started");
       await api.streamRun(threadId, handleRunEvent, controller.signal);
+      setLiveThinking(null);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["messages", threadId] }),
         queryClient.invalidateQueries({ queryKey: ["threads"] }),
@@ -470,6 +474,12 @@ export function WorkspacePage() {
               {message.role === "assistant" && <PersistedToolActivity steps={persistedToolSteps(messages.data, message.id)} />}
             </article>
           ))}
+          {liveThinking !== null && isRunning && (
+            <div className="thinking-live" aria-live="polite">
+              <span>Thinking</span>
+              <p>{liveThinking}</p>
+            </div>
+          )}
           {streamedReply !== null && <article className="chat-message assistant streaming"><span className="message-author">Mindweft</span><RenderedAssistantMessage content={streamedReply} /></article>}
           {isRunning && streamedReply === null && <div className="thinking-row"><i /><i /><i /><span>Working</span></div>}
           {error && <div className="conversation-error" role="alert">{error}</div>}
