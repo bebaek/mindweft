@@ -31,6 +31,7 @@ from app.llm import (
     LLMAdapter,
     MockLLMAdapter,
     llm_progress_sink,
+    llm_reasoning_sink,
     serialize_tool_result,
 )
 from app.mcp import MCPPrivateToolResult
@@ -697,6 +698,7 @@ class AgentRuntime:
                     )
                     _progress_bytes = 0
                     _progress_last_emit = 0.0
+                    _live_reasoning = ""
 
                     async def _on_progress(chunk_len: int) -> None:
                         nonlocal _progress_bytes, _progress_last_emit
@@ -709,7 +711,15 @@ class AgentRuntime:
                                 {"type": "llm.progress", "bytes": _progress_bytes},
                             )
 
-                    with llm_progress_sink(_on_progress):
+                    async def _on_reasoning(content: str) -> None:
+                        nonlocal _live_reasoning
+                        _live_reasoning += content
+                        await _emit_run_event(
+                            event_sink,
+                            {"type": "reasoning", "content": _live_reasoning},
+                        )
+
+                    with llm_progress_sink(_on_progress), llm_reasoning_sink(_on_reasoning):
                         response = await llm_adapter.generate(messages, tool_specs)
                     if response.usage is not None:
                         await _emit_run_event(

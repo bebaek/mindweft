@@ -50,6 +50,10 @@ ProgressSink = Callable[[int], Awaitable[None]] | None
 _progress_sink_ctx: contextvars.ContextVar[ProgressSink] = contextvars.ContextVar(
     "progress_sink", default=None
 )
+ReasoningSink = Callable[[str], Awaitable[None]] | None
+_reasoning_sink_ctx: contextvars.ContextVar[ReasoningSink] = contextvars.ContextVar(
+    "reasoning_sink", default=None
+)
 
 
 @contextmanager
@@ -59,6 +63,21 @@ def llm_progress_sink(sink: Callable[[int], Awaitable[None]]) -> Iterator[None]:
         yield
     finally:
         _progress_sink_ctx.reset(token)
+
+
+@contextmanager
+def llm_reasoning_sink(sink: Callable[[str], Awaitable[None]]) -> Iterator[None]:
+    token = _reasoning_sink_ctx.set(sink)
+    try:
+        yield
+    finally:
+        _reasoning_sink_ctx.reset(token)
+
+
+async def _emit_reasoning_progress(content: str) -> None:
+    sink = _reasoning_sink_ctx.get()
+    if sink is not None and content.strip():
+        await sink(content)
 
 
 class LLMAdapter(ABC):
@@ -956,10 +975,30 @@ async def _post_responses_request(
                     provider=provider,
                     model=model,
                 )
+            sse_buffer = ""
             try:
                 async for chunk in response.aiter_text():
                     body_chunks.append(chunk)
                     await _emit_progress_chunk(len(chunk))
+                    if "text/event-stream" in content_type:
+                        sse_buffer += chunk
+                        complete_lines = sse_buffer.split("\n")
+                        sse_buffer = complete_lines.pop()
+                        for raw_line in complete_lines:
+                            line = raw_line.strip()
+                            if not line.startswith("data:"):
+                                continue
+                            try:
+                                event = json.loads(line.removeprefix("data:").strip())
+                            except json.JSONDecodeError:
+                                continue
+                            if (
+                                isinstance(event, dict)
+                                and event.get("type") == "response.reasoning_summary_text.delta"
+                            ):
+                                delta = event.get("delta")
+                                if isinstance(delta, str):
+                                    await _emit_reasoning_progress(delta)
             except httpx.HTTPError as exc:
                 read_error = exc
     except httpx.HTTPError as exc:
