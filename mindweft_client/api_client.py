@@ -344,10 +344,27 @@ class MindweftAPIClient:
             self._thread_id = thread_id
         return thread
 
-    def list_threads(self, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    def list_threads(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        q: str | None = None,
+        archived: bool = False,
+        pinned: bool | None = None,
+    ) -> dict[str, Any]:
+        query = _build_query(
+            {
+                "limit": limit,
+                "offset": offset,
+                "q": q,
+                "archived": "true" if archived else None,
+                "pinned": None if pinned is None else str(pinned).lower(),
+            }
+        )
         response = self.request_json(
             "GET",
-            f"{self._config.base_url}/threads?limit={limit}&offset={offset}",
+            f"{self._config.base_url}/threads{query}",
         )
         if not isinstance(response, dict):
             raise RuntimeError("Mindweft list-threads response must be an object")
@@ -370,6 +387,27 @@ class MindweftAPIClient:
         )
         if not isinstance(response, dict):
             raise RuntimeError("Mindweft rename-thread response must be an object")
+        return cast(dict[str, Any], response)
+
+    def update_thread_organization(
+        self,
+        thread_id: str,
+        *,
+        pinned: bool | None = None,
+        archived: bool | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            key: value
+            for key, value in {"pinned": pinned, "archived": archived}.items()
+            if value is not None
+        }
+        response = self.request_json(
+            "PATCH",
+            f"{self._config.base_url}/threads/{thread_id}/organization",
+            payload=payload,
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Mindweft thread-organization response must be an object")
         return cast(dict[str, Any], response)
 
     def get_thread_lineage(self, thread_id: str) -> dict[str, Any]:

@@ -182,10 +182,16 @@ mindweft threads create --skills coding-workspace concise --capability-profile i
 ### Threads
 
 ```bash
-mindweft threads                          # list locally remembered threads
-mindweft threads show <thread-id>         # show a specific thread
-mindweft threads create                   # create a new thread
-mindweft threads delete <thread-id>       # delete a thread (requires --admin)
+mindweft threads list --search "launch plan" # search active threads by title
+mindweft threads list --pinned                # list pinned active threads
+mindweft threads list --archived              # list archived threads
+mindweft threads show <thread-id>              # show a specific thread
+mindweft threads create                        # create a new thread
+mindweft threads pin <thread-id>               # pin a thread
+mindweft threads unpin <thread-id>             # unpin a thread
+mindweft threads archive <thread-id>           # archive a thread
+mindweft threads restore <thread-id>           # restore an archived thread
+mindweft threads delete <thread-id>            # permanently delete a thread
 ```
 
 ### Resume
@@ -304,8 +310,12 @@ Available during interactive chat:
 | `/agent <preset>` | Create and switch to a new thread using that preset. |
 | `/threads` | List and interactively select a thread (TTY), ordered oldest-to-newest so recent threads remain next to the prompt. |
 | `/threads <selector>` | Switch to a thread by ID or unique title/date substring. |
+| `/threads search <query>` | Search active server-side threads by title. |
+| `/threads archived` | List archived server-side threads. |
 | `/switch <id>` | Switch to a specific thread. |
 | `/rename <title>` | Rename the current thread. |
+| `/pin` / `/unpin` | Pin or unpin the current thread. |
+| `/archive` / `/restore` | Archive or restore the current thread without affecting related branches. |
 | `/copy-id` | Copy the current thread ID. |
 | `/cancel` | Cancel the current run. |
 | `/fork` | Create and switch to a child branch at the latest visible message. |

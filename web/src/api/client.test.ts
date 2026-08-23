@@ -98,6 +98,28 @@ describe("MinigentApiClient", () => {
     );
   });
 
+  it("searches and organizes conversation threads", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ threads: [], total: 0, limit: 50, offset: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ));
+    const client = new MinigentApiClient({ mode: "session" });
+
+    await client.listThreads(50, undefined, { q: "launch plan", archived: true, pinned: true });
+    await client.updateThreadOrganization("thread/1", { pinned: true, archived: false });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/threads?limit=50&q=launch+plan&archived=true&pinned=true",
+    );
+    expect(fetchMock.mock.calls[1][0]).toBe("/threads/thread%2F1/organization");
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({
+      method: "PATCH",
+      body: JSON.stringify({ pinned: true, archived: false }),
+    }));
+  });
+
   it("uses secure same-origin credentials by default", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ status: "ok" }), {

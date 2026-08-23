@@ -165,6 +165,9 @@ class ThreadStore(Protocol):
         status: ThreadStatus | None = None,
         capability_profile: str | None = None,
         skill: str | None = None,
+        q: str | None = None,
+        archived: bool | None = None,
+        pinned: bool | None = None,
         created_after: datetime | None = None,
         updated_after: datetime | None = None,
         limit: int | None = None,
@@ -178,6 +181,9 @@ class ThreadStore(Protocol):
         status: ThreadStatus | None = None,
         capability_profile: str | None = None,
         skill: str | None = None,
+        q: str | None = None,
+        archived: bool | None = None,
+        pinned: bool | None = None,
         created_after: datetime | None = None,
         updated_after: datetime | None = None,
     ) -> int: ...
@@ -206,6 +212,15 @@ class ThreadStore(Protocol):
     ) -> Thread: ...
 
     def set_thread_status(self, tenant_id: str, thread_id: str, status: ThreadStatus) -> Thread: ...
+
+    def set_thread_organization(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        pinned: bool | None = None,
+        archived: bool | None = None,
+    ) -> Thread: ...
 
     def get_thread(self, tenant_id: str, thread_id: str) -> Thread: ...
 
@@ -479,6 +494,9 @@ class InMemoryThreadStore:
         status: ThreadStatus | None = None,
         capability_profile: str | None = None,
         skill: str | None = None,
+        q: str | None = None,
+        archived: bool | None = None,
+        pinned: bool | None = None,
         created_after: datetime | None = None,
         updated_after: datetime | None = None,
         limit: int | None = None,
@@ -494,11 +512,22 @@ class InMemoryThreadStore:
                     status=status,
                     capability_profile=capability_profile,
                     skill=skill,
+                    q=q,
+                    archived=archived,
+                    pinned=pinned,
                     created_after=created_after,
                     updated_after=updated_after,
                 )
             ]
-            sorted_threads = sorted(threads, key=lambda thread: thread.updated_at, reverse=True)
+            sorted_threads = sorted(
+                threads,
+                key=lambda thread: (
+                    thread.pinned_at is not None,
+                    thread.pinned_at or thread.updated_at,
+                    thread.updated_at,
+                ),
+                reverse=True,
+            )
             return _paginate_threads(sorted_threads, limit=limit, offset=offset)
 
     def count_threads(
@@ -508,6 +537,9 @@ class InMemoryThreadStore:
         status: ThreadStatus | None = None,
         capability_profile: str | None = None,
         skill: str | None = None,
+        q: str | None = None,
+        archived: bool | None = None,
+        pinned: bool | None = None,
         created_after: datetime | None = None,
         updated_after: datetime | None = None,
     ) -> int:
@@ -521,6 +553,9 @@ class InMemoryThreadStore:
                     status=status,
                     capability_profile=capability_profile,
                     skill=skill,
+                    q=q,
+                    archived=archived,
+                    pinned=pinned,
                     created_after=created_after,
                     updated_after=updated_after,
                 )
@@ -598,6 +633,23 @@ class InMemoryThreadStore:
             thread.status = status
             thread.updated_at = utc_now()
             return thread
+
+    def set_thread_organization(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        pinned: bool | None = None,
+        archived: bool | None = None,
+    ) -> Thread:
+        with self._lock:
+            thread = self._require_thread(tenant_id, thread_id)
+            now = utc_now()
+            if pinned is not None and pinned != (thread.pinned_at is not None):
+                thread.pinned_at = now if pinned else None
+            if archived is not None and archived != (thread.archived_at is not None):
+                thread.archived_at = now if archived else None
+            return thread.model_copy(deep=True)
 
     def get_thread(self, tenant_id: str, thread_id: str) -> Thread:
         with self._lock:
@@ -1142,6 +1194,9 @@ class SQLiteThreadStore:
         status: ThreadStatus | None = None,
         capability_profile: str | None = None,
         skill: str | None = None,
+        q: str | None = None,
+        archived: bool | None = None,
+        pinned: bool | None = None,
         created_after: datetime | None = None,
         updated_after: datetime | None = None,
         limit: int | None = None,
@@ -1154,10 +1209,21 @@ class SQLiteThreadStore:
                 status=status,
                 capability_profile=capability_profile,
                 skill=skill,
+                q=q,
+                archived=archived,
+                pinned=pinned,
                 created_after=created_after,
                 updated_after=updated_after,
             )
-            sorted_threads = sorted(threads, key=lambda thread: thread.updated_at, reverse=True)
+            sorted_threads = sorted(
+                threads,
+                key=lambda thread: (
+                    thread.pinned_at is not None,
+                    thread.pinned_at or thread.updated_at,
+                    thread.updated_at,
+                ),
+                reverse=True,
+            )
             return _paginate_threads(sorted_threads, limit=limit, offset=offset)
 
     def count_threads(
@@ -1167,6 +1233,9 @@ class SQLiteThreadStore:
         status: ThreadStatus | None = None,
         capability_profile: str | None = None,
         skill: str | None = None,
+        q: str | None = None,
+        archived: bool | None = None,
+        pinned: bool | None = None,
         created_after: datetime | None = None,
         updated_after: datetime | None = None,
     ) -> int:
@@ -1178,6 +1247,9 @@ class SQLiteThreadStore:
                     status=status,
                     capability_profile=capability_profile,
                     skill=skill,
+                    q=q,
+                    archived=archived,
+                    pinned=pinned,
                     created_after=created_after,
                     updated_after=updated_after,
                 )
@@ -1277,6 +1349,24 @@ class SQLiteThreadStore:
                     _CURRENT_RUN.set(None)
             thread.status = status
             thread.updated_at = utc_now()
+            self._save_thread(conn, thread)
+            return thread
+
+    def set_thread_organization(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        pinned: bool | None = None,
+        archived: bool | None = None,
+    ) -> Thread:
+        with self._lock, self._connection() as conn:
+            thread = self._require_thread(conn, tenant_id, thread_id)
+            now = utc_now()
+            if pinned is not None and pinned != (thread.pinned_at is not None):
+                thread.pinned_at = now if pinned else None
+            if archived is not None and archived != (thread.archived_at is not None):
+                thread.archived_at = now if archived else None
             self._save_thread(conn, thread)
             return thread
 
@@ -1692,6 +1782,9 @@ class SQLiteThreadStore:
         skill: str | None,
         created_after: datetime | None,
         updated_after: datetime | None,
+        q: str | None = None,
+        archived: bool | None = None,
+        pinned: bool | None = None,
     ) -> list[Thread]:
         rows = conn.execute(
             "SELECT payload FROM threads WHERE tenant_id = ?",
@@ -1708,6 +1801,9 @@ class SQLiteThreadStore:
                 skill=skill,
                 created_after=created_after,
                 updated_after=updated_after,
+                q=q,
+                archived=archived,
+                pinned=pinned,
             )
         ]
 
@@ -1959,6 +2055,9 @@ def _thread_matches_filters(
     skill: str | None,
     created_after: datetime | None,
     updated_after: datetime | None,
+    q: str | None = None,
+    archived: bool | None = None,
+    pinned: bool | None = None,
 ) -> bool:
     if thread.tenant_id != tenant_id:
         return False
@@ -1967,6 +2066,12 @@ def _thread_matches_filters(
     if capability_profile is not None and thread.capability_profile != capability_profile:
         return False
     if skill is not None and thread.skill_name != skill and skill not in (thread.skill_names or []):
+        return False
+    if q is not None and q.casefold() not in (thread.title or "New conversation").casefold():
+        return False
+    if archived is not None and (thread.archived_at is not None) != archived:
+        return False
+    if pinned is not None and (thread.pinned_at is not None) != pinned:
         return False
     if created_after is not None and thread.created_at <= created_after:
         return False

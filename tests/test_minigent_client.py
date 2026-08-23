@@ -2221,6 +2221,56 @@ def test_minigent_api_client_exposes_shared_thread_methods(
     assert requests[8]["payload"] == {"at_message_id": "message-1"}
 
 
+def test_minigent_api_client_searches_and_organizes_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[tuple[str, str, object | None]] = []
+
+    class FakeResponse:
+        def __init__(self, payload: object) -> None:
+            self.payload = payload
+
+        def read(self) -> bytes:
+            return json.dumps(self.payload).encode("utf-8")
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    def fake_urlopen(request: object) -> FakeResponse:
+        payload = json.loads(request.data.decode("utf-8")) if request.data else None
+        requests.append((request.get_method(), request.full_url, payload))
+        if request.get_method() == "GET":
+            return FakeResponse({"threads": [], "total": 0, "limit": 10, "offset": 0})
+        return FakeResponse({"thread_id": "thread-1", "pinned_at": "2026-01-01T00:00:00Z"})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = MinigentAPIClient(
+        ClientConfig(
+            base_url="http://127.0.0.1:8000",
+            wake_phrase="hey minigent",
+            principal=PrincipalConfig(user_id="user-1", tenant_id="tenant-1"),
+        )
+    )
+
+    client.list_threads(limit=10, q="launch plan", archived=True, pinned=True)
+    organized = client.update_thread_organization("thread-1", pinned=True)
+
+    assert requests[0] == (
+        "GET",
+        "http://127.0.0.1:8000/threads?limit=10&offset=0&q=launch+plan&archived=true&pinned=true",
+        None,
+    )
+    assert requests[1] == (
+        "PATCH",
+        "http://127.0.0.1:8000/threads/thread-1/organization",
+        {"pinned": True},
+    )
+    assert organized["pinned_at"]
+
+
 def test_minigent_client_discards_upload_when_message_creation_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5182,8 +5232,9 @@ def test_run_chat_loop_handles_local_chat_commands(
     assert exit_code == 0
     assert output_stream.getvalue() == (
         "[user] [idle] chat commands: /help, /new, /agent [current|preset], "
-        "/llm [current|profile], /options, /skills, /profiles, /threads, /switch <id>, "
-        "/rename <title>, /copy-id, /cancel, "
+        "/llm [current|profile], /options, /skills, /profiles, "
+        "/threads [search <query>|archived], /switch <id>, "
+        "/rename <title>, /pin, /unpin, /archive, /restore, /copy-id, /cancel, "
         "/fork [number|--pick|--message-id UUID], /lineage, /parent, /children [number], "
         "/compact, /actions, "
         "/discard-action <consent-id>, /export [markdown|json], /tokens, "

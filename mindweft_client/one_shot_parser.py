@@ -265,7 +265,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     threads_parser = subparsers.add_parser("threads", help="Manage conversation threads.")
     threads_subparsers = threads_parser.add_subparsers(dest="threads_command")
-    threads_subparsers.add_parser("list", help="List locally remembered threads.")
+    threads_list_parser = threads_subparsers.add_parser(
+        "list", help="List server-side conversation threads."
+    )
+    threads_list_parser.add_argument("--search", default=None, help="Search thread titles.")
+    threads_list_parser.add_argument(
+        "--archived", action="store_true", help="List archived threads instead of active threads."
+    )
+    threads_list_parser.add_argument(
+        "--pinned", action="store_true", help="List only pinned threads."
+    )
 
     threads_create_parser = threads_subparsers.add_parser("create", help="Create a new thread.")
     threads_create_parser.add_argument(
@@ -314,6 +323,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     threads_show_parser = threads_subparsers.add_parser("show", help="Show thread messages.")
     threads_show_parser.add_argument("thread_id", help="Thread ID to display.")
+
+    for command_name in ["pin", "unpin", "archive", "restore"]:
+        organization_parser = threads_subparsers.add_parser(
+            command_name, help=f"{command_name.title()} a thread."
+        )
+        organization_parser.add_argument("thread_id", help="Thread ID to update.")
 
     threads_delete_parser = threads_subparsers.add_parser("delete", help="Delete a thread.")
     threads_delete_parser.add_argument("thread_id", help="Thread ID to delete.")

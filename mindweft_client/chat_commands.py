@@ -392,7 +392,11 @@ def run_threads_list(
     trace_id: str | None,
 ) -> int:
     try:
-        response = client.list_threads()
+        response = client.list_threads(
+            q=getattr(args, "search", None),
+            archived=getattr(args, "archived", False),
+            pinned=True if getattr(args, "pinned", False) else None,
+        )
     except RuntimeError:
         threads = list_remembered_threads(base_url, args)
     else:
@@ -411,13 +415,42 @@ def run_threads_list(
     if not threads:
         print("No locally remembered threads.")
         return 0
-    print("Recent threads")
+    print("Archived threads" if getattr(args, "archived", False) else "Recent threads")
     print("")
     for index, item in enumerate(threads, start=1):
         title = item.title or "Untitled thread"
         updated_at = item.updated_at or "unknown"
         message_count = "?" if item.message_count is None else str(item.message_count)
         print(f"{index}. {updated_at}  {title}  messages={message_count}  {item.thread_id}")
+    return 0
+
+
+def run_threads_organization(
+    args: argparse.Namespace,
+    client: MindweftAPIClient,
+    trace_id: str | None,
+) -> int:
+    command = args.threads_command
+    organization = {
+        "pinned": command == "pin" if command in {"pin", "unpin"} else None,
+        "archived": command == "archive" if command in {"archive", "restore"} else None,
+    }
+    thread = client.update_thread_organization(args.thread_id, **organization)
+    if args.json:
+        output: dict[str, Any] = {"thread": thread}
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    labels = {
+        "pin": "Pinned",
+        "unpin": "Unpinned",
+        "archive": "Archived",
+        "restore": "Restored",
+    }
+    print(f"{labels[command]} thread {args.thread_id}")
     return 0
 
 
