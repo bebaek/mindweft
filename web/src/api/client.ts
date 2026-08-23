@@ -262,6 +262,12 @@ export interface RawThreadContext {
   usage: ThreadContextUsage;
 }
 
+export interface ForkThreadResponse {
+  thread_id: string;
+  parent_thread_id: string;
+  fork_message_id: string;
+}
+
 export interface CompactThreadResponse {
   thread_id: string;
   source_thread_id: string;
@@ -1539,6 +1545,16 @@ export class MinigentApiClient {
     return this.#request<RawThreadContext>(
       `/threads/${encodeURIComponent(threadId)}/context/raw`,
       { signal },
+    );
+  }
+
+  forkThread(threadId: string, messageId: string): Promise<ForkThreadResponse> {
+    return this.#request<ForkThreadResponse>(
+      `/threads/${encodeURIComponent(threadId)}/fork`,
+      {
+        method: "POST",
+        body: JSON.stringify({ at_message_id: messageId }),
+      },
     );
   }
 

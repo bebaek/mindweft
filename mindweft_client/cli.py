@@ -538,6 +538,21 @@ class RememberingMindweftAPIClient:
         if callable(flusher):
             flusher()
 
+    def fork_thread(self, thread_id: str, *, at_message_id: str) -> dict[str, Any]:
+        response = self._client.fork_thread(  # type: ignore[attr-defined]
+            thread_id,
+            at_message_id=at_message_id,
+        )
+        normalized = response if isinstance(response, dict) else {}
+        child_thread_id = normalized.get("thread_id")
+        if isinstance(child_thread_id, str) and child_thread_id:
+            remember_client_thread(
+                self._remembering_config,
+                child_thread_id,
+                title="Branched thread",
+            )
+        return normalized
+
     def compact_thread(self, thread_id: str) -> dict[str, Any]:
         response = self._client.compact_thread(thread_id)  # type: ignore[attr-defined]
         normalized = response if isinstance(response, dict) else {}
@@ -988,6 +1003,9 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         if utterance == "/compact":
             _handle_chat_compact(client, output_stream)
             continue
+        if utterance == "/fork" or utterance.startswith("/fork "):
+            _handle_chat_fork(utterance, client, input_stream, output_stream)
+            continue
         if utterance == "/actions":
             _handle_chat_private_actions(client, output_stream)
             continue
@@ -1127,7 +1145,8 @@ def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
         "[idle] chat commands: /help, /new, /agent [current|preset], /llm [current|profile], "
         "/options, /skills, /profiles, /threads, /switch <id>, /rename <title>, /copy-id, /cancel, "
-        "/compact, /actions, /discard-action <consent-id>, /export [markdown|json], /tokens, "
+        "/fork [number|--pick|--message-id UUID], /compact, /actions, "
+        "/discard-action <consent-id>, /export [markdown|json], /tokens, "
         "/debug, /editor, /image <path...>|paste|list|clear, /commands, "
         "/command set|show|delete, "
         "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
@@ -1828,6 +1847,118 @@ def _handle_chat_discard_private_action(
     output_stream.write(
         f"[idle] discarded {result.get('state', 'unknown')} private action "
         f"{result.get('consent_id', consent_id)}\n"
+    )
+    output_stream.flush()
+
+
+def _fork_message_choices(
+    client: RememberingMindweftAPIClient, thread_id: str
+) -> list[dict[str, Any]]:
+    response = client.get_thread(thread_id)
+    raw_messages = response.get("messages") if isinstance(response, dict) else None
+    if not isinstance(raw_messages, list):
+        return []
+    choices = [
+        message
+        for message in raw_messages
+        if isinstance(message, dict)
+        and isinstance(message.get("id"), str)
+        and (
+            message.get("role") == "user"
+            or (
+                message.get("role") == "assistant"
+                and isinstance(message.get("content"), str)
+                and bool(message["content"].strip())
+            )
+        )
+    ]
+    return choices[-20:]
+
+
+def _fork_message_preview(message: dict[str, Any], *, limit: int = 72) -> str:
+    content = message.get("content")
+    normalized = " ".join(content.split()) if isinstance(content, str) else ""
+    if not normalized:
+        normalized = "[empty]"
+    return normalized if len(normalized) <= limit else normalized[: limit - 3].rstrip() + "..."
+
+
+def _handle_chat_fork(
+    utterance: str,
+    client: RememberingMindweftAPIClient,
+    input_stream: ChatInputStream,
+    output_stream: ChatOutputStream,
+) -> None:
+    thread_id = client.thread_id
+    if not thread_id:
+        output_stream.write("[idle] no current thread\n")
+        output_stream.flush()
+        return
+    try:
+        args = shlex.split(utterance)
+        choices = _fork_message_choices(client, thread_id)
+    except (ValueError, RuntimeError) as exc:
+        output_stream.write(f"[idle] fork failed: {exc}\n")
+        output_stream.flush()
+        return
+    if not choices:
+        output_stream.write("[idle] no messages are available to branch from\n")
+        output_stream.flush()
+        return
+
+    message_id: str | None = None
+    if len(args) == 1:
+        message_id = str(choices[-1]["id"])
+    elif len(args) == 3 and args[1] == "--message-id":
+        message_id = args[2]
+    elif len(args) >= 2 and args[1] == "--message-id":
+        output_stream.write("[idle] usage: /fork --message-id UUID\n")
+        output_stream.flush()
+        return
+    elif len(args) == 2 and args[1] == "--pick":
+        for index, message in enumerate(choices, start=1):
+            role = str(message.get("role", "unknown")).title()
+            output_stream.write(f"  {index:>2}  {role:<9} {_fork_message_preview(message)}\n")
+        output_stream.write("Select message number (blank to cancel): ")
+        output_stream.flush()
+        selection = input_stream.readline().strip()
+        if not selection:
+            output_stream.write("[idle] fork cancelled\n")
+            output_stream.flush()
+            return
+        args = ["/fork", selection]
+
+    if message_id is None and len(args) == 2:
+        try:
+            selected_index = int(args[1])
+        except ValueError:
+            selected_index = 0
+        if selected_index < 1 or selected_index > len(choices):
+            output_stream.write(
+                f"[idle] choose a message number from 1 to {len(choices)}, or use /fork --pick\n"
+            )
+            output_stream.flush()
+            return
+        message_id = str(choices[selected_index - 1]["id"])
+    if message_id is None:
+        output_stream.write("[idle] usage: /fork [number|--pick|--message-id UUID]\n")
+        output_stream.flush()
+        return
+
+    try:
+        result = client.fork_thread(thread_id, at_message_id=message_id)
+    except Exception as exc:
+        output_stream.write(f"[idle] fork failed: {exc}\n")
+        output_stream.flush()
+        return
+    child_thread_id = result.get("thread_id") if isinstance(result, dict) else None
+    if not isinstance(child_thread_id, str) or not child_thread_id:
+        output_stream.write("[idle] fork failed: server did not return a child thread\n")
+        output_stream.flush()
+        return
+    output_stream.write(
+        f"[idle] forked child {child_thread_id} from {thread_id} at the selected message; "
+        "source preserved\n"
     )
     output_stream.flush()
 

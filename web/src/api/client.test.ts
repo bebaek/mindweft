@@ -47,6 +47,33 @@ describe("MinigentApiClient", () => {
     );
   });
 
+  it("forks a thread at an internal message id", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        thread_id: "thread-child",
+        parent_thread_id: "thread/source",
+        fork_message_id: "message-2",
+      }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const result = await new MinigentApiClient({ mode: "session" }).forkThread(
+      "thread/source",
+      "message-2",
+    );
+
+    expect(result.thread_id).toBe("thread-child");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/threads/thread%2Fsource/fork",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ at_message_id: "message-2" }),
+      }),
+    );
+  });
+
   it("uses secure same-origin credentials by default", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ status: "ok" }), {
