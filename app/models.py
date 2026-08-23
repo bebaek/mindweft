@@ -131,6 +131,7 @@ MessagePart = Annotated[TextPart | ImagePart, Field(discriminator="type")]
 class Message(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     thread_id: str
+    source_message_id: str | None = None
     role: MessageRole
     content: str
     parts: list[MessagePart] | None = None
@@ -153,6 +154,8 @@ class Thread(BaseModel):
     skill_names: list[str] | None = None
     capability_profile: str | None = None
     llm_profile: str | None = None
+    parent_thread_id: str | None = None
+    fork_message_id: str | None = None
     status: ThreadStatus = ThreadStatus.IDLE
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -190,6 +193,17 @@ class CreateThreadResponse(BaseModel):
     thread_id: str
 
 
+class ForkThreadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    at_message_id: str = Field(min_length=1)
+
+
+class ForkThreadResponse(BaseModel):
+    thread_id: str
+    parent_thread_id: str
+    fork_message_id: str
+
+
 class ThreadListItem(BaseModel):
     thread_id: str
     title: str
@@ -200,6 +214,8 @@ class ThreadListItem(BaseModel):
     skill_names: list[str] | None = None
     capability_profile: str | None = None
     llm_profile: str | None = None
+    parent_thread_id: str | None = None
+    fork_message_id: str | None = None
     message_count: int = 0
     created_at: datetime
     updated_at: datetime

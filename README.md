@@ -395,6 +395,15 @@ runtime-only input tool under `trusted_input_preprocessor_tools`; keep mutation 
 selected argument paths in `private_value_tool_policies`. DAV credentials and protocol-specific
 environment variables belong on the external sidecar, not the Mindweft process.
 
+## Thread forks
+
+Conversation history can be copied into a new append-only branch through
+`POST /threads/{thread_id}/fork` with `{"at_message_id": "..."}`. The source thread is left
+unchanged; the child inherits the source execution settings and current summarized context, copies
+messages through the selected point with provenance IDs, and records `parent_thread_id` plus
+`fork_message_id`. Fork boundaries may not split an assistant tool call from its tool result.
+Referenced image attachments are cloned into the child thread.
+
 ## Clients
 
 ### Browser

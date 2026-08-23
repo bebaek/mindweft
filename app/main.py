@@ -11,6 +11,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -71,6 +72,8 @@ from app.models import (
     ExecutionOptionItem,
     ExecutionOptionSection,
     ExecutionOptionsResponse,
+    ForkThreadRequest,
+    ForkThreadResponse,
     GenerateThreadTitleResponse,
     Message,
     MessageRole,
@@ -394,6 +397,8 @@ def _thread_list_item(store: ThreadStore, tenant_id: str, thread: Thread) -> Thr
         skill_names=thread.skill_names,
         capability_profile=thread.capability_profile,
         llm_profile=thread.llm_profile,
+        parent_thread_id=thread.parent_thread_id,
+        fork_message_id=thread.fork_message_id,
         message_count=len(messages),
         created_at=thread.created_at,
         updated_at=thread.updated_at,
@@ -408,6 +413,85 @@ def _thread_title(messages: list[Message]) -> str:
         if message.content.strip():
             return generate_thread_title(message.content)
     return "New conversation"
+
+
+def _messages_through(messages: list[Message], at_message_id: str) -> list[Message]:
+    for index, message in enumerate(messages):
+        if message.id != at_message_id:
+            continue
+        if message.role == MessageRole.ASSISTANT and message.tool_name and message.tool_call_id:
+            raise HTTPException(
+                status_code=422,
+                detail=(f"Cannot fork after tool call '{message.tool_call_id}' without its result"),
+            )
+        if message.role == MessageRole.TOOL:
+            previous = messages[index - 1] if index > 0 else None
+            if (
+                previous is None
+                or previous.role != MessageRole.ASSISTANT
+                or not previous.tool_name
+                or not previous.tool_call_id
+                or previous.tool_call_id != message.tool_call_id
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Cannot fork after an orphaned tool result",
+                )
+        return messages[: index + 1]
+    raise HTTPException(status_code=404, detail=f"Message '{at_message_id}' not found")
+
+
+def _clone_fork_attachments(
+    request: Request,
+    *,
+    tenant_id: str,
+    source_thread_id: str,
+    child_thread_id: str,
+    messages: list[Message],
+) -> dict[str, str]:
+    attachment_store = request.app.state.attachment_store
+    settings = request.app.state.attachment_store_settings
+    source_attachment_ids = [
+        part.attachment_id
+        for message in messages
+        for part in (message.parts or [])
+        if part.type == "image" and part.attachment_id is not None
+    ]
+    attachment_id_map: dict[str, str] = {}
+    for source_attachment_id in dict.fromkeys(source_attachment_ids):
+        record = attachment_store.get(
+            tenant_id,
+            source_thread_id,
+            source_attachment_id,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Fork source attachment '{source_attachment_id}' is unavailable",
+            )
+        metadata = attachment_store.put(
+            tenant_id,
+            child_thread_id,
+            mime_type=record.metadata.mime_type,
+            data=record.data,
+            created_by=record.metadata.created_by,
+            max_per_thread=settings.max_per_thread,
+            max_bytes_per_thread=settings.max_bytes_per_thread,
+            max_per_tenant=settings.max_per_tenant,
+            max_bytes_per_tenant=settings.max_bytes_per_tenant,
+            pending_ttl_seconds=settings.pending_ttl_seconds,
+        )
+        attachment_id_map[source_attachment_id] = metadata.attachment_id
+
+    for source_attachment_id in source_attachment_ids:
+        child_attachment_id = attachment_id_map[source_attachment_id]
+        if not attachment_store.mark_referenced(
+            tenant_id,
+            child_thread_id,
+            child_attachment_id,
+        ):
+            raise HTTPException(status_code=500, detail="Failed to reference forked attachment")
+    return attachment_id_map
 
 
 def _validate_and_normalize_message_request(
@@ -1510,6 +1594,68 @@ def create_app(
             llm_profile=llm_profile,
         )
         return CreateThreadResponse(thread_id=thread.thread_id)
+
+    @app.post(
+        "/threads/{thread_id}/fork",
+        response_model=ForkThreadResponse,
+        status_code=201,
+    )
+    async def fork_thread(
+        thread_id: str,
+        body: ForkThreadRequest,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> ForkThreadResponse:
+        execution = resolve_principal_execution(principal)
+        enforce_thread_creation_limit(
+            context=tenant_context_from_request_state(request.state),
+            store=request.app.state.store,
+        )
+        enforce_execution_entitlements(
+            context=tenant_context_from_request_state(request.state),
+            execution=execution,
+        )
+        source_messages = request.app.state.store.list_messages(
+            principal.tenant_id,
+            thread_id,
+        )
+        fork_messages = _messages_through(source_messages, body.at_message_id)
+        child_thread_id = str(uuid4())
+        try:
+            attachment_id_map = _clone_fork_attachments(
+                request,
+                tenant_id=principal.tenant_id,
+                source_thread_id=thread_id,
+                child_thread_id=child_thread_id,
+                messages=fork_messages,
+            )
+            child = request.app.state.store.fork_thread(
+                principal.tenant_id,
+                thread_id,
+                at_message_id=body.at_message_id,
+                child_thread_id=child_thread_id,
+                attachment_id_map=attachment_id_map,
+            )
+        except AttachmentLimitExceeded as exc:
+            request.app.state.attachment_store.delete_thread(
+                principal.tenant_id,
+                child_thread_id,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="attachment storage limit prevents forking this thread",
+            ) from exc
+        except Exception:
+            request.app.state.attachment_store.delete_thread(
+                principal.tenant_id,
+                child_thread_id,
+            )
+            raise
+        return ForkThreadResponse(
+            thread_id=child.thread_id,
+            parent_thread_id=thread_id,
+            fork_message_id=body.at_message_id,
+        )
 
     def persist_image_attachment(
         app_request: Request,

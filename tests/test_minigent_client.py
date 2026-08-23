@@ -2122,6 +2122,14 @@ def test_minigent_api_client_exposes_shared_thread_methods(
             and request.get_method() == "GET"
         ):
             return FakeResponse([{"role": "user", "content": "hello"}])
+        if request.full_url.endswith("/threads/thread-1/fork"):
+            return FakeResponse(
+                {
+                    "thread_id": "thread-2",
+                    "parent_thread_id": "thread-1",
+                    "fork_message_id": "message-1",
+                }
+            )
         if request.full_url.endswith("/threads/thread-1/compact"):
             return FakeResponse({"compacted_message_count": 1, "message_count": 2})
         if request.full_url.endswith("/threads/thread-1/run"):
@@ -2160,6 +2168,12 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "messages": [{"role": "user", "content": "hello"}],
     }
     assert client.run_thread("thread-1", stream=False) == ("hi", None)
+    assert client.fork_thread("thread-1", at_message_id="message-1") == {
+        "thread_id": "thread-2",
+        "parent_thread_id": "thread-1",
+        "fork_message_id": "message-1",
+    }
+    assert client.thread_id == "thread-2"
     assert client.compact_thread("thread-1") == {"compacted_message_count": 1, "message_count": 2}
     client.delete_thread("thread-1")
 
@@ -2172,6 +2186,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "GET",
         "POST",
         "POST",
+        "POST",
         "DELETE",
     ]
     assert requests[3]["payload"] == {
@@ -2180,6 +2195,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "capability_profile": "dev",
         "llm_profile": "claude",
     }
+    assert requests[7]["payload"] == {"at_message_id": "message-1"}
 
 
 def test_minigent_client_discards_upload_when_message_creation_fails(

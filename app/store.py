@@ -17,6 +17,7 @@ from fastapi import HTTPException
 
 from app.models import (
     AuditRecord,
+    ImagePart,
     Message,
     MessageRole,
     Thread,
@@ -90,6 +91,16 @@ class ThreadStore(Protocol):
     ) -> Thread: ...
 
     def delete_thread(self, tenant_id: str, thread_id: str) -> None: ...
+
+    def fork_thread(
+        self,
+        tenant_id: str,
+        source_thread_id: str,
+        *,
+        at_message_id: str,
+        child_thread_id: str | None = None,
+        attachment_id_map: Mapping[str, str] | None = None,
+    ) -> Thread: ...
 
     def prune_threads(
         self,
@@ -280,6 +291,36 @@ class InMemoryThreadStore:
             del self._threads[thread_id]
             del self._contexts[thread_id]
             del self._messages[thread_id]
+
+    def fork_thread(
+        self,
+        tenant_id: str,
+        source_thread_id: str,
+        *,
+        at_message_id: str,
+        child_thread_id: str | None = None,
+        attachment_id_map: Mapping[str, str] | None = None,
+    ) -> Thread:
+        with self._lock:
+            source = self._require_thread(tenant_id, source_thread_id)
+            source_messages = self._messages[source_thread_id]
+            prefix = _fork_message_prefix(source_messages, at_message_id)
+            resolved_child_id = child_thread_id or str(uuid4())
+            if resolved_child_id in self._threads:
+                raise HTTPException(status_code=409, detail="Fork thread ID already exists")
+            child = _forked_thread(source, resolved_child_id, at_message_id)
+            source_context = self._contexts[source_thread_id]
+            self._threads[resolved_child_id] = child
+            self._contexts[resolved_child_id] = ThreadContext(
+                thread_id=resolved_child_id,
+                summary=source_context.summary,
+            )
+            self._messages[resolved_child_id] = _copy_fork_messages(
+                prefix,
+                resolved_child_id,
+                attachment_id_map=attachment_id_map,
+            )
+            return child.model_copy(deep=True)
 
     def prune_threads(
         self,
@@ -837,6 +878,56 @@ class SQLiteThreadStore:
         with self._lock, self._connection() as conn:
             self._require_thread(conn, tenant_id, thread_id)
             conn.execute("DELETE FROM threads WHERE thread_id = ?", (thread_id,))
+
+    def fork_thread(
+        self,
+        tenant_id: str,
+        source_thread_id: str,
+        *,
+        at_message_id: str,
+        child_thread_id: str | None = None,
+        attachment_id_map: Mapping[str, str] | None = None,
+    ) -> Thread:
+        with self._lock, self._connection() as conn:
+            source = self._require_thread(conn, tenant_id, source_thread_id)
+            rows = conn.execute(
+                "SELECT payload FROM messages WHERE thread_id = ? ORDER BY position ASC",
+                (source_thread_id,),
+            ).fetchall()
+            source_messages = [Message.model_validate(json.loads(row[0])) for row in rows]
+            prefix = _fork_message_prefix(source_messages, at_message_id)
+            resolved_child_id = child_thread_id or str(uuid4())
+            if (
+                conn.execute(
+                    "SELECT 1 FROM threads WHERE thread_id = ?", (resolved_child_id,)
+                ).fetchone()
+                is not None
+            ):
+                raise HTTPException(status_code=409, detail="Fork thread ID already exists")
+            child = _forked_thread(source, resolved_child_id, at_message_id)
+            source_context = self._require_context(conn, source_thread_id)
+            child_context = ThreadContext(
+                thread_id=resolved_child_id,
+                summary=source_context.summary,
+            )
+            conn.execute(
+                "INSERT INTO threads (thread_id, tenant_id, payload) VALUES (?, ?, ?)",
+                (resolved_child_id, tenant_id, _dump_model(child)),
+            )
+            conn.execute(
+                "INSERT INTO thread_contexts (thread_id, payload) VALUES (?, ?)",
+                (resolved_child_id, _dump_model(child_context)),
+            )
+            copied_messages = _copy_fork_messages(
+                prefix,
+                resolved_child_id,
+                attachment_id_map=attachment_id_map,
+            )
+            conn.executemany(
+                "INSERT INTO messages (thread_id, payload) VALUES (?, ?)",
+                ((resolved_child_id, _dump_model(message)) for message in copied_messages),
+            )
+            return child
 
     def prune_threads(
         self,
@@ -1642,6 +1733,102 @@ class SQLiteThreadStore:
             "UPDATE thread_contexts SET payload = ? WHERE thread_id = ?",
             (_dump_model(context), context.thread_id),
         )
+
+
+def _fork_message_prefix(messages: list[Message], at_message_id: str) -> list[Message]:
+    boundary = next(
+        (index for index, message in enumerate(messages) if message.id == at_message_id),
+        None,
+    )
+    if boundary is None:
+        raise HTTPException(status_code=404, detail=f"Message '{at_message_id}' not found")
+
+    boundary_message = messages[boundary]
+    if (
+        boundary_message.role == MessageRole.ASSISTANT
+        and boundary_message.tool_name
+        and boundary_message.tool_call_id
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Cannot fork after tool call '{boundary_message.tool_call_id}' without its result"
+            ),
+        )
+    if boundary_message.role == MessageRole.TOOL and (
+        boundary == 0 or not _is_completed_tool_pair(messages[boundary - 1], boundary_message)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot fork after an orphaned tool result",
+        )
+    return messages[: boundary + 1]
+
+
+def _is_completed_tool_pair(assistant_message: Message, tool_message: Message) -> bool:
+    return (
+        assistant_message.role == MessageRole.ASSISTANT
+        and tool_message.role == MessageRole.TOOL
+        and bool(assistant_message.tool_name)
+        and bool(assistant_message.tool_call_id)
+        and assistant_message.tool_call_id == tool_message.tool_call_id
+    )
+
+
+def _forked_thread(source: Thread, child_thread_id: str, at_message_id: str) -> Thread:
+    return Thread(
+        thread_id=child_thread_id,
+        tenant_id=source.tenant_id,
+        execution_user_id=source.execution_user_id,
+        title=source.title,
+        title_source=source.title_source,
+        title_updated_at=source.title_updated_at,
+        skill_name=source.skill_name,
+        skill_names=list(source.skill_names) if source.skill_names is not None else None,
+        capability_profile=source.capability_profile,
+        llm_profile=source.llm_profile,
+        parent_thread_id=source.thread_id,
+        fork_message_id=at_message_id,
+    )
+
+
+def _copy_fork_messages(
+    messages: list[Message],
+    child_thread_id: str,
+    *,
+    attachment_id_map: Mapping[str, str] | None,
+) -> list[Message]:
+    copied: list[Message] = []
+    attachment_id_map = attachment_id_map or {}
+    for message in messages:
+        parts = None
+        if message.parts is not None:
+            parts = [
+                part.model_copy(
+                    deep=True,
+                    update={
+                        "attachment_id": attachment_id_map.get(
+                            part.attachment_id,
+                            part.attachment_id,
+                        )
+                    },
+                )
+                if isinstance(part, ImagePart) and part.attachment_id
+                else part.model_copy(deep=True)
+                for part in message.parts
+            ]
+        copied.append(
+            message.model_copy(
+                deep=True,
+                update={
+                    "id": str(uuid4()),
+                    "thread_id": child_thread_id,
+                    "source_message_id": message.id,
+                    "parts": parts,
+                },
+            )
+        )
+    return copied
 
 
 def build_thread_store_from_env() -> ThreadStore:
