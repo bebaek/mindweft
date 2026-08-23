@@ -2131,7 +2131,9 @@ def test_minigent_api_client_exposes_shared_thread_methods(
                 }
             )
         if request.full_url.endswith("/threads/thread-1/compact"):
-            return FakeResponse({"compacted_message_count": 1, "message_count": 2})
+            return FakeResponse(
+                {"thread_id": "thread-3", "compacted_message_count": 1, "message_count": 2}
+            )
         if request.full_url.endswith("/threads/thread-1/run"):
             return FakeResponse({"reply": "hi"})
         if request.full_url.endswith("/threads/thread-1"):
@@ -2174,7 +2176,12 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "fork_message_id": "message-1",
     }
     assert client.thread_id == "thread-2"
-    assert client.compact_thread("thread-1") == {"compacted_message_count": 1, "message_count": 2}
+    assert client.compact_thread("thread-1") == {
+        "thread_id": "thread-3",
+        "compacted_message_count": 1,
+        "message_count": 2,
+    }
+    assert client.thread_id == "thread-3"
     client.delete_thread("thread-1")
 
     assert [request["method"] for request in requests] == [

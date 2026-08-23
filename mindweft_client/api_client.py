@@ -730,7 +730,11 @@ class MindweftAPIClient:
         )
         if not isinstance(response, dict):
             raise RuntimeError("Mindweft compact-thread response must be an object")
-        return cast(dict[str, Any], response)
+        compacted = cast(dict[str, Any], response)
+        compacted_thread_id = compacted.get("thread_id")
+        if isinstance(compacted_thread_id, str) and compacted_thread_id:
+            self._thread_id = compacted_thread_id
+        return compacted
 
     def cancel_current_run(self, thread_id: str | None = None) -> dict[str, Any] | None:
         resolved_thread_id = thread_id or self._thread_id

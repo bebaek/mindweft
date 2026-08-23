@@ -131,6 +131,46 @@ def test_thread_store_fork_rejects_split_tool_call(store_kind: str, tmp_path: Pa
     ]
 
 
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_thread_store_creates_compacted_fork_from_retained_suffix(
+    store_kind: str, tmp_path: Path
+) -> None:
+    store = (
+        InMemoryThreadStore()
+        if store_kind == "memory"
+        else SQLiteThreadStore(tmp_path / "compacted-fork.db")
+    )
+    source = store.create_thread("tenant-a")
+    messages = [
+        store.append_message(
+            "tenant-a",
+            Message(thread_id=source.thread_id, role=MessageRole.USER, content=f"message-{index}"),
+        )
+        for index in range(10)
+    ]
+
+    child = store.fork_compacted_thread(
+        "tenant-a",
+        source.thread_id,
+        fork_message_id=messages[-1].id,
+        compacted_through_message_id=messages[1].id,
+        summary="User: message-0\nUser: message-1",
+    )
+
+    assert child.parent_thread_id == source.thread_id
+    assert child.fork_message_id == messages[-1].id
+    assert child.compacted_through_message_id == messages[1].id
+    assert [message.content for message in store.list_messages("tenant-a", child.thread_id)] == [
+        f"message-{index}" for index in range(2, 10)
+    ]
+    assert [message.content for message in store.list_messages("tenant-a", source.thread_id)] == [
+        f"message-{index}" for index in range(10)
+    ]
+    assert store.get_thread_context("tenant-a", child.thread_id).summary == (
+        "User: message-0\nUser: message-1"
+    )
+
+
 def test_thread_store_settings_from_env_mapping_uses_defaults() -> None:
     assert ThreadStoreSettings.from_env({}) == ThreadStoreSettings(db_path=None)
 

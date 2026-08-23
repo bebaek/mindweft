@@ -156,6 +156,7 @@ class Thread(BaseModel):
     llm_profile: str | None = None
     parent_thread_id: str | None = None
     fork_message_id: str | None = None
+    compacted_through_message_id: str | None = None
     status: ThreadStatus = ThreadStatus.IDLE
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -216,6 +217,7 @@ class ThreadListItem(BaseModel):
     llm_profile: str | None = None
     parent_thread_id: str | None = None
     fork_message_id: str | None = None
+    compacted_through_message_id: str | None = None
     message_count: int = 0
     created_at: datetime
     updated_at: datetime

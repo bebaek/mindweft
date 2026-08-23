@@ -400,6 +400,7 @@ def _thread_list_item(store: ThreadStore, tenant_id: str, thread: Thread) -> Thr
         llm_profile=thread.llm_profile,
         parent_thread_id=thread.parent_thread_id,
         fork_message_id=thread.fork_message_id,
+        compacted_through_message_id=thread.compacted_through_message_id,
         message_count=len(messages),
         created_at=thread.created_at,
         updated_at=thread.updated_at,
@@ -1989,19 +1990,102 @@ def create_app(
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> dict[str, object]:
         store = request.app.state.store
-        before_messages = store.list_messages(principal.tenant_id, thread_id)
-        before_context = store.get_thread_context(principal.tenant_id, thread_id)
-        before_usage = estimate_thread_context_usage(before_messages, context=before_context)
-        context = request.app.state.runtime.compact_thread(principal, thread_id)
-        after_messages = store.list_messages(principal.tenant_id, thread_id)
-        after_usage = estimate_thread_context_usage(after_messages, context=context)
+        source_thread = store.get_thread(principal.tenant_id, thread_id)
+        if source_thread.status == ThreadStatus.RUNNING:
+            raise HTTPException(status_code=409, detail="Cannot compact a running thread")
+        plan = request.app.state.runtime.plan_thread_compaction(principal, thread_id)
+        before_usage = estimate_thread_context_usage(
+            plan.source_messages,
+            context=plan.source_context,
+        )
+        if plan.compacted_message_count <= 0:
+            return {
+                "thread_id": thread_id,
+                "source_thread_id": thread_id,
+                "fork_message_id": None,
+                "compacted_through_message_id": None,
+                "summary": plan.source_context.summary,
+                "compacted_message_count": 0,
+                "message_count": len(plan.source_messages),
+                "usage_before": before_usage,
+                "usage": before_usage,
+            }
+
+        enforce_thread_creation_limit(
+            context=tenant_context_from_request_state(request.state),
+            store=store,
+        )
+        execution = resolve_principal_execution(principal)
+        enforce_execution_entitlements(
+            context=tenant_context_from_request_state(request.state),
+            execution=execution,
+        )
+        fork_message_id = plan.fork_message_id
+        compacted_through_message_id = plan.compacted_through_message_id
+        assert fork_message_id is not None
+        assert compacted_through_message_id is not None
+        child_thread_id = str(uuid4())
+        child_created = False
+        try:
+            attachment_id_map = _clone_fork_attachments(
+                request,
+                tenant_id=principal.tenant_id,
+                source_thread_id=thread_id,
+                child_thread_id=child_thread_id,
+                messages=plan.retained_messages,
+            )
+            private_value_references = _fork_private_value_references(
+                plan.retained_messages,
+                plan.summary,
+            )
+            request.app.state.runtime.copy_private_values(
+                principal,
+                thread_id,
+                child_thread_id,
+                private_value_references,
+            )
+            child = store.fork_compacted_thread(
+                principal.tenant_id,
+                thread_id,
+                fork_message_id=fork_message_id,
+                compacted_through_message_id=compacted_through_message_id,
+                summary=plan.summary,
+                child_thread_id=child_thread_id,
+                attachment_id_map=attachment_id_map,
+            )
+            child_created = True
+        except AttachmentLimitExceeded as exc:
+            request.app.state.runtime.clear_private_values(principal, child_thread_id)
+            request.app.state.attachment_store.delete_thread(
+                principal.tenant_id,
+                child_thread_id,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="attachment storage limit prevents compacting this thread",
+            ) from exc
+        except Exception:
+            request.app.state.runtime.clear_private_values(principal, child_thread_id)
+            request.app.state.attachment_store.delete_thread(
+                principal.tenant_id,
+                child_thread_id,
+            )
+            if child_created:
+                store.delete_thread(principal.tenant_id, child_thread_id)
+            raise
+
+        child_messages = store.list_messages(principal.tenant_id, child.thread_id)
+        child_context = store.get_thread_context(principal.tenant_id, child.thread_id)
         return {
-            "thread_id": thread_id,
-            "summary": context.summary,
-            "compacted_message_count": len(before_messages) - len(after_messages),
-            "message_count": len(after_messages),
+            "thread_id": child.thread_id,
+            "source_thread_id": thread_id,
+            "fork_message_id": fork_message_id,
+            "compacted_through_message_id": compacted_through_message_id,
+            "summary": child_context.summary,
+            "compacted_message_count": plan.compacted_message_count,
+            "message_count": len(child_messages),
             "usage_before": before_usage,
-            "usage": after_usage,
+            "usage": estimate_thread_context_usage(child_messages, context=child_context),
         }
 
     @app.post("/threads/{thread_id}/run", response_model=RunThreadResponse)

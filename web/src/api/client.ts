@@ -264,6 +264,9 @@ export interface RawThreadContext {
 
 export interface CompactThreadResponse {
   thread_id: string;
+  source_thread_id: string;
+  fork_message_id: string | null;
+  compacted_through_message_id: string | null;
   summary: string;
   compacted_message_count: number;
   message_count: number;

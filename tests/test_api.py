@@ -1660,15 +1660,168 @@ def test_thread_manual_compact_endpoint_summarizes_older_messages() -> None:
 
     assert compact_response.status_code == 200
     compacted = compact_response.json()
+    child_id = compacted["thread_id"]
+    assert child_id != thread_id
+    assert compacted["source_thread_id"] == thread_id
+    assert compacted["fork_message_id"]
+    assert compacted["compacted_through_message_id"]
     assert compacted["compacted_message_count"] == 2
     assert compacted["message_count"] == 8
     assert "User: message-0" in compacted["summary"]
     assert "User: message-1" in compacted["summary"]
-    raw_context = client.get(f"/threads/{thread_id}/context/raw", headers=AUTH_HEADERS).json()
-    assert raw_context["summary"] == compacted["summary"]
-    assert [message["content"] for message in raw_context["messages"]] == [
+    source_context = client.get(f"/threads/{thread_id}/context/raw", headers=AUTH_HEADERS).json()
+    assert source_context["summary"] == ""
+    assert [message["content"] for message in source_context["messages"]] == [
+        f"message-{index}" for index in range(10)
+    ]
+    child_context = client.get(f"/threads/{child_id}/context/raw", headers=AUTH_HEADERS).json()
+    assert child_context["summary"] == compacted["summary"]
+    assert [message["content"] for message in child_context["messages"]] == [
         f"message-{index}" for index in range(2, 10)
     ]
+
+
+def test_thread_manual_compact_clones_retained_state_and_preserves_source_state() -> None:
+    store = InMemoryThreadStore()
+    attachment_store = InMemoryAttachmentStore()
+    source = store.create_thread("tenant-1", execution_user_id="user-1")
+    image_data = base64.b64decode(PNG_1X1_BASE64)
+    prefix_attachment = attachment_store.put(
+        "tenant-1", source.thread_id, mime_type="image/png", data=image_data, created_by="user-1"
+    )
+    retained_attachment = attachment_store.put(
+        "tenant-1", source.thread_id, mime_type="image/png", data=image_data, created_by="user-1"
+    )
+    assert attachment_store.mark_referenced(
+        "tenant-1", source.thread_id, prefix_attachment.attachment_id
+    )
+    assert attachment_store.mark_referenced(
+        "tenant-1", source.thread_id, retained_attachment.attachment_id
+    )
+    prefix_placeholder = "{" * 2 + "pii:email:prefix-ref" + "}" * 2
+    retained_placeholder = "{" * 2 + "pii:phone:retained-ref" + "}" * 2
+    store.append_message(
+        "tenant-1",
+        Message(
+            thread_id=source.thread_id,
+            role=MessageRole.USER,
+            content="prefix image",
+            parts=[ImagePart(mime_type="image/png", attachment_id=prefix_attachment.attachment_id)],
+        ),
+    )
+    store.append_message(
+        "tenant-1",
+        Message(
+            thread_id=source.thread_id,
+            role=MessageRole.USER,
+            content=prefix_placeholder,
+        ),
+    )
+    store.append_message(
+        "tenant-1",
+        Message(
+            thread_id=source.thread_id,
+            role=MessageRole.USER,
+            content=retained_placeholder,
+            parts=[
+                ImagePart(mime_type="image/png", attachment_id=retained_attachment.attachment_id)
+            ],
+        ),
+    )
+    for index in range(3, 10):
+        store.append_message(
+            "tenant-1",
+            Message(
+                thread_id=source.thread_id,
+                role=MessageRole.USER,
+                content=f"message-{index}",
+            ),
+        )
+    app = create_app(
+        thread_store=store,
+        attachment_store=attachment_store,
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=build_local_tool_registry(),
+    )
+    private_store = app.state.runtime._private_value_store
+    private_store.add(
+        "tenant-1",
+        source.thread_id,
+        {"prefix-ref": "prefix-sensitive", "retained-ref": "retained-sensitive"},
+        user_id="user-1",
+        kinds={"prefix-ref": "email", "retained-ref": "phone"},
+    )
+    client = TestClient(app)
+
+    response = client.post(f"/threads/{source.thread_id}/compact", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    child_id = response.json()["thread_id"]
+    assert child_id != source.thread_id
+    assert attachment_store.usage("tenant-1", source.thread_id) == (2, len(image_data) * 2)
+    assert attachment_store.usage("tenant-1", child_id) == (1, len(image_data))
+    child_messages = store.list_messages("tenant-1", child_id)
+    child_image = next(
+        part
+        for message in child_messages
+        for part in (message.parts or [])
+        if isinstance(part, ImagePart)
+    )
+    assert child_image.attachment_id != retained_attachment.attachment_id
+    assert (
+        private_store.resolve_for_tool("tenant-1", child_id, prefix_placeholder, user_id="user-1")
+        == "prefix-sensitive"
+    )
+    assert (
+        private_store.resolve_for_tool("tenant-1", child_id, retained_placeholder, user_id="user-1")
+        == "retained-sensitive"
+    )
+    assert (
+        attachment_store.get("tenant-1", source.thread_id, prefix_attachment.attachment_id)
+        is not None
+    )
+    assert (
+        attachment_store.get("tenant-1", source.thread_id, retained_attachment.attachment_id)
+        is not None
+    )
+
+
+def test_thread_manual_compact_endpoint_is_noop_for_short_thread() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    client.post(
+        f"/threads/{thread_id}/messages",
+        json={"content": "only message"},
+        headers=AUTH_HEADERS,
+    )
+
+    response = client.post(f"/threads/{thread_id}/compact", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["thread_id"] == thread_id
+    assert response.json()["source_thread_id"] == thread_id
+    assert response.json()["compacted_message_count"] == 0
+    assert client.get("/threads", headers=AUTH_HEADERS).json()["total"] == 1
+
+
+def test_thread_manual_compact_endpoint_rejects_running_thread() -> None:
+    store = InMemoryThreadStore()
+    thread = store.create_thread("tenant-1")
+    store.start_run("tenant-1", thread.thread_id)
+    client = TestClient(
+        create_app(
+            thread_store=store,
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+
+    response = client.post(f"/threads/{thread.thread_id}/compact", headers=AUTH_HEADERS)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Cannot compact a running thread"
 
 
 def test_create_app_uses_runtime_max_iterations_from_env(monkeypatch) -> None:

@@ -8,6 +8,11 @@ package version is `0.1.0`.
 
 ## [Unreleased]
 
+### Added
+
+- Manual thread compaction now creates a summarized child fork and preserves the complete source
+  thread; CLI and browser clients continue on the returned child automatically.
+
 ### Fixed
 
 - Thread forks now copy unexpired private values referenced by inherited context into the child
