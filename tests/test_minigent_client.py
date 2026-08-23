@@ -4995,6 +4995,84 @@ def test_run_chat_loop_rebuilds_prompt_history_after_thread_switch(
     assert (tmp_path / "home" / ".local" / "state" / "mindweft" / "cli-state.json").exists()
 
 
+def test_chat_fork_picker_uses_display_number_without_exposing_ids() -> None:
+    class ForkClient:
+        thread_id = "thread-source"
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def get_thread(self, thread_id: str) -> dict[str, object]:
+            assert thread_id == self.thread_id
+            return {
+                "thread_id": thread_id,
+                "messages": [
+                    {"id": "hidden-user-id", "role": "user", "content": "Plan the migration"},
+                    {
+                        "id": "hidden-assistant-id",
+                        "role": "assistant",
+                        "content": "Here is the plan",
+                    },
+                    {"id": "hidden-tool-id", "role": "tool", "content": "ignored"},
+                ],
+            }
+
+        def fork_thread(self, thread_id: str, *, at_message_id: str) -> dict[str, str]:
+            self.calls.append((thread_id, at_message_id))
+            self.thread_id = "thread-child"
+            return {
+                "thread_id": "thread-child",
+                "parent_thread_id": thread_id,
+                "fork_message_id": at_message_id,
+            }
+
+    client = ForkClient()
+    output = TtyStringIO()
+
+    voice_cli._handle_chat_fork("/fork --pick", client, StringIO("2\n"), output)
+
+    assert client.calls == [("thread-source", "hidden-assistant-id")]
+    rendered = output.getvalue()
+    assert "1  User" in rendered
+    assert "Plan the migration" in rendered
+    assert "2  Assistant" in rendered
+    assert "Here is the plan" in rendered
+    assert "hidden-user-id" not in rendered
+    assert "hidden-assistant-id" not in rendered
+    assert "source preserved" in rendered
+
+
+def test_chat_fork_without_argument_uses_latest_visible_message() -> None:
+    class ForkClient:
+        thread_id = "thread-source"
+
+        def __init__(self) -> None:
+            self.selected: str | None = None
+
+        def get_thread(self, thread_id: str) -> dict[str, object]:
+            return {
+                "thread_id": thread_id,
+                "messages": [
+                    {"id": "message-1", "role": "user", "content": "Question"},
+                    {"id": "message-2", "role": "assistant", "content": "Answer"},
+                ],
+            }
+
+        def fork_thread(self, thread_id: str, *, at_message_id: str) -> dict[str, str]:
+            self.selected = at_message_id
+            return {
+                "thread_id": "thread-child",
+                "parent_thread_id": thread_id,
+                "fork_message_id": at_message_id,
+            }
+
+    client = ForkClient()
+
+    voice_cli._handle_chat_fork("/fork", client, StringIO(), TtyStringIO())
+
+    assert client.selected == "message-2"
+
+
 def test_run_chat_loop_handles_local_chat_commands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5021,7 +5099,8 @@ def test_run_chat_loop_handles_local_chat_commands(
         "[user] [idle] chat commands: /help, /new, /agent [current|preset], "
         "/llm [current|profile], /options, /skills, /profiles, /threads, /switch <id>, "
         "/rename <title>, /copy-id, /cancel, "
-        "/compact, /actions, /discard-action <consent-id>, /export [markdown|json], /tokens, "
+        "/fork [number|--pick|--message-id UUID], /compact, /actions, "
+        "/discard-action <consent-id>, /export [markdown|json], /tokens, "
         "/debug, /editor, /image <path...>|paste|list|clear, /commands, "
         "/command set|show|delete, "
         "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "

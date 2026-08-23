@@ -57,6 +57,7 @@ export function WorkspacePage() {
   const [liveThinking, setLiveThinking] = useState<string | null>(null);
   const [streamedReply, setStreamedReply] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [branchNotice, setBranchNotice] = useState<string | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [mobileThreadRailOpen, setMobileThreadRailOpen] = useState(false);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
@@ -135,6 +136,21 @@ export function WorkspacePage() {
     queryFn: ({ signal }) => api.listMessages(selectedThreadId!, signal),
     enabled: selectedThreadId !== null,
     retry: false,
+  });
+  const forkThread = useMutation({
+    mutationFn: ({ threadId, messageId }: { threadId: string; messageId: string }) =>
+      api.forkThread(threadId, messageId),
+    onSuccess: (result) => {
+      setError(null);
+      const sourceTitle = selectedTitle(threads.data?.threads, result.parent_thread_id);
+      setBranchNotice(`Branched from “${sourceTitle}”. The source thread was preserved.`);
+      setSelectedThreadId(result.thread_id);
+      void queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+    onError: (caught) => {
+      setBranchNotice(null);
+      setError(caught instanceof Error ? caught.message : "Could not branch from this message.");
+    },
   });
 
   useEffect(() => {
@@ -401,6 +417,7 @@ export function WorkspacePage() {
     setStreamedReply(null);
     setActivity([]);
     setError(null);
+    setBranchNotice(null);
     for (const image of pendingImages) URL.revokeObjectURL(image.previewUrl);
     setPendingImages([]);
   }
@@ -439,6 +456,7 @@ export function WorkspacePage() {
                   setStreamedReply(null);
                   setActivity([]);
                   setError(null);
+                  setBranchNotice(null);
                 }
               }}
             />
@@ -472,6 +490,16 @@ export function WorkspacePage() {
               <MessageImages message={message} />
               {message.role === "assistant" && showThinking && reasoningSummary(message.metadata) && <details className="thinking-summary"><summary>Thinking summary</summary><p>{reasoningSummary(message.metadata)}</p></details>}
               {message.role === "assistant" && <PersistedToolActivity steps={persistedToolSteps(messages.data, message.id)} />}
+              <div className="message-actions">
+                <button
+                  type="button"
+                  className="message-branch-action"
+                  disabled={!selectedThreadId || isRunning || forkThread.isPending}
+                  onClick={() => selectedThreadId && forkThread.mutate({ threadId: selectedThreadId, messageId: message.id })}
+                >
+                  Branch from here
+                </button>
+              </div>
             </article>
           ))}
           {liveThinking !== null && isRunning && (
@@ -482,6 +510,7 @@ export function WorkspacePage() {
           )}
           {streamedReply !== null && <article className="chat-message assistant streaming"><span className="message-author">Mindweft</span><RenderedAssistantMessage content={streamedReply} /></article>}
           {isRunning && streamedReply === null && <div className="thinking-row"><i /><i /><i /><span>Working</span></div>}
+          {branchNotice && <div className="branch-notice" role="status">{branchNotice}</div>}
           {error && <div className="conversation-error" role="alert">{error}</div>}
           <div ref={messagesEndRef} />
         </div>

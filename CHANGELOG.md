@@ -10,6 +10,9 @@ package version is `0.1.0`.
 
 ### Added
 
+- Browser messages now provide a **Branch from here** action, and interactive CLI branching supports
+  the latest visible message, numbered recent-message selection, an interactive picker, and an
+  advanced explicit message-ID option.
 - Manual thread compaction now creates a summarized child fork and preserves the complete source
   thread; CLI and browser clients continue on the returned child automatically.
 

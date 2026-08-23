@@ -411,6 +411,9 @@ and leaves the source messages and source-owned data unchanged. Short threads re
 without creating a child, and running threads cannot be manually compacted. Optional automatic
 compaction is disabled by default; when enabled, it advances an in-thread model-context projection
 (summary plus active suffix) while preserving every raw message and attachment in the same thread.
+The browser exposes **Branch from here** on each visible message. Interactive CLI users can run
+`/fork` for the latest visible message, `/fork N` for one of the 20 recent numbered messages,
+`/fork --pick` to display and select that list, or `/fork --message-id UUID` for advanced use.
 
 ## Clients
 

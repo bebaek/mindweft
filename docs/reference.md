@@ -144,6 +144,12 @@ message tail in a summarized child fork while preserving the source. Set
 smaller prompts at the cost of resetting/changing the cacheable prefix. Automatic compaction updates
 only the model-visible summary boundary; raw messages and attachments remain stored and exportable.
 
+Create a lossless child at any safe conversational boundary with
+`POST /threads/{thread_id}/fork`. The browser provides **Branch from here** on visible messages. In
+interactive CLI chat, use `/fork` for the latest visible message, `/fork --pick` to select from the
+20 most recent visible messages, `/fork N` to reuse a displayed number, or
+`/fork --message-id UUID` for advanced API-oriented workflows.
+
 Mindweft does not cache model replies locally. Native LLM adapters do preserve and report
 provider-side prompt-cache usage when the provider includes it in response metadata.
 For provider debugging, set `MINDWEFT_LLM_DEBUG_LOG_RESPONSES=true` to log raw LLM

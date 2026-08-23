@@ -232,6 +232,11 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 34px 56px; }
 .chat-message.user .message-content { border-color:var(--forest); border-radius:14px 4px 14px 14px; color:white; background:var(--forest); }
 .plain-message-content { white-space:pre-wrap; }
 .chat-message.streaming .message-content { border-color:#cddbcf; }
+.message-actions { display:flex; justify-content:flex-end; margin-top:6px; opacity:.65; transition:opacity .15s ease; }
+.chat-message:hover .message-actions, .chat-message:focus-within .message-actions { opacity:1; }
+.message-branch-action { padding:4px 8px; border:0; color:var(--muted); background:transparent; font-size:var(--text-sm); text-decoration:underline; text-underline-offset:2px; }
+.message-branch-action:hover:not(:disabled) { color:var(--forest); }
+.branch-notice { max-width:720px; margin:0 auto 14px; padding:10px 12px; border:1px solid #b9cfbd; border-radius:8px; color:var(--forest); background:#edf5ee; font-size:var(--text-control); }
 .markdown-content { overflow-x:auto; }
 .markdown-content > :first-child { margin-top:0; }
 .markdown-content > :last-child { margin-bottom:0; }
