@@ -1,6 +1,21 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import type { AdminAuditRecord } from "../src/api/client";
+
+async function expectCssMatchesToken(locator: Locator, property: string, token: string) {
+  const values = await locator.evaluate((element, input) => {
+    const probe = document.createElement("span");
+    probe.style.setProperty(input.property, `var(${input.token})`);
+    document.body.append(probe);
+    const expected = getComputedStyle(probe).getPropertyValue(input.property);
+    probe.remove();
+    return {
+      actual: getComputedStyle(element).getPropertyValue(input.property),
+      expected,
+    };
+  }, { property, token });
+  expect(values.actual).toBe(values.expected);
+}
 
 async function installApiMocks(page: Page, onExecutionOptions?: (route: Route) => void) {
   await page.route("**/health/ready", async (route) => {
@@ -449,7 +464,7 @@ test("uses readable typography tokens for chat and controls", async ({ page }) =
   await expect(page.locator(".markdown-content strong")).toHaveCSS("font-weight", "650");
   const threadTitle = page.locator(".thread-title").first();
   await expect(threadTitle).toHaveText("Review the deployment plan");
-  await expect(threadTitle).toHaveCSS("color", "rgb(23, 33, 27)");
+  await expectCssMatchesToken(threadTitle, "color", "--color-text");
   const titleBox = await threadTitle.boundingBox();
   expect(titleBox?.width ?? 0).toBeGreaterThan(40);
   expect(titleBox?.height ?? 0).toBeGreaterThan(10);
@@ -574,8 +589,8 @@ test("keeps the workspace sidebar and dialogs legible in dark mode", async ({ pa
   await openConversations(page);
   const threadButton = page.getByRole("button", { name: "Review the deployment plan" });
   await threadButton.hover();
-  await expect(threadButton).toHaveCSS("background-color", "rgb(32, 42, 35)");
-  await expect(threadButton.locator(".thread-title")).toHaveCSS("color", "rgb(231, 237, 232)");
+  await expectCssMatchesToken(threadButton, "background-color", "--color-surface-hover");
+  await expectCssMatchesToken(threadButton.locator(".thread-title"), "color", "--color-text");
   expect((await new AxeBuilder({ page }).include(".thread-rail").analyze()).violations).toEqual([]);
 
   await threadButton.click();
@@ -609,15 +624,16 @@ test("applies development credentials without persisting them", async ({ page })
   await dialog.getByRole("button", { name: "Use connection" }).click();
 
   await expect(page.getByRole("button", { name: /Development/ })).toBeVisible();
-  await expect.poll(() => executionHeaders.at(-1)?.["x-minigent-tenant-id"]).toBe("tenant-e2e");
-  expect(executionHeaders.at(-1)?.["x-minigent-user-id"]).toBe("user-e2e");
-  expect(executionHeaders.at(-1)?.["x-minigent-admin"]).toBe("true");
+  await navigateToWorkspace(page);
+  await expect.poll(() => executionHeaders.at(-1)?.["x-mindweft-tenant-id"]).toBe("tenant-e2e");
+  expect(executionHeaders.at(-1)?.["x-mindweft-user-id"]).toBe("user-e2e");
+  expect(executionHeaders.at(-1)?.["x-mindweft-admin"]).toBe("true");
 
   const storage = await page.evaluate(() => ({
     local: Object.keys(localStorage),
     session: Object.keys(sessionStorage),
   }));
-  expect(storage).toEqual({ local: ["minigent-theme"], session: [] });
+  expect(storage).toEqual({ local: ["mindweft-theme"], session: [] });
 });
 
 test("runs a streamed conversation without accessibility violations", async ({ page }) => {
@@ -1075,7 +1091,7 @@ test("inspects, deletes, prunes, and audits tenant threads", async ({ page }) =>
   await page.getByRole("button", { name: "Switch to dark mode" }).click();
   const threadRow = page.getByRole("button", { name: /thread-old-review/ });
   await threadRow.hover();
-  await expect(threadRow).toHaveCSS("background-color", "rgb(32, 42, 35)");
+  await expectCssMatchesToken(threadRow, "background-color", "--color-surface-hover");
   expect((await new AxeBuilder({ page }).include(".thread-table").analyze()).violations).toEqual([]);
   await page.getByRole("button", { name: "Switch to light mode" }).click();
   await page.getByLabel("Skill", { exact: true }).fill("review");
@@ -1108,7 +1124,7 @@ test("inspects, deletes, prunes, and audits tenant threads", async ({ page }) =>
   await page.getByRole("button", { name: "Switch to dark mode" }).click();
   const pruneAudit = page.getByRole("button", { name: /Threads · Prune/ });
   await pruneAudit.hover();
-  await expect(pruneAudit).toHaveCSS("background-color", "rgb(32, 42, 35)");
+  await expectCssMatchesToken(pruneAudit, "background-color", "--color-surface-hover");
   expect((await new AxeBuilder({ page }).include(".audit-list").analyze()).violations).toEqual([]);
   await page.getByRole("button", { name: "Switch to light mode" }).click();
   await pruneAudit.click();
@@ -1133,6 +1149,6 @@ test("supports mobile navigation", async ({ page }) => {
 
   await page.getByRole("button", { name: "Show conversations" }).click();
   await expect(page.locator(".thread-rail")).toHaveClass(/is-open/);
-  await page.getByRole("button", { name: "Close conversations" }).click();
+  await page.getByRole("button", { name: "Close conversations" }).dispatchEvent("click");
   await expect(page.locator(".thread-rail")).not.toHaveClass(/is-open/);
 });

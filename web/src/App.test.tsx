@@ -8,6 +8,7 @@ afterEach(() => {
   cleanup();
   window.history.replaceState(null, "", "/");
   delete document.documentElement.dataset.theme;
+  document.documentElement.classList.remove("dark", "light");
   document.documentElement.style.removeProperty("color-scheme");
 });
 
@@ -149,6 +150,8 @@ it("renders the production console shell and readiness status", async () => {
   const themeToggle = screen.getByRole("button", { name: "Switch to dark mode" });
   fireEvent.click(themeToggle);
   expect(document.documentElement.dataset.theme).toBe("dark");
+  expect(document.documentElement).toHaveClass("dark");
+  expect(document.documentElement).not.toHaveClass("light");
   expect(window.localStorage.getItem("mindweft-theme")).toBe("dark");
   expect(window.localStorage.getItem("minigent-theme")).toBeNull();
   expect(screen.getByRole("button", { name: "Switch to light mode" })).toBeInTheDocument();
@@ -166,6 +169,8 @@ it("migrates the legacy Minigent theme preference", async () => {
 
   expect(await screen.findByText("Ready")).toBeInTheDocument();
   expect(document.documentElement.dataset.theme).toBe("dark");
+  expect(document.documentElement).toHaveClass("dark");
+  expect(document.documentElement).not.toHaveClass("light");
   expect(window.localStorage.getItem("mindweft-theme")).toBe("dark");
   expect(window.localStorage.getItem("minigent-theme")).toBeNull();
 });

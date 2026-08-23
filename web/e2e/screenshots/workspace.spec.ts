@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import { installDemoWorkspaceMocks } from "../fixtures/demo-api-mocks";
 
@@ -116,4 +117,46 @@ test("captures the workspace with a demo chat", async ({ page }, testInfo) => {
     path: `test-results/screenshots/workspace-${testInfo.project.name}.png`,
     fullPage: true,
   });
+});
+
+test("applies distinct curated branch hover colors in light and dark themes", async ({ page }) => {
+  await installDemoWorkspaceMocks(page);
+  await page.goto("/", { waitUntil: "networkidle" });
+
+  const menu = page.getByRole("button", { name: "Open navigation" });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole("button", { name: "Workspace" }).click();
+  const conversations = page.getByRole("button", { name: "Show conversations" });
+  if (await conversations.isVisible()) await conversations.click();
+  await page.getByRole("button", { name: /Plan the product launch/ }).click();
+  const branchAction = page.getByRole("button", { name: "Branch from here" }).first();
+  await branchAction.hover();
+  await page.waitForTimeout(200);
+
+  const lightStyles = await branchAction.evaluate((element) => {
+    const styles = getComputedStyle(element);
+    return { color: styles.color, backgroundColor: styles.backgroundColor };
+  });
+  const lightAccessibility = await new AxeBuilder({ page })
+    .include(".message-actions")
+    .withRules(["color-contrast"])
+    .analyze();
+  expect(lightAccessibility.violations).toEqual([]);
+  await page.getByRole("button", { name: "Switch to dark mode" }).click();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await branchAction.hover();
+  await page.waitForTimeout(200);
+  const darkStyles = await branchAction.evaluate((element) => {
+    const styles = getComputedStyle(element);
+    return { color: styles.color, backgroundColor: styles.backgroundColor };
+  });
+
+  expect(lightStyles.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(darkStyles.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(darkStyles).not.toEqual(lightStyles);
+  const darkAccessibility = await new AxeBuilder({ page })
+    .include(".message-actions")
+    .withRules(["color-contrast"])
+    .analyze();
+  expect(darkAccessibility.violations).toEqual([]);
 });

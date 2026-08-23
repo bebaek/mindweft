@@ -28,6 +28,9 @@ package version is `0.1.0`.
 
 ### Changed
 
+- The browser now derives its core light and dark theme tokens from curated Radix Sage, Green, Lime,
+  Amber, and Red scales; semantic application tokens replace component-specific theme color pairs
+  for interactive, positive, warning, focus, message, and error states.
 - Opt-in automatic compaction now advances a model-visible summary boundary without deleting raw
   messages or attachments; direct `AgentRuntime` construction also defaults automatic compaction to
   disabled, matching server configuration.
