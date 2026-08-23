@@ -45,6 +45,14 @@ describe("visibleChatMessages", () => {
     expect(visibleChatMessages([assistant], null)).toEqual([assistant]);
   });
 
+  it("hides empty assistant tool-call records from the transcript", () => {
+    const user = message("user-1", "user", "Check the thermostat");
+    const toolCall = { ...message("assistant-tool-1", "assistant", ""), tool_name: "get_state", tool_call_id: "call-1" };
+    const assistant = message("assistant-1", "assistant", "The thermostat is online.");
+
+    expect(visibleChatMessages([user, toolCall, assistant], null)).toEqual([user, assistant]);
+  });
+
   it("continues to exclude system and tool messages", () => {
     const user = message("user-1", "user", "Hello");
     const system = message("system-1", "system", "System context");

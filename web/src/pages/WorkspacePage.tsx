@@ -28,7 +28,14 @@ interface PendingImage {
 
 interface ActivityItem {
   id: number;
+  type: string;
   label: string;
+  toolName?: string;
+  toolCallId?: string;
+  arguments?: unknown;
+  result?: unknown;
+  durationMs?: number;
+  startedAt?: number;
   error?: boolean;
 }
 
@@ -142,11 +149,17 @@ export function WorkspacePage() {
     [],
   );
 
-  function addActivity(label: string, event?: RunEvent) {
+  function addActivity(label: string, event?: RunEvent, details: Partial<ActivityItem> = {}) {
     activityId.current += 1;
     setActivity((items) => [
       ...items,
-      { id: activityId.current, label, error: event?.type === "run.error" },
+      {
+        id: activityId.current,
+        type: event?.type ?? "status",
+        label,
+        error: event?.type === "run.error",
+        ...details,
+      },
     ]);
   }
 
@@ -162,7 +175,45 @@ export function WorkspacePage() {
       }
       return;
     }
-    if (event.type === "assistant.message") {
+    if (event.type === "tool.call") {
+      const toolName = eventToolName(event);
+      addActivity(`Calling ${toolName}`, event, {
+        toolName,
+        toolCallId: eventToolCallId(event),
+        arguments: event.arguments,
+        startedAt: Date.now(),
+      });
+    } else if (event.type === "tool.result") {
+      const toolCallId = eventToolCallId(event);
+      const completedAt = Date.now();
+      setActivity((items) => {
+        const index = items.findIndex((item) => item.toolCallId === toolCallId);
+        if (index < 0) {
+          activityId.current += 1;
+          return [...items, {
+            id: activityId.current,
+            type: event.type,
+            label: `Completed ${eventToolName(event)}`,
+            toolName: eventToolName(event),
+            toolCallId,
+            result: event.result,
+            error: event.is_error === true,
+          }];
+        }
+        const updated = [...items];
+        const item = updated[index];
+        updated[index] = {
+          ...item,
+          label: `${item.toolName ?? eventToolName(event)} ${event.is_error === true ? "failed" : "completed"}`,
+          result: event.result,
+          durationMs: item.startedAt === undefined ? undefined : Math.max(0, completedAt - item.startedAt),
+          error: event.is_error === true,
+        };
+        return updated;
+      });
+    } else if (event.type === "llm.progress") {
+      return;
+    } else if (event.type === "assistant.message") {
       setStreamedReply(event.content ?? "");
       addActivity("Assistant response received", event);
     } else if (event.type === "run.error") {
@@ -412,7 +463,22 @@ export function WorkspacePage() {
         {activity.length > 0 && (
           <details className="activity-tray">
             <summary><span>Run activity</span><small>{activity.at(-1)?.label}</small></summary>
-            <ol>{activity.map((item) => <li className={item.error ? "error" : ""} key={item.id}><span />{item.label}</li>)}</ol>
+            <ol>{activity.map((item) => (
+              <li className={item.error ? "error" : ""} key={item.id}>
+                <span />
+                <div className="activity-item-content">
+                  <strong>{item.label}</strong>
+                  {item.durationMs !== undefined && <small>{formatDuration(item.durationMs)}</small>}
+                  {(item.arguments !== undefined || item.result !== undefined) && (
+                    <details className="activity-details">
+                      <summary>Details</summary>
+                      {item.arguments !== undefined && <ActivityPayload label="Arguments" value={item.arguments} />}
+                      {item.result !== undefined && <ActivityPayload label="Result" value={item.result} />}
+                    </details>
+                  )}
+                </div>
+              </li>
+            ))}</ol>
           </details>
         )}
 
@@ -563,13 +629,48 @@ function relativeTime(value: string) {
   return `${String(Math.floor(hours / 24))}d`;
 }
 
+function ActivityPayload({ label, value }: { label: string; value: unknown }) {
+  return (
+    <div className="activity-payload">
+      <small>{label}</small>
+      <pre>{formatPayload(value)}</pre>
+    </div>
+  );
+}
+
+function formatPayload(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatDuration(milliseconds: number): string {
+  if (milliseconds < 1000) return `${String(milliseconds)}ms`;
+  return `${(milliseconds / 1000).toFixed(1)}s`;
+}
+
+function eventToolName(event: RunEvent): string {
+  if (typeof event.name === "string" && event.name.trim()) return event.name;
+  if (typeof event.tool_name === "string" && event.tool_name.trim()) return event.tool_name;
+  return "tool";
+}
+
+function eventToolCallId(event: RunEvent): string | undefined {
+  if (typeof event.tool_call_id === "string") return event.tool_call_id;
+  if (typeof event.call_id === "string") return event.call_id;
+  return undefined;
+}
+
 function formatRunEvent(event: RunEvent) {
   const labels: Record<string, string> = {
     "run.started": "Run started",
     "llm.request": "Requesting model response",
     "llm.response": "Model response received",
-    "tool.call": `Calling ${typeof event.tool_name === "string" ? event.tool_name : "tool"}`,
-    "tool.result": `Completed ${typeof event.tool_name === "string" ? event.tool_name : "tool"}`,
+    "tool.call": `Calling ${eventToolName(event)}`,
+    "tool.result": `Completed ${eventToolName(event)}`,
     "run.completed": "Run completed",
   };
   return labels[event.type] ?? event.type.replaceAll(".", " ");
