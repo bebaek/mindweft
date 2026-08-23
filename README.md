@@ -408,7 +408,9 @@ extending their expiry; pending private-tool consent actions remain only on the 
 Manual `POST /threads/{thread_id}/compact` uses the same lineage model: when compaction is needed it
 creates a summarized child containing the retained recent suffix, returns the child as `thread_id`,
 and leaves the source messages and source-owned data unchanged. Short threads return a no-op response
-without creating a child, and running threads cannot be manually compacted.
+without creating a child, and running threads cannot be manually compacted. Optional automatic
+compaction is disabled by default; when enabled, it advances an in-thread model-context projection
+(summary plus active suffix) while preserving every raw message and attachment in the same thread.
 
 ## Clients
 

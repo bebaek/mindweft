@@ -23,6 +23,9 @@ package version is `0.1.0`.
 
 ### Changed
 
+- Opt-in automatic compaction now advances a model-visible summary boundary without deleting raw
+  messages or attachments; direct `AgentRuntime` construction also defaults automatic compaction to
+  disabled, matching server configuration.
 - Principal-scoped built-in user MCP tools now use the canonical `mindweft_user_mcp.*` prefix
   instead of the legacy `minigent_user_mcp.*` prefix. Existing `shared:minigent-user-mcp` profile
   references remain accepted for stored-configuration compatibility.
