@@ -308,6 +308,11 @@ Available during interactive chat:
 | `/rename <title>` | Rename the current thread. |
 | `/copy-id` | Copy the current thread ID. |
 | `/cancel` | Cancel the current run. |
+| `/fork` | Create and switch to a child branch at the latest visible message. |
+| `/fork --pick` or `/fork <number>` | Select a recent visible message and branch from it without handling message IDs. |
+| `/lineage` | Show the current thread's available parent, siblings, and direct children by title. |
+| `/parent` | Switch to the available parent thread. |
+| `/children [number]` | List direct children or switch to a numbered child. |
 | `/compact` | Manually compact thread context. |
 | `/export [markdown\|json]` | Export the current thread transcript. |
 | `/tokens` | Show estimated current thread size. |

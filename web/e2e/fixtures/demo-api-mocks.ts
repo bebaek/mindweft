@@ -102,6 +102,10 @@ export async function installDemoWorkspaceMocks(page: Page) {
       await route.fulfill(fulfill({ threads: [thread], total: 1, limit: 50, offset: 0 }));
       return;
     }
+    if (url.pathname === "/threads/thread-1/lineage") {
+      await route.fulfill(fulfill({ thread, parent: null, children: [], siblings: [] }));
+      return;
+    }
     await route.continue();
   });
   await page.route("**/threads/thread-1/messages", (route) =>

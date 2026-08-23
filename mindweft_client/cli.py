@@ -1006,6 +1006,9 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         if utterance == "/fork" or utterance.startswith("/fork "):
             _handle_chat_fork(utterance, client, input_stream, output_stream)
             continue
+        if utterance in {"/lineage", "/parent", "/children"} or utterance.startswith("/children "):
+            _handle_chat_lineage(utterance, client, config, output_stream)
+            continue
         if utterance == "/actions":
             _handle_chat_private_actions(client, output_stream)
             continue
@@ -1145,7 +1148,8 @@ def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
         "[idle] chat commands: /help, /new, /agent [current|preset], /llm [current|profile], "
         "/options, /skills, /profiles, /threads, /switch <id>, /rename <title>, /copy-id, /cancel, "
-        "/fork [number|--pick|--message-id UUID], /compact, /actions, "
+        "/fork [number|--pick|--message-id UUID], /lineage, /parent, /children [number], "
+        "/compact, /actions, "
         "/discard-action <consent-id>, /export [markdown|json], /tokens, "
         "/debug, /editor, /image <path...>|paste|list|clear, /commands, "
         "/command set|show|delete, "
@@ -1848,6 +1852,102 @@ def _handle_chat_discard_private_action(
         f"[idle] discarded {result.get('state', 'unknown')} private action "
         f"{result.get('consent_id', consent_id)}\n"
     )
+    output_stream.flush()
+
+
+def _lineage_item_title(item: object) -> str:
+    if not isinstance(item, dict):
+        return "Untitled conversation"
+    title = item.get("title")
+    return title.strip() if isinstance(title, str) and title.strip() else "Untitled conversation"
+
+
+def _lineage_items(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        item
+        for item in value
+        if isinstance(item, dict)
+        and isinstance(item.get("thread_id"), str)
+        and bool(item["thread_id"])
+    ]
+
+
+def _handle_chat_lineage(
+    utterance: str,
+    client: RememberingMindweftAPIClient,
+    config: ClientConfig,
+    output_stream: ChatOutputStream,
+) -> None:
+    thread_id = client.thread_id
+    if not thread_id:
+        output_stream.write("[idle] no current thread\n")
+        output_stream.flush()
+        return
+    try:
+        lineage = client.get_thread_lineage(thread_id)
+    except RuntimeError as exc:
+        output_stream.write(f"[idle] lineage failed: {exc}\n")
+        output_stream.flush()
+        return
+
+    parent = lineage.get("parent")
+    children = _lineage_items(lineage.get("children"))
+    siblings = _lineage_items(lineage.get("siblings"))
+    current = lineage.get("thread")
+    if utterance == "/parent":
+        parent_id = parent.get("thread_id") if isinstance(parent, dict) else None
+        if not isinstance(parent_id, str) or not parent_id:
+            output_stream.write("[idle] this thread has no available parent\n")
+            output_stream.flush()
+            return
+        _switch_to_thread(parent_id, client, config, output_stream)
+        return
+    if utterance.startswith("/children "):
+        selection = utterance.removeprefix("/children").strip()
+        try:
+            child_number = int(selection)
+        except ValueError:
+            child_number = 0
+        if child_number < 1 or child_number > len(children):
+            output_stream.write(
+                f"[idle] choose a child number from 1 to {len(children)}\n"
+                if children
+                else "[idle] this thread has no child branches\n"
+            )
+            output_stream.flush()
+            return
+        _switch_to_thread(
+            str(children[child_number - 1]["thread_id"]), client, config, output_stream
+        )
+        return
+    if utterance == "/children":
+        if not children:
+            output_stream.write("[idle] this thread has no child branches\n")
+        else:
+            output_stream.write("[idle] child branches:\n")
+            for index, child in enumerate(children, start=1):
+                output_stream.write(f"  {index:>2}  {_lineage_item_title(child)}\n")
+        output_stream.flush()
+        return
+
+    output_stream.write("[idle] thread lineage:\n")
+    if isinstance(parent, dict):
+        output_stream.write(f"  Parent   {_lineage_item_title(parent)}\n")
+    elif isinstance(current, dict) and current.get("parent_thread_id"):
+        output_stream.write("  Parent   [unavailable]\n")
+    else:
+        output_stream.write("  Parent   [none]\n")
+    output_stream.write(f"  Current  {_lineage_item_title(current)}\n")
+    if siblings:
+        output_stream.write("  Siblings\n")
+        for index, sibling in enumerate(siblings, start=1):
+            output_stream.write(f"    {index:>2}  {_lineage_item_title(sibling)}\n")
+    if children:
+        output_stream.write("  Children\n")
+        for index, child in enumerate(children, start=1):
+            output_stream.write(f"    {index:>2}  {_lineage_item_title(child)}\n")
     output_stream.flush()
 
 

@@ -1433,6 +1433,97 @@ def test_thread_fork_endpoint_copies_prefix_and_records_lineage() -> None:
     ]
 
 
+def test_thread_lineage_endpoint_returns_parent_and_direct_children() -> None:
+    store = InMemoryThreadStore()
+    source = store.create_thread("tenant-1", execution_user_id="user-1")
+    store.set_thread_title("tenant-1", source.thread_id, title="Source plan", source="manual")
+    boundary = store.append_message(
+        "tenant-1",
+        Message(thread_id=source.thread_id, role=MessageRole.USER, content="branch here"),
+    )
+    first_child = store.fork_thread(
+        "tenant-1",
+        source.thread_id,
+        at_message_id=boundary.id,
+    )
+    second_child = store.fork_thread(
+        "tenant-1",
+        source.thread_id,
+        at_message_id=boundary.id,
+    )
+    other_tenant_thread = store.create_thread("tenant-2", execution_user_id="user-2")
+    client = TestClient(
+        create_app(
+            thread_store=store,
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+
+    source_response = client.get(
+        f"/threads/{source.thread_id}/lineage",
+        headers=AUTH_HEADERS,
+    )
+    child_response = client.get(
+        f"/threads/{first_child.thread_id}/lineage",
+        headers=AUTH_HEADERS,
+    )
+
+    assert source_response.status_code == 200
+    source_payload = source_response.json()
+    assert source_payload["thread"]["thread_id"] == source.thread_id
+    assert source_payload["parent"] is None
+    assert [child["thread_id"] for child in source_payload["children"]] == [
+        first_child.thread_id,
+        second_child.thread_id,
+    ]
+    assert other_tenant_thread.thread_id not in {
+        child["thread_id"] for child in source_payload["children"]
+    }
+    assert child_response.status_code == 200
+    child_payload = child_response.json()
+    assert child_payload["thread"]["thread_id"] == first_child.thread_id
+    assert child_payload["parent"]["thread_id"] == source.thread_id
+    assert child_payload["parent"]["title"] == "Source plan"
+    assert child_payload["children"] == []
+    assert [sibling["thread_id"] for sibling in child_payload["siblings"]] == [
+        second_child.thread_id
+    ]
+    other_tenant_response = client.get(
+        f"/threads/{source.thread_id}/lineage",
+        headers={
+            "X-Mindweft-User-Id": "user-2",
+            "X-Mindweft-Tenant-Id": "tenant-2",
+        },
+    )
+    assert other_tenant_response.status_code == 404
+
+
+def test_thread_lineage_endpoint_tolerates_a_deleted_parent() -> None:
+    store = InMemoryThreadStore()
+    source = store.create_thread("tenant-1", execution_user_id="user-1")
+    boundary = store.append_message(
+        "tenant-1",
+        Message(thread_id=source.thread_id, role=MessageRole.USER, content="branch here"),
+    )
+    child = store.fork_thread("tenant-1", source.thread_id, at_message_id=boundary.id)
+    store.delete_thread("tenant-1", source.thread_id)
+    client = TestClient(
+        create_app(
+            thread_store=store,
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+        )
+    )
+
+    response = client.get(f"/threads/{child.thread_id}/lineage", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["parent"] is None
+    assert response.json()["siblings"] == []
+    assert response.json()["thread"]["parent_thread_id"] == source.thread_id
+
+
 def test_thread_fork_endpoint_copies_referenced_private_values_only() -> None:
     store = InMemoryThreadStore()
     source = store.create_thread("tenant-1", execution_user_id="user-1")

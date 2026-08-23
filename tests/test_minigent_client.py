@@ -2122,6 +2122,15 @@ def test_minigent_api_client_exposes_shared_thread_methods(
             and request.get_method() == "GET"
         ):
             return FakeResponse([{"role": "user", "content": "hello"}])
+        if request.full_url.endswith("/threads/thread-1/lineage"):
+            return FakeResponse(
+                {
+                    "thread": {"thread_id": "thread-1", "title": "Source"},
+                    "parent": None,
+                    "children": [],
+                    "siblings": [],
+                }
+            )
         if request.full_url.endswith("/threads/thread-1/fork"):
             return FakeResponse(
                 {
@@ -2169,6 +2178,12 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "thread_id": "thread-1",
         "messages": [{"role": "user", "content": "hello"}],
     }
+    assert client.get_thread_lineage("thread-1") == {
+        "thread": {"thread_id": "thread-1", "title": "Source"},
+        "parent": None,
+        "children": [],
+        "siblings": [],
+    }
     assert client.run_thread("thread-1", stream=False) == ("hi", None)
     assert client.fork_thread("thread-1", at_message_id="message-1") == {
         "thread_id": "thread-2",
@@ -2191,6 +2206,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "POST",
         "POST",
         "GET",
+        "GET",
         "POST",
         "POST",
         "POST",
@@ -2202,7 +2218,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "capability_profile": "dev",
         "llm_profile": "claude",
     }
-    assert requests[7]["payload"] == {"at_message_id": "message-1"}
+    assert requests[8]["payload"] == {"at_message_id": "message-1"}
 
 
 def test_minigent_client_discards_upload_when_message_creation_fails(
@@ -5073,6 +5089,75 @@ def test_chat_fork_without_argument_uses_latest_visible_message() -> None:
     assert client.selected == "message-2"
 
 
+def test_chat_lineage_uses_titles_without_exposing_thread_ids() -> None:
+    class LineageClient:
+        thread_id = "thread-current"
+
+        def get_thread_lineage(self, thread_id: str) -> dict[str, object]:
+            assert thread_id == self.thread_id
+            return {
+                "thread": {
+                    "thread_id": "thread-current",
+                    "title": "Current approach",
+                    "parent_thread_id": "thread-parent",
+                },
+                "parent": {"thread_id": "thread-parent", "title": "Original plan"},
+                "siblings": [{"thread_id": "thread-sibling", "title": "Alternative plan"}],
+                "children": [{"thread_id": "thread-child", "title": "Detailed follow-up"}],
+            }
+
+    output = TtyStringIO()
+
+    voice_cli._handle_chat_lineage(
+        "/lineage",
+        LineageClient(),
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+        output,
+    )
+
+    rendered = output.getvalue()
+    assert "Parent   Original plan" in rendered
+    assert "Current  Current approach" in rendered
+    assert "Alternative plan" in rendered
+    assert "Detailed follow-up" in rendered
+    assert "thread-parent" not in rendered
+    assert "thread-child" not in rendered
+
+
+def test_chat_children_number_switches_to_selected_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LineageClient:
+        thread_id = "thread-current"
+
+        def get_thread_lineage(self, thread_id: str) -> dict[str, object]:
+            return {
+                "thread": {"thread_id": thread_id, "title": "Current"},
+                "parent": None,
+                "siblings": [],
+                "children": [
+                    {"thread_id": "thread-child-1", "title": "First child"},
+                    {"thread_id": "thread-child-2", "title": "Second child"},
+                ],
+            }
+
+    switched: list[str] = []
+    monkeypatch.setattr(
+        voice_cli,
+        "_switch_to_thread",
+        lambda thread_id, client, config, output: switched.append(thread_id),
+    )
+
+    voice_cli._handle_chat_lineage(
+        "/children 2",
+        LineageClient(),
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+        TtyStringIO(),
+    )
+
+    assert switched == ["thread-child-2"]
+
+
 def test_run_chat_loop_handles_local_chat_commands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5099,7 +5184,8 @@ def test_run_chat_loop_handles_local_chat_commands(
         "[user] [idle] chat commands: /help, /new, /agent [current|preset], "
         "/llm [current|profile], /options, /skills, /profiles, /threads, /switch <id>, "
         "/rename <title>, /copy-id, /cancel, "
-        "/fork [number|--pick|--message-id UUID], /compact, /actions, "
+        "/fork [number|--pick|--message-id UUID], /lineage, /parent, /children [number], "
+        "/compact, /actions, "
         "/discard-action <consent-id>, /export [markdown|json], /tokens, "
         "/debug, /editor, /image <path...>|paste|list|clear, /commands, "
         "/command set|show|delete, "

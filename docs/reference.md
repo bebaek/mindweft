@@ -145,10 +145,14 @@ smaller prompts at the cost of resetting/changing the cacheable prefix. Automati
 only the model-visible summary boundary; raw messages and attachments remain stored and exportable.
 
 Create a lossless child at any safe conversational boundary with
-`POST /threads/{thread_id}/fork`. The browser provides **Branch from here** on visible messages. In
-interactive CLI chat, use `/fork` for the latest visible message, `/fork --pick` to select from the
-20 most recent visible messages, `/fork N` to reuse a displayed number, or
-`/fork --message-id UUID` for advanced API-oriented workflows.
+`POST /threads/{thread_id}/fork`. Retrieve the current thread, its available parent, direct children,
+and sibling branches with `GET /threads/{thread_id}/lineage`; a deleted parent is represented as
+`null` while the current thread retains its `parent_thread_id`. The browser provides **Branch from
+here** on visible messages plus persistent lineage navigation. In interactive CLI chat, use `/fork`
+for the latest visible message, `/fork --pick` to select from the 20 most recent visible messages,
+`/fork N` to reuse a displayed number, or `/fork --message-id UUID` for advanced API-oriented
+workflows. Use `/lineage`, `/parent`, and `/children [number]` to inspect and navigate relationships
+without handling thread IDs.
 
 Mindweft does not cache model replies locally. Native LLM adapters do preserve and report
 provider-side prompt-cache usage when the provider includes it in response metadata.

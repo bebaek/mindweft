@@ -101,6 +101,38 @@ test("persists the selected agent as the user default", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Make default" })).toHaveCount(0);
 });
 
+test("shows parent, sibling, and child lineage without exposing ids", async ({ page }) => {
+  await installDemoWorkspaceMocks(page);
+  await page.route("**/threads/thread-1/lineage", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      thread: { thread_id: "thread-1", title: "Current branch", parent_thread_id: "thread-parent", status: "idle", message_count: 2, created_at: "2026-08-07T12:00:00Z", updated_at: "2026-08-07T12:01:00Z" },
+      parent: { thread_id: "thread-parent", title: "Original launch plan", status: "idle", message_count: 4, created_at: "2026-08-06T12:00:00Z", updated_at: "2026-08-07T12:00:00Z" },
+      siblings: [{ thread_id: "thread-sibling", title: "Partner launch", status: "idle", message_count: 3, created_at: "2026-08-07T12:00:00Z", updated_at: "2026-08-07T12:00:00Z" }],
+      children: [{ thread_id: "thread-child", title: "Launch timeline", status: "idle", message_count: 3, created_at: "2026-08-08T12:00:00Z", updated_at: "2026-08-08T12:00:00Z" }],
+    }),
+  }));
+  await page.goto("/", { waitUntil: "networkidle" });
+
+  const menu = page.getByRole("button", { name: "Open navigation" });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole("button", { name: "Workspace" }).click();
+  const conversations = page.getByRole("button", { name: "Show conversations" });
+  if (await conversations.isVisible()) await conversations.click();
+  await page.getByRole("button", { name: /Plan the product launch/ }).click();
+
+  const lineage = page.getByRole("navigation", { name: "Conversation branches" });
+  await expect(lineage.getByText("Branched from")).toBeVisible();
+  await expect(lineage.getByRole("button", { name: "Original launch plan" })).toBeVisible();
+  await lineage.getByText("2 related branches").click();
+  await expect(lineage.getByText("Sibling branches")).toBeVisible();
+  await expect(lineage.getByRole("button", { name: "Partner launch" })).toBeVisible();
+  await expect(lineage.getByText("Child branches")).toBeVisible();
+  await expect(lineage.getByRole("button", { name: "Launch timeline" })).toBeVisible();
+  await expect(lineage).not.toContainText("thread-parent");
+  expect((await new AxeBuilder({ page }).include(".thread-lineage").analyze()).violations).toEqual([]);
+});
+
 test("captures the workspace with a demo chat", async ({ page }, testInfo) => {
   await installDemoWorkspaceMocks(page);
   await page.goto("/", { waitUntil: "networkidle" });
