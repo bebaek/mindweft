@@ -194,6 +194,12 @@ test("captures the workspace with a demo chat", async ({ page }, testInfo) => {
   await page.getByRole("button", { name: /Plan the product launch/ }).click();
   await page.waitForTimeout(300);
 
+  const sidebarAccessibility = await new AxeBuilder({ page })
+    .include(".sidebar-utilities")
+    .withRules(["color-contrast"])
+    .analyze();
+  expect(sidebarAccessibility.violations).toEqual([]);
+
   await page.screenshot({
     path: `test-results/screenshots/workspace-${testInfo.project.name}.png`,
     fullPage: true,

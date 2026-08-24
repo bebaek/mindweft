@@ -83,14 +83,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-footer"><span className="environment-dot" /><div><strong>Mindweft API</strong><small>Same-origin connection</small></div></div>
-      </aside>
-      {mobileNavOpen && <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
-
-      <div className="main-column">
-        <header className="topbar">
-          <button className="menu-button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation">☰</button>
-          <div><strong>{pages[page].label}</strong><small>{pages[page].description}</small></div>
+        <div className="sidebar-utilities">
           <button
             type="button"
             className="theme-toggle"
@@ -112,6 +105,15 @@ export function App() {
             <span>{sessionLabel(authentication.mode, session.principal?.user_id)}</span>
             <small>{authentication.mode === "session" && session.authenticated ? "Sign out" : "Configure"}</small>
           </button>
+        </div>
+        <div className="sidebar-footer"><span className="environment-dot" /><div><strong>Mindweft API</strong><small>Same-origin connection</small></div></div>
+      </aside>
+      {mobileNavOpen && <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
+
+      <div className="main-column">
+        <header className="topbar">
+          <button className="menu-button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation">☰</button>
+          <div><strong>{pages[page].label}</strong><small>{pages[page].description}</small></div>
         </header>
         <main id="main-content">
           {page === "overview" && <OverviewPage />}
