@@ -5397,7 +5397,8 @@ def test_run_chat_loop_handles_status_command(
         "LLM status · profile generic-oauth · provider generic-oauth · model gpt-5.6-sol" in output
     )
     assert "plan prolite · active limit premium" in output
-    assert "primary: 6% used · 7d window · resets in 58m" in output
+    assert "\nprimary: 6% used · 7d window · resets in 58m\n" in output
+    assert "[idle] primary:" not in output
     assert "GPT-5.3-Codex-Spark primary: 0% used · 5h window · resets in 4h 58m" in output
     assert "GPT-5.3-Codex-Spark secondary: 0% used · 7d window · resets in 6d 23h" in output
     assert "credits: none" in output
