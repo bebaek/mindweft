@@ -73,11 +73,8 @@ class MindweftAPIClient:
             raise RuntimeError("Mindweft execution-options response must be an object")
         return cast(dict[str, Any], response)
 
-    def llm_provider_status(self, tenant_id: str) -> dict[str, Any]:
-        response = self.request_json(
-            "GET",
-            f"{self._config.base_url}/admin/tenants/{tenant_id}/llm-provider-status",
-        )
+    def llm_provider_status(self) -> dict[str, Any]:
+        response = self.request_json("GET", f"{self._config.base_url}/llm-provider-status")
         if not isinstance(response, dict):
             raise RuntimeError("Mindweft LLM provider-status response must be an object")
         return cast(dict[str, Any], response)

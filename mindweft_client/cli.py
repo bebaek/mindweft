@@ -981,7 +981,7 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             _handle_chat_llm(utterance, client, config, output_stream)
             continue
         if utterance == "/status":
-            _handle_chat_status(client, config, output_stream)
+            _handle_chat_status(client, output_stream)
             continue
         if utterance in {"/options", "/skills", "/profiles", "/capabilities"}:
             _handle_chat_execution_options(utterance, client, output_stream)
@@ -1233,14 +1233,13 @@ def _handle_chat_llm(
 
 def _handle_chat_status(
     client: RememberingMindweftAPIClient,
-    config: ClientConfig,
     output_stream: ChatOutputStream,
 ) -> None:
     try:
-        response = client.llm_provider_status(config.principal.tenant_id)
+        response = client.llm_provider_status()
     except MindweftAPIError as exc:
         if exc.status_code == 403:
-            output_stream.write("[idle] LLM provider status requires admin access\n")
+            output_stream.write("[idle] LLM provider status access is not enabled\n")
         else:
             output_stream.write(f"[idle] LLM provider status unavailable: {exc}\n")
         output_stream.flush()

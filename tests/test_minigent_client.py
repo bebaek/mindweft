@@ -2110,7 +2110,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
                     "capability_profiles": {"default": None, "items": []},
                 }
             )
-        if request.full_url.endswith("/admin/tenants/tenant-1/llm-provider-status"):
+        if request.full_url.endswith("/llm-provider-status"):
             return FakeResponse({"tenant_id": "tenant-1", "default_profile": None, "profiles": []})
         if request.full_url.endswith("/threads"):
             return FakeResponse({"thread_id": "thread-1"})
@@ -2169,7 +2169,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         },
         "capability_profiles": {"default": None, "items": []},
     }
-    assert client.llm_provider_status("tenant-1") == {
+    assert client.llm_provider_status() == {
         "tenant_id": "tenant-1",
         "default_profile": None,
         "profiles": [],
@@ -5333,8 +5333,7 @@ def test_run_chat_loop_handles_status_command(
             self.thread_id = "thread-1"
             return {"thread_id": "thread-1"}
 
-        def llm_provider_status(self, tenant_id: str) -> dict[str, object]:
-            assert tenant_id == "demo-tenant"
+        def llm_provider_status(self) -> dict[str, object]:
             return {
                 "default_profile": "generic-oauth",
                 "profiles": [
