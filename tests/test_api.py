@@ -7227,6 +7227,44 @@ def test_admin_thread_inspection_requires_admin() -> None:
     assert prune_response.status_code == 403
 
 
+def test_admin_llm_provider_status_is_redacted_and_admin_only() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    forbidden = client.get(
+        "/admin/tenants/tenant-1/llm-provider-status",
+        headers=AUTH_HEADERS,
+    )
+    assert forbidden.status_code == 403
+
+    response = client.get(
+        "/admin/tenants/tenant-1/llm-provider-status",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "tenant_id": "tenant-1",
+        "default_profile": None,
+        "profiles": [
+            {
+                "profile": None,
+                "provider": "mock",
+                "model": None,
+                "rate_limits": {
+                    "status": "unavailable",
+                    "source": "last_provider_response",
+                    "observed_at": None,
+                    "requests": None,
+                    "tokens": None,
+                },
+                "codex_usage": None,
+            }
+        ],
+    }
+
+
 def test_admin_api_seeds_environment_execution_tenants(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

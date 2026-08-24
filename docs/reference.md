@@ -1743,6 +1743,7 @@ Admin endpoints:
 - `GET /admin/execution-config-tenants`
 - `GET /admin/tenants/{tenant_id}/attachments/statistics`
 - `GET /admin/tenants/{tenant_id}/run-concurrency`
+- `GET /admin/tenants/{tenant_id}/llm-provider-status`
 - `GET /admin/tenants/{tenant_id}/threads`
 - `GET /admin/tenants/{tenant_id}/threads/{thread_id}`
 - `DELETE /admin/tenants/{tenant_id}/threads/{thread_id}`
@@ -1792,6 +1793,16 @@ filters for the paginated audit log. Audit detail expansion displays only the al
 returned by the admin API.
 
 The attachment statistics endpoint returns only tenant-level counts and byte totals split across pending, referenced, and lifecycle-exempt records, plus the oldest pending timestamp and age and the configured tenant quota. It does not read or return attachment contents or per-record metadata. The run-concurrency endpoint returns only aggregate active-run and active-user counts, the next lease expiration, and configured capacities/timings; it does not expose user IDs, thread IDs, or lease IDs.
+
+The admin-only LLM provider status endpoint reports each effective LLM profile and the most recent
+provider limit snapshot. OpenAI Platform-compatible responses expose request/token values from the
+six recognized `x-ratelimit-{limit,remaining,reset}-{requests,tokens}` headers. OpenAI OAuth Codex
+responses expose their active limit and plan, primary and secondary rolling-window usage and reset
+timing, credit status, and the allowlisted `bengalfox` model-specific limit from `x-codex-*`
+headers. Credentials, cookies, opaque turn state, request IDs, arbitrary provider headers, and raw
+response bodies are never retained. A snapshot is process-local, may be unavailable until a model
+request returns recognized headers, and must not be interpreted as live availability or a Mindweft
+tenant budget.
 
 The packaged CLI can inspect and manage the same tenant registry and thread data when authenticated as an admin:
 

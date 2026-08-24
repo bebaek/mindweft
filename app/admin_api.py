@@ -354,6 +354,67 @@ class AdminTenantAttachmentStatisticsResponse(BaseModel):
     max_bytes: int
 
 
+class AdminProviderRateLimitDimension(BaseModel):
+    limit: str | None = None
+    remaining: str | None = None
+    reset: str | None = None
+
+
+class AdminProviderRateLimits(BaseModel):
+    status: Literal["unavailable", "observed"]
+    source: Literal["last_provider_response"]
+    observed_at: datetime | None = None
+    requests: AdminProviderRateLimitDimension | None = None
+    tokens: AdminProviderRateLimitDimension | None = None
+
+
+class AdminCodexLimitWindow(BaseModel):
+    used_percent: int | None = None
+    window_minutes: int | None = None
+    reset_after_seconds: int | None = None
+    reset_at: int | None = None
+    over_secondary_limit_percent: int | None = None
+
+
+class AdminCodexCredits(BaseModel):
+    balance: str | None = None
+    has_credits: bool | None = None
+    unlimited: bool | None = None
+
+
+class AdminCodexAdditionalLimit(BaseModel):
+    id: str
+    name: str | None = None
+    primary: AdminCodexLimitWindow | None = None
+    secondary: AdminCodexLimitWindow | None = None
+
+
+class AdminCodexUsageStatus(BaseModel):
+    status: Literal["observed"]
+    source: Literal["last_provider_response"]
+    observed_at: datetime
+    active_limit: str | None = None
+    plan_type: str | None = None
+    primary: AdminCodexLimitWindow | None = None
+    secondary: AdminCodexLimitWindow | None = None
+    credits: AdminCodexCredits | None = None
+    additional_limits: list[AdminCodexAdditionalLimit] = Field(default_factory=list)
+
+
+class AdminLLMProviderStatusItem(BaseModel):
+    profile: str | None = None
+    provider: str
+    model: str | None = None
+    rate_limits: AdminProviderRateLimits
+    codex_usage: AdminCodexUsageStatus | None = None
+
+
+class AdminTenantLLMProviderStatusResponse(BaseModel):
+    tenant_id: str
+    default_profile: str | None = None
+    profiles: list[AdminLLMProviderStatusItem]
+
+
 class AdminTenantRunConcurrencyResponse(BaseModel):
     tenant_id: str
     active_runs: int
@@ -1974,6 +2035,30 @@ def build_admin_router() -> APIRouter:
             user_capacity=policy.user_capacity,
             lease_seconds=policy.lease_seconds,
             heartbeat_seconds=policy.heartbeat_seconds,
+        )
+
+    @router.get(
+        "/tenants/{tenant_id}/llm-provider-status",
+        response_model=AdminTenantLLMProviderStatusResponse,
+    )
+    async def get_tenant_llm_provider_status(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> AdminTenantLLMProviderStatusResponse:
+        _ = admin
+        context = request.app.state.execution_resolver.resolve(tenant_id)
+        adapters = [(None, context.llm_adapter), *sorted(context.llm_adapters.items())]
+        return AdminTenantLLMProviderStatusResponse(
+            tenant_id=tenant_id,
+            default_profile=context.config.default_llm_profile,
+            profiles=[
+                AdminLLMProviderStatusItem(
+                    profile=profile,
+                    **adapter.provider_status(),
+                )
+                for profile, adapter in adapters
+            ],
         )
 
     @router.get(
