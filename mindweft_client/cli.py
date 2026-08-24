@@ -1279,30 +1279,28 @@ def _handle_chat_status(
     profile_label = selected.get("profile") or "default"
     provider = selected.get("provider") or "unknown"
     model = selected.get("model") or "unknown"
-    output_stream.write(
-        f"[idle] LLM status · profile {profile_label} · provider {provider} · model {model}\n"
-    )
+    lines = [f"LLM status · profile {profile_label} · provider {provider} · model {model}"]
     codex_usage = selected.get("codex_usage")
     if isinstance(codex_usage, dict) and codex_usage.get("status") == "observed":
-        _write_codex_status(codex_usage, output_stream)
+        lines.extend(_format_codex_status(codex_usage))
     else:
         rate_limits = selected.get("rate_limits")
         if isinstance(rate_limits, dict) and rate_limits.get("status") == "observed":
-            _write_platform_rate_limits(rate_limits, output_stream)
+            lines.extend(_format_platform_rate_limits(rate_limits))
         else:
-            output_stream.write(
-                "[idle] no provider usage status observed yet; send a model request first\n"
-            )
+            lines.append("no provider usage status observed yet; send a model request first")
+    for index, line in enumerate(lines):
+        prefix = "[idle] " if index == 0 else ""
+        output_stream.write(f"{prefix}{line}\n")
     output_stream.flush()
 
 
-def _write_codex_status(status: dict[str, Any], output_stream: ChatOutputStream) -> None:
+def _format_codex_status(status: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
     plan = status.get("plan_type")
     active_limit = status.get("active_limit")
     if plan or active_limit:
-        output_stream.write(
-            f"[idle] plan {plan or 'unknown'} · active limit {active_limit or 'unknown'}\n"
-        )
+        lines.append(f"plan {plan or 'unknown'} · active limit {active_limit or 'unknown'}")
     observed_epoch = _status_timestamp(status.get("observed_at"))
     now = time.time()
     for label, key in (("primary", "primary"), ("secondary", "secondary")):
@@ -1310,9 +1308,7 @@ def _write_codex_status(status: dict[str, Any], output_stream: ChatOutputStream)
         if isinstance(window, dict) and (
             window.get("window_minutes") or window.get("used_percent")
         ):
-            output_stream.write(
-                f"[idle] {label}: {_format_provider_limit_window(window, observed_epoch, now)}\n"
-            )
+            lines.append(f"{label}: {_format_provider_limit_window(window, observed_epoch, now)}")
     additional = status.get("additional_limits")
     if isinstance(additional, list):
         for limit in additional:
@@ -1322,9 +1318,9 @@ def _write_codex_status(status: dict[str, Any], output_stream: ChatOutputStream)
             for label in ("primary", "secondary"):
                 window = limit.get(label)
                 if isinstance(window, dict):
-                    output_stream.write(
-                        f"[idle] {name} {label}: "
-                        f"{_format_provider_limit_window(window, observed_epoch, now)}\n"
+                    lines.append(
+                        f"{name} {label}: "
+                        f"{_format_provider_limit_window(window, observed_epoch, now)}"
                     )
     credits = status.get("credits")
     if isinstance(credits, dict):
@@ -1336,30 +1332,33 @@ def _write_codex_status(status: dict[str, Any], output_stream: ChatOutputStream)
             credit_summary = "none"
         else:
             credit_summary = "unknown"
-        output_stream.write(f"[idle] credits: {credit_summary}\n")
+        lines.append(f"credits: {credit_summary}")
     if observed_epoch is not None:
-        output_stream.write(
-            f"[idle] observed {_format_compact_duration(max(0, int(now - observed_epoch)))} ago"
-            " · source last OpenAI response\n"
+        lines.append(
+            f"observed {_format_compact_duration(max(0, int(now - observed_epoch)))} ago"
+            " · source last OpenAI response"
         )
+    return lines
 
 
-def _write_platform_rate_limits(status: dict[str, Any], output_stream: ChatOutputStream) -> None:
+def _format_platform_rate_limits(status: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
     for label in ("requests", "tokens"):
         dimension = status.get(label)
         if not isinstance(dimension, dict):
             continue
-        output_stream.write(
-            f"[idle] {label}: {dimension.get('remaining', '?')} remaining of "
-            f"{dimension.get('limit', '?')} · resets {dimension.get('reset', '?')}\n"
+        lines.append(
+            f"{label}: {dimension.get('remaining', '?')} remaining of "
+            f"{dimension.get('limit', '?')} · resets {dimension.get('reset', '?')}"
         )
     observed_epoch = _status_timestamp(status.get("observed_at"))
     if observed_epoch is not None:
-        output_stream.write(
-            f"[idle] observed "
+        lines.append(
+            "observed "
             f"{_format_compact_duration(max(0, int(time.time() - observed_epoch)))} ago"
-            " · source last provider response\n"
+            " · source last provider response"
         )
+    return lines
 
 
 def _format_provider_limit_window(
