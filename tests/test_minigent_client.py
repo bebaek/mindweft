@@ -2110,6 +2110,8 @@ def test_minigent_api_client_exposes_shared_thread_methods(
                     "capability_profiles": {"default": None, "items": []},
                 }
             )
+        if request.full_url.endswith("/admin/tenants/tenant-1/llm-provider-status"):
+            return FakeResponse({"tenant_id": "tenant-1", "default_profile": None, "profiles": []})
         if request.full_url.endswith("/threads"):
             return FakeResponse({"thread_id": "thread-1"})
         if (
@@ -2167,6 +2169,11 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         },
         "capability_profiles": {"default": None, "items": []},
     }
+    assert client.llm_provider_status("tenant-1") == {
+        "tenant_id": "tenant-1",
+        "default_profile": None,
+        "profiles": [],
+    }
     assert client.create_thread(
         agent_name="reviewer",
         skills=["coding", "review"],
@@ -2203,6 +2210,7 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "GET",
         "GET",
         "GET",
+        "GET",
         "POST",
         "POST",
         "GET",
@@ -2212,13 +2220,13 @@ def test_minigent_api_client_exposes_shared_thread_methods(
         "POST",
         "DELETE",
     ]
-    assert requests[3]["payload"] == {
+    assert requests[4]["payload"] == {
         "agent_name": "reviewer",
         "skill_names": ["coding", "review"],
         "capability_profile": "dev",
         "llm_profile": "claude",
     }
-    assert requests[8]["payload"] == {"at_message_id": "message-1"}
+    assert requests[9]["payload"] == {"at_message_id": "message-1"}
 
 
 def test_minigent_api_client_searches_and_organizes_threads(
@@ -5238,7 +5246,7 @@ def test_run_chat_loop_handles_local_chat_commands(
     assert exit_code == 0
     assert output_stream.getvalue() == (
         "[user] [idle] chat commands: /help, /new, /agent [current|preset], "
-        "/llm [current|profile], /options, /skills, /profiles, "
+        "/llm [current|profile], /status, /options, /skills, /profiles, "
         "/threads [search [--messages|--titles] <query>|archived], "
         "/switch <id>, /rename <title>, /pin, /unpin, /archive, /restore, "
         "/copy-id, /cancel, "
@@ -5305,6 +5313,96 @@ def test_run_chat_loop_handles_llm_profile_command(
     assert "available LLM profiles: primary, backup" in output
     assert "switched to LLM profile backup; created thread thread-backup" in output
     assert "current LLM profile: backup" in output
+
+
+def test_run_chat_loop_handles_status_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_stream = StringIO()
+    input_stream = StringIO("/status\n/exit\n")
+
+    class FakeChatClient:
+        thread_id: str | None = None
+
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def create_thread(self, **kwargs: object) -> dict[str, str]:
+            del kwargs
+            self.thread_id = "thread-1"
+            return {"thread_id": "thread-1"}
+
+        def llm_provider_status(self, tenant_id: str) -> dict[str, object]:
+            assert tenant_id == "demo-tenant"
+            return {
+                "default_profile": "generic-oauth",
+                "profiles": [
+                    {
+                        "profile": "generic-oauth",
+                        "provider": "generic-oauth",
+                        "model": "gpt-5.6-sol",
+                        "rate_limits": {"status": "unavailable"},
+                        "codex_usage": {
+                            "status": "observed",
+                            "observed_at": "1970-01-01T00:16:40Z",
+                            "plan_type": "prolite",
+                            "active_limit": "premium",
+                            "primary": {
+                                "used_percent": 6,
+                                "window_minutes": 10080,
+                                "reset_after_seconds": 3600,
+                            },
+                            "secondary": None,
+                            "credits": {
+                                "balance": "0",
+                                "has_credits": False,
+                                "unlimited": False,
+                            },
+                            "additional_limits": [
+                                {
+                                    "id": "bengalfox",
+                                    "name": "GPT-5.3-Codex-Spark",
+                                    "primary": {
+                                        "used_percent": 0,
+                                        "window_minutes": 300,
+                                        "reset_after_seconds": 18000,
+                                    },
+                                    "secondary": {
+                                        "used_percent": 0,
+                                        "window_minutes": 10080,
+                                        "reset_after_seconds": 604800,
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+
+        def send_user_message(self, content: str) -> dict[str, str]:
+            raise AssertionError(f"local chat command should not be sent: {content}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.time, "time", lambda: 1100.0)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    assert (
+        run_chat_loop(ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"))
+        == 0
+    )
+    output = output_stream.getvalue()
+    assert (
+        "LLM status · profile generic-oauth · provider generic-oauth · model gpt-5.6-sol" in output
+    )
+    assert "plan prolite · active limit premium" in output
+    assert "primary: 6% used · 7d window · resets in 58m" in output
+    assert "GPT-5.3-Codex-Spark primary: 0% used · 5h window · resets in 4h 58m" in output
+    assert "GPT-5.3-Codex-Spark secondary: 0% used · 7d window · resets in 6d 23h" in output
+    assert "credits: none" in output
+    assert "observed 1m ago · source last OpenAI response" in output
 
 
 def test_run_chat_loop_handles_agent_command(

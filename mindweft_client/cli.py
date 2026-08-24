@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 from dataclasses import replace
+from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Callable, Protocol, TextIO, cast
@@ -979,6 +980,9 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         if utterance == "/llm" or utterance.startswith("/llm "):
             _handle_chat_llm(utterance, client, config, output_stream)
             continue
+        if utterance == "/status":
+            _handle_chat_status(client, config, output_stream)
+            continue
         if utterance in {"/options", "/skills", "/profiles", "/capabilities"}:
             _handle_chat_execution_options(utterance, client, output_stream)
             continue
@@ -1150,7 +1154,7 @@ def _chat_abort_message(config: ClientConfig) -> str:
 def _write_chat_help(output_stream: ChatOutputStream) -> None:
     output_stream.write(
         "[idle] chat commands: /help, /new, /agent [current|preset], /llm [current|profile], "
-        "/options, /skills, /profiles, /threads [search [--messages|--titles] <query>|archived], "
+        "/status, /options, /skills, /profiles, /threads [search [--messages|--titles] <query>|archived], "
         "/switch <id>, /rename <title>, /pin, /unpin, /archive, /restore, /copy-id, /cancel, "
         "/fork [number|--pick|--message-id UUID], /lineage, /parent, /children [number], "
         "/compact, /actions, "
@@ -1225,6 +1229,188 @@ def _handle_chat_llm(
     remember_client_thread(config, thread_id, title=f"LLM: {selection}")
     output_stream.write(f"[idle] switched to LLM profile {selection}; created thread {thread_id}\n")
     output_stream.flush()
+
+
+def _handle_chat_status(
+    client: RememberingMindweftAPIClient,
+    config: ClientConfig,
+    output_stream: ChatOutputStream,
+) -> None:
+    try:
+        response = client.llm_provider_status(config.principal.tenant_id)
+    except MindweftAPIError as exc:
+        if exc.status_code == 403:
+            output_stream.write("[idle] LLM provider status requires admin access\n")
+        else:
+            output_stream.write(f"[idle] LLM provider status unavailable: {exc}\n")
+        output_stream.flush()
+        return
+    except RuntimeError as exc:
+        output_stream.write(f"[idle] LLM provider status unavailable: {exc}\n")
+        output_stream.flush()
+        return
+
+    profiles = response.get("profiles")
+    if not isinstance(profiles, list):
+        output_stream.write("[idle] LLM provider status unavailable: profiles missing\n")
+        output_stream.flush()
+        return
+    default_profile = response.get("default_profile")
+    selected_profile = client.active_llm_profile or (
+        default_profile if isinstance(default_profile, str) else None
+    )
+    selected = next(
+        (
+            item
+            for item in profiles
+            if isinstance(item, dict) and item.get("profile") == selected_profile
+        ),
+        None,
+    )
+    if selected is None:
+        selected = next(
+            (item for item in profiles if isinstance(item, dict) and item.get("profile") is None),
+            None,
+        )
+    if not isinstance(selected, dict):
+        output_stream.write("[idle] LLM provider status unavailable: active profile missing\n")
+        output_stream.flush()
+        return
+
+    profile_label = selected.get("profile") or "default"
+    provider = selected.get("provider") or "unknown"
+    model = selected.get("model") or "unknown"
+    output_stream.write(
+        f"[idle] LLM status · profile {profile_label} · provider {provider} · model {model}\n"
+    )
+    codex_usage = selected.get("codex_usage")
+    if isinstance(codex_usage, dict) and codex_usage.get("status") == "observed":
+        _write_codex_status(codex_usage, output_stream)
+    else:
+        rate_limits = selected.get("rate_limits")
+        if isinstance(rate_limits, dict) and rate_limits.get("status") == "observed":
+            _write_platform_rate_limits(rate_limits, output_stream)
+        else:
+            output_stream.write(
+                "[idle] no provider usage status observed yet; send a model request first\n"
+            )
+    output_stream.flush()
+
+
+def _write_codex_status(status: dict[str, Any], output_stream: ChatOutputStream) -> None:
+    plan = status.get("plan_type")
+    active_limit = status.get("active_limit")
+    if plan or active_limit:
+        output_stream.write(
+            f"[idle] plan {plan or 'unknown'} · active limit {active_limit or 'unknown'}\n"
+        )
+    observed_epoch = _status_timestamp(status.get("observed_at"))
+    now = time.time()
+    for label, key in (("primary", "primary"), ("secondary", "secondary")):
+        window = status.get(key)
+        if isinstance(window, dict) and (
+            window.get("window_minutes") or window.get("used_percent")
+        ):
+            output_stream.write(
+                f"[idle] {label}: {_format_provider_limit_window(window, observed_epoch, now)}\n"
+            )
+    additional = status.get("additional_limits")
+    if isinstance(additional, list):
+        for limit in additional:
+            if not isinstance(limit, dict):
+                continue
+            name = limit.get("name") or limit.get("id") or "additional limit"
+            for label in ("primary", "secondary"):
+                window = limit.get(label)
+                if isinstance(window, dict):
+                    output_stream.write(
+                        f"[idle] {name} {label}: "
+                        f"{_format_provider_limit_window(window, observed_epoch, now)}\n"
+                    )
+    credits = status.get("credits")
+    if isinstance(credits, dict):
+        if credits.get("unlimited") is True:
+            credit_summary = "unlimited"
+        elif credits.get("has_credits") is True:
+            credit_summary = f"balance {credits.get('balance', 'unknown')}"
+        elif credits.get("has_credits") is False:
+            credit_summary = "none"
+        else:
+            credit_summary = "unknown"
+        output_stream.write(f"[idle] credits: {credit_summary}\n")
+    if observed_epoch is not None:
+        output_stream.write(
+            f"[idle] observed {_format_compact_duration(max(0, int(now - observed_epoch)))} ago"
+            " · source last OpenAI response\n"
+        )
+
+
+def _write_platform_rate_limits(status: dict[str, Any], output_stream: ChatOutputStream) -> None:
+    for label in ("requests", "tokens"):
+        dimension = status.get(label)
+        if not isinstance(dimension, dict):
+            continue
+        output_stream.write(
+            f"[idle] {label}: {dimension.get('remaining', '?')} remaining of "
+            f"{dimension.get('limit', '?')} · resets {dimension.get('reset', '?')}\n"
+        )
+    observed_epoch = _status_timestamp(status.get("observed_at"))
+    if observed_epoch is not None:
+        output_stream.write(
+            f"[idle] observed "
+            f"{_format_compact_duration(max(0, int(time.time() - observed_epoch)))} ago"
+            " · source last provider response\n"
+        )
+
+
+def _format_provider_limit_window(
+    window: dict[str, Any], observed_epoch: float | None, now: float
+) -> str:
+    parts: list[str] = []
+    used_percent = window.get("used_percent")
+    if isinstance(used_percent, int):
+        parts.append(f"{used_percent}% used")
+    window_minutes = window.get("window_minutes")
+    if isinstance(window_minutes, int) and window_minutes > 0:
+        parts.append(f"{_format_compact_duration(window_minutes * 60)} window")
+    reset_at = window.get("reset_at")
+    remaining: int | None = None
+    if isinstance(reset_at, int) and reset_at > 0:
+        remaining = max(0, int(reset_at - now))
+    else:
+        reset_after = window.get("reset_after_seconds")
+        if isinstance(reset_after, int):
+            age = max(0, int(now - observed_epoch)) if observed_epoch is not None else 0
+            remaining = max(0, reset_after - age)
+    if remaining is not None:
+        parts.append(f"resets in {_format_compact_duration(remaining)}")
+    return " · ".join(parts) or "status unavailable"
+
+
+def _format_compact_duration(seconds: int) -> str:
+    seconds = max(0, seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, _ = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours}h" if hours else f"{days}d"
+
+
+def _status_timestamp(value: object) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 def _handle_chat_execution_options(
