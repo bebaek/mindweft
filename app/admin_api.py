@@ -82,6 +82,7 @@ NON_NEGATIVE_INTEGER_ENTITLEMENT_LIMITS = {
     "max_thread_runs",
 }
 GENERIC_TENANT_PROVISIONING_PROFILE = "generic-v1"
+LLM_PROVIDER_STATUS_FEATURE = "llm_provider_status"
 
 
 def _tenant_provisioning_execution_config(profile: str | None) -> dict[str, Any] | None:
@@ -754,6 +755,68 @@ async def require_tenant_owner_principal(
     ):
         raise HTTPException(status_code=403, detail="Tenant owner access required")
     return principal
+
+
+async def require_tenant_manager_principal(
+    request: Request,
+    principal: Principal = Depends(require_principal),
+) -> Principal:
+    if principal.is_admin:
+        return principal
+    tenant_id = request.path_params.get("tenant_id")
+    if not isinstance(tenant_id, str) or tenant_id != principal.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant manager access required")
+    store = getattr(request.app.state, "admin_store", None)
+    if store is None:
+        raise HTTPException(status_code=403, detail="Tenant manager access required")
+    tenant = store.get_tenant(tenant_id)
+    if tenant is None or tenant.status not in {TenantStatus.PROVISIONING, TenantStatus.ACTIVE}:
+        raise HTTPException(status_code=403, detail="Tenant manager access required")
+    membership = store.get_tenant_user_by_user_id(tenant_id, principal.user_id)
+    if (
+        membership is None
+        or membership.status != TenantUserStatus.ACTIVE
+        or membership.role not in {TenantUserRole.OWNER, TenantUserRole.ADMIN}
+    ):
+        raise HTTPException(status_code=403, detail="Tenant manager access required")
+    return principal
+
+
+def build_tenant_llm_provider_status(
+    app: Any,
+    tenant_id: str,
+    *,
+    redact_account_details: bool = False,
+) -> AdminTenantLLMProviderStatusResponse:
+    context = app.state.execution_resolver.resolve(tenant_id)
+    adapters = [(None, context.llm_adapter), *sorted(context.llm_adapters.items())]
+    profiles = [
+        AdminLLMProviderStatusItem(
+            profile=profile,
+            **adapter.provider_status(),
+        )
+        for profile, adapter in adapters
+    ]
+    if redact_account_details:
+        profiles = [
+            item.model_copy(
+                update={
+                    "codex_usage": (
+                        item.codex_usage.model_copy(
+                            update={"active_limit": None, "plan_type": None, "credits": None}
+                        )
+                        if item.codex_usage is not None
+                        else None
+                    )
+                }
+            )
+            for item in profiles
+        ]
+    return AdminTenantLLMProviderStatusResponse(
+        tenant_id=tenant_id,
+        default_profile=context.config.default_llm_profile,
+        profiles=profiles,
+    )
 
 
 def build_admin_router() -> APIRouter:
@@ -2044,22 +2107,10 @@ def build_admin_router() -> APIRouter:
     async def get_tenant_llm_provider_status(
         tenant_id: str,
         request: Request,
-        admin: Principal = Depends(require_admin_principal),
+        admin: Principal = Depends(require_tenant_manager_principal),
     ) -> AdminTenantLLMProviderStatusResponse:
         _ = admin
-        context = request.app.state.execution_resolver.resolve(tenant_id)
-        adapters = [(None, context.llm_adapter), *sorted(context.llm_adapters.items())]
-        return AdminTenantLLMProviderStatusResponse(
-            tenant_id=tenant_id,
-            default_profile=context.config.default_llm_profile,
-            profiles=[
-                AdminLLMProviderStatusItem(
-                    profile=profile,
-                    **adapter.provider_status(),
-                )
-                for profile, adapter in adapters
-            ],
-        )
+        return build_tenant_llm_provider_status(request.app, tenant_id)
 
     @router.get(
         "/tenants/{tenant_id}/attachments/statistics",

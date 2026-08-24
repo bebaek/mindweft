@@ -17,7 +17,12 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.admin_api import build_admin_router
+from app.admin_api import (
+    LLM_PROVIDER_STATUS_FEATURE,
+    AdminTenantLLMProviderStatusResponse,
+    build_admin_router,
+    build_tenant_llm_provider_status,
+)
 from app.admin_mcp import (
     AdminMCPAuthMiddleware,
     build_admin_chat_tool_registry,
@@ -81,6 +86,7 @@ from app.models import (
     PrivateValueConsentDecisionRequest,
     RunThreadResponse,
     TenantContext,
+    TenantUserRole,
     TextPart,
     Thread,
     ThreadLineageResponse,
@@ -1308,6 +1314,34 @@ def create_app(
                     for option in agent_options
                 ],
             ),
+        )
+
+    @app.get("/llm-provider-status", response_model=AdminTenantLLMProviderStatusResponse)
+    async def llm_provider_status(
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> AdminTenantLLMProviderStatusResponse:
+        context = tenant_context_from_request_state(request.state)
+        tenant_manager = principal.is_admin or context.user_role in {
+            TenantUserRole.OWNER,
+            TenantUserRole.ADMIN,
+        }
+        tenant_registry_unavailable = request.app.state.admin_store is None
+        member_access_enabled = (
+            tenant_registry_unavailable or context.features.get(LLM_PROVIDER_STATUS_FEATURE) is True
+        )
+        if not tenant_manager and not member_access_enabled:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "LLM provider status access requires tenant manager access or the "
+                    f"'{LLM_PROVIDER_STATUS_FEATURE}' tenant feature"
+                ),
+            )
+        return build_tenant_llm_provider_status(
+            request.app,
+            principal.tenant_id,
+            redact_account_details=not tenant_manager,
         )
 
     @app.get("/tenant-context")
