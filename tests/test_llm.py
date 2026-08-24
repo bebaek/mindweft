@@ -62,6 +62,63 @@ def test_openai_compatible_adapter_returns_text_response() -> None:
     assert response.tool_call is None
 
 
+def test_openai_compatible_adapter_reports_last_observed_rate_limits() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={
+                "x-ratelimit-limit-requests": "500",
+                "x-ratelimit-remaining-requests": "487",
+                "x-ratelimit-reset-requests": "1s",
+                "x-ratelimit-limit-tokens": "30000",
+                "x-ratelimit-remaining-tokens": "24112",
+                "x-ratelimit-reset-tokens": "12s",
+                "x-provider-secret": "must-not-be-exposed",
+            },
+            json={"choices": [{"message": {"content": "hello"}}]},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    before = adapter.provider_status()
+    assert before["rate_limits"] == {
+        "status": "unavailable",
+        "source": "last_provider_response",
+        "observed_at": None,
+        "requests": None,
+        "tokens": None,
+    }
+
+    asyncio.run(
+        adapter.generate(
+            [Message(thread_id="thread", role=MessageRole.USER, content="hello")],
+            [],
+        )
+    )
+
+    status = adapter.provider_status()
+    assert status["provider"] == "openai"
+    assert status["model"] == "test-model"
+    assert status["rate_limits"]["status"] == "observed"
+    assert status["rate_limits"]["observed_at"] is not None
+    assert status["rate_limits"]["requests"] == {
+        "limit": "500",
+        "remaining": "487",
+        "reset": "1s",
+    }
+    assert status["rate_limits"]["tokens"] == {
+        "limit": "30000",
+        "remaining": "24112",
+        "reset": "12s",
+    }
+    assert "must-not-be-exposed" not in json.dumps(status)
+
+
 def test_anthropic_adapter_returns_text_response() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert str(request.url) == "https://example.com/v1/messages"
@@ -670,7 +727,24 @@ def test_generic_oauth_codex_responses_requests_reasoning_summary(
         captured_payload = json.loads(request.read().decode())
         return httpx.Response(
             200,
-            headers={"content-type": "text/event-stream"},
+            headers={
+                "content-type": "text/event-stream",
+                "x-codex-active-limit": "premium",
+                "x-codex-plan-type": "prolite",
+                "x-codex-primary-used-percent": "6",
+                "x-codex-primary-window-minutes": "10080",
+                "x-codex-primary-reset-after-seconds": "584092",
+                "x-codex-primary-reset-at": "1800000000",
+                "x-codex-credits-balance": "0",
+                "x-codex-credits-has-credits": "False",
+                "x-codex-credits-unlimited": "False",
+                "x-codex-bengalfox-limit-name": "GPT-5.3-Codex-Spark",
+                "x-codex-bengalfox-primary-used-percent": "0",
+                "x-codex-bengalfox-primary-window-minutes": "300",
+                "x-codex-bengalfox-secondary-used-percent": "0",
+                "x-codex-bengalfox-secondary-window-minutes": "10080",
+                "x-provider-secret": "must-not-be-exposed",
+            },
             text=(
                 'data: {"type":"response.output_text.delta","delta":"hello"}\n\n'
                 'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\n'
@@ -694,6 +768,32 @@ def test_generic_oauth_codex_responses_requests_reasoning_summary(
     assert response.content == "hello"
     assert captured_payload["include"] == ["reasoning.encrypted_content"]
     assert captured_payload["reasoning"] == {"effort": "medium", "summary": "auto"}
+    status = adapter.provider_status()
+    assert status["rate_limits"]["status"] == "unavailable"
+    assert status["codex_usage"] == {
+        "status": "observed",
+        "source": "last_provider_response",
+        "observed_at": status["codex_usage"]["observed_at"],
+        "active_limit": "premium",
+        "plan_type": "prolite",
+        "primary": {
+            "used_percent": 6,
+            "window_minutes": 10080,
+            "reset_after_seconds": 584092,
+            "reset_at": 1800000000,
+        },
+        "secondary": None,
+        "credits": {"balance": "0", "has_credits": False, "unlimited": False},
+        "additional_limits": [
+            {
+                "id": "bengalfox",
+                "name": "GPT-5.3-Codex-Spark",
+                "primary": {"used_percent": 0, "window_minutes": 300},
+                "secondary": {"used_percent": 0, "window_minutes": 10080},
+            }
+        ],
+    }
+    assert "must-not-be-exposed" not in json.dumps(status)
 
 
 def test_generic_oauth_responses_extracts_streamed_reasoning_summary(

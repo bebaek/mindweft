@@ -7227,6 +7227,136 @@ def test_admin_thread_inspection_requires_admin() -> None:
     assert prune_response.status_code == 403
 
 
+def test_admin_llm_provider_status_requires_privileged_access_without_tenant_registry() -> None:
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    forbidden = client.get(
+        "/admin/tenants/tenant-1/llm-provider-status",
+        headers=AUTH_HEADERS,
+    )
+    assert forbidden.status_code == 403
+
+    local_tenant_response = client.get("/llm-provider-status", headers=AUTH_HEADERS)
+    assert local_tenant_response.status_code == 200
+    assert local_tenant_response.json()["tenant_id"] == "tenant-1"
+
+    response = client.get(
+        "/admin/tenants/tenant-1/llm-provider-status",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "tenant_id": "tenant-1",
+        "default_profile": None,
+        "profiles": [
+            {
+                "profile": None,
+                "provider": "mock",
+                "model": None,
+                "rate_limits": {
+                    "status": "unavailable",
+                    "source": "last_provider_response",
+                    "observed_at": None,
+                    "requests": None,
+                    "tokens": None,
+                },
+                "codex_usage": None,
+            }
+        ],
+    }
+
+
+def test_llm_provider_status_allows_tenant_managers_and_entitled_members(tmp_path: Path) -> None:
+    class StatusLLMAdapter(MockLLMAdapter):
+        def provider_status(self) -> dict[str, object]:
+            status = super().provider_status()
+            status["codex_usage"] = {
+                "status": "observed",
+                "source": "last_provider_response",
+                "observed_at": "2026-08-24T20:05:33Z",
+                "active_limit": "premium",
+                "plan_type": "prolite",
+                "primary": {"used_percent": 6, "window_minutes": 10080},
+                "secondary": None,
+                "credits": {"balance": "0", "has_credits": False, "unlimited": False},
+                "additional_limits": [],
+            }
+            return status
+
+    store = _sqlite_store(tmp_path)
+    client = TestClient(
+        create_app(
+            llm_adapter=StatusLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            admin_store=store,
+        )
+    )
+    tenant_response = client.post(
+        "/admin/tenants",
+        json={
+            "id": "tenant-1",
+            "slug": "tenant-one",
+            "name": "Tenant One",
+            "status": "active",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert tenant_response.status_code == 201
+    user_response = client.post(
+        "/admin/tenants/tenant-1/users",
+        json={"user_id": "user-1", "role": "admin", "status": "active"},
+        headers=ADMIN_HEADERS,
+    )
+    assert user_response.status_code == 201
+    user_record_id = user_response.json()["id"]
+
+    manager_admin_response = client.get(
+        "/admin/tenants/tenant-1/llm-provider-status", headers=AUTH_HEADERS
+    )
+    manager_self_response = client.get("/llm-provider-status", headers=AUTH_HEADERS)
+    assert manager_admin_response.status_code == 200
+    assert manager_self_response.status_code == 200
+    manager_codex = manager_self_response.json()["profiles"][0]["codex_usage"]
+    assert manager_codex["plan_type"] == "prolite"
+    assert manager_codex["active_limit"] == "premium"
+    assert manager_codex["credits"]["balance"] == "0"
+
+    member_response = client.patch(
+        f"/admin/tenants/tenant-1/users/{user_record_id}",
+        json={"role": "member"},
+        headers=ADMIN_HEADERS,
+    )
+    assert member_response.status_code == 200
+    assert (
+        client.get("/admin/tenants/tenant-1/llm-provider-status", headers=AUTH_HEADERS).status_code
+        == 403
+    )
+    assert client.get("/llm-provider-status", headers=AUTH_HEADERS).status_code == 403
+
+    entitlement_response = client.put(
+        "/admin/tenants/tenant-1/entitlements",
+        json={"features": {"llm_provider_status": True}, "limits": {}},
+        headers=ADMIN_HEADERS,
+    )
+    assert entitlement_response.status_code == 200
+    entitled_response = client.get("/llm-provider-status", headers=AUTH_HEADERS)
+    assert entitled_response.status_code == 200
+    entitled_codex = entitled_response.json()["profiles"][0]["codex_usage"]
+    assert entitled_codex["primary"] == {
+        "used_percent": 6,
+        "window_minutes": 10080,
+        "reset_after_seconds": None,
+        "reset_at": None,
+        "over_secondary_limit_percent": None,
+    }
+    assert entitled_codex["plan_type"] is None
+    assert entitled_codex["active_limit"] is None
+    assert entitled_codex["credits"] is None
+
+
 def test_admin_api_seeds_environment_execution_tenants(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

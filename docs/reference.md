@@ -1743,6 +1743,8 @@ Admin endpoints:
 - `GET /admin/execution-config-tenants`
 - `GET /admin/tenants/{tenant_id}/attachments/statistics`
 - `GET /admin/tenants/{tenant_id}/run-concurrency`
+- `GET /admin/tenants/{tenant_id}/llm-provider-status`
+- `GET /llm-provider-status`
 - `GET /admin/tenants/{tenant_id}/threads`
 - `GET /admin/tenants/{tenant_id}/threads/{thread_id}`
 - `DELETE /admin/tenants/{tenant_id}/threads/{thread_id}`
@@ -1792,6 +1794,26 @@ filters for the paginated audit log. Audit detail expansion displays only the al
 returned by the admin API.
 
 The attachment statistics endpoint returns only tenant-level counts and byte totals split across pending, referenced, and lifecycle-exempt records, plus the oldest pending timestamp and age and the configured tenant quota. It does not read or return attachment contents or per-record metadata. The run-concurrency endpoint returns only aggregate active-run and active-user counts, the next lease expiration, and configured capacities/timings; it does not expose user IDs, thread IDs, or lease IDs.
+
+The tenant-scoped LLM provider status endpoints report each effective LLM profile and the most
+recent provider limit snapshot. Platform admins and active tenant `owner`/`admin` memberships may
+use the administrative tenant route and receive the complete snapshot. The current-principal route
+`GET /llm-provider-status` provides the same complete view to tenant owners/admins. Other active
+tenant users are denied by default when the tenant registry is enabled; a tenant may opt them in
+with the boolean `llm_provider_status` entitlement feature. In local/env-only deployments without a
+tenant registry, authenticated tenant principals receive the same redacted member view because no
+membership or entitlement records exist. Non-manager views include usage percentages, rolling
+windows, reset timing, and snapshot age, but account-level plan, active-limit, and credit fields are
+redacted.
+
+OpenAI Platform-compatible responses expose request/token values from the
+six recognized `x-ratelimit-{limit,remaining,reset}-{requests,tokens}` headers. OpenAI OAuth Codex
+responses expose their active limit and plan, primary and secondary rolling-window usage and reset
+timing, credit status, and the allowlisted `bengalfox` model-specific limit from `x-codex-*`
+headers. Credentials, cookies, opaque turn state, request IDs, arbitrary provider headers, and raw
+response bodies are never retained. A snapshot is process-local, may be unavailable until a model
+request returns recognized headers, and must not be interpreted as live availability or a Mindweft
+tenant budget.
 
 The packaged CLI can inspect and manage the same tenant registry and thread data when authenticated as an admin:
 
