@@ -329,6 +329,7 @@ Available during interactive chat:
 | `/children [number]` | List direct children or switch to a numbered child. |
 | `/compact` | Manually compact thread context. |
 | `/export [markdown\|json]` | Export the current thread transcript. |
+| `/status` | Show the active LLM profile and the last provider-limit snapshot. OpenAI OAuth/Codex windows, reset timing, plan, and credit status require admin access; the command does not make a provider request. |
 | `/tokens` | Show estimated current thread size. |
 | `/debug` | Toggle debug mode. |
 | `/editor` | Open `$EDITOR` for long prompt composition. |
