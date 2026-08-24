@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -44,6 +45,125 @@ DEFAULT_LLM_MAX_TOOL_RESULT_CHARS = 200000
 DEFAULT_RESPONSES_REASONING_ONLY_RETRIES = 3
 DEFAULT_ANTHROPIC_MAX_TOKENS = 4096
 DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
+OPENAI_RATE_LIMIT_HEADERS = {
+    "x-ratelimit-limit-requests": ("requests", "limit"),
+    "x-ratelimit-remaining-requests": ("requests", "remaining"),
+    "x-ratelimit-reset-requests": ("requests", "reset"),
+    "x-ratelimit-limit-tokens": ("tokens", "limit"),
+    "x-ratelimit-remaining-tokens": ("tokens", "remaining"),
+    "x-ratelimit-reset-tokens": ("tokens", "reset"),
+}
+CODEX_LIMIT_WINDOW_FIELDS = {
+    "used-percent": "used_percent",
+    "window-minutes": "window_minutes",
+    "reset-after-seconds": "reset_after_seconds",
+    "reset-at": "reset_at",
+    "over-secondary-limit-percent": "over_secondary_limit_percent",
+}
+CODEX_ADDITIONAL_LIMITS = ("bengalfox",)
+
+
+def _rate_limit_snapshot_from_headers(headers: Mapping[str, str]) -> dict[str, Any] | None:
+    dimensions: dict[str, dict[str, str]] = {}
+    for header, (dimension, field) in OPENAI_RATE_LIMIT_HEADERS.items():
+        value = headers.get(header)
+        if value is not None:
+            dimensions.setdefault(dimension, {})[field] = value
+    if not dimensions:
+        return None
+    return {
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        **dimensions,
+    }
+
+
+def _optional_header_bool(headers: Mapping[str, str], name: str) -> bool | None:
+    value = headers.get(name)
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    return None
+
+
+def _optional_header_int(headers: Mapping[str, str], name: str) -> int | None:
+    value = headers.get(name)
+    if value is None or not value.strip():
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _codex_limit_window(headers: Mapping[str, str], prefix: str) -> dict[str, int] | None:
+    window = {
+        output_name: value
+        for suffix, output_name in CODEX_LIMIT_WINDOW_FIELDS.items()
+        if (value := _optional_header_int(headers, f"{prefix}-{suffix}")) is not None
+    }
+    return window or None
+
+
+def _codex_usage_snapshot_from_headers(headers: Mapping[str, str]) -> dict[str, Any] | None:
+    primary = _codex_limit_window(headers, "x-codex-primary")
+    secondary = _codex_limit_window(headers, "x-codex-secondary")
+    additional_limits: list[dict[str, Any]] = []
+    for limit_id in CODEX_ADDITIONAL_LIMITS:
+        prefix = f"x-codex-{limit_id}"
+        name = headers.get(f"{prefix}-limit-name")
+        additional_primary = _codex_limit_window(headers, f"{prefix}-primary")
+        additional_secondary = _codex_limit_window(headers, f"{prefix}-secondary")
+        if name is not None or additional_primary is not None or additional_secondary is not None:
+            additional_limits.append(
+                {
+                    "id": limit_id,
+                    "name": name,
+                    "primary": additional_primary,
+                    "secondary": additional_secondary,
+                }
+            )
+    credits = {
+        "balance": headers.get("x-codex-credits-balance"),
+        "has_credits": _optional_header_bool(headers, "x-codex-credits-has-credits"),
+        "unlimited": _optional_header_bool(headers, "x-codex-credits-unlimited"),
+    }
+    if not any(value is not None for value in credits.values()):
+        credits = None
+    active_limit = headers.get("x-codex-active-limit")
+    plan_type = headers.get("x-codex-plan-type")
+    if not any((active_limit, plan_type, primary, secondary, credits, additional_limits)):
+        return None
+    return {
+        "status": "observed",
+        "source": "last_provider_response",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "active_limit": active_limit,
+        "plan_type": plan_type,
+        "primary": primary,
+        "secondary": secondary,
+        "credits": credits,
+        "additional_limits": additional_limits,
+    }
+
+
+def _provider_status_from_snapshot(
+    description: Mapping[str, Any], snapshot: Mapping[str, Any]
+) -> dict[str, Any]:
+    return {
+        "provider": description["provider"],
+        "model": description["model"],
+        "rate_limits": {
+            "status": "observed",
+            "source": "last_provider_response",
+            "observed_at": snapshot["observed_at"],
+            "requests": dict(snapshot["requests"]) if snapshot.get("requests") else None,
+            "tokens": dict(snapshot["tokens"]) if snapshot.get("tokens") else None,
+        },
+    }
 
 
 ProgressSink = Callable[[int], Awaitable[None]] | None
@@ -92,6 +212,20 @@ class LLMAdapter(ABC):
     @abstractmethod
     def describe(self) -> dict[str, Any]:
         raise NotImplementedError
+
+    def provider_status(self) -> dict[str, Any]:
+        description = self.describe()
+        return {
+            "provider": description.get("provider"),
+            "model": description.get("model"),
+            "rate_limits": {
+                "status": "unavailable",
+                "source": "last_provider_response",
+                "observed_at": None,
+                "requests": None,
+                "tokens": None,
+            },
+        }
 
 
 class MockLLMAdapter(LLMAdapter):
@@ -159,6 +293,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
         self._extra_headers = extra_headers or {}
         self._timeout = timeout
         self._transport = transport
+        self._rate_limit_snapshot: dict[str, Any] | None = None
 
     async def generate(
         self,
@@ -195,6 +330,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
                     tools=tools,
                     tool_name_map=tool_name_map,
                 )
+                self._record_rate_limit_snapshot(response)
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 provider = str(self.describe()["provider"])
@@ -220,6 +356,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
                         tools=tools,
                         tool_name_map=tool_name_map,
                     )
+                    self._record_rate_limit_snapshot(retry_response)
                     try:
                         retry_response.raise_for_status()
                     except httpx.HTTPStatusError as retry_exc:
@@ -276,6 +413,16 @@ class OpenAICompatibleAdapter(LLMAdapter):
             "adapter": "OpenAICompatibleAdapter",
         }
 
+    def provider_status(self) -> dict[str, Any]:
+        if self._rate_limit_snapshot is None:
+            return super().provider_status()
+        return _provider_status_from_snapshot(self.describe(), self._rate_limit_snapshot)
+
+    def _record_rate_limit_snapshot(self, response: httpx.Response) -> None:
+        snapshot = _rate_limit_snapshot_from_headers(response.headers)
+        if snapshot is not None:
+            self._rate_limit_snapshot = snapshot
+
     async def _post_chat_completion(
         self,
         *,
@@ -327,6 +474,7 @@ class GoogleGeminiAdapter(LLMAdapter):
         self._extra_headers = extra_headers or {}
         self._timeout = timeout
         self._transport = transport
+        self._rate_limit_snapshot: dict[str, Any] | None = None
 
     async def generate(
         self,
@@ -745,6 +893,7 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
         self._extra_headers = extra_headers or {}
         self._timeout = timeout
         self._transport = transport
+        self._codex_usage_snapshot: dict[str, Any] | None = None
 
     async def generate(
         self,
@@ -827,7 +976,7 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
                         "Pruned orphaned tool messages from ChatGPT Codex Responses payload url=%s",
                         self._url,
                     )
-                body, content_type = await _post_responses_request(
+                body, content_type, codex_usage_snapshot = await _post_responses_request(
                     client,
                     self._url,
                     payload,
@@ -835,6 +984,8 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
                     provider=GENERIC_OAUTH_PROVIDER,
                     model=self._model,
                 )
+                if codex_usage_snapshot is not None:
+                    self._codex_usage_snapshot = codex_usage_snapshot
                 _debug_log_raw_llm_response(
                     GENERIC_OAUTH_PROVIDER,
                     body,
@@ -888,6 +1039,13 @@ class GenericOAuthResponsesAdapter(LLMAdapter):
             "adapter": "GenericOAuthResponsesAdapter",
             "prompt_cache_key_configured": bool(LLMRuntimeSettings.from_env().prompt_cache_key),
         }
+
+    def provider_status(self) -> dict[str, Any]:
+        status = super().provider_status()
+        status["codex_usage"] = (
+            dict(self._codex_usage_snapshot) if self._codex_usage_snapshot is not None else None
+        )
+        return status
 
 
 async def _emit_progress_chunk(chunk_len: int) -> None:
@@ -944,9 +1102,10 @@ async def _post_responses_request(
     *,
     provider: str,
     model: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, dict[str, Any] | None]:
     body_chunks: list[str] = []
     content_type = ""
+    codex_usage_snapshot: dict[str, Any] | None = None
     read_error: httpx.HTTPError | None = None
     try:
         async with client.stream(
@@ -956,6 +1115,7 @@ async def _post_responses_request(
             headers=headers,
         ) as response:
             content_type = response.headers.get("content-type", "")
+            codex_usage_snapshot = _codex_usage_snapshot_from_headers(response.headers)
             if response.is_error:
                 detail = await response.aread()
                 request = response.request
@@ -1009,7 +1169,7 @@ async def _post_responses_request(
         raise _provider_request_exception(
             read_error, provider=provider, model=model
         ) from read_error
-    return body, content_type
+    return body, content_type, codex_usage_snapshot
 
 
 @dataclass(frozen=True)
