@@ -94,7 +94,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .sidebar-footer { display: flex; align-items: center; gap: 10px; margin-top:10px; padding: 15px 12px 3px; border-top: 1px solid rgba(255, 255, 255, 0.1); }
 .sidebar-utilities { display:grid; grid-template-columns:38px minmax(0,1fr); gap:8px; margin-top:auto; padding:12px 8px 0; border-top:1px solid rgba(255,255,255,.1); }
 .sidebar-utilities .theme-toggle { margin:0; }
-.sidebar-utilities .connection-button { min-width:0; margin:0; }
+.sidebar-utilities .connection-button { min-width:0; margin:0; color:var(--ink); }
 .sidebar-utilities .connection-button>span:nth-child(2) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .sidebar-footer strong { font-size: var(--text-body); font-weight: 600; }
 .environment-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 4px rgba(189, 237, 125, 0.12); }
