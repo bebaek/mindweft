@@ -193,7 +193,7 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | `MINDWEFT_USER_DEPROVISIONING_INTERVAL_SECONDS` / `MINDWEFT_USER_DEPROVISIONING_MAX_ATTEMPTS` | Poll interval and retry limit for durable user lifecycle deprovisioning (defaults: 5 seconds and 8 attempts). |
 | `MINDWEFT_LLM_PROVIDER` | LLM provider such as `mock`, `openai`, `openrouter`, `openai-compatible`, `generic-oauth`, `google`, or `anthropic`. |
 | `MINDWEFT_LLM_MODEL` | Model identifier for the selected provider. |
-| `MINDWEFT_IMAGE_INPUT_ENABLED` | Enables image attachments from CLI/chat clients; unified config key is `[image_input].enabled`. |
+| `MINDWEFT_IMAGE_INPUT_ENABLED` | Enables image attachments from CLI/chat clients; unified config key is `[image_input].enabled`. Named LLM profiles can declare `input_modalities = ["text"]` or `["text", "image"]`; omitted declarations remain permissive for compatibility. |
 | `MINDWEFT_ATTACHMENT_DB_PATH` | Optional SQLite store for uploaded attachment bytes; unified config key is `[attachments].db_path`. |
 | `MINDWEFT_ATTACHMENT_ENCRYPTION_KEY` / `MINDWEFT_ATTACHMENT_ENCRYPTION_KEYS` | Optional AES-256-GCM key or versioned keyring for attachment bytes at rest. |
 | `MINDWEFT_RATE_LIMIT_DB_PATH` | Optional shared SQLite token-bucket state for upload and run rate limits. |
@@ -204,6 +204,12 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | `MINDWEFT_MCP_BROKER_DB_PATH` | Optional shared SQLite path for cross-replica MCP broker sessions; bearer tokens are stored only as SHA-256 hashes. |
 | `MINDWEFT_TOOL_TIMEOUT_SECONDS` | Default wall-clock limit for each runtime tool call before returning a structured timeout error. |
 | `MINDWEFT_RESPONSES_REASONING_ONLY_RETRIES` | Bounded generic OAuth Responses continuations after reasoning-only output before reporting a retryable provider stall. |
+
+Mindweft currently implements text and image message parts. `audio`, `video`, and `document` remain
+reserved configuration vocabulary rather than end-to-end input support. Image capability metadata is
+returned by `GET /execution-options`; an omitted `input_modalities` declaration remains permissive
+for compatibility, while an explicit text-only profile is rejected before upload. Peer-agent
+backends do not currently accept image input.
 
 See the [full reference](docs/reference.md) for the complete environment and tenant config
 surface.
@@ -513,7 +519,9 @@ It uses the streaming run
 endpoint to show live LLM, tool, and peer-agent progress, with mobile-friendly run
 controls, a stop action, basic assistant markdown rendering, execution option selectors,
 image file selection, mobile camera capture, drag-and-drop, and clipboard paste with previews and
-per-image detail controls when server image input is enabled; the browser streams binary image
+per-image detail controls when server image input is enabled and the effective LLM profile and
+agent backend accept images; text-only profiles disable image selection without blocking text input.
+The browser streams binary image
 bodies to thread-scoped attachment storage instead of base64-wrapping them, then keeps references
 in message history. Browser responses include MIME-sniffing, framing, referrer, permissions, and
 Content Security Policy headers; the CSP limits scripts and network requests to the Mindweft origin

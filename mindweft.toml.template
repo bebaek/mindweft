@@ -21,6 +21,9 @@ default = "mock"
 [llm.providers.mock]
 provider = "mock"
 input_modalities = ["text"]
+# Mindweft currently implements text and image message parts. Declare ["text"] for a
+# text-only profile or ["text", "image"] for an image-capable profile. Omitting the
+# field preserves permissive legacy behavior; it does not confirm model capability.
 
 # Add named profiles here, then select one with `mindweft chat --llm openrouter`,
 # `mindweft run --llm openrouter`, or the browser settings panel.

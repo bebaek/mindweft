@@ -845,10 +845,47 @@ def _message_parts_for_pending_images(
     return parts
 
 
+def _effective_llm_image_option(
+    execution_options: dict[str, Any],
+    active_llm_profile: str | None,
+) -> dict[str, Any] | None:
+    section = execution_options.get("llm_profiles")
+    if not isinstance(section, dict):
+        return None
+    profile_name = active_llm_profile or section.get("default")
+    items = section.get("items")
+    if isinstance(profile_name, str) and isinstance(items, list):
+        normalized = profile_name.removeprefix("shared:")
+        for item in items:
+            if isinstance(item, dict) and item.get("name") == normalized:
+                return item
+    effective_default = section.get("effective_default")
+    return effective_default if isinstance(effective_default, dict) else None
+
+
+def _image_input_unavailable_for_client(
+    client: RememberingMindweftAPIClient,
+) -> str | None:
+    try:
+        options = client.execution_options()
+    except (AttributeError, RuntimeError):
+        return None
+    option = _effective_llm_image_option(options, client.active_llm_profile)
+    if option is None or option.get("image_input_allowed") is not False:
+        return None
+    reason = option.get("image_input_reason")
+    if reason == "backend_unsupported":
+        return "the selected agent backend does not support image input"
+    if reason == "profile_unsupported":
+        return "the selected LLM profile only accepts text"
+    return "image input is disabled on this server"
+
+
 def _handle_chat_image_command(
     utterance: str,
     pending_image_parts: list[dict[str, Any]],
     output_stream: ChatOutputStream,
+    client: RememberingMindweftAPIClient | None = None,
 ) -> None:
     try:
         args = shlex.split(utterance)
@@ -869,6 +906,16 @@ def _handle_chat_image_command(
                 )
         output_stream.flush()
         return
+    if len(args) == 2 and args[1] in {"clear", "reset"}:
+        pending_image_parts.clear()
+        output_stream.write("[idle] cleared queued images\n")
+        output_stream.flush()
+        return
+    unavailable = _image_input_unavailable_for_client(client) if client is not None else None
+    if unavailable is not None:
+        output_stream.write(f"[idle] {unavailable}\n")
+        output_stream.flush()
+        return
     if len(args) == 2 and args[1] in {"paste", "clipboard"}:
         try:
             pending_image_parts.extend(_image_parts_from_macos_clipboard())
@@ -880,11 +927,6 @@ def _handle_chat_image_command(
             f"[idle] queued clipboard image for the next message "
             f"({len(pending_image_parts)} total)\n"
         )
-        output_stream.flush()
-        return
-    if len(args) == 2 and args[1] in {"clear", "reset"}:
-        pending_image_parts.clear()
-        output_stream.write("[idle] cleared queued images\n")
         output_stream.flush()
         return
     paths = args[1:]
@@ -963,7 +1005,12 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             _write_chat_help(output_stream)
             continue
         if utterance == "/image" or utterance.startswith("/image "):
-            _handle_chat_image_command(utterance, pending_image_parts, output_stream)
+            _handle_chat_image_command(
+                utterance,
+                pending_image_parts,
+                output_stream,
+                client,
+            )
             continue
         if utterance == "/commands":
             _handle_chat_commands(output_stream)
@@ -1044,6 +1091,15 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             continue
         utterance = expanded_utterance
         try:
+            if pending_image_parts:
+                unavailable = _image_input_unavailable_for_client(client)
+                if unavailable is not None:
+                    output_stream.write(
+                        f"[idle] queued images cannot be sent: {unavailable}; "
+                        "use /image clear or switch profiles\n"
+                    )
+                    output_stream.flush()
+                    continue
             message_parts = _message_parts_for_pending_images(utterance, pending_image_parts)
             if message_parts is None:
                 client.send_user_message(utterance)
@@ -1184,12 +1240,24 @@ def _handle_chat_llm(
     items = section.get("items", []) if isinstance(section, dict) else []
     names = [item.get("name") for item in items if isinstance(item, dict)]
     names = [name for name in names if isinstance(name, str)]
+    labels = []
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            continue
+        modalities = item.get("input_modalities")
+        if item.get("image_input_reason") == "profile_unsupported":
+            suffix = " [text only]"
+        elif isinstance(modalities, list):
+            suffix = " [" + ",".join(str(value) for value in modalities) + "]"
+        else:
+            suffix = " [modalities not declared]"
+        labels.append(str(item["name"]) + suffix)
     default = section.get("default") if isinstance(section, dict) else None
     if not selection:
         if not names:
             output_stream.write("[idle] no named LLM profiles configured\n")
         else:
-            output_stream.write(f"[idle] available LLM profiles: {', '.join(names)}\n")
+            output_stream.write(f"[idle] available LLM profiles: {', '.join(labels)}\n")
             if isinstance(default, str):
                 output_stream.write(f"[idle] default LLM profile: {default}\n")
         output_stream.flush()

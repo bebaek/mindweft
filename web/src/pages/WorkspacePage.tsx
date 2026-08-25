@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type ClipboardEvent, type 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
+  type ExecutionLlmOptionItem,
   type ExecutionOptionsResponse,
   type ImagePart,
   type Message,
@@ -26,6 +27,49 @@ interface PendingImage {
   file: File;
   previewUrl: string;
   detail: "auto" | "low" | "high";
+}
+
+function normalizedProfileName(name: string | null | undefined): string | null {
+  return name?.replace(/^shared:/, "") || null;
+}
+
+function effectiveLlmOption(
+  options: ExecutionOptionsResponse | undefined,
+  thread: ThreadListItem | undefined,
+  selectedProfile: string,
+  effectiveAgent: string,
+): ExecutionLlmOptionItem | undefined {
+  if (!options) return undefined;
+  const findProfile = (name: string | null | undefined) => {
+    const normalized = normalizedProfileName(name);
+    return normalized
+      ? options.llm_profiles.items.find((profile) => profile.name === normalized)
+      : undefined;
+  };
+  if (thread) {
+    return findProfile(thread.llm_profile) ?? options.llm_profiles.effective_default;
+  }
+  const explicit = findProfile(selectedProfile);
+  if (explicit) return explicit;
+  const agent = options.agents.items.find(
+    (item) => (item.id ?? item.name) === effectiveAgent,
+  );
+  return (
+    findProfile(agent?.llm_profile) ??
+    findProfile(options.llm_profiles.default) ??
+    options.llm_profiles.effective_default
+  );
+}
+
+function imageInputUnavailableMessage(profile: ExecutionLlmOptionItem | undefined): string | null {
+  if (profile?.image_input_allowed !== false) return null;
+  if (profile.image_input_reason === "backend_unsupported") {
+    return "The selected agent backend does not support image input.";
+  }
+  if (profile.image_input_reason === "profile_unsupported") {
+    return "The selected model profile only accepts text.";
+  }
+  return "Image input is disabled on this server.";
 }
 
 type ActivityStatus = "pending" | "success" | "error" | "info";
@@ -226,6 +270,21 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   }, [highlightedMessageId, messages.data]);
 
   const effectiveAgent = selectedAgent || executionOptions.data?.agents.default || "";
+  const composerThread = threads.data?.threads.find(
+    (thread) => thread.thread_id === selectedThreadId,
+  ) ?? lineage.data?.thread;
+  const composerLlmOption = effectiveLlmOption(
+    executionOptions.data,
+    composerThread,
+    selectedLlmProfile,
+    effectiveAgent,
+  );
+  const profileImageUnavailable = imageInputUnavailableMessage(composerLlmOption);
+  const imageInputAvailable = Boolean(config.data?.image_input.enabled) && !profileImageUnavailable;
+  const imageInputMessage = !config.data?.image_input.enabled
+    ? "Image input is disabled on this server."
+    : profileImageUnavailable;
+  const queuedImagesBlocked = pendingImages.length > 0 && !imageInputAvailable;
   const canSaveDefaultAgent = Boolean(
     selectedAgent && selectedAgent !== executionOptions.data?.agents.default,
   );
@@ -329,6 +388,10 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     const content = draft.trim();
     const queuedImages = [...pendingImages];
     if ((!content && queuedImages.length === 0) || isRunning) return;
+    if (queuedImages.length > 0 && !imageInputAvailable) {
+      setError(imageInputMessage ?? "Image input is unavailable.");
+      return;
+    }
 
     setError(null);
     setDraft("");
@@ -402,8 +465,8 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   function addImageFiles(files: FileList | File[] | null) {
     if (!files?.length) return;
     const imageConfig = config.data?.image_input;
-    if (!imageConfig?.enabled) {
-      setError("Image input is disabled on this server.");
+    if (!imageConfig?.enabled || !imageInputAvailable) {
+      setError(imageInputMessage ?? "Image input is unavailable.");
       return;
     }
     const candidates = Array.from(files);
@@ -794,18 +857,30 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
                 <option value="">Automatic</option>
                 {executionOptions.data?.llm_profiles.items.map((profile) => {
                   const value = profile.name;
-                  return <option key={value} value={value}>{profile.display_name ?? profile.name}</option>;
+                  const capability = profile.image_input_reason === "profile_unsupported"
+                    ? " · text only"
+                    : "";
+                  return <option key={value} value={value}>{profile.display_name ?? profile.name}{capability}</option>;
                 })}
               </select>
             </label>
           </div>
-          <label className={`attach-image ${config.data?.image_input.enabled ? "" : "disabled"}`} title={config.data?.image_input.enabled ? "Attach images" : "Image input is unavailable"}>
+          {profileImageUnavailable && (
+            <p className="composer-capability-warning" role={queuedImagesBlocked ? "alert" : "status"}>
+              {profileImageUnavailable}
+              {queuedImagesBlocked ? " Remove the queued images or choose an image-capable profile." : ""}
+            </p>
+          )}
+          <label
+            className={`attach-image ${imageInputAvailable ? "" : "disabled"}`}
+            title={imageInputAvailable ? "Attach images" : (imageInputMessage ?? "Image input is unavailable")}
+          >
             <span aria-hidden="true">+</span><span className="sr-only">Attach images</span>
             <input
               type="file"
               accept={config.data?.image_input.allowed_mime_types.join(",") ?? "image/*"}
               multiple
-              disabled={isRunning || !config.data?.image_input.enabled}
+              disabled={isRunning || !imageInputAvailable}
               onChange={(event) => { addImageFiles(event.target.files); event.target.value = ""; }}
             />
           </label>
@@ -838,9 +913,9 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           {isRunning ? (
             <button className="stop-run" type="button" onClick={() => void stopRun()}>Stop</button>
           ) : (
-            <button className="send-message" type="submit" disabled={!draft.trim() && pendingImages.length === 0} aria-label="Send message">↑</button>
+            <button className="send-message" type="submit" disabled={queuedImagesBlocked || (!draft.trim() && pendingImages.length === 0)} aria-label="Send message">↑</button>
           )}
-          <small>Enter to send · Shift+Enter for a new line{config.data?.image_input.enabled ? " · Paste images" : ""}</small>
+          <small>Enter to send · Shift+Enter for a new line{imageInputAvailable ? " · Paste images" : ""}</small>
         </form>
       </div>
       <ContextDialog

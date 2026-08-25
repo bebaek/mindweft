@@ -310,6 +310,21 @@ class ExecutionOptionSection(BaseModel):
     items: list[ExecutionOptionItem] = Field(default_factory=list)
 
 
+class ExecutionLLMOptionItem(ExecutionOptionItem):
+    input_modalities: list[str] | None = None
+    image_input_allowed: bool
+    image_input_reason: Literal["disabled", "backend_unsupported", "profile_unsupported"] | None = (
+        None
+    )
+    capability_declared: bool = False
+
+
+class ExecutionLLMOptionSection(BaseModel):
+    default: str | None = None
+    effective_default: ExecutionLLMOptionItem
+    items: list[ExecutionLLMOptionItem] = Field(default_factory=list)
+
+
 class ExecutionAgentOptionItem(BaseModel):
     name: str
     description: str | None = None
@@ -332,7 +347,7 @@ class ExecutionOptionsResponse(BaseModel):
     tenant_id: str
     skills: ExecutionOptionSection
     capability_profiles: ExecutionOptionSection
-    llm_profiles: ExecutionOptionSection = Field(default_factory=ExecutionOptionSection)
+    llm_profiles: ExecutionLLMOptionSection
     agents: ExecutionAgentOptionSection = Field(default_factory=ExecutionAgentOptionSection)
 
 

@@ -110,6 +110,81 @@ test("adds pasted clipboard images without blocking text paste", async ({ page }
   await expect(page.getByRole("button", { name: "Send message" })).toBeEnabled();
 });
 
+test("keeps queued images visible when switching to a text-only profile", async ({ page }) => {
+  await installDemoWorkspaceMocks(page);
+  await page.route("**/config", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      image_input: {
+        enabled: true,
+        allowed_mime_types: ["image/png"],
+        max_images: 4,
+        max_bytes: 5_000_000,
+        max_total_bytes: 10_000_000,
+      },
+    }),
+  }));
+  await page.route("**/execution-options", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      tenant_id: "demo-tenant",
+      skills: { items: [] },
+      capability_profiles: { items: [] },
+      llm_profiles: {
+        default: "vision",
+        effective_default: {
+          name: "vision",
+          image_input_allowed: true,
+          capability_declared: true,
+        },
+        items: [
+          {
+            name: "vision",
+            display_name: "Vision",
+            input_modalities: ["text", "image"],
+            image_input_allowed: true,
+            capability_declared: true,
+          },
+          {
+            name: "text-only",
+            display_name: "Fast text",
+            input_modalities: ["text"],
+            image_input_allowed: false,
+            image_input_reason: "profile_unsupported",
+            capability_declared: true,
+          },
+        ],
+      },
+      agents: { items: [] },
+    }),
+  }));
+  await page.goto("/", { waitUntil: "networkidle" });
+
+  const composer = page.getByRole("textbox", { name: /Message/ });
+  await composer.evaluate((element) => {
+    const clipboard = new DataTransfer();
+    clipboard.items.add(new File(
+      [new Uint8Array([137, 80, 78, 71])],
+      "queued.png",
+      { type: "image/png" },
+    ));
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: clipboard });
+    element.dispatchEvent(event);
+  });
+  await expect(page.getByRole("img", { name: "queued.png" })).toBeVisible();
+
+  await page.getByLabel("Model profile").selectOption("text-only");
+  await expect(page.getByText(/selected model profile only accepts text/i)).toBeVisible();
+  await expect(page.getByRole("img", { name: "queued.png" })).toBeVisible();
+  await composer.fill("Text remains editable");
+  await expect(page.getByRole("button", { name: "Send message" })).toBeDisabled();
+
+  await page.getByRole("button", { name: "Remove queued.png" }).click();
+  await expect(page.getByRole("button", { name: "Send message" })).toBeEnabled();
+  await expect(page.getByText(/selected model profile only accepts text/i)).toBeVisible();
+});
+
 test("selects an explicit model profile for a new conversation", async ({ page }) => {
   await installDemoWorkspaceMocks(page);
   await page.goto("/", { waitUntil: "networkidle" });

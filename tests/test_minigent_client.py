@@ -4221,6 +4221,61 @@ def test_run_chat_loop_image_paste_command_queues_clipboard_image(
     assert "[assistant] clipboard reply\n" in output
 
 
+def test_run_chat_loop_keeps_queued_image_when_profile_becomes_text_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "queued.png"
+    image_path.write_bytes(b"png")
+    output_stream = StringIO()
+    input_stream = StringIO(f"/image {image_path}\ndescribe it\n/image list\n/image clear\n/exit\n")
+    capability_calls = 0
+
+    class FakeChatClient:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def execution_options(self) -> dict[str, object]:
+            nonlocal capability_calls
+            capability_calls += 1
+            allowed = capability_calls == 1
+            return {
+                "llm_profiles": {
+                    "default": "profile",
+                    "effective_default": {
+                        "name": "profile",
+                        "image_input_allowed": allowed,
+                        "image_input_reason": None if allowed else "profile_unsupported",
+                    },
+                    "items": [
+                        {
+                            "name": "profile",
+                            "image_input_allowed": allowed,
+                            "image_input_reason": None if allowed else "profile_unsupported",
+                        }
+                    ],
+                }
+            }
+
+        def send_user_message(self, content: str, *, parts=None) -> dict[str, str]:
+            del content, parts
+            raise AssertionError("an incompatible queued image must not be sent")
+
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    assert (
+        run_chat_loop(ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey mindweft"))
+        == 0
+    )
+    output = output_stream.getvalue()
+    assert "queued 1 image(s) for the next message" in output
+    assert "queued images cannot be sent: the selected LLM profile only accepts text" in output
+    assert str(image_path) in output
+    assert "cleared queued images" in output
+
+
 def test_build_chat_prompt_session_for_tty_streams(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -5310,7 +5365,10 @@ def test_run_chat_loop_handles_llm_profile_command(
     )
     assert create_calls == ["backup"]
     output = output_stream.getvalue()
-    assert "available LLM profiles: primary, backup" in output
+    assert (
+        "available LLM profiles: primary [modalities not declared], "
+        "backup [modalities not declared]"
+    ) in output
     assert "switched to LLM profile backup; created thread thread-backup" in output
     assert "current LLM profile: backup" in output
 

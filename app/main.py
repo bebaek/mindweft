@@ -61,6 +61,11 @@ from app.execution import (
 from app.external_grants import build_external_grant_provider_registry_from_env
 from app.health import database_readiness_checks
 from app.image_validation import ImageDimensionError, enforce_image_dimensions
+from app.input_capabilities import (
+    ImageInputAvailability,
+    image_input_availability,
+    image_input_unavailable_detail,
+)
 from app.llm import LLMAdapter, build_llm_adapter_from_env
 from app.mcp_broker import (
     MCPBrokerSession,
@@ -74,6 +79,8 @@ from app.models import (
     CreateThreadResponse,
     ExecutionAgentOptionItem,
     ExecutionAgentOptionSection,
+    ExecutionLLMOptionItem,
+    ExecutionLLMOptionSection,
     ExecutionOptionItem,
     ExecutionOptionSection,
     ExecutionOptionsResponse,
@@ -544,7 +551,7 @@ def _validate_and_normalize_message_request(
     request: AddMessageRequest,
     settings: ImageInputSettings,
     *,
-    input_modalities: frozenset[str] | None = None,
+    image_availability: ImageInputAvailability | None = None,
     attachment_store: AttachmentStore | None = None,
     tenant_id: str | None = None,
     thread_id: str | None = None,
@@ -556,9 +563,11 @@ def _validate_and_normalize_message_request(
     image_parts = [part for part in request.parts if part.type == "image"]
     if image_parts and not settings.enabled:
         raise HTTPException(status_code=400, detail="image input is disabled")
-    if image_parts and input_modalities is not None and "image" not in input_modalities:
+    if image_parts and image_availability is not None and not image_availability.allowed:
+        assert image_availability.reason is not None
         raise HTTPException(
-            status_code=400, detail="selected LLM profile does not support image input"
+            status_code=400,
+            detail=image_input_unavailable_detail(image_availability.reason),
         )
     if len(image_parts) > settings.max_images:
         raise HTTPException(
@@ -1249,6 +1258,36 @@ def create_app(
         capability_options = catalog.capability_profile_options()
         agent_options = catalog.agent_options()
         default_skill_refs = catalog.default_skill_refs
+        image_settings = request.app.state.image_input_settings
+
+        def llm_option_item(
+            name: str,
+            profile_name: str | None,
+            *,
+            selectable: bool = True,
+        ) -> ExecutionLLMOptionItem:
+            llm_config = get_llm_config(execution, profile_name)
+            availability = image_input_availability(
+                execution,
+                profile_name,
+                globally_enabled=image_settings.enabled,
+            )
+            return ExecutionLLMOptionItem(
+                name=name,
+                id=f"shared:{name}" if selectable else None,
+                display_name=name,
+                source="shared",
+                input_modalities=(
+                    sorted(llm_config.input_modalities)
+                    if llm_config.input_modalities is not None
+                    else None
+                ),
+                image_input_allowed=availability.allowed,
+                image_input_reason=availability.reason,
+                capability_declared=availability.capability_declared,
+            )
+
+        effective_default_name = config.default_llm_profile or "legacy/default"
         return ExecutionOptionsResponse(
             tenant_id=principal.tenant_id,
             skills=ExecutionOptionSection(
@@ -1280,17 +1319,14 @@ def create_app(
                     for option in capability_options
                 ],
             ),
-            llm_profiles=ExecutionOptionSection(
+            llm_profiles=ExecutionLLMOptionSection(
                 default=config.default_llm_profile,
-                items=[
-                    ExecutionOptionItem(
-                        name=name,
-                        id=f"shared:{name}",
-                        display_name=name,
-                        source="shared",
-                    )
-                    for name in config.llm_profiles
-                ],
+                effective_default=llm_option_item(
+                    effective_default_name,
+                    config.default_llm_profile,
+                    selectable=config.default_llm_profile is not None,
+                ),
+                items=[llm_option_item(name, name) for name in config.llm_profiles],
             ),
             agents=ExecutionAgentOptionSection(
                 default=catalog.default_agent_ref,
@@ -1912,6 +1948,33 @@ def create_app(
             fork_message_id=body.at_message_id,
         )
 
+    def thread_image_availability(
+        app_request: Request,
+        principal: Principal,
+        thread_id: str,
+    ) -> ImageInputAvailability:
+        thread = app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        execution = resolve_principal_execution(principal)
+        return image_input_availability(
+            execution,
+            thread.llm_profile,
+            globally_enabled=app_request.app.state.image_input_settings.enabled,
+        )
+
+    def enforce_thread_image_input(
+        app_request: Request,
+        principal: Principal,
+        thread_id: str,
+    ) -> ImageInputAvailability:
+        availability = thread_image_availability(app_request, principal, thread_id)
+        if not availability.allowed:
+            assert availability.reason is not None
+            raise HTTPException(
+                status_code=400,
+                detail=image_input_unavailable_detail(availability.reason),
+            )
+        return availability
+
     def persist_image_attachment(
         app_request: Request,
         principal: Principal,
@@ -1920,10 +1983,8 @@ def create_app(
         mime_type: str,
         data: bytes,
     ) -> AttachmentMetadata:
-        app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        enforce_thread_image_input(app_request, principal, thread_id)
         image_settings = app_request.app.state.image_input_settings
-        if not image_settings.enabled:
-            raise HTTPException(status_code=400, detail="image input is disabled")
         normalized_mime_type = mime_type.strip().lower().split(";", 1)[0]
         if normalized_mime_type not in image_settings.allowed_mime_types:
             raise HTTPException(
@@ -1981,7 +2042,7 @@ def create_app(
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> AttachmentMetadata:
         _enforce_request_rate_limit(app_request, principal, UPLOAD_RATE_LIMIT_CATEGORY)
-        app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        enforce_thread_image_input(app_request, principal, thread_id)
         try:
             data = base64.b64decode(upload.data, validate=True)
         except (binascii.Error, ValueError) as exc:
@@ -2004,10 +2065,8 @@ def create_app(
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> AttachmentMetadata:
         _enforce_request_rate_limit(app_request, principal, UPLOAD_RATE_LIMIT_CATEGORY)
-        app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        enforce_thread_image_input(app_request, principal, thread_id)
         image_settings = app_request.app.state.image_input_settings
-        if not image_settings.enabled:
-            raise HTTPException(status_code=400, detail="image input is disabled")
         mime_type = app_request.headers.get("content-type", "").strip().lower().split(";", 1)[0]
         if mime_type not in image_settings.allowed_mime_types:
             raise HTTPException(status_code=400, detail=f"unsupported image MIME type: {mime_type}")
@@ -2090,11 +2149,15 @@ def create_app(
         )
         execution = resolve_principal_execution(principal)
         thread = app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
-        llm_config = get_llm_config(execution, thread.llm_profile)
+        availability = image_input_availability(
+            execution,
+            thread.llm_profile,
+            globally_enabled=app_request.app.state.image_input_settings.enabled,
+        )
         request = _validate_and_normalize_message_request(
             request,
             app_request.app.state.image_input_settings,
-            input_modalities=llm_config.input_modalities,
+            image_availability=availability,
             attachment_store=app_request.app.state.attachment_store,
             tenant_id=principal.tenant_id,
             thread_id=thread_id,
