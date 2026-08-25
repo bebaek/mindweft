@@ -229,10 +229,13 @@ export interface ThreadSearchResponse {
   offset: number;
 }
 
-export interface ImagePart {
-  type: "image";
+export interface AttachmentPartBase {
   mime_type: string;
   attachment_id: string;
+}
+
+export interface ImagePart extends AttachmentPartBase {
+  type: "image";
   detail: "auto" | "low" | "high";
 }
 

@@ -73,6 +73,7 @@ from app.mcp_broker import (
     handle_mcp_broker_request,
 )
 from app.mcp_manager import MCPServerManager
+from app.message_parts import attachment_ids as message_attachment_ids
 from app.models import (
     AddMessageRequest,
     CreateThreadRequest,
@@ -488,12 +489,7 @@ def _clone_fork_attachments(
 ) -> dict[str, str]:
     attachment_store = request.app.state.attachment_store
     settings = request.app.state.attachment_store_settings
-    source_attachment_ids = [
-        part.attachment_id
-        for message in messages
-        for part in (message.parts or [])
-        if part.type == "image" and part.attachment_id is not None
-    ]
+    source_attachment_ids = message_attachment_ids(messages)
     attachment_id_map: dict[str, str] = {}
     for source_attachment_id in dict.fromkeys(source_attachment_ids):
         record = attachment_store.get(
@@ -2109,11 +2105,7 @@ def create_app(
     ) -> None:
         app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
         messages = app_request.app.state.store.list_messages(principal.tenant_id, thread_id)
-        if any(
-            part.type == "image" and part.attachment_id == attachment_id
-            for message in messages
-            for part in (message.parts or [])
-        ):
+        if attachment_id in message_attachment_ids(messages):
             raise HTTPException(
                 status_code=409, detail="attachment is referenced by message history"
             )
@@ -2185,11 +2177,15 @@ def create_app(
                     )
                 else:
                     protected_parts.append(part)
-        attachment_ids = [
-            part.attachment_id
-            for part in (protected_parts or [])
-            if part.type == "image" and part.attachment_id is not None
-        ]
+        protected_message = Message(
+            thread_id=thread_id,
+            role=MessageRole.USER,
+            content=protected_content,
+            parts=protected_parts,
+            created_by=principal.user_id,
+            metadata=request.metadata,
+        )
+        attachment_ids = message_attachment_ids([protected_message])
         marked_attachment_ids: list[str] = []
         for attachment_id in attachment_ids:
             marked = app_request.app.state.attachment_store.mark_referenced(
@@ -2204,19 +2200,12 @@ def create_app(
                         thread_id,
                         marked_id,
                     )
-                raise HTTPException(status_code=400, detail="image attachment_id is invalid")
+                raise HTTPException(status_code=400, detail="attachment_id is invalid")
             marked_attachment_ids.append(attachment_id)
         try:
             stored_message = app_request.app.state.store.append_message(
                 principal.tenant_id,
-                Message(
-                    thread_id=thread_id,
-                    role=MessageRole.USER,
-                    content=protected_content,
-                    parts=protected_parts,
-                    created_by=principal.user_id,
-                    metadata=request.metadata,
-                ),
+                protected_message,
             )
         except Exception:
             for attachment_id in marked_attachment_ids:

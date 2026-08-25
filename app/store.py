@@ -16,9 +16,9 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from app.message_parts import remap_attachment_ids
 from app.models import (
     AuditRecord,
-    ImagePart,
     Message,
     MessageRole,
     Thread,
@@ -2168,22 +2168,7 @@ def _copy_fork_messages(
     copied: list[Message] = []
     attachment_id_map = attachment_id_map or {}
     for message in messages:
-        parts = None
-        if message.parts is not None:
-            parts = [
-                part.model_copy(
-                    deep=True,
-                    update={
-                        "attachment_id": attachment_id_map.get(
-                            part.attachment_id,
-                            part.attachment_id,
-                        )
-                    },
-                )
-                if isinstance(part, ImagePart) and part.attachment_id
-                else part.model_copy(deep=True)
-                for part in message.parts
-            ]
+        parts = remap_attachment_ids(message.parts, attachment_id_map)
         copied.append(
             message.model_copy(
                 deep=True,
