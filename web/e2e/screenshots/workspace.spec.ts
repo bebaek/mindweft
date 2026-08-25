@@ -2,6 +2,32 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import { installDemoWorkspaceMocks } from "../fixtures/demo-api-mocks";
 
+test("keeps the message composer ready for the next turn", async ({ page }) => {
+  await installDemoWorkspaceMocks(page);
+  await page.route("**/threads/thread-1/run/stream", (route) => route.fulfill({
+    contentType: "application/x-ndjson",
+    body: `${JSON.stringify({ type: "assistant.message", content: "Ready for the next question." })}\n`,
+  }));
+  await page.goto("/", { waitUntil: "networkidle" });
+
+  const menu = page.getByRole("button", { name: "Open navigation" });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole("button", { name: "Workspace" }).click();
+
+  const composer = page.getByRole("textbox", { name: /Message/ });
+  await expect(composer).toBeFocused();
+
+  const conversations = page.getByRole("button", { name: "Show conversations" });
+  if (await conversations.isVisible()) await conversations.click();
+  await page.getByRole("button", { name: /Plan the product launch/ }).click();
+  await expect(composer).toBeFocused();
+
+  await composer.fill("What should I do next?");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(composer).toBeEnabled();
+  await expect(composer).toBeFocused();
+});
+
 test("searches, pins, archives, and restores conversations", async ({ page }) => {
   await installDemoWorkspaceMocks(page);
   await page.goto("/", { waitUntil: "networkidle" });
