@@ -64,6 +64,19 @@ export interface ExecutionOptionSection {
   items: ExecutionOptionItem[];
 }
 
+export interface ExecutionLlmOptionItem extends ExecutionOptionItem {
+  input_modalities?: string[] | null;
+  image_input_allowed: boolean;
+  image_input_reason?: "disabled" | "backend_unsupported" | "profile_unsupported" | null;
+  capability_declared: boolean;
+}
+
+export interface ExecutionLlmOptionSection {
+  default?: string | null;
+  effective_default: ExecutionLlmOptionItem;
+  items: ExecutionLlmOptionItem[];
+}
+
 export interface ExecutionAgentOptionItem extends ExecutionOptionItem {
   skill_name?: string | null;
   skills?: string[] | null;
@@ -80,7 +93,7 @@ export interface ExecutionOptionsResponse {
   tenant_id: string;
   skills: ExecutionOptionSection;
   capability_profiles: ExecutionOptionSection;
-  llm_profiles: ExecutionOptionSection;
+  llm_profiles: ExecutionLlmOptionSection;
   agents: ExecutionAgentOptionSection;
 }
 

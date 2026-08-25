@@ -3244,7 +3244,9 @@ def test_run_endpoint_can_use_peer_agent_backend(tmp_path: Path) -> None:
     ]
 
 
-def test_peer_agent_backend_rejects_image_input(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_peer_agent_backend_rejects_image_input_before_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
     config = parse_tenant_execution_config(
         "tenant-1",
@@ -3266,6 +3268,11 @@ def test_peer_agent_backend_rejects_image_input(monkeypatch: pytest.MonkeyPatch)
         )
     )
     thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    default_option = client.get("/execution-options", headers=AUTH_HEADERS).json()["llm_profiles"][
+        "effective_default"
+    ]
+    assert default_option["image_input_allowed"] is False
+    assert default_option["image_input_reason"] == "backend_unsupported"
     message_response = client.post(
         f"/threads/{thread_id}/messages",
         json={
@@ -3278,11 +3285,11 @@ def test_peer_agent_backend_rejects_image_input(monkeypatch: pytest.MonkeyPatch)
         headers=AUTH_HEADERS,
     )
 
-    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
-
-    assert message_response.status_code == 200
-    assert run_response.status_code == 400
-    assert run_response.json()["detail"] == "peer_agent backend does not support image input"
+    assert message_response.status_code == 400
+    assert message_response.json()["detail"] == (
+        "selected agent backend does not support image input"
+    )
+    assert client.get(f"/threads/{thread_id}/messages", headers=AUTH_HEADERS).json() == []
 
 
 def test_peer_agent_backend_queues_reserved_task_when_create_fails(tmp_path: Path) -> None:
@@ -4499,7 +4506,22 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
                 },
             ],
         },
-        "llm_profiles": {"default": None, "defaults": None, "items": []},
+        "llm_profiles": {
+            "default": None,
+            "effective_default": {
+                "name": "legacy/default",
+                "description": None,
+                "id": None,
+                "display_name": "legacy/default",
+                "source": "shared",
+                "version": None,
+                "input_modalities": None,
+                "image_input_allowed": False,
+                "image_input_reason": "disabled",
+                "capability_declared": False,
+            },
+            "items": [],
+        },
         "agents": {
             "default": "support",
             "items": [
@@ -4576,28 +4598,13 @@ def test_threads_bind_named_llm_profiles(monkeypatch: pytest.MonkeyPatch) -> Non
 
     options = client.get("/execution-options", headers=AUTH_HEADERS)
     assert options.status_code == 200
-    assert options.json()["llm_profiles"] == {
-        "default": "primary",
-        "defaults": None,
-        "items": [
-            {
-                "name": "primary",
-                "description": None,
-                "id": "shared:primary",
-                "display_name": "primary",
-                "source": "shared",
-                "version": None,
-            },
-            {
-                "name": "backup",
-                "description": None,
-                "id": "shared:backup",
-                "display_name": "backup",
-                "source": "shared",
-                "version": None,
-            },
-        ],
-    }
+    section = options.json()["llm_profiles"]
+    assert section["default"] == "primary"
+    assert section["effective_default"]["name"] == "primary"
+    assert section["effective_default"]["input_modalities"] is None
+    assert section["effective_default"]["image_input_allowed"] is False
+    assert section["effective_default"]["image_input_reason"] == "disabled"
+    assert [item["name"] for item in section["items"]] == ["primary", "backup"]
 
     default_thread = client.post("/threads", headers=AUTH_HEADERS)
     backup_thread = client.post("/threads", headers=AUTH_HEADERS, json={"llm_profile": "backup"})
@@ -4638,6 +4645,16 @@ def test_selected_llm_profile_enforces_declared_image_capability(
         ),
     )
     client = TestClient(create_app())
+    options = client.get("/execution-options", headers=AUTH_HEADERS).json()["llm_profiles"]
+    profiles = {item["name"]: item for item in options["items"]}
+    assert options["effective_default"] == profiles["text-only"]
+    assert profiles["text-only"]["input_modalities"] == ["text"]
+    assert profiles["text-only"]["image_input_allowed"] is False
+    assert profiles["text-only"]["image_input_reason"] == "profile_unsupported"
+    assert profiles["vision"]["input_modalities"] == ["image", "text"]
+    assert profiles["vision"]["image_input_allowed"] is True
+    assert profiles["vision"]["image_input_reason"] is None
+
     text_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
     vision_thread_id = client.post(
         "/threads", headers=AUTH_HEADERS, json={"llm_profile": "vision"}
@@ -4650,6 +4667,11 @@ def test_selected_llm_profile_enforces_declared_image_capability(
         ],
     }
 
+    text_upload = client.post(
+        f"/threads/{text_thread_id}/attachments",
+        headers=AUTH_HEADERS,
+        json={"mime_type": "image/png", "data": PNG_1X1_BASE64},
+    )
     text_response = client.post(
         f"/threads/{text_thread_id}/messages", headers=AUTH_HEADERS, json=payload
     )
@@ -4657,6 +4679,8 @@ def test_selected_llm_profile_enforces_declared_image_capability(
         f"/threads/{vision_thread_id}/messages", headers=AUTH_HEADERS, json=payload
     )
 
+    assert text_upload.status_code == 400
+    assert text_upload.json()["detail"] == "selected LLM profile does not support image input"
     assert text_response.status_code == 400
     assert text_response.json()["detail"] == "selected LLM profile does not support image input"
     assert vision_response.status_code == 200

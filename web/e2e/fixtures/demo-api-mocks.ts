@@ -74,9 +74,31 @@ export async function installDemoWorkspaceMocks(page: Page) {
         capability_profiles: { items: [] },
         llm_profiles: {
           default: "claude",
+          effective_default: {
+            name: "claude",
+            display_name: "Claude Sonnet",
+            input_modalities: ["text", "image"],
+            image_input_allowed: true,
+            image_input_reason: null,
+            capability_declared: true,
+          },
           items: [
-            { name: "claude", display_name: "Claude Sonnet" },
-            { name: "gpt-4.1", display_name: "GPT-4.1" },
+            {
+              name: "claude",
+              display_name: "Claude Sonnet",
+              input_modalities: ["text", "image"],
+              image_input_allowed: true,
+              image_input_reason: null,
+              capability_declared: true,
+            },
+            {
+              name: "gpt-4.1",
+              display_name: "GPT-4.1",
+              input_modalities: ["text", "image"],
+              image_input_allowed: true,
+              image_input_reason: null,
+              capability_declared: true,
+            },
           ],
         },
         agents: {
