@@ -70,6 +70,7 @@ export function WorkspacePage() {
   const abortRef = useRef<AbortController | null>(null);
   const activityId = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const pendingImagesRef = useRef<PendingImage[]>([]);
   const pendingConsentRef = useRef<PrivateValueConsentRequest | null>(null);
 
@@ -202,6 +203,10 @@ export function WorkspacePage() {
       setError(caught instanceof Error ? caught.message : "Could not organize conversation.");
     },
   });
+
+  useEffect(() => {
+    if (!isRunning) messageInputRef.current?.focus({ preventScroll: true });
+  }, [isRunning, selectedThreadId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
@@ -793,6 +798,7 @@ export function WorkspacePage() {
             />
           </label>
           <textarea
+            ref={messageInputRef}
             aria-label="Message Mindweft"
             placeholder="Ask Mindweft anything…"
             value={draft}
