@@ -72,6 +72,44 @@ test("searches message content and navigates to the matching message", async ({ 
   await expect(page.locator("#message-message-2")).toHaveClass(/search-highlight/);
 });
 
+test("adds pasted clipboard images without blocking text paste", async ({ page }) => {
+  await installDemoWorkspaceMocks(page);
+  await page.route("**/config", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      image_input: {
+        enabled: true,
+        allowed_mime_types: ["image/png", "image/jpeg"],
+        max_images: 4,
+        max_bytes: 5_000_000,
+        max_total_bytes: 10_000_000,
+      },
+    }),
+  }));
+  await page.goto("/", { waitUntil: "networkidle" });
+
+  const composer = page.getByRole("textbox", { name: /Message/ });
+  await composer.fill("Keep this draft");
+  const defaultAllowed = await composer.evaluate((element) => {
+    const clipboard = new DataTransfer();
+    clipboard.setData("text/plain", " and paste this text");
+    clipboard.items.add(new File(
+      [new Uint8Array([137, 80, 78, 71])],
+      "clipboard-image.png",
+      { type: "image/png" },
+    ));
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: clipboard });
+    return element.dispatchEvent(event);
+  });
+
+  expect(defaultAllowed).toBe(true);
+  await expect(composer).toHaveValue("Keep this draft");
+  await expect(page.getByRole("img", { name: "clipboard-image.png" })).toBeVisible();
+  await expect(page.getByLabel("Image detail for clipboard-image.png")).toHaveValue("auto");
+  await expect(page.getByRole("button", { name: "Send message" })).toBeEnabled();
+});
+
 test("selects an explicit model profile for a new conversation", async ({ page }) => {
   await installDemoWorkspaceMocks(page);
   await page.goto("/", { waitUntil: "networkidle" });

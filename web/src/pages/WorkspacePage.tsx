@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
@@ -399,7 +399,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     }
   }
 
-  function addImageFiles(files: FileList | null) {
+  function addImageFiles(files: FileList | File[] | null) {
     if (!files?.length) return;
     const imageConfig = config.data?.image_input;
     if (!imageConfig?.enabled) {
@@ -817,6 +817,17 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
             rows={1}
             disabled={isRunning}
             onChange={(event) => setDraft(event.target.value)}
+            onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
+              const clipboardFiles = event.clipboardData.files.length > 0
+                ? Array.from(event.clipboardData.files)
+                : Array.from(event.clipboardData.items)
+                    .filter((item) => item.kind === "file")
+                    .map((item) => item.getAsFile())
+                    .filter((file): file is File => file !== null);
+              const images = clipboardFiles
+                .filter((file) => file.type.toLowerCase().startsWith("image/"));
+              if (images.length > 0) addImageFiles(images);
+            }}
             onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
@@ -829,7 +840,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           ) : (
             <button className="send-message" type="submit" disabled={!draft.trim() && pendingImages.length === 0} aria-label="Send message">↑</button>
           )}
-          <small>Enter to send · Shift+Enter for a new line</small>
+          <small>Enter to send · Shift+Enter for a new line{config.data?.image_input.enabled ? " · Paste images" : ""}</small>
         </form>
       </div>
       <ContextDialog

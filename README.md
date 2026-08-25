@@ -450,7 +450,7 @@ agent selection, NDJSON run streaming, activity
 inspection, cancellation controls, context usage inspection, raw model-context previews, and
 confirmed compaction. On narrow screens, the conversation rail is collapsed by default and available
 from the Conversations menu so the active chat retains the screen space. The console also supports
-validated image selection, authenticated binary uploads, attachment previews,
+validated image selection and clipboard image paste, authenticated binary uploads, attachment previews,
 and per-image detail controls, one-time private-value approval/denial, pending-consent recovery after
 reload, uncertain-action reconciliation, a personal setup workspace for versioned execution-overlay
 JSON plus write-only encrypted MCP credential creation, rotation, and deletion, a tenant-owner
