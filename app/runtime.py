@@ -36,7 +36,7 @@ from app.llm import (
 )
 from app.mcp import MCPPrivateToolResult
 from app.models import (
-    ImagePart,
+    AttachmentPartBase,
     LLMResponse,
     Message,
     MessageRole,
@@ -1186,14 +1186,14 @@ class AgentRuntime:
                 continue
             resolved_parts = []
             for part in message.parts:
-                if not isinstance(part, ImagePart) or not part.attachment_id:
+                if not isinstance(part, AttachmentPartBase) or not part.attachment_id:
                     resolved_parts.append(part)
                     continue
                 record = self._attachment_store.get(tenant_id, thread_id, part.attachment_id)
                 if record is None:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"image attachment is unavailable: {part.attachment_id}",
+                        detail=f"attachment is unavailable: {part.attachment_id}",
                     )
                 resolved_parts.append(
                     part.model_copy(

@@ -116,12 +116,15 @@ class TextPart(BaseModel):
     text: str
 
 
-class ImagePart(BaseModel):
-    type: Literal["image"] = "image"
+class AttachmentPartBase(BaseModel):
     mime_type: str
     data: str | None = None
     url: str | None = None
     attachment_id: str | None = None
+
+
+class ImagePart(AttachmentPartBase):
+    type: Literal["image"] = "image"
     detail: Literal["auto", "low", "high"] = "auto"
 
 

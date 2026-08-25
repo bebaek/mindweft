@@ -71,6 +71,18 @@ Registered functions, called by name, returning JSON-like results. Tools can be 
 Abstract interface that handles model calls. Can be swapped between mock, OpenAI, OpenRouter,
 Gemini, and Generic OAuth providers.
 
+### Structured message content
+
+`MessagePart` is the discriminated union of content modalities that Mindweft supports end to
+end. `AttachmentPartBase` owns only shared attachment-source mechanics such as MIME type, inline
+data, URL, and stored attachment ID. Attachment lifecycle operations—reference tracking, deletion,
+forking, compaction, and runtime hydration—operate on that base class. Validation and LLM provider
+serialization continue to operate on concrete modality classes such as `ImagePart`.
+
+A new concrete part must not be added to the public `MessagePart` union until its validation,
+provider adaptation, client behavior, and lifecycle tests are implemented together. Defining or
+using the attachment base does not by itself advertise a new supported modality.
+
 ## Design Principles
 
 ### 1. Simplicity First
