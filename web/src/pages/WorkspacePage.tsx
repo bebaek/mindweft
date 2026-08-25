@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
@@ -44,7 +44,12 @@ interface ActivityItem {
   error?: boolean;
 }
 
-export function WorkspacePage() {
+interface WorkspacePageProps {
+  sidebarHeader?: ReactNode;
+  sidebarFooter?: ReactNode;
+}
+
+export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePageProps) {
   const { api, authentication } = useAuth();
   const queryClient = useQueryClient();
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
@@ -209,7 +214,7 @@ export function WorkspacePage() {
   }, [isRunning, selectedThreadId]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
   }, [messages.data, streamedReply, activity]);
 
   useEffect(() => {
@@ -522,6 +527,7 @@ export function WorkspacePage() {
   return (
     <section className="workspace-page">
       <aside className={`thread-rail ${mobileThreadRailOpen ? "is-open" : ""}`} aria-label="Conversations">
+        {sidebarHeader}
         <div className="thread-rail-heading">
           <div><p className="eyebrow">Workspace</p><h2>Conversations</h2></div>
           <button type="button" onClick={newThread} aria-label="New conversation">+</button>
@@ -590,6 +596,7 @@ export function WorkspacePage() {
             </p>
           )}
         </div>
+        {sidebarFooter}
       </aside>
       {mobileThreadRailOpen && <button type="button" className="thread-rail-backdrop" aria-label="Close conversations" onClick={() => setMobileThreadRailOpen(false)} />}
 
@@ -600,28 +607,33 @@ export function WorkspacePage() {
           <div className="conversation-actions">
             {activity.filter((item) => showThinking || item.type !== "reasoning").length > 0 && <span className="activity-count">{activity.filter((item) => showThinking || item.type !== "reasoning").length} event{activity.filter((item) => showThinking || item.type !== "reasoning").length === 1 ? "" : "s"}</span>}
             <button type="button" className={showThinking ? "active" : ""} onClick={() => setShowThinking((visible) => !visible)}>Thinking {showThinking ? "on" : "off"}</button>
-            <button
-              type="button"
-              disabled={!selectedThread || isRunning || organizeThread.isPending}
-              onClick={() => selectedThread && organizeThread.mutate({
-                threadId: selectedThread.thread_id,
-                organization: { pinned: !selectedThread.pinned_at },
-              })}
-            >
-              {selectedThread?.pinned_at ? "Unpin" : "Pin"}
-            </button>
-            <button
-              type="button"
-              disabled={!selectedThread || isRunning || organizeThread.isPending}
-              onClick={() => selectedThread && organizeThread.mutate({
-                threadId: selectedThread.thread_id,
-                organization: { archived: !selectedThread.archived_at },
-              })}
-            >
-              {selectedThread?.archived_at ? "Restore" : "Archive"}
-            </button>
-            <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => void renameSelectedThread()}>Rename</button>
-            <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => setContextOpen(true)}>Context</button>
+            <details className="conversation-menu">
+              <summary role="button" aria-label="Conversation actions" title="Conversation actions">•••</summary>
+              <div>
+                <button
+                  type="button"
+                  disabled={!selectedThread || isRunning || organizeThread.isPending}
+                  onClick={() => selectedThread && organizeThread.mutate({
+                    threadId: selectedThread.thread_id,
+                    organization: { pinned: !selectedThread.pinned_at },
+                  })}
+                >
+                  {selectedThread?.pinned_at ? "Unpin" : "Pin"}
+                </button>
+                <button
+                  type="button"
+                  disabled={!selectedThread || isRunning || organizeThread.isPending}
+                  onClick={() => selectedThread && organizeThread.mutate({
+                    threadId: selectedThread.thread_id,
+                    organization: { archived: !selectedThread.archived_at },
+                  })}
+                >
+                  {selectedThread?.archived_at ? "Restore" : "Archive"}
+                </button>
+                <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => void renameSelectedThread()}>Rename</button>
+                <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => setContextOpen(true)}>Context</button>
+              </div>
+            </details>
           </div>
         </header>
 

@@ -10,9 +10,7 @@ test("keeps the message composer ready for the next turn", async ({ page }) => {
   }));
   await page.goto("/", { waitUntil: "networkidle" });
 
-  const menu = page.getByRole("button", { name: "Open navigation" });
-  if (await menu.isVisible()) await menu.click();
-  await page.getByRole("button", { name: "Workspace" }).click();
+  await expect(page.getByRole("heading", { name: "What are we working on?" })).toBeVisible();
 
   const composer = page.getByRole("textbox", { name: /Message/ });
   await expect(composer).toBeFocused();
@@ -32,9 +30,7 @@ test("searches, pins, archives, and restores conversations", async ({ page }) =>
   await installDemoWorkspaceMocks(page);
   await page.goto("/", { waitUntil: "networkidle" });
 
-  const menu = page.getByRole("button", { name: "Open navigation" });
-  if (await menu.isVisible()) await menu.click();
-  await page.getByRole("button", { name: "Workspace" }).click();
+  await expect(page.getByRole("heading", { name: "What are we working on?" })).toBeVisible();
   async function showConversations() {
     const toggle = page.getByRole("button", { name: "Show conversations" });
     if (await toggle.isVisible()) await toggle.click();
@@ -44,6 +40,7 @@ test("searches, pins, archives, and restores conversations", async ({ page }) =>
   await page.getByRole("searchbox", { name: "Search conversations" }).fill("product launch");
   await expect(page.getByRole("button", { name: /Plan the product launch/ })).toBeVisible();
   await page.getByRole("button", { name: /Plan the product launch/ }).click();
+  await page.getByRole("button", { name: "Conversation actions" }).click();
   await page.getByRole("button", { name: "Pin", exact: true }).click();
   await expect(page.getByRole("button", { name: "Unpin", exact: true })).toBeVisible();
 
@@ -62,9 +59,7 @@ test("searches message content and navigates to the matching message", async ({ 
   await installDemoWorkspaceMocks(page);
   await page.goto("/", { waitUntil: "networkidle" });
 
-  const menu = page.getByRole("button", { name: "Open navigation" });
-  if (await menu.isVisible()) await menu.click();
-  await page.getByRole("button", { name: "Workspace" }).click();
+  await expect(page.getByRole("heading", { name: "What are we working on?" })).toBeVisible();
   const conversations = page.getByRole("button", { name: "Show conversations" });
   if (await conversations.isVisible()) await conversations.click();
 
@@ -81,9 +76,7 @@ test("selects an explicit model profile for a new conversation", async ({ page }
   await installDemoWorkspaceMocks(page);
   await page.goto("/", { waitUntil: "networkidle" });
 
-  const menu = page.getByRole("button", { name: "Open navigation" });
-  if (await menu.isVisible()) await menu.click();
-  await page.getByRole("button", { name: "Workspace" }).click();
+  await expect(page.getByRole("heading", { name: "What are we working on?" })).toBeVisible();
   const conversations = page.getByRole("button", { name: "Show conversations" });
   if (await conversations.isVisible()) await conversations.click();
   await page.getByRole("button", { name: "New conversation" }).click();
@@ -149,9 +142,7 @@ test("persists the selected agent as the user default", async ({ page }) => {
   });
 
   async function openNewConversation() {
-    const menu = page.getByRole("button", { name: "Open navigation" });
-    if (await menu.isVisible()) await menu.click();
-    await page.getByRole("button", { name: "Workspace" }).click();
+    await expect(page.getByRole("heading", { name: "What are we working on?" })).toBeVisible();
     const conversations = page.getByRole("button", { name: "Show conversations" });
     if (await conversations.isVisible()) await conversations.click();
     await page.getByRole("button", { name: "New conversation" }).click();
@@ -189,9 +180,7 @@ test("shows parent, sibling, and child lineage without exposing ids", async ({ p
   }));
   await page.goto("/", { waitUntil: "networkidle" });
 
-  const menu = page.getByRole("button", { name: "Open navigation" });
-  if (await menu.isVisible()) await menu.click();
-  await page.getByRole("button", { name: "Workspace" }).click();
+  await expect(page.getByRole("heading", { name: "What are we working on?" })).toBeVisible();
   const conversations = page.getByRole("button", { name: "Show conversations" });
   if (await conversations.isVisible()) await conversations.click();
   await page.getByRole("button", { name: /Plan the product launch/ }).click();
@@ -212,9 +201,7 @@ test("captures the workspace with a demo chat", async ({ page }, testInfo) => {
   await installDemoWorkspaceMocks(page);
   await page.goto("/", { waitUntil: "networkidle" });
 
-  const menu = page.getByRole("button", { name: "Open navigation" });
-  if (await menu.isVisible()) await menu.click();
-  await page.getByRole("button", { name: "Workspace" }).click();
+  await expect(page.getByRole("heading", { name: "What are we working on?" })).toBeVisible();
   const conversations = page.getByRole("button", { name: "Show conversations" });
   if (await conversations.isVisible()) await conversations.click();
   await page.getByRole("button", { name: /Plan the product launch/ }).click();
@@ -228,7 +215,7 @@ test("captures the workspace with a demo chat", async ({ page }, testInfo) => {
 
   await page.screenshot({
     path: `test-results/screenshots/workspace-${testInfo.project.name}.png`,
-    fullPage: true,
+    fullPage: false,
   });
 });
 
@@ -236,9 +223,7 @@ test("applies distinct curated branch hover colors in light and dark themes", as
   await installDemoWorkspaceMocks(page);
   await page.goto("/", { waitUntil: "networkidle" });
 
-  const menu = page.getByRole("button", { name: "Open navigation" });
-  if (await menu.isVisible()) await menu.click();
-  await page.getByRole("button", { name: "Workspace" }).click();
+  await expect(page.getByRole("heading", { name: "What are we working on?" })).toBeVisible();
   const conversations = page.getByRole("button", { name: "Show conversations" });
   if (await conversations.isVisible()) await conversations.click();
   await page.getByRole("button", { name: /Plan the product launch/ }).click();

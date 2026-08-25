@@ -24,7 +24,7 @@ const pages: Record<Page, { label: string; description: string }> = {
 };
 
 export function App() {
-  const [page, setPage] = useState<Page>("overview");
+  const [page, setPage] = useState<Page>("workspace");
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>(initialTheme);
@@ -71,44 +71,60 @@ export function App() {
     setMobileNavOpen(false);
   }
 
+  const brand = <div className="brand"><span className="brand-mark">M</span><div><strong>Mindweft</strong><small>Agent operations</small></div></div>;
+  const navigation = (
+    <nav aria-label="Primary navigation">
+      {visiblePages.map((key) => (
+        <button
+          key={key}
+          className={page === key ? "active" : ""}
+          aria-label={pages[key].label}
+          title={pages[key].label}
+          onClick={() => navigate(key)}
+        >
+          <NavIcon page={key} /><span>{pages[key].label}</span>
+        </button>
+      ))}
+    </nav>
+  );
+  const utilities = (
+    <div className="sidebar-utilities">
+      <button
+        type="button"
+        className="theme-toggle"
+        aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+        title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+        onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+      ><span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span></button>
+      <button
+        className="connection-button"
+        onClick={() => {
+          if (authentication.mode === "session" && session.authenticated) {
+            void logout().then(() => queryClient.clear());
+          } else {
+            setConnectionOpen(true);
+          }
+        }}
+      >
+        <span className="connection-indicator" />
+        <span>{sessionLabel(authentication.mode, session.principal?.user_id)}</span>
+        <small>{authentication.mode === "session" && session.authenticated ? "Sign out" : "Configure"}</small>
+      </button>
+    </div>
+  );
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${page === "workspace" ? "workspace-shell" : ""}`}>
       <a className="skip-link" href="#main-content">Skip to content</a>
-      <aside className={`sidebar ${mobileNavOpen ? "is-open" : ""}`}>
-        <div className="brand"><span className="brand-mark">M</span><div><strong>Mindweft</strong><small>Agent operations</small></div></div>
-        <nav aria-label="Primary navigation">
-          {visiblePages.map((key) => (
-            <button key={key} className={page === key ? "active" : ""} onClick={() => navigate(key)}>
-              <NavIcon page={key} /><span>{pages[key].label}</span>
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-utilities">
-          <button
-            type="button"
-            className="theme-toggle"
-            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-            onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
-          ><span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span></button>
-          <button
-            className="connection-button"
-            onClick={() => {
-              if (authentication.mode === "session" && session.authenticated) {
-                void logout().then(() => queryClient.clear());
-              } else {
-                setConnectionOpen(true);
-              }
-            }}
-          >
-            <span className="connection-indicator" />
-            <span>{sessionLabel(authentication.mode, session.principal?.user_id)}</span>
-            <small>{authentication.mode === "session" && session.authenticated ? "Sign out" : "Configure"}</small>
-          </button>
-        </div>
-        <div className="sidebar-footer"><span className="environment-dot" /><div><strong>Mindweft API</strong><small>Same-origin connection</small></div></div>
-      </aside>
-      {mobileNavOpen && <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
+      {page !== "workspace" && (
+        <aside className={`sidebar ${mobileNavOpen ? "is-open" : ""}`}>
+          {brand}
+          {navigation}
+          {utilities}
+          <div className="sidebar-footer"><span className="environment-dot" /><div><strong>Mindweft API</strong><small>Same-origin connection</small></div></div>
+        </aside>
+      )}
+      {mobileNavOpen && page !== "workspace" && <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
 
       <div className="main-column">
         <header className="topbar">
@@ -117,7 +133,12 @@ export function App() {
         </header>
         <main id="main-content">
           {page === "overview" && <OverviewPage />}
-          {page === "workspace" && <WorkspacePage />}
+          {page === "workspace" && (
+            <WorkspacePage
+              sidebarHeader={<div className="workspace-sidebar-chrome">{brand}{navigation}</div>}
+              sidebarFooter={utilities}
+            />
+          )}
           {page === "personal" && <PersonalizationPage />}
           {page === "settings" && tenantOwner && tenantContext.data && <AdminPage tenantId={tenantContext.data.tenant_id} />}
           {page === "admin" && platformAdmin && <AdminPage />}
