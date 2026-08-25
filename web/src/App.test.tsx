@@ -77,7 +77,7 @@ it("activates a tenant user from a single-use setup link", async () => {
   fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "a secure local password" } });
   fireEvent.click(screen.getByRole("button", { name: "Activate account" }));
 
-  expect(await screen.findByText("Build, observe, and govern your agents.")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "What are we working on?" })).toBeInTheDocument();
   expect(window.location.hash).toBe("");
 });
 
@@ -106,7 +106,7 @@ it("signs in with configured static credentials", async () => {
   fireEvent.change(screen.getByLabelText("Password"), { target: { value: "secret" } });
   fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-  expect(await screen.findByText("Build, observe, and govern your agents.")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "What are we working on?" })).toBeInTheDocument();
   expect(screen.getByText("admin")).toBeInTheDocument();
 });
 
@@ -134,7 +134,7 @@ it("shows tenant settings to an owner without exposing platform administration",
   expect(screen.queryByRole("button", { name: "Administration" })).not.toBeInTheDocument();
 });
 
-it("renders the production console shell and readiness status", async () => {
+it("renders the conversation-first console shell", async () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={queryClient}>
@@ -142,8 +142,8 @@ it("renders the production console shell and readiness status", async () => {
     </QueryClientProvider>,
   );
 
-  expect(await screen.findByText("Build, observe, and govern your agents.")).toBeInTheDocument();
-  expect(await screen.findByText("Ready")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "What are we working on?" })).toBeInTheDocument();
+  expect(screen.getByRole("complementary", { name: "Conversations" })).toBeInTheDocument();
   expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Personal setup" })).toBeInTheDocument();
 
@@ -167,7 +167,7 @@ it("migrates the legacy Minigent theme preference", async () => {
     </QueryClientProvider>,
   );
 
-  expect(await screen.findByText("Ready")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "What are we working on?" })).toBeInTheDocument();
   expect(document.documentElement.dataset.theme).toBe("dark");
   expect(document.documentElement).toHaveClass("dark");
   expect(document.documentElement).not.toHaveClass("light");

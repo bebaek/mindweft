@@ -338,13 +338,7 @@ async function installWorkspaceMocks(
 }
 
 async function navigateToWorkspace(page: Page) {
-  const menu = page.getByRole("button", { name: "Open navigation" });
-  if ((page.viewportSize()?.width ?? Infinity) <= 900) {
-    await expect(menu).toBeVisible();
-    await menu.click();
-    await expect(page.locator(".sidebar")).toHaveClass(/is-open/);
-  }
-  await page.getByRole("button", { name: "Workspace", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "What are we working on?" })).toBeVisible();
 }
 
 async function openConversations(page: Page) {
@@ -352,6 +346,28 @@ async function openConversations(page: Page) {
   if (await conversations.isVisible()) {
     await conversations.click();
     await expect(page.locator(".thread-rail")).toHaveClass(/is-open/);
+  }
+}
+
+async function switchToDarkMode(page: Page) {
+  const toggle = page.getByRole("button", { name: "Switch to dark mode" });
+  if (!(await toggle.isVisible())) {
+    await page.getByRole("button", { name: "Open navigation" }).click();
+    await expect(page.locator(".sidebar")).toHaveClass(/is-open/);
+  }
+  await toggle.dispatchEvent("click");
+}
+
+async function openConnectionSettings(page: Page) {
+  const connection = page.getByRole("button", { name: /Secure session/ });
+  if (!(await connection.isVisible())) await openConversations(page);
+  await connection.click();
+}
+
+async function openConversationActions(page: Page) {
+  const context = page.getByRole("button", { name: "Context", exact: true });
+  if (!(await context.isVisible())) {
+    await page.getByRole("button", { name: "Conversation actions" }).click();
   }
 }
 
@@ -425,7 +441,7 @@ async function installAdminMocks(page: Page) {
 async function navigateToAdmin(page: Page) {
   let admin = page.getByRole("button", { name: "Administration", exact: true });
   if (await admin.count() === 0) {
-    await page.getByRole("button", { name: /Secure session/ }).click();
+    await openConnectionSettings(page);
     const dialog = page.getByRole("dialog", { name: "Authentication" });
     await dialog.getByLabel("Development headers").check();
     await dialog.getByLabel("Tenant ID").fill("tenant-acme");
@@ -434,22 +450,17 @@ async function navigateToAdmin(page: Page) {
     await dialog.getByRole("button", { name: "Use connection" }).click();
     admin = page.getByRole("button", { name: "Administration", exact: true });
   }
-  const menu = page.getByRole("button", { name: "Open navigation" });
-  if (await menu.isVisible()) {
-    await menu.click();
-    await expect(page.locator(".sidebar")).toHaveClass(/is-open/);
-  }
+  if (!(await admin.isVisible())) await openConversations(page);
   await admin.click();
 }
 
-test("loads the production console and passes an accessibility scan", async ({ page }) => {
+test("loads the conversation-first console and passes an accessibility scan", async ({ page }) => {
   await installApiMocks(page);
   await page.goto("./");
 
   await expect(page).toHaveTitle("Mindweft Console");
-  await expect(page.getByRole("heading", { name: "Build, observe, and govern your agents." })).toBeVisible();
-  await expect(page.getByText("Ready", { exact: true })).toBeVisible();
-  await expect(page.getByText("3 checks passing")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What are we working on?" })).toBeVisible();
+  await expect(page.locator(".thread-rail")).toBeAttached();
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
@@ -514,8 +525,7 @@ test("prioritizes conversation space after a thread is selected", async ({ page 
 
   const mobile = (page.viewportSize()?.width ?? 0) <= 720;
   const runtimeSelectors = page.locator(".composer-runtime-selectors");
-  if (mobile) await expect(runtimeSelectors).toBeHidden();
-  else await expect(runtimeSelectors).toBeVisible();
+  await expect(runtimeSelectors).toBeHidden();
   const workspaceBox = await page.locator(".workspace-page").boundingBox();
   const messageBox = await page.locator(".message-scroll").boundingBox();
   const composerBox = await page.locator(".chat-composer").boundingBox();
@@ -534,10 +544,10 @@ test("prioritizes conversation space after a thread is selected", async ({ page 
   expect(Math.abs(inputBox!.y + inputBox!.height / 2 - (attachBox!.y + attachBox!.height / 2))).toBeLessThan(4);
   if (mobile) {
     const headerBox = await page.locator(".conversation-header").boundingBox();
-    const contextBox = await page.getByRole("button", { name: "Context", exact: true }).boundingBox();
+    const actionsBox = await page.getByRole("button", { name: "Conversation actions" }).boundingBox();
     expect(headerBox).not.toBeNull();
-    expect(contextBox).not.toBeNull();
-    expect(contextBox!.x + contextBox!.width).toBeLessThanOrEqual(headerBox!.x + headerBox!.width - 10);
+    expect(actionsBox).not.toBeNull();
+    expect(actionsBox!.x + actionsBox!.width).toBeLessThanOrEqual(headerBox!.x + headerBox!.width - 10);
     expect(composerBox!.height).toBeLessThan(100);
     expect(messageBox!.height).toBeGreaterThan(workspaceBox!.height * 0.75);
   }
@@ -572,7 +582,7 @@ test("keeps overview, authentication, and administration legible in dark mode", 
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 
-  await page.getByRole("button", { name: /Secure session/ }).click();
+  await openConnectionSettings(page);
   const dialog = page.getByRole("dialog", { name: "Authentication" });
   await dialog.getByLabel("Development headers").check();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
@@ -614,6 +624,7 @@ test("keeps the workspace sidebar and dialogs legible in dark mode", async ({ pa
   await expect(page.getByRole("table")).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 
+  await openConversationActions(page);
   await page.getByRole("button", { name: "Context" }).click();
   const contextDialog = page.getByRole("dialog", { name: "Thread context" });
   await expect(contextDialog.getByText("1,240")).toBeVisible();
@@ -631,7 +642,7 @@ test("applies development credentials without persisting them", async ({ page })
   await installApiMocks(page, (route) => executionHeaders.push(route.request().headers()));
   await page.goto("./");
 
-  await page.getByRole("button", { name: /Secure session/ }).click();
+  await openConnectionSettings(page);
   const dialog = page.getByRole("dialog", { name: "Authentication" });
   await dialog.getByLabel("Development headers").check();
   await dialog.getByLabel("Tenant ID").fill("tenant-e2e");
@@ -682,6 +693,7 @@ test("runs a streamed conversation without accessibility violations", async ({ p
   await expect(page.getByRole("img", { name: "User attachment" })).toBeVisible();
   await expect(page.locator(".activity-tray summary").getByText("Run completed")).toBeVisible();
 
+  await openConversationActions(page);
   await page.getByRole("button", { name: "Context" }).click();
   const contextDialog = page.getByRole("dialog", { name: "Thread context" });
   await expect(contextDialog.getByText("1,240")).toBeVisible();
@@ -1104,12 +1116,12 @@ test("inspects, deletes, prunes, and audits tenant threads", async ({ page }) =>
   await page.goto("./");
   await navigateToAdmin(page);
   await expect(page.getByText("2 threads", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Switch to dark mode" }).click();
+  await switchToDarkMode(page);
   const threadRow = page.getByRole("button", { name: /thread-old-review/ });
   await threadRow.hover();
   await expectCssMatchesToken(threadRow, "background-color", "--color-surface-hover");
   expect((await new AxeBuilder({ page }).include(".thread-table").analyze()).violations).toEqual([]);
-  await page.getByRole("button", { name: "Switch to light mode" }).click();
+  await page.getByRole("button", { name: "Switch to light mode" }).dispatchEvent("click");
   await page.getByLabel("Skill", { exact: true }).fill("review");
   await page.getByRole("button", { name: "Apply filters" }).click();
   await expect(page.getByText("1 thread", { exact: true })).toBeVisible();
@@ -1137,12 +1149,12 @@ test("inspects, deletes, prunes, and audits tenant threads", async ({ page }) =>
 
   await page.getByRole("button", { name: "Audit log" }).click();
   await expect(page.getByText("3 audit records", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Switch to dark mode" }).click();
+  await switchToDarkMode(page);
   const pruneAudit = page.getByRole("button", { name: /Threads · Prune/ });
   await pruneAudit.hover();
   await expectCssMatchesToken(pruneAudit, "background-color", "--color-surface-hover");
   expect((await new AxeBuilder({ page }).include(".audit-list").analyze()).violations).toEqual([]);
-  await page.getByRole("button", { name: "Switch to light mode" }).click();
+  await page.getByRole("button", { name: "Switch to light mode" }).dispatchEvent("click");
   await pruneAudit.click();
   await expect(page.getByText("thread-old-research")).toBeVisible();
   await page.getByLabel("Action").fill("threads.delete");
@@ -1156,13 +1168,7 @@ test("supports mobile navigation", async ({ page }) => {
   await installWorkspaceMocks(page);
   await page.goto("./");
 
-  await page.getByRole("button", { name: "Open navigation" }).click();
-  await page.getByRole("button", { name: "Workspace", exact: true }).click();
-
   await expect(page.getByRole("heading", { name: "What are we working on?" })).toBeVisible();
-  await expect(page.locator(".sidebar")).not.toHaveClass(/is-open/);
-  await expect(page.locator(".thread-rail")).not.toHaveClass(/is-open/);
-
   await page.getByRole("button", { name: "Show conversations" }).click();
   await expect(page.locator(".thread-rail")).toHaveClass(/is-open/);
   await page.getByRole("button", { name: "Close conversations" }).dispatchEvent("click");

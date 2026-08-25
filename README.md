@@ -33,7 +33,9 @@ http://127.0.0.1:8000/console/
 ```
 
 Assistant responses in the production console render safe GitHub Flavored Markdown, including
-headings, lists, tables, task lists, links, blockquotes, and fenced code. Raw HTML is disabled;
+headings, lists, tables, task lists, links, blockquotes, and fenced code. The console opens directly
+into the conversation workspace, with conversation history and compact application navigation in a
+single responsive sidebar so the chat uses the rest of the viewport. Raw HTML is disabled;
 user and tool-authored content remains plain text by default. The console typography baseline is
 15px for body text, 16px for chat, 14px for controls, 13px for labels and code, and 12px for
 tertiary metadata; mobile form controls remain 16px to avoid browser input zoom.
