@@ -66,6 +66,16 @@ class LLMConfig:
 
 
 @dataclass(frozen=True)
+class AudioInputConfig:
+    enabled: object = None
+    max_bytes: object = None
+    max_audio_files: object = None
+    max_total_bytes: object = None
+    max_duration_seconds: object = None
+    allowed_mime_types: object = None
+
+
+@dataclass(frozen=True)
 class ImageInputConfig:
     enabled: object = None
     max_bytes: object = None
@@ -189,6 +199,7 @@ class UnifiedConfig:
     auth: AuthConfig = field(default_factory=AuthConfig)
     oauth: OAuthConfig = field(default_factory=OAuthConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    audio_input: AudioInputConfig = field(default_factory=AudioInputConfig)
     image_input: ImageInputConfig = field(default_factory=ImageInputConfig)
     document_input: DocumentInputConfig = field(default_factory=DocumentInputConfig)
     attachments: AttachmentConfig = field(default_factory=AttachmentConfig)
@@ -209,6 +220,7 @@ SECTION_FIELDS: dict[str, set[str]] = {
     "auth": set(AuthConfig.__dataclass_fields__),
     "oauth": set(OAuthConfig.__dataclass_fields__),
     "llm": set(LLMConfig.__dataclass_fields__),
+    "audio_input": set(AudioInputConfig.__dataclass_fields__),
     "image_input": set(ImageInputConfig.__dataclass_fields__),
     "document_input": set(DocumentInputConfig.__dataclass_fields__),
     "attachments": set(AttachmentConfig.__dataclass_fields__),
@@ -227,6 +239,7 @@ TOP_LEVEL_KEYS = {
     "auth",
     "oauth",
     "llm",
+    "audio_input",
     "image_input",
     "document_input",
     "attachments",
@@ -247,6 +260,7 @@ SECTION_TYPES: dict[str, type[Any]] = {
     "auth": AuthConfig,
     "oauth": OAuthConfig,
     "llm": LLMConfig,
+    "audio_input": AudioInputConfig,
     "image_input": ImageInputConfig,
     "document_input": DocumentInputConfig,
     "attachments": AttachmentConfig,

@@ -49,6 +49,17 @@ DEFAULT_DOCUMENT_INPUT_MAX_TOTAL_BYTES = 20 * 1024 * 1024
 DEFAULT_DOCUMENT_INPUT_MAX_PAGES = 100
 DEFAULT_DOCUMENT_INPUT_MAX_TEXT_BYTES = 1024 * 1024
 DEFAULT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES = frozenset({"application/pdf", "text/plain"})
+AUDIO_INPUT_ENABLED_ENV = "MINIGENT_AUDIO_INPUT_ENABLED"
+AUDIO_INPUT_MAX_BYTES_ENV = "MINIGENT_AUDIO_INPUT_MAX_BYTES"
+AUDIO_INPUT_MAX_AUDIO_FILES_ENV = "MINIGENT_AUDIO_INPUT_MAX_AUDIO_FILES"
+AUDIO_INPUT_MAX_TOTAL_BYTES_ENV = "MINIGENT_AUDIO_INPUT_MAX_TOTAL_BYTES"
+AUDIO_INPUT_MAX_DURATION_SECONDS_ENV = "MINIGENT_AUDIO_INPUT_MAX_DURATION_SECONDS"
+AUDIO_INPUT_ALLOWED_MIME_TYPES_ENV = "MINIGENT_AUDIO_INPUT_ALLOWED_MIME_TYPES"
+DEFAULT_AUDIO_INPUT_MAX_BYTES = 10 * 1024 * 1024
+DEFAULT_AUDIO_INPUT_MAX_AUDIO_FILES = 4
+DEFAULT_AUDIO_INPUT_MAX_TOTAL_BYTES = 20 * 1024 * 1024
+DEFAULT_AUDIO_INPUT_MAX_DURATION_SECONDS = 600
+DEFAULT_AUDIO_INPUT_ALLOWED_MIME_TYPES = frozenset({"audio/wav"})
 
 
 @dataclass(frozen=True)
@@ -126,10 +137,47 @@ class DocumentInputSettings:
 
 
 @dataclass(frozen=True)
+class AudioInputSettings:
+    enabled: bool = False
+    max_bytes: int = DEFAULT_AUDIO_INPUT_MAX_BYTES
+    max_audio_files: int = DEFAULT_AUDIO_INPUT_MAX_AUDIO_FILES
+    max_total_bytes: int = DEFAULT_AUDIO_INPUT_MAX_TOTAL_BYTES
+    max_duration_seconds: int = DEFAULT_AUDIO_INPUT_MAX_DURATION_SECONDS
+    allowed_mime_types: frozenset[str] = DEFAULT_AUDIO_INPUT_ALLOWED_MIME_TYPES
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> AudioInputSettings:
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
+        return cls(
+            enabled=_parse_boolean(lookup, AUDIO_INPUT_ENABLED_ENV),
+            max_bytes=_parse_positive_int(
+                lookup, AUDIO_INPUT_MAX_BYTES_ENV, DEFAULT_AUDIO_INPUT_MAX_BYTES
+            ),
+            max_audio_files=_parse_positive_int(
+                lookup, AUDIO_INPUT_MAX_AUDIO_FILES_ENV, DEFAULT_AUDIO_INPUT_MAX_AUDIO_FILES
+            ),
+            max_total_bytes=_parse_positive_int(
+                lookup, AUDIO_INPUT_MAX_TOTAL_BYTES_ENV, DEFAULT_AUDIO_INPUT_MAX_TOTAL_BYTES
+            ),
+            max_duration_seconds=_parse_positive_int(
+                lookup,
+                AUDIO_INPUT_MAX_DURATION_SECONDS_ENV,
+                DEFAULT_AUDIO_INPUT_MAX_DURATION_SECONDS,
+            ),
+            allowed_mime_types=_parse_allowed_mime_types(
+                lookup,
+                AUDIO_INPUT_ALLOWED_MIME_TYPES_ENV,
+                DEFAULT_AUDIO_INPUT_ALLOWED_MIME_TYPES,
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class MindweftSettings:
     admin_store: AdminStoreSettings
     agent_backend: TenantAgentBackendConfig
     attachment_store: AttachmentStoreSettings
+    audio_input: AudioInputSettings
     auth: AuthSettings
     document_input: DocumentInputSettings
     image_input: ImageInputSettings
@@ -151,6 +199,7 @@ class MindweftSettings:
             admin_store=AdminStoreSettings.from_env(lookup),
             agent_backend=TenantAgentBackendConfig.from_env(lookup),
             attachment_store=AttachmentStoreSettings.from_env(lookup),
+            audio_input=AudioInputSettings.from_env(lookup),
             auth=AuthSettings.from_env(lookup),
             document_input=DocumentInputSettings.from_env(lookup),
             image_input=ImageInputSettings.from_env(lookup),
@@ -175,12 +224,44 @@ def load_settings(env: Mapping[str, str] | None = None) -> MindweftSettings:
     return MindweftSettings.from_env(env)
 
 
+def audio_input_settings_from_env() -> AudioInputSettings:
+    return AudioInputSettings.from_env()
+
+
 def document_input_settings_from_env() -> DocumentInputSettings:
     return DocumentInputSettings.from_env()
 
 
 def image_input_settings_from_env() -> ImageInputSettings:
     return ImageInputSettings.from_env()
+
+
+def _audio_input_public_dict(settings: AudioInputSettings) -> dict[str, object]:
+    return {
+        "enabled": settings.enabled,
+        "max_bytes": settings.max_bytes,
+        "max_audio_files": settings.max_audio_files,
+        "max_total_bytes": settings.max_total_bytes,
+        "max_duration_seconds": settings.max_duration_seconds,
+        "allowed_mime_types": sorted(settings.allowed_mime_types),
+    }
+
+
+def _audio_input_export_public_dict(settings: AudioInputSettings) -> dict[str, object]:
+    exported: dict[str, object] = {}
+    if settings.enabled:
+        exported["enabled"] = True
+    if settings.max_bytes != DEFAULT_AUDIO_INPUT_MAX_BYTES:
+        exported["max_bytes"] = settings.max_bytes
+    if settings.max_audio_files != DEFAULT_AUDIO_INPUT_MAX_AUDIO_FILES:
+        exported["max_audio_files"] = settings.max_audio_files
+    if settings.max_total_bytes != DEFAULT_AUDIO_INPUT_MAX_TOTAL_BYTES:
+        exported["max_total_bytes"] = settings.max_total_bytes
+    if settings.max_duration_seconds != DEFAULT_AUDIO_INPUT_MAX_DURATION_SECONDS:
+        exported["max_duration_seconds"] = settings.max_duration_seconds
+    if settings.allowed_mime_types != DEFAULT_AUDIO_INPUT_ALLOWED_MIME_TYPES:
+        exported["allowed_mime_types"] = sorted(settings.allowed_mime_types)
+    return exported
 
 
 def _document_input_public_dict(settings: DocumentInputSettings) -> dict[str, object]:

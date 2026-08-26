@@ -24,7 +24,7 @@ from app.llm import (
     load_provider_config,
     serialize_tool_result,
 )
-from app.models import DocumentPart, Message, MessageRole, ToolSpec
+from app.models import AudioPart, DocumentPart, Message, MessageRole, ToolSpec
 from app.oauth import OAuthCredentials
 from app.tools import build_local_tool_registry
 
@@ -36,6 +36,27 @@ class FakeOAuthProvider:
             refresh_token="refresh-token",
             expires_at=9999999999.0,
         )
+
+
+def test_provider_serializers_handle_wav_audio_explicitly() -> None:
+    audio = AudioPart(mime_type="audio/wav", data="UklGRg==", filename="note.wav")
+    message = Message(
+        thread_id="thread",
+        role=MessageRole.USER,
+        content="analyze",
+        parts=[audio],
+    )
+
+    assert _message_to_openai_content(message) == [
+        {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}}
+    ]
+    assert _gemini_parts_for_message(message) == [
+        {"inline_data": {"mime_type": "audio/wav", "data": "UklGRg=="}}
+    ]
+    with pytest.raises(HTTPException, match="Anthropic provider does not support audio"):
+        _message_to_anthropic_content(message)
+    with pytest.raises(HTTPException, match="Responses provider does not support audio"):
+        _message_to_responses_content(message)
 
 
 def test_provider_serializers_handle_pdf_documents_explicitly() -> None:

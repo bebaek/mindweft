@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import sqlite3
+import wave
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
@@ -532,6 +533,61 @@ def test_config_reports_and_exports_image_input_settings(monkeypatch: pytest.Mon
         "max_dimension": 4096,
         "allowed_mime_types": ["image/png", "image/webp"],
     }
+
+
+def _wav_bytes(*, frames: int = 1600, sample_rate: int = 16000) -> bytes:
+    output = BytesIO()
+    with wave.open(output, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"\x01\x00" * frames)
+    return output.getvalue()
+
+
+def test_wav_audio_upload_and_message_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_AUDIO_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINIGENT_LLM_INPUT_MODALITIES", "text,audio")
+    client = TestClient(create_app())
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    uploaded = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        headers={**AUTH_HEADERS, "Content-Type": "audio/x-wav"},
+        content=_wav_bytes(),
+    )
+    assert uploaded.status_code == 200
+    assert uploaded.json()["mime_type"] == "audio/wav"
+
+    message = client.post(
+        f"/threads/{thread_id}/messages",
+        headers=AUTH_HEADERS,
+        json={
+            "parts": [
+                {
+                    "type": "audio",
+                    "mime_type": "audio/x-wav",
+                    "attachment_id": uploaded.json()["attachment_id"],
+                    "filename": "note.wav",
+                }
+            ]
+        },
+    )
+    assert message.status_code == 200
+    assert message.json()["parts"][0]["mime_type"] == "audio/wav"
+
+
+def test_wav_audio_requires_explicit_supported_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIGENT_AUDIO_INPUT_ENABLED", "true")
+    client = TestClient(create_app())
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    response = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        headers={**AUTH_HEADERS, "Content-Type": "audio/wav"},
+        content=_wav_bytes(),
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "selected LLM profile does not support audio input"
 
 
 def test_config_reports_and_exports_document_input_settings(
@@ -4915,6 +4971,8 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
                 "source": "shared",
                 "version": None,
                 "input_modalities": None,
+                "audio_input_allowed": False,
+                "audio_input_reason": "disabled",
                 "image_input_allowed": False,
                 "document_input_allowed": False,
                 "document_input_reason": "disabled",

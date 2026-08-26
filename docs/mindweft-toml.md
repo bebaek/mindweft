@@ -330,6 +330,7 @@ Use the tables below as the supported key reference.
 | Key | Maps to | Notes |
 | --- | --- | --- |
 | `profile` | no direct env var | Used by tooling and docs to describe the intended local setup. |
+| `audio_input` | `MINDWEFT_AUDIO_INPUT_*` | Enables and limits validated PCM WAV attachments for explicitly audio-capable profiles. |
 | `image_input` | `MINDWEFT_IMAGE_INPUT_*` | Enables and limits image attachments for multimodal providers. |
 | `document_input` | `MINDWEFT_DOCUMENT_INPUT_*` | Enables and limits PDF attachments for explicitly document-capable profiles. |
 | `agent_skills` | projects into `MINDWEFT_TENANT_EXECUTION_CONFIGS` | Imports local Agent Skill `SKILL.md` metadata into each tenant skill catalog. |
@@ -420,6 +421,23 @@ providers that support image detail receive that value, while other providers us
 native/default behavior.
 The dedicated camera action is shown only on coarse-pointer touch devices; desktop browsers retain
 the regular image picker because they commonly ignore the HTML camera-capture hint.
+
+### `[audio_input]`
+
+PCM WAV audio input is disabled by default and always requires an explicit `audio` declaration in
+the selected native LLM profile. Mindweft validates RIFF/WAVE structure, uncompressed PCM encoding,
+non-empty frames, duration, and byte limits before storage. Native serialization is available for
+Gemini plus OpenAI and OpenRouter Chat Completions profiles; Anthropic and Responses profiles reject
+audio explicitly.
+
+| Key | Environment equivalent | Notes |
+| --- | --- | --- |
+| `enabled` | `MINDWEFT_AUDIO_INPUT_ENABLED` | Defaults to `false`. |
+| `max_bytes` | `MINDWEFT_AUDIO_INPUT_MAX_BYTES` | Per-file byte limit. |
+| `max_audio_files` | `MINDWEFT_AUDIO_INPUT_MAX_AUDIO_FILES` | Per-message file-count limit. |
+| `max_total_bytes` | `MINDWEFT_AUDIO_INPUT_MAX_TOTAL_BYTES` | Per-message combined byte limit. |
+| `max_duration_seconds` | `MINDWEFT_AUDIO_INPUT_MAX_DURATION_SECONDS` | Maximum duration of each WAV file. |
+| `allowed_mime_types` | `MINDWEFT_AUDIO_INPUT_ALLOWED_MIME_TYPES` | Defaults to `audio/wav`; WAV aliases are canonicalized. |
 
 ### `[document_input]`
 

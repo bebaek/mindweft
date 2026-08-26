@@ -66,6 +66,8 @@ export interface ExecutionOptionSection {
 
 export interface ExecutionLlmOptionItem extends ExecutionOptionItem {
   input_modalities?: string[] | null;
+  audio_input_allowed?: boolean;
+  audio_input_reason?: "disabled" | "backend_unsupported" | "profile_unsupported" | null;
   image_input_allowed: boolean;
   document_input_allowed: boolean;
   document_input_reason?: "disabled" | "backend_unsupported" | "profile_unsupported" | null;
@@ -236,6 +238,11 @@ export interface AttachmentPartBase {
   attachment_id: string;
 }
 
+export interface AudioPart extends AttachmentPartBase {
+  type: "audio";
+  filename: string;
+}
+
 export interface ImagePart extends AttachmentPartBase {
   type: "image";
   detail: "auto" | "low" | "high";
@@ -251,7 +258,7 @@ export interface TextPart {
   text: string;
 }
 
-export type MessagePart = TextPart | ImagePart | DocumentPart;
+export type MessagePart = TextPart | AudioPart | ImagePart | DocumentPart;
 
 export interface Message {
   id: string;
@@ -265,6 +272,15 @@ export interface Message {
   tool_call_id?: string | null;
   tool_arguments?: Record<string, unknown> | null;
   created_at: string;
+}
+
+export interface AudioInputConfig {
+  enabled: boolean;
+  max_bytes: number;
+  max_audio_files: number;
+  max_total_bytes: number;
+  max_duration_seconds: number;
+  allowed_mime_types: string[];
 }
 
 export interface ImageInputConfig {
@@ -288,6 +304,7 @@ export interface DocumentInputConfig {
 }
 
 export interface PublicConfig {
+  audio_input?: AudioInputConfig;
   document_input: DocumentInputConfig;
   image_input: ImageInputConfig;
   [key: string]: unknown;

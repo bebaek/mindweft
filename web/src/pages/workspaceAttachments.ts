@@ -1,6 +1,7 @@
-import type { DocumentInputConfig, ImageInputConfig } from "../api/client";
+import type { AudioInputConfig, DocumentInputConfig, ImageInputConfig } from "../api/client";
 
 export interface ClassifiedAttachmentFiles {
+  audio: File[];
   documents: File[];
   images: File[];
   unsupported: File[];
@@ -46,15 +47,19 @@ export function classifyAttachmentFiles(
   files: Iterable<File>,
   imageConfig: ImageInputConfig | undefined,
   documentConfig: DocumentInputConfig | undefined,
+  audioConfig?: AudioInputConfig,
 ): ClassifiedAttachmentFiles {
+  const audioMimeTypes = normalizedMimeTypes(audioConfig?.allowed_mime_types ?? []);
   const imageMimeTypes = normalizedMimeTypes(imageConfig?.allowed_mime_types ?? []);
   const documentMimeTypes = normalizedMimeTypes(documentConfig?.allowed_mime_types ?? []);
-  const classified: ClassifiedAttachmentFiles = { documents: [], images: [], unsupported: [] };
+  const classified: ClassifiedAttachmentFiles = { audio: [], documents: [], images: [], unsupported: [] };
 
   for (const original of files) {
     const file = normalizeDocumentMimeType(original);
     const mimeType = file.type.toLowerCase();
-    if (imageMimeTypes.has(mimeType)) {
+    if (audioMimeTypes.has(mimeType) || (original.name.toLowerCase().endsWith(".wav") && (!mimeType || mimeType === "audio/x-wav"))) {
+      classified.audio.push(withMimeType(original, "audio/wav"));
+    } else if (imageMimeTypes.has(mimeType)) {
       classified.images.push(file);
     } else if (documentMimeTypes.has(mimeType)) {
       classified.documents.push(file);

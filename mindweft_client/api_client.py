@@ -673,7 +673,7 @@ class MindweftAPIClient:
                 clean_part = dict(part)
                 data = clean_part.get("data")
                 if (
-                    clean_part.get("type") not in {"image", "document"}
+                    clean_part.get("type") not in {"image", "document", "audio"}
                     or not isinstance(data, str)
                     or not data
                 ):

@@ -53,6 +53,15 @@ enabled = false
 # max_dimension = 16384
 # allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
 
+[audio_input]
+# Enable validated PCM WAV attachments for profiles that explicitly declare "audio" input.
+enabled = false
+# max_bytes = 10485760
+# max_audio_files = 4
+# max_total_bytes = 20971520
+# max_duration_seconds = 600
+# allowed_mime_types = ["audio/wav"]
+
 [document_input]
 # Enable PDF and plain-text attachments only for profiles that explicitly declare "document" input.
 enabled = false

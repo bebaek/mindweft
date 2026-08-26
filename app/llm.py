@@ -20,6 +20,7 @@ import httpx
 from fastapi import HTTPException
 
 from app.models import (
+    AudioPart,
     DocumentPart,
     ImagePart,
     LLMResponse,
@@ -1689,6 +1690,15 @@ def _message_to_openai_content(message: Message) -> str | list[dict[str, Any]]:
                     }
                 )
             continue
+        if isinstance(part, AudioPart):
+            if part.data:
+                content.append(
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": part.data, "format": "wav"},
+                    }
+                )
+            continue
         if isinstance(part, DocumentPart):
             raise HTTPException(
                 status_code=400,
@@ -1706,7 +1716,7 @@ def _gemini_parts_for_message(message: Message) -> list[dict[str, Any]]:
             if part.text:
                 parts.append({"text": part.text})
             continue
-        if isinstance(part, (ImagePart, DocumentPart)):
+        if isinstance(part, (AudioPart, ImagePart, DocumentPart)):
             if part.data:
                 parts.append({"inline_data": {"mime_type": part.mime_type, "data": part.data}})
             elif part.url:
@@ -1830,6 +1840,11 @@ def _message_to_anthropic_content(message: Message) -> list[dict[str, Any]]:
             if image:
                 content.append(image)
             continue
+        if isinstance(part, AudioPart):
+            raise HTTPException(
+                status_code=400,
+                detail="selected Anthropic provider does not support audio input",
+            )
         if isinstance(part, DocumentPart):
             document = _anthropic_document_block(part)
             if document:
@@ -2314,6 +2329,11 @@ def _message_to_responses_content(message: Message) -> str | list[dict[str, Any]
             if url:
                 content.append({"type": "input_image", "image_url": url})
             continue
+        if isinstance(part, AudioPart):
+            raise HTTPException(
+                status_code=400,
+                detail="selected Responses provider does not support audio input",
+            )
         if isinstance(part, DocumentPart) and part.data:
             content.append(
                 {

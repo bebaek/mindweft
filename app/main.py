@@ -37,6 +37,11 @@ from app.attachments import (
     UploadAttachmentRequest,
     build_attachment_store,
 )
+from app.audio_validation import (
+    AudioValidationError,
+    canonical_audio_mime_type,
+    validate_audio,
+)
 from app.auth import validate_auth_settings
 from app.document_validation import (
     DocumentValidationError,
@@ -67,8 +72,11 @@ from app.external_grants import build_external_grant_provider_registry_from_env
 from app.health import database_readiness_checks
 from app.image_validation import ImageDimensionError, enforce_image_dimensions
 from app.input_capabilities import (
+    AudioInputAvailability,
     DocumentInputAvailability,
     ImageInputAvailability,
+    audio_input_availability,
+    audio_input_unavailable_detail,
     document_input_availability,
     document_input_unavailable_detail,
     image_input_availability,
@@ -84,6 +92,7 @@ from app.mcp_manager import MCPServerManager
 from app.message_parts import attachment_ids as message_attachment_ids
 from app.models import (
     AddMessageRequest,
+    AudioPart,
     CreateThreadRequest,
     CreateThreadResponse,
     DocumentPart,
@@ -139,9 +148,12 @@ from app.session_auth import build_session_auth_router, validate_session_auth_se
 from app.settings import (
     DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES,
     DEFAULT_IMAGE_INPUT_MAX_BYTES,
+    AudioInputSettings,
     DocumentInputSettings,
     ImageInputSettings,
     MindweftSettings,
+    _audio_input_export_public_dict,
+    _audio_input_public_dict,
     _document_input_export_public_dict,
     _document_input_public_dict,
     _image_input_export_public_dict,
@@ -560,9 +572,11 @@ def _validate_and_normalize_message_request(
     request: AddMessageRequest,
     settings: ImageInputSettings,
     document_settings: DocumentInputSettings,
+    audio_settings: AudioInputSettings | None = None,
     *,
     image_availability: ImageInputAvailability | None = None,
     document_availability: DocumentInputAvailability | None = None,
+    audio_availability: AudioInputAvailability | None = None,
     attachment_store: AttachmentStore | None = None,
     tenant_id: str | None = None,
     thread_id: str | None = None,
@@ -571,6 +585,8 @@ def _validate_and_normalize_message_request(
         if not request.content:
             raise HTTPException(status_code=400, detail="message content is required")
         return request
+    if audio_settings is None:
+        audio_settings = AudioInputSettings()
     image_parts = [part for part in request.parts if part.type == "image"]
     if image_parts and not settings.enabled:
         raise HTTPException(status_code=400, detail="image input is disabled")
@@ -637,6 +653,74 @@ def _validate_and_normalize_message_request(
                 status_code=400,
                 detail="message images exceed maximum total allowed size",
             )
+    audio_entries = [
+        (index, part) for index, part in enumerate(request.parts) if isinstance(part, AudioPart)
+    ]
+    audio_parts = [part for _, part in audio_entries]
+    if audio_parts and not audio_settings.enabled:
+        raise HTTPException(status_code=400, detail="audio input is disabled")
+    if audio_parts and audio_availability is not None and not audio_availability.allowed:
+        assert audio_availability.reason is not None
+        raise HTTPException(
+            status_code=400,
+            detail=audio_input_unavailable_detail(audio_availability.reason),
+        )
+    if len(audio_parts) > audio_settings.max_audio_files:
+        raise HTTPException(
+            status_code=400,
+            detail=f"message exceeds maximum audio file count ({audio_settings.max_audio_files})",
+        )
+    total_audio_bytes = 0
+    normalized_parts = list(request.parts)
+    for index, original_part in audio_entries:
+        mime_type = canonical_audio_mime_type(original_part.mime_type)
+        part = original_part.model_copy(update={"mime_type": mime_type})
+        normalized_parts[index] = part
+        if mime_type not in audio_settings.allowed_mime_types:
+            raise HTTPException(
+                status_code=400, detail=f"unsupported audio MIME type: {part.mime_type}"
+            )
+        if (
+            part.filename != Path(part.filename).name
+            or part.filename in {".", ".."}
+            or "\\" in part.filename
+            or any(ord(character) < 32 for character in part.filename)
+        ):
+            raise HTTPException(status_code=400, detail="audio filename must be a plain filename")
+        source_count = sum(bool(source) for source in (part.data, part.url, part.attachment_id))
+        if source_count != 1:
+            raise HTTPException(
+                status_code=400,
+                detail="audio part must include exactly one of data, url, or attachment_id",
+            )
+        if part.url:
+            raise HTTPException(status_code=400, detail="audio URL sources are not supported")
+        if part.attachment_id:
+            if attachment_store is None or tenant_id is None or thread_id is None:
+                raise HTTPException(status_code=400, detail="audio attachment_id is not supported")
+            record = attachment_store.get(tenant_id, thread_id, part.attachment_id)
+            if record is None:
+                raise HTTPException(status_code=400, detail="audio attachment_id is invalid")
+            if record.metadata.mime_type != mime_type:
+                raise HTTPException(
+                    status_code=400,
+                    detail="audio attachment MIME type does not match uploaded attachment",
+                )
+            _validate_audio_bytes(record.data, mime_type, audio_settings)
+            total_audio_bytes += record.metadata.size_bytes
+        if part.data:
+            try:
+                decoded = base64.b64decode(part.data, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="audio data must be base64") from exc
+            if len(decoded) > audio_settings.max_bytes:
+                raise HTTPException(status_code=400, detail="audio exceeds maximum allowed size")
+            _validate_audio_bytes(decoded, mime_type, audio_settings)
+            total_audio_bytes += len(decoded)
+        if total_audio_bytes > audio_settings.max_total_bytes:
+            raise HTTPException(
+                status_code=400, detail="message audio exceeds maximum total allowed size"
+            )
     document_entries = [
         (index, part) for index, part in enumerate(request.parts) if isinstance(part, DocumentPart)
     ]
@@ -655,7 +739,7 @@ def _validate_and_normalize_message_request(
             detail=f"message exceeds maximum document count ({document_settings.max_documents})",
         )
     total_document_bytes = 0
-    normalized_parts = list(request.parts)
+    normalized_parts = list(normalized_parts)
     for index, original_part in document_entries:
         mime_type = canonical_document_mime_type(original_part.mime_type)
         part = (
@@ -981,6 +1065,21 @@ def _thread_context_usage(
         return None
 
 
+def _validate_audio_bytes(
+    data: bytes,
+    mime_type: str,
+    settings: AudioInputSettings,
+) -> None:
+    try:
+        validate_audio(
+            data,
+            canonical_audio_mime_type(mime_type),
+            max_duration_seconds=settings.max_duration_seconds,
+        )
+    except AudioValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
 def _validate_document_bytes(
     data: bytes,
     mime_type: str,
@@ -1190,6 +1289,7 @@ def create_app(
     app.state.admin_execution_resolver = admin_execution_resolver
     app.state.quality_enhancer = QualityEnhancer()
     runtime_settings = settings.runtime
+    app.state.audio_input_settings = settings.audio_input
     app.state.document_input_settings = settings.document_input
     app.state.image_input_settings = settings.image_input
     app.state.runtime_settings = runtime_settings
@@ -1338,14 +1438,19 @@ def create_app(
     @app.get("/config")
     async def config(request: Request, export: bool = False) -> dict[str, object]:
         result = request.app.state.execution_resolver.describe(include_export=export)
+        audio_input_settings = request.app.state.audio_input_settings
         document_input_settings = request.app.state.document_input_settings
         image_input_settings = request.app.state.image_input_settings
+        result["audio_input"] = _audio_input_public_dict(audio_input_settings)
         result["document_input"] = _document_input_public_dict(document_input_settings)
         result["image_input"] = _image_input_public_dict(image_input_settings)
         if export:
+            audio_input_export = _audio_input_export_public_dict(audio_input_settings)
             document_input_export = _document_input_export_public_dict(document_input_settings)
             image_input_export = _image_input_export_public_dict(image_input_settings)
             unified_export = result.get("unified_config_export")
+            if audio_input_export and isinstance(unified_export, dict):
+                unified_export["audio_input"] = audio_input_export
             if document_input_export and isinstance(unified_export, dict):
                 unified_export["document_input"] = document_input_export
             if image_input_export and isinstance(unified_export, dict):
@@ -1373,6 +1478,7 @@ def create_app(
         capability_options = catalog.capability_profile_options()
         agent_options = catalog.agent_options()
         default_skill_refs = catalog.default_skill_refs
+        audio_settings = request.app.state.audio_input_settings
         document_settings = request.app.state.document_input_settings
         image_settings = request.app.state.image_input_settings
 
@@ -1387,6 +1493,11 @@ def create_app(
                 execution,
                 profile_name,
                 globally_enabled=image_settings.enabled,
+            )
+            audio_availability = audio_input_availability(
+                execution,
+                profile_name,
+                globally_enabled=audio_settings.enabled,
             )
             document_availability = document_input_availability(
                 execution,
@@ -1404,6 +1515,8 @@ def create_app(
                     else None
                 ),
                 image_input_allowed=availability.allowed,
+                audio_input_allowed=audio_availability.allowed,
+                audio_input_reason=audio_availability.reason,
                 document_input_allowed=document_availability.allowed,
                 document_input_reason=document_availability.reason,
                 image_input_reason=availability.reason,
@@ -2071,6 +2184,33 @@ def create_app(
             fork_message_id=body.at_message_id,
         )
 
+    def thread_audio_availability(
+        app_request: Request,
+        principal: Principal,
+        thread_id: str,
+    ) -> AudioInputAvailability:
+        thread = app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        execution = resolve_principal_execution(principal)
+        return audio_input_availability(
+            execution,
+            thread.llm_profile,
+            globally_enabled=app_request.app.state.audio_input_settings.enabled,
+        )
+
+    def enforce_thread_audio_input(
+        app_request: Request,
+        principal: Principal,
+        thread_id: str,
+    ) -> AudioInputAvailability:
+        availability = thread_audio_availability(app_request, principal, thread_id)
+        if not availability.allowed:
+            assert availability.reason is not None
+            raise HTTPException(
+                status_code=400,
+                detail=audio_input_unavailable_detail(availability.reason),
+            )
+        return availability
+
     def thread_image_availability(
         app_request: Request,
         principal: Principal,
@@ -2134,9 +2274,17 @@ def create_app(
         data: bytes,
     ) -> AttachmentMetadata:
         normalized_mime_type = mime_type.strip().lower().split(";", 1)[0]
+        audio_settings = app_request.app.state.audio_input_settings
         image_settings = app_request.app.state.image_input_settings
         document_settings = app_request.app.state.document_input_settings
-        if normalized_mime_type in image_settings.allowed_mime_types:
+        audio_mime_type = canonical_audio_mime_type(normalized_mime_type)
+        if audio_mime_type in audio_settings.allowed_mime_types:
+            normalized_mime_type = audio_mime_type
+            enforce_thread_audio_input(app_request, principal, thread_id)
+            if len(data) > audio_settings.max_bytes:
+                raise HTTPException(status_code=400, detail="audio exceeds maximum allowed size")
+            _validate_audio_bytes(data, normalized_mime_type, audio_settings)
+        elif normalized_mime_type in image_settings.allowed_mime_types:
             enforce_thread_image_input(app_request, principal, thread_id)
             if len(data) > image_settings.max_bytes:
                 raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
@@ -2214,9 +2362,14 @@ def create_app(
     ) -> AttachmentMetadata:
         _enforce_request_rate_limit(app_request, principal, UPLOAD_RATE_LIMIT_CATEGORY)
         mime_type = app_request.headers.get("content-type", "").strip().lower().split(";", 1)[0]
+        audio_settings = app_request.app.state.audio_input_settings
         image_settings = app_request.app.state.image_input_settings
         document_settings = app_request.app.state.document_input_settings
-        if mime_type in image_settings.allowed_mime_types:
+        audio_mime_type = canonical_audio_mime_type(mime_type)
+        if audio_mime_type in audio_settings.allowed_mime_types:
+            mime_type = audio_mime_type
+            max_bytes, kind = audio_settings.max_bytes, "audio"
+        elif mime_type in image_settings.allowed_mime_types:
             max_bytes, kind = image_settings.max_bytes, "image"
         else:
             document_mime_type = canonical_document_mime_type(mime_type)
@@ -2295,6 +2448,11 @@ def create_app(
         )
         execution = resolve_principal_execution(principal)
         thread = app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        audio_availability = audio_input_availability(
+            execution,
+            thread.llm_profile,
+            globally_enabled=app_request.app.state.audio_input_settings.enabled,
+        )
         availability = image_input_availability(
             execution,
             thread.llm_profile,
@@ -2309,8 +2467,10 @@ def create_app(
             request,
             app_request.app.state.image_input_settings,
             app_request.app.state.document_input_settings,
+            app_request.app.state.audio_input_settings,
             image_availability=availability,
             document_availability=document_availability,
+            audio_availability=audio_availability,
             attachment_store=app_request.app.state.attachment_store,
             tenant_id=principal.tenant_id,
             thread_id=thread_id,
