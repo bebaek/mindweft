@@ -194,6 +194,7 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | `MINDWEFT_USER_DEPROVISIONING_INTERVAL_SECONDS` / `MINDWEFT_USER_DEPROVISIONING_MAX_ATTEMPTS` | Poll interval and retry limit for durable user lifecycle deprovisioning (defaults: 5 seconds and 8 attempts). |
 | `MINDWEFT_LLM_PROVIDER` | LLM provider such as `mock`, `openai`, `openrouter`, `openai-compatible`, `generic-oauth`, `google`, or `anthropic`. |
 | `MINDWEFT_LLM_MODEL` | Model identifier for the selected provider. |
+| `MINDWEFT_AUDIO_INPUT_ENABLED` / `MINDWEFT_AUDIO_INPUT_MAX_BYTES` / `MINDWEFT_AUDIO_INPUT_MAX_DURATION_SECONDS` | Enables validated PCM WAV attachments for native OpenAI/OpenRouter Chat Completions and Gemini profiles that explicitly declare `audio`; unified config keys live under `[audio_input]`. |
 | `MINDWEFT_IMAGE_INPUT_ENABLED` | Enables image attachments from CLI/chat clients; unified config key is `[image_input].enabled`. Named LLM profiles can declare `input_modalities = ["text"]` or `["text", "image"]`; omitted declarations remain permissive for compatibility. |
 | `MINDWEFT_DOCUMENT_INPUT_ENABLED` / `MINDWEFT_DOCUMENT_INPUT_MAX_PAGES` / `MINDWEFT_DOCUMENT_INPUT_MAX_TEXT_BYTES` | Enables PDF and plain-text document attachments for native provider profiles that explicitly declare `document`; unified config keys live under `[document_input]`. |
 | `MINDWEFT_ATTACHMENT_DB_PATH` | Optional SQLite store for uploaded attachment bytes; unified config key is `[attachments].db_path`. |
@@ -207,8 +208,11 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | `MINDWEFT_TOOL_TIMEOUT_SECONDS` | Default wall-clock limit for each runtime tool call before returning a structured timeout error. |
 | `MINDWEFT_RESPONSES_REASONING_ONLY_RETRIES` | Bounded generic OAuth Responses continuations after reasoning-only output before reporting a retryable provider stall. |
 
-Mindweft implements text and image parts plus PDF and plain-text document parts. `audio` and `video`
-remain reserved configuration vocabulary rather than end-to-end input support. PDF uploads are
+Mindweft implements text and image parts, validated PCM WAV audio parts, plus PDF and plain-text
+document parts. `video` remains reserved configuration vocabulary rather than end-to-end input
+support. Audio input is disabled by default, requires an explicit `audio` profile declaration, and
+is serialized for native OpenAI/OpenRouter Chat Completions and Gemini adapters; Responses,
+Anthropic, and peer backends reject it explicitly. PDF uploads are
 parsed before storage or message creation; malformed, encrypted, empty, and over-limit files are
 rejected. Plain-text `.txt`, `.md`, `.csv`, and `.log` files must be non-empty UTF-8 without NUL
 bytes and are canonicalized to `text/plain`. Document input is disabled by default and requires an

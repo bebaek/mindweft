@@ -112,6 +112,7 @@ mindweft run --thread <thread-id> "continue"
 mindweft run --resume-last "continue"
 mindweft run --image ./screenshot.png "describe this image"
 mindweft run --image before.png --image after.png "compare these"
+mindweft run --audio ./meeting.wav "summarize and identify non-speech sounds"
 mindweft run --document ./requirements.pdf "review this document"
 mindweft run --document ./notes.md "summarize these notes"
 ```
@@ -137,6 +138,7 @@ reply prints to stdout with no extra noise. Useful flags:
 | `--llm <name>` | Named LLM profile to bind to a new thread. |
 | `--image <path>` | Attach an image file; can be repeated. Requires server-side `[image_input].enabled = true` (or `MINDWEFT_IMAGE_INPUT_ENABLED=true`) and a vision-capable model/provider. |
 | `--image-detail auto\|low\|high` | Vision detail hint for attached images. |
+| `--audio <path>` | Attach a validated uncompressed PCM WAV file; can be repeated. Requires `[audio_input].enabled = true`, a native supported provider, and an explicit `audio` input capability. |
 | `--document <path>` | Attach a PDF or UTF-8 `.txt`, `.md`, `.csv`, or `.log` document; can be repeated. Requires `[document_input].enabled = true`, a native supported provider, and an explicit `document` input capability. |
 
 ### Chat (one-shot)
@@ -147,6 +149,7 @@ mindweft chat --stream "hello with progress"
 mindweft chat --thread <thread-id> "continue"
 mindweft chat --resume-last "continue"
 mindweft chat --image ./diagram.png "what does this show?"
+mindweft chat --audio ./voice-note.wav "analyze this recording"
 mindweft chat --document ./requirements.pdf "summarize this"
 ```
 

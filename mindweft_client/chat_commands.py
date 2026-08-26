@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Sequence, TextIO, cast
 
 from mindweft_client.api_client import MindweftAPIClient
+from mindweft_client.audio_files import read_audio_file
 from mindweft_client.config import ClientConfig, build_client_config
 from mindweft_client.document_files import read_document_file
 from mindweft_client.output import (
@@ -304,6 +305,24 @@ def _image_parts_from_paths(
     return parts
 
 
+def _audio_parts_from_paths(paths: Sequence[str] | None) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    for raw_path in paths or []:
+        try:
+            path, mime_type, data = read_audio_file(raw_path)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        parts.append(
+            {
+                "type": "audio",
+                "mime_type": mime_type,
+                "data": base64.b64encode(data).decode("ascii"),
+                "filename": path.name,
+            }
+        )
+    return parts
+
+
 def _document_parts_from_paths(paths: Sequence[str] | None) -> list[dict[str, Any]]:
     parts: list[dict[str, Any]] = []
     for raw_path in paths or []:
@@ -326,17 +345,20 @@ def _message_parts(
     content: str,
     image_paths: Sequence[str] | None,
     document_paths: Sequence[str] | None,
+    audio_paths: Sequence[str] | None = None,
     *,
     detail: str,
 ) -> list[dict[str, Any]] | None:
     image_parts = _image_parts_from_paths(image_paths, detail=detail)
+    audio_parts = _audio_parts_from_paths(audio_paths)
     document_parts = _document_parts_from_paths(document_paths)
-    if not image_parts and not document_parts:
+    if not image_parts and not audio_parts and not document_parts:
         return None
     parts: list[dict[str, Any]] = []
     if content:
         parts.append({"type": "text", "text": content})
     parts.extend(image_parts)
+    parts.extend(audio_parts)
     parts.extend(document_parts)
     return parts
 
@@ -352,6 +374,7 @@ def run_chat(
         args.message,
         getattr(args, "image", None),
         getattr(args, "document", None),
+        getattr(args, "audio", None),
         detail=getattr(args, "image_detail", "auto"),
     )
     client.add_message(thread_id, args.message, parts=message_parts)

@@ -77,8 +77,10 @@ Gemini, and Generic OAuth providers.
 end. `AttachmentPartBase` owns only shared attachment-source mechanics such as MIME type, inline
 data, URL, and stored attachment ID. Attachment lifecycle operations—reference tracking, deletion,
 forking, compaction, and runtime hydration—operate on that base class. Validation and LLM provider
-serialization continue to operate on concrete modality classes such as `ImagePart` and
-`DocumentPart`. PDF and validated UTF-8 plain-text documents require explicit profile capability
+serialization continue to operate on concrete modality classes such as `ImagePart`, `AudioPart`,
+and `DocumentPart`. Validated uncompressed PCM WAV audio requires explicit profile capability and
+is adapted by OpenAI/OpenRouter Chat Completions and Gemini; Responses and Anthropic reject it.
+PDF and validated UTF-8 plain-text documents require explicit profile capability
 metadata and provider adaptation; omitted metadata remains permissive only for legacy image
 compatibility.
 

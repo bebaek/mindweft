@@ -16,6 +16,7 @@ class InputAvailability:
     capability_declared: bool = False
 
 
+AudioInputAvailability = InputAvailability
 ImageInputAvailability = InputAvailability
 DocumentInputAvailability = InputAvailability
 
@@ -35,6 +36,15 @@ def _input_availability(
         return InputAvailability(False, "disabled", declared)
     if execution.config.agent_backend.type != AGENT_BACKEND_NATIVE:
         return InputAvailability(False, "backend_unsupported", declared)
+    if modality == "audio" and llm_config.provider not in {
+        "mock",
+        "openai",
+        "openrouter",
+        "google",
+        "google-generative-ai",
+        "gemini",
+    }:
+        return InputAvailability(False, "profile_unsupported", declared)
     if modality == "document" and llm_config.provider not in {
         "mock",
         "anthropic",
@@ -49,6 +59,22 @@ def _input_availability(
     ):
         return InputAvailability(False, "profile_unsupported", declared)
     return InputAvailability(True, capability_declared=declared)
+
+
+def audio_input_availability(
+    execution: TenantExecutionContext,
+    llm_profile: str | None,
+    *,
+    globally_enabled: bool,
+) -> AudioInputAvailability:
+    """Resolve audio policy; audio support always requires an explicit declaration."""
+    return _input_availability(
+        execution,
+        llm_profile,
+        modality="audio",
+        globally_enabled=globally_enabled,
+        require_declaration=True,
+    )
 
 
 def image_input_availability(
@@ -89,6 +115,10 @@ def input_unavailable_detail(modality: str, reason: InputUnavailableReason) -> s
     if reason == "backend_unsupported":
         return f"selected agent backend does not support {modality} input"
     return f"selected LLM profile does not support {modality} input"
+
+
+def audio_input_unavailable_detail(reason: InputUnavailableReason) -> str:
+    return input_unavailable_detail("audio", reason)
 
 
 def image_input_unavailable_detail(reason: ImageInputUnavailableReason) -> str:

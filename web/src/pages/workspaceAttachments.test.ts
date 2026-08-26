@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { DocumentInputConfig, ImageInputConfig } from "../api/client";
+import type { AudioInputConfig, DocumentInputConfig, ImageInputConfig } from "../api/client";
 import {
   classifyAttachmentFiles,
   unsupportedAttachmentMessage,
   validateQueueAddition,
 } from "./workspaceAttachments";
+
+const audioConfig: AudioInputConfig = {
+  enabled: true,
+  max_bytes: 20,
+  max_audio_files: 2,
+  max_total_bytes: 30,
+  max_duration_seconds: 60,
+  allowed_mime_types: ["audio/wav"],
+};
 
 const imageConfig: ImageInputConfig = {
   enabled: true,
@@ -73,6 +82,21 @@ describe("classifyAttachmentFiles", () => {
       ["notes.md", "text/plain"],
       ["report.csv", "text/plain"],
       ["debug.log", "text/plain"],
+    ]);
+    expect(result.unsupported).toEqual([]);
+  });
+
+  it("canonicalizes WAV aliases and extension-only files", () => {
+    const result = classifyAttachmentFiles(
+      [file("voice.wav", "audio/x-wav"), file("meeting.WAV", "")],
+      imageConfig,
+      documentConfig,
+      audioConfig,
+    );
+
+    expect(result.audio.map((audio) => [audio.name, audio.type])).toEqual([
+      ["voice.wav", "audio/wav"],
+      ["meeting.WAV", "audio/wav"],
     ]);
     expect(result.unsupported).toEqual([]);
   });

@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type ClipboardEvent, type 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
+  type AudioPart,
   type DocumentPart,
   type ExecutionLlmOptionItem,
   type ExecutionOptionsResponse,
@@ -21,6 +22,7 @@ import {
 } from "./workspaceAttachments";
 
 import { runErrorMessage } from "./runEvents";
+import { AudioAttachment } from "../components/AudioAttachment";
 import { ContextDialog } from "../components/ContextDialog";
 import { ConsentDialog } from "../components/ConsentDialog";
 import { DocumentAttachment } from "../components/DocumentAttachment";
@@ -29,6 +31,11 @@ const AssistantMarkdown = lazy(async () => {
   const module = await import("../components/AssistantMarkdown");
   return { default: module.AssistantMarkdown };
 });
+
+interface PendingAudio {
+  file: File;
+  previewUrl: string;
+}
 
 interface PendingDocument {
   file: File;
@@ -70,6 +77,17 @@ function effectiveLlmOption(
     findProfile(options.llm_profiles.default) ??
     options.llm_profiles.effective_default
   );
+}
+
+function audioInputUnavailableMessage(profile: ExecutionLlmOptionItem | undefined): string | null {
+  if (profile?.audio_input_allowed !== false) return null;
+  if (profile.audio_input_reason === "backend_unsupported") {
+    return "The selected agent backend does not support audio input.";
+  }
+  if (profile.audio_input_reason === "profile_unsupported") {
+    return "The selected model profile does not accept audio.";
+  }
+  return "Audio input is disabled on this server.";
 }
 
 function documentInputUnavailableMessage(profile: ExecutionLlmOptionItem | undefined): string | null {
@@ -136,6 +154,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   const [threadSearchScope, setThreadSearchScope] = useState<"title" | "all">("title");
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [showArchivedThreads, setShowArchivedThreads] = useState(false);
+  const [pendingAudio, setPendingAudio] = useState<PendingAudio[]>([]);
   const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>([]);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
@@ -144,6 +163,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   const activityId = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const pendingAudioRef = useRef<PendingAudio[]>([]);
   const pendingImagesRef = useRef<PendingImage[]>([]);
   const attachmentDragDepth = useRef(0);
   const pendingConsentRef = useRef<PrivateValueConsentRequest | null>(null);
@@ -155,6 +175,10 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     retry: false,
     staleTime: 10_000,
   });
+
+  useEffect(() => {
+    pendingAudioRef.current = pendingAudio;
+  }, [pendingAudio]);
 
   useEffect(() => {
     pendingImagesRef.current = pendingImages;
@@ -304,6 +328,12 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     selectedLlmProfile,
     effectiveAgent,
   );
+  const profileAudioUnavailable = audioInputUnavailableMessage(composerLlmOption);
+  const audioInputAvailable = Boolean(config.data?.audio_input?.enabled) && !profileAudioUnavailable;
+  const audioInputMessage = !config.data?.audio_input?.enabled
+    ? "Audio input is disabled on this server."
+    : profileAudioUnavailable;
+  const queuedAudioBlocked = pendingAudio.length > 0 && !audioInputAvailable;
   const profileDocumentUnavailable = documentInputUnavailableMessage(composerLlmOption);
   const documentInputAvailable = Boolean(config.data?.document_input.enabled) && !profileDocumentUnavailable;
   const documentInputMessage = !config.data?.document_input.enabled
@@ -319,13 +349,10 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   const documentAccept = config.data?.document_input.allowed_mime_types.includes("text/plain")
     ? [...config.data.document_input.allowed_mime_types, ".txt", ".md", ".csv", ".log"].join(",")
     : (config.data?.document_input.allowed_mime_types.join(",") ?? "application/pdf");
-  const attachmentDropMessage = imageInputAvailable && documentInputAvailable
-    ? "Drop images or documents to attach them"
-    : imageInputAvailable
-      ? "Drop images to attach them"
-      : documentInputAvailable
-        ? "Drop documents to attach them"
-        : null;
+  const attachmentKinds = [imageInputAvailable && "images", documentInputAvailable && "documents", audioInputAvailable && "audio"].filter((value): value is string => Boolean(value));
+  const attachmentDropLabel = attachmentKinds.length === 0
+    ? null
+    : `Drop ${attachmentKinds.length === 1 ? attachmentKinds[0] : `${attachmentKinds.slice(0, -1).join(", ")}${attachmentKinds.length > 2 ? "," : ""} or ${attachmentKinds.at(-1)}`} to attach them`;
   const canSaveDefaultAgent = Boolean(
     selectedAgent && selectedAgent !== executionOptions.data?.agents.default,
   );
@@ -334,6 +361,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   useEffect(
     () => () => {
       abortRef.current?.abort();
+      for (const audio of pendingAudioRef.current) URL.revokeObjectURL(audio.previewUrl);
       for (const image of pendingImagesRef.current) URL.revokeObjectURL(image.previewUrl);
     },
     [],
@@ -427,9 +455,14 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   async function sendMessage(event: FormEvent) {
     event.preventDefault();
     const content = draft.trim();
+    const queuedAudio = [...pendingAudio];
     const queuedDocuments = [...pendingDocuments];
     const queuedImages = [...pendingImages];
-    if ((!content && queuedImages.length === 0 && queuedDocuments.length === 0) || isRunning) return;
+    if ((!content && queuedImages.length === 0 && queuedDocuments.length === 0 && queuedAudio.length === 0) || isRunning) return;
+    if (queuedAudio.length > 0 && !audioInputAvailable) {
+      setError(audioInputMessage ?? "Audio input is unavailable.");
+      return;
+    }
     if (queuedDocuments.length > 0 && !documentInputAvailable) {
       setError(documentInputMessage ?? "Document input is unavailable.");
       return;
@@ -467,6 +500,9 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
       for (const image of queuedImages) {
         uploaded.push(await api.uploadAttachment(threadId, image.file, controller.signal));
       }
+      for (const audio of queuedAudio) {
+        uploaded.push(await api.uploadAttachment(threadId, audio.file, controller.signal));
+      }
       for (const document of queuedDocuments) {
         uploaded.push(await api.uploadAttachment(threadId, document.file, controller.signal));
       }
@@ -479,7 +515,13 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
               attachment_id: attachment.attachment_id,
               detail: queuedImages[index].detail,
             })),
-            ...uploaded.slice(queuedImages.length).map((attachment, index) => ({
+            ...uploaded.slice(queuedImages.length, queuedImages.length + queuedAudio.length).map((attachment, index) => ({
+              type: "audio" as const,
+              mime_type: queuedAudio[index].file.type,
+              attachment_id: attachment.attachment_id,
+              filename: queuedAudio[index].file.name,
+            })),
+            ...uploaded.slice(queuedImages.length + queuedAudio.length).map((attachment, index) => ({
               type: "document" as const,
               mime_type: queuedDocuments[index].file.type,
               attachment_id: attachment.attachment_id,
@@ -489,7 +531,9 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
         : undefined;
       await api.addMessage(threadId, content, parts, controller.signal);
       messageStored = true;
+      for (const audio of queuedAudio) URL.revokeObjectURL(audio.previewUrl);
       for (const image of queuedImages) URL.revokeObjectURL(image.previewUrl);
+      setPendingAudio([]);
       setPendingDocuments([]);
       setPendingImages([]);
       await queryClient.invalidateQueries({ queryKey: ["messages", threadId] });
@@ -520,6 +564,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
 
   function addAttachmentFiles(files: FileList | File[] | null) {
     if (!files?.length) return;
+    const audioConfig = config.data?.audio_input;
     const imageConfig = config.data?.image_input;
     const documentConfig = config.data?.document_input;
     if (!imageConfig || !documentConfig) {
@@ -527,7 +572,11 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
       return;
     }
 
-    const candidates = classifyAttachmentFiles(files, imageConfig, documentConfig);
+    const candidates = classifyAttachmentFiles(files, imageConfig, documentConfig, audioConfig);
+    if (candidates.audio.length > 0 && (!audioConfig || !audioInputAvailable)) {
+      setError(audioInputMessage ?? "Audio input is unavailable.");
+      return;
+    }
     if (candidates.images.length > 0 && !imageInputAvailable) {
       setError(imageInputMessage ?? "Image input is unavailable.");
       return;
@@ -537,6 +586,17 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
       return;
     }
 
+    const audioError = audioConfig ? validateQueueAddition(
+      pendingAudio.map((audio) => audio.file),
+      candidates.audio,
+      {
+        allowed_mime_types: audioConfig.allowed_mime_types,
+        max_bytes: audioConfig.max_bytes,
+        max_items: audioConfig.max_audio_files,
+        max_total_bytes: audioConfig.max_total_bytes,
+      },
+      { singular: "audio file", plural: "audio files" },
+    ) : null;
     const imageError = validateQueueAddition(
       pendingImages.map((image) => image.file),
       candidates.images,
@@ -566,11 +626,17 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
       },
       { singular: "document", plural: "documents" },
     );
-    if (imageError || documentError) {
-      setError(imageError ?? documentError);
+    if (audioError || imageError || documentError) {
+      setError(audioError ?? imageError ?? documentError);
       return;
     }
 
+    if (candidates.audio.length > 0) {
+      setPendingAudio((audio) => [
+        ...audio,
+        ...candidates.audio.map((file) => ({ file, previewUrl: URL.createObjectURL(file) })),
+      ]);
+    }
     if (candidates.images.length > 0) {
       setPendingImages((images) => [
         ...images,
@@ -601,7 +667,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   function handleAttachmentDragEnter(event: DragEvent<HTMLFormElement>) {
     if (!isFileDrag(event)) return;
     event.preventDefault();
-    if (isRunning || !attachmentDropMessage) return;
+    if (isRunning || !attachmentDropLabel) return;
     attachmentDragDepth.current += 1;
     setAttachmentDragActive(true);
   }
@@ -690,7 +756,9 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     setActivity([]);
     setError(null);
     setBranchNotice(null);
+    for (const audio of pendingAudio) URL.revokeObjectURL(audio.previewUrl);
     for (const image of pendingImages) URL.revokeObjectURL(image.previewUrl);
+    setPendingAudio([]);
     setPendingDocuments([]);
     setPendingImages([]);
   }
@@ -874,6 +942,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
               <span className="message-author">{message.role === "user" ? "You" : "Mindweft"}</span>
               {message.content && (message.role === "assistant" ? <RenderedAssistantMessage content={message.content} /> : <div className="message-content plain-message-content">{message.content}</div>)}
               <MessageImages message={message} />
+              <MessageAudio message={message} />
               <MessageDocuments message={message} />
               {message.role === "assistant" && showThinking && reasoningSummary(message.metadata) && <details className="thinking-summary"><summary>Thinking summary</summary><p>{reasoningSummary(message.metadata)}</p></details>}
               {message.role === "assistant" && <PersistedToolActivity steps={persistedToolSteps(messages.data, message.id)} />}
@@ -933,7 +1002,21 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           onDrop={handleAttachmentDrop}
         >
           {attachmentDragActive && (
-            <div className="attachment-drop-target" role="status">{attachmentDropMessage}</div>
+            <div className="attachment-drop-target" role="status">{attachmentDropLabel}</div>
+          )}
+          {pendingAudio.length > 0 && (
+            <div className="pending-audio">
+              {pendingAudio.map((audio, index) => (
+                <div className="pending-audio-item" key={audio.previewUrl}>
+                  <strong>{audio.file.name}</strong>
+                  <audio controls preload="metadata" src={audio.previewUrl}><track kind="captions" /></audio>
+                  <button type="button" aria-label={`Remove ${audio.file.name}`} onClick={() => setPendingAudio((items) => {
+                    URL.revokeObjectURL(items[index].previewUrl);
+                    return items.filter((_, itemIndex) => itemIndex !== index);
+                  })}>×</button>
+                </div>
+              ))}
+            </div>
           )}
           {pendingDocuments.length > 0 && (
             <div className="pending-documents">
@@ -1016,6 +1099,11 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
               </select>
             </label>
           </div>
+          {queuedAudioBlocked && profileAudioUnavailable && (
+            <p className="composer-capability-warning" role="alert">
+              {profileAudioUnavailable} Remove the queued audio or choose an audio-capable profile.
+            </p>
+          )}
           {profileImageUnavailable && (
             <p className="composer-capability-warning" role={queuedImagesBlocked ? "alert" : "status"}>
               {profileImageUnavailable}
@@ -1028,6 +1116,19 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
               {queuedDocumentsBlocked ? " Remove the queued documents or choose a document-capable profile." : ""}
             </p>
           )}
+          <label
+            className={`attach-image ${audioInputAvailable ? "" : "disabled"}`}
+            title={audioInputAvailable ? "Attach WAV audio" : (audioInputMessage ?? "Audio input is unavailable")}
+          >
+            <span aria-hidden="true">WAV</span><span className="sr-only">Attach WAV audio</span>
+            <input
+              type="file"
+              accept={config.data?.audio_input?.allowed_mime_types.join(",") ?? "audio/wav"}
+              multiple
+              disabled={isRunning || !audioInputAvailable}
+              onChange={(event) => { addAttachmentFiles(event.target.files); event.target.value = ""; }}
+            />
+          </label>
           <label
             className={`attach-image ${documentInputAvailable ? "" : "disabled"}`}
             title={documentInputAvailable ? "Attach documents" : (documentInputMessage ?? "Document input is unavailable")}
@@ -1084,11 +1185,11 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           {isRunning ? (
             <button className="stop-run" type="button" onClick={() => void stopRun()}>Stop</button>
           ) : (
-            <button className="send-message" type="submit" disabled={queuedDocumentsBlocked || queuedImagesBlocked || (!draft.trim() && pendingImages.length === 0 && pendingDocuments.length === 0)} aria-label="Send message">↑</button>
+            <button className="send-message" type="submit" disabled={queuedAudioBlocked || queuedDocumentsBlocked || queuedImagesBlocked || (!draft.trim() && pendingAudio.length === 0 && pendingImages.length === 0 && pendingDocuments.length === 0)} aria-label="Send message">↑</button>
           )}
           <small>
             Enter to send · Shift+Enter for a new line
-            {imageInputAvailable || documentInputAvailable ? " · Paste or drop attachments" : ""}
+            {imageInputAvailable || documentInputAvailable || audioInputAvailable ? " · Paste or drop attachments" : ""}
           </small>
         </form>
       </div>
@@ -1259,6 +1360,12 @@ function privateValueConsentRequest(value: unknown): PrivateValueConsentRequest 
       Boolean(item) && typeof item.path === "string" && typeof item.kind === "string" && typeof item.count === "number"
     ),
   };
+}
+
+function MessageAudio({ message }: { message: Message }) {
+  const audioParts = message.parts?.filter((part): part is AudioPart => part.type === "audio") ?? [];
+  if (audioParts.length === 0) return null;
+  return <div className="message-audio-list">{audioParts.map((audio) => <AudioAttachment key={audio.attachment_id} threadId={message.thread_id} audio={audio} />)}</div>;
 }
 
 function MessageDocuments({ message }: { message: Message }) {

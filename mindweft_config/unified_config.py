@@ -125,6 +125,14 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "auth_params": "MINIGENT_OAUTH_AUTH_PARAMS",
         "account_id_jwt_claim": "MINIGENT_OAUTH_ACCOUNT_ID_JWT_CLAIM",
     },
+    "audio_input": {
+        "enabled": "MINIGENT_AUDIO_INPUT_ENABLED",
+        "max_bytes": "MINIGENT_AUDIO_INPUT_MAX_BYTES",
+        "max_audio_files": "MINIGENT_AUDIO_INPUT_MAX_AUDIO_FILES",
+        "max_total_bytes": "MINIGENT_AUDIO_INPUT_MAX_TOTAL_BYTES",
+        "max_duration_seconds": "MINIGENT_AUDIO_INPUT_MAX_DURATION_SECONDS",
+        "allowed_mime_types": "MINIGENT_AUDIO_INPUT_ALLOWED_MIME_TYPES",
+    },
     "image_input": {
         "enabled": "MINIGENT_IMAGE_INPUT_ENABLED",
         "max_bytes": "MINIGENT_IMAGE_INPUT_MAX_BYTES",
