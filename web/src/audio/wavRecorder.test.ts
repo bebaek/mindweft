@@ -102,7 +102,7 @@ describe("PCM WAV encoding", () => {
     const onLimitReached = vi.fn();
 
     const session = await startPcmWavRecording({
-      maxBytes: 1_000,
+      maxBytes: 50,
       maxDurationSeconds: 1,
       onDurationChange,
       onLimitReached,
@@ -114,10 +114,10 @@ describe("PCM WAV encoding", () => {
     expect(getUserMedia).toHaveBeenCalledWith({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
-    expect(onDurationChange).toHaveBeenLastCalledWith(1);
+    expect(onDurationChange).toHaveBeenLastCalledWith(0.75);
     expect(onLimitReached).toHaveBeenCalledOnce();
     expect(file.type).toBe("audio/wav");
-    expect(file.size).toBe(52);
+    expect(file.size).toBe(50);
     expect(stopTrack).toHaveBeenCalledOnce();
     expect(closeContext).toHaveBeenCalledOnce();
   });

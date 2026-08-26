@@ -495,7 +495,9 @@ console's curated Radix palette and semantic-token conventions are documented in
 [`web/THEMING.md`](web/THEMING.md). Microphone recording requires an audio-capable profile,
 enabled server audio input, browser permission, and a secure browser context such as HTTPS or
 localhost. Recordings are encoded as mono 16-bit PCM WAV in the browser and still pass through the
-same upload limits and server-side WAV validation as selected files.
+same upload limits and server-side WAV validation as selected files. See the
+[audio input smoke-test checklist](docs/audio-input.md) for browser permission, lifecycle, limit,
+and opt-in provider checks.
 
 For frontend development, run the API and Vite development server in separate terminals:
 
