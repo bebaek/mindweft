@@ -23,6 +23,7 @@ import {
 
 import { runErrorMessage } from "./runEvents";
 import { AudioAttachment } from "../components/AudioAttachment";
+import { AudioRecorder } from "../components/AudioRecorder";
 import { ContextDialog } from "../components/ContextDialog";
 import { ConsentDialog } from "../components/ConsentDialog";
 import { DocumentAttachment } from "../components/DocumentAttachment";
@@ -155,6 +156,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [showArchivedThreads, setShowArchivedThreads] = useState(false);
   const [pendingAudio, setPendingAudio] = useState<PendingAudio[]>([]);
+  const [audioRecordingActive, setAudioRecordingActive] = useState(false);
   const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>([]);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
@@ -458,7 +460,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     const queuedAudio = [...pendingAudio];
     const queuedDocuments = [...pendingDocuments];
     const queuedImages = [...pendingImages];
-    if ((!content && queuedImages.length === 0 && queuedDocuments.length === 0 && queuedAudio.length === 0) || isRunning) return;
+    if ((!content && queuedImages.length === 0 && queuedDocuments.length === 0 && queuedAudio.length === 0) || isRunning || audioRecordingActive) return;
     if (queuedAudio.length > 0 && !audioInputAvailable) {
       setError(audioInputMessage ?? "Audio input is unavailable.");
       return;
@@ -1116,6 +1118,16 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
               {queuedDocumentsBlocked ? " Remove the queued documents or choose a document-capable profile." : ""}
             </p>
           )}
+          <div className="composer-attachment-actions">
+            <AudioRecorder
+            disabled={isRunning || !audioInputAvailable}
+            maxBytes={config.data?.audio_input?.max_bytes ?? 1}
+            maxDurationSeconds={config.data?.audio_input?.max_duration_seconds ?? 1}
+            unavailableReason={audioInputMessage}
+            onError={(message) => setError(message || null)}
+            onRecorded={(file) => addAttachmentFiles([file])}
+            onRecordingChange={setAudioRecordingActive}
+          />
           <label
             className={`attach-image ${audioInputAvailable ? "" : "disabled"}`}
             title={audioInputAvailable ? "Attach WAV audio" : (audioInputMessage ?? "Audio input is unavailable")}
@@ -1154,7 +1166,8 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
               disabled={isRunning || !imageInputAvailable}
               onChange={(event) => { addAttachmentFiles(event.target.files); event.target.value = ""; }}
             />
-          </label>
+            </label>
+          </div>
           <textarea
             ref={messageInputRef}
             aria-label="Message Mindweft"
@@ -1185,7 +1198,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           {isRunning ? (
             <button className="stop-run" type="button" onClick={() => void stopRun()}>Stop</button>
           ) : (
-            <button className="send-message" type="submit" disabled={queuedAudioBlocked || queuedDocumentsBlocked || queuedImagesBlocked || (!draft.trim() && pendingAudio.length === 0 && pendingImages.length === 0 && pendingDocuments.length === 0)} aria-label="Send message">↑</button>
+            <button className="send-message" type="submit" disabled={audioRecordingActive || queuedAudioBlocked || queuedDocumentsBlocked || queuedImagesBlocked || (!draft.trim() && pendingAudio.length === 0 && pendingImages.length === 0 && pendingDocuments.length === 0)} aria-label="Send message">↑</button>
           )}
           <small>
             Enter to send · Shift+Enter for a new line

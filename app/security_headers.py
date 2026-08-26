@@ -38,7 +38,7 @@ class SecurityHeadersMiddleware:
                 headers["X-Content-Type-Options"] = "nosniff"
                 headers["Referrer-Policy"] = "no-referrer"
                 headers["X-Frame-Options"] = "DENY"
-                headers["Permissions-Policy"] = "camera=(self), microphone=(), geolocation=()"
+                headers["Permissions-Policy"] = "camera=(self), microphone=(self), geolocation=()"
                 headers["X-Permitted-Cross-Domain-Policies"] = "none"
                 if (
                     path == "/web"

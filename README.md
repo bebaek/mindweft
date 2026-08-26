@@ -467,9 +467,10 @@ agent selection, NDJSON run streaming, activity
 inspection, cancellation controls, context usage inspection, raw model-context previews, and
 confirmed compaction. On narrow screens, the conversation rail is collapsed by default and available
 from the Conversations menu so the active chat retains the screen space. The console also supports
-validated image, PDF, and plain-text document selection, clipboard paste, and mixed attachment
+validated image, PDF, plain-text document, and PCM WAV selection, client-side microphone recording
+with explicit start/stop/cancel controls, clipboard paste, and mixed attachment
 drag-and-drop, authenticated binary uploads, lazy authenticated document previews and downloads,
-image previews,
+image and queued-audio previews,
 and per-image detail controls, one-time private-value approval/denial, pending-consent recovery after
 reload, uncertain-action reconciliation, a personal setup workspace for versioned execution-overlay
 JSON plus write-only encrypted MCP credential creation, rotation, and deletion, a tenant-owner
@@ -491,7 +492,10 @@ production default but requires a session endpoint backed by the deployment's id
 the current API authentication modes continue to use bearer tokens or development headers. The
 console never persists bearer tokens or development principal values in browser storage. The
 console's curated Radix palette and semantic-token conventions are documented in
-[`web/THEMING.md`](web/THEMING.md).
+[`web/THEMING.md`](web/THEMING.md). Microphone recording requires an audio-capable profile,
+enabled server audio input, browser permission, and a secure browser context such as HTTPS or
+localhost. Recordings are encoded as mono 16-bit PCM WAV in the browser and still pass through the
+same upload limits and server-side WAV validation as selected files.
 
 For frontend development, run the API and Vite development server in separate terminals:
 
