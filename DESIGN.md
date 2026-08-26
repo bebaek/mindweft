@@ -77,7 +77,9 @@ Gemini, and Generic OAuth providers.
 end. `AttachmentPartBase` owns only shared attachment-source mechanics such as MIME type, inline
 data, URL, and stored attachment ID. Attachment lifecycle operations—reference tracking, deletion,
 forking, compaction, and runtime hydration—operate on that base class. Validation and LLM provider
-serialization continue to operate on concrete modality classes such as `ImagePart`.
+serialization continue to operate on concrete modality classes such as `ImagePart` and `DocumentPart`. PDF documents require explicit
+profile capability metadata and provider adaptation; omitted metadata remains permissive only for legacy
+image compatibility.
 
 A new concrete part must not be added to the public `MessagePart` union until its validation,
 provider adaptation, client behavior, and lifecycle tests are implemented together. Defining or

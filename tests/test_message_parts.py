@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Literal
-
 import pytest
 from pydantic import ValidationError
 
@@ -13,16 +11,12 @@ from app.message_parts import (
 )
 from app.models import (
     AttachmentPartBase,
+    DocumentPart,
     ImagePart,
     Message,
     MessageRole,
     TextPart,
 )
-
-
-class DocumentPartForTest(AttachmentPartBase):
-    type: Literal["document"] = "document"
-    label: str
 
 
 def test_image_part_wire_shape_is_unchanged() -> None:
@@ -50,7 +44,7 @@ def test_message_part_discriminator_still_rejects_unknown_types() -> None:
             thread_id="thread-1",
             role=MessageRole.USER,
             content="unsupported",
-            parts=[{"type": "document", "mime_type": "application/pdf"}],  # type: ignore[list-item]
+            parts=[{"type": "audio", "mime_type": "audio/wav"}],  # type: ignore[list-item]
         )
 
 
@@ -103,16 +97,16 @@ def test_remap_attachment_ids_preserves_subtype_fields_without_mutating_source()
 
 
 def test_attachment_helpers_are_not_image_specific() -> None:
-    source = DocumentPartForTest(
+    source = DocumentPart(
         mime_type="application/pdf",
         attachment_id="document-1",
-        label="Requirements",
+        filename="requirements.pdf",
     )
 
     remapped = remap_attachment_ids([source], {"document-1": "document-2"})
 
     assert is_attachment_part(source)
     assert remapped is not None
-    assert isinstance(remapped[0], DocumentPartForTest)
+    assert isinstance(remapped[0], DocumentPart)
     assert remapped[0].attachment_id == "document-2"
-    assert remapped[0].label == "Requirements"
+    assert remapped[0].filename == "requirements.pdf"

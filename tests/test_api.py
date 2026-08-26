@@ -27,6 +27,7 @@ from app.admin_api import (
 from app.agent_backends import PeerBackendSettings, _sanitize_peer_task_event
 from app.attachments import InMemoryAttachmentStore
 from app.execution import (
+    FixedTenantExecutionResolver,
     InMemoryTenantExecutionResolver,
     TenantAgentBackendConfig,
     TenantExecutionSettings,
@@ -51,6 +52,7 @@ from app.mcp_broker import (
 )
 from app.models import (
     AuditRecord,
+    DocumentPart,
     ImagePart,
     LLMResponse,
     Message,
@@ -701,6 +703,136 @@ def test_attachment_upload_stores_reference_and_resolves_for_llm(
     assert delete_response.json()["detail"] == "attachment is referenced by message history"
 
 
+def test_pdf_attachment_upload_stores_reference_and_resolves_for_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingAdapter(LLMAdapter):
+        def __init__(self) -> None:
+            self.messages: list[Message] = []
+
+        async def generate(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            del tools
+            self.messages = messages
+            return LLMResponse(content="reviewed")
+
+        def describe(self) -> dict[str, object]:
+            return {"provider": "recording"}
+
+    monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_ENABLED", "true")
+    adapter = RecordingAdapter()
+    registry = build_local_tool_registry()
+    execution_config = parse_tenant_execution_config(
+        "tenant-1",
+        {"llm": {"provider": "mock", "input_modalities": ["text", "document"]}},
+    )
+    app = create_app(
+        execution_resolver=FixedTenantExecutionResolver(adapter, registry, config=execution_config)
+    )
+    client = TestClient(app)
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    pdf = b"%PDF-1.7\nminimal test document"
+
+    upload_response = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=pdf,
+        headers={**AUTH_HEADERS, "Content-Type": "application/pdf"},
+    )
+    assert upload_response.status_code == 200
+    attachment_id = upload_response.json()["attachment_id"]
+
+    message_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={
+            "content": "review this",
+            "parts": [
+                {"type": "text", "text": "review this"},
+                {
+                    "type": "document",
+                    "mime_type": "application/pdf",
+                    "attachment_id": attachment_id,
+                    "filename": "requirements.pdf",
+                },
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert message_response.status_code == 200
+    assert message_response.json()["parts"][1]["filename"] == "requirements.pdf"
+
+    fork_response = client.post(
+        f"/threads/{thread_id}/fork",
+        json={"at_message_id": message_response.json()["id"]},
+        headers=AUTH_HEADERS,
+    )
+    assert fork_response.status_code == 201
+    child_id = fork_response.json()["thread_id"]
+    child_message = app.state.store.list_messages("tenant-1", child_id)[0]
+    assert child_message.parts is not None
+    child_document = child_message.parts[1]
+    assert isinstance(child_document, DocumentPart)
+    assert child_document.filename == "requirements.pdf"
+    assert child_document.attachment_id != attachment_id
+    cloned = app.state.attachment_store.get(
+        "tenant-1", child_id, child_document.attachment_id or ""
+    )
+    assert cloned is not None
+    assert cloned.data == pdf
+
+    run_response = client.post(f"/threads/{thread_id}/run", headers=AUTH_HEADERS)
+    assert run_response.status_code == 200
+    user_message = next(message for message in adapter.messages if message.role == MessageRole.USER)
+    assert user_message.parts is not None
+    document = user_message.parts[1]
+    assert isinstance(document, DocumentPart)
+    assert document.attachment_id is None
+    assert base64.b64decode(document.data or "") == pdf
+
+
+def test_pdf_input_requires_explicit_profile_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_ENABLED", "true")
+    client = TestClient(create_app())
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    response = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=b"%PDF-1.7\ncontent",
+        headers={**AUTH_HEADERS, "Content-Type": "application/pdf"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "selected LLM profile does not support document input"
+
+
+def test_pdf_input_rejects_chat_completions_provider_before_upload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_ENABLED", "true")
+    registry = build_local_tool_registry()
+    execution_config = parse_tenant_execution_config(
+        "tenant-1",
+        {"llm": {"provider": "openai", "input_modalities": ["text", "document"]}},
+    )
+    client = TestClient(
+        create_app(
+            execution_resolver=FixedTenantExecutionResolver(
+                MockLLMAdapter(), registry, config=execution_config
+            )
+        )
+    )
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+
+    response = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=b"%PDF-1.7\ncontent",
+        headers={**AUTH_HEADERS, "Content-Type": "application/pdf"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "selected LLM profile does not support document input"
+
+
 def test_attachment_upload_rate_limit_covers_both_endpoints(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -946,7 +1078,9 @@ def test_binary_attachment_upload_enforces_type_and_stream_size(
     )
 
     assert unsupported.status_code == 400
-    assert unsupported.json()["detail"] == "unsupported image MIME type: application/octet-stream"
+    assert (
+        unsupported.json()["detail"] == "unsupported attachment MIME type: application/octet-stream"
+    )
     assert oversized.status_code == 400
     assert oversized.json()["detail"] == "image exceeds maximum allowed size"
 
@@ -4517,6 +4651,8 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
                 "version": None,
                 "input_modalities": None,
                 "image_input_allowed": False,
+                "document_input_allowed": False,
+                "document_input_reason": "disabled",
                 "image_input_reason": "disabled",
                 "capability_declared": False,
             },

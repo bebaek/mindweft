@@ -112,6 +112,7 @@ mindweft run --thread <thread-id> "continue"
 mindweft run --resume-last "continue"
 mindweft run --image ./screenshot.png "describe this image"
 mindweft run --image before.png --image after.png "compare these"
+mindweft run --document ./requirements.pdf "review this document"
 ```
 
 `run` reads from stdin when no prompt argument is provided. By default the assistant
@@ -135,6 +136,7 @@ reply prints to stdout with no extra noise. Useful flags:
 | `--llm <name>` | Named LLM profile to bind to a new thread. |
 | `--image <path>` | Attach an image file; can be repeated. Requires server-side `[image_input].enabled = true` (or `MINDWEFT_IMAGE_INPUT_ENABLED=true`) and a vision-capable model/provider. |
 | `--image-detail auto\|low\|high` | Vision detail hint for attached images. |
+| `--document <path>` | Attach a PDF; can be repeated. Requires `[document_input].enabled = true`, a native supported provider, and an explicit `document` input capability. |
 
 ### Chat (one-shot)
 
@@ -144,6 +146,7 @@ mindweft chat --stream "hello with progress"
 mindweft chat --thread <thread-id> "continue"
 mindweft chat --resume-last "continue"
 mindweft chat --image ./diagram.png "what does this show?"
+mindweft chat --document ./requirements.pdf "summarize this"
 ```
 
 Same flags as `run`, plus `--print-thread-id` and `--transcript` for printing the full
@@ -337,6 +340,9 @@ Available during interactive chat:
 | `/image paste`, `/image clipboard` | On macOS, use `pngpaste` to queue a PNG image from the system clipboard for the next message. |
 | `/image list` | Show images queued for the next message. |
 | `/image clear` | Clear queued images without sending them. |
+| `/document <path...>` | Queue one or more PDF files for the next message. The selected profile must explicitly support document input. |
+| `/document list` | Show PDFs queued for the next message. |
+| `/document clear` | Clear queued PDFs without sending them. |
 | `/commands` | List saved custom slash commands. |
 | `/command set <name> <template>` | Save a custom slash command. Use `{input}` to place invocation text. |
 | `/command show <name>` | Show a saved command's template. |

@@ -77,6 +77,15 @@ class ImageInputConfig:
 
 
 @dataclass(frozen=True)
+class DocumentInputConfig:
+    enabled: object = None
+    max_bytes: object = None
+    max_documents: object = None
+    max_total_bytes: object = None
+    allowed_mime_types: object = None
+
+
+@dataclass(frozen=True)
 class AttachmentConfig:
     db_path: object = None
     max_per_thread: object = None
@@ -179,6 +188,7 @@ class UnifiedConfig:
     oauth: OAuthConfig = field(default_factory=OAuthConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     image_input: ImageInputConfig = field(default_factory=ImageInputConfig)
+    document_input: DocumentInputConfig = field(default_factory=DocumentInputConfig)
     attachments: AttachmentConfig = field(default_factory=AttachmentConfig)
     rate_limits: RateLimitConfig = field(default_factory=RateLimitConfig)
     coding: CodingConfig = field(default_factory=CodingConfig)
@@ -198,6 +208,7 @@ SECTION_FIELDS: dict[str, set[str]] = {
     "oauth": set(OAuthConfig.__dataclass_fields__),
     "llm": set(LLMConfig.__dataclass_fields__),
     "image_input": set(ImageInputConfig.__dataclass_fields__),
+    "document_input": set(DocumentInputConfig.__dataclass_fields__),
     "attachments": set(AttachmentConfig.__dataclass_fields__),
     "rate_limits": set(RateLimitConfig.__dataclass_fields__),
     "coding": set(CodingConfig.__dataclass_fields__),
@@ -215,6 +226,7 @@ TOP_LEVEL_KEYS = {
     "oauth",
     "llm",
     "image_input",
+    "document_input",
     "attachments",
     "rate_limits",
     "coding",
@@ -234,6 +246,7 @@ SECTION_TYPES: dict[str, type[Any]] = {
     "oauth": OAuthConfig,
     "llm": LLMConfig,
     "image_input": ImageInputConfig,
+    "document_input": DocumentInputConfig,
     "attachments": AttachmentConfig,
     "rate_limits": RateLimitConfig,
     "coding": CodingConfig,
@@ -314,6 +327,9 @@ _INT_KEYS = {
     "image_input.max_total_bytes",
     "image_input.max_pixels",
     "image_input.max_dimension",
+    "document_input.max_bytes",
+    "document_input.max_documents",
+    "document_input.max_total_bytes",
     "attachments.max_per_thread",
     "attachments.max_bytes_per_thread",
     "attachments.max_per_tenant",
@@ -348,6 +364,7 @@ _BOOL_KEYS = {
     "llm.thinking_enabled",
     "llm.prompt_cache_enabled",
     "image_input.enabled",
+    "document_input.enabled",
     "coding.enabled",
     "coding.inject_workspace_skill",
     "coding.shell_enabled",
@@ -358,6 +375,7 @@ _BOOL_KEYS = {
 
 _STRING_LIST_KEYS = {
     "image_input.allowed_mime_types",
+    "document_input.allowed_mime_types",
     "llm.input_modalities",
     "coding.workspaces",
     "coding.shell_allowed_command_prefixes",
@@ -475,6 +493,7 @@ def _validate_llm_providers(value: object) -> list[str]:
         "thinking_budget_tokens",
         "thinking_effort",
         "prompt_cache_enabled",
+        "input_modalities",
         "timeout",
     }
     for name, provider in value.items():

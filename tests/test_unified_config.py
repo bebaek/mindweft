@@ -956,6 +956,7 @@ default = "primary"
 provider = "openai"
 model = "gpt-test"
 api_key_env = "PRIMARY_KEY"
+input_modalities = ["text", "image", "document"]
 
 [llm.providers.backup]
 provider = "openai-compatible"
@@ -979,6 +980,7 @@ api_key_env = "BACKUP_KEY"
         "primary": {
             "provider": "openai",
             "model": "gpt-test",
+            "input_modalities": ["text", "image", "document"],
             "api_key": "${PRIMARY_KEY}",
         },
         "backup": {

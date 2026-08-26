@@ -142,6 +142,48 @@ def test_run_sends_image_parts(monkeypatch: Any, tmp_path: Path, capsys: Any) ->
     assert capsys.readouterr().out == "image summary\n"
 
 
+def test_run_sends_pdf_document_parts(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    document_path = tmp_path / "requirements.pdf"
+    document_path.write_bytes(b"%PDF-1.7\nrequirements")
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/attachments"):
+            body = json.loads(request.data.decode("utf-8"))
+            assert body == {
+                "mime_type": "application/pdf",
+                "data": "JVBERi0xLjcKcmVxdWlyZW1lbnRz",
+            }
+            return _Response(body={"attachment_id": "attachment-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            body = json.loads(request.data.decode("utf-8"))
+            assert body == {
+                "content": "review",
+                "parts": [
+                    {"type": "text", "text": "review"},
+                    {
+                        "type": "document",
+                        "mime_type": "application/pdf",
+                        "attachment_id": "attachment-1",
+                        "filename": "requirements.pdf",
+                    },
+                ],
+            }
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run"):
+            return _Response(body={"reply": "document summary"})
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["run", "--document", str(document_path), "review"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "document summary\n"
+
+
 def test_run_json_outputs_structured_reply(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     def urlopen(request: Any) -> _Response:
         if request.full_url.endswith("/threads"):

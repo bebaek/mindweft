@@ -831,15 +831,40 @@ def _image_parts_from_paths(paths: list[str], *, detail: str = "auto") -> list[d
     return parts
 
 
-def _message_parts_for_pending_images(
-    content: str, pending_image_parts: list[dict[str, Any]]
+def _document_parts_from_paths(paths: list[str]) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    for raw_path in paths:
+        path = Path(raw_path).expanduser()
+        if not path.is_file():
+            raise ValueError(f"document file not found: {raw_path}")
+        if path.suffix.lower() != ".pdf":
+            raise ValueError(f"document must be a PDF file: {raw_path}")
+        data = path.read_bytes()
+        if not data.startswith(b"%PDF-"):
+            raise ValueError(f"document does not contain PDF data: {raw_path}")
+        parts.append(
+            {
+                "type": "document",
+                "mime_type": "application/pdf",
+                "data": base64.b64encode(data).decode("ascii"),
+                "filename": path.name,
+                "source_path": str(path),
+            }
+        )
+    return parts
+
+
+def _message_parts_for_pending_attachments(
+    content: str,
+    pending_image_parts: list[dict[str, Any]],
+    pending_document_parts: list[dict[str, Any]],
 ) -> list[dict[str, Any]] | None:
-    if not pending_image_parts:
+    if not pending_image_parts and not pending_document_parts:
         return None
     parts: list[dict[str, Any]] = []
     if content:
         parts.append({"type": "text", "text": content})
-    for part in pending_image_parts:
+    for part in [*pending_image_parts, *pending_document_parts]:
         clean_part = {key: value for key, value in part.items() if key != "source_path"}
         parts.append(clean_part)
     return parts
@@ -879,6 +904,74 @@ def _image_input_unavailable_for_client(
     if reason == "profile_unsupported":
         return "the selected LLM profile only accepts text"
     return "image input is disabled on this server"
+
+
+def _document_input_unavailable_for_client(
+    client: RememberingMindweftAPIClient,
+) -> str | None:
+    try:
+        options = client.execution_options()
+    except (AttributeError, RuntimeError):
+        return None
+    option = _effective_llm_image_option(options, client.active_llm_profile)
+    if option is None or option.get("document_input_allowed") is not False:
+        return None
+    reason = option.get("document_input_reason")
+    if reason == "backend_unsupported":
+        return "the selected agent backend does not support document input"
+    if reason == "profile_unsupported":
+        return "the selected LLM profile does not support document input"
+    return "document input is disabled on this server"
+
+
+def _handle_chat_document_command(
+    utterance: str,
+    pending_document_parts: list[dict[str, Any]],
+    output_stream: ChatOutputStream,
+    client: RememberingMindweftAPIClient | None = None,
+) -> None:
+    try:
+        args = shlex.split(utterance)
+    except ValueError as exc:
+        output_stream.write(f"[idle] document command parse error: {exc}\n")
+        output_stream.flush()
+        return
+    if len(args) == 1 or (len(args) == 2 and args[1] in {"list", "status"}):
+        if not pending_document_parts:
+            output_stream.write("[idle] no documents queued for the next message\n")
+        else:
+            output_stream.write(
+                f"[idle] {len(pending_document_parts)} document(s) queued for the next message:\n"
+            )
+            for index, part in enumerate(pending_document_parts, start=1):
+                output_stream.write(
+                    f"  {index}. {part.get('source_path', part.get('filename', '<inline>'))} "
+                    f"({part.get('mime_type')})\n"
+                )
+        output_stream.flush()
+        return
+    if len(args) == 2 and args[1] in {"clear", "reset"}:
+        pending_document_parts.clear()
+        output_stream.write("[idle] cleared queued documents\n")
+        output_stream.flush()
+        return
+    unavailable = _document_input_unavailable_for_client(client) if client is not None else None
+    if unavailable is not None:
+        output_stream.write(f"[idle] {unavailable}\n")
+        output_stream.flush()
+        return
+    paths = args[1:]
+    try:
+        pending_document_parts.extend(_document_parts_from_paths(paths))
+    except ValueError as exc:
+        output_stream.write(f"[idle] {exc}\n")
+        output_stream.flush()
+        return
+    output_stream.write(
+        f"[idle] queued {len(paths)} document(s) for the next message "
+        f"({len(pending_document_parts)} total)\n"
+    )
+    output_stream.flush()
 
 
 def _handle_chat_image_command(
@@ -954,6 +1047,7 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
     prompt_session_thread_id: str | None | object = object()
     synced_prompt_history_thread_id: str | None = None
     speech_output = ConsoleSpeechOutput(output_stream=output_stream)
+    pending_document_parts: list[dict[str, Any]] = []
     pending_image_parts: list[dict[str, Any]] = []
 
     turns_completed = 0
@@ -1008,6 +1102,14 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
             _handle_chat_image_command(
                 utterance,
                 pending_image_parts,
+                output_stream,
+                client,
+            )
+            continue
+        if utterance == "/document" or utterance.startswith("/document "):
+            _handle_chat_document_command(
+                utterance,
+                pending_document_parts,
                 output_stream,
                 client,
             )
@@ -1100,11 +1202,23 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
                     )
                     output_stream.flush()
                     continue
-            message_parts = _message_parts_for_pending_images(utterance, pending_image_parts)
+            if pending_document_parts:
+                unavailable = _document_input_unavailable_for_client(client)
+                if unavailable is not None:
+                    output_stream.write(
+                        f"[idle] queued documents cannot be sent: {unavailable}; "
+                        "use /document clear or switch profiles\n"
+                    )
+                    output_stream.flush()
+                    continue
+            message_parts = _message_parts_for_pending_attachments(
+                utterance, pending_image_parts, pending_document_parts
+            )
             if message_parts is None:
                 client.send_user_message(utterance)
             else:
                 client.send_user_message(utterance, parts=message_parts)
+                pending_document_parts.clear()
                 pending_image_parts.clear()
             reply, metadata = client.run_thread()
             reply, metadata = _maybe_resume_private_value_consent(
@@ -1215,7 +1329,8 @@ def _write_chat_help(output_stream: ChatOutputStream) -> None:
         "/fork [number|--pick|--message-id UUID], /lineage, /parent, /children [number], "
         "/compact, /actions, "
         "/discard-action <consent-id>, /export [markdown|json], /tokens, "
-        "/debug, /editor, /image <path...>|paste|list|clear, /commands, "
+        "/debug, /editor, /image <path...>|paste|list|clear, "
+        "/document <path...>|list|clear, /commands, "
         "/command set|show|delete, "
         "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"

@@ -74,6 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Image file to attach to the message. Can be specified multiple times.",
     )
     chat_parser.add_argument(
+        "--document",
+        action="append",
+        default=[],
+        help="PDF document to attach to the message. Can be specified multiple times.",
+    )
+    chat_parser.add_argument(
         "--image-detail",
         choices=["auto", "low", "high"],
         default="auto",
@@ -152,6 +158,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Image file to attach to the prompt. Can be specified multiple times.",
+    )
+    run_parser.add_argument(
+        "--document",
+        action="append",
+        default=[],
+        help="PDF document to attach to the prompt. Can be specified multiple times.",
     )
     run_parser.add_argument(
         "--image-detail",

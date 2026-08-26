@@ -128,7 +128,12 @@ class ImagePart(AttachmentPartBase):
     detail: Literal["auto", "low", "high"] = "auto"
 
 
-MessagePart = Annotated[TextPart | ImagePart, Field(discriminator="type")]
+class DocumentPart(AttachmentPartBase):
+    type: Literal["document"] = "document"
+    filename: str = Field(min_length=1, max_length=255)
+
+
+MessagePart = Annotated[TextPart | ImagePart | DocumentPart, Field(discriminator="type")]
 
 
 class Message(BaseModel):
@@ -316,6 +321,10 @@ class ExecutionOptionSection(BaseModel):
 class ExecutionLLMOptionItem(ExecutionOptionItem):
     input_modalities: list[str] | None = None
     image_input_allowed: bool
+    document_input_allowed: bool = False
+    document_input_reason: (
+        Literal["disabled", "backend_unsupported", "profile_unsupported"] | None
+    ) = None
     image_input_reason: Literal["disabled", "backend_unsupported", "profile_unsupported"] | None = (
         None
     )

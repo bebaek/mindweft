@@ -62,7 +62,10 @@ from app.external_grants import build_external_grant_provider_registry_from_env
 from app.health import database_readiness_checks
 from app.image_validation import ImageDimensionError, enforce_image_dimensions
 from app.input_capabilities import (
+    DocumentInputAvailability,
     ImageInputAvailability,
+    document_input_availability,
+    document_input_unavailable_detail,
     image_input_availability,
     image_input_unavailable_detail,
 )
@@ -78,6 +81,7 @@ from app.models import (
     AddMessageRequest,
     CreateThreadRequest,
     CreateThreadResponse,
+    DocumentPart,
     ExecutionAgentOptionItem,
     ExecutionAgentOptionSection,
     ExecutionLLMOptionItem,
@@ -129,8 +133,11 @@ from app.session_auth import build_session_auth_router, validate_session_auth_se
 from app.settings import (
     DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES,
     DEFAULT_IMAGE_INPUT_MAX_BYTES,
+    DocumentInputSettings,
     ImageInputSettings,
     MindweftSettings,
+    _document_input_export_public_dict,
+    _document_input_public_dict,
     _image_input_export_public_dict,
     _image_input_public_dict,
     load_settings,
@@ -546,8 +553,10 @@ def _fork_private_value_references(messages: list[Message], summary: str) -> set
 def _validate_and_normalize_message_request(
     request: AddMessageRequest,
     settings: ImageInputSettings,
+    document_settings: DocumentInputSettings,
     *,
     image_availability: ImageInputAvailability | None = None,
+    document_availability: DocumentInputAvailability | None = None,
     attachment_store: AttachmentStore | None = None,
     tenant_id: str | None = None,
     thread_id: str | None = None,
@@ -622,6 +631,77 @@ def _validate_and_normalize_message_request(
                 status_code=400,
                 detail="message images exceed maximum total allowed size",
             )
+    document_parts = [part for part in request.parts if isinstance(part, DocumentPart)]
+    if document_parts and not document_settings.enabled:
+        raise HTTPException(status_code=400, detail="document input is disabled")
+    if document_parts and document_availability is not None and not document_availability.allowed:
+        assert document_availability.reason is not None
+        raise HTTPException(
+            status_code=400,
+            detail=document_input_unavailable_detail(document_availability.reason),
+        )
+    if len(document_parts) > document_settings.max_documents:
+        raise HTTPException(
+            status_code=400,
+            detail=f"message exceeds maximum document count ({document_settings.max_documents})",
+        )
+    total_document_bytes = 0
+    for part in document_parts:
+        mime_type = part.mime_type.strip().lower()
+        if mime_type not in document_settings.allowed_mime_types:
+            raise HTTPException(
+                status_code=400, detail=f"unsupported document MIME type: {part.mime_type}"
+            )
+        if (
+            part.filename != Path(part.filename).name
+            or part.filename in {".", ".."}
+            or "\\" in part.filename
+            or any(ord(character) < 32 for character in part.filename)
+        ):
+            raise HTTPException(
+                status_code=400, detail="document filename must be a plain filename"
+            )
+        source_count = sum(bool(source) for source in (part.data, part.url, part.attachment_id))
+        if source_count != 1:
+            raise HTTPException(
+                status_code=400,
+                detail="document part must include exactly one of data, url, or attachment_id",
+            )
+        if part.url:
+            raise HTTPException(status_code=400, detail="document URL sources are not supported")
+        if part.attachment_id:
+            if attachment_store is None or tenant_id is None or thread_id is None:
+                raise HTTPException(
+                    status_code=400, detail="document attachment_id is not supported"
+                )
+            record = attachment_store.get(tenant_id, thread_id, part.attachment_id)
+            if record is None:
+                raise HTTPException(status_code=400, detail="document attachment_id is invalid")
+            if record.metadata.mime_type != mime_type:
+                raise HTTPException(
+                    status_code=400,
+                    detail="document attachment MIME type does not match uploaded attachment",
+                )
+            if not _document_bytes_match_mime_type(record.data, mime_type):
+                raise HTTPException(status_code=400, detail="stored document data is invalid")
+            total_document_bytes += record.metadata.size_bytes
+        if part.data:
+            try:
+                decoded = base64.b64decode(part.data, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="document data must be base64") from exc
+            if len(decoded) > document_settings.max_bytes:
+                raise HTTPException(status_code=400, detail="document exceeds maximum allowed size")
+            if not _document_bytes_match_mime_type(decoded, mime_type):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"document data does not match declared MIME type: {part.mime_type}",
+                )
+            total_document_bytes += len(decoded)
+        if total_document_bytes > document_settings.max_total_bytes:
+            raise HTTPException(
+                status_code=400, detail="message documents exceed maximum total allowed size"
+            )
     if request.content:
         return request
     text_content = "\n".join(
@@ -630,7 +710,9 @@ def _validate_and_normalize_message_request(
     return request.model_copy(update={"content": text_content})
 
 
-async def _read_limited_request_body(request: Request, max_bytes: int) -> bytes:
+async def _read_limited_request_body(
+    request: Request, max_bytes: int, *, kind: str = "image"
+) -> bytes:
     content_length = request.headers.get("content-length", "").strip()
     if content_length:
         try:
@@ -640,11 +722,11 @@ async def _read_limited_request_body(request: Request, max_bytes: int) -> bytes:
         if declared_size < 0:
             raise HTTPException(status_code=400, detail="invalid Content-Length header")
         if declared_size > max_bytes:
-            raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
+            raise HTTPException(status_code=400, detail=f"{kind} exceeds maximum allowed size")
     body = bytearray()
     async for chunk in request.stream():
         if len(body) + len(chunk) > max_bytes:
-            raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
+            raise HTTPException(status_code=400, detail=f"{kind} exceeds maximum allowed size")
         body.extend(chunk)
     return bytes(body)
 
@@ -885,6 +967,10 @@ def _thread_context_usage(
         return None
 
 
+def _document_bytes_match_mime_type(data: bytes, mime_type: str) -> bool:
+    return mime_type == "application/pdf" and data.startswith(b"%PDF-")
+
+
 def create_app(
     llm_adapter: LLMAdapter | None = None,
     tool_registry: ToolRegistry | None = None,
@@ -1077,6 +1163,7 @@ def create_app(
     app.state.admin_execution_resolver = admin_execution_resolver
     app.state.quality_enhancer = QualityEnhancer()
     runtime_settings = settings.runtime
+    app.state.document_input_settings = settings.document_input
     app.state.image_input_settings = settings.image_input
     app.state.runtime_settings = runtime_settings
     mcp_server_name_authorizer = None
@@ -1224,11 +1311,16 @@ def create_app(
     @app.get("/config")
     async def config(request: Request, export: bool = False) -> dict[str, object]:
         result = request.app.state.execution_resolver.describe(include_export=export)
+        document_input_settings = request.app.state.document_input_settings
         image_input_settings = request.app.state.image_input_settings
+        result["document_input"] = _document_input_public_dict(document_input_settings)
         result["image_input"] = _image_input_public_dict(image_input_settings)
         if export:
+            document_input_export = _document_input_export_public_dict(document_input_settings)
             image_input_export = _image_input_export_public_dict(image_input_settings)
             unified_export = result.get("unified_config_export")
+            if document_input_export and isinstance(unified_export, dict):
+                unified_export["document_input"] = document_input_export
             if image_input_export and isinstance(unified_export, dict):
                 unified_export["image_input"] = image_input_export
         return result
@@ -1254,6 +1346,7 @@ def create_app(
         capability_options = catalog.capability_profile_options()
         agent_options = catalog.agent_options()
         default_skill_refs = catalog.default_skill_refs
+        document_settings = request.app.state.document_input_settings
         image_settings = request.app.state.image_input_settings
 
         def llm_option_item(
@@ -1268,6 +1361,11 @@ def create_app(
                 profile_name,
                 globally_enabled=image_settings.enabled,
             )
+            document_availability = document_input_availability(
+                execution,
+                profile_name,
+                globally_enabled=document_settings.enabled,
+            )
             return ExecutionLLMOptionItem(
                 name=name,
                 id=f"shared:{name}" if selectable else None,
@@ -1279,6 +1377,8 @@ def create_app(
                     else None
                 ),
                 image_input_allowed=availability.allowed,
+                document_input_allowed=document_availability.allowed,
+                document_input_reason=document_availability.reason,
                 image_input_reason=availability.reason,
                 capability_declared=availability.capability_declared,
             )
@@ -1971,7 +2071,34 @@ def create_app(
             )
         return availability
 
-    def persist_image_attachment(
+    def thread_document_availability(
+        app_request: Request,
+        principal: Principal,
+        thread_id: str,
+    ) -> DocumentInputAvailability:
+        thread = app_request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        execution = resolve_principal_execution(principal)
+        return document_input_availability(
+            execution,
+            thread.llm_profile,
+            globally_enabled=app_request.app.state.document_input_settings.enabled,
+        )
+
+    def enforce_thread_document_input(
+        app_request: Request,
+        principal: Principal,
+        thread_id: str,
+    ) -> DocumentInputAvailability:
+        availability = thread_document_availability(app_request, principal, thread_id)
+        if not availability.allowed:
+            assert availability.reason is not None
+            raise HTTPException(
+                status_code=400,
+                detail=document_input_unavailable_detail(availability.reason),
+            )
+        return availability
+
+    def persist_attachment(
         app_request: Request,
         principal: Principal,
         thread_id: str,
@@ -1979,22 +2106,32 @@ def create_app(
         mime_type: str,
         data: bytes,
     ) -> AttachmentMetadata:
-        enforce_thread_image_input(app_request, principal, thread_id)
-        image_settings = app_request.app.state.image_input_settings
         normalized_mime_type = mime_type.strip().lower().split(";", 1)[0]
-        if normalized_mime_type not in image_settings.allowed_mime_types:
+        image_settings = app_request.app.state.image_input_settings
+        document_settings = app_request.app.state.document_input_settings
+        if normalized_mime_type in image_settings.allowed_mime_types:
+            enforce_thread_image_input(app_request, principal, thread_id)
+            if len(data) > image_settings.max_bytes:
+                raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
+            if not _image_bytes_match_mime_type(data, normalized_mime_type):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"image data does not match declared MIME type: {normalized_mime_type}",
+                )
+            _enforce_image_dimension_limits(data, normalized_mime_type, image_settings)
+        elif normalized_mime_type in document_settings.allowed_mime_types:
+            enforce_thread_document_input(app_request, principal, thread_id)
+            if len(data) > document_settings.max_bytes:
+                raise HTTPException(status_code=400, detail="document exceeds maximum allowed size")
+            if not _document_bytes_match_mime_type(data, normalized_mime_type):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"document data does not match declared MIME type: {normalized_mime_type}",
+                )
+        else:
             raise HTTPException(
-                status_code=400,
-                detail=f"unsupported image MIME type: {normalized_mime_type}",
+                status_code=400, detail=f"unsupported attachment MIME type: {normalized_mime_type}"
             )
-        if len(data) > image_settings.max_bytes:
-            raise HTTPException(status_code=400, detail="image exceeds maximum allowed size")
-        if not _image_bytes_match_mime_type(data, normalized_mime_type):
-            raise HTTPException(
-                status_code=400,
-                detail=f"image data does not match declared MIME type: {normalized_mime_type}",
-            )
-        _enforce_image_dimension_limits(data, normalized_mime_type, image_settings)
         attachment_settings = app_request.app.state.attachment_store_settings
         attachment_store = app_request.app.state.attachment_store
         _cleanup_pending_attachments_before_upload(attachment_store)
@@ -2027,10 +2164,7 @@ def create_app(
             }[exc.limit]
             raise HTTPException(status_code=400, detail=detail) from exc
 
-    @app.post(
-        "/threads/{thread_id}/attachments",
-        response_model=AttachmentMetadata,
-    )
+    @app.post("/threads/{thread_id}/attachments", response_model=AttachmentMetadata)
     async def upload_attachment(
         thread_id: str,
         upload: UploadAttachmentRequest,
@@ -2038,42 +2172,34 @@ def create_app(
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> AttachmentMetadata:
         _enforce_request_rate_limit(app_request, principal, UPLOAD_RATE_LIMIT_CATEGORY)
-        enforce_thread_image_input(app_request, principal, thread_id)
         try:
             data = base64.b64decode(upload.data, validate=True)
         except (binascii.Error, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="image data must be base64") from exc
-        return persist_image_attachment(
-            app_request,
-            principal,
-            thread_id,
-            mime_type=upload.mime_type,
-            data=data,
+            raise HTTPException(status_code=400, detail="attachment data must be base64") from exc
+        return persist_attachment(
+            app_request, principal, thread_id, mime_type=upload.mime_type, data=data
         )
 
-    @app.post(
-        "/threads/{thread_id}/attachments/binary",
-        response_model=AttachmentMetadata,
-    )
+    @app.post("/threads/{thread_id}/attachments/binary", response_model=AttachmentMetadata)
     async def upload_binary_attachment(
         thread_id: str,
         app_request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> AttachmentMetadata:
         _enforce_request_rate_limit(app_request, principal, UPLOAD_RATE_LIMIT_CATEGORY)
-        enforce_thread_image_input(app_request, principal, thread_id)
-        image_settings = app_request.app.state.image_input_settings
         mime_type = app_request.headers.get("content-type", "").strip().lower().split(";", 1)[0]
-        if mime_type not in image_settings.allowed_mime_types:
-            raise HTTPException(status_code=400, detail=f"unsupported image MIME type: {mime_type}")
-        data = await _read_limited_request_body(app_request, image_settings.max_bytes)
-        return persist_image_attachment(
-            app_request,
-            principal,
-            thread_id,
-            mime_type=mime_type,
-            data=data,
-        )
+        image_settings = app_request.app.state.image_input_settings
+        document_settings = app_request.app.state.document_input_settings
+        if mime_type in image_settings.allowed_mime_types:
+            max_bytes, kind = image_settings.max_bytes, "image"
+        elif mime_type in document_settings.allowed_mime_types:
+            max_bytes, kind = document_settings.max_bytes, "document"
+        else:
+            raise HTTPException(
+                status_code=400, detail=f"unsupported attachment MIME type: {mime_type}"
+            )
+        data = await _read_limited_request_body(app_request, max_bytes, kind=kind)
+        return persist_attachment(app_request, principal, thread_id, mime_type=mime_type, data=data)
 
     @app.get("/threads/{thread_id}/attachments/{attachment_id}")
     async def get_attachment(
@@ -2146,10 +2272,17 @@ def create_app(
             thread.llm_profile,
             globally_enabled=app_request.app.state.image_input_settings.enabled,
         )
+        document_availability = document_input_availability(
+            execution,
+            thread.llm_profile,
+            globally_enabled=app_request.app.state.document_input_settings.enabled,
+        )
         request = _validate_and_normalize_message_request(
             request,
             app_request.app.state.image_input_settings,
+            app_request.app.state.document_input_settings,
             image_availability=availability,
+            document_availability=document_availability,
             attachment_store=app_request.app.state.attachment_store,
             tenant_id=principal.tenant_id,
             thread_id=thread_id,

@@ -14,13 +14,17 @@ from app.llm import (
     LLMSettings,
     MockLLMAdapter,
     OpenAICompatibleAdapter,
+    _gemini_parts_for_message,
+    _message_to_anthropic_content,
+    _message_to_openai_content,
+    _message_to_responses_content,
     _prune_historical_tool_messages_for_azure,
     build_llm_adapter_from_env,
     llm_progress_sink,
     load_provider_config,
     serialize_tool_result,
 )
-from app.models import Message, MessageRole, ToolSpec
+from app.models import DocumentPart, Message, MessageRole, ToolSpec
 from app.oauth import OAuthCredentials
 from app.tools import build_local_tool_registry
 
@@ -32,6 +36,44 @@ class FakeOAuthProvider:
             refresh_token="refresh-token",
             expires_at=9999999999.0,
         )
+
+
+def test_provider_serializers_handle_pdf_documents_explicitly() -> None:
+    document = DocumentPart(
+        mime_type="application/pdf",
+        data="JVBERi0xLjcK",
+        filename="requirements.pdf",
+    )
+    message = Message(
+        thread_id="thread",
+        role=MessageRole.USER,
+        content="review",
+        parts=[document],
+    )
+
+    assert _gemini_parts_for_message(message) == [
+        {"inline_data": {"mime_type": "application/pdf", "data": "JVBERi0xLjcK"}}
+    ]
+    assert _message_to_anthropic_content(message) == [
+        {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": "JVBERi0xLjcK",
+            },
+            "title": "requirements.pdf",
+        }
+    ]
+    assert _message_to_responses_content(message) == [
+        {
+            "type": "input_file",
+            "filename": "requirements.pdf",
+            "file_data": "data:application/pdf;base64,JVBERi0xLjcK",
+        }
+    ]
+    with pytest.raises(HTTPException, match="Chat Completions provider"):
+        _message_to_openai_content(message)
 
 
 def test_openai_compatible_adapter_returns_text_response() -> None:

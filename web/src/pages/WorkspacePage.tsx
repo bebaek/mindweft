@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type ClipboardEvent, type 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
+  type DocumentPart,
   type ExecutionLlmOptionItem,
   type ExecutionOptionsResponse,
   type ImagePart,
@@ -22,6 +23,10 @@ const AssistantMarkdown = lazy(async () => {
   const module = await import("../components/AssistantMarkdown");
   return { default: module.AssistantMarkdown };
 });
+
+interface PendingDocument {
+  file: File;
+}
 
 interface PendingImage {
   file: File;
@@ -59,6 +64,17 @@ function effectiveLlmOption(
     findProfile(options.llm_profiles.default) ??
     options.llm_profiles.effective_default
   );
+}
+
+function documentInputUnavailableMessage(profile: ExecutionLlmOptionItem | undefined): string | null {
+  if (profile?.document_input_allowed !== false) return null;
+  if (profile.document_input_reason === "backend_unsupported") {
+    return "The selected agent backend does not support document input.";
+  }
+  if (profile.document_input_reason === "profile_unsupported") {
+    return "The selected model profile does not accept documents.";
+  }
+  return "Document input is disabled on this server.";
 }
 
 function imageInputUnavailableMessage(profile: ExecutionLlmOptionItem | undefined): string | null {
@@ -114,6 +130,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   const [threadSearchScope, setThreadSearchScope] = useState<"title" | "all">("title");
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [showArchivedThreads, setShowArchivedThreads] = useState(false);
+  const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>([]);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [consentRequest, setConsentRequest] = useState<PrivateValueConsentRequest | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -279,6 +296,12 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     selectedLlmProfile,
     effectiveAgent,
   );
+  const profileDocumentUnavailable = documentInputUnavailableMessage(composerLlmOption);
+  const documentInputAvailable = Boolean(config.data?.document_input.enabled) && !profileDocumentUnavailable;
+  const documentInputMessage = !config.data?.document_input.enabled
+    ? "Document input is disabled on this server."
+    : profileDocumentUnavailable;
+  const queuedDocumentsBlocked = pendingDocuments.length > 0 && !documentInputAvailable;
   const profileImageUnavailable = imageInputUnavailableMessage(composerLlmOption);
   const imageInputAvailable = Boolean(config.data?.image_input.enabled) && !profileImageUnavailable;
   const imageInputMessage = !config.data?.image_input.enabled
@@ -386,8 +409,13 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   async function sendMessage(event: FormEvent) {
     event.preventDefault();
     const content = draft.trim();
+    const queuedDocuments = [...pendingDocuments];
     const queuedImages = [...pendingImages];
-    if ((!content && queuedImages.length === 0) || isRunning) return;
+    if ((!content && queuedImages.length === 0 && queuedDocuments.length === 0) || isRunning) return;
+    if (queuedDocuments.length > 0 && !documentInputAvailable) {
+      setError(documentInputMessage ?? "Document input is unavailable.");
+      return;
+    }
     if (queuedImages.length > 0 && !imageInputAvailable) {
       setError(imageInputMessage ?? "Image input is unavailable.");
       return;
@@ -421,20 +449,30 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
       for (const image of queuedImages) {
         uploaded.push(await api.uploadAttachment(threadId, image.file, controller.signal));
       }
+      for (const document of queuedDocuments) {
+        uploaded.push(await api.uploadAttachment(threadId, document.file, controller.signal));
+      }
       const parts = uploaded.length
         ? [
             ...(content ? [{ type: "text" as const, text: content }] : []),
-            ...uploaded.map((attachment, index) => ({
+            ...uploaded.slice(0, queuedImages.length).map((attachment, index) => ({
               type: "image" as const,
               mime_type: queuedImages[index].file.type,
               attachment_id: attachment.attachment_id,
               detail: queuedImages[index].detail,
+            })),
+            ...uploaded.slice(queuedImages.length).map((attachment, index) => ({
+              type: "document" as const,
+              mime_type: queuedDocuments[index].file.type,
+              attachment_id: attachment.attachment_id,
+              filename: queuedDocuments[index].file.name,
             })),
           ]
         : undefined;
       await api.addMessage(threadId, content, parts, controller.signal);
       messageStored = true;
       for (const image of queuedImages) URL.revokeObjectURL(image.previewUrl);
+      setPendingDocuments([]);
       setPendingImages([]);
       await queryClient.invalidateQueries({ queryKey: ["messages", threadId] });
       addActivity("Run started");
@@ -460,6 +498,42 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
       abortRef.current = null;
       setIsRunning(false);
     }
+  }
+
+  function addDocumentFiles(files: FileList | File[] | null) {
+    if (!files?.length) return;
+    const documentConfig = config.data?.document_input;
+    if (!documentConfig?.enabled || !documentInputAvailable) {
+      setError(documentInputMessage ?? "Document input is unavailable.");
+      return;
+    }
+    const candidates = Array.from(files).map((file) =>
+      !file.type && file.name.toLowerCase().endsWith(".pdf")
+        ? new File([file], file.name, { type: "application/pdf" })
+        : file
+    );
+    if (pendingDocuments.length + candidates.length > documentConfig.max_documents) {
+      setError(`A message can include at most ${String(documentConfig.max_documents)} documents.`);
+      return;
+    }
+    const totalBytes = [...pendingDocuments.map((item) => item.file.size), ...candidates.map((file) => file.size)]
+      .reduce((sum, size) => sum + size, 0);
+    if (totalBytes > documentConfig.max_total_bytes) {
+      setError("Selected documents exceed the total message size limit.");
+      return;
+    }
+    for (const file of candidates) {
+      if (!documentConfig.allowed_mime_types.includes(file.type.toLowerCase())) {
+        setError(`Unsupported document type: ${file.type || file.name}`);
+        return;
+      }
+      if (file.size > documentConfig.max_bytes) {
+        setError(`${file.name} exceeds the per-document size limit.`);
+        return;
+      }
+    }
+    setError(null);
+    setPendingDocuments((documents) => [...documents, ...candidates.map((file) => ({ file }))]);
   }
 
   function addImageFiles(files: FileList | File[] | null) {
@@ -562,6 +636,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     setError(null);
     setBranchNotice(null);
     for (const image of pendingImages) URL.revokeObjectURL(image.previewUrl);
+    setPendingDocuments([]);
     setPendingImages([]);
   }
 
@@ -744,6 +819,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
               <span className="message-author">{message.role === "user" ? "You" : "Mindweft"}</span>
               {message.content && (message.role === "assistant" ? <RenderedAssistantMessage content={message.content} /> : <div className="message-content plain-message-content">{message.content}</div>)}
               <MessageImages message={message} />
+              <MessageDocuments message={message} />
               {message.role === "assistant" && showThinking && reasoningSummary(message.metadata) && <details className="thinking-summary"><summary>Thinking summary</summary><p>{reasoningSummary(message.metadata)}</p></details>}
               {message.role === "assistant" && <PersistedToolActivity steps={persistedToolSteps(messages.data, message.id)} />}
               <div className="message-actions">
@@ -794,6 +870,16 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
         )}
 
         <form className={`chat-composer${selectedThreadId === null ? "" : " has-thread"}`} onSubmit={(event) => void sendMessage(event)}>
+          {pendingDocuments.length > 0 && (
+            <div className="pending-documents">
+              {pendingDocuments.map((document, index) => (
+                <div className="pending-document" key={`${document.file.name}-${String(index)}`}>
+                  <span aria-hidden="true">PDF</span><strong>{document.file.name}</strong>
+                  <button type="button" aria-label={`Remove ${document.file.name}`} onClick={() => setPendingDocuments((items) => items.filter((_, itemIndex) => itemIndex !== index))}>×</button>
+                </div>
+              ))}
+            </div>
+          )}
           {pendingImages.length > 0 && (
             <div className="pending-images">
               {pendingImages.map((image, index) => (
@@ -871,6 +957,25 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
               {queuedImagesBlocked ? " Remove the queued images or choose an image-capable profile." : ""}
             </p>
           )}
+          {queuedDocumentsBlocked && profileDocumentUnavailable && (
+            <p className="composer-capability-warning" role={queuedDocumentsBlocked ? "alert" : "status"}>
+              {profileDocumentUnavailable}
+              {queuedDocumentsBlocked ? " Remove the queued documents or choose a document-capable profile." : ""}
+            </p>
+          )}
+          <label
+            className={`attach-image ${documentInputAvailable ? "" : "disabled"}`}
+            title={documentInputAvailable ? "Attach PDF documents" : (documentInputMessage ?? "Document input is unavailable")}
+          >
+            <span aria-hidden="true">PDF</span><span className="sr-only">Attach PDF documents</span>
+            <input
+              type="file"
+              accept={config.data?.document_input.allowed_mime_types.join(",") ?? "application/pdf"}
+              multiple
+              disabled={isRunning || !documentInputAvailable}
+              onChange={(event) => { addDocumentFiles(event.target.files); event.target.value = ""; }}
+            />
+          </label>
           <label
             className={`attach-image ${imageInputAvailable ? "" : "disabled"}`}
             title={imageInputAvailable ? "Attach images" : (imageInputMessage ?? "Image input is unavailable")}
@@ -913,7 +1018,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           {isRunning ? (
             <button className="stop-run" type="button" onClick={() => void stopRun()}>Stop</button>
           ) : (
-            <button className="send-message" type="submit" disabled={queuedImagesBlocked || (!draft.trim() && pendingImages.length === 0)} aria-label="Send message">↑</button>
+            <button className="send-message" type="submit" disabled={queuedDocumentsBlocked || queuedImagesBlocked || (!draft.trim() && pendingImages.length === 0 && pendingDocuments.length === 0)} aria-label="Send message">↑</button>
           )}
           <small>Enter to send · Shift+Enter for a new line{imageInputAvailable ? " · Paste images" : ""}</small>
         </form>
@@ -1085,6 +1190,31 @@ function privateValueConsentRequest(value: unknown): PrivateValueConsentRequest 
       Boolean(item) && typeof item.path === "string" && typeof item.kind === "string" && typeof item.count === "number"
     ),
   };
+}
+
+function MessageDocuments({ message }: { message: Message }) {
+  const documents = message.parts?.filter((part): part is DocumentPart => part.type === "document") ?? [];
+  if (documents.length === 0) return null;
+  return <div className="message-documents">{documents.map((document) => <AuthenticatedDocument key={document.attachment_id} threadId={message.thread_id} document={document} />)}</div>;
+}
+
+function AuthenticatedDocument({ threadId, document }: { threadId: string; document: DocumentPart }) {
+  const { api } = useAuth();
+  const [source, setSource] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    void api.getAttachmentBlob(threadId, document.attachment_id, controller.signal).then((blob) => {
+      objectUrl = URL.createObjectURL(blob);
+      setSource(objectUrl);
+    }).catch((caught: unknown) => {
+      if (!(caught instanceof DOMException && caught.name === "AbortError")) setSource("");
+    });
+    return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [api, document.attachment_id, threadId]);
+  if (source === null) return <span>Loading {document.filename}…</span>;
+  if (!source) return <span>{document.filename} unavailable</span>;
+  return <a href={source} download={document.filename} target="_blank" rel="noreferrer">PDF · {document.filename}</a>;
 }
 
 function MessageImages({ message }: { message: Message }) {

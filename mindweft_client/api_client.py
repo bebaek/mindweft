@@ -594,7 +594,9 @@ class MindweftAPIClient:
         parts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"content": content}
-        uploaded_parts, uploaded_attachment_ids = self._upload_inline_image_parts(thread_id, parts)
+        uploaded_parts, uploaded_attachment_ids = self._upload_inline_attachment_parts(
+            thread_id, parts
+        )
         if uploaded_parts is not None:
             payload["parts"] = uploaded_parts
         if metadata is not None:
@@ -657,7 +659,7 @@ class MindweftAPIClient:
             parts=formatted_parts,
         )
 
-    def _upload_inline_image_parts(
+    def _upload_inline_attachment_parts(
         self,
         thread_id: str,
         parts: list[dict[str, Any]] | None,
@@ -670,12 +672,16 @@ class MindweftAPIClient:
             for part in parts:
                 clean_part = dict(part)
                 data = clean_part.get("data")
-                if clean_part.get("type") != "image" or not isinstance(data, str) or not data:
+                if (
+                    clean_part.get("type") not in {"image", "document"}
+                    or not isinstance(data, str)
+                    or not data
+                ):
                     uploaded.append(clean_part)
                     continue
                 mime_type = clean_part.get("mime_type")
                 if not isinstance(mime_type, str) or not mime_type:
-                    raise RuntimeError("Image part must include mime_type")
+                    raise RuntimeError("Attachment part must include mime_type")
                 attachment = self.upload_attachment(
                     thread_id,
                     mime_type=mime_type,
