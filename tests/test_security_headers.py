@@ -44,6 +44,7 @@ def test_browser_clients_use_restrictive_content_security_policy() -> None:
     assert console.headers["content-security-policy"] == WEB_CONTENT_SECURITY_POLICY
     assert "script-src 'self'" in WEB_CONTENT_SECURITY_POLICY
     assert "object-src 'none'" in WEB_CONTENT_SECURITY_POLICY
+    assert "frame-src 'self' blob:" in WEB_CONTENT_SECURITY_POLICY
     assert "frame-ancestors 'none'" in WEB_CONTENT_SECURITY_POLICY
     assert "img-src 'self' blob: data:" in WEB_CONTENT_SECURITY_POLICY
     assert (
