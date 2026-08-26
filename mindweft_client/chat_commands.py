@@ -12,6 +12,7 @@ from typing import Any, Sequence, TextIO, cast
 
 from mindweft_client.api_client import MindweftAPIClient
 from mindweft_client.config import ClientConfig, build_client_config
+from mindweft_client.document_files import read_document_file
 from mindweft_client.output import (
     StreamProgressRenderer,
     TokenMode,
@@ -306,18 +307,14 @@ def _image_parts_from_paths(
 def _document_parts_from_paths(paths: Sequence[str] | None) -> list[dict[str, Any]]:
     parts: list[dict[str, Any]] = []
     for raw_path in paths or []:
-        path = Path(raw_path).expanduser()
-        if not path.is_file():
-            raise SystemExit(f"document file not found: {raw_path}")
-        if path.suffix.lower() != ".pdf":
-            raise SystemExit(f"document must be a PDF file: {raw_path}")
-        data = path.read_bytes()
-        if not data.startswith(b"%PDF-"):
-            raise SystemExit(f"document does not contain PDF data: {raw_path}")
+        try:
+            path, mime_type, data = read_document_file(raw_path)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         parts.append(
             {
                 "type": "document",
-                "mime_type": "application/pdf",
+                "mime_type": mime_type,
                 "data": base64.b64encode(data).decode("ascii"),
                 "filename": path.name,
             }

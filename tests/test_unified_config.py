@@ -106,6 +106,7 @@ allowed_mime_types = ["image/png", "image/webp"]
 [document_input]
 enabled = true
 max_pages = 42
+max_text_bytes = 4321
 
 [coding]
 enabled = true
@@ -145,6 +146,7 @@ enabled = false
     assert env["MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES"] == "image/png,image/webp"
     assert env["MINIGENT_DOCUMENT_INPUT_ENABLED"] == "true"
     assert env["MINIGENT_DOCUMENT_INPUT_MAX_PAGES"] == "42"
+    assert env["MINIGENT_DOCUMENT_INPUT_MAX_TEXT_BYTES"] == "4321"
     assert env["MINIGENT_CODING_MCP_GATEWAY_ENABLED"] == "true"
     assert env["MINIGENT_CODING_MCP_GATEWAY_PORT"] == "9876"
     assert env["MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX"] == "/tools"
@@ -211,6 +213,7 @@ max_bytes = 5678
 max_documents = 2
 max_total_bytes = 6789
 max_pages = 25
+max_text_bytes = 4567
 allowed_mime_types = ["application/pdf"]
 
 [attachments]
@@ -359,6 +362,7 @@ max_payload_chars = 4096
     assert settings.document_input.max_documents == 2
     assert settings.document_input.max_total_bytes == 6789
     assert settings.document_input.max_pages == 25
+    assert settings.document_input.max_text_bytes == 4567
     assert settings.document_input.allowed_mime_types == frozenset({"application/pdf"})
     assert settings.attachment_store.db_path == "attachments.db"
     assert settings.attachment_store.max_per_thread == 12

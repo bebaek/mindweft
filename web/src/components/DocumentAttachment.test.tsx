@@ -25,6 +25,13 @@ const document: DocumentPart = {
   filename: "requirements.pdf",
 };
 
+const textDocument: DocumentPart = {
+  type: "document",
+  mime_type: "text/plain",
+  attachment_id: "attachment-text",
+  filename: "notes.md",
+};
+
 beforeAll(() => {
   Object.defineProperty(URL, "createObjectURL", {
     configurable: true,
@@ -118,7 +125,7 @@ describe("DocumentAttachment", () => {
     render(<DocumentAttachment threadId="thread-1" document={document} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    expect(await screen.findByText("The PDF could not be loaded.")).toBeInTheDocument();
+    expect(await screen.findByText("The document could not be loaded.")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Retry preview" }));
 
@@ -127,6 +134,25 @@ describe("DocumentAttachment", () => {
       "blob:pdf-preview",
     );
     expect(getAttachmentBlob).toHaveBeenCalledTimes(2);
+  });
+
+  it("renders plain text literally without interpreting HTML or Markdown", async () => {
+    const content = "# Heading\n<script>alert('no')</script>\n**bold**";
+    const textBlob = new Blob([content], { type: "text/plain" });
+    Object.defineProperty(textBlob, "text", { value: () => Promise.resolve(content) });
+    getAttachmentBlob.mockResolvedValue(textBlob);
+    const view = render(<DocumentAttachment threadId="thread-1" document={textDocument} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    await waitFor(() => expect(view.container.querySelector("pre")).not.toBeNull());
+    const preview = view.container.querySelector("pre");
+    if (!(preview instanceof HTMLPreElement)) throw new Error("Text preview was not rendered");
+    expect(preview.textContent).toBe(content);
+    expect(screen.getByText("TXT")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Heading" })).not.toBeInTheDocument();
+    expect(preview.querySelector("script")).toBeNull();
+    expect(screen.queryByTitle("Preview of notes.md")).not.toBeInTheDocument();
   });
 
   it("aborts an active retrieval when removed", async () => {

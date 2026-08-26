@@ -316,12 +316,15 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     ? "Image input is disabled on this server."
     : profileImageUnavailable;
   const queuedImagesBlocked = pendingImages.length > 0 && !imageInputAvailable;
+  const documentAccept = config.data?.document_input.allowed_mime_types.includes("text/plain")
+    ? [...config.data.document_input.allowed_mime_types, ".txt", ".md", ".csv", ".log"].join(",")
+    : (config.data?.document_input.allowed_mime_types.join(",") ?? "application/pdf");
   const attachmentDropMessage = imageInputAvailable && documentInputAvailable
-    ? "Drop images or PDFs to attach them"
+    ? "Drop images or documents to attach them"
     : imageInputAvailable
       ? "Drop images to attach them"
       : documentInputAvailable
-        ? "Drop PDFs to attach them"
+        ? "Drop documents to attach them"
         : null;
   const canSaveDefaultAgent = Boolean(
     selectedAgent && selectedAgent !== executionOptions.data?.agents.default,
@@ -545,6 +548,13 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
       },
       { singular: "image", plural: "images" },
     );
+    const oversizedTextDocument = candidates.documents.find(
+      (file) => file.type === "text/plain" && file.size > documentConfig.max_text_bytes,
+    );
+    if (oversizedTextDocument) {
+      setError(`${oversizedTextDocument.name} exceeds the text-document size limit.`);
+      return;
+    }
     const documentError = validateQueueAddition(
       pendingDocuments.map((document) => document.file),
       candidates.documents,
@@ -929,7 +939,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
             <div className="pending-documents">
               {pendingDocuments.map((document, index) => (
                 <div className="pending-document" key={`${document.file.name}-${String(index)}`}>
-                  <span aria-hidden="true">PDF</span><strong>{document.file.name}</strong>
+                  <span className={document.file.type === "text/plain" ? "text" : undefined} aria-hidden="true">{document.file.type === "text/plain" ? "TXT" : "PDF"}</span><strong>{document.file.name}</strong>
                   <button type="button" aria-label={`Remove ${document.file.name}`} onClick={() => setPendingDocuments((items) => items.filter((_, itemIndex) => itemIndex !== index))}>×</button>
                 </div>
               ))}
@@ -1020,12 +1030,12 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           )}
           <label
             className={`attach-image ${documentInputAvailable ? "" : "disabled"}`}
-            title={documentInputAvailable ? "Attach PDF documents" : (documentInputMessage ?? "Document input is unavailable")}
+            title={documentInputAvailable ? "Attach documents" : (documentInputMessage ?? "Document input is unavailable")}
           >
-            <span aria-hidden="true">PDF</span><span className="sr-only">Attach PDF documents</span>
+            <span aria-hidden="true">DOC</span><span className="sr-only">Attach documents</span>
             <input
               type="file"
-              accept={config.data?.document_input.allowed_mime_types.join(",") ?? "application/pdf"}
+              accept={documentAccept}
               multiple
               disabled={isRunning || !documentInputAvailable}
               onChange={(event) => { addAttachmentFiles(event.target.files); event.target.value = ""; }}

@@ -38,6 +38,11 @@ from app.attachments import (
     build_attachment_store,
 )
 from app.auth import validate_auth_settings
+from app.document_validation import (
+    DocumentValidationError,
+    canonical_document_mime_type,
+    validate_document,
+)
 from app.entitlements import (
     enforce_execution_entitlements,
     enforce_message_creation_limit,
@@ -114,7 +119,7 @@ from app.models import (
 )
 from app.oauth import GenericOAuthProvider, build_oauth_flow_store_from_env
 from app.observability import configure_logging, configure_tracing
-from app.pdf_validation import PDFValidationError, validate_pdf
+from app.pdf_validation import PDFValidationError
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry
 from app.private_values import PII_PLACEHOLDER_PATTERN
 from app.quality import QualityEnhancer
@@ -632,7 +637,10 @@ def _validate_and_normalize_message_request(
                 status_code=400,
                 detail="message images exceed maximum total allowed size",
             )
-    document_parts = [part for part in request.parts if isinstance(part, DocumentPart)]
+    document_entries = [
+        (index, part) for index, part in enumerate(request.parts) if isinstance(part, DocumentPart)
+    ]
+    document_parts = [part for _, part in document_entries]
     if document_parts and not document_settings.enabled:
         raise HTTPException(status_code=400, detail="document input is disabled")
     if document_parts and document_availability is not None and not document_availability.allowed:
@@ -647,8 +655,15 @@ def _validate_and_normalize_message_request(
             detail=f"message exceeds maximum document count ({document_settings.max_documents})",
         )
     total_document_bytes = 0
-    for part in document_parts:
-        mime_type = part.mime_type.strip().lower()
+    normalized_parts = list(request.parts)
+    for index, original_part in document_entries:
+        mime_type = canonical_document_mime_type(original_part.mime_type)
+        part = (
+            original_part.model_copy(update={"mime_type": mime_type})
+            if mime_type != original_part.mime_type
+            else original_part
+        )
+        normalized_parts[index] = part
         if mime_type not in document_settings.allowed_mime_types:
             raise HTTPException(
                 status_code=400, detail=f"unsupported document MIME type: {part.mime_type}"
@@ -698,12 +713,15 @@ def _validate_and_normalize_message_request(
             raise HTTPException(
                 status_code=400, detail="message documents exceed maximum total allowed size"
             )
-    if request.content:
-        return request
+    normalized_request = request.model_copy(update={"parts": normalized_parts})
+    if normalized_request.content:
+        return normalized_request
     text_content = "\n".join(
-        part.text for part in request.parts if isinstance(part, TextPart) and part.text
+        part.text
+        for part in normalized_request.parts or []
+        if isinstance(part, TextPart) and part.text
     )
-    return request.model_copy(update={"content": text_content})
+    return normalized_request.model_copy(update={"content": text_content})
 
 
 async def _read_limited_request_body(
@@ -968,14 +986,15 @@ def _validate_document_bytes(
     mime_type: str,
     settings: DocumentInputSettings,
 ) -> None:
-    if mime_type != "application/pdf":
-        raise HTTPException(
-            status_code=400,
-            detail=f"document data does not match declared MIME type: {mime_type}",
-        )
+    canonical_mime_type = canonical_document_mime_type(mime_type)
     try:
-        validate_pdf(data, max_pages=settings.max_pages)
-    except PDFValidationError as exc:
+        validate_document(
+            data,
+            canonical_mime_type,
+            max_pages=settings.max_pages,
+            max_text_bytes=settings.max_text_bytes,
+        )
+    except (DocumentValidationError, PDFValidationError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
@@ -2127,15 +2146,18 @@ def create_app(
                     detail=f"image data does not match declared MIME type: {normalized_mime_type}",
                 )
             _enforce_image_dimension_limits(data, normalized_mime_type, image_settings)
-        elif normalized_mime_type in document_settings.allowed_mime_types:
+        else:
+            document_mime_type = canonical_document_mime_type(normalized_mime_type)
+            if document_mime_type not in document_settings.allowed_mime_types:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"unsupported attachment MIME type: {normalized_mime_type}",
+                )
+            normalized_mime_type = document_mime_type
             enforce_thread_document_input(app_request, principal, thread_id)
             if len(data) > document_settings.max_bytes:
                 raise HTTPException(status_code=400, detail="document exceeds maximum allowed size")
             _validate_document_bytes(data, normalized_mime_type, document_settings)
-        else:
-            raise HTTPException(
-                status_code=400, detail=f"unsupported attachment MIME type: {normalized_mime_type}"
-            )
         attachment_settings = app_request.app.state.attachment_store_settings
         attachment_store = app_request.app.state.attachment_store
         _cleanup_pending_attachments_before_upload(attachment_store)
@@ -2196,12 +2218,14 @@ def create_app(
         document_settings = app_request.app.state.document_input_settings
         if mime_type in image_settings.allowed_mime_types:
             max_bytes, kind = image_settings.max_bytes, "image"
-        elif mime_type in document_settings.allowed_mime_types:
-            max_bytes, kind = document_settings.max_bytes, "document"
         else:
-            raise HTTPException(
-                status_code=400, detail=f"unsupported attachment MIME type: {mime_type}"
-            )
+            document_mime_type = canonical_document_mime_type(mime_type)
+            if document_mime_type not in document_settings.allowed_mime_types:
+                raise HTTPException(
+                    status_code=400, detail=f"unsupported attachment MIME type: {mime_type}"
+                )
+            mime_type = document_mime_type
+            max_bytes, kind = document_settings.max_bytes, "document"
         data = await _read_limited_request_body(app_request, max_bytes, kind=kind)
         return persist_attachment(app_request, principal, thread_id, mime_type=mime_type, data=data)
 

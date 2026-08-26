@@ -41,12 +41,14 @@ DOCUMENT_INPUT_MAX_BYTES_ENV = "MINIGENT_DOCUMENT_INPUT_MAX_BYTES"
 DOCUMENT_INPUT_MAX_DOCUMENTS_ENV = "MINIGENT_DOCUMENT_INPUT_MAX_DOCUMENTS"
 DOCUMENT_INPUT_MAX_TOTAL_BYTES_ENV = "MINIGENT_DOCUMENT_INPUT_MAX_TOTAL_BYTES"
 DOCUMENT_INPUT_MAX_PAGES_ENV = "MINIGENT_DOCUMENT_INPUT_MAX_PAGES"
+DOCUMENT_INPUT_MAX_TEXT_BYTES_ENV = "MINIGENT_DOCUMENT_INPUT_MAX_TEXT_BYTES"
 DOCUMENT_INPUT_ALLOWED_MIME_TYPES_ENV = "MINIGENT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES"
 DEFAULT_DOCUMENT_INPUT_MAX_BYTES = 10 * 1024 * 1024
 DEFAULT_DOCUMENT_INPUT_MAX_DOCUMENTS = 4
 DEFAULT_DOCUMENT_INPUT_MAX_TOTAL_BYTES = 20 * 1024 * 1024
 DEFAULT_DOCUMENT_INPUT_MAX_PAGES = 100
-DEFAULT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES = frozenset({"application/pdf"})
+DEFAULT_DOCUMENT_INPUT_MAX_TEXT_BYTES = 1024 * 1024
+DEFAULT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES = frozenset({"application/pdf", "text/plain"})
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,7 @@ class DocumentInputSettings:
     max_documents: int = DEFAULT_DOCUMENT_INPUT_MAX_DOCUMENTS
     max_total_bytes: int = DEFAULT_DOCUMENT_INPUT_MAX_TOTAL_BYTES
     max_pages: int = DEFAULT_DOCUMENT_INPUT_MAX_PAGES
+    max_text_bytes: int = DEFAULT_DOCUMENT_INPUT_MAX_TEXT_BYTES
     allowed_mime_types: frozenset[str] = DEFAULT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES
 
     @classmethod
@@ -110,6 +113,9 @@ class DocumentInputSettings:
             ),
             max_pages=_parse_positive_int(
                 lookup, DOCUMENT_INPUT_MAX_PAGES_ENV, DEFAULT_DOCUMENT_INPUT_MAX_PAGES
+            ),
+            max_text_bytes=_parse_positive_int(
+                lookup, DOCUMENT_INPUT_MAX_TEXT_BYTES_ENV, DEFAULT_DOCUMENT_INPUT_MAX_TEXT_BYTES
             ),
             allowed_mime_types=_parse_allowed_mime_types(
                 lookup,
@@ -184,6 +190,7 @@ def _document_input_public_dict(settings: DocumentInputSettings) -> dict[str, ob
         "max_documents": settings.max_documents,
         "max_total_bytes": settings.max_total_bytes,
         "max_pages": settings.max_pages,
+        "max_text_bytes": settings.max_text_bytes,
         "allowed_mime_types": sorted(settings.allowed_mime_types),
     }
 
@@ -200,6 +207,8 @@ def _document_input_export_public_dict(settings: DocumentInputSettings) -> dict[
         exported["max_total_bytes"] = settings.max_total_bytes
     if settings.max_pages != DEFAULT_DOCUMENT_INPUT_MAX_PAGES:
         exported["max_pages"] = settings.max_pages
+    if settings.max_text_bytes != DEFAULT_DOCUMENT_INPUT_MAX_TEXT_BYTES:
+        exported["max_text_bytes"] = settings.max_text_bytes
     if settings.allowed_mime_types != DEFAULT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES:
         exported["allowed_mime_types"] = sorted(settings.allowed_mime_types)
     return exported

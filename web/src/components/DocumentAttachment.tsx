@@ -18,8 +18,11 @@ export function DocumentAttachment({ document, threadId }: DocumentAttachmentPro
   const requestRef = useRef<Promise<string> | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
+  const isTextDocument = document.mime_type === "text/plain";
+  const documentLabel = isTextDocument ? "text document" : "PDF";
   const [previewOpen, setPreviewOpen] = useState(false);
   const [source, setSource] = useState<string | null>(null);
+  const [textContent, setTextContent] = useState<string | null>(null);
   const [status, setStatus] = useState<RetrievalStatus>("idle");
 
   useEffect(() => {
@@ -49,14 +52,16 @@ export function DocumentAttachment({ document, threadId }: DocumentAttachmentPro
       threadId,
       document.attachment_id,
       controller.signal,
-    ).then((blob) => {
+    ).then(async (blob) => {
       const objectUrl = URL.createObjectURL(blob);
+      const text = isTextDocument ? await blob.text() : null;
       if (!mountedRef.current) {
         URL.revokeObjectURL(objectUrl);
         throw new DOMException("Document component was removed", "AbortError");
       }
       objectUrlRef.current = objectUrl;
       setSource(objectUrl);
+      setTextContent(text);
       setStatus("ready");
       return objectUrl;
     }).catch((caught: unknown) => {
@@ -103,16 +108,16 @@ export function DocumentAttachment({ document, threadId }: DocumentAttachmentPro
 
   return (
     <div className="message-document">
-      <span className="document-badge" aria-hidden="true">PDF</span>
+      <span className={`document-badge${isTextDocument ? " text" : ""}`} aria-hidden="true">{isTextDocument ? "TXT" : "PDF"}</span>
       <span className="document-filename" title={document.filename}>{document.filename}</span>
       <div className="document-actions">
         <button ref={previewButtonRef} type="button" onClick={openPreview}>Preview</button>
         <button type="button" onClick={() => void downloadDocument()}>Download</button>
       </div>
-      {status === "loading" && <span className="document-status" role="status">Loading PDF…</span>}
+      {status === "loading" && <span className="document-status" role="status">Loading {documentLabel}…</span>}
       {status === "error" && (
         <span className="document-status document-error" role="alert">
-          Could not load PDF.
+          Could not load document.
           <button type="button" onClick={() => void loadDocument().catch(() => undefined)}>Retry</button>
         </span>
       )}
@@ -131,7 +136,7 @@ export function DocumentAttachment({ document, threadId }: DocumentAttachmentPro
       >
         <div className="document-preview-header">
           <div>
-            <p className="eyebrow">PDF preview</p>
+            <p className="eyebrow">{isTextDocument ? "Text preview" : "PDF preview"}</p>
             <h2 id={titleId}>{document.filename}</h2>
           </div>
           <div className="document-preview-actions">
@@ -140,14 +145,17 @@ export function DocumentAttachment({ document, threadId }: DocumentAttachmentPro
           </div>
         </div>
         <div className="document-preview-body">
-          {status === "loading" && <p role="status">Loading PDF preview…</p>}
+          {status === "loading" && <p role="status">Loading document preview…</p>}
           {status === "error" && (
             <div className="document-preview-error" role="alert">
-              <p>The PDF could not be loaded.</p>
+              <p>The document could not be loaded.</p>
               <button type="button" onClick={() => void loadDocument().catch(() => undefined)}>Retry preview</button>
             </div>
           )}
-          {status === "ready" && source && (
+          {status === "ready" && isTextDocument && textContent !== null && (
+            <pre className="document-text-preview">{textContent}</pre>
+          )}
+          {status === "ready" && !isTextDocument && source && (
             <iframe
               src={source}
               title={`Preview of ${document.filename}`}
