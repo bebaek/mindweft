@@ -30,7 +30,37 @@ attachment byte/count limits and server-side RIFF/WAVE validation before it reac
 
 ## Provider smoke testing
 
-Live provider checks are opt-in because they require credentials and may incur cost. For OpenAI or
-OpenRouter Chat Completions and Gemini, send a short known phrase and verify that the response refers
-to its audible content. Responses, Anthropic, and peer-agent backends should reject audio before
-upload. Do not use production credentials or sensitive recordings in routine smoke tests.
+Live provider checks are opt-in because they require credentials and may incur cost. The integration
+harness generates a 250 ms mono 16-bit PCM WAV tone in memory, then exercises thread creation,
+binary upload, audio message persistence, provider execution, and authenticated history retrieval.
+It asserts provider acceptance and a non-empty response rather than a specific interpretation of the
+tone.
+
+Run one provider at a time with an explicitly selected audio-capable model:
+
+```bash
+MINDWEFT_RUN_LIVE_AUDIO_PROVIDER_TESTS=true \
+OPENAI_API_KEY=... \
+MINDWEFT_LIVE_AUDIO_OPENAI_MODEL=... \
+uv run pytest tests/test_live_audio_providers.py -k openai -m integration -q
+
+MINDWEFT_RUN_LIVE_AUDIO_PROVIDER_TESTS=true \
+OPENROUTER_API_KEY=... \
+MINDWEFT_LIVE_AUDIO_OPENROUTER_MODEL=... \
+uv run pytest tests/test_live_audio_providers.py -k openrouter -m integration -q
+
+MINDWEFT_RUN_LIVE_AUDIO_PROVIDER_TESTS=true \
+GEMINI_API_KEY=... \
+MINDWEFT_LIVE_AUDIO_GEMINI_MODEL=... \
+uv run pytest tests/test_live_audio_providers.py -k gemini -m integration -q
+```
+
+The provider-standard `OPENAI_MODEL`, `OPENROUTER_MODEL`, and `GEMINI_MODEL` variables are accepted
+when the corresponding test-specific model variable is omitted. Base URL and optional OpenRouter
+attribution variables use the normal application names. Providers without credentials or a model
+are skipped independently. Keep request/response debug logging disabled so credentials and encoded
+audio are not written to logs.
+
+Responses, Anthropic, and peer-agent backends should continue to reject audio before upload and are
+covered without live requests. Do not use production credentials or sensitive recordings in routine
+smoke tests.
