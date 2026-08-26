@@ -103,6 +103,10 @@ enabled = true
 max_bytes = 123456
 allowed_mime_types = ["image/png", "image/webp"]
 
+[document_input]
+enabled = true
+max_pages = 42
+
 [coding]
 enabled = true
 workspaces = ["/Users/example/code", "/tmp/work"]
@@ -139,6 +143,8 @@ enabled = false
     assert env["MINIGENT_IMAGE_INPUT_ENABLED"] == "true"
     assert env["MINIGENT_IMAGE_INPUT_MAX_BYTES"] == "123456"
     assert env["MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES"] == "image/png,image/webp"
+    assert env["MINIGENT_DOCUMENT_INPUT_ENABLED"] == "true"
+    assert env["MINIGENT_DOCUMENT_INPUT_MAX_PAGES"] == "42"
     assert env["MINIGENT_CODING_MCP_GATEWAY_ENABLED"] == "true"
     assert env["MINIGENT_CODING_MCP_GATEWAY_PORT"] == "9876"
     assert env["MINIGENT_CODING_MCP_GATEWAY_PATH_PREFIX"] == "/tools"
@@ -155,6 +161,17 @@ enabled = false
         '[{"name":"filesystem","url":"http://127.0.0.1:8765/mcp","headers":{}}]'
     )
     assert env["MINIGENT_REMOTE_QUALITY_ENABLED"] == "false"
+
+
+def test_document_input_max_pages_prefers_mindweft_env() -> None:
+    settings = load_settings(
+        {
+            "MINDWEFT_DOCUMENT_INPUT_MAX_PAGES": "12",
+            "MINIGENT_DOCUMENT_INPUT_MAX_PAGES": "99",
+        }
+    )
+
+    assert settings.document_input.max_pages == 12
 
 
 def test_centralized_settings_loader_uses_resolved_env_mapping(
@@ -187,6 +204,14 @@ max_total_bytes = 2468
 max_pixels = 4000000
 max_dimension = 4096
 allowed_mime_types = ["image/png", "image/webp"]
+
+[document_input]
+enabled = true
+max_bytes = 5678
+max_documents = 2
+max_total_bytes = 6789
+max_pages = 25
+allowed_mime_types = ["application/pdf"]
 
 [attachments]
 db_path = "attachments.db"
@@ -329,6 +354,12 @@ max_payload_chars = 4096
     assert settings.image_input.max_pixels == 4_000_000
     assert settings.image_input.max_dimension == 4096
     assert settings.image_input.allowed_mime_types == frozenset({"image/png", "image/webp"})
+    assert settings.document_input.enabled is True
+    assert settings.document_input.max_bytes == 5678
+    assert settings.document_input.max_documents == 2
+    assert settings.document_input.max_total_bytes == 6789
+    assert settings.document_input.max_pages == 25
+    assert settings.document_input.allowed_mime_types == frozenset({"application/pdf"})
     assert settings.attachment_store.db_path == "attachments.db"
     assert settings.attachment_store.max_per_thread == 12
     assert settings.attachment_store.max_bytes_per_thread == 3456

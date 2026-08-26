@@ -282,6 +282,7 @@ export interface DocumentInputConfig {
   max_bytes: number;
   max_documents: number;
   max_total_bytes: number;
+  max_pages: number;
   allowed_mime_types: string[];
 }
 

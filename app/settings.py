@@ -40,10 +40,12 @@ DOCUMENT_INPUT_ENABLED_ENV = "MINIGENT_DOCUMENT_INPUT_ENABLED"
 DOCUMENT_INPUT_MAX_BYTES_ENV = "MINIGENT_DOCUMENT_INPUT_MAX_BYTES"
 DOCUMENT_INPUT_MAX_DOCUMENTS_ENV = "MINIGENT_DOCUMENT_INPUT_MAX_DOCUMENTS"
 DOCUMENT_INPUT_MAX_TOTAL_BYTES_ENV = "MINIGENT_DOCUMENT_INPUT_MAX_TOTAL_BYTES"
+DOCUMENT_INPUT_MAX_PAGES_ENV = "MINIGENT_DOCUMENT_INPUT_MAX_PAGES"
 DOCUMENT_INPUT_ALLOWED_MIME_TYPES_ENV = "MINIGENT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES"
 DEFAULT_DOCUMENT_INPUT_MAX_BYTES = 10 * 1024 * 1024
 DEFAULT_DOCUMENT_INPUT_MAX_DOCUMENTS = 4
 DEFAULT_DOCUMENT_INPUT_MAX_TOTAL_BYTES = 20 * 1024 * 1024
+DEFAULT_DOCUMENT_INPUT_MAX_PAGES = 100
 DEFAULT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES = frozenset({"application/pdf"})
 
 
@@ -89,6 +91,7 @@ class DocumentInputSettings:
     max_bytes: int = DEFAULT_DOCUMENT_INPUT_MAX_BYTES
     max_documents: int = DEFAULT_DOCUMENT_INPUT_MAX_DOCUMENTS
     max_total_bytes: int = DEFAULT_DOCUMENT_INPUT_MAX_TOTAL_BYTES
+    max_pages: int = DEFAULT_DOCUMENT_INPUT_MAX_PAGES
     allowed_mime_types: frozenset[str] = DEFAULT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES
 
     @classmethod
@@ -104,6 +107,9 @@ class DocumentInputSettings:
             ),
             max_total_bytes=_parse_positive_int(
                 lookup, DOCUMENT_INPUT_MAX_TOTAL_BYTES_ENV, DEFAULT_DOCUMENT_INPUT_MAX_TOTAL_BYTES
+            ),
+            max_pages=_parse_positive_int(
+                lookup, DOCUMENT_INPUT_MAX_PAGES_ENV, DEFAULT_DOCUMENT_INPUT_MAX_PAGES
             ),
             allowed_mime_types=_parse_allowed_mime_types(
                 lookup,
@@ -177,6 +183,7 @@ def _document_input_public_dict(settings: DocumentInputSettings) -> dict[str, ob
         "max_bytes": settings.max_bytes,
         "max_documents": settings.max_documents,
         "max_total_bytes": settings.max_total_bytes,
+        "max_pages": settings.max_pages,
         "allowed_mime_types": sorted(settings.allowed_mime_types),
     }
 
@@ -191,6 +198,8 @@ def _document_input_export_public_dict(settings: DocumentInputSettings) -> dict[
         exported["max_documents"] = settings.max_documents
     if settings.max_total_bytes != DEFAULT_DOCUMENT_INPUT_MAX_TOTAL_BYTES:
         exported["max_total_bytes"] = settings.max_total_bytes
+    if settings.max_pages != DEFAULT_DOCUMENT_INPUT_MAX_PAGES:
+        exported["max_pages"] = settings.max_pages
     if settings.allowed_mime_types != DEFAULT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES:
         exported["allowed_mime_types"] = sorted(settings.allowed_mime_types)
     return exported

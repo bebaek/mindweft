@@ -195,7 +195,7 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | `MINDWEFT_LLM_PROVIDER` | LLM provider such as `mock`, `openai`, `openrouter`, `openai-compatible`, `generic-oauth`, `google`, or `anthropic`. |
 | `MINDWEFT_LLM_MODEL` | Model identifier for the selected provider. |
 | `MINDWEFT_IMAGE_INPUT_ENABLED` | Enables image attachments from CLI/chat clients; unified config key is `[image_input].enabled`. Named LLM profiles can declare `input_modalities = ["text"]` or `["text", "image"]`; omitted declarations remain permissive for compatibility. |
-| `MINDWEFT_DOCUMENT_INPUT_ENABLED` | Enables PDF document attachments for native provider profiles that explicitly declare `document`; unified config key is `[document_input].enabled`. |
+| `MINDWEFT_DOCUMENT_INPUT_ENABLED` / `MINDWEFT_DOCUMENT_INPUT_MAX_PAGES` | Enables PDF document attachments for native provider profiles that explicitly declare `document` and bounds each structurally validated PDF; unified config keys are `[document_input].enabled` and `[document_input].max_pages`. |
 | `MINDWEFT_ATTACHMENT_DB_PATH` | Optional SQLite store for uploaded attachment bytes; unified config key is `[attachments].db_path`. |
 | `MINDWEFT_ATTACHMENT_ENCRYPTION_KEY` / `MINDWEFT_ATTACHMENT_ENCRYPTION_KEYS` | Optional AES-256-GCM key or versioned keyring for attachment bytes at rest. |
 | `MINDWEFT_RATE_LIMIT_DB_PATH` | Optional shared SQLite token-bucket state for upload and run rate limits. |
@@ -208,7 +208,9 @@ Start from [`.env.template`](.env.template) for full local or deployment setting
 | `MINDWEFT_RESPONSES_REASONING_ONLY_RETRIES` | Bounded generic OAuth Responses continuations after reasoning-only output before reporting a retryable provider stall. |
 
 Mindweft implements text, image, and PDF document message parts. `audio` and `video` remain
-reserved configuration vocabulary rather than end-to-end input support. Document input is disabled
+reserved configuration vocabulary rather than end-to-end input support. PDF uploads are parsed
+before storage or message creation; malformed, encrypted, empty, and over-limit files are rejected.
+Document input is disabled
 by default and requires an explicit `document` profile capability; it is supported by Anthropic,
 Gemini, and Responses adapters, while Chat Completions adapters reject it explicitly. Image capability metadata is
 returned by `GET /execution-options`; an omitted `input_modalities` declaration remains permissive

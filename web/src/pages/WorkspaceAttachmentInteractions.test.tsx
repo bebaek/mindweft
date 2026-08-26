@@ -14,6 +14,7 @@ const mockApi = {
       max_bytes: 2_000,
       max_documents: 3,
       max_total_bytes: 4_000,
+      max_pages: 100,
       allowed_mime_types: ["application/pdf"],
     },
     image_input: {

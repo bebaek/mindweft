@@ -114,6 +114,7 @@ from app.models import (
 )
 from app.oauth import GenericOAuthProvider, build_oauth_flow_store_from_env
 from app.observability import configure_logging, configure_tracing
+from app.pdf_validation import PDFValidationError, validate_pdf
 from app.peer_agents import PeerAgentRegistry, build_peer_agent_registry
 from app.private_values import PII_PLACEHOLDER_PATTERN
 from app.quality import QualityEnhancer
@@ -682,8 +683,7 @@ def _validate_and_normalize_message_request(
                     status_code=400,
                     detail="document attachment MIME type does not match uploaded attachment",
                 )
-            if not _document_bytes_match_mime_type(record.data, mime_type):
-                raise HTTPException(status_code=400, detail="stored document data is invalid")
+            _validate_document_bytes(record.data, mime_type, document_settings)
             total_document_bytes += record.metadata.size_bytes
         if part.data:
             try:
@@ -692,11 +692,7 @@ def _validate_and_normalize_message_request(
                 raise HTTPException(status_code=400, detail="document data must be base64") from exc
             if len(decoded) > document_settings.max_bytes:
                 raise HTTPException(status_code=400, detail="document exceeds maximum allowed size")
-            if not _document_bytes_match_mime_type(decoded, mime_type):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"document data does not match declared MIME type: {part.mime_type}",
-                )
+            _validate_document_bytes(decoded, mime_type, document_settings)
             total_document_bytes += len(decoded)
         if total_document_bytes > document_settings.max_total_bytes:
             raise HTTPException(
@@ -967,8 +963,20 @@ def _thread_context_usage(
         return None
 
 
-def _document_bytes_match_mime_type(data: bytes, mime_type: str) -> bool:
-    return mime_type == "application/pdf" and data.startswith(b"%PDF-")
+def _validate_document_bytes(
+    data: bytes,
+    mime_type: str,
+    settings: DocumentInputSettings,
+) -> None:
+    if mime_type != "application/pdf":
+        raise HTTPException(
+            status_code=400,
+            detail=f"document data does not match declared MIME type: {mime_type}",
+        )
+    try:
+        validate_pdf(data, max_pages=settings.max_pages)
+    except PDFValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 def create_app(
@@ -2123,11 +2131,7 @@ def create_app(
             enforce_thread_document_input(app_request, principal, thread_id)
             if len(data) > document_settings.max_bytes:
                 raise HTTPException(status_code=400, detail="document exceeds maximum allowed size")
-            if not _document_bytes_match_mime_type(data, normalized_mime_type):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"document data does not match declared MIME type: {normalized_mime_type}",
-                )
+            _validate_document_bytes(data, normalized_mime_type, document_settings)
         else:
             raise HTTPException(
                 status_code=400, detail=f"unsupported attachment MIME type: {normalized_mime_type}"
