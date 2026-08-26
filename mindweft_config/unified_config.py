@@ -139,6 +139,7 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "max_bytes": "MINIGENT_DOCUMENT_INPUT_MAX_BYTES",
         "max_documents": "MINIGENT_DOCUMENT_INPUT_MAX_DOCUMENTS",
         "max_total_bytes": "MINIGENT_DOCUMENT_INPUT_MAX_TOTAL_BYTES",
+        "max_pages": "MINIGENT_DOCUMENT_INPUT_MAX_PAGES",
         "allowed_mime_types": "MINIGENT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES",
     },
     "attachments": {

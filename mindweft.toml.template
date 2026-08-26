@@ -59,6 +59,7 @@ enabled = false
 # max_bytes = 10485760
 # max_documents = 4
 # max_total_bytes = 20971520
+# max_pages = 100
 # allowed_mime_types = ["application/pdf"]
 
 [attachments]

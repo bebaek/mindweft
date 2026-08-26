@@ -5,15 +5,17 @@ import logging
 import sqlite3
 from collections import deque
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 
 import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from jwt.algorithms import RSAAlgorithm
+from pypdf import PdfWriter
 
 from app import auth as auth_module
 from app import execution as execution_module
@@ -100,6 +102,41 @@ OTHER_TOKEN_HEADERS = {"Authorization": "Bearer token-2"}
 PNG_1X1_BASE64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
+
+
+def _pdf_bytes(*, pages: int = 1, encrypted: bool = False) -> bytes:
+    output = BytesIO()
+    writer = PdfWriter()
+    for _ in range(pages):
+        writer.add_blank_page(width=72, height=72)
+    if encrypted:
+        writer.encrypt("secret")
+    writer.write(output)
+    return output.getvalue()
+
+
+def _document_capable_client(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    max_pages: int = 100,
+    attachment_store: InMemoryAttachmentStore | None = None,
+) -> tuple[FastAPI, TestClient, str]:
+    monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_MAX_PAGES", str(max_pages))
+    registry = build_local_tool_registry()
+    execution_config = parse_tenant_execution_config(
+        "tenant-1",
+        {"llm": {"provider": "mock", "input_modalities": ["text", "document"]}},
+    )
+    app = create_app(
+        execution_resolver=FixedTenantExecutionResolver(
+            MockLLMAdapter(), registry, config=execution_config
+        ),
+        attachment_store=attachment_store,
+    )
+    client = TestClient(app)
+    thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    return app, client, thread_id
 
 
 def test_peer_backend_settings_from_env_mapping_uses_defaults() -> None:
@@ -495,6 +532,37 @@ def test_config_reports_and_exports_image_input_settings(monkeypatch: pytest.Mon
     }
 
 
+def test_config_reports_and_exports_document_input_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_MAX_BYTES", "5678")
+    monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_MAX_DOCUMENTS", "2")
+    monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_MAX_TOTAL_BYTES", "6789")
+    monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_MAX_PAGES", "25")
+    monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES", "application/pdf")
+    client = TestClient(
+        create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
+    )
+
+    response = client.get("/config?export=true")
+
+    assert response.status_code == 200
+    expected = {
+        "enabled": True,
+        "max_bytes": 5678,
+        "max_documents": 2,
+        "max_total_bytes": 6789,
+        "max_pages": 25,
+        "allowed_mime_types": ["application/pdf"],
+    }
+    body = response.json()
+    assert body["document_input"] == expected
+    assert body["unified_config_export"]["document_input"] == {
+        key: value for key, value in expected.items() if key != "allowed_mime_types"
+    }
+
+
 def test_add_message_rejects_image_when_disabled() -> None:
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
@@ -730,7 +798,7 @@ def test_pdf_attachment_upload_stores_reference_and_resolves_for_llm(
     )
     client = TestClient(app)
     thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
-    pdf = b"%PDF-1.7\nminimal test document"
+    pdf = _pdf_bytes()
 
     upload_response = client.post(
         f"/threads/{thread_id}/attachments/binary",
@@ -786,6 +854,121 @@ def test_pdf_attachment_upload_stores_reference_and_resolves_for_llm(
     assert isinstance(document, DocumentPart)
     assert document.attachment_id is None
     assert base64.b64decode(document.data or "") == pdf
+
+
+def test_pdf_binary_upload_rejects_malformed_data_before_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, client, thread_id = _document_capable_client(monkeypatch)
+
+    response = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=b"%PDF-invalid",
+        headers={**AUTH_HEADERS, "Content-Type": "application/pdf"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "PDF document is malformed"
+    assert app.state.attachment_store.statistics("tenant-1").total_count == 0
+
+
+@pytest.mark.parametrize(
+    ("pdf", "detail"),
+    [
+        (_pdf_bytes(encrypted=True), "Encrypted PDF documents are not supported"),
+        (_pdf_bytes(pages=0), "PDF document must contain at least one page"),
+    ],
+)
+def test_pdf_binary_upload_rejects_unsupported_document_structure(
+    monkeypatch: pytest.MonkeyPatch,
+    pdf: bytes,
+    detail: str,
+) -> None:
+    app, client, thread_id = _document_capable_client(monkeypatch)
+
+    response = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=pdf,
+        headers={**AUTH_HEADERS, "Content-Type": "application/pdf"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == detail
+    assert app.state.attachment_store.statistics("tenant-1").total_count == 0
+
+
+def test_pdf_binary_upload_enforces_page_limit_before_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, client, thread_id = _document_capable_client(monkeypatch, max_pages=1)
+
+    response = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=_pdf_bytes(pages=2),
+        headers={**AUTH_HEADERS, "Content-Type": "application/pdf"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == ("PDF document exceeds the maximum allowed page count")
+    assert app.state.attachment_store.statistics("tenant-1").total_count == 0
+
+
+def test_inline_pdf_document_uses_structural_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, client, thread_id = _document_capable_client(monkeypatch)
+
+    response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={
+            "parts": [
+                {
+                    "type": "document",
+                    "mime_type": "application/pdf",
+                    "data": base64.b64encode(b"%PDF-invalid").decode("ascii"),
+                    "filename": "invalid.pdf",
+                }
+            ]
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "PDF document is malformed"
+
+
+def test_stored_pdf_reference_is_validated_defensively(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment_store = InMemoryAttachmentStore()
+    _app, client, thread_id = _document_capable_client(
+        monkeypatch, attachment_store=attachment_store
+    )
+    metadata = attachment_store.put(
+        "tenant-1",
+        thread_id,
+        mime_type="application/pdf",
+        data=b"%PDF-invalid",
+        created_by="user-1",
+    )
+
+    response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={
+            "parts": [
+                {
+                    "type": "document",
+                    "mime_type": "application/pdf",
+                    "attachment_id": metadata.attachment_id,
+                    "filename": "invalid.pdf",
+                }
+            ]
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "PDF document is malformed"
 
 
 def test_pdf_input_requires_explicit_profile_capability(

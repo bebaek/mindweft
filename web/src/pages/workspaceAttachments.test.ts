@@ -21,6 +21,7 @@ const documentConfig: DocumentInputConfig = {
   max_bytes: 20,
   max_documents: 2,
   max_total_bytes: 30,
+  max_pages: 100,
   allowed_mime_types: ["application/pdf"],
 };
 

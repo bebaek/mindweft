@@ -426,6 +426,8 @@ the regular image picker because they commonly ignore the HTML camera-capture hi
 PDF document input is disabled by default. The selected native LLM profile must explicitly include
 `document` in `input_modalities`; omitted capability metadata is not permissive for documents.
 Anthropic, Gemini, and Responses adapters serialize PDFs. Portable Chat Completions adapters do not.
+PDFs are parsed before storage or message creation; malformed, encrypted, empty, and over-limit
+files are rejected before provider invocation.
 
 | Key | Environment equivalent | Notes |
 | --- | --- | --- |
@@ -433,6 +435,7 @@ Anthropic, Gemini, and Responses adapters serialize PDFs. Portable Chat Completi
 | `max_bytes` | `MINDWEFT_DOCUMENT_INPUT_MAX_BYTES` | Maximum bytes per PDF; defaults to 10 MiB. |
 | `max_documents` | `MINDWEFT_DOCUMENT_INPUT_MAX_DOCUMENTS` | Maximum PDFs per message; defaults to 4. |
 | `max_total_bytes` | `MINDWEFT_DOCUMENT_INPUT_MAX_TOTAL_BYTES` | Maximum combined PDF bytes per message; defaults to 20 MiB. |
+| `max_pages` | `MINDWEFT_DOCUMENT_INPUT_MAX_PAGES` | Maximum pages per PDF; defaults to 100. |
 | `allowed_mime_types` | `MINDWEFT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES` | Defaults to `application/pdf`; other formats are not currently implemented. |
 
 ### `[attachments]`
