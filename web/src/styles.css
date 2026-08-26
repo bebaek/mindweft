@@ -944,8 +944,26 @@ html[data-theme="dark"] .personal-validation.invalid,html[data-theme="dark"] .cr
 }
 
 .pending-audio, .message-audio-list { display: grid; gap: 0.55rem; }
+.pending-audio { grid-column:1/-1; }
 .pending-audio-item, .message-audio { display: flex; align-items: center; gap: 0.65rem; padding: 0.6rem; border: 1px solid var(--color-border); border-radius: 0.65rem; background: var(--color-surface-raised); }
 .pending-audio-item audio, .message-audio audio { min-width: 12rem; max-width: 100%; height: 2.25rem; }
 .message-audio > div { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
 .message-audio strong, .pending-audio-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .audio-badge { padding: 0.2rem 0.35rem; border-radius: 0.3rem; background: var(--color-accent-subtle); color: var(--color-accent-strong); font-size: 0.7rem; font-weight: 700; }
+.composer-attachment-actions { display:flex; align-items:center; gap:5px; }
+.composer-attachment-actions:has(.audio-recorder-active) .attach-image { display:none; }
+.record-audio { flex:none; width:32px; height:32px; padding:0; border:1px solid var(--line); border-radius:9px; color:var(--danger); background:var(--white); cursor:pointer; font-size:16px; }
+.record-audio:disabled { cursor:default; opacity:.4; }
+.audio-recorder-active { display:flex; align-items:center; gap:8px; min-height:32px; padding:5px 8px; border:1px solid #d8aaa5; border-radius:9px; color:var(--color-danger-text); background:var(--color-danger-surface); font-size:var(--text-control); white-space:nowrap; }
+.audio-recorder-active output { margin-right:auto; font-variant-numeric:tabular-nums; font-weight:700; }
+.recording-indicator { width:9px; height:9px; border-radius:50%; background:var(--danger); box-shadow:0 0 0 3px color-mix(in srgb,var(--danger) 18%,transparent); }
+.audio-recorder-active button { padding:6px 10px; border:1px solid var(--line); border-radius:7px; background:var(--white); cursor:pointer; font-size:var(--text-sm); font-weight:700; }
+.audio-recorder-active button:disabled { cursor:wait; opacity:.6; }
+.audio-recording-stop { color:var(--color-danger-text); }
+.audio-recording-cancel { color:var(--muted); }
+
+@media(max-width:720px) {
+  .composer-attachment-actions { order:2; }
+  .composer-attachment-actions:has(.audio-recorder-active) { flex:0 0 100%; order:1; }
+  .audio-recorder-active { flex:1; }
+}

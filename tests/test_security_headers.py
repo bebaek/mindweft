@@ -24,7 +24,7 @@ def test_common_security_headers_apply_to_api_responses() -> None:
     assert response.headers["referrer-policy"] == "no-referrer"
     assert response.headers["x-frame-options"] == "DENY"
     assert response.headers["permissions-policy"] == (
-        "camera=(self), microphone=(), geolocation=()"
+        "camera=(self), microphone=(self), geolocation=()"
     )
     assert response.headers["x-permitted-cross-domain-policies"] == "none"
     assert "content-security-policy" not in response.headers
