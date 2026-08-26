@@ -113,6 +113,7 @@ mindweft run --resume-last "continue"
 mindweft run --image ./screenshot.png "describe this image"
 mindweft run --image before.png --image after.png "compare these"
 mindweft run --document ./requirements.pdf "review this document"
+mindweft run --document ./notes.md "summarize these notes"
 ```
 
 `run` reads from stdin when no prompt argument is provided. By default the assistant
@@ -136,7 +137,7 @@ reply prints to stdout with no extra noise. Useful flags:
 | `--llm <name>` | Named LLM profile to bind to a new thread. |
 | `--image <path>` | Attach an image file; can be repeated. Requires server-side `[image_input].enabled = true` (or `MINDWEFT_IMAGE_INPUT_ENABLED=true`) and a vision-capable model/provider. |
 | `--image-detail auto\|low\|high` | Vision detail hint for attached images. |
-| `--document <path>` | Attach a PDF; can be repeated. Requires `[document_input].enabled = true`, a native supported provider, and an explicit `document` input capability. |
+| `--document <path>` | Attach a PDF or UTF-8 `.txt`, `.md`, `.csv`, or `.log` document; can be repeated. Requires `[document_input].enabled = true`, a native supported provider, and an explicit `document` input capability. |
 
 ### Chat (one-shot)
 
@@ -340,9 +341,9 @@ Available during interactive chat:
 | `/image paste`, `/image clipboard` | On macOS, use `pngpaste` to queue a PNG image from the system clipboard for the next message. |
 | `/image list` | Show images queued for the next message. |
 | `/image clear` | Clear queued images without sending them. |
-| `/document <path...>` | Queue one or more PDF files for the next message. The selected profile must explicitly support document input. |
-| `/document list` | Show PDFs queued for the next message. |
-| `/document clear` | Clear queued PDFs without sending them. |
+| `/document <path...>` | Queue one or more PDF or UTF-8 `.txt`, `.md`, `.csv`, or `.log` files for the next message. The selected profile must explicitly support document input. |
+| `/document list` | Show documents queued for the next message. |
+| `/document clear` | Clear queued documents without sending them. |
 | `/commands` | List saved custom slash commands. |
 | `/command set <name> <template>` | Save a custom slash command. Use `{input}` to place invocation text. |
 | `/command show <name>` | Show a saved command's template. |

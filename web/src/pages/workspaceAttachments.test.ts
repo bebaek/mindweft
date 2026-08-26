@@ -22,7 +22,8 @@ const documentConfig: DocumentInputConfig = {
   max_documents: 2,
   max_total_bytes: 30,
   max_pages: 100,
-  allowed_mime_types: ["application/pdf"],
+  max_text_bytes: 10,
+  allowed_mime_types: ["application/pdf", "text/plain"],
 };
 
 function file(name: string, type: string, size = 1): File {
@@ -55,6 +56,25 @@ describe("classifyAttachmentFiles", () => {
     expect(result.documents).toHaveLength(1);
     expect(result.documents[0].type).toBe("application/pdf");
     expect(result.documents[0].name).toBe("SPEC.PDF");
+  });
+
+  it("canonicalizes supported text document extensions and MIME aliases", () => {
+    const result = classifyAttachmentFiles(
+      [
+        file("notes.md", "text/markdown"),
+        file("report.csv", "text/csv"),
+        file("debug.log", ""),
+      ],
+      imageConfig,
+      documentConfig,
+    );
+
+    expect(result.documents.map((document) => [document.name, document.type])).toEqual([
+      ["notes.md", "text/plain"],
+      ["report.csv", "text/plain"],
+      ["debug.log", "text/plain"],
+    ]);
+    expect(result.unsupported).toEqual([]);
   });
 
   it("reports files that match neither configured modality", () => {

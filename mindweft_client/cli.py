@@ -29,6 +29,7 @@ from mindweft_client.chat_commands import _format_markdown_transcript
 from mindweft_client.config import AgentPreset, ClientConfig, build_client_config
 from mindweft_client.debug import CaptureDebugConfig, CaptureDebugger
 from mindweft_client.diagnostic_commands import _format_execution_options
+from mindweft_client.document_files import read_document_file
 from mindweft_client.ducking import MacOsAmbientVolumeDucker
 from mindweft_client.errors import (
     MindweftAPIError,
@@ -834,18 +835,11 @@ def _image_parts_from_paths(paths: list[str], *, detail: str = "auto") -> list[d
 def _document_parts_from_paths(paths: list[str]) -> list[dict[str, Any]]:
     parts: list[dict[str, Any]] = []
     for raw_path in paths:
-        path = Path(raw_path).expanduser()
-        if not path.is_file():
-            raise ValueError(f"document file not found: {raw_path}")
-        if path.suffix.lower() != ".pdf":
-            raise ValueError(f"document must be a PDF file: {raw_path}")
-        data = path.read_bytes()
-        if not data.startswith(b"%PDF-"):
-            raise ValueError(f"document does not contain PDF data: {raw_path}")
+        path, mime_type, data = read_document_file(raw_path)
         parts.append(
             {
                 "type": "document",
-                "mime_type": "application/pdf",
+                "mime_type": mime_type,
                 "data": base64.b64encode(data).decode("ascii"),
                 "filename": path.name,
                 "source_path": str(path),

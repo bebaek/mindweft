@@ -83,6 +83,7 @@ class DocumentInputConfig:
     max_documents: object = None
     max_total_bytes: object = None
     max_pages: object = None
+    max_text_bytes: object = None
     allowed_mime_types: object = None
 
 
@@ -332,6 +333,7 @@ _INT_KEYS = {
     "document_input.max_documents",
     "document_input.max_total_bytes",
     "document_input.max_pages",
+    "document_input.max_text_bytes",
     "attachments.max_per_thread",
     "attachments.max_bytes_per_thread",
     "attachments.max_per_tenant",

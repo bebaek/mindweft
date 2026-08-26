@@ -119,10 +119,12 @@ def _document_capable_client(
     monkeypatch: pytest.MonkeyPatch,
     *,
     max_pages: int = 100,
+    max_text_bytes: int = 1024 * 1024,
     attachment_store: InMemoryAttachmentStore | None = None,
 ) -> tuple[FastAPI, TestClient, str]:
     monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_ENABLED", "true")
     monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_MAX_PAGES", str(max_pages))
+    monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_MAX_TEXT_BYTES", str(max_text_bytes))
     registry = build_local_tool_registry()
     execution_config = parse_tenant_execution_config(
         "tenant-1",
@@ -540,6 +542,7 @@ def test_config_reports_and_exports_document_input_settings(
     monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_MAX_DOCUMENTS", "2")
     monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_MAX_TOTAL_BYTES", "6789")
     monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_MAX_PAGES", "25")
+    monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_MAX_TEXT_BYTES", "3456")
     monkeypatch.setenv("MINDWEFT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES", "application/pdf")
     client = TestClient(
         create_app(llm_adapter=MockLLMAdapter(), tool_registry=build_local_tool_registry())
@@ -554,13 +557,12 @@ def test_config_reports_and_exports_document_input_settings(
         "max_documents": 2,
         "max_total_bytes": 6789,
         "max_pages": 25,
+        "max_text_bytes": 3456,
         "allowed_mime_types": ["application/pdf"],
     }
     body = response.json()
     assert body["document_input"] == expected
-    assert body["unified_config_export"]["document_input"] == {
-        key: value for key, value in expected.items() if key != "allowed_mime_types"
-    }
+    assert body["unified_config_export"]["document_input"] == expected
 
 
 def test_add_message_rejects_image_when_disabled() -> None:
@@ -854,6 +856,86 @@ def test_pdf_attachment_upload_stores_reference_and_resolves_for_llm(
     assert isinstance(document, DocumentPart)
     assert document.attachment_id is None
     assert base64.b64decode(document.data or "") == pdf
+
+
+def test_plain_text_attachment_upload_canonicalizes_mime_and_stores_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, client, thread_id = _document_capable_client(monkeypatch)
+    text = "# Notes\n\nHello, 世界!\n".encode()
+
+    upload_response = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=text,
+        headers={**AUTH_HEADERS, "Content-Type": "text/markdown; charset=utf-8"},
+    )
+
+    assert upload_response.status_code == 200
+    assert upload_response.json()["mime_type"] == "text/plain"
+    attachment_id = upload_response.json()["attachment_id"]
+    stored = app.state.attachment_store.get("tenant-1", thread_id, attachment_id)
+    assert stored is not None
+    assert stored.data == text
+
+    message_response = client.post(
+        f"/threads/{thread_id}/messages",
+        json={
+            "parts": [
+                {
+                    "type": "document",
+                    "mime_type": "text/markdown",
+                    "attachment_id": attachment_id,
+                    "filename": "notes.md",
+                }
+            ]
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert message_response.status_code == 200
+    assert message_response.json()["parts"][0]["mime_type"] == "text/plain"
+
+
+@pytest.mark.parametrize(
+    ("data", "detail"),
+    [
+        (b"\xff", "Text document is not valid UTF-8"),
+        (b" \n", "Text document must not be empty"),
+        (b"hello\x00world", "Text document contains unsupported NUL bytes"),
+    ],
+)
+def test_plain_text_binary_upload_rejects_invalid_content_before_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    data: bytes,
+    detail: str,
+) -> None:
+    app, client, thread_id = _document_capable_client(monkeypatch)
+
+    response = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=data,
+        headers={**AUTH_HEADERS, "Content-Type": "text/plain"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == detail
+    assert app.state.attachment_store.statistics("tenant-1").total_count == 0
+
+
+def test_plain_text_binary_upload_enforces_text_specific_size_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, client, thread_id = _document_capable_client(monkeypatch, max_text_bytes=4)
+
+    response = client.post(
+        f"/threads/{thread_id}/attachments/binary",
+        content=b"five!",
+        headers={**AUTH_HEADERS, "Content-Type": "text/plain"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Text document exceeds the maximum allowed size"
+    assert app.state.attachment_store.statistics("tenant-1").total_count == 0
 
 
 def test_pdf_binary_upload_rejects_malformed_data_before_storage(

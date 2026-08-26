@@ -15,7 +15,8 @@ const mockApi = {
       max_documents: 3,
       max_total_bytes: 4_000,
       max_pages: 100,
-      allowed_mime_types: ["application/pdf"],
+      max_text_bytes: 1_000,
+      allowed_mime_types: ["application/pdf", "text/plain"],
     },
     image_input: {
       enabled: true,
@@ -101,13 +102,26 @@ describe("workspace attachment intake", () => {
     const transfer = { types: ["Files"], files: [image, document], dropEffect: "none" };
 
     fireEvent.dragEnter(composer, { dataTransfer: transfer });
-    expect(screen.getByRole("status")).toHaveTextContent("Drop images or PDFs to attach them");
+    expect(screen.getByRole("status")).toHaveTextContent("Drop images or documents to attach them");
 
     fireEvent.drop(composer, { dataTransfer: transfer });
 
     expect(await screen.findByAltText("diagram.png")).toBeInTheDocument();
     expect(screen.getByText("requirements.pdf")).toBeInTheDocument();
-    expect(screen.queryByText("Drop images or PDFs to attach them")).not.toBeInTheDocument();
+    expect(screen.queryByText("Drop images or documents to attach them")).not.toBeInTheDocument();
+  });
+
+  it("queues and canonicalizes a plain-text document drop", async () => {
+    renderWorkspace();
+    const composer = await readyComposer();
+    const document = new File(["# Notes"], "notes.md", { type: "text/markdown" });
+
+    fireEvent.drop(composer, {
+      dataTransfer: { types: ["Files"], files: [document], dropEffect: "none" },
+    });
+
+    expect(await screen.findByText("notes.md")).toBeInTheDocument();
+    expect(screen.getByText("TXT")).toBeInTheDocument();
   });
 
   it("queues a PDF supplied as a clipboard file", async () => {

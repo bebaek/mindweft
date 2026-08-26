@@ -16,12 +16,30 @@ function normalizedMimeTypes(mimeTypes: string[]): Set<string> {
   return new Set(mimeTypes.map((mimeType) => mimeType.toLowerCase()));
 }
 
-function normalizePdfMimeType(file: File): File {
-  if (file.type || !file.name.toLowerCase().endsWith(".pdf")) return file;
-  return new File([file], file.name, {
-    lastModified: file.lastModified,
-    type: "application/pdf",
-  });
+const textDocumentExtensions = [".txt", ".md", ".csv", ".log"];
+const textDocumentMimeTypes = new Set(["text/plain", "text/markdown", "text/csv"]);
+
+function withMimeType(file: File, type: string): File {
+  if (file.type.toLowerCase() === type) return file;
+  return new File([file], file.name, { lastModified: file.lastModified, type });
+}
+
+function normalizeDocumentMimeType(file: File): File {
+  const name = file.name.toLowerCase();
+  const mimeType = file.type.toLowerCase();
+  if (
+    name.endsWith(".pdf") &&
+    (!mimeType || mimeType === "application/pdf" || textDocumentMimeTypes.has(mimeType))
+  ) {
+    return withMimeType(file, "application/pdf");
+  }
+  if (
+    textDocumentMimeTypes.has(mimeType) ||
+    textDocumentExtensions.some((extension) => name.endsWith(extension))
+  ) {
+    return withMimeType(file, "text/plain");
+  }
+  return file;
 }
 
 export function classifyAttachmentFiles(
@@ -34,7 +52,7 @@ export function classifyAttachmentFiles(
   const classified: ClassifiedAttachmentFiles = { documents: [], images: [], unsupported: [] };
 
   for (const original of files) {
-    const file = normalizePdfMimeType(original);
+    const file = normalizeDocumentMimeType(original);
     const mimeType = file.type.toLowerCase();
     if (imageMimeTypes.has(mimeType)) {
       classified.images.push(file);

@@ -423,20 +423,22 @@ the regular image picker because they commonly ignore the HTML camera-capture hi
 
 ### `[document_input]`
 
-PDF document input is disabled by default. The selected native LLM profile must explicitly include
-`document` in `input_modalities`; omitted capability metadata is not permissive for documents.
-Anthropic, Gemini, and Responses adapters serialize PDFs. Portable Chat Completions adapters do not.
-PDFs are parsed before storage or message creation; malformed, encrypted, empty, and over-limit
-files are rejected before provider invocation.
+PDF and plain-text document input is disabled by default. The selected native LLM profile must
+explicitly include `document` in `input_modalities`; omitted capability metadata is not permissive
+for documents. Anthropic, Gemini, and Responses adapters serialize supported documents. Portable
+Chat Completions adapters do not. PDFs are parsed before storage or message creation; malformed,
+encrypted, empty, and over-limit files are rejected. Plain-text `.txt`, `.md`, `.csv`, and `.log`
+files are canonicalized to `text/plain` and must contain non-empty UTF-8 without NUL bytes.
 
 | Key | Environment equivalent | Notes |
 | --- | --- | --- |
-| `enabled` | `MINDWEFT_DOCUMENT_INPUT_ENABLED` | Enables authenticated PDF uploads and document message parts. |
-| `max_bytes` | `MINDWEFT_DOCUMENT_INPUT_MAX_BYTES` | Maximum bytes per PDF; defaults to 10 MiB. |
-| `max_documents` | `MINDWEFT_DOCUMENT_INPUT_MAX_DOCUMENTS` | Maximum PDFs per message; defaults to 4. |
-| `max_total_bytes` | `MINDWEFT_DOCUMENT_INPUT_MAX_TOTAL_BYTES` | Maximum combined PDF bytes per message; defaults to 20 MiB. |
+| `enabled` | `MINDWEFT_DOCUMENT_INPUT_ENABLED` | Enables authenticated PDF and plain-text uploads and document message parts. |
+| `max_bytes` | `MINDWEFT_DOCUMENT_INPUT_MAX_BYTES` | Maximum bytes per document before format-specific limits; defaults to 10 MiB. |
+| `max_documents` | `MINDWEFT_DOCUMENT_INPUT_MAX_DOCUMENTS` | Maximum documents per message; defaults to 4. |
+| `max_total_bytes` | `MINDWEFT_DOCUMENT_INPUT_MAX_TOTAL_BYTES` | Maximum combined document bytes per message; defaults to 20 MiB. |
 | `max_pages` | `MINDWEFT_DOCUMENT_INPUT_MAX_PAGES` | Maximum pages per PDF; defaults to 100. |
-| `allowed_mime_types` | `MINDWEFT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES` | Defaults to `application/pdf`; other formats are not currently implemented. |
+| `max_text_bytes` | `MINDWEFT_DOCUMENT_INPUT_MAX_TEXT_BYTES` | Maximum bytes per plain-text document; defaults to 1 MiB. |
+| `allowed_mime_types` | `MINDWEFT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES` | Defaults to `application/pdf,text/plain`; office and other binary formats are not implemented. |
 
 ### `[attachments]`
 

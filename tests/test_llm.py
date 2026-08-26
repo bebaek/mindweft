@@ -76,6 +76,44 @@ def test_provider_serializers_handle_pdf_documents_explicitly() -> None:
         _message_to_openai_content(message)
 
 
+def test_provider_serializers_handle_plain_text_documents_explicitly() -> None:
+    document = DocumentPart(
+        mime_type="text/plain",
+        data="SGVsbG8sIHdvcmxkIQ==",
+        filename="notes.md",
+    )
+    message = Message(
+        thread_id="thread",
+        role=MessageRole.USER,
+        content="summarize",
+        parts=[document],
+    )
+
+    assert _gemini_parts_for_message(message) == [
+        {"inline_data": {"mime_type": "text/plain", "data": "SGVsbG8sIHdvcmxkIQ=="}}
+    ]
+    assert _message_to_anthropic_content(message) == [
+        {
+            "type": "document",
+            "source": {
+                "type": "text",
+                "media_type": "text/plain",
+                "data": "Hello, world!",
+            },
+            "title": "notes.md",
+        }
+    ]
+    assert _message_to_responses_content(message) == [
+        {
+            "type": "input_file",
+            "filename": "notes.md",
+            "file_data": "data:text/plain;base64,SGVsbG8sIHdvcmxkIQ==",
+        }
+    ]
+    with pytest.raises(HTTPException, match="Chat Completions provider"):
+        _message_to_openai_content(message)
+
+
 def test_openai_compatible_adapter_returns_text_response() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["authorization"] == "Bearer test-key"

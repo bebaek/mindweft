@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import contextvars
 import hashlib
 import json
@@ -1859,6 +1861,20 @@ def _anthropic_image_block(part: ImagePart) -> dict[str, Any] | None:
 def _anthropic_document_block(part: DocumentPart) -> dict[str, Any] | None:
     if not part.data:
         return None
+    if part.mime_type == "text/plain":
+        try:
+            text = base64.b64decode(part.data, validate=True).decode("utf-8-sig")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            return None
+        return {
+            "type": "document",
+            "source": {
+                "type": "text",
+                "media_type": "text/plain",
+                "data": text,
+            },
+            "title": part.filename,
+        }
     return {
         "type": "document",
         "source": {
