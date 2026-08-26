@@ -461,7 +461,7 @@ inspection, cancellation controls, context usage inspection, raw model-context p
 confirmed compaction. On narrow screens, the conversation rail is collapsed by default and available
 from the Conversations menu so the active chat retains the screen space. The console also supports
 validated image and PDF selection, clipboard paste, and mixed image/PDF drag-and-drop,
-authenticated binary uploads, attachment previews and downloads,
+authenticated binary uploads, lazy authenticated PDF previews and downloads, image previews,
 and per-image detail controls, one-time private-value approval/denial, pending-consent recovery after
 reload, uncertain-action reconciliation, a personal setup workspace for versioned execution-overlay
 JSON plus write-only encrypted MCP credential creation, rotation, and deletion, a tenant-owner

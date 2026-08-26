@@ -10,6 +10,7 @@ WEB_CONTENT_SECURITY_POLICY = "; ".join(
         "connect-src 'self'",
         "font-src 'self'",
         "form-action 'self'",
+        "frame-src 'self' blob:",
         "frame-ancestors 'none'",
         "img-src 'self' blob: data:",
         "object-src 'none'",

@@ -23,6 +23,7 @@ import {
 import { runErrorMessage } from "./runEvents";
 import { ContextDialog } from "../components/ContextDialog";
 import { ConsentDialog } from "../components/ConsentDialog";
+import { DocumentAttachment } from "../components/DocumentAttachment";
 
 const AssistantMarkdown = lazy(async () => {
   const module = await import("../components/AssistantMarkdown");
@@ -1253,26 +1254,7 @@ function privateValueConsentRequest(value: unknown): PrivateValueConsentRequest 
 function MessageDocuments({ message }: { message: Message }) {
   const documents = message.parts?.filter((part): part is DocumentPart => part.type === "document") ?? [];
   if (documents.length === 0) return null;
-  return <div className="message-documents">{documents.map((document) => <AuthenticatedDocument key={document.attachment_id} threadId={message.thread_id} document={document} />)}</div>;
-}
-
-function AuthenticatedDocument({ threadId, document }: { threadId: string; document: DocumentPart }) {
-  const { api } = useAuth();
-  const [source, setSource] = useState<string | null>(null);
-  useEffect(() => {
-    const controller = new AbortController();
-    let objectUrl: string | null = null;
-    void api.getAttachmentBlob(threadId, document.attachment_id, controller.signal).then((blob) => {
-      objectUrl = URL.createObjectURL(blob);
-      setSource(objectUrl);
-    }).catch((caught: unknown) => {
-      if (!(caught instanceof DOMException && caught.name === "AbortError")) setSource("");
-    });
-    return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [api, document.attachment_id, threadId]);
-  if (source === null) return <span>Loading {document.filename}…</span>;
-  if (!source) return <span>{document.filename} unavailable</span>;
-  return <a href={source} download={document.filename} target="_blank" rel="noreferrer">PDF · {document.filename}</a>;
+  return <div className="message-documents">{documents.map((document) => <DocumentAttachment key={document.attachment_id} threadId={message.thread_id} document={document} />)}</div>;
 }
 
 function MessageImages({ message }: { message: Message }) {
