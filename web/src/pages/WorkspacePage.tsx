@@ -337,8 +337,8 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     : profileAudioUnavailable;
   const queuedAudioBlocked = pendingAudio.length > 0 && !audioInputAvailable;
   const profileDocumentUnavailable = documentInputUnavailableMessage(composerLlmOption);
-  const documentInputAvailable = Boolean(config.data?.document_input.enabled) && !profileDocumentUnavailable;
-  const documentInputMessage = !config.data?.document_input.enabled
+  const documentInputAvailable = Boolean(config.data?.document_input?.enabled) && !profileDocumentUnavailable;
+  const documentInputMessage = !config.data?.document_input?.enabled
     ? "Document input is disabled on this server."
     : profileDocumentUnavailable;
   const queuedDocumentsBlocked = pendingDocuments.length > 0 && !documentInputAvailable;
@@ -348,9 +348,9 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     ? "Image input is disabled on this server."
     : profileImageUnavailable;
   const queuedImagesBlocked = pendingImages.length > 0 && !imageInputAvailable;
-  const documentAccept = config.data?.document_input.allowed_mime_types.includes("text/plain")
+  const documentAccept = config.data?.document_input?.allowed_mime_types.includes("text/plain")
     ? [...config.data.document_input.allowed_mime_types, ".txt", ".md", ".csv", ".log"].join(",")
-    : (config.data?.document_input.allowed_mime_types.join(",") ?? "application/pdf");
+    : (config.data?.document_input?.allowed_mime_types.join(",") ?? "application/pdf");
   const attachmentKinds = [imageInputAvailable && "images", documentInputAvailable && "documents", audioInputAvailable && "audio"].filter((value): value is string => Boolean(value));
   const attachmentDropLabel = attachmentKinds.length === 0
     ? null
@@ -569,7 +569,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     const audioConfig = config.data?.audio_input;
     const imageConfig = config.data?.image_input;
     const documentConfig = config.data?.document_input;
-    if (!imageConfig || !documentConfig) {
+    if (!imageConfig) {
       setError("Attachment options are still loading.");
       return;
     }
@@ -610,14 +610,14 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
       },
       { singular: "image", plural: "images" },
     );
-    const oversizedTextDocument = candidates.documents.find(
+    const oversizedTextDocument = documentConfig ? candidates.documents.find(
       (file) => file.type === "text/plain" && file.size > documentConfig.max_text_bytes,
-    );
+    ) : undefined;
     if (oversizedTextDocument) {
       setError(`${oversizedTextDocument.name} exceeds the text-document size limit.`);
       return;
     }
-    const documentError = validateQueueAddition(
+    const documentError = documentConfig ? validateQueueAddition(
       pendingDocuments.map((document) => document.file),
       candidates.documents,
       {
@@ -627,7 +627,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
         max_total_bytes: documentConfig.max_total_bytes,
       },
       { singular: "document", plural: "documents" },
-    );
+    ) : null;
     if (audioError || imageError || documentError) {
       setError(audioError ?? imageError ?? documentError);
       return;
@@ -1119,53 +1119,57 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
             </p>
           )}
           <div className="composer-attachment-actions">
-            <AudioRecorder
-            disabled={isRunning || !audioInputAvailable}
-            maxBytes={config.data?.audio_input?.max_bytes ?? 1}
-            maxDurationSeconds={config.data?.audio_input?.max_duration_seconds ?? 1}
-            unavailableReason={audioInputMessage}
-            onError={(message) => setError(message || null)}
-            onRecorded={(file) => addAttachmentFiles([file])}
-            onRecordingChange={setAudioRecordingActive}
-          />
-          <label
-            className={`attach-image ${audioInputAvailable ? "" : "disabled"}`}
-            title={audioInputAvailable ? "Attach WAV audio" : (audioInputMessage ?? "Audio input is unavailable")}
-          >
-            <span aria-hidden="true">WAV</span><span className="sr-only">Attach WAV audio</span>
-            <input
-              type="file"
-              accept={config.data?.audio_input?.allowed_mime_types.join(",") ?? "audio/wav"}
-              multiple
-              disabled={isRunning || !audioInputAvailable}
-              onChange={(event) => { addAttachmentFiles(event.target.files); event.target.value = ""; }}
-            />
-          </label>
-          <label
-            className={`attach-image ${documentInputAvailable ? "" : "disabled"}`}
-            title={documentInputAvailable ? "Attach documents" : (documentInputMessage ?? "Document input is unavailable")}
-          >
-            <span aria-hidden="true">DOC</span><span className="sr-only">Attach documents</span>
-            <input
-              type="file"
-              accept={documentAccept}
-              multiple
-              disabled={isRunning || !documentInputAvailable}
-              onChange={(event) => { addAttachmentFiles(event.target.files); event.target.value = ""; }}
-            />
-          </label>
-          <label
-            className={`attach-image ${imageInputAvailable ? "" : "disabled"}`}
-            title={imageInputAvailable ? "Attach images" : (imageInputMessage ?? "Image input is unavailable")}
-          >
-            <span aria-hidden="true">+</span><span className="sr-only">Attach images</span>
-            <input
-              type="file"
-              accept={config.data?.image_input.allowed_mime_types.join(",") ?? "image/*"}
-              multiple
-              disabled={isRunning || !imageInputAvailable}
-              onChange={(event) => { addAttachmentFiles(event.target.files); event.target.value = ""; }}
-            />
+            {config.data?.audio_input?.enabled && <>
+              <AudioRecorder
+                disabled={isRunning || !audioInputAvailable}
+                maxBytes={config.data.audio_input.max_bytes}
+                maxDurationSeconds={config.data.audio_input.max_duration_seconds}
+                unavailableReason={audioInputMessage}
+                onError={(message) => setError(message || null)}
+                onRecorded={(file) => addAttachmentFiles([file])}
+                onRecordingChange={setAudioRecordingActive}
+              />
+              <label
+                className={`attach-image ${audioInputAvailable ? "" : "disabled"}`}
+                title={audioInputAvailable ? "Attach WAV audio" : (audioInputMessage ?? "Audio input is unavailable")}
+              >
+                <span aria-hidden="true">WAV</span><span className="sr-only">Attach WAV audio</span>
+                <input
+                  type="file"
+                  accept={config.data.audio_input.allowed_mime_types.join(",")}
+                  multiple
+                  disabled={isRunning || !audioInputAvailable}
+                  onChange={(event) => { addAttachmentFiles(event.target.files); event.target.value = ""; }}
+                />
+              </label>
+            </>}
+            {config.data?.document_input?.enabled && (
+              <label
+                className={`attach-image ${documentInputAvailable ? "" : "disabled"}`}
+                title={documentInputAvailable ? "Attach documents" : (documentInputMessage ?? "Document input is unavailable")}
+              >
+                <span aria-hidden="true">DOC</span><span className="sr-only">Attach documents</span>
+                <input
+                  type="file"
+                  accept={documentAccept}
+                  multiple
+                  disabled={isRunning || !documentInputAvailable}
+                  onChange={(event) => { addAttachmentFiles(event.target.files); event.target.value = ""; }}
+                />
+              </label>
+            )}
+            <label
+              className={`attach-image ${imageInputAvailable ? "" : "disabled"}`}
+              title={imageInputAvailable ? "Attach images" : (imageInputMessage ?? "Image input is unavailable")}
+            >
+              <span aria-hidden="true">+</span><span className="sr-only">Attach images</span>
+              <input
+                type="file"
+                accept={config.data?.image_input.allowed_mime_types.join(",") ?? "image/*"}
+                multiple
+                disabled={isRunning || !imageInputAvailable}
+                onChange={(event) => { addAttachmentFiles(event.target.files); event.target.value = ""; }}
+              />
             </label>
           </div>
           <textarea

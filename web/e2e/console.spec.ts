@@ -17,7 +17,11 @@ async function expectCssMatchesToken(locator: Locator, property: string, token: 
   expect(values.actual).toBe(values.expected);
 }
 
-async function installApiMocks(page: Page, onExecutionOptions?: (route: Route) => void) {
+async function installApiMocks(
+  page: Page,
+  onExecutionOptions?: (route: Route) => void,
+  options: { audioEnabled?: boolean; audioMaxDurationSeconds?: number } = {},
+) {
   await page.route("**/health/ready", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -35,6 +39,23 @@ async function installApiMocks(page: Page, onExecutionOptions?: (route: Route) =
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
+        audio_input: {
+          enabled: options.audioEnabled ?? false,
+          max_bytes: 1_000_000,
+          max_audio_files: 3,
+          max_total_bytes: 2_000_000,
+          max_duration_seconds: options.audioMaxDurationSeconds ?? 5,
+          allowed_mime_types: ["audio/wav"],
+        },
+        document_input: {
+          enabled: false,
+          max_bytes: 5_000_000,
+          max_documents: 3,
+          max_total_bytes: 10_000_000,
+          max_pages: 100,
+          max_text_bytes: 1_000_000,
+          allowed_mime_types: ["application/pdf", "text/plain"],
+        },
         image_input: {
           enabled: true,
           max_bytes: 5_000_000,
@@ -55,7 +76,34 @@ async function installApiMocks(page: Page, onExecutionOptions?: (route: Route) =
         tenant_id: "tenant-1",
         skills: { default: "default", items: [{ name: "default" }] },
         capability_profiles: { default: "standard", items: [{ name: "standard" }] },
-        llm_profiles: { default: "primary", items: [{ name: "primary" }] },
+        llm_profiles: {
+          default: "primary",
+          effective_default: {
+            name: "primary",
+            audio_input_allowed: true,
+            document_input_allowed: true,
+            image_input_allowed: true,
+            capability_declared: true,
+          },
+          items: [
+            {
+              name: "primary",
+              audio_input_allowed: true,
+              document_input_allowed: true,
+              image_input_allowed: true,
+              capability_declared: true,
+            },
+            {
+              name: "no-audio",
+              display_name: "No audio",
+              audio_input_allowed: false,
+              audio_input_reason: "profile_unsupported",
+              document_input_allowed: true,
+              image_input_allowed: true,
+              capability_declared: true,
+            },
+          ],
+        },
         agents: { items: [] },
       }),
     });
@@ -64,7 +112,12 @@ async function installApiMocks(page: Page, onExecutionOptions?: (route: Route) =
 
 async function installWorkspaceMocks(
   page: Page,
-  options: { consent?: boolean; uncertainResume?: boolean } = {},
+  options: {
+    consent?: boolean;
+    uncertainResume?: boolean;
+    onAttachmentUpload?: (body: Buffer, contentType: string) => void;
+    onMessage?: (body: { content: string; parts?: unknown[] }) => void;
+  } = {},
 ) {
   const messages = new Map<string, Array<Record<string, unknown>>>([
     [
@@ -138,6 +191,7 @@ async function installWorkspaceMocks(
       const threadId = messageMatch[1];
       if (request.method() === "POST") {
         const body = request.postDataJSON() as { content: string; parts?: unknown[] };
+        options.onMessage?.(body);
         const message = {
           id: `message-${String((messages.get(threadId)?.length ?? 0) + 1)}`,
           thread_id: threadId,
@@ -159,13 +213,16 @@ async function installWorkspaceMocks(
     const attachmentMatch = path.match(/^\/threads\/([^/]+)\/attachments(?:\/binary|\/([^/]+))$/);
     if (attachmentMatch) {
       if (path.endsWith("/binary")) {
+        const contentType = request.headers()["content-type"] ?? "application/octet-stream";
+        const body = request.postDataBuffer() ?? Buffer.alloc(0);
+        options.onAttachmentUpload?.(body, contentType);
         await route.fulfill({
           contentType: "application/json",
           body: JSON.stringify({
             attachment_id: "attachment-1",
             thread_id: attachmentMatch[1],
-            mime_type: "image/png",
-            size_bytes: 68,
+            mime_type: contentType,
+            size_bytes: body.length,
             created_at: new Date().toISOString(),
           }),
         });
@@ -349,6 +406,28 @@ async function openConversations(page: Page) {
   }
 }
 
+async function prepareFakeMicrophone(page: Page) {
+  await page.addInitScript(() => {
+    const trackedWindow = window as Window & { __audioTrackStops?: number };
+    trackedWindow.__audioTrackStops = 0;
+    const originalStop = Object.getOwnPropertyDescriptor(
+      MediaStreamTrack.prototype,
+      "stop",
+    )?.value as (this: MediaStreamTrack) => void;
+    MediaStreamTrack.prototype.stop = function stop() {
+      trackedWindow.__audioTrackStops = (trackedWindow.__audioTrackStops ?? 0) + 1;
+      return originalStop.call(this);
+    };
+  });
+  await page.context().grantPermissions(["microphone"], { origin: "http://127.0.0.1:4173" });
+}
+
+async function microphoneStopCount(page: Page): Promise<number> {
+  return page.evaluate(() => (
+    window as Window & { __audioTrackStops?: number }
+  ).__audioTrackStops ?? 0);
+}
+
 async function switchToDarkMode(page: Page) {
   const toggle = page.getByRole("button", { name: "Switch to dark mode" });
   if (!(await toggle.isVisible())) {
@@ -464,6 +543,120 @@ test("loads the conversation-first console and passes an accessibility scan", as
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("records, cancels, and uploads bounded PCM WAV audio", async ({ page }) => {
+  let uploadedAudio: Buffer | null = null;
+  let uploadedContentType = "";
+  let submittedMessage: { content: string; parts?: unknown[] } | null = null;
+  await installApiMocks(page, undefined, { audioEnabled: true });
+  await installWorkspaceMocks(page, {
+    onAttachmentUpload: (body, contentType) => {
+      uploadedAudio = body;
+      uploadedContentType = contentType;
+    },
+    onMessage: (body) => {
+      submittedMessage = body;
+    },
+  });
+  await prepareFakeMicrophone(page);
+  await page.goto("./");
+  await navigateToWorkspace(page);
+  await openConversations(page);
+  await page.getByRole("button", { name: "Review the deployment plan" }).click();
+
+  await page.getByRole("button", { name: "Record audio" }).click();
+  const recorder = page.getByRole("group", { name: "Audio recording" });
+  await expect(recorder).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send message" })).toBeDisabled();
+  expect((await new AxeBuilder({ page }).include(".chat-composer").analyze()).violations).toEqual([]);
+  const composerBox = await page.locator(".chat-composer").boundingBox();
+  const recorderBox = await recorder.boundingBox();
+  expect(composerBox).not.toBeNull();
+  expect(recorderBox).not.toBeNull();
+  expect(recorderBox!.x).toBeGreaterThanOrEqual(composerBox!.x);
+  expect(recorderBox!.x + recorderBox!.width).toBeLessThanOrEqual(composerBox!.x + composerBox!.width);
+
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.locator(".pending-audio-item")).toHaveCount(0);
+  await expect.poll(() => microphoneStopCount(page)).toBeGreaterThan(0);
+  expect(uploadedAudio).toBeNull();
+
+  await page.getByRole("button", { name: "Record audio" }).click();
+  await expect(recorder).toBeVisible();
+  await page.waitForTimeout(750);
+  await page.getByRole("button", { name: "Stop" }).click();
+  const queuedAudio = page.locator(".pending-audio-item");
+  await expect(queuedAudio).toBeVisible();
+  await expect(queuedAudio.locator("strong")).toHaveText(/^recording-.*\.wav$/);
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  await expect.poll(() => uploadedAudio?.length ?? 0).toBeGreaterThan(44);
+  expect(uploadedContentType).toBe("audio/wav");
+  expect(uploadedAudio!.subarray(0, 4).toString("ascii")).toBe("RIFF");
+  expect(uploadedAudio!.subarray(8, 12).toString("ascii")).toBe("WAVE");
+  expect(uploadedAudio!.readUInt16LE(20)).toBe(1);
+  expect(uploadedAudio!.readUInt16LE(22)).toBe(1);
+  expect(uploadedAudio!.readUInt16LE(34)).toBe(16);
+  expect(uploadedAudio!.length).toBeLessThanOrEqual(1_000_000);
+  await expect.poll(() => submittedMessage).toEqual(expect.objectContaining({
+    content: "",
+    parts: [expect.objectContaining({
+      type: "audio",
+      mime_type: "audio/wav",
+      attachment_id: "attachment-1",
+    })],
+  }));
+});
+
+test("auto-stops microphone capture at the configured duration limit", async ({ page }) => {
+  await installApiMocks(page, undefined, {
+    audioEnabled: true,
+    audioMaxDurationSeconds: 0.2,
+  });
+  await installWorkspaceMocks(page);
+  await prepareFakeMicrophone(page);
+  await page.goto("./");
+  await navigateToWorkspace(page);
+
+  await page.getByRole("button", { name: "Record audio" }).click();
+  await expect(page.getByRole("group", { name: "Audio recording" })).toBeVisible();
+  const queuedAudio = page.locator(".pending-audio-item");
+  await expect(queuedAudio).toBeVisible();
+  await expect(page.getByRole("group", { name: "Audio recording" })).toHaveCount(0);
+  await expect.poll(() => microphoneStopCount(page)).toBeGreaterThan(0);
+  const wav = await queuedAudio.locator("audio").evaluate(async (element) => {
+    const response = await fetch((element as HTMLAudioElement).src);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return {
+      size: bytes.length,
+      riff: String.fromCharCode(...bytes.slice(0, 4)),
+      wave: String.fromCharCode(...bytes.slice(8, 12)),
+    };
+  });
+  expect(wav.riff).toBe("RIFF");
+  expect(wav.wave).toBe("WAVE");
+  expect(wav.size).toBeGreaterThan(44);
+  expect(wav.size).toBeLessThanOrEqual(1_000_000);
+});
+
+test("cancels microphone capture when the selected profile drops audio capability", async ({ page }) => {
+  await installApiMocks(page, undefined, { audioEnabled: true });
+  await installWorkspaceMocks(page);
+  await prepareFakeMicrophone(page);
+  await page.goto("./");
+  await navigateToWorkspace(page);
+
+  await page.getByRole("button", { name: "Record audio" }).click();
+  await expect(page.getByRole("group", { name: "Audio recording" })).toBeVisible();
+  await page.getByLabel("Model profile").selectOption("no-audio");
+
+  const recordButton = page.getByRole("button", { name: "Record audio" });
+  await expect(recordButton).toBeDisabled();
+  await expect(recordButton).toHaveAttribute("title", "The selected model profile does not accept audio.");
+  await expect(page.getByRole("group", { name: "Audio recording" })).toHaveCount(0);
+  await expect(page.locator(".pending-audio-item")).toHaveCount(0);
+  await expect.poll(() => microphoneStopCount(page)).toBeGreaterThan(0);
 });
 
 test("uses readable typography tokens for chat and controls", async ({ page }) => {

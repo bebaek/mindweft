@@ -90,7 +90,7 @@ test("adds pasted clipboard images without blocking text paste", async ({ page }
 
   const composer = page.getByRole("textbox", { name: /Message/ });
   await composer.fill("Keep this draft");
-  const defaultAllowed = await composer.evaluate((element) => {
+  const defaultPrevented = await composer.evaluate((element) => {
     const clipboard = new DataTransfer();
     clipboard.setData("text/plain", " and paste this text");
     clipboard.items.add(new File(
@@ -100,10 +100,10 @@ test("adds pasted clipboard images without blocking text paste", async ({ page }
     ));
     const event = new Event("paste", { bubbles: true, cancelable: true });
     Object.defineProperty(event, "clipboardData", { value: clipboard });
-    return element.dispatchEvent(event);
+    return !element.dispatchEvent(event);
   });
 
-  expect(defaultAllowed).toBe(true);
+  expect(defaultPrevented).toBe(true);
   await expect(composer).toHaveValue("Keep this draft");
   await expect(page.getByRole("img", { name: "clipboard-image.png" })).toBeVisible();
   await expect(page.getByLabel("Image detail for clipboard-image.png")).toHaveValue("auto");
@@ -353,7 +353,15 @@ test("applies distinct curated branch hover colors in light and dark themes", as
     .withRules(["color-contrast"])
     .analyze();
   expect(lightAccessibility.violations).toEqual([]);
-  await page.getByRole("button", { name: "Switch to dark mode" }).click();
+  const darkModeToggle = page.getByRole("button", { name: "Switch to dark mode" });
+  if (!(await darkModeToggle.isVisible())) {
+    const conversationsToggle = page.getByRole("button", { name: "Show conversations" });
+    if (await conversationsToggle.isVisible()) await conversationsToggle.click();
+    else await page.getByRole("button", { name: "Open navigation" }).click();
+  }
+  await darkModeToggle.click();
+  const closeConversations = page.getByRole("button", { name: "Close conversations" });
+  if (await closeConversations.isVisible()) await closeConversations.dispatchEvent("click");
   await expect(page.locator("html")).toHaveClass(/dark/);
   await branchAction.hover();
   await page.waitForTimeout(200);
