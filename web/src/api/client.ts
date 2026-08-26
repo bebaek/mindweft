@@ -67,6 +67,8 @@ export interface ExecutionOptionSection {
 export interface ExecutionLlmOptionItem extends ExecutionOptionItem {
   input_modalities?: string[] | null;
   image_input_allowed: boolean;
+  document_input_allowed: boolean;
+  document_input_reason?: "disabled" | "backend_unsupported" | "profile_unsupported" | null;
   image_input_reason?: "disabled" | "backend_unsupported" | "profile_unsupported" | null;
   capability_declared: boolean;
 }
@@ -239,12 +241,17 @@ export interface ImagePart extends AttachmentPartBase {
   detail: "auto" | "low" | "high";
 }
 
+export interface DocumentPart extends AttachmentPartBase {
+  type: "document";
+  filename: string;
+}
+
 export interface TextPart {
   type: "text";
   text: string;
 }
 
-export type MessagePart = TextPart | ImagePart;
+export type MessagePart = TextPart | ImagePart | DocumentPart;
 
 export interface Message {
   id: string;
@@ -270,7 +277,16 @@ export interface ImageInputConfig {
   allowed_mime_types: string[];
 }
 
+export interface DocumentInputConfig {
+  enabled: boolean;
+  max_bytes: number;
+  max_documents: number;
+  max_total_bytes: number;
+  allowed_mime_types: string[];
+}
+
 export interface PublicConfig {
+  document_input: DocumentInputConfig;
   image_input: ImageInputConfig;
   [key: string]: unknown;
 }

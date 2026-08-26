@@ -4161,6 +4161,57 @@ def test_run_chat_loop_image_command_queues_next_message(
     assert "[assistant] it is tiny\n" in output
 
 
+def test_run_chat_loop_document_command_queues_next_message(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_stream = StringIO()
+    document_path = tmp_path / "requirements.pdf"
+    document_path.write_bytes(b"%PDF-1.7\nrequirements")
+    input_stream = StringIO(f"/document {document_path}\nreview this\n")
+    sent_messages: list[tuple[str, list[dict[str, object]] | None]] = []
+
+    class FakeChatClient:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def send_user_message(
+            self, content: str, *, parts: list[dict[str, object]] | None = None
+        ) -> dict[str, str]:
+            sent_messages.append((content, parts))
+            return {"id": "message-1"}
+
+        def run_thread(self) -> tuple[str, dict[str, object] | None]:
+            return ("document reply", None)
+
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    exit_code = run_chat_loop(
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey mindweft")
+    )
+
+    assert exit_code == 0
+    assert sent_messages == [
+        (
+            "review this",
+            [
+                {"type": "text", "text": "review this"},
+                {
+                    "type": "document",
+                    "mime_type": "application/pdf",
+                    "data": "JVBERi0xLjcKcmVxdWlyZW1lbnRz",
+                    "filename": "requirements.pdf",
+                },
+            ],
+        )
+    ]
+    output = output_stream.getvalue()
+    assert "[idle] queued 1 document(s) for the next message (1 total)\n" in output
+    assert "[assistant] document reply\n" in output
+
+
 def test_run_chat_loop_image_paste_command_queues_clipboard_image(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4274,6 +4325,66 @@ def test_run_chat_loop_keeps_queued_image_when_profile_becomes_text_only(
     assert "queued images cannot be sent: the selected LLM profile only accepts text" in output
     assert str(image_path) in output
     assert "cleared queued images" in output
+
+
+def test_run_chat_loop_keeps_queued_document_when_profile_becomes_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    document_path = tmp_path / "requirements.pdf"
+    document_path.write_bytes(b"%PDF-1.7\nrequirements")
+    output_stream = StringIO()
+    input_stream = StringIO(
+        f"/document {document_path}\nreview it\n/document list\n/document clear\n/exit\n"
+    )
+    capability_calls = 0
+
+    class FakeChatClient:
+        def __init__(self, config: ClientConfig, output_stream=None) -> None:
+            del config, output_stream
+
+        def execution_options(self) -> dict[str, object]:
+            nonlocal capability_calls
+            capability_calls += 1
+            allowed = capability_calls == 1
+            return {
+                "llm_profiles": {
+                    "default": "profile",
+                    "effective_default": {
+                        "name": "profile",
+                        "document_input_allowed": allowed,
+                        "document_input_reason": (None if allowed else "profile_unsupported"),
+                    },
+                    "items": [
+                        {
+                            "name": "profile",
+                            "document_input_allowed": allowed,
+                            "document_input_reason": (None if allowed else "profile_unsupported"),
+                        }
+                    ],
+                }
+            }
+
+        def send_user_message(self, content: str, *, parts=None) -> dict[str, str]:
+            del content, parts
+            raise AssertionError("an incompatible queued document must not be sent")
+
+    monkeypatch.setattr(voice_cli, "MindweftAPIClient", FakeChatClient)
+    monkeypatch.setattr(voice_cli.sys, "stdin", input_stream)
+    monkeypatch.setattr(voice_cli.sys, "stdout", output_stream)
+
+    assert (
+        run_chat_loop(ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey mindweft"))
+        == 0
+    )
+    output = output_stream.getvalue()
+    assert "queued 1 document(s) for the next message" in output
+    assert (
+        "queued documents cannot be sent: the selected LLM profile does not support document input"
+        in output
+    )
+    assert str(document_path) in output
+    assert "cleared queued documents" in output
 
 
 def test_build_chat_prompt_session_for_tty_streams(
@@ -5308,7 +5419,8 @@ def test_run_chat_loop_handles_local_chat_commands(
         "/fork [number|--pick|--message-id UUID], /lineage, /parent, /children [number], "
         "/compact, /actions, "
         "/discard-action <consent-id>, /export [markdown|json], /tokens, "
-        "/debug, /editor, /image <path...>|paste|list|clear, /commands, "
+        "/debug, /editor, /image <path...>|paste|list|clear, "
+        "/document <path...>|list|clear, /commands, "
         "/command set|show|delete, "
         "/exit, /quit. Default: Enter submits; Esc+Enter or Ctrl+J inserts a newline. "
         "Set MINIGENT_CLIENT_CHAT_SUBMIT_MODE=alt-enter to make Esc+Enter submit.\n"

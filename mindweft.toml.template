@@ -53,6 +53,14 @@ enabled = false
 # max_dimension = 16384
 # allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
 
+[document_input]
+# Enable PDF attachments only for profiles that explicitly declare "document" input.
+enabled = false
+# max_bytes = 10485760
+# max_documents = 4
+# max_total_bytes = 20971520
+# allowed_mime_types = ["application/pdf"]
+
 [attachments]
 # Use persistent SQLite in multi-replica or restart-safe deployments.
 # db_path = "/data/mindweft-attachments.db"

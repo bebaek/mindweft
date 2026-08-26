@@ -3,24 +3,52 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from app.execution import (
-    AGENT_BACKEND_NATIVE,
-    TenantExecutionContext,
-    get_llm_config,
-)
+from app.execution import AGENT_BACKEND_NATIVE, TenantExecutionContext, get_llm_config
 
-ImageInputUnavailableReason = Literal[
-    "disabled",
-    "backend_unsupported",
-    "profile_unsupported",
-]
+InputUnavailableReason = Literal["disabled", "backend_unsupported", "profile_unsupported"]
+ImageInputUnavailableReason = InputUnavailableReason
 
 
 @dataclass(frozen=True)
-class ImageInputAvailability:
+class InputAvailability:
     allowed: bool
-    reason: ImageInputUnavailableReason | None = None
+    reason: InputUnavailableReason | None = None
     capability_declared: bool = False
+
+
+ImageInputAvailability = InputAvailability
+DocumentInputAvailability = InputAvailability
+
+
+def _input_availability(
+    execution: TenantExecutionContext,
+    llm_profile: str | None,
+    *,
+    modality: str,
+    globally_enabled: bool,
+    require_declaration: bool,
+) -> InputAvailability:
+    llm_config = get_llm_config(execution, llm_profile)
+    input_modalities = llm_config.input_modalities
+    declared = input_modalities is not None
+    if not globally_enabled:
+        return InputAvailability(False, "disabled", declared)
+    if execution.config.agent_backend.type != AGENT_BACKEND_NATIVE:
+        return InputAvailability(False, "backend_unsupported", declared)
+    if modality == "document" and llm_config.provider not in {
+        "mock",
+        "anthropic",
+        "google",
+        "google-generative-ai",
+        "gemini",
+        "generic-oauth",
+    }:
+        return InputAvailability(False, "profile_unsupported", declared)
+    if (require_declaration and input_modalities is None) or (
+        input_modalities is not None and modality not in input_modalities
+    ):
+        return InputAvailability(False, "profile_unsupported", declared)
+    return InputAvailability(True, capability_declared=declared)
 
 
 def image_input_availability(
@@ -29,39 +57,43 @@ def image_input_availability(
     *,
     globally_enabled: bool,
 ) -> ImageInputAvailability:
-    """Return Mindweft's effective image-input policy for an execution profile.
+    """Resolve image policy, retaining permissive omitted metadata for compatibility."""
+    return _input_availability(
+        execution,
+        llm_profile,
+        modality="image",
+        globally_enabled=globally_enabled,
+        require_declaration=False,
+    )
 
-    An omitted ``input_modalities`` declaration remains permissive for backward
-    compatibility. The provider can still reject a model that does not actually
-    accept images.
-    """
-    llm_config = get_llm_config(execution, llm_profile)
-    input_modalities = llm_config.input_modalities
-    declared = input_modalities is not None
-    if not globally_enabled:
-        return ImageInputAvailability(
-            allowed=False,
-            reason="disabled",
-            capability_declared=declared,
-        )
-    if execution.config.agent_backend.type != AGENT_BACKEND_NATIVE:
-        return ImageInputAvailability(
-            allowed=False,
-            reason="backend_unsupported",
-            capability_declared=declared,
-        )
-    if input_modalities is not None and "image" not in input_modalities:
-        return ImageInputAvailability(
-            allowed=False,
-            reason="profile_unsupported",
-            capability_declared=True,
-        )
-    return ImageInputAvailability(allowed=True, capability_declared=declared)
+
+def document_input_availability(
+    execution: TenantExecutionContext,
+    llm_profile: str | None,
+    *,
+    globally_enabled: bool,
+) -> DocumentInputAvailability:
+    """Resolve PDF policy; document support always requires an explicit declaration."""
+    return _input_availability(
+        execution,
+        llm_profile,
+        modality="document",
+        globally_enabled=globally_enabled,
+        require_declaration=True,
+    )
+
+
+def input_unavailable_detail(modality: str, reason: InputUnavailableReason) -> str:
+    if reason == "disabled":
+        return f"{modality} input is disabled"
+    if reason == "backend_unsupported":
+        return f"selected agent backend does not support {modality} input"
+    return f"selected LLM profile does not support {modality} input"
 
 
 def image_input_unavailable_detail(reason: ImageInputUnavailableReason) -> str:
-    if reason == "disabled":
-        return "image input is disabled"
-    if reason == "backend_unsupported":
-        return "selected agent backend does not support image input"
-    return "selected LLM profile does not support image input"
+    return input_unavailable_detail("image", reason)
+
+
+def document_input_unavailable_detail(reason: InputUnavailableReason) -> str:
+    return input_unavailable_detail("document", reason)

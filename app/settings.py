@@ -36,6 +36,15 @@ DEFAULT_IMAGE_INPUT_MAX_DIMENSION = 16_384
 DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/webp", "image/gif"}
 )
+DOCUMENT_INPUT_ENABLED_ENV = "MINIGENT_DOCUMENT_INPUT_ENABLED"
+DOCUMENT_INPUT_MAX_BYTES_ENV = "MINIGENT_DOCUMENT_INPUT_MAX_BYTES"
+DOCUMENT_INPUT_MAX_DOCUMENTS_ENV = "MINIGENT_DOCUMENT_INPUT_MAX_DOCUMENTS"
+DOCUMENT_INPUT_MAX_TOTAL_BYTES_ENV = "MINIGENT_DOCUMENT_INPUT_MAX_TOTAL_BYTES"
+DOCUMENT_INPUT_ALLOWED_MIME_TYPES_ENV = "MINIGENT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES"
+DEFAULT_DOCUMENT_INPUT_MAX_BYTES = 10 * 1024 * 1024
+DEFAULT_DOCUMENT_INPUT_MAX_DOCUMENTS = 4
+DEFAULT_DOCUMENT_INPUT_MAX_TOTAL_BYTES = 20 * 1024 * 1024
+DEFAULT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES = frozenset({"application/pdf"})
 
 
 @dataclass(frozen=True)
@@ -75,11 +84,42 @@ class ImageInputSettings:
 
 
 @dataclass(frozen=True)
+class DocumentInputSettings:
+    enabled: bool = False
+    max_bytes: int = DEFAULT_DOCUMENT_INPUT_MAX_BYTES
+    max_documents: int = DEFAULT_DOCUMENT_INPUT_MAX_DOCUMENTS
+    max_total_bytes: int = DEFAULT_DOCUMENT_INPUT_MAX_TOTAL_BYTES
+    allowed_mime_types: frozenset[str] = DEFAULT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> DocumentInputSettings:
+        lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
+        return cls(
+            enabled=_parse_boolean(lookup, DOCUMENT_INPUT_ENABLED_ENV),
+            max_bytes=_parse_positive_int(
+                lookup, DOCUMENT_INPUT_MAX_BYTES_ENV, DEFAULT_DOCUMENT_INPUT_MAX_BYTES
+            ),
+            max_documents=_parse_positive_int(
+                lookup, DOCUMENT_INPUT_MAX_DOCUMENTS_ENV, DEFAULT_DOCUMENT_INPUT_MAX_DOCUMENTS
+            ),
+            max_total_bytes=_parse_positive_int(
+                lookup, DOCUMENT_INPUT_MAX_TOTAL_BYTES_ENV, DEFAULT_DOCUMENT_INPUT_MAX_TOTAL_BYTES
+            ),
+            allowed_mime_types=_parse_allowed_mime_types(
+                lookup,
+                DOCUMENT_INPUT_ALLOWED_MIME_TYPES_ENV,
+                DEFAULT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES,
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class MindweftSettings:
     admin_store: AdminStoreSettings
     agent_backend: TenantAgentBackendConfig
     attachment_store: AttachmentStoreSettings
     auth: AuthSettings
+    document_input: DocumentInputSettings
     image_input: ImageInputSettings
     llm: LLMSettings
     logging: LoggingSettings
@@ -100,6 +140,7 @@ class MindweftSettings:
             agent_backend=TenantAgentBackendConfig.from_env(lookup),
             attachment_store=AttachmentStoreSettings.from_env(lookup),
             auth=AuthSettings.from_env(lookup),
+            document_input=DocumentInputSettings.from_env(lookup),
             image_input=ImageInputSettings.from_env(lookup),
             llm=LLMSettings.from_env(lookup),
             logging=LoggingSettings.from_env(lookup),
@@ -122,8 +163,37 @@ def load_settings(env: Mapping[str, str] | None = None) -> MindweftSettings:
     return MindweftSettings.from_env(env)
 
 
+def document_input_settings_from_env() -> DocumentInputSettings:
+    return DocumentInputSettings.from_env()
+
+
 def image_input_settings_from_env() -> ImageInputSettings:
     return ImageInputSettings.from_env()
+
+
+def _document_input_public_dict(settings: DocumentInputSettings) -> dict[str, object]:
+    return {
+        "enabled": settings.enabled,
+        "max_bytes": settings.max_bytes,
+        "max_documents": settings.max_documents,
+        "max_total_bytes": settings.max_total_bytes,
+        "allowed_mime_types": sorted(settings.allowed_mime_types),
+    }
+
+
+def _document_input_export_public_dict(settings: DocumentInputSettings) -> dict[str, object]:
+    exported: dict[str, object] = {}
+    if settings.enabled:
+        exported["enabled"] = True
+    if settings.max_bytes != DEFAULT_DOCUMENT_INPUT_MAX_BYTES:
+        exported["max_bytes"] = settings.max_bytes
+    if settings.max_documents != DEFAULT_DOCUMENT_INPUT_MAX_DOCUMENTS:
+        exported["max_documents"] = settings.max_documents
+    if settings.max_total_bytes != DEFAULT_DOCUMENT_INPUT_MAX_TOTAL_BYTES:
+        exported["max_total_bytes"] = settings.max_total_bytes
+    if settings.allowed_mime_types != DEFAULT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES:
+        exported["allowed_mime_types"] = sorted(settings.allowed_mime_types)
+    return exported
 
 
 def _image_input_public_dict(settings: ImageInputSettings) -> dict[str, object]:
@@ -162,7 +232,11 @@ def _canonical_env_name(name: str) -> str:
 
 
 def _parse_image_input_enabled(env: Mapping[str, str]) -> bool:
-    value = env.get(IMAGE_INPUT_ENABLED_ENV)
+    return _parse_boolean(env, IMAGE_INPUT_ENABLED_ENV)
+
+
+def _parse_boolean(env: Mapping[str, str], name: str) -> bool:
+    value = env.get(name)
     if value is None:
         return False
     normalized = value.strip().lower()
@@ -172,13 +246,21 @@ def _parse_image_input_enabled(env: Mapping[str, str]) -> bool:
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    raise RuntimeError(f"{_canonical_env_name(IMAGE_INPUT_ENABLED_ENV)} must be a boolean")
+    raise RuntimeError(f"{_canonical_env_name(name)} must be a boolean")
 
 
 def _parse_image_input_allowed_mime_types(env: Mapping[str, str]) -> frozenset[str]:
-    configured = env.get(IMAGE_INPUT_ALLOWED_MIME_TYPES_ENV, "").strip()
+    return _parse_allowed_mime_types(
+        env, IMAGE_INPUT_ALLOWED_MIME_TYPES_ENV, DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES
+    )
+
+
+def _parse_allowed_mime_types(
+    env: Mapping[str, str], name: str, default: frozenset[str]
+) -> frozenset[str]:
+    configured = env.get(name, "").strip()
     if not configured:
-        return DEFAULT_IMAGE_INPUT_ALLOWED_MIME_TYPES
+        return default
     return frozenset(item.strip().lower() for item in configured.split(",") if item.strip())
 
 

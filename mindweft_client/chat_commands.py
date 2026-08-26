@@ -303,16 +303,44 @@ def _image_parts_from_paths(
     return parts
 
 
+def _document_parts_from_paths(paths: Sequence[str] | None) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    for raw_path in paths or []:
+        path = Path(raw_path).expanduser()
+        if not path.is_file():
+            raise SystemExit(f"document file not found: {raw_path}")
+        if path.suffix.lower() != ".pdf":
+            raise SystemExit(f"document must be a PDF file: {raw_path}")
+        data = path.read_bytes()
+        if not data.startswith(b"%PDF-"):
+            raise SystemExit(f"document does not contain PDF data: {raw_path}")
+        parts.append(
+            {
+                "type": "document",
+                "mime_type": "application/pdf",
+                "data": base64.b64encode(data).decode("ascii"),
+                "filename": path.name,
+            }
+        )
+    return parts
+
+
 def _message_parts(
-    content: str, image_paths: Sequence[str] | None, *, detail: str
+    content: str,
+    image_paths: Sequence[str] | None,
+    document_paths: Sequence[str] | None,
+    *,
+    detail: str,
 ) -> list[dict[str, Any]] | None:
     image_parts = _image_parts_from_paths(image_paths, detail=detail)
-    if not image_parts:
+    document_parts = _document_parts_from_paths(document_paths)
+    if not image_parts and not document_parts:
         return None
     parts: list[dict[str, Any]] = []
     if content:
         parts.append({"type": "text", "text": content})
     parts.extend(image_parts)
+    parts.extend(document_parts)
     return parts
 
 
@@ -326,6 +354,7 @@ def run_chat(
     message_parts = _message_parts(
         args.message,
         getattr(args, "image", None),
+        getattr(args, "document", None),
         detail=getattr(args, "image_detail", "auto"),
     )
     client.add_message(thread_id, args.message, parts=message_parts)

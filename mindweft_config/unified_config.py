@@ -134,6 +134,13 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "max_dimension": "MINIGENT_IMAGE_INPUT_MAX_DIMENSION",
         "allowed_mime_types": "MINIGENT_IMAGE_INPUT_ALLOWED_MIME_TYPES",
     },
+    "document_input": {
+        "enabled": "MINIGENT_DOCUMENT_INPUT_ENABLED",
+        "max_bytes": "MINIGENT_DOCUMENT_INPUT_MAX_BYTES",
+        "max_documents": "MINIGENT_DOCUMENT_INPUT_MAX_DOCUMENTS",
+        "max_total_bytes": "MINIGENT_DOCUMENT_INPUT_MAX_TOTAL_BYTES",
+        "allowed_mime_types": "MINIGENT_DOCUMENT_INPUT_ALLOWED_MIME_TYPES",
+    },
     "attachments": {
         "db_path": "MINIGENT_ATTACHMENT_DB_PATH",
         "max_per_thread": "MINIGENT_ATTACHMENT_MAX_PER_THREAD",

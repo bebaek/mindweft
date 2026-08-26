@@ -17,7 +17,16 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import HTTPException
 
-from app.models import ImagePart, LLMResponse, Message, MessageRole, TextPart, ToolCall, ToolSpec
+from app.models import (
+    DocumentPart,
+    ImagePart,
+    LLMResponse,
+    Message,
+    MessageRole,
+    TextPart,
+    ToolCall,
+    ToolSpec,
+)
 from app.oauth import GENERIC_OAUTH_PROVIDER, GenericOAuthProvider
 from mindweft_config.unified_config import normalize_mindweft_env
 
@@ -1677,6 +1686,12 @@ def _message_to_openai_content(message: Message) -> str | list[dict[str, Any]]:
                         "image_url": {"url": url, "detail": part.detail},
                     }
                 )
+            continue
+        if isinstance(part, DocumentPart):
+            raise HTTPException(
+                status_code=400,
+                detail="selected Chat Completions provider does not support document input",
+            )
     return content or message.content
 
 
@@ -1689,7 +1704,7 @@ def _gemini_parts_for_message(message: Message) -> list[dict[str, Any]]:
             if part.text:
                 parts.append({"text": part.text})
             continue
-        if isinstance(part, ImagePart):
+        if isinstance(part, (ImagePart, DocumentPart)):
             if part.data:
                 parts.append({"inline_data": {"mime_type": part.mime_type, "data": part.data}})
             elif part.url:
@@ -1812,6 +1827,11 @@ def _message_to_anthropic_content(message: Message) -> list[dict[str, Any]]:
             image = _anthropic_image_block(part)
             if image:
                 content.append(image)
+            continue
+        if isinstance(part, DocumentPart):
+            document = _anthropic_document_block(part)
+            if document:
+                content.append(document)
     return content or ([{"type": "text", "text": message.content}] if message.content else [])
 
 
@@ -1834,6 +1854,20 @@ def _anthropic_image_block(part: ImagePart) -> dict[str, Any] | None:
             },
         }
     return None
+
+
+def _anthropic_document_block(part: DocumentPart) -> dict[str, Any] | None:
+    if not part.data:
+        return None
+    return {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": part.mime_type,
+            "data": part.data,
+        },
+        "title": part.filename,
+    }
 
 
 def _parse_anthropic_response(
@@ -2263,6 +2297,15 @@ def _message_to_responses_content(message: Message) -> str | list[dict[str, Any]
             url = _image_data_url(part)
             if url:
                 content.append({"type": "input_image", "image_url": url})
+            continue
+        if isinstance(part, DocumentPart) and part.data:
+            content.append(
+                {
+                    "type": "input_file",
+                    "filename": part.filename,
+                    "file_data": f"data:{part.mime_type};base64,{part.data}",
+                }
+            )
     return content or message.content
 
 
