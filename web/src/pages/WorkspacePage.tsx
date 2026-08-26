@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
@@ -14,6 +14,11 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
 import { reasoningSummary, persistedToolSteps, visibleChatMessages, withDefaultAgent, type PersistedToolStep } from "./workspaceMessages";
+import {
+  classifyAttachmentFiles,
+  unsupportedAttachmentMessage,
+  validateQueueAddition,
+} from "./workspaceAttachments";
 
 import { runErrorMessage } from "./runEvents";
 import { ContextDialog } from "../components/ContextDialog";
@@ -132,12 +137,14 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   const [showArchivedThreads, setShowArchivedThreads] = useState(false);
   const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>([]);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [consentRequest, setConsentRequest] = useState<PrivateValueConsentRequest | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const activityId = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const pendingImagesRef = useRef<PendingImage[]>([]);
+  const attachmentDragDepth = useRef(0);
   const pendingConsentRef = useRef<PrivateValueConsentRequest | null>(null);
 
   const pendingConsents = useQuery({
@@ -308,6 +315,13 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     ? "Image input is disabled on this server."
     : profileImageUnavailable;
   const queuedImagesBlocked = pendingImages.length > 0 && !imageInputAvailable;
+  const attachmentDropMessage = imageInputAvailable && documentInputAvailable
+    ? "Drop images or PDFs to attach them"
+    : imageInputAvailable
+      ? "Drop images to attach them"
+      : documentInputAvailable
+        ? "Drop PDFs to attach them"
+        : null;
   const canSaveDefaultAgent = Boolean(
     selectedAgent && selectedAgent !== executionOptions.data?.agents.default,
   );
@@ -500,76 +514,106 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     }
   }
 
-  function addDocumentFiles(files: FileList | File[] | null) {
-    if (!files?.length) return;
-    const documentConfig = config.data?.document_input;
-    if (!documentConfig?.enabled || !documentInputAvailable) {
-      setError(documentInputMessage ?? "Document input is unavailable.");
-      return;
-    }
-    const candidates = Array.from(files).map((file) =>
-      !file.type && file.name.toLowerCase().endsWith(".pdf")
-        ? new File([file], file.name, { type: "application/pdf" })
-        : file
-    );
-    if (pendingDocuments.length + candidates.length > documentConfig.max_documents) {
-      setError(`A message can include at most ${String(documentConfig.max_documents)} documents.`);
-      return;
-    }
-    const totalBytes = [...pendingDocuments.map((item) => item.file.size), ...candidates.map((file) => file.size)]
-      .reduce((sum, size) => sum + size, 0);
-    if (totalBytes > documentConfig.max_total_bytes) {
-      setError("Selected documents exceed the total message size limit.");
-      return;
-    }
-    for (const file of candidates) {
-      if (!documentConfig.allowed_mime_types.includes(file.type.toLowerCase())) {
-        setError(`Unsupported document type: ${file.type || file.name}`);
-        return;
-      }
-      if (file.size > documentConfig.max_bytes) {
-        setError(`${file.name} exceeds the per-document size limit.`);
-        return;
-      }
-    }
-    setError(null);
-    setPendingDocuments((documents) => [...documents, ...candidates.map((file) => ({ file }))]);
-  }
-
-  function addImageFiles(files: FileList | File[] | null) {
+  function addAttachmentFiles(files: FileList | File[] | null) {
     if (!files?.length) return;
     const imageConfig = config.data?.image_input;
-    if (!imageConfig?.enabled || !imageInputAvailable) {
+    const documentConfig = config.data?.document_input;
+    if (!imageConfig || !documentConfig) {
+      setError("Attachment options are still loading.");
+      return;
+    }
+
+    const candidates = classifyAttachmentFiles(files, imageConfig, documentConfig);
+    if (candidates.images.length > 0 && !imageInputAvailable) {
       setError(imageInputMessage ?? "Image input is unavailable.");
       return;
     }
-    const candidates = Array.from(files);
-    const totalCount = pendingImages.length + candidates.length;
-    const totalBytes = [...pendingImages.map((image) => image.file.size), ...candidates.map((file) => file.size)]
-      .reduce((sum, size) => sum + size, 0);
-    if (totalCount > imageConfig.max_images) {
-      setError(`A message can include at most ${String(imageConfig.max_images)} images.`);
+    if (candidates.documents.length > 0 && !documentInputAvailable) {
+      setError(documentInputMessage ?? "Document input is unavailable.");
       return;
     }
-    if (totalBytes > imageConfig.max_total_bytes) {
-      setError("Selected images exceed the total message size limit.");
+
+    const imageError = validateQueueAddition(
+      pendingImages.map((image) => image.file),
+      candidates.images,
+      {
+        allowed_mime_types: imageConfig.allowed_mime_types,
+        max_bytes: imageConfig.max_bytes,
+        max_items: imageConfig.max_images,
+        max_total_bytes: imageConfig.max_total_bytes,
+      },
+      { singular: "image", plural: "images" },
+    );
+    const documentError = validateQueueAddition(
+      pendingDocuments.map((document) => document.file),
+      candidates.documents,
+      {
+        allowed_mime_types: documentConfig.allowed_mime_types,
+        max_bytes: documentConfig.max_bytes,
+        max_items: documentConfig.max_documents,
+        max_total_bytes: documentConfig.max_total_bytes,
+      },
+      { singular: "document", plural: "documents" },
+    );
+    if (imageError || documentError) {
+      setError(imageError ?? documentError);
       return;
     }
-    for (const file of candidates) {
-      if (!imageConfig.allowed_mime_types.includes(file.type.toLowerCase())) {
-        setError(`Unsupported image type: ${file.type || file.name}`);
-        return;
-      }
-      if (file.size > imageConfig.max_bytes) {
-        setError(`${file.name} exceeds the per-image size limit.`);
-        return;
-      }
+
+    if (candidates.images.length > 0) {
+      setPendingImages((images) => [
+        ...images,
+        ...candidates.images.map((file) => ({
+          file,
+          previewUrl: URL.createObjectURL(file),
+          detail: "auto" as const,
+        })),
+      ]);
     }
-    setError(null);
-    setPendingImages((images) => [
-      ...images,
-      ...candidates.map((file) => ({ file, previewUrl: URL.createObjectURL(file), detail: "auto" as const })),
-    ]);
+    if (candidates.documents.length > 0) {
+      setPendingDocuments((documents) => [
+        ...documents,
+        ...candidates.documents.map((file) => ({ file })),
+      ]);
+    }
+    setError(
+      candidates.unsupported.length > 0
+        ? unsupportedAttachmentMessage(candidates.unsupported)
+        : null,
+    );
+  }
+
+  function isFileDrag(event: DragEvent<HTMLElement>): boolean {
+    return Array.from(event.dataTransfer.types).includes("Files");
+  }
+
+  function handleAttachmentDragEnter(event: DragEvent<HTMLFormElement>) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    if (isRunning || !attachmentDropMessage) return;
+    attachmentDragDepth.current += 1;
+    setAttachmentDragActive(true);
+  }
+
+  function handleAttachmentDragOver(event: DragEvent<HTMLFormElement>) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = isRunning ? "none" : "copy";
+  }
+
+  function handleAttachmentDragLeave(event: DragEvent<HTMLFormElement>) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    attachmentDragDepth.current = Math.max(0, attachmentDragDepth.current - 1);
+    if (attachmentDragDepth.current === 0) setAttachmentDragActive(false);
+  }
+
+  function handleAttachmentDrop(event: DragEvent<HTMLFormElement>) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    attachmentDragDepth.current = 0;
+    setAttachmentDragActive(false);
+    if (!isRunning) addAttachmentFiles(event.dataTransfer.files);
   }
 
   function removeImage(index: number) {
@@ -869,7 +913,17 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           </details>
         )}
 
-        <form className={`chat-composer${selectedThreadId === null ? "" : " has-thread"}`} onSubmit={(event) => void sendMessage(event)}>
+        <form
+          className={`chat-composer${selectedThreadId === null ? "" : " has-thread"}${attachmentDragActive ? " is-dragging-attachments" : ""}`}
+          onSubmit={(event) => void sendMessage(event)}
+          onDragEnter={handleAttachmentDragEnter}
+          onDragOver={handleAttachmentDragOver}
+          onDragLeave={handleAttachmentDragLeave}
+          onDrop={handleAttachmentDrop}
+        >
+          {attachmentDragActive && (
+            <div className="attachment-drop-target" role="status">{attachmentDropMessage}</div>
+          )}
           {pendingDocuments.length > 0 && (
             <div className="pending-documents">
               {pendingDocuments.map((document, index) => (
@@ -973,7 +1027,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
               accept={config.data?.document_input.allowed_mime_types.join(",") ?? "application/pdf"}
               multiple
               disabled={isRunning || !documentInputAvailable}
-              onChange={(event) => { addDocumentFiles(event.target.files); event.target.value = ""; }}
+              onChange={(event) => { addAttachmentFiles(event.target.files); event.target.value = ""; }}
             />
           </label>
           <label
@@ -986,7 +1040,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
               accept={config.data?.image_input.allowed_mime_types.join(",") ?? "image/*"}
               multiple
               disabled={isRunning || !imageInputAvailable}
-              onChange={(event) => { addImageFiles(event.target.files); event.target.value = ""; }}
+              onChange={(event) => { addAttachmentFiles(event.target.files); event.target.value = ""; }}
             />
           </label>
           <textarea
@@ -1004,9 +1058,10 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
                     .filter((item) => item.kind === "file")
                     .map((item) => item.getAsFile())
                     .filter((file): file is File => file !== null);
-              const images = clipboardFiles
-                .filter((file) => file.type.toLowerCase().startsWith("image/"));
-              if (images.length > 0) addImageFiles(images);
+              if (clipboardFiles.length > 0) {
+                event.preventDefault();
+                addAttachmentFiles(clipboardFiles);
+              }
             }}
             onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
               if (event.key === "Enter" && !event.shiftKey) {
@@ -1020,7 +1075,10 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           ) : (
             <button className="send-message" type="submit" disabled={queuedDocumentsBlocked || queuedImagesBlocked || (!draft.trim() && pendingImages.length === 0 && pendingDocuments.length === 0)} aria-label="Send message">↑</button>
           )}
-          <small>Enter to send · Shift+Enter for a new line{imageInputAvailable ? " · Paste images" : ""}</small>
+          <small>
+            Enter to send · Shift+Enter for a new line
+            {imageInputAvailable || documentInputAvailable ? " · Paste or drop attachments" : ""}
+          </small>
         </form>
       </div>
       <ContextDialog
