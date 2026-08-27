@@ -595,7 +595,7 @@ uv run mindweft skills
 uv run mindweft capabilities
 uv run mindweft threads
 uv run mindweft resume
-uv run mindweft export --format markdown
+uv run mindweft export --format markdown --output transcript.md
 uv run mindweft config doctor
 ```
 
@@ -605,6 +605,11 @@ Install as a reusable CLI app:
 uv tool install '.[voice]'
 mindweft-client chat
 ```
+
+The export command writes a readable transcript, not a portable thread backup. Markdown and JSON
+omit thread configuration, context, lineage, and attachment bytes, and the exported messages may
+contain private values rendered for the authenticated user. Review transcript files before sharing
+them. Thread archive import/export is not currently supported.
 
 See the [CLI reference](docs/cli.md) for all commands, interactive slash commands,
 execution option discovery, streaming options, voice modes, and configuration.

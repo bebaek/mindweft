@@ -216,9 +216,21 @@ picker. Use `--no-picker` to skip the picker and resume the latest thread direct
 ### Export
 
 ```bash
-mindweft export --format markdown         # export the latest remembered thread
-mindweft export <thread-id> --format json # export a specific thread
+mindweft export --format markdown                       # export latest thread to stdout
+mindweft export <thread-id> --format json               # export a specific thread to stdout
+mindweft export <thread-id> --output transcript.md      # write Markdown to a file
+mindweft export <thread-id> --format json --output transcript.json
 ```
+
+`export` produces a readable transcript rather than a portable thread archive. Markdown and JSON
+contain the user-visible messages but omit thread configuration, context summaries, lineage, and
+attachment bytes. The JSON format is therefore not a backup format and cannot currently be imported
+to reconstruct a thread.
+
+Transcript messages are rendered for the authenticated user and may include private values that the
+server protects internally. Treat exported files as sensitive and review them before sharing. The
+interactive `/export [markdown|json]` command has the same transcript and privacy semantics and
+always writes to the interactive output stream.
 
 ### Diagnostics
 

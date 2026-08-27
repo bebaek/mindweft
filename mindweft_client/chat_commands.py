@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 import mimetypes
 import secrets
 import sys
@@ -603,11 +604,15 @@ def run_export(
         output: dict[str, Any] = {"thread_id": thread_id, "messages": messages}
         if trace_id is not None:
             output["trace_id"] = trace_id
-        print_json(output)
-        return 0
-    if trace_id is not None:
-        print(f"<!-- trace_id={trace_id} -->")
-    print(_format_markdown_transcript(thread_id, messages), end="")
+        text = json.dumps(output, indent=2, sort_keys=True) + "\n"
+    else:
+        trace_comment = f"<!-- trace_id={trace_id} -->\n" if trace_id is not None else ""
+        text = trace_comment + _format_markdown_transcript(thread_id, messages)
+    output_path = getattr(args, "output", None)
+    if output_path:
+        Path(output_path).write_text(text, encoding="utf-8")
+    else:
+        print(text, end="")
     return 0
 
 
