@@ -713,6 +713,47 @@ def test_export_thread_as_json(monkeypatch: Any, tmp_path: Path, capsys: Any) ->
     assert json.loads(capsys.readouterr().out) == {"thread_id": "thread-2", "messages": messages}
 
 
+def test_export_thread_to_files(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    messages = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    ]
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads/thread-2/messages"):
+            return _Response(body=messages)
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+    markdown_path = tmp_path / "thread.md"
+    json_path = tmp_path / "thread.json"
+
+    assert cli.main(["export", "thread-2", "--output", str(markdown_path)]) == 0
+    assert (
+        markdown_path.read_text(encoding="utf-8")
+        == "# Mindweft transcript\n\nThread: `thread-2`\n\n## User\n\nhello\n\n## Assistant\n\nhi\n"
+    )
+    assert (
+        cli.main(
+            [
+                "export",
+                "thread-2",
+                "--format",
+                "json",
+                "--output",
+                str(json_path),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(json_path.read_text(encoding="utf-8")) == {
+        "thread_id": "thread-2",
+        "messages": messages,
+    }
+    assert capsys.readouterr().out == ""
+
+
 def test_cli_prints_friendly_auth_errors(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     def urlopen(request: Any) -> _Response:
         raise urllib.error.HTTPError(

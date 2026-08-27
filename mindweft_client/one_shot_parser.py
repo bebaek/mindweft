@@ -273,7 +273,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="When resuming without an ID, skip the interactive thread picker and use the latest thread.",
     )
 
-    export_parser = subparsers.add_parser("export", help="Export a thread transcript.")
+    export_parser = subparsers.add_parser(
+        "export",
+        help="Export a thread transcript.",
+        description=(
+            "Export a readable thread transcript. Transcript exports are not portable thread "
+            "archives and may contain private values rendered for the authenticated user."
+        ),
+    )
     export_parser.add_argument(
         "thread_id",
         nargs="?",
@@ -284,7 +291,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--format",
         choices=["markdown", "json"],
         default="markdown",
-        help="Transcript output format.",
+        help="Transcript output format. Neither format is a portable thread archive.",
+    )
+    export_parser.add_argument(
+        "--output",
+        default=None,
+        help="Write the transcript to this file instead of stdout.",
     )
 
     threads_parser = subparsers.add_parser("threads", help="Manage conversation threads.")
