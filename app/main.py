@@ -168,6 +168,14 @@ from app.store import (
     ThreadStoreSettings,
 )
 from app.tenants import require_active_tenant_principal, require_tenant_context
+from app.thread_archives import (
+    ThreadArchiveImportResponse,
+    ThreadArchiveImportWarning,
+    ThreadArchiveV1,
+    build_thread_archive,
+    imported_messages,
+    validate_importable_thread_archive,
+)
 from app.thread_title_service import (
     automatic_semantic_titles_supported,
     generate_semantic_thread_title,
@@ -1860,6 +1868,21 @@ def create_app(
             offset=offset,
         )
 
+    @app.get("/threads/{thread_id}/archive", response_model=ThreadArchiveV1)
+    async def export_thread_archive(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> ThreadArchiveV1:
+        store = request.app.state.store
+        thread = store.get_thread(principal.tenant_id, thread_id)
+        messages = store.list_messages(principal.tenant_id, thread_id)
+        context = store.get_thread_context(principal.tenant_id, thread_id)
+        try:
+            return build_thread_archive(thread, messages, context)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.get("/threads/{thread_id}/lineage", response_model=ThreadLineageResponse)
     async def get_thread_lineage(
         thread_id: str,
@@ -1994,6 +2017,175 @@ def create_app(
             archived=body.archived,
         )
         return _thread_list_item(store, principal.tenant_id, thread)
+
+    @app.post(
+        "/threads/import",
+        response_model=ThreadArchiveImportResponse,
+        status_code=201,
+    )
+    async def import_thread_archive(
+        archive: ThreadArchiveV1,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> ThreadArchiveImportResponse:
+        store = request.app.state.store
+        try:
+            validate_importable_thread_archive(archive)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        tenant_context = tenant_context_from_request_state(request.state)
+        execution = resolve_principal_execution(principal)
+        enforce_thread_creation_limit(context=tenant_context, store=store)
+        enforce_execution_entitlements(context=tenant_context, execution=execution)
+        catalog = effective_execution_catalog(
+            execution.config,
+            request.app.state.admin_store,
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+        )
+        try:
+            default_agent = catalog.resolve_agent(None, use_default=True)
+            requested_skill_refs = (
+                list(default_agent.skill_refs) or catalog.default_skill_refs
+                if default_agent is not None
+                else catalog.default_skill_refs
+            )
+            resolved_skills = catalog.resolve_skill_refs(requested_skill_refs, use_defaults=False)
+            requested_capability_ref = (
+                default_agent.capability_profile_ref
+                if default_agent is not None and default_agent.capability_profile_ref is not None
+                else catalog.default_capability_profile_ref
+            )
+            resolved_capability = catalog.resolve_capability_profile(
+                requested_capability_ref,
+                use_default=False,
+            )
+            if resolved_capability is not None and resolved_capability.source == "user":
+                catalog.personal_capability_constraints(resolved_capability)
+        except UserExecutionResolutionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        skill_names = [skill.stored_ref for skill in resolved_skills] or None
+        skill_name = skill_names[0] if skill_names is not None and len(skill_names) == 1 else None
+        capability_profile = (
+            resolved_capability.stored_ref if resolved_capability is not None else None
+        )
+        llm_profile = (
+            default_agent.llm_profile
+            if default_agent is not None and default_agent.llm_profile is not None
+            else execution.config.default_llm_profile
+        )
+        if llm_profile is not None and llm_profile not in execution.config.llm_profiles:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown LLM profile '{llm_profile}' for tenant '{principal.tenant_id}'",
+            )
+        thread = store.create_thread(
+            principal.tenant_id,
+            execution_user_id=principal.user_id,
+            skill_name=skill_name,
+            skill_names=skill_names,
+            capability_profile=capability_profile,
+            llm_profile=llm_profile,
+        )
+        try:
+            messages = imported_messages(
+                archive,
+                thread_id=thread.thread_id,
+                importing_user_id=principal.user_id,
+            )
+            for message in messages:
+                enforce_message_creation_limit(
+                    context=tenant_context,
+                    store=store,
+                    thread_id=thread.thread_id,
+                )
+                protected_content = await request.app.state.runtime.protect_user_content(
+                    principal,
+                    thread.thread_id,
+                    message.content,
+                )
+                protected_parts = None
+                if message.parts is not None:
+                    protected_parts = []
+                    for part in message.parts:
+                        if isinstance(part, TextPart):
+                            protected_parts.append(
+                                part.model_copy(
+                                    update={
+                                        "text": await request.app.state.runtime.protect_user_content(
+                                            principal,
+                                            thread.thread_id,
+                                            part.text,
+                                        )
+                                    }
+                                )
+                            )
+                        else:
+                            protected_parts.append(part)
+                store.append_message(
+                    principal.tenant_id,
+                    message.model_copy(
+                        update={"content": protected_content, "parts": protected_parts}
+                    ),
+                )
+            title = archive.thread.title
+            if title is not None:
+                normalized_title = normalize_manual_thread_title(title)
+                if archive.thread.title_source == "semantic":
+                    store.set_semantic_thread_title(
+                        principal.tenant_id,
+                        thread.thread_id,
+                        title=normalized_title,
+                    )
+                else:
+                    store.set_thread_title(
+                        principal.tenant_id,
+                        thread.thread_id,
+                        title=normalized_title,
+                        source=(
+                            "manual" if archive.thread.title_source == "manual" else "generated"
+                        ),
+                    )
+            protected_summary = await request.app.state.runtime.protect_user_content(
+                principal,
+                thread.thread_id,
+                archive.context.summary,
+            )
+            store.update_thread_context(
+                principal.tenant_id,
+                thread.thread_id,
+                summary=protected_summary,
+                summarized_message_count=archive.context.summarized_message_count,
+            )
+        except Exception:
+            request.app.state.runtime.clear_private_values(principal, thread.thread_id)
+            store.delete_thread(principal.tenant_id, thread.thread_id)
+            raise
+
+        warnings: list[ThreadArchiveImportWarning] = []
+        if any(
+            (
+                archive.thread.skill_name,
+                archive.thread.skill_names,
+                archive.thread.capability_profile,
+                archive.thread.llm_profile,
+            )
+        ):
+            warnings.append(
+                ThreadArchiveImportWarning(
+                    code="execution_options_not_restored",
+                    message=(
+                        "Source skills, capability profile, and LLM profile were recorded in the "
+                        "archive but destination defaults were used."
+                    ),
+                )
+            )
+        return ThreadArchiveImportResponse(
+            thread_id=thread.thread_id,
+            source_thread_id=archive.thread.source_thread_id,
+            message_count=len(archive.messages),
+            warnings=warnings,
+        )
 
     @app.post("/threads", response_model=CreateThreadResponse)
     async def create_thread(

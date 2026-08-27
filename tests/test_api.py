@@ -8590,3 +8590,109 @@ def test_agent_preset_selects_llm_profile_and_request_overrides_it(
     options = client.get("/execution-options", headers=AUTH_HEADERS)
     assert options.status_code == 200
     assert options.json()["agents"]["items"][0]["llm_profile"] == "coding"
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_thread_archive_api_round_trip_preserves_core_history(
+    store_kind: str, tmp_path: Path
+) -> None:
+    thread_store = (
+        SQLiteThreadStore(tmp_path / "thread-archive.db") if store_kind == "sqlite" else None
+    )
+    app = create_app(thread_store=thread_store)
+    client = TestClient(app)
+    source_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    added = client.post(
+        f"/threads/{source_thread_id}/messages",
+        headers=AUTH_HEADERS,
+        json={"content": "hello archive"},
+    )
+    assert added.status_code == 200
+    run = client.post(f"/threads/{source_thread_id}/run", headers=AUTH_HEADERS)
+    assert run.status_code == 200
+    renamed = client.patch(
+        f"/threads/{source_thread_id}/title",
+        headers=AUTH_HEADERS,
+        json={"title": "Archived conversation"},
+    )
+    assert renamed.status_code == 200
+    app.state.store.update_thread_context(
+        "tenant-1",
+        source_thread_id,
+        summary="Earlier archive summary",
+        summarized_message_count=1,
+    )
+
+    exported = client.get(f"/threads/{source_thread_id}/archive", headers=AUTH_HEADERS)
+    assert exported.status_code == 200
+    archive = exported.json()
+    assert archive["schema"] == "mindweft.thread-archive"
+    assert archive["version"] == 1
+    assert archive["thread"]["source_thread_id"] == source_thread_id
+    assert archive["thread"]["title"] == "Archived conversation"
+    assert archive["thread"]["title_source"] == "manual"
+    assert "tenant_id" not in archive["thread"]
+    assert "execution_user_id" not in archive["thread"]
+    assert [message["role"] for message in archive["messages"]] == ["user", "assistant"]
+    assert all("created_by" not in message for message in archive["messages"])
+    source_message_ids = [message["source_message_id"] for message in archive["messages"]]
+    archive["thread"]["llm_profile"] = "source-only-profile"
+
+    imported = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
+    assert imported.status_code == 201
+    result = imported.json()
+    imported_thread_id = result["thread_id"]
+    assert imported_thread_id != source_thread_id
+    assert result["source_thread_id"] == source_thread_id
+    assert result["message_count"] == 2
+    assert result["warnings"][0]["code"] == "execution_options_not_restored"
+
+    imported_messages_response = client.get(
+        f"/threads/{imported_thread_id}/messages", headers=AUTH_HEADERS
+    )
+    assert imported_messages_response.status_code == 200
+    imported_messages_payload = imported_messages_response.json()
+    assert [message["role"] for message in imported_messages_payload] == ["user", "assistant"]
+    assert [message["content"] for message in imported_messages_payload] == [
+        "hello archive",
+        "Mock reply: hello archive",
+    ]
+    assert [message["source_message_id"] for message in imported_messages_payload] == (
+        source_message_ids
+    )
+    assert all(message["id"] not in source_message_ids for message in imported_messages_payload)
+    imported_context = client.get(
+        f"/threads/{imported_thread_id}/context/raw", headers=AUTH_HEADERS
+    )
+    assert imported_context.status_code == 200
+    assert imported_context.json()["summary"] == "Earlier archive summary"
+    assert imported_context.json()["summarized_message_count"] == 1
+    listed = client.get("/threads", headers=AUTH_HEADERS).json()["threads"]
+    imported_list_item = next(
+        thread for thread in listed if thread["thread_id"] == imported_thread_id
+    )
+    assert imported_list_item["title"] == "Archived conversation"
+    assert imported_list_item["title_source"] == "manual"
+    assert imported_list_item["llm_profile"] is None
+
+
+def test_thread_archive_import_rejects_invalid_context_without_creating_thread() -> None:
+    app = create_app()
+    client = TestClient(app)
+    archive = {
+        "schema": "mindweft.thread-archive",
+        "version": 1,
+        "thread": {
+            "source_thread_id": "source-thread",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+        "context": {"summary": "invalid", "summarized_message_count": 1},
+        "messages": [],
+    }
+
+    response = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "archive summarized_message_count exceeds message count"
+    assert app.state.store.count_threads("tenant-1") == 0

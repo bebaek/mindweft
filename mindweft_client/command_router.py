@@ -24,6 +24,7 @@ from mindweft_client.api_client import MindweftAPIClient
 from mindweft_client.chat_commands import (
     run_chat,
     run_export,
+    run_import_thread_archive,
     run_resume,
     run_threads_create,
     run_threads_delete,
@@ -63,6 +64,8 @@ def dispatch_command(
         return run_resume(args, client, base_url, trace_id)
     if args.command == "export":
         return run_export(args, client, base_url, trace_id)
+    if args.command == "import":
+        return run_import_thread_archive(args, client, base_url, trace_id)
     if args.command == "threads":
         if args.threads_command in {None, "list"}:
             return run_threads_list(args, client, base_url, trace_id)

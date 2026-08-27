@@ -39,6 +39,7 @@ _CHAT_COMMANDS = [
     "remember_thread",
     "run_chat",
     "run_export",
+    "run_import_thread_archive",
     "run_resume",
     "run_threads_create",
     "run_threads_delete",

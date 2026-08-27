@@ -216,21 +216,31 @@ picker. Use `--no-picker` to skip the picker and resume the latest thread direct
 ### Export
 
 ```bash
-mindweft export --format markdown                       # export latest thread to stdout
-mindweft export <thread-id> --format json               # export a specific thread to stdout
+mindweft export --format markdown                       # export latest transcript to stdout
+mindweft export <thread-id> --format json               # export a transcript as JSON
 mindweft export <thread-id> --output transcript.md      # write Markdown to a file
 mindweft export <thread-id> --format json --output transcript.json
+mindweft export <thread-id> --format archive --output thread.mindweft.json
+mindweft import thread.mindweft.json                    # create a new thread from an archive
 ```
 
-`export` produces a readable transcript rather than a portable thread archive. Markdown and JSON
-contain the user-visible messages but omit thread configuration, context summaries, lineage, and
-attachment bytes. The JSON format is therefore not a backup format and cannot currently be imported
-to reconstruct a thread.
+The Markdown and JSON formats produce readable transcripts rather than portable thread archives.
+They contain the user-visible messages but omit thread configuration, context summaries, lineage,
+and attachment bytes. Transcript messages are rendered for the authenticated user and may include
+private values that the server protects internally. Treat transcript files as sensitive and review
+them before sharing. The interactive `/export [markdown|json]` command has the same transcript and
+privacy semantics and always writes to the interactive output stream.
 
-Transcript messages are rendered for the authenticated user and may include private values that the
-server protects internally. Treat exported files as sensitive and review them before sharing. The
-interactive `/export [markdown|json]` command has the same transcript and privacy semantics and
-always writes to the interactive output stream.
+`--format archive` requests a versioned JSON archive from the server's protected store
+representation. Archive files exclude tenant ownership and message creator identities. Import always
+creates a new thread for the authenticated principal, assigns new thread and message IDs, and records
+the source message IDs as provenance.
+
+The initial version supports user, assistant, and tool message history, title, and context. Import
+rejects system messages, and export and import reject threads containing attachment parts. Lineage,
+pin/archive organization state, attachment bytes, and source execution selections are not restored
+yet. The destination's execution defaults are used; `mindweft import` prints a warning when the
+archive records source skills, a capability profile, or an LLM profile.
 
 ### Diagnostics
 

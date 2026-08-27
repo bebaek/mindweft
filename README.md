@@ -606,10 +606,23 @@ uv tool install '.[voice]'
 mindweft-client chat
 ```
 
-The export command writes a readable transcript, not a portable thread backup. Markdown and JSON
+The default Markdown and JSON formats write readable transcripts, not portable thread backups. They
 omit thread configuration, context, lineage, and attachment bytes, and the exported messages may
 contain private values rendered for the authenticated user. Review transcript files before sharing
-them. Thread archive import/export is not currently supported.
+them.
+
+A first versioned archive format is available for text-only threads:
+
+```bash
+uv run mindweft export <thread-id> --format archive --output thread.mindweft.json
+uv run mindweft import thread.mindweft.json
+```
+
+Archive export uses the server's protected message representation, excludes tenant and user
+ownership, and imports into a new thread owned by the authenticated principal. Version 1 preserves
+core user, assistant, and tool messages, title, and context, but does not yet support system or
+attachment parts, lineage, organization state, or restoring source execution selections. Imports
+use destination execution defaults and report a warning when source selections were recorded.
 
 See the [CLI reference](docs/cli.md) for all commands, interactive slash commands,
 execution option discovery, streaming options, voice modes, and configuration.
