@@ -277,8 +277,8 @@ def build_parser() -> argparse.ArgumentParser:
         "export",
         help="Export a thread transcript.",
         description=(
-            "Export a readable thread transcript. Transcript exports are not portable thread "
-            "archives and may contain private values rendered for the authenticated user."
+            "Export a readable transcript or versioned thread archive. Transcript formats are not "
+            "portable archives and may contain private values rendered for the authenticated user."
         ),
     )
     export_parser.add_argument(
@@ -289,15 +289,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export_parser.add_argument(
         "--format",
-        choices=["markdown", "json"],
+        choices=["markdown", "json", "archive"],
         default="markdown",
-        help="Transcript output format. Neither format is a portable thread archive.",
+        help=(
+            "Output format. Markdown and JSON are readable transcripts; archive is a versioned "
+            "portable JSON document."
+        ),
     )
     export_parser.add_argument(
         "--output",
         default=None,
-        help="Write the transcript to this file instead of stdout.",
+        help="Write the export to this file instead of stdout.",
     )
+
+    import_parser = subparsers.add_parser(
+        "import",
+        help="Import a versioned thread archive.",
+        description=(
+            "Import a Mindweft thread archive as a new thread. Source execution options are "
+            "recorded but destination defaults are used."
+        ),
+    )
+    import_parser.add_argument("archive", help="Path to a Mindweft thread archive JSON file.")
 
     threads_parser = subparsers.add_parser("threads", help="Manage conversation threads.")
     threads_subparsers = threads_parser.add_subparsers(dest="threads_command")

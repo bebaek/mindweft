@@ -584,6 +584,14 @@ def _format_markdown_transcript(thread_id: str, messages: list[dict[str, Any]]) 
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _write_export_text(args: argparse.Namespace, text: str) -> None:
+    output_path = getattr(args, "output", None)
+    if output_path:
+        Path(output_path).write_text(text, encoding="utf-8")
+    else:
+        print(text, end="")
+
+
 def run_export(
     args: argparse.Namespace,
     client: MindweftAPIClient,
@@ -591,6 +599,10 @@ def run_export(
     trace_id: str | None,
 ) -> int:
     thread_id = args.thread_id or load_remembered_thread(base_url, args)
+    if args.format == "archive":
+        archive = client.export_thread_archive(thread_id)
+        _write_export_text(args, json.dumps(archive, indent=2, sort_keys=True) + "\n")
+        return 0
     thread = client.get_thread(thread_id)
     messages = thread["messages"]
     remember_thread(
@@ -608,11 +620,45 @@ def run_export(
     else:
         trace_comment = f"<!-- trace_id={trace_id} -->\n" if trace_id is not None else ""
         text = trace_comment + _format_markdown_transcript(thread_id, messages)
-    output_path = getattr(args, "output", None)
-    if output_path:
-        Path(output_path).write_text(text, encoding="utf-8")
-    else:
-        print(text, end="")
+    _write_export_text(args, text)
+    return 0
+
+
+def run_import_thread_archive(
+    args: argparse.Namespace,
+    client: MindweftAPIClient,
+    base_url: str,
+    trace_id: str | None,
+) -> int:
+    archive_path = Path(args.archive)
+    archive = json.loads(archive_path.read_text(encoding="utf-8"))
+    if not isinstance(archive, dict):
+        raise ValueError("thread archive must contain a JSON object")
+    response = client.import_thread_archive(archive)
+    thread_id = response.get("thread_id")
+    if not isinstance(thread_id, str) or not thread_id:
+        raise RuntimeError("Mindweft thread archive import response is missing thread_id")
+    thread_data = archive.get("thread")
+    title = thread_data.get("title") if isinstance(thread_data, dict) else None
+    message_count = response.get("message_count")
+    remember_thread(
+        base_url,
+        args,
+        thread_id,
+        title=title if isinstance(title, str) else None,
+        message_count=message_count if isinstance(message_count, int) else None,
+    )
+    if trace_id is not None:
+        response["trace_id"] = trace_id
+    if args.json:
+        print_json(response)
+        return 0
+    print(f"thread_id={thread_id}")
+    warnings = response.get("warnings")
+    if isinstance(warnings, list):
+        for warning in warnings:
+            if isinstance(warning, dict) and isinstance(warning.get("message"), str):
+                print(f"Warning: {warning['message']}", file=sys.stderr)
     return 0
 
 

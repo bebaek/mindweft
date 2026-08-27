@@ -42,6 +42,7 @@ from mindweft_client.chat_commands import (  # noqa: F401 - preserve helper impo
     remember_thread,
     run_chat,
     run_export,
+    run_import_thread_archive,
     run_resume,
     run_threads_create,
     run_threads_delete,

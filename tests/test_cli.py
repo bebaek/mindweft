@@ -754,6 +754,68 @@ def test_export_thread_to_files(monkeypatch: Any, tmp_path: Path, capsys: Any) -
     assert capsys.readouterr().out == ""
 
 
+def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    archive = {
+        "schema": "mindweft.thread-archive",
+        "version": 1,
+        "archive_id": "archive-1",
+        "exported_at": "2026-01-01T00:00:00Z",
+        "thread": {
+            "source_thread_id": "thread-2",
+            "title": "Portable thread",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+        "context": {"summary": "", "summarized_message_count": 0},
+        "messages": [],
+    }
+    imported_payloads: list[dict[str, Any]] = []
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads/thread-2/archive"):
+            return _Response(body=archive)
+        if request.full_url.endswith("/threads/import"):
+            imported_payloads.append(json.loads(request.data.decode("utf-8")))
+            return _Response(
+                body={
+                    "thread_id": "thread-imported",
+                    "source_thread_id": "thread-2",
+                    "message_count": 0,
+                    "warnings": [
+                        {
+                            "code": "execution_options_not_restored",
+                            "message": "Destination defaults were used.",
+                        }
+                    ],
+                }
+            )
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+    archive_path = tmp_path / "thread.mindweft.json"
+
+    assert (
+        cli.main(
+            [
+                "export",
+                "thread-2",
+                "--format",
+                "archive",
+                "--output",
+                str(archive_path),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(archive_path.read_text(encoding="utf-8")) == archive
+    assert cli.main(["import", str(archive_path)]) == 0
+    assert imported_payloads == [archive]
+    captured = capsys.readouterr()
+    assert captured.out == "thread_id=thread-imported\n"
+    assert captured.err == "Warning: Destination defaults were used.\n"
+
+
 def test_cli_prints_friendly_auth_errors(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     def urlopen(request: Any) -> _Response:
         raise urllib.error.HTTPError(
