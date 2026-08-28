@@ -33,6 +33,7 @@ from app.agent_backends import AgentBackendRouter, NativeAgentBackend
 from app.attachments import (
     AttachmentLimitExceeded,
     AttachmentMetadata,
+    AttachmentRecord,
     AttachmentStore,
     UploadAttachmentRequest,
     build_attachment_store,
@@ -169,9 +170,10 @@ from app.store import (
 )
 from app.tenants import require_active_tenant_principal, require_tenant_context
 from app.thread_archives import (
+    ThreadArchive,
     ThreadArchiveImportResponse,
     ThreadArchiveImportWarning,
-    ThreadArchiveV1,
+    ThreadArchiveV2,
     build_thread_archive,
     imported_messages,
     validate_importable_thread_archive,
@@ -1868,18 +1870,38 @@ def create_app(
             offset=offset,
         )
 
-    @app.get("/threads/{thread_id}/archive", response_model=ThreadArchiveV1)
+    @app.get("/threads/{thread_id}/archive", response_model=ThreadArchiveV2)
     async def export_thread_archive(
         thread_id: str,
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
-    ) -> ThreadArchiveV1:
+    ) -> ThreadArchiveV2:
         store = request.app.state.store
         thread = store.get_thread(principal.tenant_id, thread_id)
         messages = store.list_messages(principal.tenant_id, thread_id)
         context = store.get_thread_context(principal.tenant_id, thread_id)
+        attachment_records: dict[str, AttachmentRecord] = {}
+        for attachment_id in message_attachment_ids(messages):
+            if attachment_id in attachment_records:
+                continue
+            record = request.app.state.attachment_store.get(
+                principal.tenant_id,
+                thread_id,
+                attachment_id,
+            )
+            if record is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"attachment '{attachment_id}' referenced by thread is missing",
+                )
+            attachment_records[attachment_id] = record
         try:
-            return build_thread_archive(thread, messages, context)
+            return build_thread_archive(
+                thread,
+                messages,
+                context,
+                attachment_records=attachment_records,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -2024,16 +2046,18 @@ def create_app(
         status_code=201,
     )
     async def import_thread_archive(
-        archive: ThreadArchiveV1,
+        archive: ThreadArchive,
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> ThreadArchiveImportResponse:
         store = request.app.state.store
         try:
-            validate_importable_thread_archive(archive)
+            attachment_data = validate_importable_thread_archive(archive)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         tenant_context = tenant_context_from_request_state(request.state)
+        if attachment_data:
+            _enforce_request_rate_limit(request, principal, UPLOAD_RATE_LIMIT_CATEGORY)
         execution = resolve_principal_execution(principal)
         enforce_thread_creation_limit(context=tenant_context, store=store)
         enforce_execution_entitlements(context=tenant_context, execution=execution)
@@ -2088,10 +2112,28 @@ def create_app(
             llm_profile=llm_profile,
         )
         try:
+            attachment_id_map: dict[str, str] = {}
+            archive_attachments = (
+                {attachment.source_attachment_id: attachment for attachment in archive.attachments}
+                if isinstance(archive, ThreadArchiveV2)
+                else {}
+            )
+            for source_attachment_id, data in attachment_data.items():
+                attachment = archive_attachments[source_attachment_id]
+                imported_attachment = persist_attachment(
+                    request,
+                    principal,
+                    thread.thread_id,
+                    mime_type=attachment.mime_type,
+                    data=data,
+                )
+                attachment_id_map[source_attachment_id] = imported_attachment.attachment_id
             messages = imported_messages(
                 archive,
                 thread_id=thread.thread_id,
                 importing_user_id=principal.user_id,
+                attachment_id_map=attachment_id_map,
+                validated=True,
             )
             for message in messages:
                 enforce_message_creation_limit(
@@ -2122,6 +2164,16 @@ def create_app(
                             )
                         else:
                             protected_parts.append(part)
+                attachment_ids = message_attachment_ids([message])
+                for attachment_id in attachment_ids:
+                    if not request.app.state.attachment_store.mark_referenced(
+                        principal.tenant_id,
+                        thread.thread_id,
+                        attachment_id,
+                    ):
+                        raise RuntimeError(
+                            f"imported attachment '{attachment_id}' could not be referenced"
+                        )
                 store.append_message(
                     principal.tenant_id,
                     message.model_copy(
@@ -2159,6 +2211,10 @@ def create_app(
             )
         except Exception:
             request.app.state.runtime.clear_private_values(principal, thread.thread_id)
+            request.app.state.attachment_store.delete_thread(
+                principal.tenant_id,
+                thread.thread_id,
+            )
             store.delete_thread(principal.tenant_id, thread.thread_id)
             raise
 
@@ -2184,6 +2240,7 @@ def create_app(
             thread_id=thread.thread_id,
             source_thread_id=archive.thread.source_thread_id,
             message_count=len(archive.messages),
+            attachment_count=len(attachment_data),
             warnings=warnings,
         )
 

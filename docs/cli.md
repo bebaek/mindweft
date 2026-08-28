@@ -232,15 +232,22 @@ them before sharing. The interactive `/export [markdown|json]` command has the s
 privacy semantics and always writes to the interactive output stream.
 
 `--format archive` requests a versioned JSON archive from the server's protected store
-representation. Archive files exclude tenant ownership and message creator identities. Import always
-creates a new thread for the authenticated principal, assigns new thread and message IDs, and records
-the source message IDs as provenance.
+representation. Archive files exclude tenant ownership and message creator identities but include
+referenced attachment bytes, so treat them as sensitive. Import always creates a new thread for the
+authenticated principal, assigns new thread, message, and attachment IDs, and records source message
+IDs as provenance.
 
-The initial version supports user, assistant, and tool message history, title, and context. Import
-rejects system messages, and export and import reject threads containing attachment parts. Lineage,
-pin/archive organization state, attachment bytes, and source execution selections are not restored
-yet. The destination's execution defaults are used; `mindweft import` prints a warning when the
-archive records source skills, a capability profile, or an LLM profile.
+The current version 2 format supports user, assistant, and tool message history, title, context, and
+referenced audio, image, and document attachments. Attachment data is base64-encoded in the JSON
+archive with its MIME type, byte size, and SHA-256 checksum. Import verifies the manifest,
+revalidates attachment content, applies destination attachment capabilities and quotas, and rewrites
+message-part references to new attachment IDs. Base64 increases file size, so archive files are
+larger than the underlying attachment bytes. Existing version 1 text-only archives remain
+importable.
+
+System messages remain rejected. Lineage, pin/archive organization state, and source execution
+selections are not restored yet. The destination's execution defaults are used; `mindweft import`
+prints a warning when the archive records source skills, a capability profile, or an LLM profile.
 
 ### Diagnostics
 

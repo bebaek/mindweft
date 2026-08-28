@@ -1,11 +1,16 @@
+import base64
+import hashlib
 from datetime import datetime, timezone
 
 import pytest
 
+from app.attachments import AttachmentMetadata, AttachmentRecord
 from app.models import DocumentPart, Message, MessageRole, Thread, ThreadContext
 from app.thread_archives import (
     ThreadArchiveV1,
+    ThreadArchiveV2,
     build_thread_archive,
+    decode_archive_attachments,
     imported_messages,
     validate_importable_thread_archive,
 )
@@ -40,11 +45,12 @@ def test_thread_archive_round_trip_uses_portable_ids_and_schema_alias() -> None:
     payload = archive.model_dump(mode="json", by_alias=True)
 
     assert payload["schema"] == "mindweft.thread-archive"
+    assert payload["version"] == 2
     assert "schema_name" not in payload
     assert "tenant_id" not in payload["thread"]
     assert "execution_user_id" not in payload["thread"]
     assert "created_by" not in payload["messages"][0]
-    restored_archive = ThreadArchiveV1.model_validate(payload)
+    restored_archive = ThreadArchiveV2.model_validate(payload)
     restored = imported_messages(
         restored_archive,
         thread_id="thread-destination",
@@ -58,7 +64,56 @@ def test_thread_archive_round_trip_uses_portable_ids_and_schema_alias() -> None:
     assert restored[0].content == source.content
 
 
-def test_thread_archive_rejects_attachment_parts_for_core_format() -> None:
+def test_thread_archive_round_trips_attachment_manifest_and_remaps_id() -> None:
+    thread = Thread(thread_id="thread-source", tenant_id="tenant-1")
+    data = b"portable attachment bytes"
+    message = Message(
+        thread_id=thread.thread_id,
+        role=MessageRole.USER,
+        content="attached",
+        parts=[
+            DocumentPart(
+                mime_type="application/pdf",
+                attachment_id="attachment-1",
+                filename="notes.pdf",
+            )
+        ],
+    )
+    record = AttachmentRecord(
+        metadata=AttachmentMetadata(
+            attachment_id="attachment-1",
+            thread_id=thread.thread_id,
+            mime_type="application/pdf",
+            size_bytes=len(data),
+        ),
+        data=data,
+    )
+
+    archive = build_thread_archive(
+        thread,
+        [message],
+        ThreadContext(thread_id=thread.thread_id),
+        attachment_records={"attachment-1": record},
+    )
+
+    assert len(archive.attachments) == 1
+    archived_attachment = archive.attachments[0]
+    assert archived_attachment.data == base64.b64encode(data).decode("ascii")
+    assert archived_attachment.size_bytes == len(data)
+    assert archived_attachment.sha256 == hashlib.sha256(data).hexdigest()
+    assert decode_archive_attachments(archive) == {"attachment-1": data}
+    restored = imported_messages(
+        archive,
+        thread_id="thread-destination",
+        importing_user_id="user-destination",
+        attachment_id_map={"attachment-1": "attachment-new"},
+    )
+    assert restored[0].parts is not None
+    assert isinstance(restored[0].parts[0], DocumentPart)
+    assert restored[0].parts[0].attachment_id == "attachment-new"
+
+
+def test_thread_archive_rejects_missing_attachment_data() -> None:
     thread = Thread(thread_id="thread-source", tenant_id="tenant-1")
     message = Message(
         thread_id=thread.thread_id,
@@ -73,7 +128,7 @@ def test_thread_archive_rejects_attachment_parts_for_core_format() -> None:
         ],
     )
 
-    with pytest.raises(ValueError, match="attachment parts"):
+    with pytest.raises(ValueError, match="attachment data is missing"):
         build_thread_archive(thread, [message], ThreadContext(thread_id=thread.thread_id))
 
 
@@ -87,6 +142,24 @@ def test_thread_archive_rejects_system_messages() -> None:
 
     with pytest.raises(ValueError, match="system messages"):
         build_thread_archive(thread, [message], ThreadContext(thread_id=thread.thread_id))
+
+
+def test_thread_archive_v1_remains_importable_without_attachments() -> None:
+    archive = ThreadArchiveV1.model_validate(
+        {
+            "schema": "mindweft.thread-archive",
+            "version": 1,
+            "thread": {
+                "source_thread_id": "thread-source",
+                "created_at": NOW.isoformat(),
+                "updated_at": NOW.isoformat(),
+            },
+            "context": {"summary": "", "summarized_message_count": 0},
+            "messages": [],
+        }
+    )
+
+    assert validate_importable_thread_archive(archive) == {}
 
 
 def test_thread_archive_rejects_invalid_context_count() -> None:

@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import sqlite3
@@ -28,7 +29,7 @@ from app.admin_api import (
     admin_store_settings_from_env,
 )
 from app.agent_backends import PeerBackendSettings, _sanitize_peer_task_event
-from app.attachments import InMemoryAttachmentStore
+from app.attachments import InMemoryAttachmentStore, SQLiteAttachmentStore
 from app.execution import (
     FixedTenantExecutionResolver,
     InMemoryTenantExecutionResolver,
@@ -8627,7 +8628,7 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert exported.status_code == 200
     archive = exported.json()
     assert archive["schema"] == "mindweft.thread-archive"
-    assert archive["version"] == 1
+    assert archive["version"] == 2
     assert archive["thread"]["source_thread_id"] == source_thread_id
     assert archive["thread"]["title"] == "Archived conversation"
     assert archive["thread"]["title_source"] == "manual"
@@ -8645,6 +8646,7 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert imported_thread_id != source_thread_id
     assert result["source_thread_id"] == source_thread_id
     assert result["message_count"] == 2
+    assert result["attachment_count"] == 0
     assert result["warnings"][0]["code"] == "execution_options_not_restored"
 
     imported_messages_response = client.get(
@@ -8676,6 +8678,152 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert imported_list_item["llm_profile"] is None
 
 
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_thread_archive_api_round_trips_attachment_bytes(
+    store_kind: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_LLM_INPUT_MODALITIES", "text,image")
+    thread_store = (
+        SQLiteThreadStore(tmp_path / "thread-archive-attachment.db")
+        if store_kind == "sqlite"
+        else None
+    )
+    attachment_store = (
+        SQLiteAttachmentStore(tmp_path / "thread-archive-attachment-bytes.db")
+        if store_kind == "sqlite"
+        else InMemoryAttachmentStore()
+    )
+    app = create_app(thread_store=thread_store, attachment_store=attachment_store)
+    client = TestClient(app)
+    source_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    image_data = base64.b64decode(PNG_1X1_BASE64)
+    uploaded = client.post(
+        f"/threads/{source_thread_id}/attachments/binary",
+        headers={**AUTH_HEADERS, "Content-Type": "image/png"},
+        content=image_data,
+    )
+    assert uploaded.status_code == 200
+    source_attachment_id = uploaded.json()["attachment_id"]
+    added = client.post(
+        f"/threads/{source_thread_id}/messages",
+        headers=AUTH_HEADERS,
+        json={
+            "content": "portable image",
+            "parts": [
+                {"type": "text", "text": "portable image"},
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "attachment_id": source_attachment_id,
+                    "detail": "auto",
+                },
+            ],
+        },
+    )
+    assert added.status_code == 200
+
+    exported = client.get(f"/threads/{source_thread_id}/archive", headers=AUTH_HEADERS)
+    assert exported.status_code == 200
+    archive = exported.json()
+    assert len(archive["attachments"]) == 1
+    archived_attachment = archive["attachments"][0]
+    assert archived_attachment["source_attachment_id"] == source_attachment_id
+    assert archived_attachment["mime_type"] == "image/png"
+    assert archived_attachment["size_bytes"] == len(image_data)
+    assert base64.b64decode(archived_attachment["data"]) == image_data
+
+    invalid_archive = json.loads(json.dumps(archive))
+    invalid_archive["attachments"][0]["sha256"] = "0" * 64
+    invalid = client.post("/threads/import", headers=AUTH_HEADERS, json=invalid_archive)
+    assert invalid.status_code == 422
+    assert "checksum does not match" in invalid.json()["detail"]
+    assert app.state.store.count_threads("tenant-1") == 1
+
+    imported = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
+    assert imported.status_code == 201
+    result = imported.json()
+    assert result["attachment_count"] == 1
+    imported_thread_id = result["thread_id"]
+    imported_messages = client.get(
+        f"/threads/{imported_thread_id}/messages", headers=AUTH_HEADERS
+    ).json()
+    imported_image_part = next(
+        part for part in imported_messages[0]["parts"] if part["type"] == "image"
+    )
+    imported_attachment_id = imported_image_part["attachment_id"]
+    assert imported_attachment_id != source_attachment_id
+    downloaded = client.get(
+        f"/threads/{imported_thread_id}/attachments/{imported_attachment_id}",
+        headers=AUTH_HEADERS,
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.content == image_data
+
+
+def test_thread_archive_attachment_quota_failure_rolls_back_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINDWEFT_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("MINDWEFT_LLM_INPUT_MODALITIES", "text,image")
+    monkeypatch.setenv("MINDWEFT_ATTACHMENT_MAX_PER_THREAD", "1")
+    app = create_app(attachment_store=InMemoryAttachmentStore())
+    client = TestClient(app)
+    image_data = base64.b64decode(PNG_1X1_BASE64)
+    encoded = base64.b64encode(image_data).decode("ascii")
+    checksum = hashlib.sha256(image_data).hexdigest()
+    archive = {
+        "schema": "mindweft.thread-archive",
+        "version": 2,
+        "thread": {
+            "source_thread_id": "source-thread",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+        "context": {"summary": "", "summarized_message_count": 0},
+        "messages": [
+            {
+                "source_message_id": "source-message",
+                "role": "user",
+                "content": "two images",
+                "parts": [
+                    {
+                        "type": "image",
+                        "mime_type": "image/png",
+                        "attachment_id": "attachment-1",
+                    },
+                    {
+                        "type": "image",
+                        "mime_type": "image/png",
+                        "attachment_id": "attachment-2",
+                    },
+                ],
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ],
+        "attachments": [
+            {
+                "source_attachment_id": attachment_id,
+                "mime_type": "image/png",
+                "encoding": "base64",
+                "size_bytes": len(image_data),
+                "sha256": checksum,
+                "data": encoded,
+            }
+            for attachment_id in ("attachment-1", "attachment-2")
+        ],
+    }
+
+    response = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "thread attachment count limit exceeded"
+    assert app.state.store.count_threads("tenant-1") == 0
+    assert app.state.attachment_store.tenant_usage("tenant-1") == (0, 0)
+
+
 def test_thread_archive_import_rejects_invalid_context_without_creating_thread() -> None:
     app = create_app()
     client = TestClient(app)
@@ -8696,3 +8844,8 @@ def test_thread_archive_import_rejects_invalid_context_without_creating_thread()
     assert response.status_code == 422
     assert response.json()["detail"] == "archive summarized_message_count exceeds message count"
     assert app.state.store.count_threads("tenant-1") == 0
+
+    archive["context"]["summarized_message_count"] = 0
+    imported = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
+    assert imported.status_code == 201
+    assert imported.json()["attachment_count"] == 0
