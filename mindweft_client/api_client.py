@@ -590,10 +590,17 @@ class MindweftAPIClient:
             raise RuntimeError("Mindweft admin thread-detail response must be an object")
         return cast(dict[str, Any], response)
 
-    def delete_admin_thread(self, tenant_id: str, thread_id: str) -> dict[str, Any]:
+    def delete_admin_thread(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        imported_lineage: bool = False,
+    ) -> dict[str, Any]:
+        suffix = "?imported_lineage=true" if imported_lineage else ""
         response = self.request_json(
             "DELETE",
-            f"{self._config.base_url}/admin/tenants/{tenant_id}/threads/{thread_id}",
+            f"{self._config.base_url}/admin/tenants/{tenant_id}/threads/{thread_id}{suffix}",
         )
         if not isinstance(response, dict):
             raise RuntimeError("Mindweft admin thread-delete response must be an object")

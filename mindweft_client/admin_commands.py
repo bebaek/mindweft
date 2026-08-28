@@ -736,7 +736,11 @@ def run_admin_threads_delete(
     client: MindweftAPIClient,
     trace_id: str | None,
 ) -> int:
-    response = client.delete_admin_thread(args.admin_tenant_id, args.thread_id)
+    response = client.delete_admin_thread(
+        args.admin_tenant_id,
+        args.thread_id,
+        imported_lineage=args.imported_lineage,
+    )
     if args.json:
         output: dict[str, Any] = dict(response)
         if trace_id is not None:
@@ -745,7 +749,10 @@ def run_admin_threads_delete(
         return 0
     if trace_id is not None:
         print(f"trace_id={trace_id}")
-    print(f"deleted thread_id={response.get('thread_id')} tenant_id={response.get('tenant_id')}")
+    print(
+        f"deleted thread_id={response.get('thread_id')} tenant_id={response.get('tenant_id')} "
+        f"count={response.get('deleted_count', 1)}"
+    )
     return 0
 
 

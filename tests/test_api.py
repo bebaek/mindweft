@@ -2256,6 +2256,31 @@ def test_thread_lineage_archive_exports_complete_fork_tree(store_kind: str, tmp_
     assert reimported.json()["threads"] != imported_payload["threads"]
     assert len(store.list_threads("tenant-1")) == 8
 
+    admin_target_id = reimported.json()["requested_thread_id"]
+    blocked_admin_delete = client.delete(
+        f"/admin/tenants/tenant-1/threads/{admin_target_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert blocked_admin_delete.status_code == 409
+    admin_deleted = client.delete(
+        f"/admin/tenants/tenant-1/threads/{admin_target_id}?imported_lineage=true",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_deleted.status_code == 200
+    assert admin_deleted.json()["deleted_count"] == 4
+    assert admin_deleted.json()["deleted_thread_ids"] == [
+        item["thread_id"] for item in reimported.json()["threads"]
+    ]
+    assert len(store.list_threads("tenant-1")) == 4
+    audit_records = store.list_audit_records("tenant-1", action="threads.delete")
+    assert audit_records[-1].affected_count == 4
+    assert audit_records[-1].thread_ids == admin_deleted.json()["deleted_thread_ids"]
+
+    post_admin_reimport = client.post("/threads/import-lineage", headers=AUTH_HEADERS, json=bundle)
+    assert post_admin_reimport.status_code == 201
+    assert post_admin_reimport.json()["thread_count"] == 4
+    assert len(store.list_threads("tenant-1")) == 8
+
 
 @pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
 def test_thread_lineage_archive_import_rolls_back_all_new_threads(
