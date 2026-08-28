@@ -781,6 +781,7 @@ def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, caps
                     "thread_id": "thread-imported",
                     "source_thread_id": "thread-2",
                     "message_count": 0,
+                    "attachment_count": 0,
                     "warnings": [
                         {
                             "code": "execution_options_not_restored",

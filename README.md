@@ -611,7 +611,7 @@ omit thread configuration, context, lineage, and attachment bytes, and the expor
 contain private values rendered for the authenticated user. Review transcript files before sharing
 them.
 
-A first versioned archive format is available for text-only threads:
+A versioned archive format is available for portable thread round trips:
 
 ```bash
 uv run mindweft export <thread-id> --format archive --output thread.mindweft.json
@@ -619,10 +619,13 @@ uv run mindweft import thread.mindweft.json
 ```
 
 Archive export uses the server's protected message representation, excludes tenant and user
-ownership, and imports into a new thread owned by the authenticated principal. Version 1 preserves
-core user, assistant, and tool messages, title, and context, but does not yet support system or
-attachment parts, lineage, organization state, or restoring source execution selections. Imports
-use destination execution defaults and report a warning when source selections were recorded.
+ownership, and imports into a new thread owned by the authenticated principal. Version 2 preserves
+core user, assistant, and tool messages, title, context, and referenced audio, image, and document
+attachments. Attachment bytes are base64-encoded with declared sizes and SHA-256 checksums; import
+revalidates content and enforces destination attachment capabilities and quotas before remapping
+attachment IDs. System messages, lineage, organization state, and source execution selections are
+not restored. Version 1 text-only archives remain importable. Imports use destination execution
+defaults and report a warning when source selections were recorded.
 
 See the [CLI reference](docs/cli.md) for all commands, interactive slash commands,
 execution option discovery, streaming options, voice modes, and configuration.
