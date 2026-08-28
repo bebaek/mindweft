@@ -118,6 +118,7 @@ from app.models import (
     TenantUserRole,
     TextPart,
     Thread,
+    ThreadImportProvenance,
     ThreadLineageResponse,
     ThreadListItem,
     ThreadListResponse,
@@ -128,6 +129,7 @@ from app.models import (
     ThreadTitleResponse,
     UpdateThreadOrganizationRequest,
     UpdateThreadTitleRequest,
+    utc_now,
 )
 from app.oauth import GenericOAuthProvider, build_oauth_flow_store_from_env
 from app.observability import configure_logging, configure_tracing
@@ -466,6 +468,20 @@ def _thread_list_item(store: ThreadStore, tenant_id: str, thread: Thread) -> Thr
         message_count=len(messages),
         created_at=thread.created_at,
         updated_at=thread.updated_at,
+    )
+
+
+def _thread_import_provenance(thread: Thread) -> ThreadImportProvenance | None:
+    if (
+        thread.import_source_archive_id is None
+        or thread.import_source_thread_id is None
+        or thread.imported_at is None
+    ):
+        return None
+    return ThreadImportProvenance(
+        archive_id=thread.import_source_archive_id,
+        source_thread_id=thread.import_source_thread_id,
+        imported_at=thread.imported_at,
     )
 
 
@@ -1951,6 +1967,7 @@ def create_app(
             siblings=[
                 _thread_list_item(store, principal.tenant_id, sibling) for sibling in siblings
             ],
+            import_provenance=_thread_import_provenance(current),
         )
 
     @app.post(
@@ -2294,6 +2311,9 @@ def create_app(
                 skill_names=skill_names or None,
                 capability_profile=capability_profile,
                 llm_profile=llm_profile,
+                import_source_archive_id=archive.archive_id,
+                import_source_thread_id=archive.thread.source_thread_id,
+                imported_at=utc_now(),
             )
         except Exception:
             if claim_token is not None:
