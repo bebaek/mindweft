@@ -476,14 +476,16 @@ class MindweftAPIClient:
         profile_policy: str = "available",
         organization_policy: str = "reset",
         timestamp_policy: str = "reset",
+        dry_run: bool = False,
     ) -> dict[str, Any]:
-        query = urllib.parse.urlencode(
-            {
-                "profile_policy": profile_policy,
-                "organization_policy": organization_policy,
-                "timestamp_policy": timestamp_policy,
-            }
-        )
+        query_values = {
+            "profile_policy": profile_policy,
+            "organization_policy": organization_policy,
+            "timestamp_policy": timestamp_policy,
+        }
+        if dry_run:
+            query_values["dry_run"] = "true"
+        query = urllib.parse.urlencode(query_values)
         response = self.request_json(
             "POST",
             f"{self._config.base_url}/threads/import-lineage?{query}",

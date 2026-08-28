@@ -773,14 +773,22 @@ def test_export_thread_lineage_archive(monkeypatch: Any, tmp_path: Path, capsys:
             return _Response(body=lineage_archive)
         if "/threads/import-lineage?" in request.full_url:
             imported_payloads.append(json.loads(request.data.decode("utf-8")))
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query)
+            dry_run = query.get("dry_run") == ["true"]
             return _Response(
                 body={
                     "archive_id": "lineage-archive-1",
-                    "root_thread_id": "imported-root",
-                    "requested_thread_id": "imported-child",
+                    "root_thread_id": None if dry_run else "imported-root",
+                    "requested_thread_id": None if dry_run else "imported-child",
                     "threads": [
-                        {"source_thread_id": "thread-root", "thread_id": "imported-root"},
-                        {"source_thread_id": "thread-child", "thread_id": "imported-child"},
+                        {
+                            "source_thread_id": "thread-root",
+                            "thread_id": None if dry_run else "imported-root",
+                        },
+                        {
+                            "source_thread_id": "thread-child",
+                            "thread_id": None if dry_run else "imported-child",
+                        },
                     ],
                     "thread_count": 2,
                     "message_count": 3,
@@ -788,6 +796,7 @@ def test_export_thread_lineage_archive(monkeypatch: Any, tmp_path: Path, capsys:
                     "profile_policy": "available",
                     "organization_policy": "reset",
                     "timestamp_policy": "reset",
+                    "dry_run": dry_run,
                     "warnings": [],
                 }
             )
@@ -805,6 +814,13 @@ def test_export_thread_lineage_archive(monkeypatch: Any, tmp_path: Path, capsys:
     assert imported_payloads == [lineage_archive]
     assert capsys.readouterr().out == (
         "thread_id=imported-child root_thread_id=imported-root threads=2\n"
+    )
+
+    assert cli.main(["import", str(archive_path), "--dry-run"]) == 0
+    assert imported_payloads == [lineage_archive, lineage_archive]
+    assert capsys.readouterr().out == (
+        "validation=ok threads=2 messages=3 attachments=0 profile_policy=available "
+        "organization_policy=reset timestamp_policy=reset\n"
     )
 
 

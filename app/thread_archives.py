@@ -215,13 +215,13 @@ class ThreadLineageArchiveImportWarning(ThreadArchiveModel):
 
 class ThreadLineageArchiveImportedThread(ThreadArchiveModel):
     source_thread_id: str
-    thread_id: str
+    thread_id: str | None
 
 
 class ThreadLineageArchiveImportResponse(ThreadArchiveModel):
     archive_id: str
-    root_thread_id: str
-    requested_thread_id: str
+    root_thread_id: str | None
+    requested_thread_id: str | None
     threads: list[ThreadLineageArchiveImportedThread]
     thread_count: int
     message_count: int
@@ -229,6 +229,7 @@ class ThreadLineageArchiveImportResponse(ThreadArchiveModel):
     profile_policy: ThreadArchiveProfilePolicy
     organization_policy: ThreadArchiveOrganizationPolicy = "reset"
     timestamp_policy: ThreadArchiveTimestampPolicy = "reset"
+    dry_run: bool = False
     warnings: list[ThreadLineageArchiveImportWarning] = Field(default_factory=list)
 
 

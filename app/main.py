@@ -2680,53 +2680,51 @@ def create_app(
         dry_run: bool = False,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> ThreadLineageArchiveImportResponse:
-        if dry_run:
-            raise HTTPException(
-                status_code=400, detail="lineage archive import does not support dry-run"
-            )
         store = request.app.state.store
         import_key = f"lineage:{archive.archive_id}"
-        request_digest = hashlib.sha256(
-            json.dumps(
-                {
-                    "archive": archive.model_dump(mode="json"),
-                    "profile_policy": profile_policy,
-                    "organization_policy": organization_policy,
-                    "timestamp_policy": timestamp_policy,
-                },
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-        ).hexdigest()
-        try:
-            replay = store.lookup_archive_import(
-                principal.tenant_id,
-                import_key,
-                request_digest,
-            )
-        except (
-            thread_store_module.ArchiveImportConflictError,
-            thread_store_module.ArchiveImportInProgressError,
-        ) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if replay is not None:
-            return ThreadLineageArchiveImportResponse.model_validate(replay.response_payload)
-        try:
-            claim = store.begin_archive_import(
-                principal.tenant_id,
-                import_key,
-                request_digest,
-            )
-        except (
-            thread_store_module.ArchiveImportConflictError,
-            thread_store_module.ArchiveImportInProgressError,
-        ) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if claim.completed:
-            return ThreadLineageArchiveImportResponse.model_validate(claim.response_payload)
-        claim_token = claim.claim_token
-        if claim_token is None:
-            raise RuntimeError("lineage archive import claim token is missing")
+        claim_token: str | None = None
+        if not dry_run:
+            request_digest = hashlib.sha256(
+                json.dumps(
+                    {
+                        "archive": archive.model_dump(mode="json"),
+                        "profile_policy": profile_policy,
+                        "organization_policy": organization_policy,
+                        "timestamp_policy": timestamp_policy,
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            try:
+                replay = store.lookup_archive_import(
+                    principal.tenant_id,
+                    import_key,
+                    request_digest,
+                )
+            except (
+                thread_store_module.ArchiveImportConflictError,
+                thread_store_module.ArchiveImportInProgressError,
+            ) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if replay is not None:
+                return ThreadLineageArchiveImportResponse.model_validate(replay.response_payload)
+            try:
+                claim = store.begin_archive_import(
+                    principal.tenant_id,
+                    import_key,
+                    request_digest,
+                )
+            except (
+                thread_store_module.ArchiveImportConflictError,
+                thread_store_module.ArchiveImportInProgressError,
+            ) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if claim.completed:
+                return ThreadLineageArchiveImportResponse.model_validate(claim.response_payload)
+            claim_token = claim.claim_token
+            if claim_token is None:
+                raise RuntimeError("lineage archive import claim token is missing")
 
         source_to_destination: dict[str, str] = {}
         created_thread_ids: list[str] = []
@@ -2747,8 +2745,15 @@ def create_app(
 
         try:
             for entry in archive.threads:
+                member_archive = (
+                    entry.archive.model_copy(
+                        update={"archive_id": f"dry-run:{uuid4()}:{entry.archive.archive_id}"}
+                    )
+                    if dry_run
+                    else entry.archive
+                )
                 imported = await import_thread_archive(
-                    archive=entry.archive,
+                    archive=member_archive,
                     request=request,
                     profile_policy=profile_policy,
                     organization_policy=organization_policy,
@@ -2813,14 +2818,22 @@ def create_app(
             imported_threads = [
                 ThreadLineageArchiveImportedThread(
                     source_thread_id=entry.archive.thread.source_thread_id,
-                    thread_id=source_to_destination[entry.archive.thread.source_thread_id],
+                    thread_id=(
+                        None
+                        if dry_run
+                        else source_to_destination[entry.archive.thread.source_thread_id]
+                    ),
                 )
                 for entry in archive.threads
             ]
             response = ThreadLineageArchiveImportResponse(
                 archive_id=archive.archive_id,
-                root_thread_id=source_to_destination[archive.root_source_thread_id],
-                requested_thread_id=source_to_destination[archive.requested_source_thread_id],
+                root_thread_id=(
+                    None if dry_run else source_to_destination[archive.root_source_thread_id]
+                ),
+                requested_thread_id=(
+                    None if dry_run else source_to_destination[archive.requested_source_thread_id]
+                ),
                 threads=imported_threads,
                 thread_count=len(imported_threads),
                 message_count=sum(
@@ -2832,6 +2845,7 @@ def create_app(
                 profile_policy=profile_policy,
                 organization_policy=organization_policy,
                 timestamp_policy=timestamp_policy,
+                dry_run=dry_run,
                 warnings=[
                     ThreadLineageArchiveImportWarning(
                         source_thread_id=source_thread_id,
@@ -2846,6 +2860,11 @@ def create_app(
                     for warning in imported.warnings
                 ],
             )
+            if dry_run:
+                rollback()
+                return response
+            if claim_token is None or response.root_thread_id is None:
+                raise RuntimeError("lineage archive import completion state is missing")
             store.complete_archive_import(
                 principal.tenant_id,
                 import_key,
@@ -2856,11 +2875,12 @@ def create_app(
             return response
         except Exception:
             rollback()
-            store.abandon_archive_import(
-                principal.tenant_id,
-                import_key,
-                claim_token,
-            )
+            if claim_token is not None:
+                store.abandon_archive_import(
+                    principal.tenant_id,
+                    import_key,
+                    claim_token,
+                )
             raise
 
     @app.post("/threads", response_model=CreateThreadResponse)

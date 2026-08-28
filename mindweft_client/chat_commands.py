@@ -639,16 +639,43 @@ def run_import_thread_archive(
     if not isinstance(archive, dict):
         raise ValueError("thread archive must contain a JSON object")
     if archive.get("schema") == "mindweft.thread-lineage-archive":
-        if args.dry_run:
-            raise ValueError("lineage archive import does not support --dry-run")
         response = client.import_thread_lineage_archive(
             archive,
             profile_policy=args.profile_policy,
             organization_policy=args.organization_policy,
             timestamp_policy=args.timestamp_policy,
+            dry_run=args.dry_run,
         )
         if trace_id is not None:
             response["trace_id"] = trace_id
+        if args.dry_run:
+            imported_threads = response.get("threads")
+            if (
+                response.get("dry_run") is not True
+                or response.get("root_thread_id") is not None
+                or response.get("requested_thread_id") is not None
+                or not isinstance(imported_threads, list)
+                or any(
+                    not isinstance(item, dict) or item.get("thread_id") is not None
+                    for item in imported_threads
+                )
+            ):
+                raise RuntimeError("Mindweft thread lineage archive dry-run response is invalid")
+            if args.json:
+                print_json(response)
+            else:
+                print(
+                    "validation=ok "
+                    f"threads={response.get('thread_count', 0)} "
+                    f"messages={response.get('message_count', 0)} "
+                    f"attachments={response.get('attachment_count', 0)} "
+                    f"profile_policy={response.get('profile_policy', args.profile_policy)} "
+                    "organization_policy="
+                    f"{response.get('organization_policy', args.organization_policy)} "
+                    f"timestamp_policy={response.get('timestamp_policy', args.timestamp_policy)}"
+                )
+                _print_thread_archive_import_warnings(response)
+            return 0
         thread_id = response.get("requested_thread_id")
         if not isinstance(thread_id, str) or not thread_id:
             raise RuntimeError(

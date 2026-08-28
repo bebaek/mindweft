@@ -2216,6 +2216,14 @@ def test_thread_lineage_archive_exports_complete_fork_tree(store_kind: str, tmp_
     replay = client.post("/threads/import-lineage", headers=AUTH_HEADERS, json=bundle)
     assert replay.status_code == 201
     assert replay.json() == imported_payload
+    post_import_dry_run = client.post(
+        "/threads/import-lineage?dry_run=true",
+        headers=AUTH_HEADERS,
+        json=bundle,
+    )
+    assert post_import_dry_run.status_code == 201
+    assert post_import_dry_run.json()["dry_run"] is True
+    assert len(store.list_threads("tenant-1")) == 8
     conflicting_bundle = json.loads(json.dumps(bundle))
     conflicting_bundle["threads"][0]["archive"]["thread"]["title"] = "changed"
     conflict = client.post(
@@ -2255,7 +2263,13 @@ def test_thread_lineage_archive_import_rolls_back_all_new_threads(
         headers=AUTH_HEADERS,
         json=bundle,
     )
-    assert dry_run.status_code == 400
+    assert dry_run.status_code == 201
+    dry_run_payload = dry_run.json()
+    assert dry_run_payload["dry_run"] is True
+    assert dry_run_payload["root_thread_id"] is None
+    assert dry_run_payload["requested_thread_id"] is None
+    assert all(item["thread_id"] is None for item in dry_run_payload["threads"])
+    assert dry_run_payload["thread_count"] == 2
     assert len(store.list_threads("tenant-1")) == 2
 
     failed = client.post(
@@ -2275,6 +2289,67 @@ def test_thread_lineage_archive_import_rolls_back_all_new_threads(
     assert retried.status_code == 201
     assert retried.json()["thread_count"] == 2
     assert len(store.list_threads("tenant-1")) == 4
+
+
+def test_thread_lineage_archive_dry_run_enforces_cumulative_thread_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_store = InMemoryThreadStore()
+    root = source_store.create_thread("tenant-1", execution_user_id="user-1")
+    boundary = source_store.append_message(
+        "tenant-1",
+        Message(thread_id=root.thread_id, role=MessageRole.USER, content="fork"),
+    )
+    child = source_store.fork_thread("tenant-1", root.thread_id, at_message_id=boundary.id)
+    source_client = TestClient(create_app(thread_store=source_store))
+    bundle = source_client.get(
+        f"/threads/{child.thread_id}/lineage/archive",
+        headers=AUTH_HEADERS,
+    ).json()
+
+    monkeypatch.setenv("MINDWEFT_TENANT_REGISTRY_REQUIRED", "true")
+    destination_store = InMemoryThreadStore()
+    destination_client = TestClient(
+        create_app(
+            thread_store=destination_store,
+            admin_store=_sqlite_store(tmp_path),
+        )
+    )
+    destination_client.post(
+        "/admin/tenants",
+        json={"id": "tenant-1", "slug": "tenant-one", "name": "Tenant One", "status": "active"},
+        headers=ADMIN_HEADERS,
+    )
+    destination_client.put(
+        "/admin/tenants/tenant-1/entitlements",
+        json={"features": {}, "limits": {"max_threads": 1}},
+        headers=ADMIN_HEADERS,
+    )
+
+    rejected = destination_client.post(
+        "/threads/import-lineage?dry_run=true",
+        headers=AUTH_HEADERS,
+        json=bundle,
+    )
+
+    assert rejected.status_code == 429
+    assert "max_threads" in rejected.json()["detail"]
+    assert destination_store.list_threads("tenant-1") == []
+
+    destination_client.put(
+        "/admin/tenants/tenant-1/entitlements",
+        json={"features": {}, "limits": {"max_threads": 2}},
+        headers=ADMIN_HEADERS,
+    )
+    accepted = destination_client.post(
+        "/threads/import-lineage?dry_run=true",
+        headers=AUTH_HEADERS,
+        json=bundle,
+    )
+    assert accepted.status_code == 201
+    assert accepted.json()["dry_run"] is True
+    assert destination_store.list_threads("tenant-1") == []
 
 
 def test_thread_lineage_archive_rejects_independently_imported_member() -> None:
