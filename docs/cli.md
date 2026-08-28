@@ -222,6 +222,7 @@ mindweft export <thread-id> --output transcript.md      # write Markdown to a fi
 mindweft export <thread-id> --format json --output transcript.json
 mindweft export <thread-id> --format archive --output thread.mindweft.json
 mindweft export <thread-id> --format lineage-archive --output lineage.mindweft.json
+mindweft import lineage.mindweft.json                    # restore the complete fork tree
 mindweft import thread.mindweft.json --dry-run          # validate without retaining a thread
 mindweft import thread.mindweft.json                    # restore available execution selections
 mindweft import thread.mindweft.json --profile-policy strict
@@ -252,15 +253,20 @@ larger than the underlying attachment bytes. Existing version 1 through 3 archiv
 versions 1 and 2 do not contain organization state, and versions 1 through 3 do not carry portable
 import provenance.
 
-`--format lineage-archive` requests an export-only version 1
+`--format lineage-archive` requests a version 1
 `mindweft.thread-lineage-archive` bundle. Starting from any member, the server finds its root and
 exports the complete descendant fork tree in parent-before-child order. Every entry contains a nested
 version 4 thread archive plus internal parent-thread, fork-message, and compaction-boundary source IDs.
-The server rejects bundles above 100 threads, 10,000 messages, or 1,000 attachments. Bundle import is
-not yet supported; extract or export a single `mindweft.thread-archive` when using `mindweft import`.
+The server rejects bundles above 100 threads, 10,000 messages, or 1,000 attachments. Import creates
+new destination IDs for all members and their messages and attachments, remaps parent, fork-message,
+and compaction-boundary references, and restores the tree through `POST /threads/import-lineage`.
+Profile, organization, and timestamp policies apply to every nested archive. Bundle imports are
+idempotent by bundle ID and roll back newly created members when any member fails. A nested archive
+that was imported separately is rejected rather than attached to a new tree. Lineage archives do not
+currently support `--dry-run`.
 
-System messages remain rejected, and fork/compaction lineage is not restored. Organization-state
-handling is controlled separately by `--organization-policy`:
+For single-thread archives, system messages remain rejected and fork/compaction lineage is not
+restored. Organization-state handling is controlled separately by `--organization-policy`:
 
 | Policy | Behavior |
 | --- | --- |

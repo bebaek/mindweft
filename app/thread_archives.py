@@ -207,6 +207,31 @@ class ThreadLineageArchiveV1(ThreadArchiveModel):
         return self
 
 
+class ThreadLineageArchiveImportWarning(ThreadArchiveModel):
+    source_thread_id: str
+    code: str
+    message: str
+
+
+class ThreadLineageArchiveImportedThread(ThreadArchiveModel):
+    source_thread_id: str
+    thread_id: str
+
+
+class ThreadLineageArchiveImportResponse(ThreadArchiveModel):
+    archive_id: str
+    root_thread_id: str
+    requested_thread_id: str
+    threads: list[ThreadLineageArchiveImportedThread]
+    thread_count: int
+    message_count: int
+    attachment_count: int
+    profile_policy: ThreadArchiveProfilePolicy
+    organization_policy: ThreadArchiveOrganizationPolicy = "reset"
+    timestamp_policy: ThreadArchiveTimestampPolicy = "reset"
+    warnings: list[ThreadLineageArchiveImportWarning] = Field(default_factory=list)
+
+
 class ThreadArchiveImportWarning(ThreadArchiveModel):
     code: str
     message: str
@@ -222,6 +247,7 @@ class ThreadArchiveImportResponse(ThreadArchiveModel):
     timestamp_policy: ThreadArchiveTimestampPolicy = "reset"
     dry_run: bool = False
     warnings: list[ThreadArchiveImportWarning] = Field(default_factory=list)
+    replayed: bool = Field(default=False, exclude=True)
 
 
 def build_thread_archive(

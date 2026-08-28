@@ -638,6 +638,55 @@ def run_import_thread_archive(
     archive = json.loads(archive_path.read_text(encoding="utf-8"))
     if not isinstance(archive, dict):
         raise ValueError("thread archive must contain a JSON object")
+    if archive.get("schema") == "mindweft.thread-lineage-archive":
+        if args.dry_run:
+            raise ValueError("lineage archive import does not support --dry-run")
+        response = client.import_thread_lineage_archive(
+            archive,
+            profile_policy=args.profile_policy,
+            organization_policy=args.organization_policy,
+            timestamp_policy=args.timestamp_policy,
+        )
+        if trace_id is not None:
+            response["trace_id"] = trace_id
+        thread_id = response.get("requested_thread_id")
+        if not isinstance(thread_id, str) or not thread_id:
+            raise RuntimeError(
+                "Mindweft thread lineage archive import response is missing requested_thread_id"
+            )
+        requested_source_thread_id = archive.get("requested_source_thread_id")
+        title: str | None = None
+        for entry in archive.get("threads", []):
+            if not isinstance(entry, dict):
+                continue
+            nested_archive = entry.get("archive")
+            if not isinstance(nested_archive, dict):
+                continue
+            thread_data = nested_archive.get("thread")
+            if (
+                isinstance(thread_data, dict)
+                and thread_data.get("source_thread_id") == requested_source_thread_id
+                and isinstance(thread_data.get("title"), str)
+            ):
+                title = thread_data["title"]
+                break
+        remember_thread(
+            base_url,
+            args,
+            thread_id,
+            title=title,
+            message_count=None,
+        )
+        if args.json:
+            print_json(response)
+        else:
+            print(
+                f"thread_id={thread_id} "
+                f"root_thread_id={response.get('root_thread_id')} "
+                f"threads={response.get('thread_count', 0)}"
+            )
+            _print_thread_archive_import_warnings(response)
+        return 0
     response = client.import_thread_archive(
         archive,
         profile_policy=args.profile_policy,
