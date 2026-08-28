@@ -460,6 +460,15 @@ class MindweftAPIClient:
             raise RuntimeError("Mindweft thread archive response must be an object")
         return cast(dict[str, Any], response)
 
+    def export_thread_lineage_archive(self, thread_id: str) -> dict[str, Any]:
+        response = self.request_json(
+            "GET",
+            f"{self._config.base_url}/threads/{thread_id}/lineage/archive",
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Mindweft thread lineage archive response must be an object")
+        return cast(dict[str, Any], response)
+
     def import_thread_archive(
         self,
         archive: dict[str, Any],

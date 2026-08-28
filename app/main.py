@@ -175,6 +175,9 @@ from app.store import (
 from app.tenants import require_active_tenant_principal, require_tenant_context
 from app.thread_archives import (
     MAX_ARCHIVE_PROVENANCE_HOPS,
+    MAX_LINEAGE_ARCHIVE_ATTACHMENTS,
+    MAX_LINEAGE_ARCHIVE_MESSAGES,
+    MAX_LINEAGE_ARCHIVE_THREADS,
     ThreadArchive,
     ThreadArchiveImportResponse,
     ThreadArchiveImportWarning,
@@ -184,6 +187,8 @@ from app.thread_archives import (
     ThreadArchiveV2,
     ThreadArchiveV3,
     ThreadArchiveV4,
+    ThreadLineageArchiveEntry,
+    ThreadLineageArchiveV1,
     build_thread_archive,
     imported_messages,
     validate_importable_thread_archive,
@@ -494,6 +499,44 @@ def _thread_import_provenance_chain(thread: Thread) -> list[ThreadImportProvenan
         return list(thread.import_provenance_chain)
     provenance = _thread_import_provenance(thread)
     return [provenance] if provenance is not None else []
+
+
+def _build_exported_thread_archive(
+    request: Request,
+    tenant_id: str,
+    thread: Thread,
+    *,
+    messages: list[Message] | None = None,
+) -> ThreadArchiveV4:
+    store = request.app.state.store
+    exported_messages = (
+        messages if messages is not None else store.list_messages(tenant_id, thread.thread_id)
+    )
+    context = store.get_thread_context(tenant_id, thread.thread_id)
+    attachment_records: dict[str, AttachmentRecord] = {}
+    for attachment_id in message_attachment_ids(exported_messages):
+        if attachment_id in attachment_records:
+            continue
+        record = request.app.state.attachment_store.get(
+            tenant_id,
+            thread.thread_id,
+            attachment_id,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"attachment '{attachment_id}' referenced by thread is missing",
+            )
+        attachment_records[attachment_id] = record
+    try:
+        return build_thread_archive(
+            thread,
+            exported_messages,
+            context,
+            attachment_records=attachment_records,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _search_snippet(content: str, query: str, *, max_chars: int = 180) -> str:
@@ -1911,32 +1954,108 @@ def create_app(
     ) -> ThreadArchiveV4:
         store = request.app.state.store
         thread = store.get_thread(principal.tenant_id, thread_id)
-        messages = store.list_messages(principal.tenant_id, thread_id)
-        context = store.get_thread_context(principal.tenant_id, thread_id)
-        attachment_records: dict[str, AttachmentRecord] = {}
-        for attachment_id in message_attachment_ids(messages):
-            if attachment_id in attachment_records:
-                continue
-            record = request.app.state.attachment_store.get(
-                principal.tenant_id,
-                thread_id,
-                attachment_id,
-            )
-            if record is None:
+        return _build_exported_thread_archive(request, principal.tenant_id, thread)
+
+    @app.get(
+        "/threads/{thread_id}/lineage/archive",
+        response_model=ThreadLineageArchiveV1,
+    )
+    async def export_thread_lineage_archive(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> ThreadLineageArchiveV1:
+        store = request.app.state.store
+        requested = store.get_thread(principal.tenant_id, thread_id)
+        tenant_threads = store.list_threads(principal.tenant_id)
+        threads_by_id = {thread.thread_id: thread for thread in tenant_threads}
+
+        root = requested
+        ancestor_ids: set[str] = set()
+        while True:
+            if root.thread_id in ancestor_ids:
+                raise HTTPException(status_code=409, detail="thread lineage contains a cycle")
+            ancestor_ids.add(root.thread_id)
+            if root.parent_thread_id is None:
+                break
+            parent = threads_by_id.get(root.parent_thread_id)
+            if parent is None:
+                break
+            root = parent
+
+        children_by_parent: dict[str, list[Thread]] = {}
+        for thread in tenant_threads:
+            if thread.parent_thread_id is not None:
+                children_by_parent.setdefault(thread.parent_thread_id, []).append(thread)
+        for children in children_by_parent.values():
+            children.sort(key=lambda child: (child.created_at, child.thread_id))
+
+        lineage_threads: list[Thread] = []
+        pending = [root]
+        included_ids: set[str] = set()
+        while pending:
+            current = pending.pop(0)
+            if current.thread_id in included_ids:
+                raise HTTPException(status_code=409, detail="thread lineage contains a cycle")
+            included_ids.add(current.thread_id)
+            lineage_threads.append(current)
+            if len(lineage_threads) > MAX_LINEAGE_ARCHIVE_THREADS:
                 raise HTTPException(
-                    status_code=409,
-                    detail=f"attachment '{attachment_id}' referenced by thread is missing",
+                    status_code=413,
+                    detail=(
+                        "thread lineage archive exceeds the maximum of "
+                        f"{MAX_LINEAGE_ARCHIVE_THREADS} threads"
+                    ),
                 )
-            attachment_records[attachment_id] = record
-        try:
-            return build_thread_archive(
-                thread,
-                messages,
-                context,
-                attachment_records=attachment_records,
+            pending.extend(children_by_parent.get(current.thread_id, []))
+
+        entries: list[ThreadLineageArchiveEntry] = []
+        message_count = 0
+        attachment_count = 0
+        for thread in lineage_threads:
+            messages = store.list_messages(principal.tenant_id, thread.thread_id)
+            message_count += len(messages)
+            if message_count > MAX_LINEAGE_ARCHIVE_MESSAGES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        "thread lineage archive exceeds the maximum of "
+                        f"{MAX_LINEAGE_ARCHIVE_MESSAGES} messages"
+                    ),
+                )
+            attachment_count += len(message_attachment_ids(messages))
+            if attachment_count > MAX_LINEAGE_ARCHIVE_ATTACHMENTS:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        "thread lineage archive exceeds the maximum of "
+                        f"{MAX_LINEAGE_ARCHIVE_ATTACHMENTS} attachments"
+                    ),
+                )
+            parent_is_included = thread.parent_thread_id in included_ids
+            entries.append(
+                ThreadLineageArchiveEntry(
+                    archive=_build_exported_thread_archive(
+                        request,
+                        principal.tenant_id,
+                        thread,
+                        messages=messages,
+                    ),
+                    parent_source_thread_id=(
+                        thread.parent_thread_id if parent_is_included else None
+                    ),
+                    fork_source_message_id=(thread.fork_message_id if parent_is_included else None),
+                    compacted_through_source_message_id=(
+                        thread.compacted_through_message_id if parent_is_included else None
+                    ),
+                )
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        return ThreadLineageArchiveV1(
+            requested_source_thread_id=requested.thread_id,
+            root_source_thread_id=root.thread_id,
+            threads=entries,
+        )
 
     @app.get("/threads/{thread_id}/lineage", response_model=ThreadLineageResponse)
     async def get_thread_lineage(

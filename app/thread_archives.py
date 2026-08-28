@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal, Mapping
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.attachments import AttachmentRecord
 from app.message_parts import is_attachment_part, remap_attachment_ids
@@ -23,12 +23,17 @@ from app.models import (
 
 THREAD_ARCHIVE_SCHEMA = "mindweft.thread-archive"
 THREAD_ARCHIVE_VERSION = 4
+THREAD_LINEAGE_ARCHIVE_SCHEMA = "mindweft.thread-lineage-archive"
+THREAD_LINEAGE_ARCHIVE_VERSION = 1
 ThreadArchiveProfilePolicy = Literal["defaults", "available", "strict"]
 ThreadArchiveOrganizationPolicy = Literal["reset", "preserve"]
 ThreadArchiveTimestampPolicy = Literal["reset", "preserve"]
 MAX_ARCHIVE_MESSAGES = 10_000
 MAX_ARCHIVE_ATTACHMENTS = 1_000
 MAX_ARCHIVE_PROVENANCE_HOPS = 64
+MAX_LINEAGE_ARCHIVE_THREADS = 100
+MAX_LINEAGE_ARCHIVE_MESSAGES = 10_000
+MAX_LINEAGE_ARCHIVE_ATTACHMENTS = 1_000
 
 
 class ThreadArchiveModel(BaseModel):
@@ -136,6 +141,70 @@ ThreadArchive = Annotated[
     ThreadArchiveV1 | ThreadArchiveV2 | ThreadArchiveV3 | ThreadArchiveV4,
     Field(discriminator="version"),
 ]
+
+
+class ThreadLineageArchiveEntry(ThreadArchiveModel):
+    archive: ThreadArchiveV4
+    parent_source_thread_id: str | None = None
+    fork_source_message_id: str | None = None
+    compacted_through_source_message_id: str | None = None
+
+
+class ThreadLineageArchiveV1(ThreadArchiveModel):
+    schema_name: Literal["mindweft.thread-lineage-archive"] = Field(
+        default=THREAD_LINEAGE_ARCHIVE_SCHEMA,
+        validation_alias="schema",
+        serialization_alias="schema",
+    )
+    version: Literal[1] = THREAD_LINEAGE_ARCHIVE_VERSION
+    archive_id: str = Field(default_factory=lambda: str(uuid4()))
+    exported_at: datetime = Field(default_factory=utc_now)
+    requested_source_thread_id: str = Field(min_length=1)
+    root_source_thread_id: str = Field(min_length=1)
+    threads: list[ThreadLineageArchiveEntry] = Field(
+        min_length=1,
+        max_length=MAX_LINEAGE_ARCHIVE_THREADS,
+    )
+
+    @model_validator(mode="after")
+    def validate_tree(self) -> ThreadLineageArchiveV1:
+        entries_by_id: dict[str, ThreadLineageArchiveEntry] = {}
+        seen_ids: set[str] = set()
+        for index, entry in enumerate(self.threads):
+            source_thread_id = entry.archive.thread.source_thread_id
+            if source_thread_id in entries_by_id:
+                raise ValueError("lineage archive source thread IDs must be unique")
+            if index == 0:
+                if source_thread_id != self.root_source_thread_id:
+                    raise ValueError("lineage archive root must be the first thread")
+                if entry.parent_source_thread_id is not None:
+                    raise ValueError("lineage archive root must not have a parent")
+            elif entry.parent_source_thread_id not in seen_ids:
+                raise ValueError("lineage archive parents must precede their children")
+            if entry.parent_source_thread_id is None:
+                if entry.fork_source_message_id is not None:
+                    raise ValueError("lineage archive root must not have a fork message")
+                if entry.compacted_through_source_message_id is not None:
+                    raise ValueError("lineage archive root must not have a compaction boundary")
+            else:
+                parent = entries_by_id[entry.parent_source_thread_id]
+                parent_message_ids = {
+                    message.source_message_id for message in parent.archive.messages
+                }
+                if entry.fork_source_message_id not in parent_message_ids:
+                    raise ValueError("lineage archive fork message must belong to the parent")
+                if (
+                    entry.compacted_through_source_message_id is not None
+                    and entry.compacted_through_source_message_id not in parent_message_ids
+                ):
+                    raise ValueError(
+                        "lineage archive compaction boundary must belong to the parent"
+                    )
+            entries_by_id[source_thread_id] = entry
+            seen_ids.add(source_thread_id)
+        if self.requested_source_thread_id not in entries_by_id:
+            raise ValueError("lineage archive requested thread must be included")
+        return self
 
 
 class ThreadArchiveImportWarning(ThreadArchiveModel):

@@ -615,6 +615,7 @@ A versioned archive format is available for portable thread round trips:
 
 ```bash
 uv run mindweft export <thread-id> --format archive --output thread.mindweft.json
+uv run mindweft export <thread-id> --format lineage-archive --output lineage.mindweft.json
 uv run mindweft import thread.mindweft.json --dry-run
 uv run mindweft import thread.mindweft.json
 uv run mindweft import thread.mindweft.json --organization-policy preserve
@@ -628,6 +629,15 @@ attachments, source pin/archive organization state, and a bounded import-provena
 bytes are base64-encoded with declared sizes and SHA-256 checksums; import revalidates content and
 enforces destination attachment capabilities and quotas before remapping attachment IDs. System
 messages and fork/compaction lineage are not restored.
+
+For backup and inspection of a complete fork tree, `--format lineage-archive` exports the requested
+thread's root, all descendants, each thread's nested version 4 archive, and the parent, fork-message,
+and compaction-boundary source IDs needed to reconstruct relationships. The bundle schema is
+`mindweft.thread-lineage-archive` version 1 and is also available from
+`GET /threads/{thread_id}/lineage/archive`. Export is capped at 100 threads, 10,000 messages, and 1,000
+attachments across the bundle. Lineage bundle import is not yet supported; `mindweft import` continues
+to accept a single `mindweft.thread-archive` document.
+
 Destination-local organization defaults are used unless `--organization-policy preserve` is selected.
 Likewise, imports receive fresh destination thread timestamps unless `--timestamp-policy preserve`
 restores the source `created_at` and `updated_at` values; preserved timestamps affect destination

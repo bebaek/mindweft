@@ -2112,6 +2112,97 @@ def test_thread_fork_endpoint_copies_prefix_and_records_lineage() -> None:
     ]
 
 
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_thread_lineage_archive_exports_complete_fork_tree(store_kind: str, tmp_path: Path) -> None:
+    store = (
+        SQLiteThreadStore(tmp_path / "thread-lineage-archive.db")
+        if store_kind == "sqlite"
+        else InMemoryThreadStore()
+    )
+    root = store.create_thread("tenant-1", execution_user_id="user-1")
+    first = store.append_message(
+        "tenant-1",
+        Message(thread_id=root.thread_id, role=MessageRole.USER, content="first"),
+    )
+    second = store.append_message(
+        "tenant-1",
+        Message(thread_id=root.thread_id, role=MessageRole.ASSISTANT, content="second"),
+    )
+    child = store.fork_thread("tenant-1", root.thread_id, at_message_id=first.id)
+    child_boundary = store.append_message(
+        "tenant-1",
+        Message(thread_id=child.thread_id, role=MessageRole.USER, content="child branch"),
+    )
+    grandchild = store.fork_thread(
+        "tenant-1",
+        child.thread_id,
+        at_message_id=child_boundary.id,
+    )
+    sibling = store.fork_compacted_thread(
+        "tenant-1",
+        root.thread_id,
+        fork_message_id=second.id,
+        compacted_through_message_id=first.id,
+        summary="first was compacted",
+    )
+    client = TestClient(create_app(thread_store=store))
+
+    response = client.get(
+        f"/threads/{grandchild.thread_id}/lineage/archive",
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    bundle = response.json()
+    assert bundle["schema"] == "mindweft.thread-lineage-archive"
+    assert bundle["version"] == 1
+    assert bundle["requested_source_thread_id"] == grandchild.thread_id
+    assert bundle["root_source_thread_id"] == root.thread_id
+    entries = {entry["archive"]["thread"]["source_thread_id"]: entry for entry in bundle["threads"]}
+    assert set(entries) == {
+        root.thread_id,
+        child.thread_id,
+        grandchild.thread_id,
+        sibling.thread_id,
+    }
+    assert entries[root.thread_id]["parent_source_thread_id"] is None
+    assert entries[root.thread_id]["fork_source_message_id"] is None
+    assert entries[child.thread_id]["parent_source_thread_id"] == root.thread_id
+    assert entries[child.thread_id]["fork_source_message_id"] == first.id
+    assert entries[grandchild.thread_id]["parent_source_thread_id"] == child.thread_id
+    assert entries[grandchild.thread_id]["fork_source_message_id"] == child_boundary.id
+    assert entries[sibling.thread_id]["parent_source_thread_id"] == root.thread_id
+    assert entries[sibling.thread_id]["fork_source_message_id"] == second.id
+    assert entries[sibling.thread_id]["compacted_through_source_message_id"] == first.id
+    assert entries[sibling.thread_id]["archive"]["context"]["summary"] == "first was compacted"
+    assert all(entry["archive"]["version"] == 4 for entry in entries.values())
+    assert all(
+        entry["archive"]["schema"] == "mindweft.thread-archive" for entry in entries.values()
+    )
+
+
+def test_thread_lineage_archive_enforces_thread_limit() -> None:
+    store = InMemoryThreadStore()
+    root = store.create_thread("tenant-1", execution_user_id="user-1")
+    boundary = store.append_message(
+        "tenant-1",
+        Message(thread_id=root.thread_id, role=MessageRole.USER, content="fork"),
+    )
+    for _ in range(100):
+        store.fork_thread("tenant-1", root.thread_id, at_message_id=boundary.id)
+    client = TestClient(create_app(thread_store=store))
+
+    response = client.get(
+        f"/threads/{root.thread_id}/lineage/archive",
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == (
+        "thread lineage archive exceeds the maximum of 100 threads"
+    )
+
+
 def test_thread_lineage_endpoint_returns_parent_and_direct_children() -> None:
     store = InMemoryThreadStore()
     source = store.create_thread("tenant-1", execution_user_id="user-1")

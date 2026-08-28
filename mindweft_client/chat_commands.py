@@ -599,6 +599,10 @@ def run_export(
     trace_id: str | None,
 ) -> int:
     thread_id = args.thread_id or load_remembered_thread(base_url, args)
+    if args.format == "lineage-archive":
+        archive = client.export_thread_lineage_archive(thread_id)
+        _write_export_text(args, json.dumps(archive, indent=2, sort_keys=True) + "\n")
+        return 0
     if args.format == "archive":
         archive = client.export_thread_archive(thread_id)
         _write_export_text(args, json.dumps(archive, indent=2, sort_keys=True) + "\n")

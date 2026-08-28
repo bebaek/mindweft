@@ -221,6 +221,7 @@ mindweft export <thread-id> --format json               # export a transcript as
 mindweft export <thread-id> --output transcript.md      # write Markdown to a file
 mindweft export <thread-id> --format json --output transcript.json
 mindweft export <thread-id> --format archive --output thread.mindweft.json
+mindweft export <thread-id> --format lineage-archive --output lineage.mindweft.json
 mindweft import thread.mindweft.json --dry-run          # validate without retaining a thread
 mindweft import thread.mindweft.json                    # restore available execution selections
 mindweft import thread.mindweft.json --profile-policy strict
@@ -250,6 +251,13 @@ message-part references to new attachment IDs. Base64 increases file size, so ar
 larger than the underlying attachment bytes. Existing version 1 through 3 archives remain importable;
 versions 1 and 2 do not contain organization state, and versions 1 through 3 do not carry portable
 import provenance.
+
+`--format lineage-archive` requests an export-only version 1
+`mindweft.thread-lineage-archive` bundle. Starting from any member, the server finds its root and
+exports the complete descendant fork tree in parent-before-child order. Every entry contains a nested
+version 4 thread archive plus internal parent-thread, fork-message, and compaction-boundary source IDs.
+The server rejects bundles above 100 threads, 10,000 messages, or 1,000 attachments. Bundle import is
+not yet supported; extract or export a single `mindweft.thread-archive` when using `mindweft import`.
 
 System messages remain rejected, and fork/compaction lineage is not restored. Organization-state
 handling is controlled separately by `--organization-policy`:

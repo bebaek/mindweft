@@ -755,6 +755,29 @@ def test_export_thread_to_files(monkeypatch: Any, tmp_path: Path, capsys: Any) -
     assert capsys.readouterr().out == ""
 
 
+def test_export_thread_lineage_archive(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    lineage_archive = {
+        "schema": "mindweft.thread-lineage-archive",
+        "version": 1,
+        "archive_id": "lineage-archive-1",
+        "exported_at": "2026-01-01T00:00:00Z",
+        "requested_source_thread_id": "thread-child",
+        "root_source_thread_id": "thread-root",
+        "threads": [],
+    }
+
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads/thread-child/lineage/archive"):
+            return _Response(body=lineage_archive)
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    assert cli.main(["export", "thread-child", "--format", "lineage-archive"]) == 0
+    assert json.loads(capsys.readouterr().out) == lineage_archive
+
+
 def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     archive = {
         "schema": "mindweft.thread-archive",
