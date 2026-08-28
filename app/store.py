@@ -297,6 +297,16 @@ class ThreadStore(Protocol):
         archived: bool | None = None,
     ) -> Thread: ...
 
+    def set_thread_lineage(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        parent_thread_id: str | None,
+        fork_message_id: str | None,
+        compacted_through_message_id: str | None,
+    ) -> Thread: ...
+
     def restore_thread_timestamps(
         self,
         tenant_id: str,
@@ -866,6 +876,24 @@ class InMemoryThreadStore:
                 thread.pinned_at = now if pinned else None
             if archived is not None and archived != (thread.archived_at is not None):
                 thread.archived_at = now if archived else None
+            return thread.model_copy(deep=True)
+
+    def set_thread_lineage(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        parent_thread_id: str | None,
+        fork_message_id: str | None,
+        compacted_through_message_id: str | None,
+    ) -> Thread:
+        with self._lock:
+            thread = self._require_thread(tenant_id, thread_id)
+            if parent_thread_id is not None:
+                self._require_thread(tenant_id, parent_thread_id)
+            thread.parent_thread_id = parent_thread_id
+            thread.fork_message_id = fork_message_id
+            thread.compacted_through_message_id = compacted_through_message_id
             return thread.model_copy(deep=True)
 
     def restore_thread_timestamps(
@@ -1803,6 +1831,25 @@ class SQLiteThreadStore:
                 thread.pinned_at = now if pinned else None
             if archived is not None and archived != (thread.archived_at is not None):
                 thread.archived_at = now if archived else None
+            self._save_thread(conn, thread)
+            return thread
+
+    def set_thread_lineage(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        parent_thread_id: str | None,
+        fork_message_id: str | None,
+        compacted_through_message_id: str | None,
+    ) -> Thread:
+        with self._lock, self._connection() as conn:
+            thread = self._require_thread(conn, tenant_id, thread_id)
+            if parent_thread_id is not None:
+                self._require_thread(conn, tenant_id, parent_thread_id)
+            thread.parent_thread_id = parent_thread_id
+            thread.fork_message_id = fork_message_id
+            thread.compacted_through_message_id = compacted_through_message_id
             self._save_thread(conn, thread)
             return thread
 

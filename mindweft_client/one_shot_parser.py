@@ -304,14 +304,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     import_parser = subparsers.add_parser(
         "import",
-        help="Import a versioned thread archive.",
+        help="Import a versioned thread or lineage archive.",
         description=(
-            "Import a Mindweft thread archive as a new thread. Source execution options, "
-            "organization state, and thread timestamps are mapped through independent destination "
-            "policies."
+            "Import a Mindweft thread archive as a new thread, or a lineage archive as a restored "
+            "fork tree. Source execution options, organization state, and thread timestamps are "
+            "mapped through independent destination policies."
         ),
     )
-    import_parser.add_argument("archive", help="Path to a Mindweft thread archive JSON file.")
+    import_parser.add_argument(
+        "archive",
+        help="Path to a Mindweft thread or lineage archive JSON file.",
+    )
     import_parser.add_argument(
         "--profile-policy",
         choices=["available", "defaults", "strict"],
@@ -346,8 +349,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help=(
-            "Run full destination validation, including attachment checks, then remove all imported "
-            "state instead of creating a thread."
+            "Run full destination validation for a single-thread archive, including attachment "
+            "checks, then remove all imported state instead of creating a thread. Lineage archives "
+            "do not support dry-run."
         ),
     )
 

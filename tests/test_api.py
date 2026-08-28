@@ -2180,6 +2180,132 @@ def test_thread_lineage_archive_exports_complete_fork_tree(store_kind: str, tmp_
         entry["archive"]["schema"] == "mindweft.thread-archive" for entry in entries.values()
     )
 
+    imported = client.post("/threads/import-lineage", headers=AUTH_HEADERS, json=bundle)
+    assert imported.status_code == 201
+    imported_payload = imported.json()
+    assert imported_payload["archive_id"] == bundle["archive_id"]
+    assert imported_payload["thread_count"] == 4
+    assert imported_payload["message_count"] == sum(
+        len(entry["archive"]["messages"]) for entry in bundle["threads"]
+    )
+    destination_ids = {
+        item["source_thread_id"]: item["thread_id"] for item in imported_payload["threads"]
+    }
+    assert imported_payload["root_thread_id"] == destination_ids[root.thread_id]
+    assert imported_payload["requested_thread_id"] == destination_ids[grandchild.thread_id]
+
+    imported_root = store.get_thread("tenant-1", destination_ids[root.thread_id])
+    imported_child = store.get_thread("tenant-1", destination_ids[child.thread_id])
+    imported_grandchild = store.get_thread("tenant-1", destination_ids[grandchild.thread_id])
+    imported_sibling = store.get_thread("tenant-1", destination_ids[sibling.thread_id])
+    assert imported_root.parent_thread_id is None
+    assert imported_child.parent_thread_id == imported_root.thread_id
+    assert imported_grandchild.parent_thread_id == imported_child.thread_id
+    assert imported_sibling.parent_thread_id == imported_root.thread_id
+    imported_root_messages = store.list_messages("tenant-1", imported_root.thread_id)
+    imported_root_message_ids = {
+        message.source_message_id: message.id for message in imported_root_messages
+    }
+    assert imported_child.fork_message_id == imported_root_message_ids[first.id]
+    assert imported_sibling.fork_message_id == imported_root_message_ids[second.id]
+    assert imported_sibling.compacted_through_message_id == imported_root_message_ids[first.id]
+    assert (
+        imported_child.import_source_archive_id == entries[child.thread_id]["archive"]["archive_id"]
+    )
+
+    replay = client.post("/threads/import-lineage", headers=AUTH_HEADERS, json=bundle)
+    assert replay.status_code == 201
+    assert replay.json() == imported_payload
+    conflicting_bundle = json.loads(json.dumps(bundle))
+    conflicting_bundle["threads"][0]["archive"]["thread"]["title"] = "changed"
+    conflict = client.post(
+        "/threads/import-lineage",
+        headers=AUTH_HEADERS,
+        json=conflicting_bundle,
+    )
+    assert conflict.status_code == 409
+    assert len(store.list_threads("tenant-1")) == 8
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_thread_lineage_archive_import_rolls_back_all_new_threads(
+    store_kind: str, tmp_path: Path
+) -> None:
+    store = (
+        SQLiteThreadStore(tmp_path / "thread-lineage-import-rollback.db")
+        if store_kind == "sqlite"
+        else InMemoryThreadStore()
+    )
+    root = store.create_thread("tenant-1", execution_user_id="user-1")
+    boundary = store.append_message(
+        "tenant-1",
+        Message(thread_id=root.thread_id, role=MessageRole.USER, content="fork"),
+    )
+    child = store.fork_thread("tenant-1", root.thread_id, at_message_id=boundary.id)
+    client = TestClient(create_app(thread_store=store))
+    bundle = client.get(
+        f"/threads/{child.thread_id}/lineage/archive",
+        headers=AUTH_HEADERS,
+    ).json()
+    invalid_bundle = json.loads(json.dumps(bundle))
+    invalid_bundle["threads"][1]["archive"]["thread"]["llm_profile"] = "missing-profile"
+
+    dry_run = client.post(
+        "/threads/import-lineage?dry_run=true",
+        headers=AUTH_HEADERS,
+        json=bundle,
+    )
+    assert dry_run.status_code == 400
+    assert len(store.list_threads("tenant-1")) == 2
+
+    failed = client.post(
+        "/threads/import-lineage?profile_policy=strict",
+        headers=AUTH_HEADERS,
+        json=invalid_bundle,
+    )
+
+    assert failed.status_code == 400
+    assert len(store.list_threads("tenant-1")) == 2
+
+    retried = client.post(
+        "/threads/import-lineage?profile_policy=strict",
+        headers=AUTH_HEADERS,
+        json=bundle,
+    )
+    assert retried.status_code == 201
+    assert retried.json()["thread_count"] == 2
+    assert len(store.list_threads("tenant-1")) == 4
+
+
+def test_thread_lineage_archive_rejects_independently_imported_member() -> None:
+    store = InMemoryThreadStore()
+    root = store.create_thread("tenant-1", execution_user_id="user-1")
+    boundary = store.append_message(
+        "tenant-1",
+        Message(thread_id=root.thread_id, role=MessageRole.USER, content="fork"),
+    )
+    child = store.fork_thread("tenant-1", root.thread_id, at_message_id=boundary.id)
+    client = TestClient(create_app(thread_store=store))
+    bundle = client.get(
+        f"/threads/{child.thread_id}/lineage/archive",
+        headers=AUTH_HEADERS,
+    ).json()
+    root_archive = bundle["threads"][0]["archive"]
+    independently_imported = client.post(
+        "/threads/import",
+        headers=AUTH_HEADERS,
+        json=root_archive,
+    )
+    assert independently_imported.status_code == 201
+
+    response = client.post("/threads/import-lineage", headers=AUTH_HEADERS, json=bundle)
+
+    assert response.status_code == 409
+    assert response.json()["detail"].startswith(
+        "lineage archive member was already imported independently"
+    )
+    assert len(store.list_threads("tenant-1")) == 3
+
 
 def test_thread_lineage_archive_enforces_thread_limit() -> None:
     store = InMemoryThreadStore()

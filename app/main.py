@@ -188,6 +188,9 @@ from app.thread_archives import (
     ThreadArchiveV3,
     ThreadArchiveV4,
     ThreadLineageArchiveEntry,
+    ThreadLineageArchiveImportedThread,
+    ThreadLineageArchiveImportResponse,
+    ThreadLineageArchiveImportWarning,
     ThreadLineageArchiveV1,
     build_thread_archive,
     imported_messages,
@@ -2242,7 +2245,9 @@ def create_app(
             ) as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             if replay is not None:
-                return ThreadArchiveImportResponse.model_validate(replay.response_payload)
+                return ThreadArchiveImportResponse.model_validate(
+                    replay.response_payload
+                ).model_copy(update={"replayed": True})
         tenant_context = tenant_context_from_request_state(request.state)
         execution = resolve_principal_execution(principal)
         enforce_execution_entitlements(context=tenant_context, execution=execution)
@@ -2456,7 +2461,9 @@ def create_app(
             ) as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             if claim.completed:
-                return ThreadArchiveImportResponse.model_validate(claim.response_payload)
+                return ThreadArchiveImportResponse.model_validate(
+                    claim.response_payload
+                ).model_copy(update={"replayed": True})
             claim_token = claim.claim_token
             if claim_token is None:
                 raise RuntimeError("archive import claim token is missing")
@@ -2658,6 +2665,203 @@ def create_app(
             )
             raise
         return response
+
+    @app.post(
+        "/threads/import-lineage",
+        response_model=ThreadLineageArchiveImportResponse,
+        status_code=201,
+    )
+    async def import_thread_lineage_archive(
+        archive: ThreadLineageArchiveV1,
+        request: Request,
+        profile_policy: ThreadArchiveProfilePolicy = "available",
+        organization_policy: ThreadArchiveOrganizationPolicy = "reset",
+        timestamp_policy: ThreadArchiveTimestampPolicy = "reset",
+        dry_run: bool = False,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> ThreadLineageArchiveImportResponse:
+        if dry_run:
+            raise HTTPException(
+                status_code=400, detail="lineage archive import does not support dry-run"
+            )
+        store = request.app.state.store
+        import_key = f"lineage:{archive.archive_id}"
+        request_digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "archive": archive.model_dump(mode="json"),
+                    "profile_policy": profile_policy,
+                    "organization_policy": organization_policy,
+                    "timestamp_policy": timestamp_policy,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        try:
+            replay = store.lookup_archive_import(
+                principal.tenant_id,
+                import_key,
+                request_digest,
+            )
+        except (
+            thread_store_module.ArchiveImportConflictError,
+            thread_store_module.ArchiveImportInProgressError,
+        ) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if replay is not None:
+            return ThreadLineageArchiveImportResponse.model_validate(replay.response_payload)
+        try:
+            claim = store.begin_archive_import(
+                principal.tenant_id,
+                import_key,
+                request_digest,
+            )
+        except (
+            thread_store_module.ArchiveImportConflictError,
+            thread_store_module.ArchiveImportInProgressError,
+        ) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if claim.completed:
+            return ThreadLineageArchiveImportResponse.model_validate(claim.response_payload)
+        claim_token = claim.claim_token
+        if claim_token is None:
+            raise RuntimeError("lineage archive import claim token is missing")
+
+        source_to_destination: dict[str, str] = {}
+        created_thread_ids: list[str] = []
+        imported_responses: list[ThreadArchiveImportResponse] = []
+
+        def rollback() -> None:
+            for imported_thread_id in reversed(created_thread_ids):
+                request.app.state.runtime.clear_private_values(principal, imported_thread_id)
+                request.app.state.attachment_store.delete_thread(
+                    principal.tenant_id,
+                    imported_thread_id,
+                )
+                try:
+                    store.delete_thread(principal.tenant_id, imported_thread_id)
+                except HTTPException as exc:
+                    if exc.status_code != 404:
+                        raise
+
+        try:
+            for entry in archive.threads:
+                imported = await import_thread_archive(
+                    archive=entry.archive,
+                    request=request,
+                    profile_policy=profile_policy,
+                    organization_policy=organization_policy,
+                    timestamp_policy=timestamp_policy,
+                    dry_run=False,
+                    principal=principal,
+                )
+                if imported.thread_id is None:
+                    raise RuntimeError("lineage archive member import did not create a thread")
+                if imported.replayed:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "lineage archive member was already imported independently: "
+                            f"{entry.archive.thread.source_thread_id}"
+                        ),
+                    )
+                created_thread_ids.append(imported.thread_id)
+                source_to_destination[entry.archive.thread.source_thread_id] = imported.thread_id
+                imported_responses.append(imported)
+
+            for entry in archive.threads:
+                source_thread_id = entry.archive.thread.source_thread_id
+                destination_thread_id = source_to_destination[source_thread_id]
+                destination_parent_id = (
+                    source_to_destination[entry.parent_source_thread_id]
+                    if entry.parent_source_thread_id is not None
+                    else None
+                )
+                fork_message_id: str | None = None
+                compacted_through_message_id: str | None = None
+                if destination_parent_id is not None:
+                    source_message_map = {
+                        message.source_message_id: message.id
+                        for message in store.list_messages(
+                            principal.tenant_id,
+                            destination_parent_id,
+                        )
+                        if message.source_message_id is not None
+                    }
+                    if entry.fork_source_message_id is None:
+                        raise RuntimeError("lineage archive child has no fork message")
+                    fork_message_id = source_message_map.get(entry.fork_source_message_id)
+                    if fork_message_id is None:
+                        raise RuntimeError("imported lineage fork message could not be mapped")
+                    if entry.compacted_through_source_message_id is not None:
+                        compacted_through_message_id = source_message_map.get(
+                            entry.compacted_through_source_message_id
+                        )
+                        if compacted_through_message_id is None:
+                            raise RuntimeError(
+                                "imported lineage compaction boundary could not be mapped"
+                            )
+                store.set_thread_lineage(
+                    principal.tenant_id,
+                    destination_thread_id,
+                    parent_thread_id=destination_parent_id,
+                    fork_message_id=fork_message_id,
+                    compacted_through_message_id=compacted_through_message_id,
+                )
+
+            imported_threads = [
+                ThreadLineageArchiveImportedThread(
+                    source_thread_id=entry.archive.thread.source_thread_id,
+                    thread_id=source_to_destination[entry.archive.thread.source_thread_id],
+                )
+                for entry in archive.threads
+            ]
+            response = ThreadLineageArchiveImportResponse(
+                archive_id=archive.archive_id,
+                root_thread_id=source_to_destination[archive.root_source_thread_id],
+                requested_thread_id=source_to_destination[archive.requested_source_thread_id],
+                threads=imported_threads,
+                thread_count=len(imported_threads),
+                message_count=sum(
+                    imported_response.message_count for imported_response in imported_responses
+                ),
+                attachment_count=sum(
+                    imported_response.attachment_count for imported_response in imported_responses
+                ),
+                profile_policy=profile_policy,
+                organization_policy=organization_policy,
+                timestamp_policy=timestamp_policy,
+                warnings=[
+                    ThreadLineageArchiveImportWarning(
+                        source_thread_id=source_thread_id,
+                        code=warning.code,
+                        message=warning.message,
+                    )
+                    for source_thread_id, imported in zip(
+                        (entry.archive.thread.source_thread_id for entry in archive.threads),
+                        imported_responses,
+                        strict=True,
+                    )
+                    for warning in imported.warnings
+                ],
+            )
+            store.complete_archive_import(
+                principal.tenant_id,
+                import_key,
+                claim_token,
+                thread_id=response.root_thread_id,
+                response_payload=response.model_dump(mode="json"),
+            )
+            return response
+        except Exception:
+            rollback()
+            store.abandon_archive_import(
+                principal.tenant_id,
+                import_key,
+                claim_token,
+            )
+            raise
 
     @app.post("/threads", response_model=CreateThreadResponse)
     async def create_thread(

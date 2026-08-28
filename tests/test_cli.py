@@ -766,9 +766,31 @@ def test_export_thread_lineage_archive(monkeypatch: Any, tmp_path: Path, capsys:
         "threads": [],
     }
 
+    imported_payloads: list[dict[str, Any]] = []
+
     def urlopen(request: Any) -> _Response:
         if request.full_url.endswith("/threads/thread-child/lineage/archive"):
             return _Response(body=lineage_archive)
+        if "/threads/import-lineage?" in request.full_url:
+            imported_payloads.append(json.loads(request.data.decode("utf-8")))
+            return _Response(
+                body={
+                    "archive_id": "lineage-archive-1",
+                    "root_thread_id": "imported-root",
+                    "requested_thread_id": "imported-child",
+                    "threads": [
+                        {"source_thread_id": "thread-root", "thread_id": "imported-root"},
+                        {"source_thread_id": "thread-child", "thread_id": "imported-child"},
+                    ],
+                    "thread_count": 2,
+                    "message_count": 3,
+                    "attachment_count": 0,
+                    "profile_policy": "available",
+                    "organization_policy": "reset",
+                    "timestamp_policy": "reset",
+                    "warnings": [],
+                }
+            )
         raise AssertionError(f"Unexpected request: {request.full_url}")
 
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -776,6 +798,14 @@ def test_export_thread_lineage_archive(monkeypatch: Any, tmp_path: Path, capsys:
 
     assert cli.main(["export", "thread-child", "--format", "lineage-archive"]) == 0
     assert json.loads(capsys.readouterr().out) == lineage_archive
+
+    archive_path = tmp_path / "lineage.mindweft.json"
+    archive_path.write_text(json.dumps(lineage_archive), encoding="utf-8")
+    assert cli.main(["import", str(archive_path)]) == 0
+    assert imported_payloads == [lineage_archive]
+    assert capsys.readouterr().out == (
+        "thread_id=imported-child root_thread_id=imported-root threads=2\n"
+    )
 
 
 def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
