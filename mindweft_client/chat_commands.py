@@ -926,6 +926,27 @@ def run_threads_delete(
     base_url: str,
     trace_id: str | None,
 ) -> int:
+    if args.imported_lineage:
+        response = client.delete_imported_thread_lineage(args.thread_id)
+        deleted_thread_ids = response.get("deleted_thread_ids")
+        if not isinstance(deleted_thread_ids, list) or not all(
+            isinstance(thread_id, str) for thread_id in deleted_thread_ids
+        ):
+            raise RuntimeError("Mindweft imported-lineage deletion response is invalid")
+        for deleted_thread_id in deleted_thread_ids:
+            forget_thread(base_url, args, deleted_thread_id)
+        if args.json:
+            output = dict(response)
+            if trace_id is not None:
+                output["trace_id"] = trace_id
+            print_json(output)
+            return 0
+        if trace_id is not None:
+            print(f"trace_id={trace_id}")
+        print(f"deleted={len(deleted_thread_ids)}")
+        for deleted_thread_id in deleted_thread_ids:
+            print(deleted_thread_id)
+        return 0
     client.delete_thread(args.thread_id)
     forget_thread(base_url, args, args.thread_id)
     if args.json:

@@ -824,6 +824,45 @@ def test_export_thread_lineage_archive(monkeypatch: Any, tmp_path: Path, capsys:
     )
 
 
+def test_delete_imported_thread_lineage(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def urlopen(request: Any) -> _Response:
+        calls.append((request.get_method(), request.full_url))
+        return _Response(
+            body={
+                "deleted_thread_ids": ["thread-root", "thread-child"],
+                "deleted_count": 2,
+            }
+        )
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    assert (
+        cli.main(
+            [
+                "--json",
+                "threads",
+                "delete",
+                "thread-child",
+                "--imported-lineage",
+            ]
+        )
+        == 0
+    )
+    assert calls == [
+        (
+            "DELETE",
+            "http://127.0.0.1:8000/threads/thread-child/imported-lineage",
+        )
+    ]
+    assert json.loads(capsys.readouterr().out) == {
+        "deleted_thread_ids": ["thread-root", "thread-child"],
+        "deleted_count": 2,
+    }
+
+
 def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     archive = {
         "schema": "mindweft.thread-archive",

@@ -2234,6 +2234,28 @@ def test_thread_lineage_archive_exports_complete_fork_tree(store_kind: str, tmp_
     assert conflict.status_code == 409
     assert len(store.list_threads("tenant-1")) == 8
 
+    blocked_delete = client.delete(
+        f"/threads/{destination_ids[child.thread_id]}",
+        headers=AUTH_HEADERS,
+    )
+    assert blocked_delete.status_code == 409
+    deleted_lineage = client.delete(
+        f"/threads/{destination_ids[grandchild.thread_id]}/imported-lineage",
+        headers=AUTH_HEADERS,
+    )
+    assert deleted_lineage.status_code == 200
+    assert deleted_lineage.json() == {
+        "deleted_thread_ids": [item["thread_id"] for item in imported_payload["threads"]],
+        "deleted_count": 4,
+    }
+    assert len(store.list_threads("tenant-1")) == 4
+
+    reimported = client.post("/threads/import-lineage", headers=AUTH_HEADERS, json=bundle)
+    assert reimported.status_code == 201
+    assert reimported.json()["thread_count"] == 4
+    assert reimported.json()["threads"] != imported_payload["threads"]
+    assert len(store.list_threads("tenant-1")) == 8
+
 
 @pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
 def test_thread_lineage_archive_import_rolls_back_all_new_threads(

@@ -261,6 +261,11 @@ class ThreadLineageResponse(BaseModel):
     import_provenance_chain: list[ThreadImportProvenance] = Field(default_factory=list)
 
 
+class ImportedLineageDeleteResponse(BaseModel):
+    deleted_thread_ids: list[str]
+    deleted_count: int
+
+
 class ThreadListResponse(BaseModel):
     threads: list[ThreadListItem]
     total: int
