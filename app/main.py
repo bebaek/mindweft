@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -17,6 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+import app.store as thread_store_module
 from app.admin_api import (
     LLM_PROVIDER_STATUS_FEATURE,
     AdminTenantLLMProviderStatusResponse,
@@ -2058,11 +2060,33 @@ def create_app(
             attachment_data = validate_importable_thread_archive(archive)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        request_digest: str | None = None
+        if not dry_run:
+            request_digest = hashlib.sha256(
+                json.dumps(
+                    {
+                        "archive": archive.model_dump(mode="json"),
+                        "profile_policy": profile_policy,
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            try:
+                replay = store.lookup_archive_import(
+                    principal.tenant_id,
+                    archive.archive_id,
+                    request_digest,
+                )
+            except (
+                thread_store_module.ArchiveImportConflictError,
+                thread_store_module.ArchiveImportInProgressError,
+            ) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if replay is not None:
+                return ThreadArchiveImportResponse.model_validate(replay.response_payload)
         tenant_context = tenant_context_from_request_state(request.state)
-        if attachment_data:
-            _enforce_request_rate_limit(request, principal, UPLOAD_RATE_LIMIT_CATEGORY)
         execution = resolve_principal_execution(principal)
-        enforce_thread_creation_limit(context=tenant_context, store=store)
         enforce_execution_entitlements(context=tenant_context, execution=execution)
         catalog = effective_execution_catalog(
             execution.config,
@@ -2204,14 +2228,47 @@ def create_app(
         capability_profile = (
             resolved_capability.stored_ref if resolved_capability is not None else None
         )
-        thread = store.create_thread(
-            principal.tenant_id,
-            execution_user_id=principal.user_id,
-            skill_name=skill_name,
-            skill_names=skill_names or None,
-            capability_profile=capability_profile,
-            llm_profile=llm_profile,
-        )
+        claim_token: str | None = None
+        if not dry_run:
+            if request_digest is None:
+                raise RuntimeError("archive import request digest is missing")
+            try:
+                claim = store.begin_archive_import(
+                    principal.tenant_id,
+                    archive.archive_id,
+                    request_digest,
+                )
+            except (
+                thread_store_module.ArchiveImportConflictError,
+                thread_store_module.ArchiveImportInProgressError,
+            ) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if claim.completed:
+                return ThreadArchiveImportResponse.model_validate(claim.response_payload)
+            claim_token = claim.claim_token
+            if claim_token is None:
+                raise RuntimeError("archive import claim token is missing")
+
+        try:
+            if attachment_data:
+                _enforce_request_rate_limit(request, principal, UPLOAD_RATE_LIMIT_CATEGORY)
+            enforce_thread_creation_limit(context=tenant_context, store=store)
+            thread = store.create_thread(
+                principal.tenant_id,
+                execution_user_id=principal.user_id,
+                skill_name=skill_name,
+                skill_names=skill_names or None,
+                capability_profile=capability_profile,
+                llm_profile=llm_profile,
+            )
+        except Exception:
+            if claim_token is not None:
+                store.abandon_archive_import(
+                    principal.tenant_id,
+                    archive.archive_id,
+                    claim_token,
+                )
+            raise
         try:
             attachment_id_map: dict[str, str] = {}
             archive_attachments = (
@@ -2317,17 +2374,15 @@ def create_app(
                 thread.thread_id,
             )
             store.delete_thread(principal.tenant_id, thread.thread_id)
+            if claim_token is not None:
+                store.abandon_archive_import(
+                    principal.tenant_id,
+                    archive.archive_id,
+                    claim_token,
+                )
             raise
 
-        if dry_run:
-            request.app.state.runtime.clear_private_values(principal, thread.thread_id)
-            request.app.state.attachment_store.delete_thread(
-                principal.tenant_id,
-                thread.thread_id,
-            )
-            store.delete_thread(principal.tenant_id, thread.thread_id)
-
-        return ThreadArchiveImportResponse(
+        response = ThreadArchiveImportResponse(
             thread_id=None if dry_run else thread.thread_id,
             source_thread_id=archive.thread.source_thread_id,
             message_count=len(archive.messages),
@@ -2336,6 +2391,39 @@ def create_app(
             dry_run=dry_run,
             warnings=warnings,
         )
+        if dry_run:
+            request.app.state.runtime.clear_private_values(principal, thread.thread_id)
+            request.app.state.attachment_store.delete_thread(
+                principal.tenant_id,
+                thread.thread_id,
+            )
+            store.delete_thread(principal.tenant_id, thread.thread_id)
+            return response
+
+        if claim_token is None:
+            raise RuntimeError("archive import claim token is missing")
+        try:
+            store.complete_archive_import(
+                principal.tenant_id,
+                archive.archive_id,
+                claim_token,
+                thread_id=thread.thread_id,
+                response_payload=response.model_dump(mode="json"),
+            )
+        except Exception:
+            request.app.state.runtime.clear_private_values(principal, thread.thread_id)
+            request.app.state.attachment_store.delete_thread(
+                principal.tenant_id,
+                thread.thread_id,
+            )
+            store.delete_thread(principal.tenant_id, thread.thread_id)
+            store.abandon_archive_import(
+                principal.tenant_id,
+                archive.archive_id,
+                claim_token,
+            )
+            raise
+        return response
 
     @app.post("/threads", response_model=CreateThreadResponse)
     async def create_thread(

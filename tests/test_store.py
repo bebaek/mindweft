@@ -13,11 +13,90 @@ import app.store as store_module
 from app.models import Message, MessageRole, ThreadStatus
 from app.peer_agents import PeerAgentRegistry
 from app.store import (
+    ArchiveImportConflictError,
+    ArchiveImportInProgressError,
     InMemoryThreadStore,
     SQLiteThreadStore,
     ThreadStoreSettings,
     thread_store_settings_from_env,
 )
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_archive_import_claims_are_idempotent_and_tenant_scoped(
+    store_kind: str, tmp_path: Path
+) -> None:
+    store = (
+        InMemoryThreadStore()
+        if store_kind == "memory"
+        else SQLiteThreadStore(tmp_path / "archive-imports.db")
+    )
+
+    assert store.lookup_archive_import("tenant-a", "archive-1", "digest-1") is None
+    first = store.begin_archive_import("tenant-a", "archive-1", "digest-1")
+    assert first.claim_token is not None
+    assert first.completed is False
+    with pytest.raises(ArchiveImportInProgressError):
+        store.begin_archive_import("tenant-a", "archive-1", "digest-1")
+    with pytest.raises(ArchiveImportInProgressError):
+        store.lookup_archive_import("tenant-a", "archive-1", "digest-1")
+    with pytest.raises(ArchiveImportConflictError):
+        store.begin_archive_import("tenant-a", "archive-1", "different-digest")
+
+    store.abandon_archive_import("tenant-a", "archive-1", first.claim_token)
+    replacement = store.begin_archive_import("tenant-a", "archive-1", "digest-1")
+    assert replacement.claim_token is not None
+    thread = store.create_thread("tenant-a")
+    response = {"thread_id": thread.thread_id, "message_count": 2}
+    store.complete_archive_import(
+        "tenant-a",
+        "archive-1",
+        replacement.claim_token,
+        thread_id=thread.thread_id,
+        response_payload=response,
+    )
+
+    replay = store.lookup_archive_import("tenant-a", "archive-1", "digest-1")
+    assert replay is not None
+    assert replay.completed is True
+    assert replay.claim_token is None
+    assert replay.response_payload == response
+    other_tenant = store.begin_archive_import("tenant-b", "archive-1", "digest-1")
+    assert other_tenant.claim_token is not None
+
+    store.delete_thread("tenant-a", thread.thread_id)
+    after_delete = store.begin_archive_import("tenant-a", "archive-1", "digest-1")
+    assert after_delete.claim_token is not None
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_archive_import_claim_can_recover_after_lease_expiry(
+    store_kind: str, tmp_path: Path
+) -> None:
+    store = (
+        InMemoryThreadStore()
+        if store_kind == "memory"
+        else SQLiteThreadStore(tmp_path / "archive-import-leases.db")
+    )
+    stale = store.begin_archive_import(
+        "tenant-a",
+        "archive-1",
+        "digest-1",
+        lease_seconds=0,
+    )
+    replacement = store.begin_archive_import("tenant-a", "archive-1", "digest-1")
+    assert stale.claim_token is not None
+    assert replacement.claim_token is not None
+    assert replacement.claim_token != stale.claim_token
+    thread = store.create_thread("tenant-a")
+    with pytest.raises(RuntimeError, match="no longer active"):
+        store.complete_archive_import(
+            "tenant-a",
+            "archive-1",
+            stale.claim_token,
+            thread_id=thread.thread_id,
+            response_payload={"thread_id": thread.thread_id},
+        )
 
 
 @pytest.mark.parametrize("store_kind", ["memory", "sqlite"])

@@ -30,6 +30,7 @@ from app.thread_titles import generate_thread_title
 from mindweft_config.unified_config import preferred_mindweft_env
 
 DEFAULT_RUN_LEASE_SECONDS = 30.0
+DEFAULT_ARCHIVE_IMPORT_LEASE_SECONDS = 3600.0
 _CURRENT_RUN: ContextVar[tuple[str, str, str] | None] = ContextVar(
     "minigent_current_thread_run", default=None
 )
@@ -66,6 +67,33 @@ class _QueuedPeerTaskCancellation:
 
 
 @dataclass(frozen=True)
+class ArchiveImportClaim:
+    claim_token: str | None
+    response_payload: dict[str, Any] | None = None
+
+    @property
+    def completed(self) -> bool:
+        return self.response_payload is not None
+
+
+@dataclass(frozen=True)
+class _ArchiveImportRecord:
+    request_digest: str
+    claim_token: str
+    lease_expires_at: float
+    thread_id: str | None = None
+    response_payload: dict[str, Any] | None = None
+
+
+class ArchiveImportConflictError(ValueError):
+    pass
+
+
+class ArchiveImportInProgressError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
 class ThreadStoreSettings:
     db_path: str | None = None
 
@@ -92,6 +120,39 @@ class ThreadStore(Protocol):
     ) -> Thread: ...
 
     def delete_thread(self, tenant_id: str, thread_id: str) -> None: ...
+
+    def lookup_archive_import(
+        self,
+        tenant_id: str,
+        archive_id: str,
+        request_digest: str,
+    ) -> ArchiveImportClaim | None: ...
+
+    def begin_archive_import(
+        self,
+        tenant_id: str,
+        archive_id: str,
+        request_digest: str,
+        *,
+        lease_seconds: float = DEFAULT_ARCHIVE_IMPORT_LEASE_SECONDS,
+    ) -> ArchiveImportClaim: ...
+
+    def complete_archive_import(
+        self,
+        tenant_id: str,
+        archive_id: str,
+        claim_token: str,
+        *,
+        thread_id: str,
+        response_payload: Mapping[str, Any],
+    ) -> None: ...
+
+    def abandon_archive_import(
+        self,
+        tenant_id: str,
+        archive_id: str,
+        claim_token: str,
+    ) -> None: ...
 
     def fork_thread(
         self,
@@ -293,6 +354,7 @@ class InMemoryThreadStore:
         self._instance_id = uuid4().hex
         self._runs: dict[tuple[str, str], ThreadRun] = {}
         self._peer_task_cancellations: dict[str, _QueuedPeerTaskCancellation] = {}
+        self._archive_imports: dict[tuple[str, str], _ArchiveImportRecord] = {}
 
     def create_thread(
         self,
@@ -325,6 +387,107 @@ class InMemoryThreadStore:
             del self._threads[thread_id]
             del self._contexts[thread_id]
             del self._messages[thread_id]
+            self._archive_imports = {
+                key: record
+                for key, record in self._archive_imports.items()
+                if record.thread_id != thread_id
+            }
+
+    def lookup_archive_import(
+        self,
+        tenant_id: str,
+        archive_id: str,
+        request_digest: str,
+    ) -> ArchiveImportClaim | None:
+        with self._lock:
+            record = self._archive_imports.get((tenant_id, archive_id))
+            if record is None:
+                return None
+            if record.request_digest != request_digest:
+                raise ArchiveImportConflictError(
+                    "archive_id was already used with different archive content or import options"
+                )
+            if record.response_payload is not None:
+                return ArchiveImportClaim(
+                    claim_token=None,
+                    response_payload=dict(record.response_payload),
+                )
+            if record.lease_expires_at > time.time():
+                raise ArchiveImportInProgressError("archive import is already in progress")
+            return None
+
+    def begin_archive_import(
+        self,
+        tenant_id: str,
+        archive_id: str,
+        request_digest: str,
+        *,
+        lease_seconds: float = DEFAULT_ARCHIVE_IMPORT_LEASE_SECONDS,
+    ) -> ArchiveImportClaim:
+        with self._lock:
+            key = (tenant_id, archive_id)
+            now = time.time()
+            record = self._archive_imports.get(key)
+            if record is not None:
+                if record.request_digest != request_digest:
+                    raise ArchiveImportConflictError(
+                        "archive_id was already used with different archive content or import options"
+                    )
+                if record.response_payload is not None:
+                    return ArchiveImportClaim(
+                        claim_token=None,
+                        response_payload=dict(record.response_payload),
+                    )
+                if record.lease_expires_at > now:
+                    raise ArchiveImportInProgressError("archive import is already in progress")
+            claim_token = uuid4().hex
+            self._archive_imports[key] = _ArchiveImportRecord(
+                request_digest=request_digest,
+                claim_token=claim_token,
+                lease_expires_at=now + lease_seconds,
+            )
+            return ArchiveImportClaim(claim_token=claim_token)
+
+    def complete_archive_import(
+        self,
+        tenant_id: str,
+        archive_id: str,
+        claim_token: str,
+        *,
+        thread_id: str,
+        response_payload: Mapping[str, Any],
+    ) -> None:
+        with self._lock:
+            key = (tenant_id, archive_id)
+            record = self._archive_imports.get(key)
+            if (
+                record is None
+                or record.claim_token != claim_token
+                or record.response_payload is not None
+            ):
+                raise RuntimeError("archive import claim is no longer active")
+            self._require_thread(tenant_id, thread_id)
+            self._archive_imports[key] = replace(
+                record,
+                thread_id=thread_id,
+                response_payload=dict(response_payload),
+            )
+
+    def abandon_archive_import(
+        self,
+        tenant_id: str,
+        archive_id: str,
+        claim_token: str,
+    ) -> None:
+        with self._lock:
+            key = (tenant_id, archive_id)
+            record = self._archive_imports.get(key)
+            if (
+                record is not None
+                and record.claim_token == claim_token
+                and record.response_payload is None
+            ):
+                del self._archive_imports[key]
 
     def fork_thread(
         self,
@@ -1001,6 +1164,148 @@ class SQLiteThreadStore:
             if self._fts_available:
                 conn.execute("DELETE FROM message_search WHERE thread_id = ?", (thread_id,))
             conn.execute("DELETE FROM threads WHERE thread_id = ?", (thread_id,))
+
+    def lookup_archive_import(
+        self,
+        tenant_id: str,
+        archive_id: str,
+        request_digest: str,
+    ) -> ArchiveImportClaim | None:
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT request_digest, lease_expires_at, response_payload
+                FROM archive_imports
+                WHERE tenant_id = ? AND archive_id = ?
+                """,
+                (tenant_id, archive_id),
+            ).fetchone()
+            if row is None:
+                return None
+            stored_digest, lease_expires_at, response_payload = row
+            if str(stored_digest) != request_digest:
+                raise ArchiveImportConflictError(
+                    "archive_id was already used with different archive content or import options"
+                )
+            if response_payload is not None:
+                parsed_payload = json.loads(str(response_payload))
+                if not isinstance(parsed_payload, dict):
+                    raise RuntimeError("stored archive import response is invalid")
+                return ArchiveImportClaim(
+                    claim_token=None,
+                    response_payload=parsed_payload,
+                )
+            if float(lease_expires_at) > time.time():
+                raise ArchiveImportInProgressError("archive import is already in progress")
+            return None
+
+    def begin_archive_import(
+        self,
+        tenant_id: str,
+        archive_id: str,
+        request_digest: str,
+        *,
+        lease_seconds: float = DEFAULT_ARCHIVE_IMPORT_LEASE_SECONDS,
+    ) -> ArchiveImportClaim:
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            now = time.time()
+            row = conn.execute(
+                """
+                SELECT request_digest, claim_token, lease_expires_at, response_payload
+                FROM archive_imports
+                WHERE tenant_id = ? AND archive_id = ?
+                """,
+                (tenant_id, archive_id),
+            ).fetchone()
+            if row is not None:
+                stored_digest, _stored_token, lease_expires_at, response_payload = row
+                if str(stored_digest) != request_digest:
+                    raise ArchiveImportConflictError(
+                        "archive_id was already used with different archive content or import options"
+                    )
+                if response_payload is not None:
+                    parsed_payload = json.loads(str(response_payload))
+                    if not isinstance(parsed_payload, dict):
+                        raise RuntimeError("stored archive import response is invalid")
+                    return ArchiveImportClaim(
+                        claim_token=None,
+                        response_payload=parsed_payload,
+                    )
+                if float(lease_expires_at) > now:
+                    raise ArchiveImportInProgressError("archive import is already in progress")
+            claim_token = uuid4().hex
+            conn.execute(
+                """
+                INSERT INTO archive_imports (
+                    tenant_id,
+                    archive_id,
+                    request_digest,
+                    claim_token,
+                    lease_expires_at,
+                    thread_id,
+                    response_payload
+                ) VALUES (?, ?, ?, ?, ?, NULL, NULL)
+                ON CONFLICT (tenant_id, archive_id) DO UPDATE SET
+                    request_digest = excluded.request_digest,
+                    claim_token = excluded.claim_token,
+                    lease_expires_at = excluded.lease_expires_at,
+                    thread_id = NULL,
+                    response_payload = NULL
+                """,
+                (tenant_id, archive_id, request_digest, claim_token, now + lease_seconds),
+            )
+            return ArchiveImportClaim(claim_token=claim_token)
+
+    def complete_archive_import(
+        self,
+        tenant_id: str,
+        archive_id: str,
+        claim_token: str,
+        *,
+        thread_id: str,
+        response_payload: Mapping[str, Any],
+    ) -> None:
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_thread(conn, tenant_id, thread_id)
+            cursor = conn.execute(
+                """
+                UPDATE archive_imports
+                SET thread_id = ?, response_payload = ?
+                WHERE tenant_id = ?
+                  AND archive_id = ?
+                  AND claim_token = ?
+                  AND response_payload IS NULL
+                """,
+                (
+                    thread_id,
+                    json.dumps(dict(response_payload), separators=(",", ":"), sort_keys=True),
+                    tenant_id,
+                    archive_id,
+                    claim_token,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("archive import claim is no longer active")
+
+    def abandon_archive_import(
+        self,
+        tenant_id: str,
+        archive_id: str,
+        claim_token: str,
+    ) -> None:
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """
+                DELETE FROM archive_imports
+                WHERE tenant_id = ?
+                  AND archive_id = ?
+                  AND claim_token = ?
+                  AND response_payload IS NULL
+                """,
+                (tenant_id, archive_id, claim_token),
+            )
 
     def fork_thread(
         self,
@@ -1811,6 +2116,18 @@ class SQLiteThreadStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_thread_runs_lease
                     ON thread_runs (lease_expires_at);
+                CREATE TABLE IF NOT EXISTS archive_imports (
+                    tenant_id TEXT NOT NULL,
+                    archive_id TEXT NOT NULL,
+                    request_digest TEXT NOT NULL,
+                    claim_token TEXT NOT NULL,
+                    lease_expires_at REAL NOT NULL,
+                    thread_id TEXT REFERENCES threads(thread_id) ON DELETE CASCADE,
+                    response_payload TEXT,
+                    PRIMARY KEY (tenant_id, archive_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_archive_imports_thread_id
+                    ON archive_imports (thread_id);
                 CREATE TABLE IF NOT EXISTS peer_task_cancellations (
                     cancellation_id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,

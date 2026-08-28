@@ -263,6 +263,14 @@ content, and storage-quota paths, then removes the temporary thread, attachments
 state. It returns `thread_id: null`, `dry_run: true`, counts, the selected profile policy, and the same
 warnings a real import would return. Attachment dry runs consume the normal upload rate-limit budget.
 
+Successful non-dry-run imports are idempotent within a tenant by `archive_id`. Repeating an import
+with identical normalized archive content and the same profile policy returns the first response and
+thread ID without creating another thread or consuming attachment upload rate-limit budget. The
+server returns `409 Conflict` if that archive ID is already associated with different content or a
+different profile policy, or if an identical import is currently in progress. In-progress claims
+expire after one hour so interrupted imports can be retried. Deleting the imported thread removes the
+associated idempotency record and permits a new import of that archive.
+
 ### Diagnostics
 
 ```bash

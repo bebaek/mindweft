@@ -631,6 +631,11 @@ substitutes destination defaults. Use `--profile-policy defaults` to ignore sour
 `--profile-policy strict` to reject unavailable selections. Use `--dry-run` to execute schema,
 execution-selection, entitlement, message, private-value, attachment-content, and quota checks through
 the normal import path and then remove the temporary thread, attachments, and private-value state.
+Successful non-dry-run imports are idempotent per tenant and archive ID: retrying the same archive
+with the same profile policy returns the original imported thread instead of creating a duplicate.
+Reusing an archive ID with changed content or a different profile policy returns `409 Conflict`, as
+does a concurrent retry while the first import is still in progress. Deleting the imported thread also
+clears its idempotency record, allowing that archive to be imported again.
 
 See the [CLI reference](docs/cli.md) for all commands, interactive slash commands,
 execution option discovery, streaming options, voice modes, and configuration.
