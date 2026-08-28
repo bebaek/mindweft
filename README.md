@@ -643,7 +643,17 @@ operation is idempotent by bundle ID and rolls back all newly created members if
 a nested archive that was already imported independently is rejected to avoid mutating an existing
 thread. Lineage bundle dry-run imports retain all temporary members together while validation runs so
 cumulative thread, message, and attachment quotas are exercised accurately; all temporary state and
-idempotency records are removed before the successful validation response is returned.
+idempotency records are removed before the successful validation response is returned. Threads from a
+completed multi-thread lineage import must be deleted as a group so bundle and nested idempotency
+records cannot become partially stale:
+
+```bash
+uv run mindweft threads delete <member-thread-id> --imported-lineage
+```
+
+A normal single-thread delete returns `409 Conflict` for those members. Group deletion can start from
+any imported member, removes the entire restored tree and its attachment/private-value state, and
+allows the same bundle to be imported again with fresh destination IDs.
 
 Destination-local organization defaults are used unless `--organization-policy preserve` is selected.
 Likewise, imports receive fresh destination thread timestamps unless `--timestamp-policy preserve`

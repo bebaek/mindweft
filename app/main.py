@@ -109,6 +109,7 @@ from app.models import (
     ForkThreadRequest,
     ForkThreadResponse,
     GenerateThreadTitleResponse,
+    ImportedLineageDeleteResponse,
     Message,
     MessageRole,
     Principal,
@@ -3723,12 +3724,60 @@ def create_app(
             thread_id,
         )
 
+    @app.delete(
+        "/threads/{thread_id}/imported-lineage",
+        response_model=ImportedLineageDeleteResponse,
+    )
+    async def delete_imported_thread_lineage(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> ImportedLineageDeleteResponse:
+        store = request.app.state.store
+        thread_ids = store.get_imported_lineage_thread_ids(principal.tenant_id, thread_id)
+        if thread_ids is None:
+            raise HTTPException(
+                status_code=409,
+                detail="thread is not a member of a completed lineage archive import",
+            )
+        deleted_thread_ids: list[str] = []
+        for imported_thread_id in reversed(thread_ids):
+            try:
+                store.delete_thread(principal.tenant_id, imported_thread_id)
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+                continue
+            request.app.state.attachment_store.delete_thread(
+                principal.tenant_id,
+                imported_thread_id,
+            )
+            request.app.state.runtime.clear_private_values(principal, imported_thread_id)
+            deleted_thread_ids.append(imported_thread_id)
+        deleted_thread_ids.reverse()
+        return ImportedLineageDeleteResponse(
+            deleted_thread_ids=deleted_thread_ids,
+            deleted_count=len(deleted_thread_ids),
+        )
+
     @app.delete("/threads/{thread_id}", status_code=204)
     async def delete_thread(
         thread_id: str,
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> None:
+        imported_lineage_ids = request.app.state.store.get_imported_lineage_thread_ids(
+            principal.tenant_id,
+            thread_id,
+        )
+        if imported_lineage_ids is not None and len(imported_lineage_ids) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "thread belongs to an imported lineage; delete the complete lineage through "
+                    f"DELETE /threads/{thread_id}/imported-lineage"
+                ),
+            )
         request.app.state.store.delete_thread(principal.tenant_id, thread_id)
         request.app.state.attachment_store.delete_thread(principal.tenant_id, thread_id)
         request.app.state.runtime.clear_private_values(principal, thread_id)

@@ -201,6 +201,7 @@ mindweft threads unpin <thread-id>             # unpin a thread
 mindweft threads archive <thread-id>           # archive a thread
 mindweft threads restore <thread-id>           # restore an archived thread
 mindweft threads delete <thread-id>            # permanently delete a thread
+mindweft threads delete <thread-id> --imported-lineage  # delete a restored lineage tree
 ```
 
 ### Resume
@@ -267,6 +268,13 @@ that was imported separately is rejected rather than attached to a new tree. A l
 all temporary members until relationship and cumulative thread, message, and attachment validation
 finishes, then removes temporary threads, attachments, private values, and idempotency records. Its
 response reports counts and warnings but returns null destination thread IDs.
+
+A completed multi-thread lineage import is a deletion unit. Delete it from any member with
+`mindweft threads delete <thread-id> --imported-lineage`, or call
+`DELETE /threads/{thread_id}/imported-lineage`. This removes all imported members in child-before-parent
+order, clears their attachment and private-value state, invalidates bundle and nested idempotency
+records, and permits a fresh import. Ordinary `DELETE /threads/{thread_id}` requests return `409` for
+members of a multi-thread imported lineage to prevent partial deletion.
 
 For single-thread archives, system messages remain rejected and fork/compaction lineage is not
 restored. Organization-state handling is controlled separately by `--organization-policy`:

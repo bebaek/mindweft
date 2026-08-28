@@ -159,6 +159,12 @@ class ThreadStore(Protocol):
         claim_token: str,
     ) -> None: ...
 
+    def get_imported_lineage_thread_ids(
+        self,
+        tenant_id: str,
+        thread_id: str,
+    ) -> list[str] | None: ...
+
     def fork_thread(
         self,
         tenant_id: str,
@@ -520,6 +526,21 @@ class InMemoryThreadStore:
                 and record.response_payload is None
             ):
                 del self._archive_imports[key]
+
+    def get_imported_lineage_thread_ids(
+        self,
+        tenant_id: str,
+        thread_id: str,
+    ) -> list[str] | None:
+        with self._lock:
+            self._require_thread(tenant_id, thread_id)
+            for (record_tenant_id, archive_id), record in self._archive_imports.items():
+                if record_tenant_id != tenant_id or not archive_id.startswith("lineage:"):
+                    continue
+                thread_ids = _lineage_import_thread_ids(record.response_payload)
+                if thread_ids is not None and thread_id in thread_ids:
+                    return thread_ids
+            return None
 
     def fork_thread(
         self,
@@ -1378,6 +1399,32 @@ class SQLiteThreadStore:
                 """,
                 (tenant_id, archive_id, claim_token),
             )
+
+    def get_imported_lineage_thread_ids(
+        self,
+        tenant_id: str,
+        thread_id: str,
+    ) -> list[str] | None:
+        with self._lock, self._connection() as conn:
+            self._require_thread(conn, tenant_id, thread_id)
+            rows = conn.execute(
+                """
+                SELECT response_payload
+                FROM archive_imports
+                WHERE tenant_id = ?
+                  AND archive_id LIKE 'lineage:%'
+                  AND response_payload IS NOT NULL
+                """,
+                (tenant_id,),
+            ).fetchall()
+            for (response_payload,) in rows:
+                parsed_payload = json.loads(str(response_payload))
+                if not isinstance(parsed_payload, dict):
+                    raise RuntimeError("stored lineage archive import response is invalid")
+                thread_ids = _lineage_import_thread_ids(parsed_payload)
+                if thread_ids is not None and thread_id in thread_ids:
+                    return thread_ids
+            return None
 
     def fork_thread(
         self,
@@ -2690,6 +2737,23 @@ def _audit_record_matches_filters(
     if created_before is not None and record.created_at >= created_before:
         return False
     return True
+
+
+def _lineage_import_thread_ids(response_payload: Mapping[str, Any] | None) -> list[str] | None:
+    if response_payload is None:
+        return None
+    imported_threads = response_payload.get("threads")
+    if not isinstance(imported_threads, list):
+        return None
+    thread_ids: list[str] = []
+    for imported_thread in imported_threads:
+        if not isinstance(imported_thread, dict):
+            return None
+        thread_id = imported_thread.get("thread_id")
+        if not isinstance(thread_id, str) or not thread_id:
+            return None
+        thread_ids.append(thread_id)
+    return thread_ids or None
 
 
 def _paginate_threads(threads: list[Thread], *, limit: int | None, offset: int) -> list[Thread]:

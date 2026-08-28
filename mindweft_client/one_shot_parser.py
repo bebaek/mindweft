@@ -433,6 +433,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     threads_delete_parser = threads_subparsers.add_parser("delete", help="Delete a thread.")
     threads_delete_parser.add_argument("thread_id", help="Thread ID to delete.")
+    threads_delete_parser.add_argument(
+        "--imported-lineage",
+        action="store_true",
+        help="Delete every thread restored by the same lineage archive import.",
+    )
 
     admin_parser = subparsers.add_parser("admin", help="Admin inspection commands.")
     admin_subparsers = admin_parser.add_subparsers(dest="admin_command", required=True)
