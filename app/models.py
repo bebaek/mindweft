@@ -174,6 +174,9 @@ class Thread(BaseModel):
     parent_thread_id: str | None = None
     fork_message_id: str | None = None
     compacted_through_message_id: str | None = None
+    import_source_archive_id: str | None = None
+    import_source_thread_id: str | None = None
+    imported_at: datetime | None = None
     status: ThreadStatus = ThreadStatus.IDLE
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -242,11 +245,18 @@ class ThreadListItem(BaseModel):
     updated_at: datetime
 
 
+class ThreadImportProvenance(BaseModel):
+    archive_id: str
+    source_thread_id: str
+    imported_at: datetime
+
+
 class ThreadLineageResponse(BaseModel):
     thread: ThreadListItem
     parent: ThreadListItem | None = None
     children: list[ThreadListItem] = Field(default_factory=list)
     siblings: list[ThreadListItem] = Field(default_factory=list)
+    import_provenance: ThreadImportProvenance | None = None
 
 
 class ThreadListResponse(BaseModel):

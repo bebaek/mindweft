@@ -643,7 +643,9 @@ with the same profile, organization, and timestamp policies returns the original
 instead of creating a duplicate. Reusing an archive ID with changed content or different import
 policies returns `409 Conflict`, as does a concurrent retry while the first import is still in progress.
 Deleting the imported thread also clears its idempotency record, allowing that archive to be imported
-again.
+again. Each created destination thread retains its immediate source archive ID, source thread ID, and
+destination import time. This provenance is available from `GET /threads/{thread_id}/lineage` and is
+independent of optional source thread timestamps.
 
 See the [CLI reference](docs/cli.md) for all commands, interactive slash commands,
 execution option discovery, streaming options, voice modes, and configuration.

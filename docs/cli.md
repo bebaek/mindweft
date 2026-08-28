@@ -290,6 +290,13 @@ changed content or different import policies, or if an identical import is curre
 In-progress claims expire after one hour so interrupted imports can be retried. Deleting the imported
 thread removes the associated idempotency record and permits a new import of that archive.
 
+Every successful non-dry-run import also records destination-side immediate provenance: the source
+`archive_id`, source thread ID, and the actual destination import time. Retrieve it as
+`import_provenance` from `GET /threads/{thread_id}/lineage`. The destination import time is retained
+even when `--timestamp-policy preserve` replaces the thread's own timestamps. This provenance is not
+embedded in a later archive export; each import records the archive and source thread it directly
+consumed.
+
 ### Diagnostics
 
 ```bash

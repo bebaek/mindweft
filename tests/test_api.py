@@ -8654,6 +8654,22 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert result["dry_run"] is False
     assert result["warnings"][0]["code"] == "llm_profile_substituted"
 
+    source_lineage = client.get(
+        f"/threads/{source_thread_id}/lineage",
+        headers=AUTH_HEADERS,
+    )
+    assert source_lineage.status_code == 200
+    assert source_lineage.json()["import_provenance"] is None
+    imported_lineage = client.get(
+        f"/threads/{imported_thread_id}/lineage",
+        headers=AUTH_HEADERS,
+    )
+    assert imported_lineage.status_code == 200
+    provenance = imported_lineage.json()["import_provenance"]
+    assert provenance["archive_id"] == archive["archive_id"]
+    assert provenance["source_thread_id"] == source_thread_id
+    assert datetime.fromisoformat(provenance["imported_at"]) <= datetime.now(timezone.utc)
+
     imported_messages_response = client.get(
         f"/threads/{imported_thread_id}/messages", headers=AUTH_HEADERS
     )
@@ -8990,6 +9006,14 @@ def test_thread_archive_timestamp_policy_resets_preserves_and_is_idempotent(
     preserved_thread = app.state.store.get_thread("tenant-1", preserved.json()["thread_id"])
     assert preserved_thread.created_at == source_created_at
     assert preserved_thread.updated_at == source_updated_at
+    preserved_lineage = client.get(
+        f"/threads/{preserved.json()['thread_id']}/lineage",
+        headers=AUTH_HEADERS,
+    ).json()
+    provenance = preserved_lineage["import_provenance"]
+    assert provenance["archive_id"] == "timestamps-preserve"
+    assert provenance["source_thread_id"] == source_thread_id
+    assert datetime.fromisoformat(provenance["imported_at"]) > source_updated_at
 
 
 def test_thread_archive_profile_policies_restore_substitute_or_reject(
