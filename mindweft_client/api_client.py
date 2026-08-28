@@ -465,11 +465,13 @@ class MindweftAPIClient:
         archive: dict[str, Any],
         *,
         profile_policy: str = "available",
+        organization_policy: str = "reset",
         dry_run: bool = False,
     ) -> dict[str, Any]:
         query = _build_query(
             {
                 "profile_policy": profile_policy,
+                "organization_policy": organization_policy,
                 "dry_run": "true" if dry_run else None,
             }
         )

@@ -617,25 +617,28 @@ A versioned archive format is available for portable thread round trips:
 uv run mindweft export <thread-id> --format archive --output thread.mindweft.json
 uv run mindweft import thread.mindweft.json --dry-run
 uv run mindweft import thread.mindweft.json
+uv run mindweft import thread.mindweft.json --organization-policy preserve
 ```
 
 Archive export uses the server's protected message representation, excludes tenant and user
-ownership, and imports into a new thread owned by the authenticated principal. Version 2 preserves
-core user, assistant, and tool messages, title, context, and referenced audio, image, and document
-attachments. Attachment bytes are base64-encoded with declared sizes and SHA-256 checksums; import
-revalidates content and enforces destination attachment capabilities and quotas before remapping
-attachment IDs. System messages, lineage, and organization state are not restored. Version 1
-text-only archives remain importable. By default, import restores source skills, capability profile,
-and LLM profile when they exist on the destination and reports category-specific warnings when it
-substitutes destination defaults. Use `--profile-policy defaults` to ignore source selections or
+ownership, and imports into a new thread owned by the authenticated principal. Version 3 preserves
+core user, assistant, and tool messages, title, context, referenced audio, image, and document
+attachments, and source pin/archive organization state. Attachment bytes are base64-encoded with
+declared sizes and SHA-256 checksums; import revalidates content and enforces destination attachment
+capabilities and quotas before remapping attachment IDs. System messages and lineage are not restored.
+Destination-local organization defaults are used unless `--organization-policy preserve` is selected;
+version 1 and 2 archives remain importable but do not contain organization state. By default, import
+restores source skills, capability profile, and LLM profile when they exist on the destination and
+reports category-specific warnings when it substitutes destination defaults. Use
+`--profile-policy defaults` to ignore source selections or
 `--profile-policy strict` to reject unavailable selections. Use `--dry-run` to execute schema,
 execution-selection, entitlement, message, private-value, attachment-content, and quota checks through
 the normal import path and then remove the temporary thread, attachments, and private-value state.
 Successful non-dry-run imports are idempotent per tenant and archive ID: retrying the same archive
-with the same profile policy returns the original imported thread instead of creating a duplicate.
-Reusing an archive ID with changed content or a different profile policy returns `409 Conflict`, as
-does a concurrent retry while the first import is still in progress. Deleting the imported thread also
-clears its idempotency record, allowing that archive to be imported again.
+with the same profile and organization policies returns the original imported thread instead of
+creating a duplicate. Reusing an archive ID with changed content or different import policies returns
+`409 Conflict`, as does a concurrent retry while the first import is still in progress. Deleting the
+imported thread also clears its idempotency record, allowing that archive to be imported again.
 
 See the [CLI reference](docs/cli.md) for all commands, interactive slash commands,
 execution option discovery, streaming options, voice modes, and configuration.

@@ -306,8 +306,8 @@ def build_parser() -> argparse.ArgumentParser:
         "import",
         help="Import a versioned thread archive.",
         description=(
-            "Import a Mindweft thread archive as a new thread. Source execution options can be "
-            "restored when available, replaced with destination defaults, or required strictly."
+            "Import a Mindweft thread archive as a new thread. Source execution options and "
+            "organization state are mapped through independent destination policies."
         ),
     )
     import_parser.add_argument("archive", help="Path to a Mindweft thread archive JSON file.")
@@ -318,6 +318,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "How to map source skills, capability profile, and LLM profile. The default restores "
             "available selections and substitutes destination defaults for missing selections."
+        ),
+    )
+
+    import_parser.add_argument(
+        "--organization-policy",
+        choices=("reset", "preserve"),
+        default="reset",
+        help=(
+            "How to map source pin and archive state. The default resets destination organization; "
+            "preserve restores state recorded by version 3 archives."
         ),
     )
 

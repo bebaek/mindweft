@@ -175,8 +175,10 @@ from app.thread_archives import (
     ThreadArchive,
     ThreadArchiveImportResponse,
     ThreadArchiveImportWarning,
+    ThreadArchiveOrganizationPolicy,
     ThreadArchiveProfilePolicy,
     ThreadArchiveV2,
+    ThreadArchiveV3,
     build_thread_archive,
     imported_messages,
     validate_importable_thread_archive,
@@ -1873,12 +1875,12 @@ def create_app(
             offset=offset,
         )
 
-    @app.get("/threads/{thread_id}/archive", response_model=ThreadArchiveV2)
+    @app.get("/threads/{thread_id}/archive", response_model=ThreadArchiveV3)
     async def export_thread_archive(
         thread_id: str,
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
-    ) -> ThreadArchiveV2:
+    ) -> ThreadArchiveV3:
         store = request.app.state.store
         thread = store.get_thread(principal.tenant_id, thread_id)
         messages = store.list_messages(principal.tenant_id, thread_id)
@@ -2052,6 +2054,7 @@ def create_app(
         archive: ThreadArchive,
         request: Request,
         profile_policy: ThreadArchiveProfilePolicy = "available",
+        organization_policy: ThreadArchiveOrganizationPolicy = "reset",
         dry_run: bool = False,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> ThreadArchiveImportResponse:
@@ -2062,12 +2065,15 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         request_digest: str | None = None
         if not dry_run:
+            request_identity = {
+                "archive": archive.model_dump(mode="json"),
+                "profile_policy": profile_policy,
+            }
+            if organization_policy != "reset":
+                request_identity["organization_policy"] = organization_policy
             request_digest = hashlib.sha256(
                 json.dumps(
-                    {
-                        "archive": archive.model_dump(mode="json"),
-                        "profile_policy": profile_policy,
-                    },
+                    request_identity,
                     separators=(",", ":"),
                     sort_keys=True,
                 ).encode("utf-8")
@@ -2223,6 +2229,30 @@ def create_app(
                         )
                     )
 
+        if isinstance(archive, ThreadArchiveV3):
+            if organization_policy == "reset" and (
+                archive.organization.pinned or archive.organization.archived
+            ):
+                warnings.append(
+                    ThreadArchiveImportWarning(
+                        code="organization_state_not_restored",
+                        message=(
+                            "Source pin and archive state was recorded but destination organization "
+                            "defaults were used."
+                        ),
+                    )
+                )
+        elif organization_policy == "preserve":
+            warnings.append(
+                ThreadArchiveImportWarning(
+                    code="organization_state_unavailable",
+                    message=(
+                        "The source archive version does not record pin or archive state; destination "
+                        "organization defaults were used."
+                    ),
+                )
+            )
+
         skill_names = [skill.stored_ref for skill in resolved_skills]
         skill_name = skill_names[0] if len(skill_names) == 1 else None
         capability_profile = (
@@ -2273,7 +2303,7 @@ def create_app(
             attachment_id_map: dict[str, str] = {}
             archive_attachments = (
                 {attachment.source_attachment_id: attachment for attachment in archive.attachments}
-                if isinstance(archive, ThreadArchiveV2)
+                if isinstance(archive, (ThreadArchiveV2, ThreadArchiveV3))
                 else {}
             )
             for source_attachment_id, data in attachment_data.items():
@@ -2367,6 +2397,13 @@ def create_app(
                 summary=protected_summary,
                 summarized_message_count=archive.context.summarized_message_count,
             )
+            if organization_policy == "preserve" and isinstance(archive, ThreadArchiveV3):
+                store.set_thread_organization(
+                    principal.tenant_id,
+                    thread.thread_id,
+                    pinned=archive.organization.pinned,
+                    archived=archive.organization.archived,
+                )
         except Exception:
             request.app.state.runtime.clear_private_values(principal, thread.thread_id)
             request.app.state.attachment_store.delete_thread(
@@ -2388,6 +2425,7 @@ def create_app(
             message_count=len(archive.messages),
             attachment_count=len(attachment_data),
             profile_policy=profile_policy,
+            organization_policy=organization_policy,
             dry_run=dry_run,
             warnings=warnings,
         )

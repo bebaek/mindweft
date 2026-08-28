@@ -8628,7 +8628,8 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert exported.status_code == 200
     archive = exported.json()
     assert archive["schema"] == "mindweft.thread-archive"
-    assert archive["version"] == 2
+    assert archive["version"] == 3
+    assert archive["organization"] == {"pinned": False, "archived": False}
     assert archive["thread"]["source_thread_id"] == source_thread_id
     assert archive["thread"]["title"] == "Archived conversation"
     assert archive["thread"]["title_source"] == "manual"
@@ -8648,6 +8649,7 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert result["message_count"] == 2
     assert result["attachment_count"] == 0
     assert result["profile_policy"] == "available"
+    assert result["organization_policy"] == "reset"
     assert result["dry_run"] is False
     assert result["warnings"][0]["code"] == "llm_profile_substituted"
 
@@ -8678,6 +8680,8 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert imported_list_item["title"] == "Archived conversation"
     assert imported_list_item["title_source"] == "manual"
     assert imported_list_item["llm_profile"] is None
+    assert imported_list_item["pinned_at"] is None
+    assert imported_list_item["archived_at"] is None
 
     replayed = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
     assert replayed.status_code == 201
@@ -8863,6 +8867,79 @@ def test_thread_archive_attachment_quota_failure_rolls_back_import(
     assert response.json()["detail"] == "thread attachment count limit exceeded"
     assert app.state.store.count_threads("tenant-1") == 0
     assert app.state.attachment_store.tenant_usage("tenant-1") == (0, 0)
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_thread_archive_organization_policy_resets_preserves_and_supports_v2(
+    store_kind: str, tmp_path: Path
+) -> None:
+    thread_store = (
+        SQLiteThreadStore(tmp_path / "thread-archive-organization.db")
+        if store_kind == "sqlite"
+        else None
+    )
+    app = create_app(thread_store=thread_store)
+    client = TestClient(app)
+    source_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    organized = client.patch(
+        f"/threads/{source_thread_id}/organization",
+        headers=AUTH_HEADERS,
+        json={"pinned": True, "archived": True},
+    )
+    assert organized.status_code == 200
+    archive = client.get(
+        f"/threads/{source_thread_id}/archive",
+        headers=AUTH_HEADERS,
+    ).json()
+    assert archive["version"] == 3
+    assert archive["organization"] == {"pinned": True, "archived": True}
+
+    reset = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
+    assert reset.status_code == 201
+    assert reset.json()["organization_policy"] == "reset"
+    assert any(
+        warning["code"] == "organization_state_not_restored" for warning in reset.json()["warnings"]
+    )
+    reset_thread = app.state.store.get_thread("tenant-1", reset.json()["thread_id"])
+    assert reset_thread.pinned_at is None
+    assert reset_thread.archived_at is None
+    changed_policy = client.post(
+        "/threads/import?organization_policy=preserve",
+        headers=AUTH_HEADERS,
+        json=archive,
+    )
+    assert changed_policy.status_code == 409
+
+    preserved_archive = json.loads(json.dumps(archive))
+    preserved_archive["archive_id"] = "organization-preserve"
+    preserved = client.post(
+        "/threads/import?organization_policy=preserve",
+        headers=AUTH_HEADERS,
+        json=preserved_archive,
+    )
+    assert preserved.status_code == 201
+    assert preserved.json()["organization_policy"] == "preserve"
+    preserved_thread = app.state.store.get_thread("tenant-1", preserved.json()["thread_id"])
+    assert preserved_thread.pinned_at is not None
+    assert preserved_thread.archived_at is not None
+
+    v2_archive = json.loads(json.dumps(archive))
+    v2_archive["archive_id"] = "organization-v2"
+    v2_archive["version"] = 2
+    del v2_archive["organization"]
+    imported_v2 = client.post(
+        "/threads/import?organization_policy=preserve",
+        headers=AUTH_HEADERS,
+        json=v2_archive,
+    )
+    assert imported_v2.status_code == 201
+    assert any(
+        warning["code"] == "organization_state_unavailable"
+        for warning in imported_v2.json()["warnings"]
+    )
+    v2_thread = app.state.store.get_thread("tenant-1", imported_v2.json()["thread_id"])
+    assert v2_thread.pinned_at is None
+    assert v2_thread.archived_at is None
 
 
 def test_thread_archive_profile_policies_restore_substitute_or_reject(
