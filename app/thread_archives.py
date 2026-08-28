@@ -17,6 +17,7 @@ THREAD_ARCHIVE_SCHEMA = "mindweft.thread-archive"
 THREAD_ARCHIVE_VERSION = 3
 ThreadArchiveProfilePolicy = Literal["defaults", "available", "strict"]
 ThreadArchiveOrganizationPolicy = Literal["reset", "preserve"]
+ThreadArchiveTimestampPolicy = Literal["reset", "preserve"]
 MAX_ARCHIVE_MESSAGES = 10_000
 MAX_ARCHIVE_ATTACHMENTS = 1_000
 
@@ -121,6 +122,7 @@ class ThreadArchiveImportResponse(ThreadArchiveModel):
     attachment_count: int
     profile_policy: ThreadArchiveProfilePolicy
     organization_policy: ThreadArchiveOrganizationPolicy = "reset"
+    timestamp_policy: ThreadArchiveTimestampPolicy = "reset"
     dry_run: bool = False
     warnings: list[ThreadArchiveImportWarning] = Field(default_factory=list)
 
@@ -196,6 +198,13 @@ def build_thread_archive(
 
 
 def validate_importable_thread_archive(archive: ThreadArchive) -> dict[str, bytes]:
+    if (
+        archive.thread.created_at.utcoffset() is None
+        or archive.thread.updated_at.utcoffset() is None
+    ):
+        raise ValueError("archive thread timestamps must include a UTC offset")
+    if archive.thread.updated_at < archive.thread.created_at:
+        raise ValueError("archive thread updated_at must not precede created_at")
     if archive.thread.title is not None and not archive.thread.title.strip():
         raise ValueError("archive thread title must not be blank")
     if archive.context.summarized_message_count > len(archive.messages):

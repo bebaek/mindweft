@@ -225,6 +225,7 @@ mindweft import thread.mindweft.json --dry-run          # validate without retai
 mindweft import thread.mindweft.json                    # restore available execution selections
 mindweft import thread.mindweft.json --profile-policy strict
 mindweft import thread.mindweft.json --organization-policy preserve
+mindweft import thread.mindweft.json --timestamp-policy preserve
 ```
 
 The Markdown and JSON formats produce readable transcripts rather than portable thread archives.
@@ -257,6 +258,13 @@ controlled separately by `--organization-policy`:
 | `reset` | Default. Use destination organization defaults (`pinned=false`, `archived=false`) and warn when recorded source state is not restored. |
 | `preserve` | Restore source pin and archive state from a version 3 archive. For older archives, use destination defaults and print a warning. |
 
+Thread timestamp handling is controlled separately by `--timestamp-policy`:
+
+| Policy | Behavior |
+| --- | --- |
+| `reset` | Default. Keep fresh destination `created_at` and `updated_at` values after import. |
+| `preserve` | Restore source thread `created_at` and `updated_at` values after all imported content is written. Preserved timestamps affect destination sorting, filtering, and retention. |
+
 Execution-selection handling is controlled by `--profile-policy`:
 
 | Policy | Behavior |
@@ -266,18 +274,18 @@ Execution-selection handling is controlled by `--profile-policy`:
 | `strict` | Restore every recorded source selection and reject the import before creating a thread if any selection is unavailable. |
 
 The server API exposes the same behavior through
-`POST /threads/import?profile_policy=<policy>&organization_policy=<policy>`.
+`POST /threads/import?profile_policy=<policy>&organization_policy=<policy>&timestamp_policy=<policy>`.
 Add `dry_run=true` to perform a full import validation without retaining the imported thread. A dry
 run exercises the normal entitlement, execution-selection, message, private-value, attachment
 content, and storage-quota paths, then removes the temporary thread, attachments, and private-value
-state. It returns `thread_id: null`, `dry_run: true`, counts, the selected profile and organization
-policies, and the same warnings a real import would return. Attachment dry runs consume the normal
-upload rate-limit budget.
+state. It returns `thread_id: null`, `dry_run: true`, counts, the selected profile, organization, and
+timestamp policies, and the same warnings a real import would return. Attachment dry runs consume the
+normal upload rate-limit budget.
 
 Successful non-dry-run imports are idempotent within a tenant by `archive_id`. Repeating an import
-with identical normalized archive content and the same profile and organization policies returns the
-first response and thread ID without creating another thread or consuming attachment upload
-rate-limit budget. The server returns `409 Conflict` if that archive ID is already associated with
+with identical normalized archive content and the same profile, organization, and timestamp policies
+returns the first response and thread ID without creating another thread or consuming attachment
+upload rate-limit budget. The server returns `409 Conflict` if that archive ID is already associated
 changed content or different import policies, or if an identical import is currently in progress.
 In-progress claims expire after one hour so interrupted imports can be retried. Deleting the imported
 thread removes the associated idempotency record and permits a new import of that archive.

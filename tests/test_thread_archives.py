@@ -185,6 +185,24 @@ def test_thread_archive_v1_remains_importable_without_attachments() -> None:
     assert validate_importable_thread_archive(archive) == {}
 
 
+def test_thread_archive_rejects_invalid_thread_timestamps() -> None:
+    thread = Thread(
+        thread_id="thread-source",
+        tenant_id="tenant-1",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    archive = build_thread_archive(thread, [], ThreadContext(thread_id=thread.thread_id))
+    archive.thread.updated_at = datetime(2025, 12, 31, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="must not precede"):
+        validate_importable_thread_archive(archive)
+
+    archive.thread.updated_at = NOW
+    archive.thread.created_at = datetime(2026, 1, 1)
+    with pytest.raises(ValueError, match="UTC offset"):
+        validate_importable_thread_archive(archive)
+
+
 def test_thread_archive_rejects_invalid_context_count() -> None:
     archive = ThreadArchiveV1.model_validate(
         {
