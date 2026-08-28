@@ -221,7 +221,8 @@ mindweft export <thread-id> --format json               # export a transcript as
 mindweft export <thread-id> --output transcript.md      # write Markdown to a file
 mindweft export <thread-id> --format json --output transcript.json
 mindweft export <thread-id> --format archive --output thread.mindweft.json
-mindweft import thread.mindweft.json                    # create a new thread from an archive
+mindweft import thread.mindweft.json                    # restore available execution selections
+mindweft import thread.mindweft.json --profile-policy strict
 ```
 
 The Markdown and JSON formats produce readable transcripts rather than portable thread archives.
@@ -245,9 +246,16 @@ message-part references to new attachment IDs. Base64 increases file size, so ar
 larger than the underlying attachment bytes. Existing version 1 text-only archives remain
 importable.
 
-System messages remain rejected. Lineage, pin/archive organization state, and source execution
-selections are not restored yet. The destination's execution defaults are used; `mindweft import`
-prints a warning when the archive records source skills, a capability profile, or an LLM profile.
+System messages remain rejected, and lineage and pin/archive organization state are not restored
+yet. Execution-selection handling is controlled by `--profile-policy`:
+
+| Policy | Behavior |
+| --- | --- |
+| `available` | Default. Restore source skills, capability profile, and LLM profile by category; substitute destination defaults and print a warning for categories that cannot resolve. |
+| `defaults` | Ignore all recorded source execution selections and use destination defaults, with a summary warning. |
+| `strict` | Restore every recorded source selection and reject the import before creating a thread if any selection is unavailable. |
+
+The server API exposes the same behavior through `POST /threads/import?profile_policy=<policy>`.
 
 ### Diagnostics
 

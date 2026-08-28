@@ -770,11 +770,14 @@ def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, caps
         "messages": [],
     }
     imported_payloads: list[dict[str, Any]] = []
+    imported_policies: list[str] = []
 
     def urlopen(request: Any) -> _Response:
         if request.full_url.endswith("/threads/thread-2/archive"):
             return _Response(body=archive)
-        if request.full_url.endswith("/threads/import"):
+        if "/threads/import?profile_policy=" in request.full_url:
+            policy = request.full_url.rsplit("=", 1)[1]
+            imported_policies.append(policy)
             imported_payloads.append(json.loads(request.data.decode("utf-8")))
             return _Response(
                 body={
@@ -782,6 +785,7 @@ def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, caps
                     "source_thread_id": "thread-2",
                     "message_count": 0,
                     "attachment_count": 0,
+                    "profile_policy": policy,
                     "warnings": [
                         {
                             "code": "execution_options_not_restored",
@@ -811,10 +815,14 @@ def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, caps
     )
     assert json.loads(archive_path.read_text(encoding="utf-8")) == archive
     assert cli.main(["import", str(archive_path)]) == 0
-    assert imported_payloads == [archive]
+    assert cli.main(["import", str(archive_path), "--profile-policy", "strict"]) == 0
+    assert imported_payloads == [archive, archive]
+    assert imported_policies == ["available", "strict"]
     captured = capsys.readouterr()
-    assert captured.out == "thread_id=thread-imported\n"
-    assert captured.err == "Warning: Destination defaults were used.\n"
+    assert captured.out == "thread_id=thread-imported\nthread_id=thread-imported\n"
+    assert captured.err == (
+        "Warning: Destination defaults were used.\nWarning: Destination defaults were used.\n"
+    )
 
 
 def test_cli_prints_friendly_auth_errors(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:

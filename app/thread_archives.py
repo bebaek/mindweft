@@ -15,6 +15,7 @@ from app.models import Message, MessagePart, MessageRole, Thread, ThreadContext,
 
 THREAD_ARCHIVE_SCHEMA = "mindweft.thread-archive"
 THREAD_ARCHIVE_VERSION = 2
+ThreadArchiveProfilePolicy = Literal["defaults", "available", "strict"]
 MAX_ARCHIVE_MESSAGES = 10_000
 MAX_ARCHIVE_ATTACHMENTS = 1_000
 
@@ -100,6 +101,7 @@ class ThreadArchiveImportResponse(ThreadArchiveModel):
     source_thread_id: str
     message_count: int
     attachment_count: int
+    profile_policy: ThreadArchiveProfilePolicy
     warnings: list[ThreadArchiveImportWarning] = Field(default_factory=list)
 
 

@@ -634,7 +634,10 @@ def run_import_thread_archive(
     archive = json.loads(archive_path.read_text(encoding="utf-8"))
     if not isinstance(archive, dict):
         raise ValueError("thread archive must contain a JSON object")
-    response = client.import_thread_archive(archive)
+    response = client.import_thread_archive(
+        archive,
+        profile_policy=args.profile_policy,
+    )
     thread_id = response.get("thread_id")
     if not isinstance(thread_id, str) or not thread_id:
         raise RuntimeError("Mindweft thread archive import response is missing thread_id")

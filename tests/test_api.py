@@ -8647,7 +8647,8 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert result["source_thread_id"] == source_thread_id
     assert result["message_count"] == 2
     assert result["attachment_count"] == 0
-    assert result["warnings"][0]["code"] == "execution_options_not_restored"
+    assert result["profile_policy"] == "available"
+    assert result["warnings"][0]["code"] == "llm_profile_substituted"
 
     imported_messages_response = client.get(
         f"/threads/{imported_thread_id}/messages", headers=AUTH_HEADERS
@@ -8822,6 +8823,131 @@ def test_thread_archive_attachment_quota_failure_rolls_back_import(
     assert response.json()["detail"] == "thread attachment count limit exceeded"
     assert app.state.store.count_threads("tenant-1") == 0
     assert app.state.attachment_store.tenant_usage("tenant-1") == (0, 0)
+
+
+def test_thread_archive_profile_policies_restore_substitute_or_reject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "MINIGENT_TENANT_EXECUTION_CONFIGS",
+        json.dumps(
+            {
+                "tenant-1": {
+                    "llm": {"provider": "mock"},
+                    "default_llm_profile": "primary",
+                    "llm_profiles": {
+                        "primary": {"provider": "mock", "model": "primary"},
+                        "source-llm": {"provider": "mock", "model": "source"},
+                    },
+                    "skills": {
+                        "default_skill": "default-skill",
+                        "items": [
+                            {"name": "default-skill", "system_prompt": "Default."},
+                            {"name": "source-skill", "system_prompt": "Source."},
+                        ],
+                    },
+                    "capability_profiles": {
+                        "default_profile": "default-capability",
+                        "items": [
+                            {"name": "default-capability", "allowed_local_tools": []},
+                            {"name": "source-capability", "allowed_local_tools": []},
+                        ],
+                    },
+                }
+            }
+        ),
+    )
+    client = TestClient(create_app())
+    archive = {
+        "schema": "mindweft.thread-archive",
+        "version": 2,
+        "thread": {
+            "source_thread_id": "source-thread",
+            "skill_names": ["source-skill"],
+            "capability_profile": "source-capability",
+            "llm_profile": "source-llm",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+        "context": {"summary": "", "summarized_message_count": 0},
+        "messages": [],
+        "attachments": [],
+    }
+
+    available = client.post(
+        "/threads/import?profile_policy=available",
+        headers=AUTH_HEADERS,
+        json=archive,
+    )
+    strict = client.post(
+        "/threads/import?profile_policy=strict",
+        headers=AUTH_HEADERS,
+        json=archive,
+    )
+    defaults = client.post(
+        "/threads/import?profile_policy=defaults",
+        headers=AUTH_HEADERS,
+        json=archive,
+    )
+
+    assert available.status_code == 201
+    assert available.json()["profile_policy"] == "available"
+    assert available.json()["warnings"] == []
+    assert strict.status_code == 201
+    assert strict.json()["profile_policy"] == "strict"
+    assert strict.json()["warnings"] == []
+    assert defaults.status_code == 201
+    assert defaults.json()["profile_policy"] == "defaults"
+    assert defaults.json()["warnings"][0]["code"] == "execution_options_not_restored"
+    listed = {
+        thread["thread_id"]: thread
+        for thread in client.get("/threads", headers=AUTH_HEADERS).json()["threads"]
+    }
+    for response in (available, strict):
+        selected = listed[response.json()["thread_id"]]
+        assert selected["skill_names"] == ["source-skill"]
+        assert selected["capability_profile"] == "source-capability"
+        assert selected["llm_profile"] == "source-llm"
+    selected_defaults = listed[defaults.json()["thread_id"]]
+    assert selected_defaults["skill_names"] == ["default-skill"]
+    assert selected_defaults["capability_profile"] == "default-capability"
+    assert selected_defaults["llm_profile"] == "primary"
+
+    missing_archive = json.loads(json.dumps(archive))
+    missing_archive["thread"]["skill_names"] = ["missing-skill"]
+    missing_archive["thread"]["capability_profile"] = "missing-capability"
+    missing_archive["thread"]["llm_profile"] = "missing-llm"
+    substituted = client.post(
+        "/threads/import?profile_policy=available",
+        headers=AUTH_HEADERS,
+        json=missing_archive,
+    )
+    assert substituted.status_code == 201
+    assert {warning["code"] for warning in substituted.json()["warnings"]} == {
+        "skills_substituted",
+        "capability_profile_substituted",
+        "llm_profile_substituted",
+    }
+    substituted_thread = next(
+        thread
+        for thread in client.get("/threads", headers=AUTH_HEADERS).json()["threads"]
+        if thread["thread_id"] == substituted.json()["thread_id"]
+    )
+    assert substituted_thread["skill_names"] == ["default-skill"]
+    assert substituted_thread["capability_profile"] == "default-capability"
+    assert substituted_thread["llm_profile"] == "primary"
+
+    count_before_strict_failure = len(listed) + 1
+    rejected = client.post(
+        "/threads/import?profile_policy=strict",
+        headers=AUTH_HEADERS,
+        json=missing_archive,
+    )
+    assert rejected.status_code == 400
+    assert "missing-skill" in rejected.json()["detail"]
+    assert client.get("/threads", headers=AUTH_HEADERS).json()["total"] == (
+        count_before_strict_failure
+    )
 
 
 def test_thread_archive_import_rejects_invalid_context_without_creating_thread() -> None:
