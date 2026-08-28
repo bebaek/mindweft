@@ -615,6 +615,7 @@ A versioned archive format is available for portable thread round trips:
 
 ```bash
 uv run mindweft export <thread-id> --format archive --output thread.mindweft.json
+uv run mindweft import thread.mindweft.json --dry-run
 uv run mindweft import thread.mindweft.json
 ```
 
@@ -627,7 +628,9 @@ attachment IDs. System messages, lineage, and organization state are not restore
 text-only archives remain importable. By default, import restores source skills, capability profile,
 and LLM profile when they exist on the destination and reports category-specific warnings when it
 substitutes destination defaults. Use `--profile-policy defaults` to ignore source selections or
-`--profile-policy strict` to reject unavailable selections.
+`--profile-policy strict` to reject unavailable selections. Use `--dry-run` to execute schema,
+execution-selection, entitlement, message, private-value, attachment-content, and quota checks through
+the normal import path and then remove the temporary thread, attachments, and private-value state.
 
 See the [CLI reference](docs/cli.md) for all commands, interactive slash commands,
 execution option discovery, streaming options, voice modes, and configuration.

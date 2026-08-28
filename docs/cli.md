@@ -221,6 +221,7 @@ mindweft export <thread-id> --format json               # export a transcript as
 mindweft export <thread-id> --output transcript.md      # write Markdown to a file
 mindweft export <thread-id> --format json --output transcript.json
 mindweft export <thread-id> --format archive --output thread.mindweft.json
+mindweft import thread.mindweft.json --dry-run          # validate without retaining a thread
 mindweft import thread.mindweft.json                    # restore available execution selections
 mindweft import thread.mindweft.json --profile-policy strict
 ```
@@ -256,6 +257,11 @@ yet. Execution-selection handling is controlled by `--profile-policy`:
 | `strict` | Restore every recorded source selection and reject the import before creating a thread if any selection is unavailable. |
 
 The server API exposes the same behavior through `POST /threads/import?profile_policy=<policy>`.
+Add `dry_run=true` to perform a full import validation without retaining the imported thread. A dry
+run exercises the normal entitlement, execution-selection, message, private-value, attachment
+content, and storage-quota paths, then removes the temporary thread, attachments, and private-value
+state. It returns `thread_id: null`, `dry_run: true`, counts, the selected profile policy, and the same
+warnings a real import would return. Attachment dry runs consume the normal upload rate-limit budget.
 
 ### Diagnostics
 

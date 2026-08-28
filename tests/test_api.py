@@ -8648,6 +8648,7 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert result["message_count"] == 2
     assert result["attachment_count"] == 0
     assert result["profile_policy"] == "available"
+    assert result["dry_run"] is False
     assert result["warnings"][0]["code"] == "llm_profile_substituted"
 
     imported_messages_response = client.get(
@@ -8742,6 +8743,20 @@ def test_thread_archive_api_round_trips_attachment_bytes(
     assert invalid.status_code == 422
     assert "checksum does not match" in invalid.json()["detail"]
     assert app.state.store.count_threads("tenant-1") == 1
+
+    usage_before_dry_run = app.state.attachment_store.tenant_usage("tenant-1")
+    dry_run = client.post(
+        "/threads/import?profile_policy=available&dry_run=true",
+        headers=AUTH_HEADERS,
+        json=archive,
+    )
+    assert dry_run.status_code == 201
+    assert dry_run.json()["thread_id"] is None
+    assert dry_run.json()["dry_run"] is True
+    assert dry_run.json()["message_count"] == 1
+    assert dry_run.json()["attachment_count"] == 1
+    assert app.state.store.count_threads("tenant-1") == 1
+    assert app.state.attachment_store.tenant_usage("tenant-1") == usage_before_dry_run
 
     imported = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
     assert imported.status_code == 201

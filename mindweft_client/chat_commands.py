@@ -637,7 +637,24 @@ def run_import_thread_archive(
     response = client.import_thread_archive(
         archive,
         profile_policy=args.profile_policy,
+        dry_run=args.dry_run,
     )
+    if trace_id is not None:
+        response["trace_id"] = trace_id
+    if args.dry_run:
+        if response.get("dry_run") is not True or response.get("thread_id") is not None:
+            raise RuntimeError("Mindweft thread archive dry-run response is invalid")
+        if args.json:
+            print_json(response)
+        else:
+            print(
+                "validation=ok "
+                f"messages={response.get('message_count', 0)} "
+                f"attachments={response.get('attachment_count', 0)} "
+                f"profile_policy={response.get('profile_policy', args.profile_policy)}"
+            )
+            _print_thread_archive_import_warnings(response)
+        return 0
     thread_id = response.get("thread_id")
     if not isinstance(thread_id, str) or not thread_id:
         raise RuntimeError("Mindweft thread archive import response is missing thread_id")
@@ -651,18 +668,20 @@ def run_import_thread_archive(
         title=title if isinstance(title, str) else None,
         message_count=message_count if isinstance(message_count, int) else None,
     )
-    if trace_id is not None:
-        response["trace_id"] = trace_id
     if args.json:
         print_json(response)
         return 0
     print(f"thread_id={thread_id}")
+    _print_thread_archive_import_warnings(response)
+    return 0
+
+
+def _print_thread_archive_import_warnings(response: dict[str, Any]) -> None:
     warnings = response.get("warnings")
     if isinstance(warnings, list):
         for warning in warnings:
             if isinstance(warning, dict) and isinstance(warning.get("message"), str):
                 print(f"Warning: {warning['message']}", file=sys.stderr)
-    return 0
 
 
 def run_threads_retitle(

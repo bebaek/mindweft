@@ -465,8 +465,14 @@ class MindweftAPIClient:
         archive: dict[str, Any],
         *,
         profile_policy: str = "available",
+        dry_run: bool = False,
     ) -> dict[str, Any]:
-        query = _build_query({"profile_policy": profile_policy})
+        query = _build_query(
+            {
+                "profile_policy": profile_policy,
+                "dry_run": "true" if dry_run else None,
+            }
+        )
         response = self.request_json(
             "POST",
             f"{self._config.base_url}/threads/import{query}",
