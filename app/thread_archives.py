@@ -11,15 +11,24 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.attachments import AttachmentRecord
 from app.message_parts import is_attachment_part, remap_attachment_ids
-from app.models import Message, MessagePart, MessageRole, Thread, ThreadContext, utc_now
+from app.models import (
+    Message,
+    MessagePart,
+    MessageRole,
+    Thread,
+    ThreadContext,
+    ThreadImportProvenance,
+    utc_now,
+)
 
 THREAD_ARCHIVE_SCHEMA = "mindweft.thread-archive"
-THREAD_ARCHIVE_VERSION = 3
+THREAD_ARCHIVE_VERSION = 4
 ThreadArchiveProfilePolicy = Literal["defaults", "available", "strict"]
 ThreadArchiveOrganizationPolicy = Literal["reset", "preserve"]
 ThreadArchiveTimestampPolicy = Literal["reset", "preserve"]
 MAX_ARCHIVE_MESSAGES = 10_000
 MAX_ARCHIVE_ATTACHMENTS = 1_000
+MAX_ARCHIVE_PROVENANCE_HOPS = 64
 
 
 class ThreadArchiveModel(BaseModel):
@@ -96,7 +105,7 @@ class ThreadArchiveOrganization(ThreadArchiveModel):
 
 
 class ThreadArchiveV3(ThreadArchiveBase):
-    version: Literal[3] = THREAD_ARCHIVE_VERSION
+    version: Literal[3] = 3
     attachments: list[ThreadArchiveAttachment] = Field(
         default_factory=list,
         max_length=MAX_ARCHIVE_ATTACHMENTS,
@@ -104,8 +113,27 @@ class ThreadArchiveV3(ThreadArchiveBase):
     organization: ThreadArchiveOrganization
 
 
+class ThreadArchiveImportProvenance(ThreadArchiveModel):
+    archive_id: str = Field(min_length=1)
+    source_thread_id: str = Field(min_length=1)
+    imported_at: datetime
+
+
+class ThreadArchiveV4(ThreadArchiveBase):
+    version: Literal[4] = THREAD_ARCHIVE_VERSION
+    attachments: list[ThreadArchiveAttachment] = Field(
+        default_factory=list,
+        max_length=MAX_ARCHIVE_ATTACHMENTS,
+    )
+    organization: ThreadArchiveOrganization
+    import_provenance_chain: list[ThreadArchiveImportProvenance] = Field(
+        default_factory=list,
+        max_length=MAX_ARCHIVE_PROVENANCE_HOPS,
+    )
+
+
 ThreadArchive = Annotated[
-    ThreadArchiveV1 | ThreadArchiveV2 | ThreadArchiveV3,
+    ThreadArchiveV1 | ThreadArchiveV2 | ThreadArchiveV3 | ThreadArchiveV4,
     Field(discriminator="version"),
 ]
 
@@ -132,7 +160,7 @@ def build_thread_archive(
     messages: list[Message],
     context: ThreadContext,
     attachment_records: Mapping[str, AttachmentRecord] | None = None,
-) -> ThreadArchiveV3:
+) -> ThreadArchiveV4:
     _reject_system_messages(messages)
     records = dict(attachment_records or {})
     referenced_ids, referenced_mime_types = _message_attachment_references(messages)
@@ -158,7 +186,7 @@ def build_thread_archive(
                 data=base64.b64encode(record.data).decode("ascii"),
             )
         )
-    return ThreadArchiveV3(
+    return ThreadArchiveV4(
         thread=ThreadArchiveThread(
             source_thread_id=thread.thread_id,
             title=thread.title,
@@ -194,6 +222,14 @@ def build_thread_archive(
             pinned=thread.pinned_at is not None,
             archived=thread.archived_at is not None,
         ),
+        import_provenance_chain=[
+            ThreadArchiveImportProvenance(
+                archive_id=hop.archive_id,
+                source_thread_id=hop.source_thread_id,
+                imported_at=hop.imported_at,
+            )
+            for hop in _thread_import_provenance_chain(thread)
+        ],
     )
 
 
@@ -205,6 +241,10 @@ def validate_importable_thread_archive(archive: ThreadArchive) -> dict[str, byte
         raise ValueError("archive thread timestamps must include a UTC offset")
     if archive.thread.updated_at < archive.thread.created_at:
         raise ValueError("archive thread updated_at must not precede created_at")
+    if isinstance(archive, ThreadArchiveV4):
+        for hop in archive.import_provenance_chain:
+            if hop.imported_at.utcoffset() is None:
+                raise ValueError("archive import-provenance timestamps must include a UTC offset")
     if archive.thread.title is not None and not archive.thread.title.strip():
         raise ValueError("archive thread title must not be blank")
     if archive.context.summarized_message_count > len(archive.messages):
@@ -281,8 +321,30 @@ def imported_messages(
     ]
 
 
+def _thread_import_provenance_chain(thread: Thread) -> list[ThreadImportProvenance]:
+    if thread.import_provenance_chain:
+        return thread.import_provenance_chain[:MAX_ARCHIVE_PROVENANCE_HOPS]
+    if (
+        thread.import_source_archive_id is None
+        or thread.import_source_thread_id is None
+        or thread.imported_at is None
+    ):
+        return []
+    return [
+        ThreadImportProvenance(
+            archive_id=thread.import_source_archive_id,
+            source_thread_id=thread.import_source_thread_id,
+            imported_at=thread.imported_at,
+        )
+    ]
+
+
 def _archive_attachments(archive: ThreadArchive) -> list[ThreadArchiveAttachment]:
-    return archive.attachments if isinstance(archive, (ThreadArchiveV2, ThreadArchiveV3)) else []
+    return (
+        archive.attachments
+        if isinstance(archive, (ThreadArchiveV2, ThreadArchiveV3, ThreadArchiveV4))
+        else []
+    )
 
 
 def _archive_message_as_message(message: ThreadArchiveMessage) -> Message:

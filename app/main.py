@@ -174,6 +174,7 @@ from app.store import (
 )
 from app.tenants import require_active_tenant_principal, require_tenant_context
 from app.thread_archives import (
+    MAX_ARCHIVE_PROVENANCE_HOPS,
     ThreadArchive,
     ThreadArchiveImportResponse,
     ThreadArchiveImportWarning,
@@ -182,6 +183,7 @@ from app.thread_archives import (
     ThreadArchiveTimestampPolicy,
     ThreadArchiveV2,
     ThreadArchiveV3,
+    ThreadArchiveV4,
     build_thread_archive,
     imported_messages,
     validate_importable_thread_archive,
@@ -472,6 +474,8 @@ def _thread_list_item(store: ThreadStore, tenant_id: str, thread: Thread) -> Thr
 
 
 def _thread_import_provenance(thread: Thread) -> ThreadImportProvenance | None:
+    if thread.import_provenance_chain:
+        return thread.import_provenance_chain[0]
     if (
         thread.import_source_archive_id is None
         or thread.import_source_thread_id is None
@@ -483,6 +487,13 @@ def _thread_import_provenance(thread: Thread) -> ThreadImportProvenance | None:
         source_thread_id=thread.import_source_thread_id,
         imported_at=thread.imported_at,
     )
+
+
+def _thread_import_provenance_chain(thread: Thread) -> list[ThreadImportProvenance]:
+    if thread.import_provenance_chain:
+        return list(thread.import_provenance_chain)
+    provenance = _thread_import_provenance(thread)
+    return [provenance] if provenance is not None else []
 
 
 def _search_snippet(content: str, query: str, *, max_chars: int = 180) -> str:
@@ -1892,12 +1903,12 @@ def create_app(
             offset=offset,
         )
 
-    @app.get("/threads/{thread_id}/archive", response_model=ThreadArchiveV3)
+    @app.get("/threads/{thread_id}/archive", response_model=ThreadArchiveV4)
     async def export_thread_archive(
         thread_id: str,
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
-    ) -> ThreadArchiveV3:
+    ) -> ThreadArchiveV4:
         store = request.app.state.store
         thread = store.get_thread(principal.tenant_id, thread_id)
         messages = store.list_messages(principal.tenant_id, thread_id)
@@ -1968,6 +1979,7 @@ def create_app(
                 _thread_list_item(store, principal.tenant_id, sibling) for sibling in siblings
             ],
             import_provenance=_thread_import_provenance(current),
+            import_provenance_chain=_thread_import_provenance_chain(current),
         )
 
     @app.post(
@@ -2250,7 +2262,7 @@ def create_app(
                         )
                     )
 
-        if isinstance(archive, ThreadArchiveV3):
+        if isinstance(archive, (ThreadArchiveV3, ThreadArchiveV4)):
             if organization_policy == "reset" and (
                 archive.organization.pinned or archive.organization.archived
             ):
@@ -2273,6 +2285,36 @@ def create_app(
                     ),
                 )
             )
+
+        imported_at = utc_now()
+        inherited_provenance = (
+            archive.import_provenance_chain if isinstance(archive, ThreadArchiveV4) else []
+        )
+        if len(inherited_provenance) >= MAX_ARCHIVE_PROVENANCE_HOPS:
+            warnings.append(
+                ThreadArchiveImportWarning(
+                    code="import_provenance_truncated",
+                    message=(
+                        "The oldest source import-provenance hop was dropped to keep the destination "
+                        f"chain within {MAX_ARCHIVE_PROVENANCE_HOPS} hops."
+                    ),
+                )
+            )
+        import_provenance_chain = [
+            ThreadImportProvenance(
+                archive_id=archive.archive_id,
+                source_thread_id=archive.thread.source_thread_id,
+                imported_at=imported_at,
+            ),
+            *[
+                ThreadImportProvenance(
+                    archive_id=hop.archive_id,
+                    source_thread_id=hop.source_thread_id,
+                    imported_at=hop.imported_at,
+                )
+                for hop in inherited_provenance[: MAX_ARCHIVE_PROVENANCE_HOPS - 1]
+            ],
+        ]
 
         skill_names = [skill.stored_ref for skill in resolved_skills]
         skill_name = skill_names[0] if len(skill_names) == 1 else None
@@ -2313,7 +2355,8 @@ def create_app(
                 llm_profile=llm_profile,
                 import_source_archive_id=archive.archive_id,
                 import_source_thread_id=archive.thread.source_thread_id,
-                imported_at=utc_now(),
+                imported_at=imported_at,
+                import_provenance_chain=import_provenance_chain,
             )
         except Exception:
             if claim_token is not None:
@@ -2327,7 +2370,7 @@ def create_app(
             attachment_id_map: dict[str, str] = {}
             archive_attachments = (
                 {attachment.source_attachment_id: attachment for attachment in archive.attachments}
-                if isinstance(archive, (ThreadArchiveV2, ThreadArchiveV3))
+                if isinstance(archive, (ThreadArchiveV2, ThreadArchiveV3, ThreadArchiveV4))
                 else {}
             )
             for source_attachment_id, data in attachment_data.items():
@@ -2421,7 +2464,9 @@ def create_app(
                 summary=protected_summary,
                 summarized_message_count=archive.context.summarized_message_count,
             )
-            if organization_policy == "preserve" and isinstance(archive, ThreadArchiveV3):
+            if organization_policy == "preserve" and isinstance(
+                archive, (ThreadArchiveV3, ThreadArchiveV4)
+            ):
                 store.set_thread_organization(
                     principal.tenant_id,
                     thread.thread_id,

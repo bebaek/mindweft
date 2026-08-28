@@ -23,6 +23,7 @@ from app.models import (
     MessageRole,
     Thread,
     ThreadContext,
+    ThreadImportProvenance,
     ThreadStatus,
     utc_now,
 )
@@ -120,6 +121,7 @@ class ThreadStore(Protocol):
         import_source_archive_id: str | None = None,
         import_source_thread_id: str | None = None,
         imported_at: datetime | None = None,
+        import_provenance_chain: list[ThreadImportProvenance] | None = None,
     ) -> Thread: ...
 
     def delete_thread(self, tenant_id: str, thread_id: str) -> None: ...
@@ -380,6 +382,7 @@ class InMemoryThreadStore:
         import_source_archive_id: str | None = None,
         import_source_thread_id: str | None = None,
         imported_at: datetime | None = None,
+        import_provenance_chain: list[ThreadImportProvenance] | None = None,
     ) -> Thread:
         with self._lock:
             normalized_skill_names = list(skill_names) if skill_names is not None else None
@@ -393,6 +396,7 @@ class InMemoryThreadStore:
                 import_source_archive_id=import_source_archive_id,
                 import_source_thread_id=import_source_thread_id,
                 imported_at=imported_at,
+                import_provenance_chain=list(import_provenance_chain or []),
             )
             self._threads[thread.thread_id] = thread
             self._contexts[thread.thread_id] = ThreadContext(thread_id=thread.thread_id)
@@ -1171,6 +1175,7 @@ class SQLiteThreadStore:
         import_source_archive_id: str | None = None,
         import_source_thread_id: str | None = None,
         imported_at: datetime | None = None,
+        import_provenance_chain: list[ThreadImportProvenance] | None = None,
     ) -> Thread:
         with self._lock, self._connection() as conn:
             normalized_skill_names = list(skill_names) if skill_names is not None else None
@@ -1184,6 +1189,7 @@ class SQLiteThreadStore:
                 import_source_archive_id=import_source_archive_id,
                 import_source_thread_id=import_source_thread_id,
                 imported_at=imported_at,
+                import_provenance_chain=list(import_provenance_chain or []),
             )
             context = ThreadContext(thread_id=thread.thread_id)
             conn.execute(

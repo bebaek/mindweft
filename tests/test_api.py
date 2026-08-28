@@ -8628,8 +8628,9 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert exported.status_code == 200
     archive = exported.json()
     assert archive["schema"] == "mindweft.thread-archive"
-    assert archive["version"] == 3
+    assert archive["version"] == 4
     assert archive["organization"] == {"pinned": False, "archived": False}
+    assert archive["import_provenance_chain"] == []
     assert archive["thread"]["source_thread_id"] == source_thread_id
     assert archive["thread"]["title"] == "Archived conversation"
     assert archive["thread"]["title_source"] == "manual"
@@ -8660,6 +8661,7 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     )
     assert source_lineage.status_code == 200
     assert source_lineage.json()["import_provenance"] is None
+    assert source_lineage.json()["import_provenance_chain"] == []
     imported_lineage = client.get(
         f"/threads/{imported_thread_id}/lineage",
         headers=AUTH_HEADERS,
@@ -8669,6 +8671,7 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert provenance["archive_id"] == archive["archive_id"]
     assert provenance["source_thread_id"] == source_thread_id
     assert datetime.fromisoformat(provenance["imported_at"]) <= datetime.now(timezone.utc)
+    assert imported_lineage.json()["import_provenance_chain"] == [provenance]
 
     imported_messages_response = client.get(
         f"/threads/{imported_thread_id}/messages", headers=AUTH_HEADERS
@@ -8908,8 +8911,9 @@ def test_thread_archive_organization_policy_resets_preserves_and_supports_v2(
         f"/threads/{source_thread_id}/archive",
         headers=AUTH_HEADERS,
     ).json()
-    assert archive["version"] == 3
+    assert archive["version"] == 4
     assert archive["organization"] == {"pinned": True, "archived": True}
+    assert archive["import_provenance_chain"] == []
 
     reset = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
     assert reset.status_code == 201
@@ -8944,6 +8948,7 @@ def test_thread_archive_organization_policy_resets_preserves_and_supports_v2(
     v2_archive["archive_id"] = "organization-v2"
     v2_archive["version"] = 2
     del v2_archive["organization"]
+    del v2_archive["import_provenance_chain"]
     imported_v2 = client.post(
         "/threads/import?organization_policy=preserve",
         headers=AUTH_HEADERS,
@@ -9014,6 +9019,77 @@ def test_thread_archive_timestamp_policy_resets_preserves_and_is_idempotent(
     assert provenance["archive_id"] == "timestamps-preserve"
     assert provenance["source_thread_id"] == source_thread_id
     assert datetime.fromisoformat(provenance["imported_at"]) > source_updated_at
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_thread_archive_carries_bounded_import_provenance_chain(
+    store_kind: str, tmp_path: Path
+) -> None:
+    thread_store = (
+        SQLiteThreadStore(tmp_path / "thread-archive-provenance.db")
+        if store_kind == "sqlite"
+        else None
+    )
+    app = create_app(thread_store=thread_store)
+    client = TestClient(app)
+    source_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    first_archive = client.get(
+        f"/threads/{source_thread_id}/archive",
+        headers=AUTH_HEADERS,
+    ).json()
+    assert first_archive["version"] == 4
+    assert first_archive["import_provenance_chain"] == []
+
+    first_import = client.post("/threads/import", headers=AUTH_HEADERS, json=first_archive)
+    assert first_import.status_code == 201
+    first_thread_id = first_import.json()["thread_id"]
+    first_lineage = client.get(
+        f"/threads/{first_thread_id}/lineage",
+        headers=AUTH_HEADERS,
+    ).json()
+    assert first_lineage["import_provenance_chain"] == [first_lineage["import_provenance"]]
+
+    second_archive = client.get(
+        f"/threads/{first_thread_id}/archive",
+        headers=AUTH_HEADERS,
+    ).json()
+    assert second_archive["import_provenance_chain"] == first_lineage["import_provenance_chain"]
+    second_import = client.post("/threads/import", headers=AUTH_HEADERS, json=second_archive)
+    assert second_import.status_code == 201
+    second_lineage = client.get(
+        f"/threads/{second_import.json()['thread_id']}/lineage",
+        headers=AUTH_HEADERS,
+    ).json()
+    chain = second_lineage["import_provenance_chain"]
+    assert len(chain) == 2
+    assert chain[0]["archive_id"] == second_archive["archive_id"]
+    assert chain[0]["source_thread_id"] == first_thread_id
+    assert chain[1] == first_lineage["import_provenance"]
+
+    bounded_archive = json.loads(json.dumps(second_archive))
+    bounded_archive["archive_id"] = "bounded-provenance"
+    bounded_archive["import_provenance_chain"] = [
+        {
+            "archive_id": f"upstream-{index}",
+            "source_thread_id": f"source-{index}",
+            "imported_at": f"2025-01-{(index % 28) + 1:02d}T00:00:00Z",
+        }
+        for index in range(64)
+    ]
+    bounded_import = client.post("/threads/import", headers=AUTH_HEADERS, json=bounded_archive)
+    assert bounded_import.status_code == 201
+    assert any(
+        warning["code"] == "import_provenance_truncated"
+        for warning in bounded_import.json()["warnings"]
+    )
+    bounded_lineage = client.get(
+        f"/threads/{bounded_import.json()['thread_id']}/lineage",
+        headers=AUTH_HEADERS,
+    ).json()
+    bounded_chain = bounded_lineage["import_provenance_chain"]
+    assert len(bounded_chain) == 64
+    assert bounded_chain[0]["archive_id"] == "bounded-provenance"
+    assert bounded_chain[-1]["archive_id"] == "upstream-62"
 
 
 def test_thread_archive_profile_policies_restore_substitute_or_reject(

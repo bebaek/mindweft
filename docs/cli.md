@@ -241,22 +241,23 @@ referenced attachment bytes, so treat them as sensitive. Import always creates a
 authenticated principal, assigns new thread, message, and attachment IDs, and records source message
 IDs as provenance.
 
-The current version 3 format supports user, assistant, and tool message history, title, context,
-referenced audio, image, and document attachments, and source pin/archive organization state.
-Attachment data is base64-encoded in the JSON
-archive with its MIME type, byte size, and SHA-256 checksum. Import verifies the manifest,
+The current version 4 format supports user, assistant, and tool message history, title, context,
+referenced audio, image, and document attachments, source pin/archive organization state, and a
+bounded import-provenance chain. Attachment data is base64-encoded in the JSON archive with its MIME
+type, byte size, and SHA-256 checksum. Import verifies the manifest,
 revalidates attachment content, applies destination attachment capabilities and quotas, and rewrites
 message-part references to new attachment IDs. Base64 increases file size, so archive files are
-larger than the underlying attachment bytes. Existing version 1 and 2 archives remain importable;
-those versions do not contain organization state.
+larger than the underlying attachment bytes. Existing version 1 through 3 archives remain importable;
+versions 1 and 2 do not contain organization state, and versions 1 through 3 do not carry portable
+import provenance.
 
-System messages remain rejected, and lineage is not restored. Organization-state handling is
-controlled separately by `--organization-policy`:
+System messages remain rejected, and fork/compaction lineage is not restored. Organization-state
+handling is controlled separately by `--organization-policy`:
 
 | Policy | Behavior |
 | --- | --- |
 | `reset` | Default. Use destination organization defaults (`pinned=false`, `archived=false`) and warn when recorded source state is not restored. |
-| `preserve` | Restore source pin and archive state from a version 3 archive. For older archives, use destination defaults and print a warning. |
+| `preserve` | Restore source pin and archive state from a version 3 or 4 archive. For older archives, use destination defaults and print a warning. |
 
 Thread timestamp handling is controlled separately by `--timestamp-policy`:
 
@@ -286,16 +287,19 @@ Successful non-dry-run imports are idempotent within a tenant by `archive_id`. R
 with identical normalized archive content and the same profile, organization, and timestamp policies
 returns the first response and thread ID without creating another thread or consuming attachment
 upload rate-limit budget. The server returns `409 Conflict` if that archive ID is already associated
-changed content or different import policies, or if an identical import is currently in progress.
+with changed content or different import policies, or if an identical import is currently in progress.
 In-progress claims expire after one hour so interrupted imports can be retried. Deleting the imported
 thread removes the associated idempotency record and permits a new import of that archive.
 
-Every successful non-dry-run import also records destination-side immediate provenance: the source
-`archive_id`, source thread ID, and the actual destination import time. Retrieve it as
-`import_provenance` from `GET /threads/{thread_id}/lineage`. The destination import time is retained
-even when `--timestamp-policy preserve` replaces the thread's own timestamps. This provenance is not
-embedded in a later archive export; each import records the archive and source thread it directly
-consumed.
+Every successful non-dry-run import records destination-side immediate provenance: the source
+`archive_id`, source thread ID, and actual destination import time. Version 4 archive exports embed
+this hop plus declared upstream hops in newest-first order. Imports prepend their immediate hop and
+retain at most 64 entries; when a full 64-hop archive is imported, the oldest hop is dropped and an
+`import_provenance_truncated` warning is returned. Retrieve the immediate hop as `import_provenance`
+and the full bounded chain as `import_provenance_chain` from `GET /threads/{thread_id}/lineage`.
+Destination import times remain unchanged when `--timestamp-policy preserve` replaces the thread's
+own timestamps. Upstream hops are archive-declared provenance and are not independently verified by
+the destination.
 
 ### Diagnostics
 

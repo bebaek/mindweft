@@ -622,18 +622,20 @@ uv run mindweft import thread.mindweft.json --timestamp-policy preserve
 ```
 
 Archive export uses the server's protected message representation, excludes tenant and user
-ownership, and imports into a new thread owned by the authenticated principal. Version 3 preserves
+ownership, and imports into a new thread owned by the authenticated principal. Version 4 preserves
 core user, assistant, and tool messages, title, context, referenced audio, image, and document
-attachments, and source pin/archive organization state. Attachment bytes are base64-encoded with
-declared sizes and SHA-256 checksums; import revalidates content and enforces destination attachment
-capabilities and quotas before remapping attachment IDs. System messages and lineage are not restored.
+attachments, source pin/archive organization state, and a bounded import-provenance chain. Attachment
+bytes are base64-encoded with declared sizes and SHA-256 checksums; import revalidates content and
+enforces destination attachment capabilities and quotas before remapping attachment IDs. System
+messages and fork/compaction lineage are not restored.
 Destination-local organization defaults are used unless `--organization-policy preserve` is selected.
 Likewise, imports receive fresh destination thread timestamps unless `--timestamp-policy preserve`
 restores the source `created_at` and `updated_at` values; preserved timestamps affect destination
-sorting, filtering, and retention behavior. Version 1 and 2 archives remain importable but do not
-contain organization state. By default, import restores source skills, capability profile, and LLM
-profile when they exist on the destination and reports category-specific warnings when it substitutes
-destination defaults. Use
+sorting, filtering, and retention behavior. Version 1 through 3 archives remain importable; versions
+1 and 2 do not contain organization state, and versions 1 through 3 do not carry portable import
+provenance. By default, import restores source skills, capability profile, and LLM profile when they
+exist on the destination and reports category-specific warnings when it substitutes destination
+defaults. Use
 `--profile-policy defaults` to ignore source selections or
 `--profile-policy strict` to reject unavailable selections. Use `--dry-run` to execute schema,
 execution-selection, entitlement, message, private-value, attachment-content, and quota checks through
@@ -644,8 +646,10 @@ instead of creating a duplicate. Reusing an archive ID with changed content or d
 policies returns `409 Conflict`, as does a concurrent retry while the first import is still in progress.
 Deleting the imported thread also clears its idempotency record, allowing that archive to be imported
 again. Each created destination thread retains its immediate source archive ID, source thread ID, and
-destination import time. This provenance is available from `GET /threads/{thread_id}/lineage` and is
-independent of optional source thread timestamps.
+destination import time. Version 4 exports carry this immediate hop and declared upstream hops in
+newest-first order, capped at 64 entries; imports at the cap drop the oldest hop with a warning. The
+chain is available from `GET /threads/{thread_id}/lineage` and remains independent of optional source
+thread timestamps.
 
 See the [CLI reference](docs/cli.md) for all commands, interactive slash commands,
 execution option discovery, streaming options, voice modes, and configuration.

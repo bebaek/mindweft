@@ -10,6 +10,7 @@ from app.thread_archives import (
     ThreadArchiveV1,
     ThreadArchiveV2,
     ThreadArchiveV3,
+    ThreadArchiveV4,
     build_thread_archive,
     decode_archive_attachments,
     imported_messages,
@@ -48,13 +49,14 @@ def test_thread_archive_round_trip_uses_portable_ids_and_schema_alias() -> None:
     payload = archive.model_dump(mode="json", by_alias=True)
 
     assert payload["schema"] == "mindweft.thread-archive"
-    assert payload["version"] == 3
+    assert payload["version"] == 4
     assert payload["organization"] == {"pinned": True, "archived": True}
+    assert payload["import_provenance_chain"] == []
     assert "schema_name" not in payload
     assert "tenant_id" not in payload["thread"]
     assert "execution_user_id" not in payload["thread"]
     assert "created_by" not in payload["messages"][0]
-    restored_archive = ThreadArchiveV3.model_validate(payload)
+    restored_archive = ThreadArchiveV4.model_validate(payload)
     restored = imported_messages(
         restored_archive,
         thread_id="thread-destination",
@@ -146,6 +148,26 @@ def test_thread_archive_rejects_system_messages() -> None:
 
     with pytest.raises(ValueError, match="system messages"):
         build_thread_archive(thread, [message], ThreadContext(thread_id=thread.thread_id))
+
+
+def test_thread_archive_v3_remains_importable_without_provenance() -> None:
+    archive = ThreadArchiveV3.model_validate(
+        {
+            "schema": "mindweft.thread-archive",
+            "version": 3,
+            "thread": {
+                "source_thread_id": "thread-source",
+                "created_at": NOW.isoformat(),
+                "updated_at": NOW.isoformat(),
+            },
+            "context": {"summary": "", "summarized_message_count": 0},
+            "messages": [],
+            "attachments": [],
+            "organization": {"pinned": True, "archived": False},
+        }
+    )
+
+    assert validate_importable_thread_archive(archive) == {}
 
 
 def test_thread_archive_v2_remains_importable_without_organization() -> None:
