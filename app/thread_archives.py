@@ -97,11 +97,12 @@ class ThreadArchiveImportWarning(ThreadArchiveModel):
 
 
 class ThreadArchiveImportResponse(ThreadArchiveModel):
-    thread_id: str
+    thread_id: str | None
     source_thread_id: str
     message_count: int
     attachment_count: int
     profile_policy: ThreadArchiveProfilePolicy
+    dry_run: bool = False
     warnings: list[ThreadArchiveImportWarning] = Field(default_factory=list)
 
 

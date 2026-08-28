@@ -321,6 +321,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    import_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Run full destination validation, including attachment checks, then remove all imported "
+            "state instead of creating a thread."
+        ),
+    )
+
     threads_parser = subparsers.add_parser("threads", help="Manage conversation threads.")
     threads_subparsers = threads_parser.add_subparsers(dest="threads_command")
     threads_list_parser = threads_subparsers.add_parser(

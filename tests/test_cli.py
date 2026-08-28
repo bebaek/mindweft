@@ -1,6 +1,7 @@
 import json
 import tomllib
 import urllib.error
+import urllib.parse
 from collections.abc import Iterator, Mapping, Sequence
 from email.message import Message
 from io import BytesIO, StringIO
@@ -776,16 +777,19 @@ def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, caps
         if request.full_url.endswith("/threads/thread-2/archive"):
             return _Response(body=archive)
         if "/threads/import?profile_policy=" in request.full_url:
-            policy = request.full_url.rsplit("=", 1)[1]
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query)
+            policy = query["profile_policy"][0]
+            dry_run = query.get("dry_run") == ["true"]
             imported_policies.append(policy)
             imported_payloads.append(json.loads(request.data.decode("utf-8")))
             return _Response(
                 body={
-                    "thread_id": "thread-imported",
+                    "thread_id": None if dry_run else "thread-imported",
                     "source_thread_id": "thread-2",
                     "message_count": 0,
                     "attachment_count": 0,
                     "profile_policy": policy,
+                    "dry_run": dry_run,
                     "warnings": [
                         {
                             "code": "execution_options_not_restored",
@@ -816,12 +820,19 @@ def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, caps
     assert json.loads(archive_path.read_text(encoding="utf-8")) == archive
     assert cli.main(["import", str(archive_path)]) == 0
     assert cli.main(["import", str(archive_path), "--profile-policy", "strict"]) == 0
-    assert imported_payloads == [archive, archive]
-    assert imported_policies == ["available", "strict"]
+    assert cli.main(["import", str(archive_path), "--dry-run"]) == 0
+    assert imported_payloads == [archive, archive, archive]
+    assert imported_policies == ["available", "strict", "available"]
     captured = capsys.readouterr()
-    assert captured.out == "thread_id=thread-imported\nthread_id=thread-imported\n"
+    assert captured.out == (
+        "thread_id=thread-imported\n"
+        "thread_id=thread-imported\n"
+        "validation=ok messages=0 attachments=0 profile_policy=available\n"
+    )
     assert captured.err == (
-        "Warning: Destination defaults were used.\nWarning: Destination defaults were used.\n"
+        "Warning: Destination defaults were used.\n"
+        "Warning: Destination defaults were used.\n"
+        "Warning: Destination defaults were used.\n"
     )
 
 

@@ -2050,6 +2050,7 @@ def create_app(
         archive: ThreadArchive,
         request: Request,
         profile_policy: ThreadArchiveProfilePolicy = "available",
+        dry_run: bool = False,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> ThreadArchiveImportResponse:
         store = request.app.state.store
@@ -2318,12 +2319,21 @@ def create_app(
             store.delete_thread(principal.tenant_id, thread.thread_id)
             raise
 
+        if dry_run:
+            request.app.state.runtime.clear_private_values(principal, thread.thread_id)
+            request.app.state.attachment_store.delete_thread(
+                principal.tenant_id,
+                thread.thread_id,
+            )
+            store.delete_thread(principal.tenant_id, thread.thread_id)
+
         return ThreadArchiveImportResponse(
-            thread_id=thread.thread_id,
+            thread_id=None if dry_run else thread.thread_id,
             source_thread_id=archive.thread.source_thread_id,
             message_count=len(archive.messages),
             attachment_count=len(attachment_data),
             profile_policy=profile_policy,
+            dry_run=dry_run,
             warnings=warnings,
         )
 
