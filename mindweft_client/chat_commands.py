@@ -638,6 +638,7 @@ def run_import_thread_archive(
         archive,
         profile_policy=args.profile_policy,
         organization_policy=args.organization_policy,
+        timestamp_policy=args.timestamp_policy,
         dry_run=args.dry_run,
     )
     if trace_id is not None:
@@ -654,7 +655,8 @@ def run_import_thread_archive(
                 f"attachments={response.get('attachment_count', 0)} "
                 f"profile_policy={response.get('profile_policy', args.profile_policy)} "
                 "organization_policy="
-                f"{response.get('organization_policy', args.organization_policy)}"
+                f"{response.get('organization_policy', args.organization_policy)} "
+                f"timestamp_policy={response.get('timestamp_policy', args.timestamp_policy)}"
             )
             _print_thread_archive_import_warnings(response)
         return 0

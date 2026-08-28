@@ -8650,6 +8650,7 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert result["attachment_count"] == 0
     assert result["profile_policy"] == "available"
     assert result["organization_policy"] == "reset"
+    assert result["timestamp_policy"] == "reset"
     assert result["dry_run"] is False
     assert result["warnings"][0]["code"] == "llm_profile_substituted"
 
@@ -8940,6 +8941,55 @@ def test_thread_archive_organization_policy_resets_preserves_and_supports_v2(
     v2_thread = app.state.store.get_thread("tenant-1", imported_v2.json()["thread_id"])
     assert v2_thread.pinned_at is None
     assert v2_thread.archived_at is None
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_thread_archive_timestamp_policy_resets_preserves_and_is_idempotent(
+    store_kind: str, tmp_path: Path
+) -> None:
+    thread_store = (
+        SQLiteThreadStore(tmp_path / "thread-archive-timestamps.db")
+        if store_kind == "sqlite"
+        else None
+    )
+    app = create_app(thread_store=thread_store)
+    client = TestClient(app)
+    source_thread_id = client.post("/threads", headers=AUTH_HEADERS).json()["thread_id"]
+    archive = client.get(
+        f"/threads/{source_thread_id}/archive",
+        headers=AUTH_HEADERS,
+    ).json()
+    source_created_at = datetime(2020, 1, 2, 3, 4, tzinfo=timezone.utc)
+    source_updated_at = datetime(2020, 2, 3, 4, 5, tzinfo=timezone.utc)
+    archive["thread"]["created_at"] = source_created_at.isoformat()
+    archive["thread"]["updated_at"] = source_updated_at.isoformat()
+
+    reset = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
+    assert reset.status_code == 201
+    assert reset.json()["timestamp_policy"] == "reset"
+    reset_thread = app.state.store.get_thread("tenant-1", reset.json()["thread_id"])
+    assert reset_thread.created_at != source_created_at
+    assert reset_thread.updated_at != source_updated_at
+
+    changed_policy = client.post(
+        "/threads/import?timestamp_policy=preserve",
+        headers=AUTH_HEADERS,
+        json=archive,
+    )
+    assert changed_policy.status_code == 409
+
+    preserved_archive = json.loads(json.dumps(archive))
+    preserved_archive["archive_id"] = "timestamps-preserve"
+    preserved = client.post(
+        "/threads/import?timestamp_policy=preserve",
+        headers=AUTH_HEADERS,
+        json=preserved_archive,
+    )
+    assert preserved.status_code == 201
+    assert preserved.json()["timestamp_policy"] == "preserve"
+    preserved_thread = app.state.store.get_thread("tenant-1", preserved.json()["thread_id"])
+    assert preserved_thread.created_at == source_created_at
+    assert preserved_thread.updated_at == source_updated_at
 
 
 def test_thread_archive_profile_policies_restore_substitute_or_reject(

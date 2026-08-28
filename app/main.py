@@ -177,6 +177,7 @@ from app.thread_archives import (
     ThreadArchiveImportWarning,
     ThreadArchiveOrganizationPolicy,
     ThreadArchiveProfilePolicy,
+    ThreadArchiveTimestampPolicy,
     ThreadArchiveV2,
     ThreadArchiveV3,
     build_thread_archive,
@@ -2055,6 +2056,7 @@ def create_app(
         request: Request,
         profile_policy: ThreadArchiveProfilePolicy = "available",
         organization_policy: ThreadArchiveOrganizationPolicy = "reset",
+        timestamp_policy: ThreadArchiveTimestampPolicy = "reset",
         dry_run: bool = False,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> ThreadArchiveImportResponse:
@@ -2071,6 +2073,8 @@ def create_app(
             }
             if organization_policy != "reset":
                 request_identity["organization_policy"] = organization_policy
+            if timestamp_policy != "reset":
+                request_identity["timestamp_policy"] = timestamp_policy
             request_digest = hashlib.sha256(
                 json.dumps(
                     request_identity,
@@ -2404,6 +2408,13 @@ def create_app(
                     pinned=archive.organization.pinned,
                     archived=archive.organization.archived,
                 )
+            if timestamp_policy == "preserve":
+                store.restore_thread_timestamps(
+                    principal.tenant_id,
+                    thread.thread_id,
+                    created_at=archive.thread.created_at,
+                    updated_at=archive.thread.updated_at,
+                )
         except Exception:
             request.app.state.runtime.clear_private_values(principal, thread.thread_id)
             request.app.state.attachment_store.delete_thread(
@@ -2426,6 +2437,7 @@ def create_app(
             attachment_count=len(attachment_data),
             profile_policy=profile_policy,
             organization_policy=organization_policy,
+            timestamp_policy=timestamp_policy,
             dry_run=dry_run,
             warnings=warnings,
         )

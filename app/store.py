@@ -292,6 +292,15 @@ class ThreadStore(Protocol):
         archived: bool | None = None,
     ) -> Thread: ...
 
+    def restore_thread_timestamps(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        created_at: datetime,
+        updated_at: datetime,
+    ) -> Thread: ...
+
     def get_thread(self, tenant_id: str, thread_id: str) -> Thread: ...
 
     def get_thread_context(self, tenant_id: str, thread_id: str) -> ThreadContext: ...
@@ -844,6 +853,20 @@ class InMemoryThreadStore:
                 thread.pinned_at = now if pinned else None
             if archived is not None and archived != (thread.archived_at is not None):
                 thread.archived_at = now if archived else None
+            return thread.model_copy(deep=True)
+
+    def restore_thread_timestamps(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        created_at: datetime,
+        updated_at: datetime,
+    ) -> Thread:
+        with self._lock:
+            thread = self._require_thread(tenant_id, thread_id)
+            thread.created_at = created_at
+            thread.updated_at = updated_at
             return thread.model_copy(deep=True)
 
     def get_thread(self, tenant_id: str, thread_id: str) -> Thread:
@@ -1759,6 +1782,21 @@ class SQLiteThreadStore:
                 thread.pinned_at = now if pinned else None
             if archived is not None and archived != (thread.archived_at is not None):
                 thread.archived_at = now if archived else None
+            self._save_thread(conn, thread)
+            return thread
+
+    def restore_thread_timestamps(
+        self,
+        tenant_id: str,
+        thread_id: str,
+        *,
+        created_at: datetime,
+        updated_at: datetime,
+    ) -> Thread:
+        with self._lock, self._connection() as conn:
+            thread = self._require_thread(conn, tenant_id, thread_id)
+            thread.created_at = created_at
+            thread.updated_at = updated_at
             self._save_thread(conn, thread)
             return thread
 
