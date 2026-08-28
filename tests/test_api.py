@@ -8679,6 +8679,31 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert imported_list_item["title_source"] == "manual"
     assert imported_list_item["llm_profile"] is None
 
+    replayed = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
+    assert replayed.status_code == 201
+    assert replayed.json() == result
+    assert app.state.store.count_threads("tenant-1") == 2
+
+    changed_archive = json.loads(json.dumps(archive))
+    changed_archive["thread"]["title"] = "Changed archive content"
+    conflict = client.post("/threads/import", headers=AUTH_HEADERS, json=changed_archive)
+    assert conflict.status_code == 409
+    assert "archive_id was already used" in conflict.json()["detail"]
+    changed_policy = client.post(
+        "/threads/import?profile_policy=defaults",
+        headers=AUTH_HEADERS,
+        json=archive,
+    )
+    assert changed_policy.status_code == 409
+    assert "import options" in changed_policy.json()["detail"]
+
+    deleted = client.delete(f"/threads/{imported_thread_id}", headers=AUTH_HEADERS)
+    assert deleted.status_code == 204
+    recreated = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
+    assert recreated.status_code == 201
+    assert recreated.json()["thread_id"] != imported_thread_id
+    assert app.state.store.count_threads("tenant-1") == 2
+
 
 @pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
 def test_thread_archive_api_round_trips_attachment_bytes(
