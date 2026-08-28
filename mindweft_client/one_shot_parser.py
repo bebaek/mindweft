@@ -289,11 +289,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export_parser.add_argument(
         "--format",
-        choices=["markdown", "json", "archive"],
+        choices=["markdown", "json", "archive", "lineage-archive"],
         default="markdown",
         help=(
-            "Output format. Markdown and JSON are readable transcripts; archive is a versioned "
-            "portable JSON document."
+            "Output format. Markdown and JSON are readable transcripts; archive is one portable "
+            "thread, and lineage-archive is the portable root plus its complete fork tree."
         ),
     )
     export_parser.add_argument(
