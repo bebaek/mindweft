@@ -623,9 +623,11 @@ ownership, and imports into a new thread owned by the authenticated principal. V
 core user, assistant, and tool messages, title, context, and referenced audio, image, and document
 attachments. Attachment bytes are base64-encoded with declared sizes and SHA-256 checksums; import
 revalidates content and enforces destination attachment capabilities and quotas before remapping
-attachment IDs. System messages, lineage, organization state, and source execution selections are
-not restored. Version 1 text-only archives remain importable. Imports use destination execution
-defaults and report a warning when source selections were recorded.
+attachment IDs. System messages, lineage, and organization state are not restored. Version 1
+text-only archives remain importable. By default, import restores source skills, capability profile,
+and LLM profile when they exist on the destination and reports category-specific warnings when it
+substitutes destination defaults. Use `--profile-policy defaults` to ignore source selections or
+`--profile-policy strict` to reject unavailable selections.
 
 See the [CLI reference](docs/cli.md) for all commands, interactive slash commands,
 execution option discovery, streaming options, voice modes, and configuration.

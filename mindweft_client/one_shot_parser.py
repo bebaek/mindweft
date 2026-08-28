@@ -306,11 +306,20 @@ def build_parser() -> argparse.ArgumentParser:
         "import",
         help="Import a versioned thread archive.",
         description=(
-            "Import a Mindweft thread archive as a new thread. Source execution options are "
-            "recorded but destination defaults are used."
+            "Import a Mindweft thread archive as a new thread. Source execution options can be "
+            "restored when available, replaced with destination defaults, or required strictly."
         ),
     )
     import_parser.add_argument("archive", help="Path to a Mindweft thread archive JSON file.")
+    import_parser.add_argument(
+        "--profile-policy",
+        choices=["available", "defaults", "strict"],
+        default="available",
+        help=(
+            "How to map source skills, capability profile, and LLM profile. The default restores "
+            "available selections and substitutes destination defaults for missing selections."
+        ),
+    )
 
     threads_parser = subparsers.add_parser("threads", help="Manage conversation threads.")
     threads_subparsers = threads_parser.add_subparsers(dest="threads_command")

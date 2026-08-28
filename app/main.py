@@ -173,6 +173,7 @@ from app.thread_archives import (
     ThreadArchive,
     ThreadArchiveImportResponse,
     ThreadArchiveImportWarning,
+    ThreadArchiveProfilePolicy,
     ThreadArchiveV2,
     build_thread_archive,
     imported_messages,
@@ -2048,6 +2049,7 @@ def create_app(
     async def import_thread_archive(
         archive: ThreadArchive,
         request: Request,
+        profile_policy: ThreadArchiveProfilePolicy = "available",
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> ThreadArchiveImportResponse:
         store = request.app.state.store
@@ -2069,45 +2071,143 @@ def create_app(
         )
         try:
             default_agent = catalog.resolve_agent(None, use_default=True)
-            requested_skill_refs = (
+            default_skill_refs = (
                 list(default_agent.skill_refs) or catalog.default_skill_refs
                 if default_agent is not None
                 else catalog.default_skill_refs
             )
-            resolved_skills = catalog.resolve_skill_refs(requested_skill_refs, use_defaults=False)
-            requested_capability_ref = (
+            default_skills = catalog.resolve_skill_refs(default_skill_refs, use_defaults=False)
+            default_capability_ref = (
                 default_agent.capability_profile_ref
                 if default_agent is not None and default_agent.capability_profile_ref is not None
                 else catalog.default_capability_profile_ref
             )
-            resolved_capability = catalog.resolve_capability_profile(
-                requested_capability_ref,
+            default_capability = catalog.resolve_capability_profile(
+                default_capability_ref,
                 use_default=False,
             )
-            if resolved_capability is not None and resolved_capability.source == "user":
-                catalog.personal_capability_constraints(resolved_capability)
+            if default_capability is not None and default_capability.source == "user":
+                catalog.personal_capability_constraints(default_capability)
         except UserExecutionResolutionError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        skill_names = [skill.stored_ref for skill in resolved_skills] or None
-        skill_name = skill_names[0] if skill_names is not None and len(skill_names) == 1 else None
-        capability_profile = (
-            resolved_capability.stored_ref if resolved_capability is not None else None
-        )
-        llm_profile = (
+        default_llm_profile = (
             default_agent.llm_profile
             if default_agent is not None and default_agent.llm_profile is not None
             else execution.config.default_llm_profile
         )
-        if llm_profile is not None and llm_profile not in execution.config.llm_profiles:
+        if (
+            default_llm_profile is not None
+            and default_llm_profile not in execution.config.llm_profiles
+        ):
             raise HTTPException(
                 status_code=400,
-                detail=f"Unknown LLM profile '{llm_profile}' for tenant '{principal.tenant_id}'",
+                detail=(
+                    f"Unknown LLM profile '{default_llm_profile}' for tenant "
+                    f"'{principal.tenant_id}'"
+                ),
             )
+
+        resolved_skills = default_skills
+        resolved_capability = default_capability
+        llm_profile = default_llm_profile
+        warnings: list[ThreadArchiveImportWarning] = []
+        source_skill_refs = (
+            list(archive.thread.skill_names)
+            if archive.thread.skill_names is not None
+            else ([archive.thread.skill_name] if archive.thread.skill_name is not None else None)
+        )
+        has_source_execution_options = any(
+            (
+                source_skill_refs is not None,
+                archive.thread.capability_profile is not None,
+                archive.thread.llm_profile is not None,
+            )
+        )
+        if profile_policy == "defaults":
+            if has_source_execution_options:
+                warnings.append(
+                    ThreadArchiveImportWarning(
+                        code="execution_options_not_restored",
+                        message=(
+                            "Source skills, capability profile, and LLM profile were recorded in "
+                            "the archive but destination defaults were used."
+                        ),
+                    )
+                )
+        else:
+            if source_skill_refs is not None:
+                try:
+                    resolved_skills = catalog.resolve_skill_refs(
+                        source_skill_refs,
+                        use_defaults=False,
+                    )
+                except UserExecutionResolutionError as exc:
+                    if profile_policy == "strict":
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
+                    resolved_skills = default_skills
+                    warnings.append(
+                        ThreadArchiveImportWarning(
+                            code="skills_substituted",
+                            message=(
+                                "One or more source skills are unavailable; destination default "
+                                "skills were used."
+                            ),
+                        )
+                    )
+            if archive.thread.capability_profile is not None:
+                try:
+                    resolved_capability = catalog.resolve_capability_profile(
+                        archive.thread.capability_profile,
+                        use_default=False,
+                    )
+                    if resolved_capability is not None and resolved_capability.source == "user":
+                        catalog.personal_capability_constraints(resolved_capability)
+                except UserExecutionResolutionError as exc:
+                    if profile_policy == "strict":
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
+                    resolved_capability = default_capability
+                    warnings.append(
+                        ThreadArchiveImportWarning(
+                            code="capability_profile_substituted",
+                            message=(
+                                "The source capability profile is unavailable; the destination "
+                                "default was used."
+                            ),
+                        )
+                    )
+            if archive.thread.llm_profile is not None:
+                if archive.thread.llm_profile in execution.config.llm_profiles:
+                    llm_profile = archive.thread.llm_profile
+                elif profile_policy == "strict":
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Unknown LLM profile '{archive.thread.llm_profile}' for tenant "
+                            f"'{principal.tenant_id}'"
+                        ),
+                    )
+                else:
+                    llm_profile = default_llm_profile
+                    warnings.append(
+                        ThreadArchiveImportWarning(
+                            code="llm_profile_substituted",
+                            message=(
+                                "The source LLM profile is unavailable; the destination default "
+                                "was used."
+                            ),
+                        )
+                    )
+
+        skill_names = [skill.stored_ref for skill in resolved_skills]
+        skill_name = skill_names[0] if len(skill_names) == 1 else None
+        capability_profile = (
+            resolved_capability.stored_ref if resolved_capability is not None else None
+        )
         thread = store.create_thread(
             principal.tenant_id,
             execution_user_id=principal.user_id,
             skill_name=skill_name,
-            skill_names=skill_names,
+            skill_names=skill_names or None,
             capability_profile=capability_profile,
             llm_profile=llm_profile,
         )
@@ -2218,29 +2318,12 @@ def create_app(
             store.delete_thread(principal.tenant_id, thread.thread_id)
             raise
 
-        warnings: list[ThreadArchiveImportWarning] = []
-        if any(
-            (
-                archive.thread.skill_name,
-                archive.thread.skill_names,
-                archive.thread.capability_profile,
-                archive.thread.llm_profile,
-            )
-        ):
-            warnings.append(
-                ThreadArchiveImportWarning(
-                    code="execution_options_not_restored",
-                    message=(
-                        "Source skills, capability profile, and LLM profile were recorded in the "
-                        "archive but destination defaults were used."
-                    ),
-                )
-            )
         return ThreadArchiveImportResponse(
             thread_id=thread.thread_id,
             source_thread_id=archive.thread.source_thread_id,
             message_count=len(archive.messages),
             attachment_count=len(attachment_data),
+            profile_policy=profile_policy,
             warnings=warnings,
         )
 

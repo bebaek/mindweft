@@ -460,10 +460,16 @@ class MindweftAPIClient:
             raise RuntimeError("Mindweft thread archive response must be an object")
         return cast(dict[str, Any], response)
 
-    def import_thread_archive(self, archive: dict[str, Any]) -> dict[str, Any]:
+    def import_thread_archive(
+        self,
+        archive: dict[str, Any],
+        *,
+        profile_policy: str = "available",
+    ) -> dict[str, Any]:
+        query = _build_query({"profile_policy": profile_policy})
         response = self.request_json(
             "POST",
-            f"{self._config.base_url}/threads/import",
+            f"{self._config.base_url}/threads/import{query}",
             payload=archive,
         )
         if not isinstance(response, dict):
