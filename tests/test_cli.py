@@ -772,6 +772,7 @@ def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, caps
     }
     imported_payloads: list[dict[str, Any]] = []
     imported_policies: list[str] = []
+    imported_organization_policies: list[str] = []
 
     def urlopen(request: Any) -> _Response:
         if request.full_url.endswith("/threads/thread-2/archive"):
@@ -779,8 +780,10 @@ def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, caps
         if "/threads/import?profile_policy=" in request.full_url:
             query = urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query)
             policy = query["profile_policy"][0]
+            organization_policy = query["organization_policy"][0]
             dry_run = query.get("dry_run") == ["true"]
             imported_policies.append(policy)
+            imported_organization_policies.append(organization_policy)
             imported_payloads.append(json.loads(request.data.decode("utf-8")))
             return _Response(
                 body={
@@ -789,6 +792,7 @@ def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, caps
                     "message_count": 0,
                     "attachment_count": 0,
                     "profile_policy": policy,
+                    "organization_policy": organization_policy,
                     "dry_run": dry_run,
                     "warnings": [
                         {
@@ -821,15 +825,20 @@ def test_export_and_import_thread_archive(monkeypatch: Any, tmp_path: Path, caps
     assert cli.main(["import", str(archive_path)]) == 0
     assert cli.main(["import", str(archive_path), "--profile-policy", "strict"]) == 0
     assert cli.main(["import", str(archive_path), "--dry-run"]) == 0
-    assert imported_payloads == [archive, archive, archive]
-    assert imported_policies == ["available", "strict", "available"]
+    assert cli.main(["import", str(archive_path), "--organization-policy", "preserve"]) == 0
+    assert imported_payloads == [archive, archive, archive, archive]
+    assert imported_policies == ["available", "strict", "available", "available"]
+    assert imported_organization_policies == ["reset", "reset", "reset", "preserve"]
     captured = capsys.readouterr()
     assert captured.out == (
         "thread_id=thread-imported\n"
         "thread_id=thread-imported\n"
-        "validation=ok messages=0 attachments=0 profile_policy=available\n"
+        "validation=ok messages=0 attachments=0 profile_policy=available "
+        "organization_policy=reset\n"
+        "thread_id=thread-imported\n"
     )
     assert captured.err == (
+        "Warning: Destination defaults were used.\n"
         "Warning: Destination defaults were used.\n"
         "Warning: Destination defaults were used.\n"
         "Warning: Destination defaults were used.\n"

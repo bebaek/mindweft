@@ -637,6 +637,7 @@ def run_import_thread_archive(
     response = client.import_thread_archive(
         archive,
         profile_policy=args.profile_policy,
+        organization_policy=args.organization_policy,
         dry_run=args.dry_run,
     )
     if trace_id is not None:
@@ -651,7 +652,9 @@ def run_import_thread_archive(
                 "validation=ok "
                 f"messages={response.get('message_count', 0)} "
                 f"attachments={response.get('attachment_count', 0)} "
-                f"profile_policy={response.get('profile_policy', args.profile_policy)}"
+                f"profile_policy={response.get('profile_policy', args.profile_policy)} "
+                "organization_policy="
+                f"{response.get('organization_policy', args.organization_policy)}"
             )
             _print_thread_archive_import_warnings(response)
         return 0

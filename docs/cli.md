@@ -224,6 +224,7 @@ mindweft export <thread-id> --format archive --output thread.mindweft.json
 mindweft import thread.mindweft.json --dry-run          # validate without retaining a thread
 mindweft import thread.mindweft.json                    # restore available execution selections
 mindweft import thread.mindweft.json --profile-policy strict
+mindweft import thread.mindweft.json --organization-policy preserve
 ```
 
 The Markdown and JSON formats produce readable transcripts rather than portable thread archives.
@@ -239,16 +240,24 @@ referenced attachment bytes, so treat them as sensitive. Import always creates a
 authenticated principal, assigns new thread, message, and attachment IDs, and records source message
 IDs as provenance.
 
-The current version 2 format supports user, assistant, and tool message history, title, context, and
-referenced audio, image, and document attachments. Attachment data is base64-encoded in the JSON
+The current version 3 format supports user, assistant, and tool message history, title, context,
+referenced audio, image, and document attachments, and source pin/archive organization state.
+Attachment data is base64-encoded in the JSON
 archive with its MIME type, byte size, and SHA-256 checksum. Import verifies the manifest,
 revalidates attachment content, applies destination attachment capabilities and quotas, and rewrites
 message-part references to new attachment IDs. Base64 increases file size, so archive files are
-larger than the underlying attachment bytes. Existing version 1 text-only archives remain
-importable.
+larger than the underlying attachment bytes. Existing version 1 and 2 archives remain importable;
+those versions do not contain organization state.
 
-System messages remain rejected, and lineage and pin/archive organization state are not restored
-yet. Execution-selection handling is controlled by `--profile-policy`:
+System messages remain rejected, and lineage is not restored. Organization-state handling is
+controlled separately by `--organization-policy`:
+
+| Policy | Behavior |
+| --- | --- |
+| `reset` | Default. Use destination organization defaults (`pinned=false`, `archived=false`) and warn when recorded source state is not restored. |
+| `preserve` | Restore source pin and archive state from a version 3 archive. For older archives, use destination defaults and print a warning. |
+
+Execution-selection handling is controlled by `--profile-policy`:
 
 | Policy | Behavior |
 | --- | --- |
@@ -256,20 +265,22 @@ yet. Execution-selection handling is controlled by `--profile-policy`:
 | `defaults` | Ignore all recorded source execution selections and use destination defaults, with a summary warning. |
 | `strict` | Restore every recorded source selection and reject the import before creating a thread if any selection is unavailable. |
 
-The server API exposes the same behavior through `POST /threads/import?profile_policy=<policy>`.
+The server API exposes the same behavior through
+`POST /threads/import?profile_policy=<policy>&organization_policy=<policy>`.
 Add `dry_run=true` to perform a full import validation without retaining the imported thread. A dry
 run exercises the normal entitlement, execution-selection, message, private-value, attachment
 content, and storage-quota paths, then removes the temporary thread, attachments, and private-value
-state. It returns `thread_id: null`, `dry_run: true`, counts, the selected profile policy, and the same
-warnings a real import would return. Attachment dry runs consume the normal upload rate-limit budget.
+state. It returns `thread_id: null`, `dry_run: true`, counts, the selected profile and organization
+policies, and the same warnings a real import would return. Attachment dry runs consume the normal
+upload rate-limit budget.
 
 Successful non-dry-run imports are idempotent within a tenant by `archive_id`. Repeating an import
-with identical normalized archive content and the same profile policy returns the first response and
-thread ID without creating another thread or consuming attachment upload rate-limit budget. The
-server returns `409 Conflict` if that archive ID is already associated with different content or a
-different profile policy, or if an identical import is currently in progress. In-progress claims
-expire after one hour so interrupted imports can be retried. Deleting the imported thread removes the
-associated idempotency record and permits a new import of that archive.
+with identical normalized archive content and the same profile and organization policies returns the
+first response and thread ID without creating another thread or consuming attachment upload
+rate-limit budget. The server returns `409 Conflict` if that archive ID is already associated with
+changed content or different import policies, or if an identical import is currently in progress.
+In-progress claims expire after one hour so interrupted imports can be retried. Deleting the imported
+thread removes the associated idempotency record and permits a new import of that archive.
 
 ### Diagnostics
 

@@ -14,8 +14,9 @@ from app.message_parts import is_attachment_part, remap_attachment_ids
 from app.models import Message, MessagePart, MessageRole, Thread, ThreadContext, utc_now
 
 THREAD_ARCHIVE_SCHEMA = "mindweft.thread-archive"
-THREAD_ARCHIVE_VERSION = 2
+THREAD_ARCHIVE_VERSION = 3
 ThreadArchiveProfilePolicy = Literal["defaults", "available", "strict"]
+ThreadArchiveOrganizationPolicy = Literal["reset", "preserve"]
 MAX_ARCHIVE_MESSAGES = 10_000
 MAX_ARCHIVE_ATTACHMENTS = 1_000
 
@@ -81,14 +82,31 @@ class ThreadArchiveV1(ThreadArchiveBase):
 
 
 class ThreadArchiveV2(ThreadArchiveBase):
-    version: Literal[2] = THREAD_ARCHIVE_VERSION
+    version: Literal[2] = 2
     attachments: list[ThreadArchiveAttachment] = Field(
         default_factory=list,
         max_length=MAX_ARCHIVE_ATTACHMENTS,
     )
 
 
-ThreadArchive = Annotated[ThreadArchiveV1 | ThreadArchiveV2, Field(discriminator="version")]
+class ThreadArchiveOrganization(ThreadArchiveModel):
+    pinned: bool = False
+    archived: bool = False
+
+
+class ThreadArchiveV3(ThreadArchiveBase):
+    version: Literal[3] = THREAD_ARCHIVE_VERSION
+    attachments: list[ThreadArchiveAttachment] = Field(
+        default_factory=list,
+        max_length=MAX_ARCHIVE_ATTACHMENTS,
+    )
+    organization: ThreadArchiveOrganization
+
+
+ThreadArchive = Annotated[
+    ThreadArchiveV1 | ThreadArchiveV2 | ThreadArchiveV3,
+    Field(discriminator="version"),
+]
 
 
 class ThreadArchiveImportWarning(ThreadArchiveModel):
@@ -102,6 +120,7 @@ class ThreadArchiveImportResponse(ThreadArchiveModel):
     message_count: int
     attachment_count: int
     profile_policy: ThreadArchiveProfilePolicy
+    organization_policy: ThreadArchiveOrganizationPolicy = "reset"
     dry_run: bool = False
     warnings: list[ThreadArchiveImportWarning] = Field(default_factory=list)
 
@@ -111,7 +130,7 @@ def build_thread_archive(
     messages: list[Message],
     context: ThreadContext,
     attachment_records: Mapping[str, AttachmentRecord] | None = None,
-) -> ThreadArchiveV2:
+) -> ThreadArchiveV3:
     _reject_system_messages(messages)
     records = dict(attachment_records or {})
     referenced_ids, referenced_mime_types = _message_attachment_references(messages)
@@ -137,7 +156,7 @@ def build_thread_archive(
                 data=base64.b64encode(record.data).decode("ascii"),
             )
         )
-    return ThreadArchiveV2(
+    return ThreadArchiveV3(
         thread=ThreadArchiveThread(
             source_thread_id=thread.thread_id,
             title=thread.title,
@@ -169,6 +188,10 @@ def build_thread_archive(
             for message in messages
         ],
         attachments=attachments,
+        organization=ThreadArchiveOrganization(
+            pinned=thread.pinned_at is not None,
+            archived=thread.archived_at is not None,
+        ),
     )
 
 
@@ -250,7 +273,7 @@ def imported_messages(
 
 
 def _archive_attachments(archive: ThreadArchive) -> list[ThreadArchiveAttachment]:
-    return archive.attachments if isinstance(archive, ThreadArchiveV2) else []
+    return archive.attachments if isinstance(archive, (ThreadArchiveV2, ThreadArchiveV3)) else []
 
 
 def _archive_message_as_message(message: ThreadArchiveMessage) -> Message:
