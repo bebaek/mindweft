@@ -328,7 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="reset",
         help=(
             "How to map source pin and archive state. The default resets destination organization; "
-            "preserve restores state recorded by version 3 archives."
+            "preserve restores state recorded by version 3 and later archives."
         ),
     )
 

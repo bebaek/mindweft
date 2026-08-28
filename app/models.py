@@ -158,6 +158,12 @@ class Message(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class ThreadImportProvenance(BaseModel):
+    archive_id: str
+    source_thread_id: str
+    imported_at: datetime
+
+
 class Thread(BaseModel):
     thread_id: str = Field(default_factory=lambda: str(uuid4()))
     tenant_id: str
@@ -177,6 +183,7 @@ class Thread(BaseModel):
     import_source_archive_id: str | None = None
     import_source_thread_id: str | None = None
     imported_at: datetime | None = None
+    import_provenance_chain: list[ThreadImportProvenance] = Field(default_factory=list)
     status: ThreadStatus = ThreadStatus.IDLE
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -245,18 +252,13 @@ class ThreadListItem(BaseModel):
     updated_at: datetime
 
 
-class ThreadImportProvenance(BaseModel):
-    archive_id: str
-    source_thread_id: str
-    imported_at: datetime
-
-
 class ThreadLineageResponse(BaseModel):
     thread: ThreadListItem
     parent: ThreadListItem | None = None
     children: list[ThreadListItem] = Field(default_factory=list)
     siblings: list[ThreadListItem] = Field(default_factory=list)
     import_provenance: ThreadImportProvenance | None = None
+    import_provenance_chain: list[ThreadImportProvenance] = Field(default_factory=list)
 
 
 class ThreadListResponse(BaseModel):
