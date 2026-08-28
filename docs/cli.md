@@ -223,6 +223,7 @@ mindweft export <thread-id> --format json --output transcript.json
 mindweft export <thread-id> --format archive --output thread.mindweft.json
 mindweft export <thread-id> --format lineage-archive --output lineage.mindweft.json
 mindweft import lineage.mindweft.json                    # restore the complete fork tree
+mindweft import lineage.mindweft.json --dry-run          # validate the complete tree and quotas
 mindweft import thread.mindweft.json --dry-run          # validate without retaining a thread
 mindweft import thread.mindweft.json                    # restore available execution selections
 mindweft import thread.mindweft.json --profile-policy strict
@@ -262,8 +263,10 @@ new destination IDs for all members and their messages and attachments, remaps p
 and compaction-boundary references, and restores the tree through `POST /threads/import-lineage`.
 Profile, organization, and timestamp policies apply to every nested archive. Bundle imports are
 idempotent by bundle ID and roll back newly created members when any member fails. A nested archive
-that was imported separately is rejected rather than attached to a new tree. Lineage archives do not
-currently support `--dry-run`.
+that was imported separately is rejected rather than attached to a new tree. A lineage dry-run keeps
+all temporary members until relationship and cumulative thread, message, and attachment validation
+finishes, then removes temporary threads, attachments, private values, and idempotency records. Its
+response reports counts and warnings but returns null destination thread IDs.
 
 For single-thread archives, system messages remain rejected and fork/compaction lineage is not
 restored. Organization-state handling is controlled separately by `--organization-policy`:

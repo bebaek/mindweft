@@ -641,7 +641,9 @@ message, and attachment IDs, remaps fork and compaction boundaries, and then res
 imports use the same profile, organization, and timestamp policies as individual archives. The bundle
 operation is idempotent by bundle ID and rolls back all newly created members if any member fails;
 a nested archive that was already imported independently is rejected to avoid mutating an existing
-thread. Lineage bundle import does not currently support `--dry-run`.
+thread. Lineage bundle dry-run imports retain all temporary members together while validation runs so
+cumulative thread, message, and attachment quotas are exercised accurately; all temporary state and
+idempotency records are removed before the successful validation response is returned.
 
 Destination-local organization defaults are used unless `--organization-policy preserve` is selected.
 Likewise, imports receive fresh destination thread timestamps unless `--timestamp-policy preserve`

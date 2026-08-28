@@ -349,9 +349,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help=(
-            "Run full destination validation for a single-thread archive, including attachment "
-            "checks, then remove all imported state instead of creating a thread. Lineage archives "
-            "do not support dry-run."
+            "Run full destination validation, including cumulative thread, message, and attachment "
+            "checks, then remove all imported state instead of retaining threads."
         ),
     )
 
