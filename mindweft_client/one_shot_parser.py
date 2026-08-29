@@ -302,6 +302,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the export to this file instead of stdout.",
     )
 
+    archive_parser = subparsers.add_parser(
+        "archive",
+        help="Inspect and verify portable archive files locally.",
+    )
+    archive_subparsers = archive_parser.add_subparsers(
+        dest="archive_command",
+        required=True,
+    )
+    archive_verify_parser = archive_subparsers.add_parser(
+        "verify",
+        help="Verify whole-content and attachment checksums without contacting a server.",
+    )
+    archive_verify_parser.add_argument(
+        "path",
+        help="Path to a checksummed thread v5 or lineage v2 archive JSON file.",
+    )
+
     import_parser = subparsers.add_parser(
         "import",
         help="Import a versioned thread or lineage archive.",

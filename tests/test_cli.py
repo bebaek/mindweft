@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 import tomllib
 import urllib.error
@@ -9,6 +11,19 @@ from pathlib import Path
 from typing import Any
 
 from minigent_client import one_shot_cli as cli
+
+
+def _add_content_checksum(payload: dict[str, Any]) -> dict[str, Any]:
+    content = {key: value for key, value in payload.items() if key != "content_sha256"}
+    payload["content_sha256"] = hashlib.sha256(
+        json.dumps(
+            content,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    return payload
 
 
 class _Response:
@@ -822,6 +837,105 @@ def test_export_thread_lineage_archive(monkeypatch: Any, tmp_path: Path, capsys:
         "validation=ok threads=2 messages=3 attachments=0 profile_policy=available "
         "organization_policy=reset timestamp_policy=reset\n"
     )
+
+
+def test_archive_verify_checks_thread_and_lineage_files_offline(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    attachment_data = b"portable attachment"
+    attachment = {
+        "source_attachment_id": "attachment-1",
+        "mime_type": "text/plain",
+        "encoding": "base64",
+        "size_bytes": len(attachment_data),
+        "sha256": hashlib.sha256(attachment_data).hexdigest(),
+        "data": base64.b64encode(attachment_data).decode("ascii"),
+    }
+    thread_archive = _add_content_checksum(
+        {
+            "schema": "mindweft.thread-archive",
+            "version": 5,
+            "archive_id": "thread-archive-1",
+            "thread": {"source_thread_id": "source-thread"},
+            "context": {"summary": ""},
+            "messages": [],
+            "attachments": [attachment],
+        }
+    )
+    lineage_archive = _add_content_checksum(
+        {
+            "schema": "mindweft.thread-lineage-archive",
+            "version": 2,
+            "archive_id": "lineage-archive-1",
+            "requested_source_thread_id": "source-thread",
+            "root_source_thread_id": "source-thread",
+            "threads": [{"archive": thread_archive}],
+        }
+    )
+    thread_path = tmp_path / "thread.json"
+    lineage_path = tmp_path / "lineage.json"
+    thread_path.write_text(json.dumps(thread_archive), encoding="utf-8")
+    lineage_path.write_text(json.dumps(lineage_archive), encoding="utf-8")
+
+    monkeypatch.setattr(
+        cli.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("network access")),
+    )
+
+    assert cli.main(["--json", "archive", "verify", str(thread_path)]) == 0
+    thread_result = json.loads(capsys.readouterr().out)
+    assert thread_result == {
+        "archive_id": "thread-archive-1",
+        "attachment_count": 1,
+        "content_sha256": thread_archive["content_sha256"],
+        "schema": "mindweft.thread-archive",
+        "thread_count": 1,
+        "valid": True,
+        "version": 5,
+    }
+
+    assert cli.main(["archive", "verify", str(lineage_path)]) == 0
+    assert capsys.readouterr().out == (
+        "valid=true schema=mindweft.thread-lineage-archive version=2 "
+        "archive_id=lineage-archive-1 threads=1 attachments=1 "
+        f"content_sha256={lineage_archive['content_sha256']}\n"
+    )
+
+    attachment_tampered = json.loads(json.dumps(thread_archive))
+    attachment_tampered["attachments"][0]["data"] = base64.b64encode(b"portable attachmenU").decode(
+        "ascii"
+    )
+    _add_content_checksum(attachment_tampered)
+    thread_path.write_text(json.dumps(attachment_tampered), encoding="utf-8")
+    assert cli.main(["archive", "verify", str(thread_path)]) == 1
+    assert "attachment-1' checksum does not match" in capsys.readouterr().err
+
+
+def test_archive_verify_rejects_tampering_and_legacy_files(tmp_path: Path, capsys: Any) -> None:
+    archive = _add_content_checksum(
+        {
+            "schema": "mindweft.thread-archive",
+            "version": 5,
+            "archive_id": "thread-archive-1",
+            "thread": {"source_thread_id": "source-thread"},
+            "context": {"summary": "original"},
+            "messages": [],
+            "attachments": [],
+        }
+    )
+    archive["context"]["summary"] = "tampered"
+    path = tmp_path / "tampered.json"
+    path.write_text(json.dumps(archive), encoding="utf-8")
+
+    assert cli.main(["archive", "verify", str(path)]) == 1
+    assert "thread archive content checksum does not match" in capsys.readouterr().err
+
+    archive["version"] = 4
+    archive.pop("content_sha256")
+    path.write_text(json.dumps(archive), encoding="utf-8")
+    assert cli.main(["archive", "verify", str(path)]) == 1
+    assert "does not provide a whole-content checksum" in capsys.readouterr().err
 
 
 def test_show_imported_thread_lineage_user_and_admin(
