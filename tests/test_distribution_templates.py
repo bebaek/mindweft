@@ -53,6 +53,7 @@ def test_production_dockerfile_includes_canonical_and_compatibility_packages() -
 
     assert "COPY README.md LICENSE ./" in dockerfile
     for package in (
+        "mindweft_archive",
         "mindweft_client",
         "mindweft_config",
         "mindweft_mcp",

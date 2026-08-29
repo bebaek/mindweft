@@ -28,6 +28,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY README.md LICENSE ./
 COPY app ./app
 COPY --from=frontend-build /web/dist ./app/static/console
+COPY mindweft_archive ./mindweft_archive
 COPY mindweft_client ./mindweft_client
 COPY mindweft_config ./mindweft_config
 COPY mindweft_mcp ./mindweft_mcp
