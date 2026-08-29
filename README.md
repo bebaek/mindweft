@@ -616,6 +616,7 @@ A versioned archive format is available for portable thread round trips:
 ```bash
 uv run mindweft export <thread-id> --format archive --output thread.mindweft.json
 uv run mindweft export <thread-id> --format lineage-archive --output lineage.mindweft.json
+uv run mindweft archive verify thread.mindweft.json
 uv run mindweft import lineage.mindweft.json
 uv run mindweft import thread.mindweft.json --dry-run
 uv run mindweft import thread.mindweft.json
@@ -633,7 +634,10 @@ base64-encoded with their own declared sizes and SHA-256 checksums; import reval
 enforces destination attachment capabilities and quotas before remapping attachment IDs. System
 messages and fork/compaction lineage are not restored. Versions 1 through 4 remain importable. The
 checksum detects accidental or uncoordinated payload changes; it is not a signature and does not
-authenticate who created an archive.
+authenticate who created an archive. Use `mindweft archive verify <path>` to check v5 thread archives
+or v2 lineage bundles locally without contacting a server. It verifies whole-content and embedded
+attachment checksums; server-side import or `import --dry-run` remains the authoritative schema,
+capability, quota, and destination-policy validation.
 
 For backup and inspection of a complete fork tree, `--format lineage-archive` exports the requested
 thread's root, all descendants, each thread's nested version 5 archive, and the parent, fork-message,
