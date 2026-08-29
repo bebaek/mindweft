@@ -373,9 +373,15 @@ Thread and audit admin commands use `--tenant` to select the target tenant:
 mindweft --admin admin threads list --tenant <tenant-id>
 mindweft --admin admin threads show <thread-id> --tenant <tenant-id>
 mindweft --admin admin threads delete <thread-id> --tenant <tenant-id>
+mindweft --admin admin threads delete <thread-id> --tenant <tenant-id> --imported-lineage
 mindweft --admin admin threads prune --tenant <tenant-id> --updated-before 2026-05-01T00:00:00Z --dry-run
 mindweft --admin admin audit list --tenant <tenant-id>
 ```
+
+Administrative thread deletion follows the same imported-lineage safety rule as tenant deletion: a
+normal delete returns `409` for a multi-thread imported lineage, while `--imported-lineage` removes all
+restored members, attachment/private-value state, and related idempotency records. The resulting
+`threads.delete` audit record contains every deleted thread ID and the full affected count.
 
 ## Interactive chat
 

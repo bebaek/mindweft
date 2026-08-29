@@ -381,8 +381,11 @@ class AgentRuntime:
         )
 
     def clear_private_values(self, principal: Principal, thread_id: str) -> None:
-        self._private_value_store.clear_thread(principal.tenant_id, thread_id)
-        self._private_value_consent_store.clear_thread(principal.tenant_id, thread_id)
+        self.clear_tenant_thread_private_values(principal.tenant_id, thread_id)
+
+    def clear_tenant_thread_private_values(self, tenant_id: str, thread_id: str) -> None:
+        self._private_value_store.clear_thread(tenant_id, thread_id)
+        self._private_value_consent_store.clear_thread(tenant_id, thread_id)
 
     def pending_private_value_consents(
         self, principal: Principal, thread_id: str

@@ -653,7 +653,9 @@ uv run mindweft threads delete <member-thread-id> --imported-lineage
 
 A normal single-thread delete returns `409 Conflict` for those members. Group deletion can start from
 any imported member, removes the entire restored tree and its attachment/private-value state, and
-allows the same bundle to be imported again with fresh destination IDs.
+allows the same bundle to be imported again with fresh destination IDs. Administrators use the same
+`--imported-lineage` flag with `mindweft --admin admin threads delete`; the deletion audit records all
+removed thread IDs and the affected count.
 
 Destination-local organization defaults are used unless `--organization-policy preserve` is selected.
 Likewise, imports receive fresh destination thread timestamps unless `--timestamp-policy preserve`

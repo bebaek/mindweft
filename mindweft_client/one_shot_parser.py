@@ -793,6 +793,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     admin_threads_delete_parser.add_argument("thread_id", help="Thread ID to delete.")
     admin_threads_delete_parser.add_argument(
+        "--imported-lineage",
+        action="store_true",
+        help="Delete every thread restored by the same lineage archive import.",
+    )
+    admin_threads_delete_parser.add_argument(
         "--tenant",
         required=True,
         dest="admin_tenant_id",

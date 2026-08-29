@@ -664,6 +664,8 @@ class AdminThreadDeleteResponse(BaseModel):
     deleted: bool
     tenant_id: str
     thread_id: str
+    deleted_thread_ids: list[str] | None = None
+    deleted_count: int | None = None
 
 
 class AdminThreadPruneResponse(BaseModel):
@@ -2308,28 +2310,59 @@ def build_admin_router() -> APIRouter:
     @router.delete(
         "/tenants/{tenant_id}/threads/{thread_id}",
         response_model=AdminThreadDeleteResponse,
+        response_model_exclude_none=True,
     )
     async def delete_tenant_thread(
         tenant_id: str,
         thread_id: str,
         request: Request,
+        imported_lineage: bool = False,
         admin: Principal = Depends(require_admin_principal),
     ) -> AdminThreadDeleteResponse:
         store = _require_thread_store(request)
-        store.delete_thread(tenant_id, thread_id)
+        lineage_thread_ids = store.get_imported_lineage_thread_ids(tenant_id, thread_id)
+        if imported_lineage:
+            if lineage_thread_ids is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="thread is not a member of a completed lineage archive import",
+                )
+            deleted_thread_ids = lineage_thread_ids
+        else:
+            if lineage_thread_ids is not None and len(lineage_thread_ids) > 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "thread belongs to an imported lineage; retry with "
+                        "imported_lineage=true to delete the complete lineage"
+                    ),
+                )
+            deleted_thread_ids = [thread_id]
+
+        deleted_count = 0
+        for deleted_thread_id in reversed(deleted_thread_ids):
+            store.delete_thread(tenant_id, deleted_thread_id)
+            request.app.state.attachment_store.delete_thread(tenant_id, deleted_thread_id)
+            request.app.state.runtime.clear_tenant_thread_private_values(
+                tenant_id,
+                deleted_thread_id,
+            )
+            deleted_count += 1
         store.append_audit_record(
             AuditRecord(
                 tenant_id=tenant_id,
                 actor_user_id=admin.user_id,
                 action="threads.delete",
-                affected_count=1,
-                thread_ids=[thread_id],
+                affected_count=deleted_count,
+                thread_ids=deleted_thread_ids,
             )
         )
         return AdminThreadDeleteResponse(
             deleted=True,
             tenant_id=tenant_id,
             thread_id=thread_id,
+            deleted_thread_ids=deleted_thread_ids if imported_lineage else None,
+            deleted_count=deleted_count if imported_lineage else None,
         )
 
     @router.get(
