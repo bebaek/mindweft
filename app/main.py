@@ -188,13 +188,17 @@ from app.thread_archives import (
     ThreadArchiveV2,
     ThreadArchiveV3,
     ThreadArchiveV4,
-    ThreadLineageArchiveEntry,
+    ThreadArchiveV5,
+    ThreadLineageArchive,
+    ThreadLineageArchiveEntryV2,
     ThreadLineageArchiveImportedThread,
     ThreadLineageArchiveImportResponse,
     ThreadLineageArchiveImportWarning,
-    ThreadLineageArchiveV1,
+    ThreadLineageArchiveV2,
+    archive_content_sha256,
     build_thread_archive,
     imported_messages,
+    lineage_archive_content_sha256,
     validate_importable_thread_archive,
 )
 from app.thread_title_service import (
@@ -511,7 +515,7 @@ def _build_exported_thread_archive(
     thread: Thread,
     *,
     messages: list[Message] | None = None,
-) -> ThreadArchiveV4:
+) -> ThreadArchiveV5:
     store = request.app.state.store
     exported_messages = (
         messages if messages is not None else store.list_messages(tenant_id, thread.thread_id)
@@ -1950,25 +1954,25 @@ def create_app(
             offset=offset,
         )
 
-    @app.get("/threads/{thread_id}/archive", response_model=ThreadArchiveV4)
+    @app.get("/threads/{thread_id}/archive", response_model=ThreadArchiveV5)
     async def export_thread_archive(
         thread_id: str,
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
-    ) -> ThreadArchiveV4:
+    ) -> ThreadArchiveV5:
         store = request.app.state.store
         thread = store.get_thread(principal.tenant_id, thread_id)
         return _build_exported_thread_archive(request, principal.tenant_id, thread)
 
     @app.get(
         "/threads/{thread_id}/lineage/archive",
-        response_model=ThreadLineageArchiveV1,
+        response_model=ThreadLineageArchiveV2,
     )
     async def export_thread_lineage_archive(
         thread_id: str,
         request: Request,
         principal: Principal = Depends(require_active_tenant_principal),
-    ) -> ThreadLineageArchiveV1:
+    ) -> ThreadLineageArchiveV2:
         store = request.app.state.store
         requested = store.get_thread(principal.tenant_id, thread_id)
         tenant_threads = store.list_threads(principal.tenant_id)
@@ -2013,7 +2017,7 @@ def create_app(
                 )
             pending.extend(children_by_parent.get(current.thread_id, []))
 
-        entries: list[ThreadLineageArchiveEntry] = []
+        entries: list[ThreadLineageArchiveEntryV2] = []
         message_count = 0
         attachment_count = 0
         for thread in lineage_threads:
@@ -2038,7 +2042,7 @@ def create_app(
                 )
             parent_is_included = thread.parent_thread_id in included_ids
             entries.append(
-                ThreadLineageArchiveEntry(
+                ThreadLineageArchiveEntryV2(
                     archive=_build_exported_thread_archive(
                         request,
                         principal.tenant_id,
@@ -2055,10 +2059,14 @@ def create_app(
                 )
             )
 
-        return ThreadLineageArchiveV1(
+        lineage_archive = ThreadLineageArchiveV2(
             requested_source_thread_id=requested.thread_id,
             root_source_thread_id=root.thread_id,
             threads=entries,
+            content_sha256="0" * 64,
+        )
+        return lineage_archive.model_copy(
+            update={"content_sha256": lineage_archive_content_sha256(lineage_archive)}
         )
 
     @app.get("/threads/{thread_id}/lineage", response_model=ThreadLineageResponse)
@@ -2387,7 +2395,7 @@ def create_app(
                         )
                     )
 
-        if isinstance(archive, (ThreadArchiveV3, ThreadArchiveV4)):
+        if isinstance(archive, (ThreadArchiveV3, ThreadArchiveV4, ThreadArchiveV5)):
             if organization_policy == "reset" and (
                 archive.organization.pinned or archive.organization.archived
             ):
@@ -2413,7 +2421,9 @@ def create_app(
 
         imported_at = utc_now()
         inherited_provenance = (
-            archive.import_provenance_chain if isinstance(archive, ThreadArchiveV4) else []
+            archive.import_provenance_chain
+            if isinstance(archive, (ThreadArchiveV4, ThreadArchiveV5))
+            else []
         )
         if len(inherited_provenance) >= MAX_ARCHIVE_PROVENANCE_HOPS:
             warnings.append(
@@ -2497,7 +2507,9 @@ def create_app(
             attachment_id_map: dict[str, str] = {}
             archive_attachments = (
                 {attachment.source_attachment_id: attachment for attachment in archive.attachments}
-                if isinstance(archive, (ThreadArchiveV2, ThreadArchiveV3, ThreadArchiveV4))
+                if isinstance(
+                    archive, (ThreadArchiveV2, ThreadArchiveV3, ThreadArchiveV4, ThreadArchiveV5)
+                )
                 else {}
             )
             for source_attachment_id, data in attachment_data.items():
@@ -2592,7 +2604,7 @@ def create_app(
                 summarized_message_count=archive.context.summarized_message_count,
             )
             if organization_policy == "preserve" and isinstance(
-                archive, (ThreadArchiveV3, ThreadArchiveV4)
+                archive, (ThreadArchiveV3, ThreadArchiveV4, ThreadArchiveV5)
             ):
                 store.set_thread_organization(
                     principal.tenant_id,
@@ -2673,7 +2685,7 @@ def create_app(
         status_code=201,
     )
     async def import_thread_lineage_archive(
-        archive: ThreadLineageArchiveV1,
+        archive: ThreadLineageArchive,
         request: Request,
         profile_policy: ThreadArchiveProfilePolicy = "available",
         organization_policy: ThreadArchiveOrganizationPolicy = "reset",
@@ -2681,6 +2693,12 @@ def create_app(
         dry_run: bool = False,
         principal: Principal = Depends(require_active_tenant_principal),
     ) -> ThreadLineageArchiveImportResponse:
+        if isinstance(archive, ThreadLineageArchiveV2) and (
+            archive.content_sha256 != lineage_archive_content_sha256(archive)
+        ):
+            raise HTTPException(
+                status_code=422, detail="lineage archive content checksum does not match"
+            )
         store = request.app.state.store
         import_key = f"lineage:{archive.archive_id}"
         claim_token: str | None = None
@@ -2746,13 +2764,15 @@ def create_app(
 
         try:
             for entry in archive.threads:
-                member_archive = (
-                    entry.archive.model_copy(
-                        update={"archive_id": f"dry-run:{uuid4()}:{entry.archive.archive_id}"}
+                member_archive = entry.archive
+                if dry_run:
+                    member_archive = member_archive.model_copy(
+                        update={"archive_id": f"dry-run:{uuid4()}:{member_archive.archive_id}"}
                     )
-                    if dry_run
-                    else entry.archive
-                )
+                    if isinstance(member_archive, ThreadArchiveV5):
+                        member_archive = member_archive.model_copy(
+                            update={"content_sha256": archive_content_sha256(member_archive)}
+                        )
                 imported = await import_thread_archive(
                     archive=member_archive,
                     request=request,

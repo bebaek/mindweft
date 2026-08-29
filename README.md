@@ -624,18 +624,23 @@ uv run mindweft import thread.mindweft.json --timestamp-policy preserve
 ```
 
 Archive export uses the server's protected message representation, excludes tenant and user
-ownership, and imports into a new thread owned by the authenticated principal. Version 4 preserves
+ownership, and imports into a new thread owned by the authenticated principal. Version 5 preserves
 core user, assistant, and tool messages, title, context, referenced audio, image, and document
-attachments, source pin/archive organization state, and a bounded import-provenance chain. Attachment
-bytes are base64-encoded with declared sizes and SHA-256 checksums; import revalidates content and
+attachments, source pin/archive organization state, and a bounded import-provenance chain. It adds a
+canonical SHA-256 checksum over the full archive payload; import rejects changes to metadata,
+messages, context, organization, provenance, or the attachment manifest. Attachment bytes are
+base64-encoded with their own declared sizes and SHA-256 checksums; import revalidates content and
 enforces destination attachment capabilities and quotas before remapping attachment IDs. System
-messages and fork/compaction lineage are not restored.
+messages and fork/compaction lineage are not restored. Versions 1 through 4 remain importable. The
+checksum detects accidental or uncoordinated payload changes; it is not a signature and does not
+authenticate who created an archive.
 
 For backup and inspection of a complete fork tree, `--format lineage-archive` exports the requested
-thread's root, all descendants, each thread's nested version 4 archive, and the parent, fork-message,
+thread's root, all descendants, each thread's nested version 5 archive, and the parent, fork-message,
 and compaction-boundary source IDs needed to reconstruct relationships. The bundle schema is
-`mindweft.thread-lineage-archive` version 1 and is also available from
-`GET /threads/{thread_id}/lineage/archive`. Export is capped at 100 threads, 10,000 messages, and 1,000
+`mindweft.thread-lineage-archive` version 2, includes its own canonical SHA-256 checksum, and is also
+available from `GET /threads/{thread_id}/lineage/archive`. Version 1 lineage bundles remain importable.
+Export is capped at 100 threads, 10,000 messages, and 1,000
 attachments across the bundle. Importing the bundle creates every member with new destination thread,
 message, and attachment IDs, remaps fork and compaction boundaries, and then restores the tree. Member
 imports use the same profile, organization, and timestamp policies as individual archives. The bundle

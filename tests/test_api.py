@@ -9,6 +9,7 @@ from collections import deque
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import httpx
 import jwt
@@ -104,6 +105,23 @@ OTHER_TOKEN_HEADERS = {"Authorization": "Bearer token-2"}
 PNG_1X1_BASE64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
+
+
+def _refresh_archive_content_checksums(payload: dict[str, Any]) -> None:
+    if payload.get("schema") == "mindweft.thread-lineage-archive":
+        for entry in payload.get("threads", []):
+            _refresh_archive_content_checksums(entry["archive"])
+    if "content_sha256" not in payload:
+        return
+    content = {key: value for key, value in payload.items() if key != "content_sha256"}
+    payload["content_sha256"] = hashlib.sha256(
+        json.dumps(
+            content,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _pdf_bytes(*, pages: int = 1, encrypted: bool = False) -> bytes:
@@ -2155,7 +2173,8 @@ def test_thread_lineage_archive_exports_complete_fork_tree(store_kind: str, tmp_
     assert response.status_code == 200
     bundle = response.json()
     assert bundle["schema"] == "mindweft.thread-lineage-archive"
-    assert bundle["version"] == 1
+    assert bundle["version"] == 2
+    assert len(bundle["content_sha256"]) == 64
     assert bundle["requested_source_thread_id"] == grandchild.thread_id
     assert bundle["root_source_thread_id"] == root.thread_id
     entries = {entry["archive"]["thread"]["source_thread_id"]: entry for entry in bundle["threads"]}
@@ -2175,10 +2194,35 @@ def test_thread_lineage_archive_exports_complete_fork_tree(store_kind: str, tmp_
     assert entries[sibling.thread_id]["fork_source_message_id"] == second.id
     assert entries[sibling.thread_id]["compacted_through_source_message_id"] == first.id
     assert entries[sibling.thread_id]["archive"]["context"]["summary"] == "first was compacted"
-    assert all(entry["archive"]["version"] == 4 for entry in entries.values())
+    assert all(entry["archive"]["version"] == 5 for entry in entries.values())
+    assert all(len(entry["archive"]["content_sha256"]) == 64 for entry in entries.values())
     assert all(
         entry["archive"]["schema"] == "mindweft.thread-archive" for entry in entries.values()
     )
+    tampered_bundle = json.loads(json.dumps(bundle))
+    tampered_bundle["threads"][0]["archive"]["context"]["summary"] = "tampered"
+    rejected_tampered_bundle = client.post(
+        "/threads/import-lineage",
+        headers=AUTH_HEADERS,
+        json=tampered_bundle,
+    )
+    assert rejected_tampered_bundle.status_code == 422
+    assert rejected_tampered_bundle.json()["detail"] == (
+        "lineage archive content checksum does not match"
+    )
+    legacy_bundle = json.loads(json.dumps(bundle))
+    legacy_bundle["version"] = 1
+    del legacy_bundle["content_sha256"]
+    for entry in legacy_bundle["threads"]:
+        entry["archive"]["version"] = 4
+        del entry["archive"]["content_sha256"]
+    legacy_dry_run = client.post(
+        "/threads/import-lineage?dry_run=true",
+        headers=AUTH_HEADERS,
+        json=legacy_bundle,
+    )
+    assert legacy_dry_run.status_code == 201
+    assert legacy_dry_run.json()["dry_run"] is True
 
     imported = client.post("/threads/import-lineage", headers=AUTH_HEADERS, json=bundle)
     assert imported.status_code == 201
@@ -2244,6 +2288,7 @@ def test_thread_lineage_archive_exports_complete_fork_tree(store_kind: str, tmp_
     assert len(store.list_threads("tenant-1")) == 8
     conflicting_bundle = json.loads(json.dumps(bundle))
     conflicting_bundle["threads"][0]["archive"]["thread"]["title"] = "changed"
+    _refresh_archive_content_checksums(conflicting_bundle)
     conflict = client.post(
         "/threads/import-lineage",
         headers=AUTH_HEADERS,
@@ -2322,6 +2367,7 @@ def test_thread_lineage_archive_import_rolls_back_all_new_threads(
     ).json()
     invalid_bundle = json.loads(json.dumps(bundle))
     invalid_bundle["threads"][1]["archive"]["thread"]["llm_profile"] = "missing-profile"
+    _refresh_archive_content_checksums(invalid_bundle)
 
     dry_run = client.post(
         "/threads/import-lineage?dry_run=true",
@@ -9055,7 +9101,8 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert exported.status_code == 200
     archive = exported.json()
     assert archive["schema"] == "mindweft.thread-archive"
-    assert archive["version"] == 4
+    assert archive["version"] == 5
+    assert len(archive["content_sha256"]) == 64
     assert archive["organization"] == {"pinned": False, "archived": False}
     assert archive["import_provenance_chain"] == []
     assert archive["thread"]["source_thread_id"] == source_thread_id
@@ -9066,7 +9113,18 @@ def test_thread_archive_api_round_trip_preserves_core_history(
     assert [message["role"] for message in archive["messages"]] == ["user", "assistant"]
     assert all("created_by" not in message for message in archive["messages"])
     source_message_ids = [message["source_message_id"] for message in archive["messages"]]
+    tampered_archive = json.loads(json.dumps(archive))
+    tampered_archive["context"]["summary"] = "tampered"
+    rejected_tampered_archive = client.post(
+        "/threads/import",
+        headers=AUTH_HEADERS,
+        json=tampered_archive,
+    )
+    assert rejected_tampered_archive.status_code == 422
+    assert rejected_tampered_archive.json()["detail"] == "archive content checksum does not match"
+
     archive["thread"]["llm_profile"] = "source-only-profile"
+    _refresh_archive_content_checksums(archive)
 
     imported = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
     assert imported.status_code == 201
@@ -9137,6 +9195,7 @@ def test_thread_archive_api_round_trip_preserves_core_history(
 
     changed_archive = json.loads(json.dumps(archive))
     changed_archive["thread"]["title"] = "Changed archive content"
+    _refresh_archive_content_checksums(changed_archive)
     conflict = client.post("/threads/import", headers=AUTH_HEADERS, json=changed_archive)
     assert conflict.status_code == 409
     assert "archive_id was already used" in conflict.json()["detail"]
@@ -9338,7 +9397,7 @@ def test_thread_archive_organization_policy_resets_preserves_and_supports_v2(
         f"/threads/{source_thread_id}/archive",
         headers=AUTH_HEADERS,
     ).json()
-    assert archive["version"] == 4
+    assert archive["version"] == 5
     assert archive["organization"] == {"pinned": True, "archived": True}
     assert archive["import_provenance_chain"] == []
 
@@ -9360,6 +9419,7 @@ def test_thread_archive_organization_policy_resets_preserves_and_supports_v2(
 
     preserved_archive = json.loads(json.dumps(archive))
     preserved_archive["archive_id"] = "organization-preserve"
+    _refresh_archive_content_checksums(preserved_archive)
     preserved = client.post(
         "/threads/import?organization_policy=preserve",
         headers=AUTH_HEADERS,
@@ -9374,6 +9434,7 @@ def test_thread_archive_organization_policy_resets_preserves_and_supports_v2(
     v2_archive = json.loads(json.dumps(archive))
     v2_archive["archive_id"] = "organization-v2"
     v2_archive["version"] = 2
+    del v2_archive["content_sha256"]
     del v2_archive["organization"]
     del v2_archive["import_provenance_chain"]
     imported_v2 = client.post(
@@ -9409,8 +9470,9 @@ def test_thread_archive_timestamp_policy_resets_preserves_and_is_idempotent(
     ).json()
     source_created_at = datetime(2020, 1, 2, 3, 4, tzinfo=timezone.utc)
     source_updated_at = datetime(2020, 2, 3, 4, 5, tzinfo=timezone.utc)
-    archive["thread"]["created_at"] = source_created_at.isoformat()
-    archive["thread"]["updated_at"] = source_updated_at.isoformat()
+    archive["thread"]["created_at"] = source_created_at.isoformat().replace("+00:00", "Z")
+    archive["thread"]["updated_at"] = source_updated_at.isoformat().replace("+00:00", "Z")
+    _refresh_archive_content_checksums(archive)
 
     reset = client.post("/threads/import", headers=AUTH_HEADERS, json=archive)
     assert reset.status_code == 201
@@ -9428,6 +9490,7 @@ def test_thread_archive_timestamp_policy_resets_preserves_and_is_idempotent(
 
     preserved_archive = json.loads(json.dumps(archive))
     preserved_archive["archive_id"] = "timestamps-preserve"
+    _refresh_archive_content_checksums(preserved_archive)
     preserved = client.post(
         "/threads/import?timestamp_policy=preserve",
         headers=AUTH_HEADERS,
@@ -9464,7 +9527,7 @@ def test_thread_archive_carries_bounded_import_provenance_chain(
         f"/threads/{source_thread_id}/archive",
         headers=AUTH_HEADERS,
     ).json()
-    assert first_archive["version"] == 4
+    assert first_archive["version"] == 5
     assert first_archive["import_provenance_chain"] == []
 
     first_import = client.post("/threads/import", headers=AUTH_HEADERS, json=first_archive)
@@ -9503,6 +9566,7 @@ def test_thread_archive_carries_bounded_import_provenance_chain(
         }
         for index in range(64)
     ]
+    _refresh_archive_content_checksums(bounded_archive)
     bounded_import = client.post("/threads/import", headers=AUTH_HEADERS, json=bounded_archive)
     assert bounded_import.status_code == 201
     assert any(
