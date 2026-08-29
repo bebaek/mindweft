@@ -731,6 +731,32 @@ def run_admin_threads_list(
     return 0
 
 
+def run_admin_threads_imported_lineage(
+    args: argparse.Namespace,
+    client: MindweftAPIClient,
+    trace_id: str | None,
+) -> int:
+    response = client.get_admin_imported_thread_lineage(
+        args.admin_tenant_id,
+        args.thread_id,
+    )
+    if args.json:
+        output: dict[str, Any] = dict(response)
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    print(
+        f"tenant_id={args.admin_tenant_id} archive_id={response.get('archive_id')} "
+        f"root_thread_id={response.get('root_thread_id')} "
+        f"requested_thread_id={response.get('requested_thread_id')} "
+        f"threads={response.get('thread_count', 0)}"
+    )
+    return 0
+
+
 def run_admin_threads_delete(
     args: argparse.Namespace,
     client: MindweftAPIClient,

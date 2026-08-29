@@ -159,6 +159,12 @@ class ThreadStore(Protocol):
         claim_token: str,
     ) -> None: ...
 
+    def get_imported_lineage_import(
+        self,
+        tenant_id: str,
+        thread_id: str,
+    ) -> dict[str, Any] | None: ...
+
     def get_imported_lineage_thread_ids(
         self,
         tenant_id: str,
@@ -527,11 +533,11 @@ class InMemoryThreadStore:
             ):
                 del self._archive_imports[key]
 
-    def get_imported_lineage_thread_ids(
+    def get_imported_lineage_import(
         self,
         tenant_id: str,
         thread_id: str,
-    ) -> list[str] | None:
+    ) -> dict[str, Any] | None:
         with self._lock:
             self._require_thread(tenant_id, thread_id)
             for (record_tenant_id, archive_id), record in self._archive_imports.items():
@@ -539,8 +545,17 @@ class InMemoryThreadStore:
                     continue
                 thread_ids = _lineage_import_thread_ids(record.response_payload)
                 if thread_ids is not None and thread_id in thread_ids:
-                    return thread_ids
+                    if record.response_payload is None:
+                        raise RuntimeError("stored lineage archive import response is missing")
+                    return dict(record.response_payload)
             return None
+
+    def get_imported_lineage_thread_ids(
+        self,
+        tenant_id: str,
+        thread_id: str,
+    ) -> list[str] | None:
+        return _lineage_import_thread_ids(self.get_imported_lineage_import(tenant_id, thread_id))
 
     def fork_thread(
         self,
@@ -1400,11 +1415,11 @@ class SQLiteThreadStore:
                 (tenant_id, archive_id, claim_token),
             )
 
-    def get_imported_lineage_thread_ids(
+    def get_imported_lineage_import(
         self,
         tenant_id: str,
         thread_id: str,
-    ) -> list[str] | None:
+    ) -> dict[str, Any] | None:
         with self._lock, self._connection() as conn:
             self._require_thread(conn, tenant_id, thread_id)
             rows = conn.execute(
@@ -1423,8 +1438,15 @@ class SQLiteThreadStore:
                     raise RuntimeError("stored lineage archive import response is invalid")
                 thread_ids = _lineage_import_thread_ids(parsed_payload)
                 if thread_ids is not None and thread_id in thread_ids:
-                    return thread_ids
+                    return parsed_payload
             return None
+
+    def get_imported_lineage_thread_ids(
+        self,
+        tenant_id: str,
+        thread_id: str,
+    ) -> list[str] | None:
+        return _lineage_import_thread_ids(self.get_imported_lineage_import(tenant_id, thread_id))
 
     def fork_thread(
         self,

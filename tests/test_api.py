@@ -2213,6 +2213,24 @@ def test_thread_lineage_archive_exports_complete_fork_tree(store_kind: str, tmp_
         imported_child.import_source_archive_id == entries[child.thread_id]["archive"]["archive_id"]
     )
 
+    inspected = client.get(
+        f"/threads/{destination_ids[sibling.thread_id]}/imported-lineage",
+        headers=AUTH_HEADERS,
+    )
+    assert inspected.status_code == 200
+    assert inspected.json() == imported_payload
+    admin_inspected = client.get(
+        f"/admin/tenants/tenant-1/threads/{destination_ids[child.thread_id]}/imported-lineage",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_inspected.status_code == 200
+    assert admin_inspected.json() == imported_payload
+    source_inspection = client.get(
+        f"/threads/{root.thread_id}/imported-lineage",
+        headers=AUTH_HEADERS,
+    )
+    assert source_inspection.status_code == 404
+
     replay = client.post("/threads/import-lineage", headers=AUTH_HEADERS, json=bundle)
     assert replay.status_code == 201
     assert replay.json() == imported_payload

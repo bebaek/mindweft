@@ -648,14 +648,17 @@ completed multi-thread lineage import must be deleted as a group so bundle and n
 records cannot become partially stale:
 
 ```bash
+uv run mindweft threads imported-lineage <member-thread-id>
 uv run mindweft threads delete <member-thread-id> --imported-lineage
 ```
 
-A normal single-thread delete returns `409 Conflict` for those members. Group deletion can start from
+The inspection command returns the bundle ID, root and originally requested destination IDs, complete
+source-to-destination thread mapping, aggregate counts, applied policies, and per-source warnings. A
+normal single-thread delete returns `409 Conflict` for those members. Group deletion can start from
 any imported member, removes the entire restored tree and its attachment/private-value state, and
-allows the same bundle to be imported again with fresh destination IDs. Administrators use the same
-`--imported-lineage` flag with `mindweft --admin admin threads delete`; the deletion audit records all
-removed thread IDs and the affected count.
+allows the same bundle to be imported again with fresh destination IDs. Administrators can inspect
+with `mindweft --admin admin threads imported-lineage` and use the same `--imported-lineage` deletion
+flag; the deletion audit records all removed thread IDs and the affected count.
 
 Destination-local organization defaults are used unless `--organization-policy preserve` is selected.
 Likewise, imports receive fresh destination thread timestamps unless `--timestamp-policy preserve`
