@@ -64,6 +64,7 @@ from app.oauth import (
     tenant_oauth_credential_key,
 )
 from app.session_auth import validate_session_auth_settings
+from app.thread_archives import ThreadLineageArchiveImportResponse
 from mindweft_config.unified_config import normalize_mindweft_env
 
 ADMIN_DB_PATH_ENV = "MINIGENT_ADMIN_DB_PATH"
@@ -2306,6 +2307,28 @@ def build_admin_router() -> APIRouter:
             context=_thread_context_response(context),
             messages=messages,
         )
+
+    @router.get(
+        "/tenants/{tenant_id}/threads/{thread_id}/imported-lineage",
+        response_model=ThreadLineageArchiveImportResponse,
+    )
+    async def get_tenant_imported_thread_lineage(
+        tenant_id: str,
+        thread_id: str,
+        request: Request,
+        admin: Principal = Depends(require_admin_principal),
+    ) -> ThreadLineageArchiveImportResponse:
+        _ = admin
+        response_payload = _require_thread_store(request).get_imported_lineage_import(
+            tenant_id,
+            thread_id,
+        )
+        if response_payload is None:
+            raise HTTPException(
+                status_code=404,
+                detail="thread is not a member of a completed lineage archive import",
+            )
+        return ThreadLineageArchiveImportResponse.model_validate(response_payload)
 
     @router.delete(
         "/tenants/{tenant_id}/threads/{thread_id}",

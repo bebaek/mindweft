@@ -920,6 +920,37 @@ def run_threads_show(
     return 0
 
 
+def run_threads_imported_lineage(
+    args: argparse.Namespace,
+    client: MindweftAPIClient,
+    trace_id: str | None,
+) -> int:
+    response = client.get_imported_thread_lineage(args.thread_id)
+    if args.json:
+        output = dict(response)
+        if trace_id is not None:
+            output["trace_id"] = trace_id
+        print_json(output)
+        return 0
+    if trace_id is not None:
+        print(f"trace_id={trace_id}")
+    print(
+        f"archive_id={response.get('archive_id')} "
+        f"root_thread_id={response.get('root_thread_id')} "
+        f"requested_thread_id={response.get('requested_thread_id')} "
+        f"threads={response.get('thread_count', 0)}"
+    )
+    imported_threads = response.get("threads")
+    if isinstance(imported_threads, list):
+        for imported_thread in imported_threads:
+            if isinstance(imported_thread, dict):
+                print(
+                    f"{imported_thread.get('source_thread_id')} -> "
+                    f"{imported_thread.get('thread_id')}"
+                )
+    return 0
+
+
 def run_threads_delete(
     args: argparse.Namespace,
     client: MindweftAPIClient,

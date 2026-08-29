@@ -431,6 +431,12 @@ def build_parser() -> argparse.ArgumentParser:
         )
         organization_parser.add_argument("thread_id", help="Thread ID to update.")
 
+    threads_imported_lineage_parser = threads_subparsers.add_parser(
+        "imported-lineage",
+        help="Show the completed lineage archive import containing a thread.",
+    )
+    threads_imported_lineage_parser.add_argument("thread_id", help="Imported member thread ID.")
+
     threads_delete_parser = threads_subparsers.add_parser("delete", help="Delete a thread.")
     threads_delete_parser.add_argument("thread_id", help="Thread ID to delete.")
     threads_delete_parser.add_argument(
@@ -782,6 +788,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     admin_threads_show_parser.add_argument("thread_id", help="Thread ID to inspect.")
     admin_threads_show_parser.add_argument(
+        "--tenant",
+        required=True,
+        dest="admin_tenant_id",
+        help="Tenant ID that owns the thread.",
+    )
+
+    admin_threads_imported_lineage_parser = admin_threads_subparsers.add_parser(
+        "imported-lineage",
+        help="Show the completed lineage archive import containing a tenant thread.",
+    )
+    admin_threads_imported_lineage_parser.add_argument(
+        "thread_id", help="Imported member thread ID."
+    )
+    admin_threads_imported_lineage_parser.add_argument(
         "--tenant",
         required=True,
         dest="admin_tenant_id",

@@ -16,6 +16,7 @@ from mindweft_client.admin_commands import (
     run_admin_tenants_transition,
     run_admin_tenants_update,
     run_admin_threads_delete,
+    run_admin_threads_imported_lineage,
     run_admin_threads_list,
     run_admin_threads_prune,
     run_admin_threads_show,
@@ -28,6 +29,7 @@ from mindweft_client.chat_commands import (
     run_resume,
     run_threads_create,
     run_threads_delete,
+    run_threads_imported_lineage,
     run_threads_list,
     run_threads_organization,
     run_threads_retitle,
@@ -79,6 +81,8 @@ def dispatch_command(
             return run_threads_show(args, client, trace_id)
         if args.threads_command in {"pin", "unpin", "archive", "restore"}:
             return run_threads_organization(args, client, trace_id)
+        if args.threads_command == "imported-lineage":
+            return run_threads_imported_lineage(args, client, trace_id)
         if args.threads_command == "delete":
             return run_threads_delete(args, client, base_url, trace_id)
     if args.command == "admin":
@@ -111,6 +115,8 @@ def dispatch_command(
                 return run_admin_threads_list(args, client, trace_id)
             if args.admin_threads_command == "show":
                 return run_admin_threads_show(args, client, trace_id)
+            if args.admin_threads_command == "imported-lineage":
+                return run_admin_threads_imported_lineage(args, client, trace_id)
             if args.admin_threads_command == "delete":
                 return run_admin_threads_delete(args, client, trace_id)
             if args.admin_threads_command == "prune":

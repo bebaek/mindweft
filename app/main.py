@@ -3724,6 +3724,26 @@ def create_app(
             thread_id,
         )
 
+    @app.get(
+        "/threads/{thread_id}/imported-lineage",
+        response_model=ThreadLineageArchiveImportResponse,
+    )
+    async def get_imported_thread_lineage(
+        thread_id: str,
+        request: Request,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> ThreadLineageArchiveImportResponse:
+        response_payload = request.app.state.store.get_imported_lineage_import(
+            principal.tenant_id,
+            thread_id,
+        )
+        if response_payload is None:
+            raise HTTPException(
+                status_code=404,
+                detail="thread is not a member of a completed lineage archive import",
+            )
+        return ThreadLineageArchiveImportResponse.model_validate(response_payload)
+
     @app.delete(
         "/threads/{thread_id}/imported-lineage",
         response_model=ImportedLineageDeleteResponse,

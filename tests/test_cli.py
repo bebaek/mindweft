@@ -824,6 +824,62 @@ def test_export_thread_lineage_archive(monkeypatch: Any, tmp_path: Path, capsys:
     )
 
 
+def test_show_imported_thread_lineage_user_and_admin(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    response = {
+        "archive_id": "bundle-1",
+        "root_thread_id": "thread-root",
+        "requested_thread_id": "thread-child",
+        "threads": [
+            {"source_thread_id": "source-root", "thread_id": "thread-root"},
+            {"source_thread_id": "source-child", "thread_id": "thread-child"},
+        ],
+        "thread_count": 2,
+        "message_count": 3,
+        "attachment_count": 0,
+        "profile_policy": "available",
+        "organization_policy": "reset",
+        "timestamp_policy": "reset",
+        "dry_run": False,
+        "warnings": [],
+    }
+    calls: list[tuple[str, str]] = []
+
+    def urlopen(request: Any) -> _Response:
+        calls.append((request.get_method(), request.full_url))
+        return _Response(body=response)
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    assert cli.main(["--json", "threads", "imported-lineage", "thread-child"]) == 0
+    assert json.loads(capsys.readouterr().out) == response
+    assert (
+        cli.main(
+            [
+                "--admin",
+                "--json",
+                "admin",
+                "threads",
+                "imported-lineage",
+                "thread-child",
+                "--tenant",
+                "tenant-a",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == response
+    assert calls == [
+        ("GET", "http://127.0.0.1:8000/threads/thread-child/imported-lineage"),
+        (
+            "GET",
+            "http://127.0.0.1:8000/admin/tenants/tenant-a/threads/thread-child/imported-lineage",
+        ),
+    ]
+
+
 def test_delete_imported_thread_lineage(monkeypatch: Any, tmp_path: Path, capsys: Any) -> None:
     calls: list[tuple[str, str]] = []
 
