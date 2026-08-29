@@ -57,9 +57,9 @@ uv run mindweft chat
 The legacy `minigent` and `minigent-client` commands remain available as compatibility aliases.
 Canonical Python imports are also available from `mindweft_archive`, `mindweft_client`,
 `mindweft_config`, `mindweft_mcp`, and `mindweft_workspace`; these packages own the implementations.
-`mindweft_archive` exposes the shared portable-archive integrity contract. Legacy `minigent_*` aliases
-for the client, config, MCP, and workspace packages remain available and resolve public modules to the
-same implementation objects.
+`mindweft_archive` exposes the shared portable-archive inspection and integrity contract. Legacy
+`minigent_*` aliases for the client, config, MCP, and workspace packages remain available and resolve
+public modules to the same implementation objects.
 The installable distribution is named `mindweft`; legacy `minigent_*` import packages and
 `minigent-*` console aliases remain included for source and command compatibility. See
 [Migrating from Minigent](docs/migrating-from-minigent.md) for upgrade guidance and the
@@ -637,10 +637,11 @@ enforces destination attachment capabilities and quotas before remapping attachm
 messages and fork/compaction lineage are not restored. Versions 1 through 4 remain importable. The
 checksum detects accidental or uncoordinated payload changes; it is not a signature and does not
 authenticate who created an archive. Server and client tooling share the public
-`mindweft_archive.content_sha256` implementation so canonicalization cannot drift across layers.
+`mindweft_archive.content_sha256`, `inspect_archive_payload`, and `verify_archive_payload`
+implementations so canonicalization and offline validation cannot drift across layers.
 Use `mindweft archive inspect <path>` to summarize any supported thread or lineage archive locally,
-including IDs, counts, and checksum availability. Inspection
-validates every available whole-content and attachment checksum, while legacy formats explicitly
+including IDs, counts, and checksum availability. Inspection validates every available whole-content
+and attachment checksum, while legacy formats explicitly
 report whole-content checksums as unavailable. Use `mindweft archive verify <path>` when a checksummed
 v5 thread archive or v2 lineage bundle is required. Both commands run without contacting a server.
 Server-side import or `import --dry-run` remains the authoritative schema, capability, quota, and
