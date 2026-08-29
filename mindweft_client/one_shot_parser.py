@@ -310,6 +310,14 @@ def build_parser() -> argparse.ArgumentParser:
         dest="archive_command",
         required=True,
     )
+    archive_inspect_parser = archive_subparsers.add_parser(
+        "inspect",
+        help="Summarize archive metadata and available checksums without contacting a server.",
+    )
+    archive_inspect_parser.add_argument(
+        "path",
+        help="Path to a thread or lineage archive JSON file.",
+    )
     archive_verify_parser = archive_subparsers.add_parser(
         "verify",
         help="Verify whole-content and attachment checksums without contacting a server.",

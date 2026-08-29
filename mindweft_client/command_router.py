@@ -22,7 +22,7 @@ from mindweft_client.admin_commands import (
     run_admin_threads_show,
 )
 from mindweft_client.api_client import MindweftAPIClient
-from mindweft_client.archive_commands import run_archive_verify
+from mindweft_client.archive_commands import run_archive_inspect, run_archive_verify
 from mindweft_client.chat_commands import (
     run_chat,
     run_export,
@@ -67,6 +67,8 @@ def dispatch_command(
         return run_resume(args, client, base_url, trace_id)
     if args.command == "export":
         return run_export(args, client, base_url, trace_id)
+    if args.command == "archive" and args.archive_command == "inspect":
+        return run_archive_inspect(args, trace_id)
     if args.command == "archive" and args.archive_command == "verify":
         return run_archive_verify(args, trace_id)
     if args.command == "import":

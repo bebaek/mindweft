@@ -224,7 +224,8 @@ mindweft export <thread-id> --output transcript.md      # write Markdown to a fi
 mindweft export <thread-id> --format json --output transcript.json
 mindweft export <thread-id> --format archive --output thread.mindweft.json
 mindweft export <thread-id> --format lineage-archive --output lineage.mindweft.json
-mindweft archive verify thread.mindweft.json             # verify checksums without a server
+mindweft archive inspect thread.mindweft.json            # summarize any supported archive locally
+mindweft archive verify thread.mindweft.json             # require checksummed integrity locally
 mindweft import lineage.mindweft.json                    # restore the complete fork tree
 mindweft import lineage.mindweft.json --dry-run          # validate the complete tree and quotas
 mindweft import thread.mindweft.json --dry-run          # validate without retaining a thread
@@ -259,13 +260,20 @@ JSON object after omitting `content_sha256`, with keys sorted, compact separator
 SHA-256 hexadecimal output. It detects accidental or uncoordinated changes but is not a signature and
 does not authenticate archive origin.
 
-`mindweft archive verify <path>` runs entirely locally and supports checksummed thread v5 and lineage
+`mindweft archive inspect <path>` runs entirely locally for supported thread v1-v5 and lineage v1-v2
+files. It reports archive identity, source/root/requested thread IDs, aggregate thread, message, and
+attachment counts, whole-content checksum status, and attachment checksum status. Every checksum that
+is present is validated; invalid whole-content or attachment data causes inspection to fail. Legacy
+formats are summarized with a whole-content status of `unavailable` while their per-attachment
+checksums remain validated when present.
+
+`mindweft archive verify <path>` is the stricter integrity gate for checksummed thread v5 and lineage
 v2 files. It verifies the whole-content checksum, every nested thread checksum, and every embedded
-attachment's base64 encoding, declared size, and SHA-256 digest. It does not contact the configured
-API. Legacy archives do not contain whole-content checksums and therefore cannot pass this command;
-they remain importable by the server. Local verification checks integrity envelopes, not the complete
-server import schema, destination capabilities, quotas, profiles, or policies. Use `import --dry-run`
-when authoritative import validation is required.
+attachment's base64 encoding, declared size, and SHA-256 digest. Both archive commands avoid the
+configured API. Legacy archives remain importable by the server but cannot pass strict verification.
+Local inspection and verification check integrity envelopes, not the complete server import schema,
+destination capabilities, quotas, profiles, or policies. Use `import --dry-run` when authoritative
+import validation is required.
 
 `--format lineage-archive` requests a version 2
 `mindweft.thread-lineage-archive` bundle. Starting from any member, the server finds its root and
