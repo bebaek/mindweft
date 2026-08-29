@@ -388,7 +388,12 @@ Administrative inspection is available through the matching `imported-lineage` C
 follows the same imported-lineage safety rule as tenant deletion: a normal delete returns `409` for a
 multi-thread imported lineage, while `--imported-lineage` removes all restored members,
 attachment/private-value state, and related idempotency records. The resulting `threads.delete` audit
-record contains every deleted thread ID and the full affected count.
+record contains every deleted thread ID and the full affected count. Bulk prune does not partially
+delete a completed multi-thread lineage. Matching imported members are returned in
+`skipped_imported_lineage_thread_ids` and must be removed with explicit imported-lineage deletion.
+For other candidates, prune now runs attachment and private-value cleanup as well as thread-store
+deletion. `candidate_thread_ids` reports every filter match, while `deleted_thread_ids` reports only
+threads actually removed; dry runs leave `deleted_thread_ids` empty.
 
 ## Interactive chat
 

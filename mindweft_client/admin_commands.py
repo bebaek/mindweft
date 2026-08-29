@@ -810,6 +810,8 @@ def run_admin_threads_prune(
                 f"deleted_count={response.get('deleted_count')}",
                 f"dry_run={response.get('dry_run')}",
                 f"candidate_count={len(response.get('candidate_thread_ids', []))}",
+                "skipped_imported_lineage_count="
+                f"{len(response.get('skipped_imported_lineage_thread_ids', []))}",
                 f"updated_before={response.get('updated_before')}",
             ]
         )

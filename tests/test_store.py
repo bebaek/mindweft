@@ -70,6 +70,49 @@ def test_archive_import_claims_are_idempotent_and_tenant_scoped(
 
 
 @pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_lists_multi_thread_imported_lineage_members(store_kind: str, tmp_path: Path) -> None:
+    store = (
+        InMemoryThreadStore()
+        if store_kind == "memory"
+        else SQLiteThreadStore(tmp_path / "lineage-members.db")
+    )
+    root = store.create_thread("tenant-a")
+    child = store.create_thread("tenant-a")
+    single = store.create_thread("tenant-a")
+    claim = store.begin_archive_import("tenant-a", "lineage:bundle", "digest")
+    assert claim.claim_token is not None
+    store.complete_archive_import(
+        "tenant-a",
+        "lineage:bundle",
+        claim.claim_token,
+        thread_id=root.thread_id,
+        response_payload={
+            "threads": [
+                {"source_thread_id": "source-root", "thread_id": root.thread_id},
+                {"source_thread_id": "source-child", "thread_id": child.thread_id},
+            ]
+        },
+    )
+    single_claim = store.begin_archive_import("tenant-a", "lineage:single-bundle", "single-digest")
+    assert single_claim.claim_token is not None
+    store.complete_archive_import(
+        "tenant-a",
+        "lineage:single-bundle",
+        single_claim.claim_token,
+        thread_id=single.thread_id,
+        response_payload={
+            "threads": [{"source_thread_id": "source-single", "thread_id": single.thread_id}]
+        },
+    )
+
+    assert store.list_imported_lineage_thread_ids("tenant-a") == {
+        root.thread_id,
+        child.thread_id,
+    }
+    assert store.list_imported_lineage_thread_ids("tenant-b") == set()
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
 def test_archive_import_claim_can_recover_after_lease_expiry(
     store_kind: str, tmp_path: Path
 ) -> None:
