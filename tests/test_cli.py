@@ -883,6 +883,21 @@ def test_archive_verify_checks_thread_and_lineage_files_offline(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("network access")),
     )
 
+    assert cli.main(["--json", "archive", "inspect", str(thread_path)]) == 0
+    inspected_thread = json.loads(capsys.readouterr().out)
+    assert inspected_thread == {
+        "archive_id": "thread-archive-1",
+        "attachment_checksum_status": "valid",
+        "attachment_count": 1,
+        "checksum_status": "valid",
+        "content_sha256": thread_archive["content_sha256"],
+        "message_count": 0,
+        "schema": "mindweft.thread-archive",
+        "source_thread_id": "source-thread",
+        "thread_count": 1,
+        "version": 5,
+    }
+
     assert cli.main(["--json", "archive", "verify", str(thread_path)]) == 0
     thread_result = json.loads(capsys.readouterr().out)
     assert thread_result == {
@@ -895,12 +910,33 @@ def test_archive_verify_checks_thread_and_lineage_files_offline(
         "version": 5,
     }
 
+    assert cli.main(["archive", "inspect", str(lineage_path)]) == 0
+    assert capsys.readouterr().out == (
+        "schema=mindweft.thread-lineage-archive version=2 "
+        "archive_id=lineage-archive-1 checksum=valid attachment_checksums=valid "
+        "threads=1 messages=0 attachments=1 root_source_thread_id=source-thread "
+        "requested_source_thread_id=source-thread\n"
+    )
+
     assert cli.main(["archive", "verify", str(lineage_path)]) == 0
     assert capsys.readouterr().out == (
         "valid=true schema=mindweft.thread-lineage-archive version=2 "
         "archive_id=lineage-archive-1 threads=1 attachments=1 "
         f"content_sha256={lineage_archive['content_sha256']}\n"
     )
+
+    legacy_lineage = json.loads(json.dumps(lineage_archive))
+    legacy_lineage["version"] = 1
+    legacy_lineage.pop("content_sha256")
+    legacy_lineage["threads"][0]["archive"]["version"] = 4
+    legacy_lineage["threads"][0]["archive"].pop("content_sha256")
+    lineage_path.write_text(json.dumps(legacy_lineage), encoding="utf-8")
+    assert cli.main(["--json", "archive", "inspect", str(lineage_path)]) == 0
+    inspected_legacy_lineage = json.loads(capsys.readouterr().out)
+    assert inspected_legacy_lineage["checksum_status"] == "unavailable"
+    assert inspected_legacy_lineage["attachment_checksum_status"] == "valid"
+    assert inspected_legacy_lineage["thread_count"] == 1
+    assert inspected_legacy_lineage["attachment_count"] == 1
 
     attachment_tampered = json.loads(json.dumps(thread_archive))
     attachment_tampered["attachments"][0]["data"] = base64.b64encode(b"portable attachmenU").decode(
@@ -928,12 +964,19 @@ def test_archive_verify_rejects_tampering_and_legacy_files(tmp_path: Path, capsy
     path = tmp_path / "tampered.json"
     path.write_text(json.dumps(archive), encoding="utf-8")
 
+    assert cli.main(["archive", "inspect", str(path)]) == 1
+    assert "thread archive content checksum does not match" in capsys.readouterr().err
     assert cli.main(["archive", "verify", str(path)]) == 1
     assert "thread archive content checksum does not match" in capsys.readouterr().err
 
     archive["version"] = 4
     archive.pop("content_sha256")
     path.write_text(json.dumps(archive), encoding="utf-8")
+    assert cli.main(["--json", "archive", "inspect", str(path)]) == 0
+    legacy_inspection = json.loads(capsys.readouterr().out)
+    assert legacy_inspection["checksum_status"] == "unavailable"
+    assert legacy_inspection["attachment_checksum_status"] == "valid"
+    assert legacy_inspection["content_sha256"] is None
     assert cli.main(["archive", "verify", str(path)]) == 1
     assert "does not provide a whole-content checksum" in capsys.readouterr().err
 
