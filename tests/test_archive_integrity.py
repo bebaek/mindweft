@@ -1,4 +1,4 @@
-from __future__ import annotations
+from pathlib import Path
 
 from app import thread_archives
 from app.models import Message, MessageRole, Thread, ThreadContext
@@ -8,6 +8,8 @@ from mindweft_archive import (
     THREAD_ARCHIVE_CHECKSUM_VERSION,
     THREAD_ARCHIVE_SCHEMA,
     content_sha256,
+    inspect_archive_payload,
+    verify_archive_payload,
 )
 from mindweft_client import archive_commands
 
@@ -32,9 +34,10 @@ def test_content_checksum_is_canonical_and_does_not_mutate_payload() -> None:
     assert payload == original
 
 
-def test_server_and_client_share_archive_integrity_contract() -> None:
+def test_server_and_client_share_archive_contract() -> None:
     assert thread_archives.content_sha256 is content_sha256
-    assert archive_commands.content_sha256 is content_sha256
+    assert archive_commands.inspect_archive_payload is inspect_archive_payload
+    assert archive_commands.verify_archive_payload is verify_archive_payload
     assert thread_archives.THREAD_ARCHIVE_SCHEMA == THREAD_ARCHIVE_SCHEMA
     assert thread_archives.THREAD_ARCHIVE_VERSION == THREAD_ARCHIVE_CHECKSUM_VERSION
     assert thread_archives.THREAD_LINEAGE_ARCHIVE_SCHEMA == LINEAGE_ARCHIVE_SCHEMA
@@ -55,7 +58,7 @@ def test_server_and_client_share_archive_integrity_contract() -> None:
     payload = archive.model_dump(mode="json", by_alias=True)
 
     assert payload["content_sha256"] == content_sha256(payload)
-    assert archive_commands.verify_archive_payload(payload) == {
+    assert verify_archive_payload(payload) == {
         "valid": True,
         "schema": THREAD_ARCHIVE_SCHEMA,
         "version": THREAD_ARCHIVE_CHECKSUM_VERSION,
@@ -64,3 +67,12 @@ def test_server_and_client_share_archive_integrity_contract() -> None:
         "thread_count": 1,
         "attachment_count": 0,
     }
+
+
+def test_shared_archive_package_has_no_server_or_client_dependency() -> None:
+    package_root = Path(__file__).parents[1] / "mindweft_archive"
+    source = "\n".join(path.read_text(encoding="utf-8") for path in package_root.glob("*.py"))
+
+    assert "from app" not in source
+    assert "import app" not in source
+    assert "mindweft_client" not in source
