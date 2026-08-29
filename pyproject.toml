@@ -83,6 +83,7 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = [
   "app*",
+  "mindweft_archive*",
   "mindweft_client*",
   "mindweft_config*",
   "mindweft_mcp*",
@@ -122,6 +123,7 @@ line-ending = "lf"
 [tool.basedpyright]
 include = [
   "app",
+  "mindweft_archive",
   "mindweft_client",
   "mindweft_config",
   "mindweft_mcp",

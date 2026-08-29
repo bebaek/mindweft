@@ -9,14 +9,17 @@ import re
 from pathlib import Path
 from typing import Any
 
+from mindweft_archive import (
+    LINEAGE_ARCHIVE_CHECKSUM_VERSION,
+    LINEAGE_ARCHIVE_SCHEMA,
+    SUPPORTED_LINEAGE_ARCHIVE_VERSIONS,
+    SUPPORTED_THREAD_ARCHIVE_VERSIONS,
+    THREAD_ARCHIVE_CHECKSUM_VERSION,
+    THREAD_ARCHIVE_SCHEMA,
+    content_sha256,
+)
 from mindweft_client.output import print_json
 
-THREAD_ARCHIVE_SCHEMA = "mindweft.thread-archive"
-THREAD_ARCHIVE_CHECKSUM_VERSION = 5
-LINEAGE_ARCHIVE_SCHEMA = "mindweft.thread-lineage-archive"
-LINEAGE_ARCHIVE_CHECKSUM_VERSION = 2
-SUPPORTED_THREAD_ARCHIVE_VERSIONS = {1, 2, 3, 4, 5}
-SUPPORTED_LINEAGE_ARCHIVE_VERSIONS = {1, 2}
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -277,16 +280,7 @@ def _verify_attachment(attachment: dict[str, Any], *, attachment_id: str) -> Non
 
 def _verify_content_checksum(payload: dict[str, Any], *, context: str) -> None:
     expected = _required_checksum(payload, context=context)
-    checksum_payload = {key: value for key, value in payload.items() if key != "content_sha256"}
-    actual = hashlib.sha256(
-        json.dumps(
-            checksum_payload,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()
-    if actual != expected:
+    if content_sha256(payload) != expected:
         raise ValueError(f"{context} content checksum does not match")
 
 

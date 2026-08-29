@@ -257,8 +257,9 @@ message-part references to new attachment IDs. Base64 increases file size, so ar
 than the underlying attachment bytes. Existing version 1 through 4 archives remain importable; only
 version 5 provides whole-archive change detection. The checksum is calculated from the model-normalized
 JSON object after omitting `content_sha256`, with keys sorted, compact separators, UTF-8 encoding, and
-SHA-256 hexadecimal output. It detects accidental or uncoordinated changes but is not a signature and
-does not authenticate archive origin.
+SHA-256 hexadecimal output. Server export and local client verification both call the public
+`mindweft_archive.content_sha256` helper to keep this contract identical. The checksum detects
+accidental or uncoordinated changes but is not a signature and does not authenticate archive origin.
 
 `mindweft archive inspect <path>` runs entirely locally for supported thread v1-v5 and lineage v1-v2
 files. It reports archive identity, source/root/requested thread IDs, aggregate thread, message, and

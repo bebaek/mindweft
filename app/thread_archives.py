@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
-import json
 from datetime import datetime
 from typing import Annotated, Any, Literal, Mapping, Self
 from uuid import uuid4
@@ -21,11 +20,17 @@ from app.models import (
     ThreadImportProvenance,
     utc_now,
 )
+from mindweft_archive import (
+    LINEAGE_ARCHIVE_CHECKSUM_VERSION,
+    LINEAGE_ARCHIVE_SCHEMA,
+    THREAD_ARCHIVE_CHECKSUM_VERSION,
+    THREAD_ARCHIVE_SCHEMA,
+    content_sha256,
+)
 
-THREAD_ARCHIVE_SCHEMA = "mindweft.thread-archive"
-THREAD_ARCHIVE_VERSION = 5
-THREAD_LINEAGE_ARCHIVE_SCHEMA = "mindweft.thread-lineage-archive"
-THREAD_LINEAGE_ARCHIVE_VERSION = 2
+THREAD_ARCHIVE_VERSION = THREAD_ARCHIVE_CHECKSUM_VERSION
+THREAD_LINEAGE_ARCHIVE_SCHEMA = LINEAGE_ARCHIVE_SCHEMA
+THREAD_LINEAGE_ARCHIVE_VERSION = LINEAGE_ARCHIVE_CHECKSUM_VERSION
 ThreadArchiveProfilePolicy = Literal["defaults", "available", "strict"]
 ThreadArchiveOrganizationPolicy = Literal["reset", "preserve"]
 ThreadArchiveTimestampPolicy = Literal["reset", "preserve"]
@@ -318,15 +323,7 @@ def lineage_archive_content_sha256(archive: ThreadLineageArchiveV2) -> str:
 
 
 def _content_sha256(archive: ThreadArchiveModel) -> str:
-    payload = archive.model_dump(mode="json", by_alias=True)
-    payload.pop("content_sha256", None)
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
+    return content_sha256(archive.model_dump(mode="json", by_alias=True))
 
 
 def build_thread_archive(

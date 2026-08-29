@@ -51,6 +51,7 @@ def test_production_code_imports_only_canonical_package_namespaces() -> None:
     roots = [
         _PROJECT_ROOT / "app",
         _PROJECT_ROOT / "scripts",
+        _PROJECT_ROOT / "mindweft_archive",
         _PROJECT_ROOT / "mindweft_client",
         _PROJECT_ROOT / "mindweft_config",
         _PROJECT_ROOT / "mindweft_mcp",
