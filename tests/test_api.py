@@ -7806,7 +7806,7 @@ def test_admin_api_deletes_thread_with_tenant_isolation() -> None:
     )
 
 
-def test_admin_api_prunes_threads_with_filters() -> None:
+def test_admin_api_prunes_threads_with_filters(monkeypatch: pytest.MonkeyPatch) -> None:
     store = InMemoryThreadStore()
     old_coding = store.create_thread("tenant-1", skill_name="coding", capability_profile="dev")
     old_research = store.create_thread("tenant-1", skill_name="research", capability_profile="dev")
@@ -7817,13 +7817,24 @@ def test_admin_api_prunes_threads_with_filters() -> None:
     old_coding.updated_at = old_timestamp
     old_research.updated_at = old_timestamp
     other_tenant.updated_at = old_timestamp
-    client = TestClient(
-        create_app(
-            llm_adapter=MockLLMAdapter(),
-            tool_registry=build_local_tool_registry(),
-            thread_store=store,
-        )
+    app = create_app(
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=build_local_tool_registry(),
+        thread_store=store,
     )
+    attachment_cleanup_calls: list[tuple[str, str]] = []
+    private_value_cleanup_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        app.state.attachment_store,
+        "delete_thread",
+        lambda tenant_id, thread_id: attachment_cleanup_calls.append((tenant_id, thread_id)),
+    )
+    monkeypatch.setattr(
+        app.state.runtime,
+        "clear_tenant_thread_private_values",
+        lambda tenant_id, thread_id: private_value_cleanup_calls.append((tenant_id, thread_id)),
+    )
+    client = TestClient(app)
 
     prune_response = client.post(
         "/admin/tenants/tenant-1/threads/prune"
@@ -7833,6 +7844,8 @@ def test_admin_api_prunes_threads_with_filters() -> None:
 
     assert prune_response.status_code == 200
     assert prune_response.json()["deleted_count"] == 1
+    assert prune_response.json()["deleted_thread_ids"] == [old_coding.thread_id]
+    assert prune_response.json()["skipped_imported_lineage_thread_ids"] == []
     assert (
         client.get(
             f"/admin/tenants/tenant-1/threads/{old_coding.thread_id}", headers=ADMIN_HEADERS
@@ -7857,7 +7870,62 @@ def test_admin_api_prunes_threads_with_filters() -> None:
         ).status_code
         == 200
     )
+    assert attachment_cleanup_calls == [("tenant-1", old_coding.thread_id)]
+    assert private_value_cleanup_calls == [("tenant-1", old_coding.thread_id)]
     assert cutoff.isoformat().replace("+00:00", "Z") == "2026-02-01T00:00:00Z"
+
+
+def test_admin_api_prune_skips_multi_thread_imported_lineages() -> None:
+    store = InMemoryThreadStore()
+    root = store.create_thread("tenant-1")
+    child = store.create_thread("tenant-1")
+    claim = store.begin_archive_import(
+        "tenant-1",
+        "lineage:bundle-1",
+        "digest-1",
+        lease_seconds=30,
+    )
+    assert claim.claim_token is not None
+    store.complete_archive_import(
+        "tenant-1",
+        "lineage:bundle-1",
+        claim.claim_token,
+        thread_id=root.thread_id,
+        response_payload={
+            "threads": [
+                {"source_thread_id": "source-root", "thread_id": root.thread_id},
+                {"source_thread_id": "source-child", "thread_id": child.thread_id},
+            ]
+        },
+    )
+    client = TestClient(
+        create_app(
+            llm_adapter=MockLLMAdapter(),
+            tool_registry=build_local_tool_registry(),
+            thread_store=store,
+        )
+    )
+
+    response = client.post(
+        "/admin/tenants/tenant-1/threads/prune?updated_before=2999-01-01T00:00:00Z",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deleted_count"] == 0
+    assert body["deleted_thread_ids"] == []
+    assert set(body["candidate_thread_ids"]) == {root.thread_id, child.thread_id}
+    assert set(body["skipped_imported_lineage_thread_ids"]) == {
+        root.thread_id,
+        child.thread_id,
+    }
+    assert store.get_thread("tenant-1", root.thread_id).thread_id == root.thread_id
+    assert store.get_thread("tenant-1", child.thread_id).thread_id == child.thread_id
+    audit_response = client.get("/admin/tenants/tenant-1/audit-records", headers=ADMIN_HEADERS)
+    audit_record = audit_response.json()["audit_records"][0]
+    assert audit_record["affected_count"] == 0
+    assert audit_record["thread_ids"] == []
 
 
 def test_admin_api_prune_dry_run_does_not_delete_or_audit() -> None:
@@ -7881,6 +7949,8 @@ def test_admin_api_prune_dry_run_does_not_delete_or_audit() -> None:
     assert response.json()["deleted_count"] == 0
     assert response.json()["dry_run"] is True
     assert response.json()["candidate_thread_ids"] == [thread.thread_id]
+    assert response.json()["deleted_thread_ids"] == []
+    assert response.json()["skipped_imported_lineage_thread_ids"] == []
     assert (
         client.get(
             f"/admin/tenants/tenant-1/threads/{thread.thread_id}", headers=ADMIN_HEADERS

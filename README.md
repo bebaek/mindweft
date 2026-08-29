@@ -658,7 +658,10 @@ normal single-thread delete returns `409 Conflict` for those members. Group dele
 any imported member, removes the entire restored tree and its attachment/private-value state, and
 allows the same bundle to be imported again with fresh destination IDs. Administrators can inspect
 with `mindweft --admin admin threads imported-lineage` and use the same `--imported-lineage` deletion
-flag; the deletion audit records all removed thread IDs and the affected count.
+flag; the deletion audit records all removed thread IDs and the affected count. Administrative prune
+never partially removes a restored lineage: matching members are reported in
+`skipped_imported_lineage_thread_ids` and remain available for explicit group deletion. Pruned native
+threads receive the same attachment and private-value cleanup as explicit deletion.
 
 Destination-local organization defaults are used unless `--organization-policy preserve` is selected.
 Likewise, imports receive fresh destination thread timestamps unless `--timestamp-policy preserve`

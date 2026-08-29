@@ -159,6 +159,8 @@ class ThreadStore(Protocol):
         claim_token: str,
     ) -> None: ...
 
+    def list_imported_lineage_thread_ids(self, tenant_id: str) -> set[str]: ...
+
     def get_imported_lineage_import(
         self,
         tenant_id: str,
@@ -532,6 +534,17 @@ class InMemoryThreadStore:
                 and record.response_payload is None
             ):
                 del self._archive_imports[key]
+
+    def list_imported_lineage_thread_ids(self, tenant_id: str) -> set[str]:
+        with self._lock:
+            imported_thread_ids: set[str] = set()
+            for (record_tenant_id, archive_id), record in self._archive_imports.items():
+                if record_tenant_id != tenant_id or not archive_id.startswith("lineage:"):
+                    continue
+                thread_ids = _lineage_import_thread_ids(record.response_payload)
+                if thread_ids is not None and len(thread_ids) > 1:
+                    imported_thread_ids.update(thread_ids)
+            return imported_thread_ids
 
     def get_imported_lineage_import(
         self,
@@ -1414,6 +1427,28 @@ class SQLiteThreadStore:
                 """,
                 (tenant_id, archive_id, claim_token),
             )
+
+    def list_imported_lineage_thread_ids(self, tenant_id: str) -> set[str]:
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT response_payload
+                FROM archive_imports
+                WHERE tenant_id = ?
+                  AND archive_id LIKE 'lineage:%'
+                  AND response_payload IS NOT NULL
+                """,
+                (tenant_id,),
+            ).fetchall()
+            imported_thread_ids: set[str] = set()
+            for (response_payload,) in rows:
+                parsed_payload = json.loads(str(response_payload))
+                if not isinstance(parsed_payload, dict):
+                    raise RuntimeError("stored lineage archive import response is invalid")
+                thread_ids = _lineage_import_thread_ids(parsed_payload)
+                if thread_ids is not None and len(thread_ids) > 1:
+                    imported_thread_ids.update(thread_ids)
+            return imported_thread_ids
 
     def get_imported_lineage_import(
         self,

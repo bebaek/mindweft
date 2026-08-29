@@ -2808,7 +2808,8 @@ def test_admin_threads_prune_sends_filters(monkeypatch: Any, capsys: Any) -> Non
     ]
     assert (
         capsys.readouterr().out
-        == "tenant_id=tenant-a deleted_count=3 dry_run=False candidate_count=3 updated_before=2026-05-19T10:00:00Z\n"
+        == "tenant_id=tenant-a deleted_count=3 dry_run=False candidate_count=3 "
+        "skipped_imported_lineage_count=0 updated_before=2026-05-19T10:00:00Z\n"
     )
 
 

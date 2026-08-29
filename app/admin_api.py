@@ -675,6 +675,8 @@ class AdminThreadPruneResponse(BaseModel):
     updated_before: datetime
     dry_run: bool = False
     candidate_thread_ids: list[str] = Field(default_factory=list)
+    deleted_thread_ids: list[str] = Field(default_factory=list)
+    skipped_imported_lineage_thread_ids: list[str] = Field(default_factory=list)
 
 
 class AdminAuditRecordResponse(BaseModel):
@@ -2218,22 +2220,35 @@ def build_admin_router() -> APIRouter:
             skill=skill,
         )
         candidate_thread_ids = [thread.thread_id for thread in candidates]
-        deleted_count = 0
+        protected_imported_lineage_thread_ids = store.list_imported_lineage_thread_ids(tenant_id)
+        eligible_thread_ids: list[str] = []
+        skipped_imported_lineage_thread_ids: list[str] = []
+        for candidate_thread_id in candidate_thread_ids:
+            if candidate_thread_id in protected_imported_lineage_thread_ids:
+                skipped_imported_lineage_thread_ids.append(candidate_thread_id)
+            else:
+                eligible_thread_ids.append(candidate_thread_id)
+
+        deleted_thread_ids = [] if dry_run else eligible_thread_ids
+        deleted_count = len(deleted_thread_ids)
         if not dry_run:
-            deleted_count = store.prune_threads(
-                tenant_id,
-                updated_before=updated_before,
-                status=status,
-                capability_profile=profile,
-                skill=skill,
-            )
+            for deleted_thread_id in deleted_thread_ids:
+                store.delete_thread(tenant_id, deleted_thread_id)
+                request.app.state.attachment_store.delete_thread(
+                    tenant_id,
+                    deleted_thread_id,
+                )
+                request.app.state.runtime.clear_tenant_thread_private_values(
+                    tenant_id,
+                    deleted_thread_id,
+                )
             store.append_audit_record(
                 AuditRecord(
                     tenant_id=tenant_id,
                     actor_user_id=admin.user_id,
                     action="threads.prune",
                     affected_count=deleted_count,
-                    thread_ids=candidate_thread_ids,
+                    thread_ids=deleted_thread_ids,
                 )
             )
         return AdminThreadPruneResponse(
@@ -2242,6 +2257,8 @@ def build_admin_router() -> APIRouter:
             updated_before=updated_before,
             dry_run=dry_run,
             candidate_thread_ids=candidate_thread_ids,
+            deleted_thread_ids=deleted_thread_ids,
+            skipped_imported_lineage_thread_ids=skipped_imported_lineage_thread_ids,
         )
 
     @router.get(
