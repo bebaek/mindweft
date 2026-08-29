@@ -246,20 +246,26 @@ referenced attachment bytes, so treat them as sensitive. Import always creates a
 authenticated principal, assigns new thread, message, and attachment IDs, and records source message
 IDs as provenance.
 
-The current version 4 format supports user, assistant, and tool message history, title, context,
+The current version 5 format supports user, assistant, and tool message history, title, context,
 referenced audio, image, and document attachments, source pin/archive organization state, and a
-bounded import-provenance chain. Attachment data is base64-encoded in the JSON archive with its MIME
-type, byte size, and SHA-256 checksum. Import verifies the manifest,
-revalidates attachment content, applies destination attachment capabilities and quotas, and rewrites
-message-part references to new attachment IDs. Base64 increases file size, so archive files are
-larger than the underlying attachment bytes. Existing version 1 through 3 archives remain importable;
-versions 1 and 2 do not contain organization state, and versions 1 through 3 do not carry portable
-import provenance.
+bounded import-provenance chain. It includes a canonical SHA-256 checksum over the complete semantic
+archive payload. Import verifies that checksum before creating destination state, then verifies each
+attachment's MIME type, byte size, SHA-256 checksum, content capabilities, and quotas before rewriting
+message-part references to new attachment IDs. Base64 increases file size, so archive files are larger
+than the underlying attachment bytes. Existing version 1 through 4 archives remain importable; only
+version 5 provides whole-archive change detection. The checksum is calculated from the model-normalized
+JSON object after omitting `content_sha256`, with keys sorted, compact separators, UTF-8 encoding, and
+SHA-256 hexadecimal output. It detects accidental or uncoordinated changes but is not a signature and
+does not authenticate archive origin.
 
-`--format lineage-archive` requests a version 1
+`--format lineage-archive` requests a version 2
 `mindweft.thread-lineage-archive` bundle. Starting from any member, the server finds its root and
 exports the complete descendant fork tree in parent-before-child order. Every entry contains a nested
-version 4 thread archive plus internal parent-thread, fork-message, and compaction-boundary source IDs.
+version 5 archive plus internal parent-thread, fork-message, and compaction-boundary source IDs. Each
+nested archive has a canonical SHA-256 checksum, and the bundle adds a checksum over the full tree and
+relationship metadata. Import rejects modified content before creating destination state. Existing
+version 1 lineage bundles remain importable.
+
 The server rejects bundles above 100 threads, 10,000 messages, or 1,000 attachments. Import creates
 new destination IDs for all members and their messages and attachments, remaps parent, fork-message,
 and compaction-boundary references, and restores the tree through `POST /threads/import-lineage`.

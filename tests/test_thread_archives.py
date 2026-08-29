@@ -10,7 +10,8 @@ from app.thread_archives import (
     ThreadArchiveV1,
     ThreadArchiveV2,
     ThreadArchiveV3,
-    ThreadArchiveV4,
+    ThreadArchiveV5,
+    archive_content_sha256,
     build_thread_archive,
     decode_archive_attachments,
     imported_messages,
@@ -49,14 +50,15 @@ def test_thread_archive_round_trip_uses_portable_ids_and_schema_alias() -> None:
     payload = archive.model_dump(mode="json", by_alias=True)
 
     assert payload["schema"] == "mindweft.thread-archive"
-    assert payload["version"] == 4
+    assert payload["version"] == 5
+    assert payload["content_sha256"] == archive_content_sha256(archive)
     assert payload["organization"] == {"pinned": True, "archived": True}
     assert payload["import_provenance_chain"] == []
     assert "schema_name" not in payload
     assert "tenant_id" not in payload["thread"]
     assert "execution_user_id" not in payload["thread"]
     assert "created_by" not in payload["messages"][0]
-    restored_archive = ThreadArchiveV4.model_validate(payload)
+    restored_archive = ThreadArchiveV5.model_validate(payload)
     restored = imported_messages(
         restored_archive,
         thread_id="thread-destination",
@@ -216,12 +218,34 @@ def test_thread_archive_rejects_invalid_thread_timestamps() -> None:
     )
     archive = build_thread_archive(thread, [], ThreadContext(thread_id=thread.thread_id))
     archive.thread.updated_at = datetime(2025, 12, 31, tzinfo=timezone.utc)
+    archive = archive.model_copy(update={"content_sha256": archive_content_sha256(archive)})
     with pytest.raises(ValueError, match="must not precede"):
         validate_importable_thread_archive(archive)
 
     archive.thread.updated_at = NOW
     archive.thread.created_at = datetime(2026, 1, 1)
+    archive = archive.model_copy(update={"content_sha256": archive_content_sha256(archive)})
     with pytest.raises(ValueError, match="UTC offset"):
+        validate_importable_thread_archive(archive)
+
+
+def test_thread_archive_rejects_content_tampering() -> None:
+    thread = Thread(thread_id="thread-source", tenant_id="tenant-1")
+    message = Message(
+        id="message-source",
+        thread_id=thread.thread_id,
+        role=MessageRole.USER,
+        content="original",
+    )
+    archive = build_thread_archive(
+        thread,
+        [message],
+        ThreadContext(thread_id=thread.thread_id),
+    )
+
+    archive.messages[0].content = "tampered"
+
+    with pytest.raises(ValueError, match="content checksum"):
         validate_importable_thread_archive(archive)
 
 
