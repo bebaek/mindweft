@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { ExecutionOptionsResponse } from "../api/client";
+import { ApiError, type ExecutionOptionsResponse, type ThreadListResponse } from "../api/client";
 import { WorkspacePage } from "./WorkspacePage";
 
 const createObjectUrl = vi.fn(() => "blob:preview");
@@ -43,12 +43,17 @@ const mockApi = {
     },
     agents: { items: [] },
   })),
-  listThreads: vi.fn(() => Promise.resolve({
+  listThreads: vi.fn<() => Promise<ThreadListResponse>>(() => Promise.resolve({
     threads: [],
     total: 0,
     limit: 50,
     offset: 0,
   })),
+  listMessages: vi.fn(() => Promise.resolve([])),
+  getThreadLineage: vi.fn(),
+  listPendingPrivateValueConsents: vi.fn(() => Promise.resolve([])),
+  getImportedThreadLineage: vi.fn(),
+  deleteThread: vi.fn(),
 };
 
 vi.mock("../auth/auth-context", () => ({
@@ -106,6 +111,47 @@ async function readyComposer(): Promise<HTMLFormElement> {
 }
 
 describe("workspace file interactions", () => {
+  it("deletes a selected standalone conversation after confirmation", async () => {
+    const thread = {
+      thread_id: "thread-delete",
+      title: "Temporary conversation",
+      status: "idle" as const,
+      message_count: 0,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+    mockApi.listThreads.mockResolvedValueOnce({
+      threads: [thread],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    mockApi.getThreadLineage.mockResolvedValue({
+      thread,
+      parent: null,
+      children: [],
+      siblings: [],
+    });
+    mockApi.getImportedThreadLineage.mockRejectedValue(
+      new ApiError("not imported", 404, { detail: "not found" }),
+    );
+    mockApi.deleteThread.mockResolvedValue(undefined);
+    renderWorkspace();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Temporary conversation/ }));
+    await screen.findByRole("heading", { name: "Temporary conversation" });
+    fireEvent.click(screen.getByRole("button", { name: "Conversation actions" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete conversation?" });
+    const confirm = within(dialog).getByRole("button", { name: "Delete conversation" });
+    await waitFor(() => expect(confirm).toBeEnabled());
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(mockApi.deleteThread).toHaveBeenCalledWith("thread-delete"));
+    expect(await screen.findByRole("status")).toHaveTextContent("Conversation deleted.");
+    expect(screen.getByRole("heading", { name: "Untitled conversation" })).toBeInTheDocument();
+  });
+
   it("opens portable archive import from the conversation actions menu", async () => {
     renderWorkspace();
     await readyComposer();

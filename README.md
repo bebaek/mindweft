@@ -640,6 +640,12 @@ transfer dialog downloads either the selected conversation or its complete linea
 and lineage archive files, exposes the same destination policies and validation-only mode, reports
 server warnings, and opens the restored requested conversation after a successful import.
 
+The same **Conversation actions** menu provides **Delete conversation**. Deletion always requires a
+confirmation and permanently removes the conversation's retained messages, context, and attachments.
+Before enabling confirmation, the console checks whether the conversation belongs to a completed
+multi-thread archive import. If it does, the dialog explains the scope and deletes the complete
+imported lineage together, matching the server's lineage-integrity requirement.
+
 Archive export uses the server's protected message representation, excludes tenant and user
 ownership, and imports into a new thread owned by the authenticated principal. Version 5 preserves
 core user, assistant, and tool messages, title, context, referenced audio, image, and document

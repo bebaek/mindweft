@@ -29,6 +29,7 @@ import { AudioRecorder } from "../components/AudioRecorder";
 import { ContextDialog } from "../components/ContextDialog";
 import { ConsentDialog } from "../components/ConsentDialog";
 import { DocumentAttachment } from "../components/DocumentAttachment";
+import { ThreadDeleteDialog } from "../components/ThreadDeleteDialog";
 
 const AssistantMarkdown = lazy(async () => {
   const module = await import("../components/AssistantMarkdown");
@@ -152,8 +153,10 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   const [error, setError] = useState<string | null>(null);
   const [branchNotice, setBranchNotice] = useState<string | null>(null);
   const [archiveNotice, setArchiveNotice] = useState<string | null>(null);
+  const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [archiveTransferOpen, setArchiveTransferOpen] = useState(false);
+  const [threadDeleteOpen, setThreadDeleteOpen] = useState(false);
   const [mobileThreadRailOpen, setMobileThreadRailOpen] = useState(false);
   const [threadSearch, setThreadSearch] = useState("");
   const [threadSearchScope, setThreadSearchScope] = useState<"title" | "all">("title");
@@ -751,6 +754,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     setError(null);
     setBranchNotice(null);
     setArchiveNotice(null);
+    setDeleteNotice(null);
   }
 
   function newThread() {
@@ -764,6 +768,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     setError(null);
     setBranchNotice(null);
     setArchiveNotice(null);
+    setDeleteNotice(null);
     for (const audio of pendingAudio) URL.revokeObjectURL(audio.previewUrl);
     for (const image of pendingImages) URL.revokeObjectURL(image.previewUrl);
     setPendingAudio([]);
@@ -785,6 +790,26 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     void queryClient.invalidateQueries({ queryKey: ["threads"] });
     void queryClient.invalidateQueries({ queryKey: ["messages", threadId] });
     void queryClient.invalidateQueries({ queryKey: ["thread-lineage", threadId] });
+  }
+
+  function handleThreadDeleted(result: {
+    deletedCount: number;
+    deletedThreadIds: string[];
+    lineage: boolean;
+  }) {
+    setThreadDeleteOpen(false);
+    newThread();
+    setDeleteNotice(
+      result.lineage
+        ? `Deleted the complete imported lineage (${result.deletedCount} conversations).`
+        : "Conversation deleted.",
+    );
+    void queryClient.invalidateQueries({ queryKey: ["threads"] });
+    void queryClient.invalidateQueries({ queryKey: ["thread-lineage"] });
+    for (const deletedThreadId of result.deletedThreadIds) {
+      queryClient.removeQueries({ queryKey: ["messages", deletedThreadId] });
+      queryClient.removeQueries({ queryKey: ["imported-thread-lineage", deletedThreadId] });
+    }
   }
 
   async function renameSelectedThread() {
@@ -918,6 +943,17 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
                 <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => void renameSelectedThread()}>Rename</button>
                 <button type="button" disabled={isRunning} onClick={() => setArchiveTransferOpen(true)}>Portable archives</button>
                 <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => setContextOpen(true)}>Context</button>
+                <button
+                  className="danger"
+                  type="button"
+                  disabled={!selectedThreadId || isRunning}
+                  onClick={(event) => {
+                    event.currentTarget.closest("details")?.removeAttribute("open");
+                    setThreadDeleteOpen(true);
+                  }}
+                >
+                  Delete conversation
+                </button>
               </div>
             </details>
           </div>
@@ -993,6 +1029,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           {isRunning && streamedReply === null && <div className="thinking-row"><i /><i /><i /><span>Working</span></div>}
           {branchNotice && <div className="branch-notice" role="status">{branchNotice}</div>}
           {archiveNotice && <div className="branch-notice" role="status">{archiveNotice}</div>}
+          {deleteNotice && <div className="branch-notice" role="status">{deleteNotice}</div>}
           {error && <div className="conversation-error" role="alert">{error}</div>}
           <div ref={messagesEndRef} />
         </div>
@@ -1240,6 +1277,13 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
         threadTitle={selectedThread?.title}
         onClose={() => setArchiveTransferOpen(false)}
         onImported={handleArchiveImported}
+      />}
+      {threadDeleteOpen && selectedThreadId && selectedThread && <ThreadDeleteDialog
+        open
+        threadId={selectedThreadId}
+        threadTitle={selectedThread.title}
+        onClose={() => setThreadDeleteOpen(false)}
+        onDeleted={handleThreadDeleted}
       />}
       <ContextDialog
         threadId={selectedThreadId}

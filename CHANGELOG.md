@@ -10,6 +10,9 @@ package version is `0.1.0`.
 
 ### Added
 
+- The production web console now provides confirmed conversation deletion, including imported-lineage
+  scope detection and complete-lineage deletion when the server requires lineage members to be
+  removed together.
 - The production web console can now download portable single-thread or complete-lineage archives and
   validate/import archive files with destination mapping policies, warning summaries, and automatic
   navigation to the restored requested conversation.

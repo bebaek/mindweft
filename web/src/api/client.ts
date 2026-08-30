@@ -262,6 +262,11 @@ export interface ArchiveImportResponse {
   warnings: ArchiveImportWarning[];
 }
 
+export interface ImportedLineageDeleteResponse {
+  deleted_thread_ids: string[];
+  deleted_count: number;
+}
+
 export interface AttachmentPartBase {
   mime_type: string;
   attachment_id: string;
@@ -1818,6 +1823,23 @@ export class MinigentApiClient {
     return this.#request(`/threads/${encodeURIComponent(threadId)}/run/cancel`, {
       method: "POST",
     });
+  }
+
+  getImportedThreadLineage(
+    threadId: string,
+    signal?: AbortSignal,
+  ): Promise<ArchiveImportResponse> {
+    return this.#request<ArchiveImportResponse>(
+      `/threads/${encodeURIComponent(threadId)}/imported-lineage`,
+      { signal },
+    );
+  }
+
+  deleteImportedThreadLineage(threadId: string): Promise<ImportedLineageDeleteResponse> {
+    return this.#request<ImportedLineageDeleteResponse>(
+      `/threads/${encodeURIComponent(threadId)}/imported-lineage`,
+      { method: "DELETE" },
+    );
   }
 
   deleteThread(threadId: string): Promise<void> {
