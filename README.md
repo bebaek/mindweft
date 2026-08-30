@@ -635,6 +635,11 @@ The same portable transfer flow is available without leaving interactive chat:
 /import thread.mindweft.json --profile-policy available
 ```
 
+In the production web console, open **Conversation actions** and select **Portable archives**. The
+transfer dialog downloads either the selected conversation or its complete lineage, accepts thread
+and lineage archive files, exposes the same destination policies and validation-only mode, reports
+server warnings, and opens the restored requested conversation after a successful import.
+
 Archive export uses the server's protected message representation, excludes tenant and user
 ownership, and imports into a new thread owned by the authenticated principal. Version 5 preserves
 core user, assistant, and tool messages, title, context, referenced audio, image, and document

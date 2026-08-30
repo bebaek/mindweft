@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type ClipboardEvent, type 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
+  type ArchiveImportResponse,
   type AudioPart,
   type DocumentPart,
   type ExecutionLlmOptionItem,
@@ -23,6 +24,7 @@ import {
 
 import { runErrorMessage } from "./runEvents";
 import { AudioAttachment } from "../components/AudioAttachment";
+import { ArchiveTransferDialog } from "../components/ArchiveTransferDialog";
 import { AudioRecorder } from "../components/AudioRecorder";
 import { ContextDialog } from "../components/ContextDialog";
 import { ConsentDialog } from "../components/ConsentDialog";
@@ -149,7 +151,9 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   const [streamedReply, setStreamedReply] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [branchNotice, setBranchNotice] = useState<string | null>(null);
+  const [archiveNotice, setArchiveNotice] = useState<string | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
+  const [archiveTransferOpen, setArchiveTransferOpen] = useState(false);
   const [mobileThreadRailOpen, setMobileThreadRailOpen] = useState(false);
   const [threadSearch, setThreadSearch] = useState("");
   const [threadSearchScope, setThreadSearchScope] = useState<"title" | "all">("title");
@@ -746,6 +750,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     setActivity([]);
     setError(null);
     setBranchNotice(null);
+    setArchiveNotice(null);
   }
 
   function newThread() {
@@ -758,11 +763,28 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     setActivity([]);
     setError(null);
     setBranchNotice(null);
+    setArchiveNotice(null);
     for (const audio of pendingAudio) URL.revokeObjectURL(audio.previewUrl);
     for (const image of pendingImages) URL.revokeObjectURL(image.previewUrl);
     setPendingAudio([]);
     setPendingDocuments([]);
     setPendingImages([]);
+  }
+
+  function handleArchiveImported(threadId: string, result: ArchiveImportResponse) {
+    const count = result.thread_count ?? 1;
+    const warnings = result.warnings.map((warning) => warning.message);
+    setSelectedThreadId(threadId);
+    setShowArchivedThreads(false);
+    setError(null);
+    setBranchNotice(null);
+    setArchiveNotice(
+      `Imported ${count} conversation${count === 1 ? "" : "s"}.`
+      + (warnings.length ? ` ${warnings.join(" ")}` : ""),
+    );
+    void queryClient.invalidateQueries({ queryKey: ["threads"] });
+    void queryClient.invalidateQueries({ queryKey: ["messages", threadId] });
+    void queryClient.invalidateQueries({ queryKey: ["thread-lineage", threadId] });
   }
 
   async function renameSelectedThread() {
@@ -894,6 +916,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
                   {selectedThread?.archived_at ? "Restore" : "Archive"}
                 </button>
                 <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => void renameSelectedThread()}>Rename</button>
+                <button type="button" disabled={isRunning} onClick={() => setArchiveTransferOpen(true)}>Portable archives</button>
                 <button type="button" disabled={!selectedThreadId || isRunning} onClick={() => setContextOpen(true)}>Context</button>
               </div>
             </details>
@@ -969,6 +992,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           {streamedReply !== null && <article className="chat-message assistant streaming"><span className="message-author">Mindweft</span><RenderedAssistantMessage content={streamedReply} /></article>}
           {isRunning && streamedReply === null && <div className="thinking-row"><i /><i /><i /><span>Working</span></div>}
           {branchNotice && <div className="branch-notice" role="status">{branchNotice}</div>}
+          {archiveNotice && <div className="branch-notice" role="status">{archiveNotice}</div>}
           {error && <div className="conversation-error" role="alert">{error}</div>}
           <div ref={messagesEndRef} />
         </div>
@@ -1210,6 +1234,13 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           </small>
         </form>
       </div>
+      {archiveTransferOpen && <ArchiveTransferDialog
+        open
+        threadId={selectedThreadId}
+        threadTitle={selectedThread?.title}
+        onClose={() => setArchiveTransferOpen(false)}
+        onImported={handleArchiveImported}
+      />}
       <ContextDialog
         threadId={selectedThreadId}
         open={contextOpen}

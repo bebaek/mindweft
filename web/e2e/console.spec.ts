@@ -170,6 +170,40 @@ async function installWorkspaceMocks(
       await route.fulfill({ contentType: "application/json", body: '{"thread_id":"thread-new"}' });
       return;
     }
+    if (
+      (path === "/threads/import" || path === "/threads/import-lineage")
+      && request.method() === "POST"
+    ) {
+      const dryRun = new URL(request.url()).searchParams.get("dry_run") === "true";
+      const lineage = path.endsWith("import-lineage");
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          thread_id: lineage || dryRun ? null : "thread-imported",
+          requested_thread_id: lineage && !dryRun ? "thread-imported" : null,
+          thread_count: lineage ? 2 : 1,
+          message_count: 2,
+          attachment_count: 0,
+          dry_run: dryRun,
+          warnings: [],
+        }),
+      });
+      return;
+    }
+    const archiveMatch = path.match(/^\/threads\/([^/]+)\/(lineage\/)?archive$/);
+    if (archiveMatch) {
+      const lineage = Boolean(archiveMatch[2]);
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          schema: lineage ? "mindweft.thread-lineage-archive" : "mindweft.thread-archive",
+          version: lineage ? 2 : 5,
+          archive_id: lineage ? "lineage-1" : "archive-1",
+        }),
+      });
+      return;
+    }
     const lineageMatch = path.match(/^\/threads\/([^/]+)\/lineage$/);
     if (lineageMatch) {
       const lineageThread = {
@@ -657,6 +691,42 @@ test("cancels microphone capture when the selected profile drops audio capabilit
   await expect(page.getByRole("group", { name: "Audio recording" })).toHaveCount(0);
   await expect(page.locator(".pending-audio-item")).toHaveCount(0);
   await expect.poll(() => microphoneStopCount(page)).toBeGreaterThan(0);
+});
+
+test("downloads and validates portable conversation archives", async ({ page }) => {
+  await installApiMocks(page);
+  await installWorkspaceMocks(page);
+  await page.goto("./");
+  await navigateToWorkspace(page);
+  await openConversations(page);
+  await page.getByRole("button", { name: "Review the deployment plan" }).click();
+
+  await page.getByRole("button", { name: "Conversation actions" }).click();
+  await page.getByRole("button", { name: "Portable archives" }).click();
+  const dialog = page.getByRole("dialog", { name: "Transfer conversations" });
+  await expect(dialog).toBeVisible();
+
+  const downloadPromise = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: "Download this conversation" }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe("review-the-deployment-plan.mindweft.json");
+
+  await dialog.getByLabel("Archive file").setInputFiles({
+    name: "thread.mindweft.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({
+      schema: "mindweft.thread-archive",
+      version: 5,
+      archive_id: "archive-1",
+    })),
+  });
+  await dialog.getByLabel(/Validate only/).check();
+  await dialog.getByRole("button", { name: "Validate archive" }).click();
+  await expect(dialog.getByText("Archive validation passed.")).toBeVisible();
+  await expect(dialog.getByText(/1 conversation, 2 messages, 0 attachments/)).toBeVisible();
+
+  const accessibility = await new AxeBuilder({ page }).include(".archive-transfer-dialog").analyze();
+  expect(accessibility.violations).toEqual([]);
 });
 
 test("uses readable typography tokens for chat and controls", async ({ page }) => {

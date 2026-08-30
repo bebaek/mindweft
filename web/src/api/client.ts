@@ -233,6 +233,35 @@ export interface ThreadSearchResponse {
   offset: number;
 }
 
+export type PortableThreadArchive = Record<string, unknown>;
+
+export interface ArchiveImportOptions {
+  profilePolicy: "available" | "defaults" | "strict";
+  organizationPolicy: "reset" | "preserve";
+  timestampPolicy: "reset" | "preserve";
+  dryRun: boolean;
+}
+
+export interface ArchiveImportWarning {
+  code: string;
+  message: string;
+  source_thread_id?: string | null;
+}
+
+export interface ArchiveImportResponse {
+  thread_id?: string | null;
+  requested_thread_id?: string | null;
+  root_thread_id?: string | null;
+  source_thread_id?: string | null;
+  archive_id?: string | null;
+  thread_count?: number;
+  message_count: number;
+  attachment_count: number;
+  dry_run: boolean;
+  replayed?: boolean;
+  warnings: ArchiveImportWarning[];
+}
+
 export interface AttachmentPartBase {
   mime_type: string;
   attachment_id: string;
@@ -1670,6 +1699,58 @@ export class MinigentApiClient {
       `/threads/${encodeURIComponent(threadId)}/lineage`,
       { signal },
     );
+  }
+
+  exportThreadArchive(threadId: string, signal?: AbortSignal): Promise<PortableThreadArchive> {
+    return this.#request<PortableThreadArchive>(
+      `/threads/${encodeURIComponent(threadId)}/archive`,
+      { signal },
+    );
+  }
+
+  exportThreadLineageArchive(
+    threadId: string,
+    signal?: AbortSignal,
+  ): Promise<PortableThreadArchive> {
+    return this.#request<PortableThreadArchive>(
+      `/threads/${encodeURIComponent(threadId)}/lineage/archive`,
+      { signal },
+    );
+  }
+
+  importThreadArchive(
+    archive: PortableThreadArchive,
+    options: ArchiveImportOptions,
+    signal?: AbortSignal,
+  ): Promise<ArchiveImportResponse> {
+    return this.#importPortableArchive("/threads/import", archive, options, signal);
+  }
+
+  importThreadLineageArchive(
+    archive: PortableThreadArchive,
+    options: ArchiveImportOptions,
+    signal?: AbortSignal,
+  ): Promise<ArchiveImportResponse> {
+    return this.#importPortableArchive("/threads/import-lineage", archive, options, signal);
+  }
+
+  #importPortableArchive(
+    path: string,
+    archive: PortableThreadArchive,
+    options: ArchiveImportOptions,
+    signal?: AbortSignal,
+  ): Promise<ArchiveImportResponse> {
+    const query = new URLSearchParams({
+      profile_policy: options.profilePolicy,
+      organization_policy: options.organizationPolicy,
+      timestamp_policy: options.timestampPolicy,
+      ...(options.dryRun ? { dry_run: "true" } : {}),
+    });
+    return this.#request<ArchiveImportResponse>(`${path}?${query.toString()}`, {
+      method: "POST",
+      body: JSON.stringify(archive),
+      signal,
+    });
   }
 
   forkThread(threadId: string, messageId: string): Promise<ForkThreadResponse> {

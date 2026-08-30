@@ -96,8 +96,9 @@ The production console foundation is served at `/console/`. Its source is in `we
 assets packaged under `app/static/console/`. Run `npm run test:e2e:install` once, then
 `npm run test:e2e` for desktop/mobile Chromium coverage and axe accessibility checks. The console
 currently provides runtime readiness, connection setup, thread history, message composition,
-streaming run activity, cancellation, context inspection, confirmed context compaction, validated
-image selection, authenticated attachment upload/display, image detail controls, one-time
+streaming run activity, cancellation, context inspection, confirmed context compaction, portable
+single-thread and lineage archive download/import with validation and destination mapping policies,
+validated image selection, authenticated attachment upload/display, image detail controls, one-time
 private-value approval/denial, pending-consent recovery, uncertain-action reconciliation, tenant
 search/detail views, tenant and user provisioning, domain verification, entitlement and execution
 configuration editing, operational capacity metrics, confirmed tenant lifecycle transitions,
