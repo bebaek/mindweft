@@ -10,6 +10,9 @@ package version is `0.1.0`.
 
 ### Added
 
+- The production web console can now download portable single-thread or complete-lineage archives and
+  validate/import archive files with destination mapping policies, warning summaries, and automatic
+  navigation to the restored requested conversation.
 - Interactive CLI chat can now export portable single-thread and complete-lineage archives to files,
   dry-run or import either archive type with destination mapping policies, report import warnings, and
   continue on the restored requested thread.

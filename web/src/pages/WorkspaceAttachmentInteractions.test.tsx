@@ -59,6 +59,18 @@ vi.mock("../auth/auth-context", () => ({
 }));
 
 beforeAll(() => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    },
+  });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.removeAttribute("open");
+    },
+  });
   Object.defineProperty(URL, "createObjectURL", {
     configurable: true,
     value: createObjectUrl,
@@ -93,7 +105,19 @@ async function readyComposer(): Promise<HTMLFormElement> {
   return form;
 }
 
-describe("workspace attachment intake", () => {
+describe("workspace file interactions", () => {
+  it("opens portable archive import from the conversation actions menu", async () => {
+    renderWorkspace();
+    await readyComposer();
+
+    fireEvent.click(screen.getByRole("button", { name: "Conversation actions" }));
+    fireEvent.click(screen.getByRole("button", { name: "Portable archives" }));
+
+    expect(await screen.findByRole("dialog", { name: "Transfer conversations" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Archive file")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download this conversation" })).toBeDisabled();
+  });
+
   it("queues a mixed image and PDF drop and shows accessible drag feedback", async () => {
     renderWorkspace();
     const composer = await readyComposer();

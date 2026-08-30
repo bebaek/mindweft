@@ -98,6 +98,77 @@ describe("MinigentApiClient", () => {
     );
   });
 
+  it("exports and imports portable thread archives", async () => {
+    const archive = { schema: "mindweft.thread-archive", archive_id: "archive-1" };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify(archive), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        thread_id: null,
+        message_count: 3,
+        attachment_count: 1,
+        dry_run: true,
+        warnings: [],
+      }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }));
+    const client = new MinigentApiClient({ mode: "session" });
+
+    await client.exportThreadArchive("thread/source");
+    await client.importThreadArchive(archive, {
+      profilePolicy: "strict",
+      organizationPolicy: "preserve",
+      timestampPolicy: "reset",
+      dryRun: true,
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/threads/thread%2Fsource/archive");
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/threads/import?profile_policy=strict&organization_policy=preserve&timestamp_policy=reset&dry_run=true",
+    );
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify(archive),
+    }));
+  });
+
+  it("exports and imports portable lineage archives", async () => {
+    const archive = { schema: "mindweft.thread-lineage-archive", archive_id: "lineage-1" };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify(archive), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        requested_thread_id: "thread-restored",
+        thread_count: 2,
+        message_count: 5,
+        attachment_count: 0,
+        dry_run: false,
+        warnings: [],
+      }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }));
+    const client = new MinigentApiClient({ mode: "session" });
+
+    await client.exportThreadLineageArchive("thread/source");
+    await client.importThreadLineageArchive(archive, {
+      profilePolicy: "available",
+      organizationPolicy: "reset",
+      timestampPolicy: "preserve",
+      dryRun: false,
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/threads/thread%2Fsource/lineage/archive");
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/threads/import-lineage?profile_policy=available&organization_policy=reset&timestamp_policy=preserve",
+    );
+  });
+
   it("searches and organizes conversation threads", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({ threads: [], total: 0, limit: 50, offset: 0 }), {
