@@ -240,7 +240,10 @@ They contain the user-visible messages but omit thread configuration, context su
 and attachment bytes. Transcript messages are rendered for the authenticated user and may include
 private values that the server protects internally. Treat transcript files as sensitive and review
 them before sharing. The interactive `/export [markdown|json]` command has the same transcript and
-privacy semantics and always writes to the interactive output stream.
+privacy semantics and writes to the interactive output stream. Interactive chat also supports
+`/export archive <path>`, `/export lineage-archive <path>`, and `/import <path>` so portable backups
+can be transferred without leaving the session; archive exports require a destination path rather
+than writing attachment bytes to the terminal.
 
 `--format archive` requests a versioned JSON archive from the server's protected store
 representation. Archive files exclude tenant ownership and message creator identities but include
@@ -485,7 +488,10 @@ Available during interactive chat:
 | `/parent` | Switch to the available parent thread. |
 | `/children [number]` | List direct children or switch to a numbered child. |
 | `/compact` | Manually compact thread context. |
-| `/export [markdown\|json]` | Export the current thread transcript. |
+| `/export [markdown\|json]` | Export the current thread transcript to the interactive output. |
+| `/export archive <path>` | Export the current thread as a portable archive file. Quote paths containing spaces. |
+| `/export lineage-archive <path>` | Export the complete fork tree containing the current thread as a portable archive file. |
+| `/import <path> [--dry-run] [--profile-policy available\|defaults\|strict] [--organization-policy reset\|preserve] [--timestamp-policy reset\|preserve]` | Validate or import a thread/lineage archive. A successful import switches to and remembers the restored requested thread. |
 | `/status` | Show the active LLM profile and the last provider-limit snapshot. OpenAI OAuth/Codex windows and reset timing are available to tenant owners/admins, or to members when the tenant enables `llm_provider_status`; the command does not make a provider request. |
 | `/tokens` | Show estimated current thread size. |
 | `/debug` | Toggle debug mode. |

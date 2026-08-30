@@ -626,6 +626,15 @@ uv run mindweft import thread.mindweft.json --organization-policy preserve
 uv run mindweft import thread.mindweft.json --timestamp-policy preserve
 ```
 
+The same portable transfer flow is available without leaving interactive chat:
+
+```text
+/export archive thread.mindweft.json
+/export lineage-archive lineage.mindweft.json
+/import thread.mindweft.json --dry-run
+/import thread.mindweft.json --profile-policy available
+```
+
 Archive export uses the server's protected message representation, excludes tenant and user
 ownership, and imports into a new thread owned by the authenticated principal. Version 5 preserves
 core user, assistant, and tool messages, title, context, referenced audio, image, and document

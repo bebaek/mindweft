@@ -10,6 +10,9 @@ package version is `0.1.0`.
 
 ### Added
 
+- Interactive CLI chat can now export portable single-thread and complete-lineage archives to files,
+  dry-run or import either archive type with destination mapping policies, report import warnings, and
+  continue on the restored requested thread.
 - Full-conversation search now supports title, message, and combined scopes with tenant/archive
   isolation, bounded user/assistant snippets, SQLite FTS5 indexing and backfill with a scan fallback,
   browser match navigation, and one-shot and interactive CLI controls.

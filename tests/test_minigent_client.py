@@ -5418,7 +5418,8 @@ def test_run_chat_loop_handles_local_chat_commands(
         "/copy-id, /cancel, "
         "/fork [number|--pick|--message-id UUID], /lineage, /parent, /children [number], "
         "/compact, /actions, "
-        "/discard-action <consent-id>, /export [markdown|json], /tokens, "
+        "/discard-action <consent-id>, /export [markdown|json], "
+        "/export <archive|lineage-archive> <path>, /import <path> [policies], /tokens, "
         "/debug, /editor, /image <path...>|paste|list|clear, "
         "/document <path...>|list|clear, /commands, "
         "/command set|show|delete, "
@@ -5921,6 +5922,182 @@ def test_run_chat_loop_handles_thread_shell_commands(
     assert "# Mindweft transcript\n\nThread: `new-thread`" in output
     assert "[idle] switched to existing-thread\n" in output
     assert "[idle] debug on\n" in output
+
+
+@pytest.mark.parametrize(
+    ("export_format", "method_name"),
+    [
+        ("archive", "export_thread_archive"),
+        ("lineage-archive", "export_thread_lineage_archive"),
+    ],
+)
+def test_interactive_chat_exports_portable_archive_to_file(
+    tmp_path: Path,
+    export_format: str,
+    method_name: str,
+) -> None:
+    output_stream = StringIO()
+    output_path = tmp_path / f"portable {export_format}.json"
+    calls: list[str] = []
+    payload = {"schema": f"test.{export_format}", "archive_id": "archive-1"}
+
+    class ExportClient:
+        thread_id = "thread-1"
+
+        def export_thread_archive(self, thread_id: str) -> dict[str, str]:
+            calls.append(f"export_thread_archive:{thread_id}")
+            return payload
+
+        def export_thread_lineage_archive(self, thread_id: str) -> dict[str, str]:
+            calls.append(f"export_thread_lineage_archive:{thread_id}")
+            return payload
+
+    voice_cli._handle_chat_export(
+        f'/export {export_format} "{output_path}"',
+        ExportClient(),
+        output_stream,
+    )
+
+    assert calls == [f"{method_name}:thread-1"]
+    assert json.loads(output_path.read_text(encoding="utf-8")) == payload
+    assert output_stream.getvalue() == f"[idle] exported {export_format} to {output_path}\n"
+
+
+def test_interactive_chat_imports_archive_with_policies_and_switches_thread(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_stream = StringIO()
+    archive_path = tmp_path / "thread archive.json"
+    archive_path.write_text(
+        json.dumps(
+            {
+                "schema": "mindweft.thread-archive",
+                "thread": {"title": "Imported conversation"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    import_calls: list[tuple[dict[str, object], dict[str, object]]] = []
+    remembered: list[tuple[str, str | None, int | None]] = []
+
+    class ImportClient:
+        thread_id = "old-thread"
+
+        def import_thread_archive(
+            self, archive: dict[str, object], **kwargs: object
+        ) -> dict[str, object]:
+            import_calls.append((archive, kwargs))
+            return {
+                "thread_id": "imported-thread",
+                "message_count": 3,
+                "attachment_count": 1,
+                "warnings": [{"message": "Used the destination default profile."}],
+            }
+
+        def set_thread_id(self, thread_id: str | None) -> None:
+            self.thread_id = thread_id
+
+    monkeypatch.setattr(
+        voice_cli,
+        "remember_client_thread",
+        lambda config, thread_id, *, title=None, message_count=None: remembered.append(
+            (thread_id, title, message_count)
+        ),
+    )
+    client = ImportClient()
+    config = ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent")
+
+    voice_cli._handle_chat_import(
+        f'/import "{archive_path}" --profile-policy strict '
+        "--organization-policy=preserve --timestamp-policy preserve",
+        client,
+        config,
+        output_stream,
+    )
+
+    assert import_calls == [
+        (
+            json.loads(archive_path.read_text(encoding="utf-8")),
+            {
+                "profile_policy": "strict",
+                "organization_policy": "preserve",
+                "timestamp_policy": "preserve",
+                "dry_run": False,
+            },
+        )
+    ]
+    assert client.thread_id == "imported-thread"
+    assert remembered == [("imported-thread", "Imported conversation", 3)]
+    assert output_stream.getvalue() == (
+        "[idle] imported 1 thread(s); current thread imported-thread\n"
+        "[idle] warning: Used the destination default profile.\n"
+    )
+
+
+def test_interactive_chat_dry_runs_lineage_import_without_switching_thread(
+    tmp_path: Path,
+) -> None:
+    output_stream = StringIO()
+    archive_path = tmp_path / "lineage.json"
+    archive_path.write_text(
+        json.dumps({"schema": "mindweft.thread-lineage-archive"}),
+        encoding="utf-8",
+    )
+    calls: list[dict[str, object]] = []
+
+    class ImportClient:
+        thread_id = "current-thread"
+
+        def import_thread_lineage_archive(
+            self, archive: dict[str, object], **kwargs: object
+        ) -> dict[str, object]:
+            del archive
+            calls.append(kwargs)
+            return {
+                "dry_run": True,
+                "thread_count": 4,
+                "message_count": 12,
+                "attachment_count": 2,
+            }
+
+        def set_thread_id(self, thread_id: str | None) -> None:
+            raise AssertionError(f"dry-run must not switch to {thread_id}")
+
+    client = ImportClient()
+    voice_cli._handle_chat_import(
+        f'/import "{archive_path}" --dry-run',
+        client,
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+        output_stream,
+    )
+
+    assert calls == [
+        {
+            "profile_policy": "available",
+            "organization_policy": "reset",
+            "timestamp_policy": "reset",
+            "dry_run": True,
+        }
+    ]
+    assert client.thread_id == "current-thread"
+    assert output_stream.getvalue() == (
+        "[idle] archive validation ok: threads=4 messages=12 attachments=2\n"
+    )
+
+
+def test_interactive_chat_import_reports_usage_errors() -> None:
+    output_stream = StringIO()
+
+    voice_cli._handle_chat_import(
+        "/import --profile-policy impossible",
+        object(),
+        ClientConfig(base_url="http://127.0.0.1:8000", wake_phrase="hey minigent"),
+        output_stream,
+    )
+
+    assert "[idle] import usage error: --profile-policy must be one of " in output_stream.getvalue()
+    assert f"[idle] usage: {voice_cli._CHAT_IMPORT_USAGE}\n" in output_stream.getvalue()
 
 
 def test_run_chat_loop_handles_editor_command(
