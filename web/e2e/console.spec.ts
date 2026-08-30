@@ -140,6 +140,7 @@ async function installWorkspaceMocks(
       ],
     ],
   ]);
+  let threadDeleted = false;
 
   await page.route("**/threads**", async (route) => {
     const request = route.request();
@@ -148,7 +149,7 @@ async function installWorkspaceMocks(
       await route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({
-          threads: [
+          threads: threadDeleted ? [] : [
             {
               thread_id: "thread-1",
               title: "Review the deployment plan",
@@ -158,7 +159,7 @@ async function installWorkspaceMocks(
               updated_at: new Date().toISOString(),
             },
           ],
-          total: 1,
+          total: threadDeleted ? 0 : 1,
           limit: 50,
           offset: 0,
         }),
@@ -201,6 +202,15 @@ async function installWorkspaceMocks(
           version: lineage ? 2 : 5,
           archive_id: lineage ? "lineage-1" : "archive-1",
         }),
+      });
+      return;
+    }
+    const importedLineageMatch = path.match(/^\/threads\/([^/]+)\/imported-lineage$/);
+    if (importedLineageMatch) {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "thread is not a member of a completed lineage archive import" }),
       });
       return;
     }
@@ -422,6 +432,13 @@ async function installWorkspaceMocks(
           usage: { total_tokens: 460 },
         }),
       });
+      return;
+    }
+    const deleteThreadMatch = path.match(/^\/threads\/([^/]+)$/);
+    if (deleteThreadMatch && request.method() === "DELETE") {
+      threadDeleted = true;
+      messages.delete(deleteThreadMatch[1]);
+      await route.fulfill({ status: 204, body: "" });
       return;
     }
     await route.fulfill({ contentType: "application/json", body: "{}" });
@@ -727,6 +744,37 @@ test("downloads and validates portable conversation archives", async ({ page }) 
 
   const accessibility = await new AxeBuilder({ page }).include(".archive-transfer-dialog").analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("confirms and deletes a conversation without accessibility violations", async ({ page }) => {
+  await installApiMocks(page);
+  await installWorkspaceMocks(page);
+  await page.goto("./");
+  await navigateToWorkspace(page);
+  await openConversations(page);
+  await page.getByRole("button", { name: "Review the deployment plan" }).click();
+
+  await page.getByRole("button", { name: "Conversation actions" }).click();
+  await page.getByRole("button", { name: "Delete conversation" }).click();
+  let dialog = page.getByRole("dialog", { name: "Delete conversation?" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(/This action cannot be undone/)).toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).include(".thread-delete-dialog").analyze();
+  expect(accessibility.violations).toEqual([]);
+
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Review the deployment plan" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Conversation actions" }).click();
+  await page.getByRole("button", { name: "Delete conversation" }).click();
+  dialog = page.getByRole("dialog", { name: "Delete conversation?" });
+  await dialog.getByRole("button", { name: "Delete conversation" }).click();
+
+  await expect(page.getByRole("heading", { name: "Untitled conversation" })).toBeVisible();
+  await expect(page.getByText("Conversation deleted.")).toBeVisible();
+  await openConversations(page);
+  await expect(page.getByText(/No conversations yet/)).toBeVisible();
 });
 
 test("uses readable typography tokens for chat and controls", async ({ page }) => {

@@ -169,6 +169,41 @@ describe("MinigentApiClient", () => {
     );
   });
 
+  it("inspects and deletes a complete imported lineage", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        archive_id: "lineage-1",
+        requested_thread_id: "thread/1",
+        thread_count: 3,
+        message_count: 7,
+        attachment_count: 1,
+        dry_run: false,
+        warnings: [],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        deleted_thread_ids: ["thread/1", "thread/2", "thread/3"],
+        deleted_count: 3,
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+    const client = new MinigentApiClient({ mode: "session" });
+
+    const lineage = await client.getImportedThreadLineage("thread/1");
+    const deleted = await client.deleteImportedThreadLineage("thread/1");
+
+    expect(lineage.thread_count).toBe(3);
+    expect(deleted.deleted_count).toBe(3);
+    expect(fetchMock.mock.calls[0][0]).toBe("/threads/thread%2F1/imported-lineage");
+    expect(fetchMock.mock.calls[1]).toEqual([
+      "/threads/thread%2F1/imported-lineage",
+      expect.objectContaining({ method: "DELETE" }),
+    ]);
+  });
+
   it("searches and organizes conversation threads", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({ threads: [], total: 0, limit: 50, offset: 0 }), {

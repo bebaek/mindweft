@@ -98,7 +98,8 @@ assets packaged under `app/static/console/`. Run `npm run test:e2e:install` once
 currently provides runtime readiness, connection setup, thread history, message composition,
 streaming run activity, cancellation, context inspection, confirmed context compaction, portable
 single-thread and lineage archive download/import with validation and destination mapping policies,
-validated image selection, authenticated attachment upload/display, image detail controls, one-time
+confirmed conversation deletion with imported-lineage scope handling, validated image selection,
+authenticated attachment upload/display, image detail controls, one-time
 private-value approval/denial, pending-consent recovery, uncertain-action reconciliation, tenant
 search/detail views, tenant and user provisioning, domain verification, entitlement and execution
 configuration editing, operational capacity metrics, confirmed tenant lifecycle transitions,
