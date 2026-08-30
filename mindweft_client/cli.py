@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import json
 import mimetypes
 import os
 import platform
@@ -20,7 +21,9 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Callable, Protocol, TextIO, cast
 
+from mindweft_archive import LINEAGE_ARCHIVE_SCHEMA, THREAD_ARCHIVE_SCHEMA
 from mindweft_client.api_client import MindweftAPIClient
+from mindweft_client.archive_commands import load_archive_file
 from mindweft_client.audio import AudioCaptureConfig, MicrophoneRecorder, open_microphone_stream
 from mindweft_client.backends.manual_audio import ManualAudioActivationSource
 from mindweft_client.backends.passive_audio import PassiveAudioActivationSource
@@ -1150,6 +1153,9 @@ def run_chat_loop(config: ClientConfig, *, once: bool = False) -> int:
         if utterance.startswith("/export"):
             _handle_chat_export(utterance, client, output_stream)
             continue
+        if utterance == "/import" or utterance.startswith("/import "):
+            _handle_chat_import(utterance, client, config, output_stream)
+            continue
         if utterance == "/compact":
             _handle_chat_compact(client, output_stream)
             continue
@@ -1322,7 +1328,8 @@ def _write_chat_help(output_stream: ChatOutputStream) -> None:
         "/switch <id>, /rename <title>, /pin, /unpin, /archive, /restore, /copy-id, /cancel, "
         "/fork [number|--pick|--message-id UUID], /lineage, /parent, /children [number], "
         "/compact, /actions, "
-        "/discard-action <consent-id>, /export [markdown|json], /tokens, "
+        "/discard-action <consent-id>, /export [markdown|json], "
+        "/export <archive|lineage-archive> <path>, /import <path> [policies], /tokens, "
         "/debug, /editor, /image <path...>|paste|list|clear, "
         "/document <path...>|list|clear, /commands, "
         "/command set|show|delete, "
@@ -2588,9 +2595,39 @@ def _handle_chat_export(
         output_stream.write("[idle] no current thread\n")
         output_stream.flush()
         return
-    export_format = utterance.removeprefix("/export").strip() or "markdown"
-    if export_format not in {"markdown", "json"}:
-        output_stream.write("[idle] usage: /export [markdown|json]\n")
+    try:
+        arguments = shlex.split(utterance.removeprefix("/export").strip())
+    except ValueError as exc:
+        output_stream.write(f"[idle] export failed: {exc}\n")
+        output_stream.flush()
+        return
+    export_format = arguments[0] if arguments else "markdown"
+    if export_format in {"archive", "lineage-archive"}:
+        if len(arguments) != 2:
+            output_stream.write("[idle] usage: /export <archive|lineage-archive> <path>\n")
+            output_stream.flush()
+            return
+        output_path = Path(arguments[1]).expanduser()
+        try:
+            archive = (
+                client.export_thread_archive(thread_id)
+                if export_format == "archive"
+                else client.export_thread_lineage_archive(thread_id)
+            )
+            output_path.write_text(
+                json.dumps(archive, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except (OSError, RuntimeError) as exc:
+            output_stream.write(f"[idle] export failed: {exc}\n")
+        else:
+            output_stream.write(f"[idle] exported {export_format} to {output_path}\n")
+        output_stream.flush()
+        return
+    if export_format not in {"markdown", "json"} or len(arguments) > 1:
+        output_stream.write(
+            "[idle] usage: /export [markdown|json] or /export <archive|lineage-archive> <path>\n"
+        )
         output_stream.flush()
         return
     try:
@@ -2603,14 +2640,173 @@ def _handle_chat_export(
     if not isinstance(messages, list):
         output_stream.write("[idle] export failed: thread messages missing\n")
     elif export_format == "json":
-        import json
-
         output_stream.write(
             json.dumps({"thread_id": thread_id, "messages": messages}, indent=2) + "\n"
         )
     else:
         output_stream.write(_format_markdown_transcript(thread_id, messages))
     output_stream.flush()
+
+
+_CHAT_IMPORT_USAGE = (
+    "/import <path> [--dry-run] [--profile-policy available|defaults|strict] "
+    "[--organization-policy reset|preserve] [--timestamp-policy reset|preserve]"
+)
+
+
+def _parse_chat_import_arguments(utterance: str) -> tuple[Path, str, str, str, bool]:
+    arguments = shlex.split(utterance.removeprefix("/import").strip())
+    path: Path | None = None
+    profile_policy = "available"
+    organization_policy = "reset"
+    timestamp_policy = "reset"
+    dry_run = False
+    policy_options = {
+        "--profile-policy": ({"available", "defaults", "strict"}, "profile"),
+        "--organization-policy": ({"reset", "preserve"}, "organization"),
+        "--timestamp-policy": ({"reset", "preserve"}, "timestamp"),
+    }
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--dry-run":
+            dry_run = True
+            index += 1
+            continue
+        option_name, separator, inline_value = argument.partition("=")
+        if option_name in policy_options:
+            if separator:
+                value = inline_value
+            else:
+                index += 1
+                if index >= len(arguments):
+                    raise ValueError(f"{option_name} requires a value")
+                value = arguments[index]
+            allowed, policy_kind = policy_options[option_name]
+            if value not in allowed:
+                choices = "|".join(sorted(allowed))
+                raise ValueError(f"{option_name} must be one of {choices}")
+            if policy_kind == "profile":
+                profile_policy = value
+            elif policy_kind == "organization":
+                organization_policy = value
+            else:
+                timestamp_policy = value
+            index += 1
+            continue
+        if argument.startswith("--"):
+            raise ValueError(f"unknown option {argument}")
+        if path is not None:
+            raise ValueError("only one archive path may be provided")
+        path = Path(argument).expanduser()
+        index += 1
+    if path is None:
+        raise ValueError("archive path is required")
+    return path, profile_policy, organization_policy, timestamp_policy, dry_run
+
+
+def _handle_chat_import(
+    utterance: str,
+    client: RememberingMindweftAPIClient,
+    config: ClientConfig,
+    output_stream: ChatOutputStream,
+) -> None:
+    try:
+        (
+            archive_path,
+            profile_policy,
+            organization_policy,
+            timestamp_policy,
+            dry_run,
+        ) = _parse_chat_import_arguments(utterance)
+    except ValueError as exc:
+        output_stream.write(
+            f"[idle] import usage error: {exc}\n[idle] usage: {_CHAT_IMPORT_USAGE}\n"
+        )
+        output_stream.flush()
+        return
+    try:
+        archive = load_archive_file(archive_path)
+        schema = archive.get("schema")
+        if schema not in {THREAD_ARCHIVE_SCHEMA, LINEAGE_ARCHIVE_SCHEMA}:
+            raise ValueError(f"unsupported archive schema: {schema!r}")
+        is_lineage = schema == LINEAGE_ARCHIVE_SCHEMA
+        importer = (
+            client.import_thread_lineage_archive if is_lineage else client.import_thread_archive
+        )
+        response = importer(
+            archive,
+            profile_policy=profile_policy,
+            organization_policy=organization_policy,
+            timestamp_policy=timestamp_policy,
+            dry_run=dry_run,
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Mindweft archive import response must be an object")
+        if dry_run:
+            if response.get("dry_run") is not True:
+                raise RuntimeError("Mindweft archive dry-run response is invalid")
+            output_stream.write(
+                "[idle] archive validation ok: "
+                f"threads={response.get('thread_count', 1)} "
+                f"messages={response.get('message_count', 0)} "
+                f"attachments={response.get('attachment_count', 0)}\n"
+            )
+            _write_chat_archive_warnings(response, output_stream)
+            output_stream.flush()
+            return
+        thread_key = "requested_thread_id" if is_lineage else "thread_id"
+        thread_id = response.get(thread_key)
+        if not isinstance(thread_id, str) or not thread_id:
+            raise RuntimeError(f"Mindweft archive import response is missing {thread_key}")
+        title = _imported_archive_title(archive, is_lineage=is_lineage)
+        message_count = response.get("message_count")
+        client.set_thread_id(thread_id)
+        remember_client_thread(
+            config,
+            thread_id,
+            title=title,
+            message_count=message_count if isinstance(message_count, int) else None,
+        )
+        output_stream.write(
+            f"[idle] imported {response.get('thread_count', 1)} thread(s); "
+            f"current thread {thread_id}\n"
+        )
+        _write_chat_archive_warnings(response, output_stream)
+    except (OSError, RuntimeError, ValueError) as exc:
+        output_stream.write(f"[idle] import failed: {exc}\n")
+    output_stream.flush()
+
+
+def _imported_archive_title(archive: dict[str, Any], *, is_lineage: bool) -> str | None:
+    if not is_lineage:
+        thread = archive.get("thread")
+        title = thread.get("title") if isinstance(thread, dict) else None
+        return title if isinstance(title, str) else None
+    requested_source_thread_id = archive.get("requested_source_thread_id")
+    entries = archive.get("threads")
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        nested = entry.get("archive") if isinstance(entry, dict) else None
+        thread = nested.get("thread") if isinstance(nested, dict) else None
+        if not isinstance(thread, dict):
+            continue
+        if thread.get("source_thread_id") != requested_source_thread_id:
+            continue
+        title = thread.get("title")
+        return title if isinstance(title, str) else None
+    return None
+
+
+def _write_chat_archive_warnings(response: dict[str, Any], output_stream: ChatOutputStream) -> None:
+    warnings = response.get("warnings")
+    if not isinstance(warnings, list):
+        return
+    for warning in warnings:
+        message = warning.get("message") if isinstance(warning, dict) else None
+        if isinstance(message, str):
+            output_stream.write(f"[idle] warning: {message}\n")
 
 
 def _title_from_thread_messages(messages: object) -> str | None:
