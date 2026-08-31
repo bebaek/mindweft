@@ -263,11 +263,16 @@ def test_user_mcp_mutations_are_versioned_write_only_and_confirmed(tmp_path: Pat
         )
 
     assert put_config.json()["result"]["structuredContent"]["version"] == 1
-    assert conflict.json()["result"]["isError"] is True
-    assert "actual_version" in str(conflict.json())
+    conflict_result = conflict.json()["result"]
+    assert conflict_result["isError"] is True
+    assert '"actual_version": 1' in conflict_result["content"][0]["text"]
+    assert '"status_code": 409' in conflict_result["content"][0]["text"]
     assert put_credential.json()["result"]["structuredContent"]["version"] == 1
     assert "Bearer mcp-secret" not in put_credential.text
-    assert delete_without_confirmation.json()["result"]["isError"] is True
+    unconfirmed_result = delete_without_confirmation.json()["result"]
+    assert unconfirmed_result["isError"] is True
+    assert "requires confirm=true" in unconfirmed_result["content"][0]["text"]
+    assert '"status_code": 400' in unconfirmed_result["content"][0]["text"]
     assert delete_credential.json()["result"]["structuredContent"]["deleted"] is True
     assert delete_config.json()["result"]["structuredContent"]["deleted"] is True
     audit_records = app.state.store.list_audit_records("tenant-1")

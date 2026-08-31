@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import HTTPException, Request
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -124,6 +126,18 @@ def _safe_payload(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
     return value
+
+
+def _call_mcp_tool(operation: Callable[[], dict[str, object]]) -> dict[str, object]:
+    """Expose expected HTTP failures to MCP clients without leaking unexpected exceptions."""
+    try:
+        return operation()
+    except HTTPException as exc:
+        message = json.dumps(
+            {"status_code": exc.status_code, "detail": _safe_payload(exc.detail)},
+            sort_keys=True,
+        )
+        raise ToolError(message) from exc
 
 
 def get_user_execution_config(app: Any, principal: Principal) -> dict[str, object]:
@@ -557,31 +571,33 @@ def build_user_mcp_server() -> MCPServer[Any]:
     @server.tool(name="get_user_execution_status")
     def mcp_get_user_execution_status() -> dict[str, object]:
         context = _context()
-        return get_user_execution_status(context.app, context.principal)
+        return _call_mcp_tool(lambda: get_user_execution_status(context.app, context.principal))
 
     @server.tool(name="get_user_execution_config")
     def mcp_get_user_execution_config() -> dict[str, object]:
         context = _context()
-        return get_user_execution_config(context.app, context.principal)
+        return _call_mcp_tool(lambda: get_user_execution_config(context.app, context.principal))
 
     @server.tool(name="validate_user_execution_config")
     def mcp_validate_user_execution_config(config: dict[str, Any]) -> dict[str, object]:
-        return validate_user_execution_config_for_mcp(config)
+        return _call_mcp_tool(lambda: validate_user_execution_config_for_mcp(config))
 
     @server.tool(name="list_user_mcp_access")
     def mcp_list_user_mcp_access() -> dict[str, object]:
         context = _context()
-        return list_user_mcp_access(context.app, context.principal)
+        return _call_mcp_tool(lambda: list_user_mcp_access(context.app, context.principal))
 
     @server.tool(name="put_user_execution_config")
     def mcp_put_user_execution_config(
         config: dict[str, Any], expected_version: int | None = None
     ) -> dict[str, object]:
         context = _context()
-        return put_user_execution_config(
-            context.app,
-            context.principal,
-            {"config": config, "expected_version": expected_version},
+        return _call_mcp_tool(
+            lambda: put_user_execution_config(
+                context.app,
+                context.principal,
+                {"config": config, "expected_version": expected_version},
+            )
         )
 
     @server.tool(name="delete_user_execution_config")
@@ -589,10 +605,12 @@ def build_user_mcp_server() -> MCPServer[Any]:
         confirm: bool, expected_version: int | None = None
     ) -> dict[str, object]:
         context = _context()
-        return delete_user_execution_config(
-            context.app,
-            context.principal,
-            {"confirm": confirm, "expected_version": expected_version},
+        return _call_mcp_tool(
+            lambda: delete_user_execution_config(
+                context.app,
+                context.principal,
+                {"confirm": confirm, "expected_version": expected_version},
+            )
         )
 
     @server.tool(name="put_user_execution_credential")
@@ -603,15 +621,17 @@ def build_user_mcp_server() -> MCPServer[Any]:
         expected_version: int | None = None,
     ) -> dict[str, object]:
         context = _context()
-        return put_user_execution_credential(
-            context.app,
-            context.principal,
-            credential_ref,
-            {
-                "header_name": header_name,
-                "header_value": header_value,
-                "expected_version": expected_version,
-            },
+        return _call_mcp_tool(
+            lambda: put_user_execution_credential(
+                context.app,
+                context.principal,
+                credential_ref,
+                {
+                    "header_name": header_name,
+                    "header_value": header_value,
+                    "expected_version": expected_version,
+                },
+            )
         )
 
     @server.tool(name="delete_user_execution_credential")
@@ -621,11 +641,13 @@ def build_user_mcp_server() -> MCPServer[Any]:
         expected_version: int | None = None,
     ) -> dict[str, object]:
         context = _context()
-        return delete_user_execution_credential(
-            context.app,
-            context.principal,
-            credential_ref,
-            {"confirm": confirm, "expected_version": expected_version},
+        return _call_mcp_tool(
+            lambda: delete_user_execution_credential(
+                context.app,
+                context.principal,
+                credential_ref,
+                {"confirm": confirm, "expected_version": expected_version},
+            )
         )
 
     return server
