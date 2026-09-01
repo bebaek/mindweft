@@ -214,6 +214,7 @@ def ensure_thread(
         return load_remembered_thread(base_url, args), False
     validate_thread_create_options(args)
     response = client.create_thread(
+        agent_name=args.agent,
         skill_name=args.skill,
         skills=args.skills,
         capability_profile=args.capability_profile,
@@ -879,6 +880,7 @@ def run_threads_create(
 ) -> int:
     validate_thread_create_options(args)
     response = client.create_thread(
+        agent_name=args.agent,
         skill_name=args.skill,
         skills=args.skills,
         capability_profile=args.capability_profile,

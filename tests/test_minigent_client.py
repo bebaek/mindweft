@@ -2764,6 +2764,14 @@ def test_minigent_client_stream_run_structured_provider_errors_are_concise(
     assert "✖ error 429: Gemini quota exceeded. Retry in about 51s." in progress_stream.getvalue()
 
 
+def test_build_config_accepts_cli_agent() -> None:
+    args = build_parser().parse_args(["--agent", "quadx-office"])
+
+    config = build_config(args)
+
+    assert config.agent_name == "quadx-office"
+
+
 def test_build_config_prefers_cli_stream_run_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIGENT_CLIENT_STREAM_RUNS", "false")
 
@@ -5576,6 +5584,40 @@ def test_run_chat_loop_handles_status_command(
     assert "observed 1m ago · source last OpenAI response" in output
 
 
+def test_chat_prompt_history_thread_uses_configured_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    calls: list[dict[str, object]] = []
+
+    class FakeClient:
+        thread_id: str | None = None
+
+        def create_thread(self, **kwargs: object) -> dict[str, str]:
+            calls.append(kwargs)
+            self.thread_id = "thread-quadx"
+            return {"thread_id": "thread-quadx"}
+
+    config = ClientConfig(
+        base_url="http://127.0.0.1:8000",
+        wake_phrase="hey minigent",
+        agent_name="quadx-office",
+    )
+    output_stream = TtyStringIO()
+
+    voice_cli._ensure_chat_thread_for_prompt_history(
+        FakeClient(),  # type: ignore[arg-type]
+        config,
+        input_stream=TtyStringIO(""),
+        output_stream=output_stream,
+    )
+
+    assert calls == [{"agent_name": "quadx-office", "skill_name": None}]
+    state = PersistentClientState.load()
+    assert state.get_last_thread(voice_cli.client_state_scope_key(config)) == "thread-quadx"
+
+
 def test_run_chat_loop_handles_agent_command(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -6268,11 +6310,12 @@ def test_minigent_client_cli_routes_chat_subcommand_without_minigent_client(
         ),
     )
 
-    exit_code = voice_cli.main(["chat", "--once"])
+    exit_code = voice_cli.main(["chat", "--agent", "quadx-office", "--once"])
 
     assert exit_code == 7
     assert calls[0][0] == "chat"
     assert isinstance(calls[0][1], ClientConfig)
+    assert calls[0][1].agent_name == "quadx-office"
     assert calls[1] == ("once", True)
 
 

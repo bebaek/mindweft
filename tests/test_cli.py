@@ -85,6 +85,28 @@ def test_chat_stream_json_prints_events(monkeypatch: Any, tmp_path: Path, capsys
     assert output["events"] == stream_events
 
 
+def test_chat_agent_selects_server_agent_when_creating_thread(
+    monkeypatch: Any, tmp_path: Path, capsys: Any
+) -> None:
+    def urlopen(request: Any) -> _Response:
+        if request.full_url.endswith("/threads"):
+            assert json.loads(request.data.decode("utf-8")) == {"agent_name": "quadx-office"}
+            return _Response(body={"thread_id": "thread-1"})
+        if request.full_url.endswith("/threads/thread-1/messages"):
+            return _Response(body={"role": "user"})
+        if request.full_url.endswith("/threads/thread-1/run"):
+            return _Response(body={"reply": "office reply"})
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+
+    exit_code = cli.main(["chat", "--agent", "quadx-office", "prepare an agenda"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "office reply\n"
+
+
 def test_run_reads_prompt_from_stdin_and_prints_plain_reply(
     monkeypatch: Any, tmp_path: Path, capsys: Any
 ) -> None:

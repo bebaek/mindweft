@@ -159,6 +159,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional skill name when creating a new thread.",
     )
+    parser.add_argument(
+        "--agent",
+        default=None,
+        help="Optional server agent name when creating a new thread.",
+    )
     thread_target_group = parser.add_mutually_exclusive_group()
     thread_target_group.add_argument(
         "--thread-id",
@@ -356,6 +361,7 @@ def build_config(args: argparse.Namespace) -> ClientConfig:
         ),
         wakeword_provider=args.wakeword_provider or env_config.wakeword_provider,
         skill_name=args.skill or env_config.skill_name,
+        agent_name=args.agent,
         agent_presets=env_config.agent_presets,
         thread_id=args.thread_id or env_config.thread_id,
         audio_device=args.audio_device or env_config.audio_device,
@@ -642,6 +648,7 @@ _OPTIONS_WITH_VALUES = {
     "--wake-acknowledgement",
     "--capture-ended-acknowledgement",
     "--skill",
+    "--agent",
     "--thread-id",
     "--api-token",
     "--user-id",
@@ -1390,6 +1397,7 @@ def _handle_chat_llm(
     preset = client.active_agent_preset_config
     try:
         created = client.create_thread(
+            agent_name=config.agent_name if preset is None else None,
             skill_name=preset.skill_name if preset is not None else None,
             skills=list(preset.skills)
             if preset is not None and preset.skills is not None
@@ -1745,8 +1753,11 @@ def _handle_chat_new(
 ) -> None:
     active_preset = client.active_agent_preset_config
     if active_preset is None:
-        response = client.create_thread(skill_name=config.skill_name)
-        title = "New thread"
+        response = client.create_thread(
+            agent_name=config.agent_name,
+            skill_name=config.skill_name,
+        )
+        title = f"Agent: {config.agent_name}" if config.agent_name else "New thread"
     else:
         response = client.create_thread(
             skill_name=active_preset.skill_name,
@@ -1904,6 +1915,8 @@ def _write_current_agent(
     active = client.active_agent_preset
     if active:
         output_stream.write(f"[idle] current agent: {active}\n")
+    elif config.agent_name:
+        output_stream.write(f"[idle] current agent: {config.agent_name}\n")
     elif config.skill_name:
         output_stream.write(f"[idle] current agent: default skill={config.skill_name}\n")
     else:
@@ -3025,12 +3038,16 @@ def _ensure_chat_thread_for_prompt_history(
     if client.thread_id or not input_is_tty() or not output_is_tty():
         return
     try:
-        response = client.create_thread(skill_name=config.skill_name)
+        response = client.create_thread(
+            agent_name=config.agent_name,
+            skill_name=config.skill_name,
+        )
     except RuntimeError:
         return
     thread_id = response.get("thread_id") if isinstance(response, dict) else None
     if isinstance(thread_id, str) and thread_id:
-        remember_client_thread(config, thread_id, title="New thread")
+        title = f"Agent: {config.agent_name}" if config.agent_name else "New thread"
+        remember_client_thread(config, thread_id, title=title)
 
 
 def _build_chat_prompt_session(
