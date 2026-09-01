@@ -65,6 +65,7 @@ class ClientConfig:
     tts_sentence_silence: float | None = 0.35
     wakeword_provider: str = "porcupine"
     skill_name: str | None = None
+    agent_name: str | None = None
     agent_presets: tuple[AgentPreset, ...] = ()
     thread_id: str | None = None
     resume_last: bool = False

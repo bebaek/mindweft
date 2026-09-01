@@ -734,7 +734,10 @@ class MindweftAPIClient:
     def ensure_thread(self) -> str:
         if self._thread_id:
             return self._thread_id
-        response = self.create_thread(skill_name=self._config.skill_name)
+        response = self.create_thread(
+            agent_name=self._config.agent_name,
+            skill_name=self._config.skill_name,
+        )
         thread_id = response["thread_id"]
         if not isinstance(thread_id, str) or not thread_id:
             raise RuntimeError("Mindweft create-thread response must include thread_id")

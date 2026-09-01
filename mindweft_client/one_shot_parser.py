@@ -92,6 +92,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Vision detail hint for attached images.",
     )
     chat_parser.add_argument(
+        "--agent", default=None, help="Server agent to apply when creating a new thread."
+    )
+    chat_parser.add_argument(
         "--skill", default=None, help="Skill to apply when creating a new thread."
     )
     chat_parser.add_argument(
@@ -182,6 +185,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "low", "high"],
         default="auto",
         help="Vision detail hint for attached images.",
+    )
+    run_parser.add_argument(
+        "--agent", default=None, help="Server agent to apply when creating a thread."
     )
     run_parser.add_argument("--skill", default=None, help="Skill to apply when creating a thread.")
     run_parser.add_argument(
@@ -403,6 +409,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     threads_create_parser = threads_subparsers.add_parser("create", help="Create a new thread.")
+    threads_create_parser.add_argument(
+        "--agent",
+        default=None,
+        help="Server agent to apply when creating the thread.",
+    )
     threads_create_parser.add_argument(
         "--skill",
         default=None,

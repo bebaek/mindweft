@@ -50,6 +50,7 @@ Or use the packaged CLI from the repo:
 
 ```bash
 uv run mindweft run "hello"
+uv run mindweft chat --agent coding "review this repository"
 uv run mindweft run --document ./requirements.pdf "review this"
 uv run mindweft chat
 ```
@@ -589,8 +590,9 @@ Inside the repo:
 
 ```bash
 uv run mindweft run "hello"
+uv run mindweft chat --agent plain-qa "explain this concept"
 uv run mindweft chat --stream "hello with progress"
-uv run mindweft-client chat --resume-last
+uv run mindweft-client chat --agent plain-qa --stream-runs
 uv run mindweft options
 uv run mindweft skills
 uv run mindweft capabilities
