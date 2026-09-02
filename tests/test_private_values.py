@@ -261,6 +261,34 @@ def test_local_pii_protector_masks_new_contact_names(text: str) -> None:
     assert result.private_value_kinds == {"person-ref": "person"}
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.org/publications/2501.12345",
+        "https://doi.org/10.1234/1234567",
+        "https://example.org/records/12345678",
+    ],
+)
+def test_local_pii_protector_treats_url_paths_as_opaque_identifiers(url: str) -> None:
+    protector = LocalPIIProtector(reference_factory=lambda: "phone-ref")
+
+    result = protector.protect(f"Read {url} for details")
+
+    assert result.text == f"Read {url} for details"
+    assert result.private_values == {}
+    assert result.private_value_kinds == {}
+
+
+def test_local_pii_protector_still_masks_phone_numbers_in_url_queries() -> None:
+    protector = LocalPIIProtector(reference_factory=lambda: "phone-ref")
+
+    result = protector.protect("Open https://example.org/search?phone=212-555-0123")
+
+    assert "212-555-0123" not in result.text
+    assert result.private_values == {"phone-ref": "212-555-0123"}
+    assert result.private_value_kinds == {"phone-ref": "phone"}
+
+
 def test_local_pii_protector_preserves_existing_placeholders() -> None:
     protector = LocalPIIProtector(reference_factory=lambda: "new-ref")
 
