@@ -606,3 +606,8 @@ even when custom MCP servers are disabled. This does not change workspace path p
 shell permissions, or forwarded-identity services. See **Tenant MCP bearer credential rotation**
 in [Reference](reference.md) for the catalog opt-in and tenant-owner API. Personal MCP
 credentials remain a separate user-scoped configuration surface.
+
+Tenant catalog cards also support explicit discovery-only connection tests. Reading connection
+status does not contact MCP servers; last-check timestamps describe historical observations rather
+than continuous health. These controls do not alter workspace scopes, path restrictions, or tool
+allowlists. See **Inspecting and testing tenant catalog connections** in [Reference](reference.md).

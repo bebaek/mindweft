@@ -236,3 +236,78 @@ def test_deployment_owned_service_rejects_rotation(setup):
     client.app.state.admin_store_settings = replace(settings, mcp_server_catalog=catalog)
     assert rotate(client).status_code == 403
     discovery.assert_not_awaited()
+
+
+def test_inspection_does_not_discover_or_disclose_credentials(setup):
+    client, _, discovery, *_ = setup
+    response = client.get("/admin/tenants/tenant-1/mcp-connections", headers=OWNER)
+    assert response.status_code == 200
+    assert response.json()["items"] == [
+        {
+            "name": "netwise",
+            "enabled": True,
+            "credential_owner": "tenant",
+            "bearer_configured": True,
+            "last_check": None,
+        }
+    ]
+    assert "old-token" not in response.text
+    discovery.assert_not_awaited()
+
+
+def test_connection_check_persists_across_store_instances_and_expires_on_edit(setup):
+    from types import SimpleNamespace
+
+    client, store, discovery, path, key = setup
+    discovery.return_value = [SimpleNamespace(name="netwise.summary")]
+    result = client.post(URL.removesuffix("credential") + "test", headers=OWNER)
+    assert result.status_code == 200
+    assert result.json()["status"] == "succeeded"
+    assert result.json()["tools"] == ["netwise.summary"]
+    other = SQLiteTenantConfigStore(str(path / "config.db"), encryption_key=key)
+    assert other.get_mcp_connection_check("tenant-1", "netwise", 1) == result.json()
+    assert other.get_mcp_connection_check("tenant-2", "netwise", 1) is None
+    assert store.get_config_version("tenant-1") == 1
+    response = client.get("/admin/tenants/tenant-1/mcp-connections", headers=OWNER)
+    assert response.json()["items"][0]["last_check"] == result.json()
+    store.upsert_raw_config("tenant-1", store.get_raw_config("tenant-1"))
+    response = client.get("/admin/tenants/tenant-1/mcp-connections", headers=OWNER)
+    assert response.json()["items"][0]["last_check"] is None
+
+
+def test_failed_connection_check_does_not_persist_upstream_exception(setup):
+    client, store, discovery, *_ = setup
+    discovery.side_effect = RuntimeError("secret echoed: old-token")
+    result = client.post(URL.removesuffix("credential") + "test", headers=OWNER)
+    assert result.status_code == 200
+    assert result.json()["status"] == "failed"
+    assert result.json()["tools"] == []
+    assert "old-token" not in result.text
+    assert "old-token" not in json.dumps(store.get_mcp_connection_check("tenant-1", "netwise", 1))
+
+
+def test_connection_check_rejects_racing_configuration_and_unauthorized_user(setup):
+    client, store, discovery, *_ = setup
+    endpoint = URL.removesuffix("credential") + "test"
+    assert (
+        client.post(endpoint, headers={**OWNER, "X-Minigent-User-Id": "member"}).status_code == 403
+    )
+    assert client.get("/admin/tenants/tenant-2/mcp-connections", headers=OWNER).status_code == 403
+    discovery.assert_not_awaited()
+
+    async def edit_during_discovery():
+        store.upsert_raw_config("tenant-1", store.get_raw_config("tenant-1"))
+        return []
+
+    discovery.side_effect = edit_during_discovery
+    assert client.post(endpoint, headers=OWNER).status_code == 409
+    assert store.get_mcp_connection_check("tenant-1", "netwise", 2) is None
+
+
+def test_deleted_config_cannot_resurrect_old_check(setup):
+    client, store, *_ = setup
+    payload = store.get_raw_config("tenant-1")
+    assert client.post(URL.removesuffix("credential") + "test", headers=OWNER).status_code == 200
+    store.delete_config("tenant-1")
+    store.upsert_raw_config("tenant-1", payload)
+    assert store.get_mcp_connection_check("tenant-1", "netwise", 1) is None

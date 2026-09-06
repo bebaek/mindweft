@@ -3014,6 +3014,111 @@ def build_admin_router() -> APIRouter:
             ),
         )
 
+    @router.get("/tenants/{tenant_id}/mcp-connections")
+    async def get_tenant_mcp_connections(
+        tenant_id: str,
+        request: Request,
+        admin: Principal = Depends(require_tenant_owner_principal),
+    ) -> dict[str, Any]:
+        _ = admin
+        store = _require_admin_store(request)
+        version = store.get_config_version(tenant_id)
+        payload = store.get_raw_config(tenant_id) or {}
+        if store.get_config_version(tenant_id) != version:
+            raise HTTPException(409, "Configuration changed; reload connections")
+        tools = payload.get("tools", {})
+        servers = {
+            server["name"]: server
+            for server in tools.get("mcp_servers", tools.get("mcpServers", []))
+        }
+        policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        items = []
+        for item in _configured_mcp_server_catalog(request):
+            if policy is not None and item.id not in policy.item_ids:
+                continue
+            name = item.server["name"]
+            server = servers.get(name)
+            authorization = next(
+                (
+                    value
+                    for key, value in (server or {}).get("headers", {}).items()
+                    if key.lower() == "authorization"
+                ),
+                "",
+            )
+            items.append(
+                {
+                    "name": name,
+                    "enabled": server is not None,
+                    "credential_owner": "tenant" if item.tenant_credential else "deployment",
+                    # This indicates presence, not validity or credential provenance.
+                    "bearer_configured": bool(
+                        authorization.lower().startswith("bearer ") and authorization[7:]
+                    ),
+                    "last_check": store.get_mcp_connection_check(tenant_id, name, version)
+                    if server is not None and version is not None
+                    else None,
+                }
+            )
+        return {"version": version, "items": items}
+
+    @router.post("/tenants/{tenant_id}/mcp-servers/{server_name}/test")
+    async def test_tenant_mcp_connection(
+        tenant_id: str,
+        server_name: str,
+        request: Request,
+        admin: Principal = Depends(require_tenant_owner_principal),
+    ) -> dict[str, Any]:
+        store = _require_admin_store(request)
+        item = next(
+            (
+                item
+                for item in _configured_mcp_server_catalog(request)
+                if item.server.get("name") == server_name
+            ),
+            None,
+        )
+        policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if item is None or (policy is not None and item.id not in policy.item_ids):
+            raise HTTPException(403, "Service is not assigned to this tenant")
+        version = store.get_config_version(tenant_id)
+        payload = store.get_raw_config(tenant_id)
+        if payload is None or version is None:
+            raise HTTPException(404, "Save a connection before testing it")
+        if store.get_config_version(tenant_id) != version:
+            raise HTTPException(409, "Configuration changed; retry the connection test")
+        config = parse_tenant_execution_config(tenant_id, payload)
+        selected = next(
+            (server for server in config.tools.mcp_servers if server.name == server_name), None
+        )
+        if selected is None:
+            raise HTTPException(404, "Save a connection before testing it")
+        if selected.url != item.server.get("url") or _tenant_catalog_policy_errors(
+            request, tenant_id, payload
+        ):
+            raise HTTPException(400, "Connection violates catalog policy")
+        result: dict[str, Any] = {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "status": "failed",
+            "tools": [],
+        }
+        try:
+            discovered = await MCPHTTPClient(selected).list_tools()
+            result.update(status="succeeded", tools=[tool.name for tool in discovered[:256]])
+        except Exception:
+            # Persist neither upstream exception text nor schemas, descriptions, or headers.
+            pass
+        if not store.save_mcp_connection_check(tenant_id, server_name, version, result):
+            raise HTTPException(409, "Configuration changed; retry the connection test")
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_mcp_connection.test",
+            new_values={"server_name": server_name, "status": result["status"]},
+        )
+        return result
+
     @router.put("/tenants/{tenant_id}/mcp-servers/{server_name}/credential")
     async def replace_tenant_mcp_credential(
         tenant_id: str,

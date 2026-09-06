@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AdminMcpServerCatalogItem } from "../api/client";
+import type { AdminMcpServerCatalogItem, TenantMcpConnection } from "../api/client";
 import {
   parseMcpServers,
   serverName,
@@ -14,6 +14,8 @@ export function MCPServerPicker({
   onChange,
   onReplaceCredential,
   credentialDisabled = false,
+  connections = [],
+  onTestConnection,
 }: {
   value: string;
   catalog: AdminMcpServerCatalogItem[];
@@ -22,6 +24,8 @@ export function MCPServerPicker({
   onChange: (value: string) => void;
   onReplaceCredential?: (serverName: string, token: string) => Promise<void>;
   credentialDisabled?: boolean;
+  connections?: TenantMcpConnection[];
+  onTestConnection?: (name: string) => Promise<void>;
 }) {
   const parsed = parseMcpServers(value);
   const invalid = parsed === null;
@@ -47,6 +51,10 @@ export function MCPServerPicker({
             aria-pressed={enabled}
             onClick={() => onChange(toggleMcpServerPreset(value, preset, !enabled))}
           >{enabled ? "Enabled — remove" : "Enable"}</button>
+          {onTestConnection && <ConnectionInspection
+            connection={connections.find(connection => connection.name === presetName)}
+            disabled={credentialDisabled || !enabled} title={preset.title}
+            onTest={() => onTestConnection(presetName)} />}
           {enabled && preset.tenant_credential === "bearer" && onReplaceCredential &&
             <BearerCredentialEditor key={presetName} title={preset.title}
               disabled={credentialDisabled}
@@ -90,5 +98,29 @@ function BearerCredentialEditor({ title, disabled, onReplace }: {
       <button type="button" disabled={pending || disabled || !token || /\s/.test(token)} onClick={() => void replace()}>{pending ? "Validating…" : "Validate and save token"}</button>
     </>}
     {disabled && <small>Save or discard other configuration edits before replacing a token.</small>}
+  </div>;
+}
+
+function ConnectionInspection({ connection, disabled, title, onTest }: {
+  connection?: TenantMcpConnection; disabled: boolean; title: string; onTest: () => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState(false);
+  const check = connection?.last_check;
+  async function testConnection() {
+    setPending(true);
+    setError(false);
+    try { await onTest(); }
+    catch { setError(true); }
+    finally { setPending(false); }
+  }
+  return <div className="mcp-credential-editor">
+    <small>Saved connection: {connection ? connection.enabled ? "enabled" : "not connected" : "status unavailable"}</small>
+    {connection && <small>Credential ownership: {connection.credential_owner}{connection.credential_owner === "tenant" ? ` · Bearer ${connection.bearer_configured ? "configured (not proof of validity)" : "missing"}` : ""}</small>}
+    <small>{check ? `Last check ${check.status} · ${new Date(check.checked_at).toLocaleString()}` : "No check recorded for the current configuration"}</small>
+    {check?.status === "succeeded" && <details><summary>Permitted tools discovered ({check.tools.length})</summary><ul>{check.tools.map(tool => <li key={tool}>{tool}</li>)}</ul></details>}
+    <button type="button" disabled={pending || disabled || !connection?.enabled} onClick={() => void testConnection()}>{pending ? "Testing connection…" : `Test ${title} connection`}</button>
+    {error && <p role="alert">Connection check could not complete. Reload and retry.</p>}
+    {check?.status === "failed" && <small>The last discovery check failed. Check credentials and service availability; no tool was invoked.</small>}
   </div>;
 }

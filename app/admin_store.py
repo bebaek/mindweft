@@ -1586,6 +1586,38 @@ class SQLiteTenantConfigStore:
                 connection.commit()
         return cursor.rowcount == 1
 
+    def get_mcp_connection_check(
+        self, tenant_id: str, server_name: str, config_version: int
+    ) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT result_json FROM tenant_mcp_connection_checks "
+                "WHERE tenant_id = ? AND server_name = ? AND config_version = ?",
+                (tenant_id, server_name, config_version),
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_mcp_connection_check(
+        self, tenant_id: str, server_name: str, config_version: int, result: dict[str, Any]
+    ) -> bool:
+        """Persist bounded, secret-free discovery metadata only for the checked config."""
+        with self._lock, self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT version FROM tenant_execution_configs WHERE tenant_id = ?", (tenant_id,)
+            ).fetchone()
+            if row is None or int(row[0]) != config_version:
+                connection.rollback()
+                return False
+            connection.execute(
+                "INSERT INTO tenant_mcp_connection_checks VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(tenant_id, server_name) DO UPDATE SET "
+                "config_version = excluded.config_version, result_json = excluded.result_json",
+                (tenant_id, server_name, config_version, json.dumps(result)),
+            )
+            connection.commit()
+        return True
+
     def delete_config(self, tenant_id: str) -> bool:
         with self._lock:
             with self._connection() as connection:
@@ -1593,12 +1625,21 @@ class SQLiteTenantConfigStore:
                     "DELETE FROM tenant_execution_configs WHERE tenant_id = ?",
                     (tenant_id,),
                 )
+                connection.execute(
+                    "DELETE FROM tenant_mcp_connection_checks WHERE tenant_id = ?", (tenant_id,)
+                )
                 connection.commit()
         return cursor.rowcount > 0
 
     def _initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connection() as connection:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS tenant_mcp_connection_checks ("
+                "tenant_id TEXT NOT NULL, server_name TEXT NOT NULL, "
+                "config_version INTEGER NOT NULL, result_json TEXT NOT NULL, "
+                "PRIMARY KEY (tenant_id, server_name))"
+            )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tenants (
