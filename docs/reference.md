@@ -2619,3 +2619,31 @@ connection-status history, and guided disconnect/credential cleanup remain follo
 The service must be enabled and saved first. Full configuration editing retains its existing
 permissions; the opt-in controls this dedicated rotation operation, not a new global restriction
 on all execution-configuration writes. Rotation does not revoke the old token at its issuer.
+
+### Inspecting and testing tenant catalog connections
+
+The tenant Tools editor distinguishes a saved enabled connection from a successful discovery
+check. Cards show deployment/tenant credential ownership, bearer presence for tenant-managed
+services, the most recent check for the current configuration, its timestamp, and the permitted
+tool names returned by discovery. Bearer presence does not establish validity or provenance.
+
+**Test connection** checks the saved configuration, not unsaved editor changes. It never invokes
+a tool. A successful check is a historical observation, not a continuous health guarantee. After
+any tenant execution configuration edit, prior results are no longer shown for the new version.
+
+Tenant-owner APIs:
+- `GET /admin/tenants/{tenant_id}/mcp-connections`: assigned catalog connection metadata only;
+  performs no network discovery and returns no headers or credential values.
+- `POST /admin/tenants/{tenant_id}/mcp-servers/{server_name}/test`: explicitly discovers tools for
+  an enabled, catalog-policy-compliant saved service. Returns `status` (`succeeded` or `failed`),
+  `checked_at`, and up to 256 permitted tool names. Upstream exception details are not returned.
+
+The latest result per tenant/service is stored in the admin SQLite database, tagged with the
+configuration version. Concurrent configuration changes reject recording a stale result with 409.
+Deleting the tenant execution configuration deletes its check records. Results are shared across
+replicas; the existing admin database backup includes them. This adds no credential store and
+changes neither credential resolution nor catalog fallback behavior.
+
+This is the inspection/testing increment of connection management. Guided first-time connection,
+disconnect with dependency checks and credential retention, and explicit tenant-credential
+provenance/migration remain separate work; existing connect/remove controls are unchanged.

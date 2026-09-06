@@ -560,6 +560,23 @@ export interface AdminTenantExecutionConfig extends AdminExecutionConfig {
   tenant_id: string;
 }
 
+export interface McpConnectionCheck {
+  checked_at: string;
+  status: "succeeded" | "failed";
+  tools: string[];
+}
+export interface TenantMcpConnection {
+  name: string;
+  enabled: boolean;
+  credential_owner: "tenant" | "deployment";
+  bearer_configured: boolean;
+  last_check: McpConnectionCheck | null;
+}
+export interface TenantMcpConnections {
+  version: number | null;
+  items: TenantMcpConnection[];
+}
+
 export interface AdminMcpServerCatalogItem {
   tenant_credential?: "bearer" | null;
   id: string;
@@ -1529,6 +1546,19 @@ export class MinigentApiClient {
     return this.#request<AdminTenantExecutionConfig>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/execution-config`,
       { method: "PUT", body: JSON.stringify({ config }) },
+    );
+  }
+
+  getTenantMcpConnections(tenantId: string, signal?: AbortSignal): Promise<TenantMcpConnections> {
+    return this.#request<TenantMcpConnections>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-connections`, { signal },
+    );
+  }
+
+  testTenantMcpConnection(tenantId: string, name: string): Promise<McpConnectionCheck> {
+    return this.#request<McpConnectionCheck>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-servers/${encodeURIComponent(name)}/test`,
+      { method: "POST" },
     );
   }
 

@@ -13,11 +13,27 @@ test("tenant Netwise token replacement preview", async ({ page }, testInfo) => {
     if (path.endsWith("/mcp-server-catalog")) body = { managed: true, allow_custom_mcp_servers: false, items: [{ id: "netwise", title: "Netwise", description: "Summarize financial positions, projections, assumptions, and data freshness.", detail: "Internal service · 9 tools", tenant_credential: "bearer", server }] };
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
   });
+  let lastCheck: { status: string; checked_at: string; tools: string[] } | null = null;
+  let connectionTests = 0;
+  await page.route("**/mcp-connections", route => route.fulfill({ contentType: "application/json", body: JSON.stringify({ version: 1, items: [{ name: "netwise", enabled: true, credential_owner: "tenant", bearer_configured: true, last_check: lastCheck }] }) }));
+  await page.route("**/mcp-servers/netwise/test", route => {
+    connectionTests += 1;
+    lastCheck = { status: "succeeded", checked_at: new Date().toISOString(), tools: ["netwise.summarize_financial_position"] };
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(lastCheck) });
+  });
   await page.addInitScript(() => localStorage.setItem("minigent-theme", "dark"));
   await page.goto("/console/", { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Tenant settings", exact: true }).click();
   await page.getByRole("button", { name: "Edit configuration", exact: true }).click();
   await page.getByRole("button", { name: "Tools", exact: true }).click();
+  await expect(page.getByText("Saved connection: enabled", { exact: true })).toBeVisible();
+  await expect(page.getByText("No check recorded for the current configuration", { exact: true })).toBeVisible();
+  expect(connectionTests).toBe(0);
+  await page.getByRole("button", { name: "Test Netwise connection" }).click();
+  await expect(page.getByText(/Last check succeeded/)).toBeVisible();
+  await page.getByText("Permitted tools discovered (1)", { exact: true }).click();
+  await expect(page.getByText("netwise.summarize_financial_position", { exact: true })).toBeVisible();
+  expect(connectionTests).toBe(1);
   await page.getByRole("button", { name: "Replace Netwise token" }).click();
   await expect(page.getByLabel("New Netwise token")).toBeVisible();
   await page.getByLabel("New Netwise token").fill("synthetic-test-token");

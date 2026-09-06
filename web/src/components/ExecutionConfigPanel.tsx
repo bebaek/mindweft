@@ -5,6 +5,7 @@ import {
   type AdminExecutionConfig,
   type AdminExecutionValidation,
   type AdminMcpServerCatalogItem,
+  type TenantMcpConnection,
 } from "../api/client";
 import { useAuth } from "../auth/auth-context";
 import { AgentPresetEditor } from "./AgentPresetEditor";
@@ -45,6 +46,12 @@ export function ExecutionConfigPanel({ platform = false, tenantId }: ExecutionCo
       platform
         ? api.getAdminDeploymentMcpServerCatalog(signal)
         : api.getAdminMcpServerCatalog(resolvedTenantId, signal),
+    retry: false,
+  });
+  const connections = useQuery({
+    queryKey: ["tenant-mcp-connections", scopeKey, authentication, executionConfig.data?.version],
+    queryFn: ({ signal }) => api.getTenantMcpConnections(resolvedTenantId, signal),
+    enabled: !platform && editing,
     retry: false,
   });
   const missing = executionConfig.error instanceof ApiError && executionConfig.error.status === 404;
@@ -101,7 +108,10 @@ export function ExecutionConfigPanel({ platform = false, tenantId }: ExecutionCo
       {executionConfig.data && <ExecutionSummary config={executionConfig.data.config} />}
       {executionConfig.data && <footer className="execution-config-footer"><span>Secrets are redacted and never returned to the browser.</span><button type="button" onClick={() => { reset.reset(); setConfirmReset(true); }}>Reset configuration</button></footer>}
 
-      {editing && <ExecutionConfigEditor platform={platform} key={`${scopeKey}-${executionConfig.data?.version ?? "new"}`} current={executionConfig.data?.config ?? null} onReplaceCredential={!platform && executionConfig.data ? async (serverName, token) => {
+      {editing && <ExecutionConfigEditor platform={platform} key={`${scopeKey}-${executionConfig.data?.version ?? "new"}`} connections={connections.data?.items ?? []} onTestConnection={!platform ? async (name) => {
+        await api.testTenantMcpConnection(resolvedTenantId, name);
+        await connections.refetch();
+      } : undefined} current={executionConfig.data?.config ?? null} onReplaceCredential={!platform && executionConfig.data ? async (serverName, token) => {
         const saved = await api.replaceAdminTenantMcpCredential(resolvedTenantId, serverName, token, executionConfig.data.version);
         queryClient.setQueryData(queryKey, saved);
         setEditing(false);
@@ -127,7 +137,7 @@ function SummaryItem({ label, value, detail }: { label: string; value: string; d
   return <article><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>;
 }
 
-function ExecutionConfigEditor({ onReplaceCredential, platform, current, mcpCatalog, allowCustomMcpServers, mcpCatalogPending, mcpCatalogError, pending, validation, error, onClose, onApply }: { onReplaceCredential?: (serverName: string, token: string) => Promise<void>; platform: boolean; current: Record<string, unknown> | null; mcpCatalog: AdminMcpServerCatalogItem[]; allowCustomMcpServers: boolean; mcpCatalogPending: boolean; mcpCatalogError: string | null; pending: boolean; validation: AdminExecutionValidation | null; error: string | null; onClose: () => void; onApply: (config: Record<string, unknown>) => void }) {
+function ExecutionConfigEditor({ connections, onTestConnection, onReplaceCredential, platform, current, mcpCatalog, allowCustomMcpServers, mcpCatalogPending, mcpCatalogError, pending, validation, error, onClose, onApply }: { connections: TenantMcpConnection[]; onTestConnection?: (name: string) => Promise<void>; onReplaceCredential?: (serverName: string, token: string) => Promise<void>; platform: boolean; current: Record<string, unknown> | null; mcpCatalog: AdminMcpServerCatalogItem[]; allowCustomMcpServers: boolean; mcpCatalogPending: boolean; mcpCatalogError: string | null; pending: boolean; validation: AdminExecutionValidation | null; error: string | null; onClose: () => void; onApply: (config: Record<string, unknown>) => void }) {
   const dialogRef = useModalDialog();
   const initial = useMemo(() => structuredConfig(current), [current]);
   const [tab, setTab] = useState<EditorTab>("llm");
@@ -194,7 +204,7 @@ function ExecutionConfigEditor({ onReplaceCredential, platform, current, mcpCata
       <nav className="execution-editor-tabs" aria-label="Execution configuration sections">{(["llm", "tools", "runtime", "skills", "presets", "advanced"] as EditorTab[]).map((item) => <button key={item} type="button" className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{tabLabel(item)}</button>)}</nav>
 
       {tab === "llm" && <div className="execution-editor-section">{!platform && <div className="oauth-llm-preset"><div><strong>OpenAI through Pi OAuth</strong><span>Uses the tenant credential imported from Pi. Choose a Codex model before applying.</span></div><button type="button" onClick={() => { setProvider("generic-oauth"); setBaseUrl("https://chatgpt.com/backend-api/codex/responses"); setApiKey(""); setClearApiKey(false); setDirty(true); }}>Use OAuth defaults</button></div>}<div className="execution-field-grid"><label>Provider<input required value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="mock" /></label><label>Model<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Provider default" /></label><label className="wide">Base URL<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="Provider default" /></label><label>Timeout (seconds)<input required type="number" min="0.1" step="0.1" value={timeout} onChange={(event) => setTimeout(event.target.value)} /></label><label>API key<input type="password" autoComplete="off" value={apiKey} disabled={clearApiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={initial.hadApiKey ? "Stored secret — leave blank to preserve" : "Optional"} /></label>{initial.hadApiKey && <label className="execution-checkbox"><input type="checkbox" checked={clearApiKey} onChange={(event) => setClearApiKey(event.target.checked)} />Clear stored API key</label>}</div><JsonField label="Advanced LLM settings" value={llmAdvanced} onChange={setLlmAdvanced} help="JSON object for headers, token limits, thinking, caching, and input modalities." /></div>}
-      {tab === "tools" && <div className="execution-editor-section"><label className="execution-text-field">Allowed local tools<input value={localTools} onChange={(event) => setLocalTools(event.target.value)} placeholder="echo, current_time, calculator" /><small>Comma-separated. Leave blank to use the runtime default tool policy.</small></label><MCPServerPicker onReplaceCredential={onReplaceCredential ? async (name, token) => {
+      {tab === "tools" && <div className="execution-editor-section"><label className="execution-text-field">Allowed local tools<input value={localTools} onChange={(event) => setLocalTools(event.target.value)} placeholder="echo, current_time, calculator" /><small>Comma-separated. Leave blank to use the runtime default tool policy.</small></label><MCPServerPicker connections={connections} onTestConnection={onTestConnection} onReplaceCredential={onReplaceCredential ? async (name, token) => {
         setCredentialSaving(true);
         try { await onReplaceCredential(name, token); }
         finally { setCredentialSaving(false); }
