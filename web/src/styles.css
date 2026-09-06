@@ -983,3 +983,8 @@ html[data-theme="dark"] .personal-validation.invalid,html[data-theme="dark"] .cr
   .composer-attachment-actions:has(.audio-recorder-active) { flex:0 0 100%; order:1; }
   .audio-recorder-active { flex:1; }
 }
+
+.mcp-server-credential-preset { flex-wrap: wrap; }
+.mcp-server-credential-preset > .mcp-credential-editor { flex-basis: 100%; gap: 8px; }
+.mcp-credential-editor label { display: grid; gap: 6px; }
+.mcp-credential-editor input { width: 100%; min-width: 0; }
