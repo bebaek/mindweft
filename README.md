@@ -345,8 +345,10 @@ conservative detector masks email addresses, phone-number-like values, street ad
 person names in explicit contexts such as `Email Jane Doe`, `Dr. Jane Doe`, or
 `Jane Doe's`. Existing private placeholders are preserved. This regex-based detector is not a
 complete PII classifier: it can miss unfamiliar formats, single names without a contextual
-cue, non-US-style addresses, and other identifiers, and it can produce false positives.
-Set `MINDWEFT_INPUT_PII_PROTECTION_ENABLED=false` to disable it explicitly.
+cue, non-US-style addresses, and other identifiers, and it can produce false positives. HTTP URL
+paths are treated as opaque identifiers for phone-number detection; query strings remain subject to
+normal detection. Set `MINDWEFT_INPUT_PII_PROTECTION_ENABLED=false` to disable the detector
+explicitly.
 
 Private placeholders are denied at every tool boundary by default. An explicitly trusted MCP
 tool can receive selected values only when its server configuration opts into

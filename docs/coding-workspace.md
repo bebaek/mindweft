@@ -600,3 +600,9 @@ Mindweft's mock adapter:
 ```bash
 uv run python scripts/demo_filesystem_mcp.py --workspace /path/to/workspace
 ```
+
+Tenant catalog services can opt into bearer-token rotation through the tenant Tools editor,
+even when custom MCP servers are disabled. This does not change workspace path policies,
+shell permissions, or forwarded-identity services. See **Tenant MCP bearer credential rotation**
+in [Reference](reference.md) for the catalog opt-in and tenant-owner API. Personal MCP
+credentials remain a separate user-scoped configuration surface.

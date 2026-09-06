@@ -2582,3 +2582,40 @@ Local tools currently include:
 - `calculator`
 - `retrieve_knowledge`
 - `peer_agent_task` when `MINDWEFT_ENABLE_PEER_AGENT_TOOL=true`
+
+### Tenant MCP bearer credential rotation
+
+An assigned catalog service may opt into tenant-owned bearer credentials with
+`"tenant_credential": "bearer"` (`tenantCredential` is also accepted) on the catalog item,
+not inside its `server` definition. Unmarked services remain deployment-managed in the
+rotation UI. Forwarded-identity services cannot opt in.
+
+For encrypted catalogs, operators can instead declare the non-secret service-name list
+`MINDWEFT_ADMIN_TENANT_MCP_BEARER_SERVERS='["netwise"]'`. Every name must already exist in
+the deployment catalog. This is a one-time deployment opt-in, not a token value.
+
+Tenant owners open **Tenant settings → Edit configuration → Tools → Replace Netwise token**
+(or the corresponding service title). Enter the raw token without `Bearer`, then choose
+**Validate and save token**. The action remains available when custom servers are forbidden.
+Other unsaved edits must be saved or discarded first. Successful rotation closes the editor;
+cancellation clears the input without changing the stored credential.
+
+`PUT /admin/tenants/{tenant_id}/mcp-servers/{server_name}/credential` accepts
+`{"token": "NEW_TOKEN", "expected_version": 1}`. It requires an active tenant owner or
+platform administrator, an assigned opted-in service, and an existing saved connection.
+The endpoint changes only Authorization, preserves the configured catalog URL and other
+settings, validates with MCP tool discovery (never a tool invocation), and stores the
+updated header encrypted in the tenant configuration. Errors never echo upstream exception
+text or input validation values. An atomic version check returns 409 rather than overwriting
+concurrent edits. Validation failure retains the previous credential. Audit metadata identifies
+only the service. The response is the redacted updated execution configuration.
+
+The saved tenant header takes precedence over catalog defaults. Store-backed execution
+resolvers check configuration versions across replicas; subsequent resolution uses the new
+credential without a pod restart. Existing in-flight calls are not canceled.
+
+This is focused rotation support, not complete connection CRUD: first-time credential setup,
+connection-status history, and guided disconnect/credential cleanup remain follow-up work.
+The service must be enabled and saved first. Full configuration editing retains its existing
+permissions; the opt-in controls this dedicated rotation operation, not a new global restriction
+on all execution-configuration writes. Rotation does not revoke the old token at its issuer.

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { AdminMcpServerCatalogItem } from "../api/client";
 import {
   parseMcpServers,
@@ -11,12 +12,16 @@ export function MCPServerPicker({
   pending,
   error,
   onChange,
+  onReplaceCredential,
+  credentialDisabled = false,
 }: {
   value: string;
   catalog: AdminMcpServerCatalogItem[];
   pending: boolean;
   error: string | null;
   onChange: (value: string) => void;
+  onReplaceCredential?: (serverName: string, token: string) => Promise<void>;
+  credentialDisabled?: boolean;
 }) {
   const parsed = parseMcpServers(value);
   const invalid = parsed === null;
@@ -33,7 +38,7 @@ export function MCPServerPicker({
       {catalog.map((preset) => {
         const presetName = serverName(preset.server);
         const enabled = parsed?.some((server) => serverName(server) === presetName) ?? false;
-        return <article className="mcp-server-preset" key={preset.id}>
+        return <article className="mcp-server-preset mcp-server-credential-preset" key={preset.id}>
           <div><strong>{preset.title}</strong><p>{preset.description}</p>{preset.detail && <small>{preset.detail}</small>}</div>
           <button
             type="button"
@@ -42,9 +47,48 @@ export function MCPServerPicker({
             aria-pressed={enabled}
             onClick={() => onChange(toggleMcpServerPreset(value, preset, !enabled))}
           >{enabled ? "Enabled — remove" : "Enable"}</button>
+          {enabled && preset.tenant_credential === "bearer" && onReplaceCredential &&
+            <BearerCredentialEditor key={presetName} title={preset.title}
+              disabled={credentialDisabled}
+              onReplace={(token) => onReplaceCredential(presetName, token)} />}
         </article>;
       })}
     </div>
     {invalid && <p className="mcp-server-picker-error" role="alert">Fix the advanced MCP JSON before changing internal services.</p>}
   </section>;
+}
+
+function BearerCredentialEditor({ title, disabled, onReplace }: {
+  title: string; disabled: boolean; onReplace: (token: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [token, setToken] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function replace() {
+    setPending(true);
+    setError(null);
+    try {
+      await onReplace(token);
+      setToken("");
+      setOpen(false);
+    } catch {
+      // Do not display an arbitrary upstream exception that could echo credentials.
+      setError("Token was not saved. Check the token and connection, or reopen the editor if the configuration changed.");
+    } finally {
+      setPending(false);
+    }
+  }
+  return <div className="mcp-credential-editor" onChange={(event) => event.stopPropagation()}>
+    <small>Tenant-managed bearer credential</small>
+    {!open ? <button type="button" disabled={disabled} onClick={() => setOpen(true)}>Replace {title} token</button> : <>
+      <label>New {title} token<input type="password" autoComplete="off" value={token}
+        disabled={pending || disabled} onChange={(event) => setToken(event.target.value)} /></label>
+      <small>Enter the raw token, without Bearer. Validation only discovers tools; it does not read financial data. Saving closes this editor.</small>
+      {error && <p role="alert">{error}</p>}
+      <button type="button" disabled={pending} onClick={() => { setToken(""); setError(null); setOpen(false); }}>Cancel token replacement</button>
+      <button type="button" disabled={pending || disabled || !token || /\s/.test(token)} onClick={() => void replace()}>{pending ? "Validating…" : "Validate and save token"}</button>
+    </>}
+    {disabled && <small>Save or discard other configuration edits before replacing a token.</small>}
+  </div>;
 }

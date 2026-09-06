@@ -1571,6 +1571,21 @@ class SQLiteTenantConfigStore:
                 )
                 connection.commit()
 
+    def replace_raw_config_if_version(
+        self, tenant_id: str, payload: dict[str, Any], expected_version: int
+    ) -> bool:
+        """Atomically replace an existing config without losing concurrent updates."""
+        serialized = json.dumps(_encrypt_payload(payload, self._fernet), ensure_ascii=True)
+        with self._lock:
+            with self._connection() as connection:
+                cursor = connection.execute(
+                    "UPDATE tenant_execution_configs SET config_json = ?, version = version + 1, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND version = ?",
+                    (serialized, tenant_id, expected_version),
+                )
+                connection.commit()
+        return cursor.rowcount == 1
+
     def delete_config(self, tenant_id: str) -> bool:
         with self._lock:
             with self._connection() as connection:

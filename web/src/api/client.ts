@@ -561,6 +561,7 @@ export interface AdminTenantExecutionConfig extends AdminExecutionConfig {
 }
 
 export interface AdminMcpServerCatalogItem {
+  tenant_credential?: "bearer" | null;
   id: string;
   title: string;
   description: string;
@@ -1528,6 +1529,15 @@ export class MinigentApiClient {
     return this.#request<AdminTenantExecutionConfig>(
       `/admin/tenants/${encodeURIComponent(tenantId)}/execution-config`,
       { method: "PUT", body: JSON.stringify({ config }) },
+    );
+  }
+
+  replaceAdminTenantMcpCredential(
+    tenantId: string, serverName: string, token: string, expectedVersion: number,
+  ): Promise<AdminTenantExecutionConfig> {
+    return this.#request<AdminTenantExecutionConfig>(
+      `/admin/tenants/${encodeURIComponent(tenantId)}/mcp-servers/${encodeURIComponent(serverName)}/credential`,
+      { method: "PUT", body: JSON.stringify({ token, expected_version: expectedVersion }) },
     );
   }
 

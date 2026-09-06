@@ -38,6 +38,10 @@ _PHONE_PATTERN = re.compile(
     r"(?<!\w)(?P<value>(?:\+?\d{1,3}[ .-]?)?"
     r"(?:\(?\d{2,4}\)?[ .-]?)?\d{3}[ .-]?\d{4})(?!\w)"
 )
+_HTTP_URL_PATH_PATTERN = re.compile(
+    r"https?://[^\s/?#]+(?P<value>/[^\s?#]*)",
+    re.IGNORECASE,
+)
 _ADDRESS_PATTERN = re.compile(
     r"(?<!\w)(?P<value>\d{1,6}\s+"
     r"(?:[A-Z][A-Z0-9.'-]*\s+){1,6}"
@@ -142,6 +146,9 @@ class LocalPIIProtector:
 
         matches: list[tuple[int, int, str, str]] = []
         protected_ranges = [match.span() for match in PII_PLACEHOLDER_PATTERN.finditer(text)]
+        phone_excluded_ranges = [
+            match.span("value") for match in _HTTP_URL_PATH_PATTERN.finditer(text)
+        ]
         detectors = (
             ("email", _EMAIL_PATTERN, 0),
             ("address", _ADDRESS_PATTERN, 1),
@@ -157,8 +164,14 @@ class LocalPIIProtector:
             for match in pattern.finditer(text):
                 start, end = match.span("value")
                 value = match.group("value")
-                if kind == "phone" and sum(character.isdigit() for character in value) < 7:
-                    continue
+                if kind == "phone":
+                    if sum(character.isdigit() for character in value) < 7:
+                        continue
+                    if any(
+                        start < range_end and end > range_start
+                        for range_start, range_end in phone_excluded_ranges
+                    ):
+                        continue
                 if any(
                     start < range_end and end > range_start
                     for range_start, range_end in protected_ranges

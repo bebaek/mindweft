@@ -14,7 +14,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, Field, ValidationError
 
 from app.admin_store import (
     SubjectMCPServerCatalogAssignment,
@@ -41,6 +41,7 @@ from app.external_grants import (
     ExternalGrantResource,
     HTTPExternalGrantProvider,
 )
+from app.mcp import MCPHTTPClient
 from app.models import (
     AuditRecord,
     Message,
@@ -238,6 +239,15 @@ class AdminMCPServerCatalogItem(BaseModel):
     description: str
     detail: str | None = None
     server: dict[str, Any]
+    tenant_credential: Literal["bearer"] | None = Field(
+        default=None, validation_alias=AliasChoices("tenant_credential", "tenantCredential")
+    )
+
+
+class AdminMCPCredentialRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    token: str = Field(min_length=1, max_length=8192, repr=False)
+    expected_version: int = Field(ge=1)
 
 
 class AdminMCPServerCatalogResponse(BaseModel):
@@ -3004,6 +3014,94 @@ def build_admin_router() -> APIRouter:
             ),
         )
 
+    @router.put("/tenants/{tenant_id}/mcp-servers/{server_name}/credential")
+    async def replace_tenant_mcp_credential(
+        tenant_id: str,
+        server_name: str,
+        request: Request,
+        admin: Principal = Depends(require_tenant_owner_principal),
+    ) -> AdminTenantExecutionConfigResponse:
+        try:
+            body = AdminMCPCredentialRequest.model_validate(await request.json())
+        except (ValueError, ValidationError):
+            # Default validation responses include input values; never echo a token.
+            raise HTTPException(422, "Expected a token and a positive expected_version") from None
+        # Never accept URLs or header names from the caller. Credential ownership is
+        # deployment policy, separate from permission to add custom servers.
+        store = _require_admin_store(request)
+        item = next(
+            (
+                item
+                for item in _configured_mcp_server_catalog(request)
+                if item.server.get("name") == server_name
+            ),
+            None,
+        )
+        policy = store.get_tenant_mcp_server_catalog_policy(tenant_id)
+        if (
+            item is None
+            or item.tenant_credential != "bearer"
+            or (policy is not None and item.id not in policy.item_ids)
+        ):
+            raise HTTPException(403, "Service does not allow tenant credential replacement")
+        if not body.token or any(char.isspace() for char in body.token):
+            raise HTTPException(
+                400, "Enter the raw bearer token without whitespace or a Bearer prefix"
+            )
+        # Check before and after reading: a racing writer must not produce a mixed snapshot.
+        if store.get_config_version(tenant_id) != body.expected_version:
+            raise HTTPException(409, "Configuration changed; reload before replacing the token")
+        payload = store.get_raw_config(tenant_id)
+        if payload is None or store.get_config_version(tenant_id) != body.expected_version:
+            raise HTTPException(409, "Configuration changed; reload before replacing the token")
+        tools = payload.get("tools", {})
+        servers = tools.get("mcp_servers", tools.get("mcpServers", []))
+        server = next((server for server in servers if server.get("name") == server_name), None)
+        if server is None:
+            raise HTTPException(404, "Enable and save the service before replacing its token")
+        if server.get("url") != item.server.get("url") or server.get(
+            "forward_identity", server.get("forwardIdentity", False)
+        ):
+            raise HTTPException(
+                400, "Service must use its catalog URL and static bearer authentication"
+            )
+        server["headers"] = {
+            key: value
+            for key, value in server.get("headers", {}).items()
+            if key.lower() != "authorization"
+        }
+        server["headers"]["Authorization"] = "Bearer " + body.token
+        errors = _tenant_catalog_policy_errors(request, tenant_id, payload)
+        if errors:
+            raise HTTPException(400, "; ".join(errors))
+        config = parse_tenant_execution_config(tenant_id, payload)
+        selected = next(server for server in config.tools.mcp_servers if server.name == server_name)
+        try:
+            # Discovery only: never invoke finance or write tools to test a credential.
+            await MCPHTTPClient(selected).list_tools()
+        except Exception:
+            # Upstream errors may echo headers: do not log/return the exception text.
+            raise HTTPException(
+                400, "MCP connection validation failed; previous credential retained"
+            ) from None
+        if not store.replace_raw_config_if_version(tenant_id, payload, body.expected_version):
+            raise HTTPException(409, "Configuration changed; reload before replacing the token")
+        _invalidate_resolver(request.app.state.execution_resolver, tenant_id)
+        _append_tenant_audit(
+            request,
+            tenant_id,
+            admin,
+            "tenant_mcp_credential.replace",
+            new_values={"server_name": server_name},
+            resource_type="execution_config",
+            resource_id=tenant_id,
+        )
+        return AdminTenantExecutionConfigResponse(
+            tenant_id=tenant_id,
+            version=body.expected_version + 1,
+            config=redact_tenant_execution_payload(payload),
+        )
+
     @router.get(
         "/tenants/{tenant_id}/execution-config",
         response_model=AdminTenantExecutionConfigResponse,
@@ -3156,6 +3254,19 @@ def _parse_mcp_server_catalog(
     if not isinstance(interpolated_payload, list):  # pragma: no cover - shape is preserved
         raise RuntimeError(f"{env_name} interpolation changed the catalog shape")
 
+    # Non-secret opt-in can accompany an encrypted catalog without editing its secrets.
+    bearer_names_raw = env.get("MINIGENT_ADMIN_TENANT_MCP_BEARER_SERVERS", "[]")
+    try:
+        bearer_names = json.loads(bearer_names_raw)
+    except (TypeError, ValueError):
+        raise RuntimeError(
+            "MINDWEFT_ADMIN_TENANT_MCP_BEARER_SERVERS must be a JSON string array"
+        ) from None
+    if not isinstance(bearer_names, list) or not all(
+        isinstance(name, str) and name for name in bearer_names
+    ):
+        raise RuntimeError("MINDWEFT_ADMIN_TENANT_MCP_BEARER_SERVERS must be a JSON string array")
+
     items: list[AdminMCPServerCatalogItem] = []
     seen_ids: set[str] = set()
     seen_names: set[str] = set()
@@ -3164,6 +3275,14 @@ def _parse_mcp_server_catalog(
             item = AdminMCPServerCatalogItem.model_validate(value)
         except ValidationError as exc:
             raise RuntimeError(f"{env_name}[{index}] is invalid") from exc
+        if item.server.get("name") in bearer_names:
+            item = item.model_copy(update={"tenant_credential": "bearer"})
+        if item.tenant_credential and item.server.get(
+            "forward_identity", item.server.get("forwardIdentity", False)
+        ):
+            raise RuntimeError(
+                f"{env_name}[{index}] cannot combine tenant credentials with forwarded identity"
+            )
         server_name = item.server.get("name")
         server_url = item.server.get("url")
         if not item.id.strip() or not item.title.strip() or not item.description.strip():
@@ -3189,6 +3308,8 @@ def _parse_mcp_server_catalog(
         seen_ids.add(item.id)
         seen_names.add(server_name)
         items.append(item)
+    if set(bearer_names) - seen_names:
+        raise RuntimeError("Tenant bearer credential services must exist in the MCP catalog")
     return tuple(items)
 
 
