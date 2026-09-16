@@ -1176,3 +1176,44 @@ def test_user_execution_config_storage_endpoint_requires_configured_store() -> N
         response = client.get("/me/execution-config", headers=AUTH_HEADERS)
 
     assert response.status_code == 503
+
+
+def test_agent_switch_uses_callers_personal_catalog_and_runtime(tmp_path: Path) -> None:
+    admin_store = SQLiteTenantConfigStore(str(tmp_path / "switch-admin.db"))
+    admin_store.upsert_user_execution_config(
+        "tenant-1", "user-1", _personal_skill_payload("Personal handoff instructions.")
+    )
+    adapter = RecordingLLMAdapter()
+    app = _runtime_app(admin_store, adapter)
+    source = app.state.store.create_thread(
+        "tenant-1", execution_user_id="user-2", skill_name="shared-style"
+    )
+    message = app.state.store.append_message(
+        "tenant-1",
+        Message(thread_id=source.thread_id, role=MessageRole.USER, content="Continue this work"),
+    )
+    with TestClient(app) as client:
+        request = {"at_message_id": message.id, "agent_name": "user:personal-agent"}
+        denied = client.post(
+            f"/threads/{source.thread_id}/fork", headers=OTHER_USER_HEADERS, json=request
+        )
+        assert denied.status_code == 400
+        switched = client.post(
+            f"/threads/{source.thread_id}/fork", headers=AUTH_HEADERS, json=request
+        )
+        assert switched.status_code == 201
+        child_id = switched.json()["thread_id"]
+        child = app.state.store.get_thread("tenant-1", child_id)
+        assert child.agent_ref == "user:personal-agent"
+        assert child.execution_user_id == "user-1"
+        assert child.capability_profile == "user:personal-tools"
+        assert child.skill_names == ["shared-style", "user:python-style"]
+        assert adapter.requests == []  # Switching never starts a model run.
+        response = client.post(f"/threads/{child_id}/run", headers=AUTH_HEADERS)
+        assert response.status_code == 200, response.text
+        assert any(
+            "Personal handoff instructions." in message.content
+            for message in adapter.requests[0]
+            if message.role == MessageRole.SYSTEM
+        )
+        assert any(message.content == "Continue this work" for message in adapter.requests[0])

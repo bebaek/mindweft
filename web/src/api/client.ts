@@ -188,6 +188,7 @@ export interface UserExecutionCredentialInput {
 export type ThreadStatus = "idle" | "running" | "error";
 
 export interface ThreadListItem {
+  agent_ref?: string | null;
   thread_id: string;
   title: string;
   title_source?: "generated" | "semantic" | "manual" | null;
@@ -1798,12 +1799,12 @@ export class MinigentApiClient {
     });
   }
 
-  forkThread(threadId: string, messageId: string): Promise<ForkThreadResponse> {
+  forkThread(threadId: string, messageId: string, agentName?: string): Promise<ForkThreadResponse> {
     return this.#request<ForkThreadResponse>(
       `/threads/${encodeURIComponent(threadId)}/fork`,
       {
         method: "POST",
-        body: JSON.stringify({ at_message_id: messageId }),
+        body: JSON.stringify({ at_message_id: messageId, ...(agentName ? { agent_name: agentName } : {}) }),
       },
     );
   }

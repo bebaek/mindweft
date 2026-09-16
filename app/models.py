@@ -168,6 +168,7 @@ class Thread(BaseModel):
     thread_id: str = Field(default_factory=lambda: str(uuid4()))
     tenant_id: str
     execution_user_id: str | None = None
+    agent_ref: str | None = None
     title: str | None = None
     title_source: Literal["generated", "semantic", "manual"] | None = None
     title_updated_at: datetime | None = None
@@ -221,9 +222,21 @@ class CreateThreadResponse(BaseModel):
     thread_id: str
 
 
+class ThreadExecutionSelection(BaseModel):
+    """Fully resolved settings, including explicit nulls that clear inherited settings."""
+
+    execution_user_id: str | None = None
+    agent_ref: str | None = None
+    skill_name: str | None = None
+    skill_names: list[str] | None = None
+    capability_profile: str | None = None
+    llm_profile: str | None = None
+
+
 class ForkThreadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     at_message_id: str = Field(min_length=1)
+    agent_name: str | None = Field(default=None, min_length=1)
 
 
 class ForkThreadResponse(BaseModel):
@@ -233,6 +246,7 @@ class ForkThreadResponse(BaseModel):
 
 
 class ThreadListItem(BaseModel):
+    agent_ref: str | None = None
     thread_id: str
     title: str
     title_source: Literal["generated", "semantic", "manual"] | None = None

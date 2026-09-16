@@ -119,6 +119,7 @@ from app.models import (
     TenantUserRole,
     TextPart,
     Thread,
+    ThreadExecutionSelection,
     ThreadImportProvenance,
     ThreadLineageResponse,
     ThreadListItem,
@@ -477,6 +478,7 @@ def _thread_list_item(store: ThreadStore, tenant_id: str, thread: Thread) -> Thr
         skill_names=thread.skill_names,
         capability_profile=thread.capability_profile,
         llm_profile=thread.llm_profile,
+        agent_ref=thread.agent_ref,
         parent_thread_id=thread.parent_thread_id,
         fork_message_id=thread.fork_message_id,
         compacted_through_message_id=thread.compacted_through_message_id,
@@ -2904,22 +2906,15 @@ def create_app(
                 )
             raise
 
-    @app.post("/threads", response_model=CreateThreadResponse)
-    async def create_thread(
-        request: Request,
-        body: CreateThreadRequest | None = None,
-        principal: Principal = Depends(require_active_tenant_principal),
-    ) -> CreateThreadResponse:
+    def resolve_thread_selection(
+        request: Request, principal: Principal, body: CreateThreadRequest | None
+    ) -> ThreadExecutionSelection:
         agent_name = body.agent_name if body is not None else None
         skill_name = body.skill_name if body is not None else None
         skill_names = body.skill_names if body is not None else None
         capability_profile = body.capability_profile if body is not None else None
         llm_profile = body.llm_profile if body is not None else None
         execution = resolve_principal_execution(principal)
-        enforce_thread_creation_limit(
-            context=tenant_context_from_request_state(request.state),
-            store=request.app.state.store,
-        )
         enforce_execution_entitlements(
             context=tenant_context_from_request_state(request.state),
             execution=execution,
@@ -3001,13 +2996,28 @@ def create_app(
                 status_code=400,
                 detail=f"Unknown LLM profile '{llm_profile}' for tenant '{principal.tenant_id}'",
             )
-        thread = request.app.state.store.create_thread(
-            principal.tenant_id,
+        return ThreadExecutionSelection(
             execution_user_id=principal.user_id,
+            agent_ref=agent.id if agent is not None else None,
             skill_name=skill_name,
             skill_names=skill_names,
             capability_profile=capability_profile,
             llm_profile=llm_profile,
+        )
+
+    @app.post("/threads", response_model=CreateThreadResponse)
+    async def create_thread(
+        request: Request,
+        body: CreateThreadRequest | None = None,
+        principal: Principal = Depends(require_active_tenant_principal),
+    ) -> CreateThreadResponse:
+        enforce_thread_creation_limit(
+            context=tenant_context_from_request_state(request.state),
+            store=request.app.state.store,
+        )
+        selection = resolve_thread_selection(request, principal, body)
+        thread = request.app.state.store.create_thread(
+            principal.tenant_id, **selection.model_dump()
         )
         return CreateThreadResponse(thread_id=thread.thread_id)
 
@@ -3031,11 +3041,43 @@ def create_app(
             context=tenant_context_from_request_state(request.state),
             execution=execution,
         )
+        source = request.app.state.store.get_thread(principal.tenant_id, thread_id)
+        if source.status == ThreadStatus.RUNNING:
+            raise HTTPException(status_code=409, detail="Cannot fork a running thread")
+        selection = (
+            resolve_thread_selection(
+                request, principal, CreateThreadRequest(agent_name=body.agent_name)
+            )
+            if body.agent_name is not None
+            else None
+        )
         source_messages = request.app.state.store.list_messages(
             principal.tenant_id,
             thread_id,
         )
         fork_messages = _messages_through(source_messages, body.at_message_id)
+        if selection is not None:
+            # Reject incompatible history before copying attachments or private mappings.
+            modalities = {part.type for message in fork_messages for part in (message.parts or [])}
+            for modality, availability_fn, enabled in (
+                ("image", image_input_availability, request.app.state.image_input_settings.enabled),
+                ("audio", audio_input_availability, request.app.state.audio_input_settings.enabled),
+                (
+                    "document",
+                    document_input_availability,
+                    request.app.state.document_input_settings.enabled,
+                ),
+            ):
+                if (
+                    modality in modalities
+                    and not availability_fn(
+                        execution, selection.llm_profile, globally_enabled=enabled
+                    ).allowed
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Target agent cannot accept {modality} history in this thread",
+                    )
         source_context = request.app.state.store.get_thread_context(
             principal.tenant_id,
             thread_id,
@@ -3066,6 +3108,7 @@ def create_app(
                 at_message_id=body.at_message_id,
                 child_thread_id=child_thread_id,
                 attachment_id_map=attachment_id_map,
+                execution_selection=selection,
             )
             child_created = True
         except AttachmentLimitExceeded as exc:

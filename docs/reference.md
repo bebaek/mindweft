@@ -147,7 +147,41 @@ smaller prompts at the cost of resetting/changing the cacheable prefix. Automati
 only the model-visible summary boundary; raw messages and attachments remain stored and exportable.
 
 Create a lossless child at any safe conversational boundary with
-`POST /threads/{thread_id}/fork`. Retrieve the current thread, its available parent, direct children,
+`POST /threads/{thread_id}/fork`. The request accepts a required `at_message_id` and
+an optional `agent_name`, for example:
+
+```json
+{"at_message_id": "message-id", "agent_name": "user:code-reviewer"}
+```
+
+Omitting `agent_name` (or passing null) retains the source's execution settings.
+Supplying it resolves the target agent against the caller's effective catalog using the
+same validation/default rules as thread creation, and binds the child to the caller's
+execution identity. The child's skills, capability profile, and LLM profile replace,
+rather than merge with, the source settings. Source history, attachments, referenced
+private-value mappings, and lineage use the existing fork behavior. This does not copy
+credentials or grant the source agent's tool permissions. Running sources return 409;
+invalid agents and incompatible image/audio/document history are rejected before copying.
+Context-window management remains the normal runtime behavior; switching does not summarize
+or convert attachments automatically.
+
+Thread list and lineage items now include nullable `agent_ref`, the canonical selected
+agent reference. Old threads remain readable with a null reference; clients must not infer
+an agent from the user's current default. The stored resolved execution settings remain
+authoritative if an agent preset is later edited.
+
+In the production console, `/agent` opens a searchable picker, and `/agent <name-or-ref>`
+preselects an exact available agent. Ambiguous names require an explicit scoped reference.
+Confirmation branches at the latest stored message (subject to tool-pair boundary checks),
+or at the message selected with **Continue with another agent…**. The Agent dropdown uses
+the same confirmation. Existing lineage navigation returns to the original. An empty
+conversation selects the target for the next message without copying a thread. Selecting
+the current agent is a no-op, except when explicitly branching from an earlier message.
+The command is a UI action, never stored as a user message, and never starts a run.
+Switching can change provider: the confirmation warns that the copied history may be sent
+to a different provider when the user continues.
+
+Retrieve the current thread, its available parent, direct children,
 and sibling branches with `GET /threads/{thread_id}/lineage`; a deleted parent is represented as
 `null` while the current thread retains its `parent_thread_id`. The browser provides **Branch from
 here** on visible messages plus persistent lineage navigation. In interactive CLI chat, use `/fork`

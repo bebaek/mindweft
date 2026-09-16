@@ -6,6 +6,7 @@ import {
   type AudioPart,
   type DocumentPart,
   type ExecutionLlmOptionItem,
+  type ExecutionAgentOptionItem,
   type ExecutionOptionsResponse,
   type ImagePart,
   type Message,
@@ -26,6 +27,7 @@ import { runErrorMessage } from "./runEvents";
 import { AudioAttachment } from "../components/AudioAttachment";
 import { ArchiveTransferDialog } from "../components/ArchiveTransferDialog";
 import { AudioRecorder } from "../components/AudioRecorder";
+import { AgentSwitchDialog } from "../components/AgentSwitchDialog";
 import { ContextDialog } from "../components/ContextDialog";
 import { ConsentDialog } from "../components/ConsentDialog";
 import { DocumentAttachment } from "../components/DocumentAttachment";
@@ -142,6 +144,9 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   const queryClient = useQueryClient();
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState("");
+  const [agentSwitch, setAgentSwitch] = useState<{ query: string; command: boolean; messageId?: string } | null>(null);
+  const [agentSwitchBusy, setAgentSwitchBusy] = useState(false);
+  const [agentSwitchError, setAgentSwitchError] = useState<string | null>(null);
   const [defaultAgentFeedback, setDefaultAgentFeedback] = useState<{ message: string; error: boolean } | null>(null);
   const [selectedLlmProfile, setSelectedLlmProfile] = useState("");
   const [draft, setDraft] = useState("");
@@ -327,10 +332,74 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     return () => window.clearTimeout(timeout);
   }, [highlightedMessageId, messages.data]);
 
-  const effectiveAgent = selectedAgent || executionOptions.data?.agents.default || "";
   const composerThread = threads.data?.threads.find(
     (thread) => thread.thread_id === selectedThreadId,
   ) ?? lineage.data?.thread;
+  const defaultAgent = selectedAgent || executionOptions.data?.agents.default || "";
+  const rawAgent = selectedThreadId ? composerThread?.agent_ref ?? "" : defaultAgent;
+  const effectiveAgent = executionOptions.data?.agents.items.find(
+    (agent) => (agent.id ?? agent.name) === rawAgent || agent.name === rawAgent,
+  )?.id ?? rawAgent;
+  const threadRunning = isRunning || composerThread?.status === "running";
+  const isAgentCommand = /^\/agent(?:\s|$)/.test(draft.trim());
+
+  function openAgentSwitch(query = "", command = false, messageId?: string) {
+    if (threadRunning || agentSwitchBusy) {
+      setError("Stop or wait for the current run before switching agents.");
+      return;
+    }
+    setAgentSwitchError(null);
+    setAgentSwitch({ query, command, messageId });
+  }
+
+  async function confirmAgentSwitch(agent: ExecutionAgentOptionItem) {
+    if (threadRunning || agentSwitchBusy) return;
+    const ref = agent.id ?? agent.name;
+    const name = agent.display_name ?? agent.name;
+    if (ref === effectiveAgent && !agentSwitch?.messageId) {
+      setBranchNotice(`Already using ${name}.`);
+    } else {
+      setAgentSwitchBusy(true);
+      setAgentSwitchError(null);
+      try {
+        if (selectedThreadId) {
+          if (!messages.data || messages.isFetching) throw new Error("Wait for conversation history to load.");
+          const last = agentSwitch?.messageId
+            ? messages.data.find((message) => message.id === agentSwitch.messageId)
+            : messages.data.at(-1);
+          if (agentSwitch?.messageId && !last) throw new Error("The selected message is no longer available.");
+          if (last) {
+            const result = await api.forkThread(selectedThreadId, last.id, ref);
+            setSelectedThreadId(result.thread_id);
+            setBranchNotice(`Switched to ${name} in a new branch. The original thread was preserved.`);
+            setActivity([]);
+            setStreamedReply(null);
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: ["threads"] }),
+              queryClient.invalidateQueries({ queryKey: ["thread-lineage"] }),
+            ]);
+          } else {
+            // No history to copy: defer creation until the next user message.
+            setSelectedThreadId(null);
+            setBranchNotice(`Selected ${name} for the next message.`);
+          }
+        } else {
+          setBranchNotice(`Selected ${name} for the next message.`);
+        }
+        setSelectedAgent(ref);
+        setSelectedLlmProfile("");
+      } catch (caught) {
+        setAgentSwitchError(caught instanceof Error ? caught.message : "Could not switch agent.");
+        return;
+      } finally {
+        setAgentSwitchBusy(false);
+      }
+    }
+    if (agentSwitch?.command) setDraft("");
+    setError(null);
+    setAgentSwitch(null);
+  }
+
   const composerLlmOption = effectiveLlmOption(
     executionOptions.data,
     composerThread,
@@ -464,6 +533,12 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   async function sendMessage(event: FormEvent) {
     event.preventDefault();
     const content = draft.trim();
+    if (agentSwitchBusy || agentSwitch) return;
+    const agentCommand = /^\/agent(?:\s+([\s\S]*))?$/.exec(content);
+    if (agentCommand) {
+      openAgentSwitch(agentCommand[1]?.trim() ?? "", true);
+      return;
+    }
     const queuedAudio = [...pendingAudio];
     const queuedDocuments = [...pendingDocuments];
     const queuedImages = [...pendingImages];
@@ -745,7 +820,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   }
 
   function openThread(threadId: string, messageId?: string) {
-    if (isRunning) return;
+    if (isRunning || agentSwitchBusy) return;
     setMobileThreadRailOpen(false);
     setSelectedThreadId(threadId);
     setHighlightedMessageId(messageId ?? null);
@@ -758,7 +833,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
   }
 
   function newThread() {
-    if (isRunning) return;
+    if (isRunning || agentSwitchBusy) return;
     setMobileThreadRailOpen(false);
     setSelectedThreadId(null);
     setHighlightedMessageId(null);
@@ -1016,6 +1091,9 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
                 >
                   Branch from here
                 </button>
+                <button type="button" className="message-branch-action"
+                  disabled={!selectedThreadId || threadRunning || agentSwitchBusy}
+                  onClick={() => openAgentSwitch("", false, message.id)}>Continue with another agent…</button>
               </div>
             </article>
           ))}
@@ -1115,13 +1193,17 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
                 <select
                   aria-label="Agent"
                   value={effectiveAgent}
-                  disabled={selectedThreadId !== null || isRunning || executionOptions.isPending}
+                  disabled={threadRunning || agentSwitchBusy || executionOptions.isPending}
                   onChange={(event) => {
+                    if (selectedThreadId) { openAgentSwitch(event.target.value); return; }
                     setSelectedAgent(event.target.value);
                     setDefaultAgentFeedback(null);
                   }}
                 >
-                  {!executionOptions.data?.agents.items.length && <option value="">Default agent</option>}
+                  {(!executionOptions.data?.agents.items.length || !effectiveAgent) && <option value="">{selectedThreadId ? "Unspecified agent" : "Default agent"}</option>}
+                  {effectiveAgent && !executionOptions.data?.agents.items.some((agent) => (agent.id ?? agent.name) === effectiveAgent) && (
+                    <option value={effectiveAgent} disabled>{effectiveAgent} (unavailable)</option>
+                  )}
                   {executionOptions.data?.agents.items.map((agent) => {
                     const value = agent.id ?? agent.name;
                     const profile = agent.llm_profile ? ` · ${agent.llm_profile.replace(/^shared:/, "")}` : "";
@@ -1263,10 +1345,10 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           {isRunning ? (
             <button className="stop-run" type="button" onClick={() => void stopRun()}>Stop</button>
           ) : (
-            <button className="send-message" type="submit" disabled={audioRecordingActive || queuedAudioBlocked || queuedDocumentsBlocked || queuedImagesBlocked || (!draft.trim() && pendingAudio.length === 0 && pendingImages.length === 0 && pendingDocuments.length === 0)} aria-label="Send message">↑</button>
+            <button className="send-message" type="submit" disabled={agentSwitchBusy || (!isAgentCommand && (audioRecordingActive || queuedAudioBlocked || queuedDocumentsBlocked || queuedImagesBlocked)) || (!draft.trim() && pendingAudio.length === 0 && pendingImages.length === 0 && pendingDocuments.length === 0)} aria-label="Send message">↑</button>
           )}
           <small>
-            Enter to send · Shift+Enter for a new line
+            Enter to send · Shift+Enter for a new line · /agent to switch agent
             {imageInputAvailable || documentInputAvailable || audioInputAvailable ? " · Paste or drop attachments" : ""}
           </small>
         </form>
@@ -1284,6 +1366,16 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
         threadTitle={selectedThread.title}
         onClose={() => setThreadDeleteOpen(false)}
         onDeleted={handleThreadDeleted}
+      />}
+      {agentSwitch && <AgentSwitchDialog
+        agents={executionOptions.data?.agents.items ?? []}
+        current={effectiveAgent}
+        initialQuery={agentSwitch.query}
+        branching={Boolean(selectedThreadId && (messages.data?.length ?? composerThread?.message_count))}
+        busy={agentSwitchBusy}
+        error={agentSwitchError}
+        onConfirm={(agent) => void confirmAgentSwitch(agent)}
+        onClose={() => setAgentSwitch(null)}
       />}
       <ContextDialog
         threadId={selectedThreadId}
