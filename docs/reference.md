@@ -147,7 +147,45 @@ smaller prompts at the cost of resetting/changing the cacheable prefix. Automati
 only the model-visible summary boundary; raw messages and attachments remain stored and exportable.
 
 Create a lossless child at any safe conversational boundary with
-`POST /threads/{thread_id}/fork`. Retrieve the current thread, its available parent, direct children,
+`POST /threads/{thread_id}/fork`. The request accepts a required `at_message_id` and
+an optional `agent_name`, for example:
+
+```json
+{"at_message_id": "message-id", "agent_name": "user:code-reviewer"}
+```
+
+Omitting all execution-selection fields (or passing null for all of them) retains the
+source's execution settings. In addition to `agent_name`, the fork request accepts
+`skill_name`, `skill_names`, `capability_profile`, and `llm_profile`, with the same
+validation/default rules as thread creation. These support local CLI presets that are not
+registered as named server agents; explicit `skill_names: []` is preserved.
+Supplying it resolves the target agent against the caller's effective catalog using the
+same validation/default rules as thread creation, and binds the child to the caller's
+execution identity. The child's skills, capability profile, and LLM profile replace,
+rather than merge with, the source settings. Source history, attachments, referenced
+private-value mappings, and lineage use the existing fork behavior. This does not copy
+credentials or grant the source agent's tool permissions. Running sources return 409;
+invalid agents and incompatible image/audio/document history are rejected before copying.
+Context-window management remains the normal runtime behavior; switching does not summarize
+or convert attachments automatically.
+
+Thread list and lineage items now include nullable `agent_ref`, the canonical selected
+agent reference. Old threads remain readable with a null reference; clients must not infer
+an agent from the user's current default. The stored resolved execution settings remain
+authoritative if an agent preset is later edited.
+
+In the production console, `/agent` opens a searchable picker, and `/agent <name-or-ref>`
+preselects an exact available agent. Ambiguous names require an explicit scoped reference.
+Confirmation branches at the latest stored message (subject to tool-pair boundary checks),
+or at the message selected with **Continue with another agent…**. The Agent dropdown uses
+the same confirmation. Existing lineage navigation returns to the original. An empty
+conversation selects the target for the next message without copying a thread. Selecting
+the current agent is a no-op, except when explicitly branching from an earlier message.
+The command is a UI action, never stored as a user message, and never starts a run.
+Switching can change provider: the confirmation warns that the copied history may be sent
+to a different provider when the user continues.
+
+Retrieve the current thread, its available parent, direct children,
 and sibling branches with `GET /threads/{thread_id}/lineage`; a deleted parent is represented as
 `null` while the current thread retains its `parent_thread_id`. The browser provides **Branch from
 here** on visible messages plus persistent lineage navigation. In interactive CLI chat, use `/fork`
@@ -2416,8 +2454,25 @@ selected skill prompts in order. In other words, skill prompts are overlays, not
 for the runtime prompt, and `POST /threads` does not accept a raw `system_prompt` override.
 
 Clients can use server-side agent presets as named shortcuts for common skill/profile combinations.
-For example, `mindweft-client chat` exposes them through `/agent` and creates a new thread with the
-preset's configured skills and capability profile.
+For example, `mindweft-client chat` exposes them through `/agent`. `/agent <name>` forks a
+nonempty current thread at its actual last message (including completed tool results), applies
+the target preset, and selects the child. The original remains intact and `/parent` returns to
+it. `/agent` alone lists choices; scoped references such as `/agent user:office` disambiguate
+shared and personal agents. Server agents are sent by canonical reference so their model
+profile and personal resource identity are not lost. Local client presets still take precedence
+for unscoped names, and send explicit skill/profile selections through the same validated fork
+API. Local presets accept `llm_profile`/`llmProfile` as well.
+
+No model run starts until the next user message. A missing or empty current conversation creates
+a fresh thread, while `/new` intentionally starts fresh with the selected agent. Errors reading
+history, incompatible targets, older servers without agent-aware forks, or unsafe/running fork
+boundaries leave the source selected; the CLI never silently falls back to an empty thread.
+Unlike the console's confirmation dialog, the CLI command switches immediately. Continuing may
+send copied history to the target agent's model/provider.
+
+If an older CLI already created an empty thread during `/agent`, that thread does not gain
+history retroactively. Switch back to the original (`/switch <original-thread-id>`) and repeat
+`/agent <name>` after updating both the client and server.
 
 Use this tenant config with the mock adapter to demo default and explicit skills plus capability
 profiles:

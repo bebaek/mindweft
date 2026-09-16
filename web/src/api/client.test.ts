@@ -74,6 +74,18 @@ describe("MinigentApiClient", () => {
     );
   });
 
+  it("forks with an explicitly selected agent", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ thread_id: "child" }), {
+        status: 201, headers: { "content-type": "application/json" },
+      }),
+    );
+    await new MinigentApiClient({ mode: "session" }).forkThread("source", "message", "user:coding");
+    expect(fetchMock).toHaveBeenCalledWith("/threads/source/fork", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ at_message_id: "message", agent_name: "user:coding" }),
+    }));
+  });
+
   it("loads immediate thread lineage", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({

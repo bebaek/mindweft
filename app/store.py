@@ -23,6 +23,7 @@ from app.models import (
     MessageRole,
     Thread,
     ThreadContext,
+    ThreadExecutionSelection,
     ThreadImportProvenance,
     ThreadStatus,
     utc_now,
@@ -114,6 +115,7 @@ class ThreadStore(Protocol):
         tenant_id: str,
         *,
         execution_user_id: str | None = None,
+        agent_ref: str | None = None,
         skill_name: str | None = None,
         skill_names: list[str] | None = None,
         capability_profile: str | None = None,
@@ -181,6 +183,7 @@ class ThreadStore(Protocol):
         at_message_id: str,
         child_thread_id: str | None = None,
         attachment_id_map: Mapping[str, str] | None = None,
+        execution_selection: ThreadExecutionSelection | None = None,
     ) -> Thread: ...
 
     def fork_compacted_thread(
@@ -399,6 +402,7 @@ class InMemoryThreadStore:
         tenant_id: str,
         *,
         execution_user_id: str | None = None,
+        agent_ref: str | None = None,
         skill_name: str | None = None,
         skill_names: list[str] | None = None,
         capability_profile: str | None = None,
@@ -413,6 +417,7 @@ class InMemoryThreadStore:
             thread = Thread(
                 tenant_id=tenant_id,
                 execution_user_id=execution_user_id,
+                agent_ref=agent_ref,
                 skill_name=skill_name,
                 skill_names=normalized_skill_names,
                 capability_profile=capability_profile,
@@ -578,15 +583,20 @@ class InMemoryThreadStore:
         at_message_id: str,
         child_thread_id: str | None = None,
         attachment_id_map: Mapping[str, str] | None = None,
+        execution_selection: ThreadExecutionSelection | None = None,
     ) -> Thread:
         with self._lock:
             source = self._require_thread(tenant_id, source_thread_id)
+            if source.status == ThreadStatus.RUNNING:
+                raise HTTPException(status_code=409, detail="Cannot fork a running thread")
             source_messages = self._messages[source_thread_id]
             prefix = _fork_message_prefix(source_messages, at_message_id)
             resolved_child_id = child_thread_id or str(uuid4())
             if resolved_child_id in self._threads:
                 raise HTTPException(status_code=409, detail="Fork thread ID already exists")
-            child = _forked_thread(source, resolved_child_id, at_message_id)
+            child = _forked_thread(
+                source, resolved_child_id, at_message_id, execution_selection=execution_selection
+            )
             source_context = self._contexts[source_thread_id]
             self._threads[resolved_child_id] = child
             self._contexts[resolved_child_id] = ThreadContext(
@@ -1245,6 +1255,7 @@ class SQLiteThreadStore:
         tenant_id: str,
         *,
         execution_user_id: str | None = None,
+        agent_ref: str | None = None,
         skill_name: str | None = None,
         skill_names: list[str] | None = None,
         capability_profile: str | None = None,
@@ -1259,6 +1270,7 @@ class SQLiteThreadStore:
             thread = Thread(
                 tenant_id=tenant_id,
                 execution_user_id=execution_user_id,
+                agent_ref=agent_ref,
                 skill_name=skill_name,
                 skill_names=normalized_skill_names,
                 capability_profile=capability_profile,
@@ -1491,12 +1503,13 @@ class SQLiteThreadStore:
         at_message_id: str,
         child_thread_id: str | None = None,
         attachment_id_map: Mapping[str, str] | None = None,
+        execution_selection: ThreadExecutionSelection | None = None,
     ) -> Thread:
         with self._lock, self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             source = self._require_thread(conn, tenant_id, source_thread_id)
             if source.status == ThreadStatus.RUNNING:
-                raise HTTPException(status_code=409, detail="Cannot compact a running thread")
+                raise HTTPException(status_code=409, detail="Cannot fork a running thread")
             rows = conn.execute(
                 "SELECT payload FROM messages WHERE thread_id = ? ORDER BY position ASC",
                 (source_thread_id,),
@@ -1511,7 +1524,9 @@ class SQLiteThreadStore:
                 is not None
             ):
                 raise HTTPException(status_code=409, detail="Fork thread ID already exists")
-            child = _forked_thread(source, resolved_child_id, at_message_id)
+            child = _forked_thread(
+                source, resolved_child_id, at_message_id, execution_selection=execution_selection
+            )
             source_context = self._require_context(conn, source_thread_id)
             child_context = ThreadContext(
                 thread_id=resolved_child_id,
@@ -2668,18 +2683,18 @@ def _forked_thread(
     at_message_id: str,
     *,
     compacted_through_message_id: str | None = None,
+    execution_selection: ThreadExecutionSelection | None = None,
 ) -> Thread:
+    selection = execution_selection or ThreadExecutionSelection(
+        **{name: getattr(source, name) for name in ThreadExecutionSelection.model_fields}
+    )
     return Thread(
         thread_id=child_thread_id,
         tenant_id=source.tenant_id,
-        execution_user_id=source.execution_user_id,
+        **selection.model_dump(),
         title=source.title,
         title_source=source.title_source,
         title_updated_at=source.title_updated_at,
-        skill_name=source.skill_name,
-        skill_names=list(source.skill_names) if source.skill_names is not None else None,
-        capability_profile=source.capability_profile,
-        llm_profile=source.llm_profile,
         parent_thread_id=source.thread_id,
         fork_message_id=at_message_id,
         compacted_through_message_id=compacted_through_message_id,

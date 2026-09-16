@@ -40,6 +40,22 @@ user and tool-authored content remains plain text by default. The console typogr
 15px for body text, 16px for chat, 14px for controls, 13px for labels and code, and 12px for
 tertiary metadata; mobile form controls remain 16px to avoid browser input zoom.
 
+In the production console, use `/agent` to choose an agent or `/agent coding` (also
+`/agent user:code-reviewer` or `/agent shared:researcher`) to preselect one. Confirming
+on an existing conversation opens a new branch with the copied history and the target
+agent's skills, model, and tool permissions; the original stays unchanged. The command
+is not sent to the model and does not start a run. The Agent selector offers the same
+flow, and **Continue with another agent…** on a message branches from that point.
+New or empty conversations only select the agent for the next message. Switching is
+blocked during a run, and cancellation or errors preserve the draft.
+
+Interactive CLI chat also supports `/agent <name-or-reference>`: it forks a nonempty current
+thread, preserving conversation history, and switches to the child without starting a run.
+`/agent` lists presets and `/agent current` shows the selection. Both server agents and local
+client presets are supported; `/new` explicitly starts fresh with the selected agent. A
+failed history read or fork leaves the original selected, rather than silently starting over.
+The legacy browser client is unchanged.
+
 The dependency-free development client remains available during migration:
 
 ```text

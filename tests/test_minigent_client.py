@@ -1540,7 +1540,9 @@ def test_parse_agent_presets_supports_object_and_array_forms() -> None:
 def test_parse_agent_presets_rejects_ambiguous_or_empty_presets() -> None:
     with pytest.raises(ValueError, match="cannot set both skill_name and skill_names"):
         parse_agent_presets({"coding": {"skill_name": "coding", "skill_names": ["review"]}})
-    with pytest.raises(ValueError, match="must set skill_name, skill_names, or capability_profile"):
+    with pytest.raises(
+        ValueError, match="must set skill_name, skill_names, capability_profile, or llm_profile"
+    ):
         parse_agent_presets({"empty": {"description": "No effective thread settings"}})
     with pytest.raises(ValueError, match="Duplicate agent preset"):
         parse_agent_presets(
@@ -5725,12 +5727,14 @@ def test_run_chat_loop_handles_server_agent_command(
         def create_thread(
             self,
             *,
+            agent_name: str | None = None,
             skill_name: str | None = None,
             skills: list[str] | None = None,
             capability_profile: str | None = None,
         ) -> dict[str, str]:
             create_calls.append(
                 {
+                    "agent_name": agent_name,
                     "skill_name": skill_name,
                     "skills": skills,
                     "capability_profile": capability_profile,
@@ -5753,7 +5757,7 @@ def test_run_chat_loop_handles_server_agent_command(
 
     assert exit_code == 0
     assert create_calls == [
-        {"skill_name": "plain-qa", "skills": None, "capability_profile": "plain-qa"}
+        {"agent_name": "plain-qa", "skill_name": None, "skills": None, "capability_profile": None}
     ]
     output = output_stream.getvalue()
     assert "[idle] - plain-qa  skill=plain-qa profile=plain-qa - Plain Q&A" in output
