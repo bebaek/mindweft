@@ -3044,11 +3044,10 @@ def create_app(
         source = request.app.state.store.get_thread(principal.tenant_id, thread_id)
         if source.status == ThreadStatus.RUNNING:
             raise HTTPException(status_code=409, detail="Cannot fork a running thread")
+        selection_request = CreateThreadRequest(**body.model_dump(exclude={"at_message_id"}))
         selection = (
-            resolve_thread_selection(
-                request, principal, CreateThreadRequest(agent_name=body.agent_name)
-            )
-            if body.agent_name is not None
+            resolve_thread_selection(request, principal, selection_request)
+            if any(value is not None for value in selection_request.model_dump().values())
             else None
         )
         source_messages = request.app.state.store.list_messages(

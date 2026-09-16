@@ -154,7 +154,11 @@ an optional `agent_name`, for example:
 {"at_message_id": "message-id", "agent_name": "user:code-reviewer"}
 ```
 
-Omitting `agent_name` (or passing null) retains the source's execution settings.
+Omitting all execution-selection fields (or passing null for all of them) retains the
+source's execution settings. In addition to `agent_name`, the fork request accepts
+`skill_name`, `skill_names`, `capability_profile`, and `llm_profile`, with the same
+validation/default rules as thread creation. These support local CLI presets that are not
+registered as named server agents; explicit `skill_names: []` is preserved.
 Supplying it resolves the target agent against the caller's effective catalog using the
 same validation/default rules as thread creation, and binds the child to the caller's
 execution identity. The child's skills, capability profile, and LLM profile replace,
@@ -2450,8 +2454,25 @@ selected skill prompts in order. In other words, skill prompts are overlays, not
 for the runtime prompt, and `POST /threads` does not accept a raw `system_prompt` override.
 
 Clients can use server-side agent presets as named shortcuts for common skill/profile combinations.
-For example, `mindweft-client chat` exposes them through `/agent` and creates a new thread with the
-preset's configured skills and capability profile.
+For example, `mindweft-client chat` exposes them through `/agent`. `/agent <name>` forks a
+nonempty current thread at its actual last message (including completed tool results), applies
+the target preset, and selects the child. The original remains intact and `/parent` returns to
+it. `/agent` alone lists choices; scoped references such as `/agent user:office` disambiguate
+shared and personal agents. Server agents are sent by canonical reference so their model
+profile and personal resource identity are not lost. Local client presets still take precedence
+for unscoped names, and send explicit skill/profile selections through the same validated fork
+API. Local presets accept `llm_profile`/`llmProfile` as well.
+
+No model run starts until the next user message. A missing or empty current conversation creates
+a fresh thread, while `/new` intentionally starts fresh with the selected agent. Errors reading
+history, incompatible targets, older servers without agent-aware forks, or unsafe/running fork
+boundaries leave the source selected; the CLI never silently falls back to an empty thread.
+Unlike the console's confirmation dialog, the CLI command switches immediately. Continuing may
+send copied history to the target agent's model/provider.
+
+If an older CLI already created an empty thread during `/agent`, that thread does not gain
+history retroactively. Switch back to the original (`/switch <original-thread-id>`) and repeat
+`/agent <name>` after updating both the client and server.
 
 Use this tenant config with the mock adapter to demo default and explicit skills plus capability
 profiles:

@@ -549,10 +549,13 @@ class RememberingMindweftAPIClient:
         if callable(flusher):
             flusher()
 
-    def fork_thread(self, thread_id: str, *, at_message_id: str) -> dict[str, Any]:
+    def fork_thread(
+        self, thread_id: str, *, at_message_id: str, **selection: Any
+    ) -> dict[str, Any]:
         response = self._client.fork_thread(  # type: ignore[attr-defined]
             thread_id,
             at_message_id=at_message_id,
+            **selection,
         )
         normalized = response if isinstance(response, dict) else {}
         child_thread_id = normalized.get("thread_id")
@@ -1759,15 +1762,12 @@ def _handle_chat_new(
         )
         title = f"Agent: {config.agent_name}" if config.agent_name else "New thread"
     else:
-        response = client.create_thread(
-            skill_name=active_preset.skill_name,
-            skills=list(active_preset.skills) if active_preset.skills is not None else None,
-            capability_profile=active_preset.capability_profile,
-        )
+        response = client.create_thread(**_agent_preset_selection(active_preset))
         # create_thread resets the client-side active label for ordinary thread creation;
         # /new is expected to keep the selected agent context.
         client.active_agent_preset = active_preset.name
         client.active_agent_preset_config = active_preset
+        client.active_llm_profile = active_preset.llm_profile
         title = f"Agent: {active_preset.name}"
     thread_id = response.get("thread_id") if isinstance(response, dict) else None
     if not isinstance(thread_id, str) or not thread_id:
@@ -1801,7 +1801,7 @@ def _handle_chat_agent(
         _merged_agent_presets(config.agent_presets, _server_agent_presets(client)), selection
     )
     if preset is None:
-        output_stream.write(f"[idle] unknown agent preset '{selection}'\n")
+        output_stream.write(f"[idle] unknown or ambiguous agent preset '{selection}'\n")
         all_presets = _merged_agent_presets(config.agent_presets, _server_agent_presets(client))
         if all_presets:
             output_stream.write("[idle] use /agent to list available presets\n")
@@ -1811,12 +1811,35 @@ def _handle_chat_agent(
             )
         output_stream.flush()
         return
+    if client.active_agent_preset_config == preset:
+        output_stream.write(f"[idle] already using agent {preset.name}\n")
+        output_stream.flush()
+        return
+    source_thread_id = client.thread_id
+    branched = False
     try:
-        response = client.create_thread(
-            skill_name=preset.skill_name,
-            skills=list(preset.skills) if preset.skills is not None else None,
-            capability_profile=preset.capability_profile,
-        )
+        selection_kwargs = _agent_preset_selection(preset)
+        messages: list[Any] = []
+        if source_thread_id:
+            source = client.get_thread(source_thread_id)
+            raw_messages = source.get("messages")
+            if not isinstance(raw_messages, list):
+                raise RuntimeError("server did not return conversation history; source preserved")
+            messages = raw_messages
+        if messages:
+            last = messages[-1]
+            message_id = last.get("id") if isinstance(last, dict) else None
+            if not isinstance(message_id, str) or not message_id:
+                raise RuntimeError("last message has no ID; source preserved")
+            assert source_thread_id is not None
+            # Use the actual tail, not the filtered /fork picker: retain tool results too.
+            # The server rejects running threads and incomplete tool-call boundaries.
+            response = client.fork_thread(
+                source_thread_id, at_message_id=message_id, **selection_kwargs
+            )
+            branched = True
+        else:
+            response = client.create_thread(**selection_kwargs)
     except RuntimeError as exc:
         output_stream.write(f"[idle] agent switch failed: {exc}\n")
         output_stream.flush()
@@ -1828,12 +1851,33 @@ def _handle_chat_agent(
         return
     client.active_agent_preset = preset.name
     client.active_agent_preset_config = preset
+    client.active_llm_profile = preset.llm_profile
     remember_client_thread(config, thread_id, title=f"Agent: {preset.name}")
-    output_stream.write(f"[idle] switched to agent {preset.name}; created thread {thread_id}\n")
+    if branched:
+        output_stream.write(
+            f"[idle] switched to agent {preset.name}; forked thread {thread_id} "
+            f"from {source_thread_id}; conversation history preserved\n"
+        )
+    else:
+        output_stream.write(f"[idle] switched to agent {preset.name}; created thread {thread_id}\n")
     detail = _format_agent_preset_detail(preset)
     if detail:
         output_stream.write(f"[idle] {detail}\n")
     output_stream.flush()
+
+
+def _agent_preset_selection(preset: AgentPreset) -> dict[str, Any]:
+    if preset.agent_ref:
+        # Let the server resolve canonical identity, personal resources, and model defaults.
+        return {"agent_name": preset.agent_ref}
+    selection: dict[str, Any] = {
+        "skill_name": preset.skill_name,
+        "skills": list(preset.skills) if preset.skills is not None else None,
+        "capability_profile": preset.capability_profile,
+    }
+    if preset.llm_profile is not None:
+        selection["llm_profile"] = preset.llm_profile
+    return selection
 
 
 def _server_agent_presets(client: RememberingMindweftAPIClient) -> tuple[AgentPreset, ...]:
@@ -1855,12 +1899,14 @@ def _server_agent_presets(client: RememberingMindweftAPIClient) -> tuple[AgentPr
         if not isinstance(name, str) or not name.strip():
             continue
         skill_name = item.get("skill_name") or item.get("skillName")
-        raw_skills = item.get("skills") or item.get("skill_names") or item.get("skillNames")
+        raw_skills = item.get("skills", item.get("skill_names", item.get("skillNames")))
         capability_profile = item.get("capability_profile") or item.get("capabilityProfile")
         description = item.get("description")
         presets.append(
             AgentPreset(
                 name=name.strip(),
+                agent_ref=item["id"] if isinstance(item.get("id"), str) else name.strip(),
+                llm_profile=item.get("llm_profile"),
                 skill_name=skill_name if isinstance(skill_name, str) and skill_name else None,
                 skills=tuple(raw_skills)
                 if isinstance(raw_skills, list)
@@ -1881,7 +1927,7 @@ def _merged_agent_presets(
     merged: list[AgentPreset] = []
     seen: set[str] = set()
     for preset in (*local_presets, *server_presets):
-        normalized = preset.name.casefold()
+        normalized = preset.agent_ref or preset.name.casefold()
         if normalized in seen:
             continue
         seen.add(normalized)
@@ -1903,7 +1949,10 @@ def _write_agent_preset_list(
     for preset in presets:
         detail = _format_agent_preset_detail(preset)
         suffix = f"  {detail}" if detail else ""
-        output_stream.write(f"[idle] - {preset.name}{suffix}\n")
+        ref = (
+            f" ({preset.agent_ref})" if preset.agent_ref and preset.agent_ref != preset.name else ""
+        )
+        output_stream.write(f"[idle] - {preset.name}{ref}{suffix}\n")
     output_stream.flush()
 
 
@@ -1927,11 +1976,16 @@ def _write_current_agent(
 
 
 def _find_agent_preset(presets: tuple[AgentPreset, ...], name: str) -> AgentPreset | None:
-    normalized = name.casefold()
+    # Scoped references disambiguate shared and personal presets with the same name.
     for preset in presets:
-        if preset.name.casefold() == normalized:
+        if ":" in name and preset.agent_ref == name:
             return preset
-    return None
+    normalized = name.casefold()
+    matches = [preset for preset in presets if preset.name.casefold() == normalized]
+    local = [preset for preset in matches if preset.agent_ref is None]
+    if local:
+        return local[0]  # Preserve local-preset precedence for unscoped names.
+    return matches[0] if len(matches) == 1 else None
 
 
 def _format_agent_preset_detail(preset: AgentPreset) -> str:
@@ -1942,6 +1996,8 @@ def _format_agent_preset_detail(preset: AgentPreset) -> str:
         parts.append("skills=" + ",".join(preset.skills))
     if preset.capability_profile:
         parts.append(f"profile={preset.capability_profile}")
+    if preset.llm_profile:
+        parts.append(f"llm={preset.llm_profile}")
     if preset.description:
         parts.append(f"- {preset.description}")
     return " ".join(parts)

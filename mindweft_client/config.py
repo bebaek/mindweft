@@ -17,6 +17,8 @@ class AgentPreset:
     skills: tuple[str, ...] | None = None
     capability_profile: str | None = None
     description: str | None = None
+    agent_ref: str | None = None
+    llm_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -667,9 +669,12 @@ def _parse_agent_preset(entry: dict[Any, Any]) -> AgentPreset:
         entry.get("capability_profile", entry.get("capabilityProfile")),
         "capability_profile",
     )
-    if skill_name is None and skills is None and capability_profile is None:
+    llm_profile = _optional_preset_str(
+        entry.get("llm_profile", entry.get("llmProfile")), "llm_profile"
+    )
+    if skill_name is None and skills is None and capability_profile is None and llm_profile is None:
         raise ValueError(
-            f"Agent preset '{name}' must set skill_name, skill_names, or capability_profile"
+            f"Agent preset '{name}' must set skill_name, skill_names, capability_profile, or llm_profile"
         )
     description = _optional_preset_str(entry.get("description"), "description")
     return AgentPreset(
@@ -678,6 +683,7 @@ def _parse_agent_preset(entry: dict[Any, Any]) -> AgentPreset:
         skills=skills,
         capability_profile=capability_profile,
         description=description,
+        llm_profile=llm_profile,
     )
 
 

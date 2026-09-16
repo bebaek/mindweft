@@ -237,6 +237,11 @@ class ForkThreadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     at_message_id: str = Field(min_length=1)
     agent_name: str | None = Field(default=None, min_length=1)
+    # Local CLI presets can supply the same explicit selection as thread creation.
+    skill_name: str | None = None
+    skill_names: list[str] | None = None
+    capability_profile: str | None = None
+    llm_profile: str | None = None
 
 
 class ForkThreadResponse(BaseModel):

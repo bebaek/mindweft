@@ -47,8 +47,14 @@ agent's skills, model, and tool permissions; the original stays unchanged. The c
 is not sent to the model and does not start a run. The Agent selector offers the same
 flow, and **Continue with another agent…** on a message branches from that point.
 New or empty conversations only select the agent for the next message. Switching is
-blocked during a run, and cancellation or errors preserve the draft. These slash commands
-are console actions, not commands for the legacy browser client or CLI.
+blocked during a run, and cancellation or errors preserve the draft.
+
+Interactive CLI chat also supports `/agent <name-or-reference>`: it forks a nonempty current
+thread, preserving conversation history, and switches to the child without starting a run.
+`/agent` lists presets and `/agent current` shows the selection. Both server agents and local
+client presets are supported; `/new` explicitly starts fresh with the selected agent. A
+failed history read or fork leaves the original selected, rather than silently starting over.
+The legacy browser client is unchanged.
 
 The dependency-free development client remains available during migration:
 
