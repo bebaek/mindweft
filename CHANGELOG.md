@@ -10,6 +10,12 @@ package version is `0.1.0`.
 
 ### Added
 
+- Named local coding instances with isolated persistent state, lifetime/store locks, automatic
+  loopback-port allocation using inherited listening sockets, and readiness-gated local discovery.
+- CLI `--instance NAME`, `instances list`, and `instances open NAME`, with launch-identity checks
+  and stale-request rejection. Default/advanced runner behavior remains compatible; console
+  authentication bootstrap is deferred.
+
 - Coding launcher startup now reports the loaded configuration path, resolved symlink target,
   and limited configuration scope, or why no TOML file was loaded, without printing values.
 

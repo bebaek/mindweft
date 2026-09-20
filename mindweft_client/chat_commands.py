@@ -42,7 +42,7 @@ def build_trace_headers(trace_id: str | None) -> dict[str, str]:
 
 def state_scope_key(base_url: str, args: argparse.Namespace) -> str:
     return build_state_scope_key(
-        base_url,
+        f"local-instance:{args.instance}" if getattr(args, "instance", None) else base_url,
         api_token=args.api_token,
         user_id=args.user_id,
         tenant_id=args.tenant_id,
@@ -165,7 +165,14 @@ def build_config(args: argparse.Namespace, trace_id: str | None) -> ClientConfig
         tenant_id=args.tenant_id,
         admin=args.admin,
         stream_runs=getattr(args, "stream", False),
-        extra_headers=build_trace_headers(trace_id),
+        extra_headers={
+            **build_trace_headers(trace_id),
+            **(
+                {"X-Mindweft-Launch-Id": args.instance_launch_id}
+                if getattr(args, "instance_launch_id", None)
+                else {}
+            ),
+        },
         wake_phrase="hey minigent",
         env_config=ClientConfig(base_url=args.base_url.rstrip("/"), wake_phrase="hey minigent"),
     )

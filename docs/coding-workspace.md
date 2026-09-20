@@ -32,6 +32,79 @@ Writes, shell, external MCP servers, peer backends, admin execution overlays, an
 workspace scopes are not enabled. Existing path deny-glob defaults remain in force. This is
 not an OS sandbox or a guarantee that every possible secret filename is excluded.
 
+### Multiple local instances
+
+Use an explicit name when testing alongside an existing instance:
+
+```bash
+# Keep the installed daily-use version running.
+mindweft code /path/to/project --instance daily
+
+# In a separate, updated checkout/environment (console assets built):
+uv run mindweft code /path/to/project --instance preview
+
+# Connect a CLI to the matching instance, without remembering its port:
+mindweft --instance preview chat "Explain this repository"
+mindweft instances list
+mindweft instances open preview
+```
+
+Use the updated checkout's `uv run mindweft ...` for client commands too if the installed tool
+predates `--instance`; an already-running older instance need not be restarted or reinstalled.
+
+Add `--demo` to either launch for mock-only testing. Instance names contain 1-64 letters,
+digits, underscores, or hyphens, starting with a letter/digit. `--instance` goes after `code`
+for launching and before the client subcommand for connecting. One name can run only once.
+
+**Ports:** named launches prefer API port 8000 and gateway port 8765. If an omitted port is
+occupied, the OS allocates a free loopback port. The launcher holds listening sockets and passes
+their descriptors to the child servers, avoiding a check-then-bind race. Explicit `--port` and
+`--gateway-port` values are strict: they must be distinct, within 1-65535, and available. The
+actual API URL is printed/opened; actual gateway URLs are used by the generated tool configuration.
+
+**State:** omitting `--instance` selects `default` and preserves existing storage settings and
+legacy state-directory fallback. Other names store threads, attachments, and OAuth data under
+`$XDG_STATE_HOME/mindweft/instances/<name>` (normally `~/.local/state/mindweft/instances/<name>`).
+Named instances override inherited thread/attachment/OAuth storage paths, reporting the overridden
+setting names. No databases or credentials are copied. Provider API keys/configuration may be
+reused, but OAuth login may need to be completed separately for the named instance. Other default
+XDG state is directed into the instance's own `xdg` subdirectory. Default in-memory stores remain
+in memory. Reusing a name after shutdown reuses its persistent data; do not run incompatible
+versions against the same named state.
+
+**Legacy safety:** older launchers and advanced runners do not participate in these instance/store
+locks. Use a new name such as `preview` when testing beside them. An unnamed/default launch refuses
+automatic API-port fallback if 8000 is occupied, rather than silently sharing a possible older
+instance's databases. An explicit port does not isolate default storage; prefer a non-default name.
+
+**Discovery:** each ready instance atomically publishes an owner-only JSON record in the user's
+state directory under `instances/`. It contains the name, launch ID, API/gateway URLs, launcher
+PID, and version, not credentials. Nothing is published until API/tool/identity readiness passes.
+Named clients verify the name and fresh launch ID against `/local-instance`; stale/unavailable
+records never fall back to another instance. Requests then carry a launch-ID header, which
+participating servers reject if the identity changed. Identity verification is not authentication;
+normal principal headers/authentication still apply. Named CLI history is scoped by instance name
+rather than its changing port.
+
+`--instance` and an explicit `--base-url` cannot be combined. An explicitly selected instance takes
+precedence over environment URL defaults. Without `--instance`, clients retain their existing URL
+behavior; automatic client selection is not included in this slice. `instances list` distinguishes
+running from stale records; `instances open NAME` verifies identity before opening the console.
+
+Locks protect both instance names and resolved storage paths used by new launchers. Service
+children inherit lock descriptors, so a killed launcher cannot release a name/store while its
+services are still alive. Normal shutdown removes its own registry record and stops only its own
+children. Lock files intentionally remain: do not delete them to force a second launch.
+
+**Separate the code too:** keep your daily version in a non-editable installation and test updates
+from a separate checkout/worktree and environment. Reinstalling over a running tool or editing a
+shared editable checkout can replace code/assets that an existing process still uses. Instance
+isolation does not snapshot the installed code or repository files.
+
+The console opens at the correct instance origin, but automatic console authentication is a
+separate follow-up. For now choose Development headers, tenant `demo-tenant`, user `demo-user`
+via Configure. Different ports isolate browser origins/local storage, **not cookies**.
+
 ### Configuration and authentication
 
 Startup prints `Config: loaded '<path>'` to stderr after TOML loading succeeds. For a symlink,
@@ -65,7 +138,7 @@ loopback binding as an authentication boundary.
 
 ### Startup and troubleshooting
 
-The launcher checks ports, starts the existing runner processes in a temporary working directory,
+The launcher reserves ports, starts the existing runner processes in a temporary working directory,
 and waits up to approximately 60 seconds for API readiness, console assets, the inspect profile,
 and exact expected MCP tool lists. Only then does it print `Ready` and open the browser. Browser
 failure is nonfatal; open the printed URL yourself. `Ctrl+C` or SIGTERM shuts down managed children
@@ -74,7 +147,9 @@ and removes the temporary gateway configuration. Startup failure also triggers c
 - **Missing provider:** use `mindweft config init --help` to create a user-level starter config,
   then configure a real provider and export its credentials. `mindweft config doctor` can help,
   but follows the advanced command's normal discovery rules; point it at the same explicit config.
-- **Port conflict:** select different `--port` / `--gateway-port` values; automatic allocation is deferred.
+- **Port conflict:** omit port flags for automatic allocation with a named instance, or select different
+  explicit `--port` / `--gateway-port` values. A default instance with port 8000 occupied asks for
+  a non-default `--instance` name to avoid sharing legacy state.
 - **Readiness failure:** inspect child startup output. A healthy API alone is not enough; missing tools
   or absent console assets prevent a ready announcement.
 
