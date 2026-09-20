@@ -29,6 +29,7 @@ def resolve_workspace_mcp_servers(
     tenant_id: str,
     workspace_roots: list[Path],
     settings: WorkspaceRuntimeSettings,
+    bundled_readonly: bool = False,
 ) -> ResolvedMCPServers:
     normalize_mindweft_env(env)
     source_file = resolve_mcp_servers_file(
@@ -67,6 +68,7 @@ def resolve_workspace_mcp_servers(
             shell_bridge_name=settings.shell_bridge_name,
             shell_bridge_port=settings.shell_bridge_port,
             shell_bridge_url=settings.shell_bridge_url,
+            **({"bundled_readonly": True} if bundled_readonly else {}),
         )
     tenant_specs = (
         mcp_server_specs_for_gateway(process_specs, settings.gateway_url_prefix)

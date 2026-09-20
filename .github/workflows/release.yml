@@ -53,7 +53,7 @@ jobs:
             exit 1
           fi
           printf 'Validated Mindweft %s from tag v%s.\n' "$package_version" "$tag_version"
-      - name: Set up Node.js for packaged console and coding smoke test
+      - name: Set up Node.js to build packaged console
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"

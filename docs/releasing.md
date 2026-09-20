@@ -60,9 +60,10 @@ Before the first public package release:
    rm -rf "$smoke_dir"
    ```
 
-The coding smoke test requires Node/npm and npm network access. It uses isolated temporary
-   HOME/config/state directories, an explicit mock provider, and a workspace with spaces. It
-   checks console serving, MCP reads and policy denials, chat, and shutdown without real keys.
+The coding smoke test gives the launched process an empty executable PATH (no Node/npm), isolated
+   temporary HOME/config/state directories, an explicit mock provider, and two roots with spaces.
+   It checks console serving, both MCP readers, path/symlink denials, chat, and shutdown without
+   real keys or npm downloads. Node/npm is needed only earlier, to build the console.
    CI package validation and the release build job run this test against the installed wheel.
 
 7. Inspect the rendered package description and metadata on a staging index when available.

@@ -24,7 +24,6 @@ def clean_environment(monkeypatch, tmp_path):
         if key.startswith(("MINDWEFT_", "MINIGENT_")):
             monkeypatch.delenv(key)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(code.shutil, "which", Mock(return_value="/usr/bin/npx"))
     monkeypatch.setattr(code, "check_port", Mock())
 
 
@@ -150,7 +149,6 @@ def test_no_open(clean_environment, monkeypatch):
     [
         ("missing", "accessible directory"),
         ("file", "accessible directory"),
-        ("npx", "Node.js"),
         ("provider", "Configure a real provider"),
         ("auth", "development authentication only"),
         ("ports", "must be different"),
@@ -163,8 +161,6 @@ def test_preflight_never_spawns(case, message, clean_environment, tmp_path, monk
     if case == "file":
         (tmp_path / "file").write_text("fixture")
         argv.insert(0, "file")
-    if case == "npx":
-        monkeypatch.setattr(code.shutil, "which", Mock(return_value=None))
     if case == "provider":
         argv = []
     if case == "auth":
@@ -335,7 +331,16 @@ def test_multiple_roots_deduplicate_and_ignore_inherited_roots(
     assert options["workspace"] == first
     assert options["shell_bridge_name"] is None
     assert len(specs) == 2
-    assert specs[0].command[-2:] == [str(first), str(second)]
+    assert specs[0].command == [
+        code.sys.executable,
+        "-m",
+        "mindweft_workspace.servers.filesystem",
+        "--workspace",
+        str(first),
+        "--workspace",
+        str(second),
+    ]
+    assert specs[1].command[-1] == "--safe-reads"
     assert specs[1].command.count(str(first)) == 1
     assert specs[1].command.count(str(second)) == 1
     assert "/" not in specs[0].command
