@@ -107,6 +107,14 @@ via Configure. Different ports isolate browser origins/local storage, **not cook
 
 ### Configuration and authentication
 
+Startup prints `Config: loaded '<path>'` to stderr after TOML loading succeeds. For a symlink,
+`Config target: '<resolved-path>'` identifies its target (including dotfiles-managed configs).
+If no file is loaded, it reports `environment only` and distinguishes disabled discovery from
+no user-level TOML found. This diagnostic contains paths only, never configuration values or
+credentials, and appears even if later provider preflight fails. A scope reminder makes clear
+that loading a file does not enable its custom tools, tenants, skills, or workspace settings.
+
+
 - Loads an explicitly selected `MINDWEFT_CONFIG_FILE` (legacy alias accepted), or the canonical
   then legacy user-level TOML path. It does **not** discover cwd-local TOML files.
 - Environment overrides TOML. Only provider, authentication, and thread/attachment persistence

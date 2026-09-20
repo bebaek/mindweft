@@ -16,6 +16,9 @@ package version is `0.1.0`.
   and stale-request rejection. Default/advanced runner behavior remains compatible; console
   authentication bootstrap is deferred.
 
+- Coding launcher startup now reports the loaded configuration path, resolved symlink target,
+  and limited configuration scope, or why no TOML file was loaded, without printing values.
+
 - Bundled read-only filesystem MCP server for `mindweft code`: no Node/npm runtime dependency,
   multi-root resolved-path checks, symlink-safe POSIX reads, and bounded UTF-8 file/list output.
   The simple launcher's targeted-text tools use the same safe-read policy; the advanced runner

@@ -416,3 +416,78 @@ def test_default_refuses_automatic_fallback_to_shared_legacy_state(
     assert code.run_code_command(args("--demo")) == 2
     run.assert_not_called()
     assert "--instance preview" in capsys.readouterr().err
+
+
+def test_config_source_reports_user_symlink_without_values(tmp_path, capsys):
+    config = tmp_path / "config" / "mindweft" / "mindweft.toml"
+    config.parent.mkdir(parents=True)
+    target = tmp_path / "dotfiles.toml"
+    target.write_text('[llm]\nprovider="openrouter"\napi_key="test-secret-not-for-output"\n')
+    config.symlink_to(target)
+    code.load_code_environment({"XDG_CONFIG_HOME": str(tmp_path / "config")}, report_source=True)
+    output = capsys.readouterr().err
+    assert f"Config: loaded {str(config)!r}" in output
+    assert f"Config target: {str(target)!r}" in output
+    assert "provider/auth/storage settings only" in output
+    assert "test-secret-not-for-output" not in output
+
+
+def test_config_source_reports_explicit_symlink_even_with_discovery_disabled(tmp_path, capsys):
+    target = tmp_path / "target.toml"
+    target.write_text('[llm]\nprovider="mock"\n')
+    link = tmp_path / "selected.toml"
+    link.symlink_to(target)
+    code.load_code_environment(
+        {"MINIGENT_CONFIG_FILE": str(link), "MINDWEFT_CONFIG_DISCOVERY": "disabled"},
+        report_source=True,
+    )
+    output = capsys.readouterr().err
+    assert f"Config: loaded {str(link)!r}" in output
+    assert f"Config target: {str(target)!r}" in output
+    assert "environment only" not in output
+
+
+@pytest.mark.parametrize("disabled", [True, False])
+def test_config_source_reports_no_file_reason(tmp_path, capsys, disabled):
+    source = {"HOME": str(tmp_path), "XDG_CONFIG_HOME": str(tmp_path / "config")}
+    if disabled:
+        source["MINDWEFT_CONFIG_DISCOVERY"] = "disabled"
+    code.load_code_environment(source, report_source=True)
+    reason = "file discovery disabled" if disabled else "no user-level TOML found"
+    assert f"Config: environment only ({reason})" in capsys.readouterr().err
+
+
+def test_config_source_reports_legacy_user_file(tmp_path, capsys):
+    config = tmp_path / "config" / "minigent" / "minigent.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('[llm]\nprovider="mock"\n')
+    code.load_code_environment({"XDG_CONFIG_HOME": str(tmp_path / "config")}, report_source=True)
+    output = capsys.readouterr().err
+    assert f"Config: loaded {str(config)!r}" in output
+    assert "Config target:" not in output
+
+
+def test_bad_config_is_not_reported_as_loaded(tmp_path, capsys):
+    config = tmp_path / "invalid.toml"
+    config.write_text("invalid TOML test-secret")
+    with pytest.raises(RuntimeError):
+        code.load_code_environment({"MINDWEFT_CONFIG_FILE": str(config)}, report_source=True)
+    output = capsys.readouterr().err
+    assert "Config: loaded" not in output
+    assert "test-secret" not in output
+
+
+def test_config_source_visible_before_provider_failure(
+    clean_environment, tmp_path, capsys, monkeypatch
+):
+    config = tmp_path / "selected.toml"
+    config.write_text('[llm]\nprovider="mock"\n')
+    monkeypatch.setenv("MINDWEFT_CONFIG_FILE", str(config))
+    assert code.run_code_command(args()) == 2
+    output = capsys.readouterr().err
+    assert output.index("Config: loaded") < output.index("Configure a real provider")
+
+
+def test_config_loader_remains_quiet_by_default(tmp_path, capsys):
+    code.load_code_environment({"HOME": str(tmp_path)})
+    assert capsys.readouterr().err == ""

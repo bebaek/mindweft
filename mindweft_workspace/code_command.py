@@ -38,7 +38,7 @@ _RUNTIME_KEYS = {
 }
 
 
-def load_code_environment(source: dict[str, str]) -> dict[str, str]:
+def load_code_environment(source: dict[str, str], *, report_source: bool = False) -> dict[str, str]:
     """Load explicitly selected or user-level TOML, never cwd TOML/dotenv/_FILE secrets.
 
     The resulting child environment disables all further file discovery. Both canonical
@@ -46,17 +46,19 @@ def load_code_environment(source: dict[str, str]) -> dict[str, str]:
     """
     source = normalize_mindweft_env(dict(source))
     explicit = preferred_mindweft_env("CONFIG_FILE", source)
-    path = Path(explicit).expanduser().resolve() if explicit else None
+    selected_path = Path(explicit).expanduser().absolute() if explicit else None
+    path = selected_path.resolve() if selected_path is not None else None
     if path is not None and not path.is_file():
         raise RuntimeError("Explicit Mindweft config file does not exist.")
-    if path is None and preferred_mindweft_env("CONFIG_DISCOVERY", source) not in {
+    discovery_disabled = preferred_mindweft_env("CONFIG_DISCOVERY", source) in {
         "disabled",
         "false",
         "0",
         "off",
         "no",
         "explicit",
-    }:
+    }
+    if path is None and not discovery_disabled:
         path = next(
             (
                 p
@@ -75,6 +77,22 @@ def load_code_environment(source: dict[str, str]) -> dict[str, str]:
         raise RuntimeError(
             "Cannot load Mindweft config; check its TOML/schema with mindweft config doctor."
         ) from exc
+    if report_source:
+        if path is not None:
+            selected = selected_path or path.absolute()
+            print(f"Config: loaded {str(selected)!r}", file=sys.stderr)
+            resolved = path.resolve()
+            if selected != resolved:
+                print(f"Config target: {str(resolved)!r}", file=sys.stderr)
+            print(
+                "Config scope: provider/auth/storage settings only; tool, tenant, skill, "
+                "and workspace settings are not inherited.",
+                file=sys.stderr,
+            )
+        elif discovery_disabled:
+            print("Config: environment only (file discovery disabled)", file=sys.stderr)
+        else:
+            print("Config: environment only (no user-level TOML found)", file=sys.stderr)
     combined = {**configured, **source}
     env = {}
     for key, value in combined.items():
@@ -188,7 +206,7 @@ def run_code_command(args: argparse.Namespace) -> int:
         for workspace in workspaces:
             if not workspace.is_dir() or not os.access(workspace, os.R_OK | os.X_OK):
                 raise RuntimeError(f"Workspace must be an accessible directory: {workspace}")
-        env = load_code_environment(dict(os.environ))
+        env = load_code_environment(dict(os.environ), report_source=True)
         check_provider(env, demo=args.demo)
         auth_mode = env.get("MINIGENT_AUTH_MODE", "dev-headers")
         if (
