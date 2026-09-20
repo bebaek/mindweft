@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import signal
 import socket
 import sys
@@ -189,10 +188,6 @@ def run_code_command(args: argparse.Namespace) -> int:
             if not workspace.is_dir() or not os.access(workspace, os.R_OK | os.X_OK):
                 raise RuntimeError(f"Workspace must be an accessible directory: {workspace}")
         env = load_code_environment(dict(os.environ))
-        if not shutil.which("npx", path=env.get("PATH")):
-            raise RuntimeError(
-                "The filesystem integration requires Node.js/npm (npx). Install Node.js, then rerun this command."
-            )
         check_provider(env, demo=args.demo)
         auth_mode = env.get("MINIGENT_AUTH_MODE", "dev-headers")
         if (
@@ -225,7 +220,7 @@ def run_code_command(args: argparse.Namespace) -> int:
                 str(args.gateway_port),
             ]
         )
-        plan = prepare_workspace_runtime(runner_args, env)
+        plan = prepare_workspace_runtime(runner_args, env, bundled_readonly=True)
         url = f"http://127.0.0.1:{args.port}/console/"
         print("Workspaces:", flush=True)
         for workspace in workspaces:

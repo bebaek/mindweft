@@ -17,9 +17,10 @@ mindweft code . --port 8080 --gateway-port 8768
 mindweft code . --demo                # explicit mock provider, no real AI responses
 ```
 
-Requirements: the installed Mindweft package with its console assets, Node.js/npm (`npx` on
-PATH), and provider settings unless `--demo` is used. The first filesystem-server launch may
-need npm network access. For a source checkout, use `uv run mindweft code ...` after building
+Requirements: the installed Mindweft package with its console assets on macOS/Linux, and provider
+settings unless `--demo` is used. The filesystem and text servers ship in the Python package and
+run using the same interpreter as Mindweft; Node/npm is not required at runtime.
+For a source checkout, use `uv run mindweft code ...` after building
 and staging the console (`npm ci --prefix web`, `npm run build --prefix web`, then copy
 `web/dist` to `app/static/console`). End users of the built wheel do not build the frontend.
 
@@ -62,16 +63,38 @@ and exact expected MCP tool lists. Only then does it print `Ready` and open the 
 failure is nonfatal; open the printed URL yourself. `Ctrl+C` or SIGTERM shuts down managed children
 and removes the temporary gateway configuration. Startup failure also triggers cleanup.
 
-- **Missing npx:** install Node.js/npm. Removing this prerequisite is a later slice.
 - **Missing provider:** use `mindweft config init --help` to create a user-level starter config,
   then configure a real provider and export its credentials. `mindweft config doctor` can help,
   but follows the advanced command's normal discovery rules; point it at the same explicit config.
 - **Port conflict:** select different `--port` / `--gateway-port` values; automatic allocation is deferred.
-- **Readiness failure:** inspect child startup output. A healthy API alone is not enough; npm/network
-  problems, missing tools, or absent console assets prevent a ready announcement.
+- **Readiness failure:** inspect child startup output. A healthy API alone is not enough; missing tools
+  or absent console assets prevent a ready announcement.
 
 For editing, shell, custom tools, or different authentication, continue using
 `mindweft-coding-workspace`; its flags and configuration discovery behavior are unchanged.
+
+### Packaged read-only tools
+
+The simple launcher uses `mindweft_workspace.servers.filesystem`, exposing exactly
+`list_allowed_directories`, `list_directory`, and `read_file`, plus the existing targeted-text
+server with `--safe-reads`. All commands use the installed Python interpreter, not PATH lookups.
+
+Both servers check supplied **and resolved** paths against the configured roots and default deny/
+allow globs. Safe in-root and cross-approved-root symlinks work; symlinks to excluded paths or
+outside all approved roots fail. POSIX no-follow descriptor traversal rejects symlink swaps
+between validation and open. Reads reject non-regular files (including FIFOs), non-UTF-8/binary
+text, and files larger than 1 MiB. Reads return at most 40000 characters; directory listing scans
+at most 1000 entries, hides denied/escaping entries, and reports truncation. Relative paths use
+the first approved root. Use absolute paths when working with multiple roots.
+
+This is still trusted-local inspection, not hostile-process isolation: hard links and concurrent
+renames of already-open directories are not sandboxed. The path policy does not identify every
+possible secret filename. The advanced runner and standalone text server retain their existing
+behavior unless this safe-read mode is explicitly selected.
+
+The following sections describe the **advanced runner**. Its default npm filesystem backend and
+custom MCP server specs remain compatible, including existing editing setups. Only `mindweft code`
+selects the packaged read-only backend automatically.
 
 ## Tool boundary: local tools vs MCP tools
 

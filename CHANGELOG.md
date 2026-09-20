@@ -10,6 +10,13 @@ package version is `0.1.0`.
 
 ### Added
 
+- Bundled read-only filesystem MCP server for `mindweft code`: no Node/npm runtime dependency,
+  multi-root resolved-path checks, symlink-safe POSIX reads, and bounded UTF-8 file/list output.
+  The simple launcher's targeted-text tools use the same safe-read policy; the advanced runner
+  retains its existing configurable filesystem backend.
+- Local `uv tool install` instructions, console build prerequisites, and legacy executable-conflict
+  guidance; installed-wheel coding validation now runs with Node/npm unavailable on PATH.
+
 - `mindweft code [paths ...]` starts a explicit-root, read-only local coding workspace with provider
   preflight, bounded API/MCP readiness, browser opening, and explicit `--demo` support. It reuses
   the existing runner without inheriting repository configuration or custom tool permissions.

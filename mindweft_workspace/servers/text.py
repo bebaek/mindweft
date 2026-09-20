@@ -9,6 +9,8 @@ from typing import Annotated, Any, Sequence
 from mcp.server import MCPServer
 from pydantic import Field
 
+from mindweft_workspace.servers.readonly import WorkspaceReadPolicy
+
 DEFAULT_MAX_CHARS = 40_000
 DEFAULT_MAX_MATCHES = 20
 
@@ -38,6 +40,7 @@ class TextMCPServer:
         workspace: Path | None = None,
         workspaces: Sequence[Path] | None = None,
         max_chars: int = DEFAULT_MAX_CHARS,
+        safe_reads: bool = False,
     ) -> None:
         raw_workspaces = list(workspaces or ([] if workspace is None else [workspace]))
         if not raw_workspaces:
@@ -45,6 +48,7 @@ class TextMCPServer:
         self.workspaces = tuple(path.expanduser().resolve() for path in raw_workspaces)
         self.workspace = self.workspaces[0]
         self.max_chars = max_chars
+        self.read_policy = WorkspaceReadPolicy(self.workspaces) if safe_reads else None
         for workspace_root in self.workspaces:
             if not workspace_root.exists() or not workspace_root.is_dir():
                 raise RuntimeError(
@@ -60,7 +64,9 @@ class TextMCPServer:
         max_chars = self._optional_int_argument(
             arguments.get("max_chars"), self.max_chars, minimum=1
         )
-        lines = self._read_lines(path)
+        lines = self._load_lines(path)
+        if self.read_policy is not None:
+            max_chars = min(max_chars, DEFAULT_MAX_CHARS)
         line_slice = _slice_lines(lines, start_line, end_line, max_chars=max_chars)
         return {
             "path": str(path),
@@ -101,7 +107,9 @@ class TextMCPServer:
             arguments.get("max_chars"), self.max_chars, minimum=1
         )
         matcher = re.compile(pattern) if use_regex else re.compile(re.escape(pattern))
-        lines = self._read_lines(path)
+        lines = self._load_lines(path)
+        if self.read_policy is not None:
+            max_chars = min(max_chars, DEFAULT_MAX_CHARS)
         matches: list[dict[str, Any]] = []
         total_content = 0
         truncated = False
@@ -137,7 +145,14 @@ class TextMCPServer:
             "truncated": truncated,
         }
 
+    def _load_lines(self, path: Path) -> list[str]:
+        if self.read_policy is not None:
+            return self.read_policy.read_text(str(path))[1].splitlines(keepends=True)
+        return self._read_lines(path)
+
     def _resolve_file(self, raw_path: Any) -> Path:
+        if self.read_policy is not None:
+            return self.read_policy.resolve(raw_path)
         if not isinstance(raw_path, str) or not raw_path.strip():
             raise ValueError("path must be a non-empty string")
         candidate = Path(raw_path).expanduser()
@@ -291,6 +306,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_CHARS,
         help="Default maximum text characters returned by each tool.",
     )
+    parser.add_argument(
+        "--safe-reads",
+        action="store_true",
+        help="Enforce resolved-path exclusions, no-follow reads, and a 1 MiB file limit.",
+    )
     return parser
 
 
@@ -299,6 +319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     server = TextMCPServer(
         workspaces=[Path(workspace) for workspace in args.workspace],
         max_chars=args.max_chars,
+        safe_reads=args.safe_reads,
     )
     build_text_sdk_server(server).run(transport="stdio")
     return 0

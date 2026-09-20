@@ -19,8 +19,17 @@ and quality-review workflows.
 
 ## Local coding workspace
 
-With Mindweft installed, Node.js/npm available, and a provider configured in your user-level
-`mindweft.toml` or environment:
+Install from a local checkout using [uv](https://docs.astral.sh/uv/getting-started/installation/).
+For a fresh checkout, build the console first using the source-build steps below:
+
+```bash
+uv tool install --python 3.12 /absolute/path/to/mindweft
+mindweft code /path/to/project --demo
+```
+
+`uv` manages the Python tool environment. The installed coding workspace runs on macOS/Linux
+without Node.js, npm, or a separate MCP installation. `--demo` uses a mock provider; configure a
+real provider in your user-level `mindweft.toml` or environment before removing it:
 
 ```bash
 mindweft code /absolute/path/to/project
@@ -29,12 +38,34 @@ mindweft code /path/to/repo1 /path/to/repo2
 # Headless: mindweft code . --no-open
 ```
 
+**Building from source:** Node/npm is still needed to build the browser console, not to run the
+installed package. Before installing from a fresh checkout:
+
+```bash
+cd /absolute/path/to/mindweft
+npm ci --prefix web
+npm run build --prefix web
+mkdir -p app/static/console
+cp -R web/dist/. app/static/console/
+uv tool install --reinstall --python 3.12 .
+```
+
+Published/built wheels include the console; their users skip that build. For an editable local
+installation, add `--editable`. If the command is not found, run `uv tool update-shell` and reopen
+your terminal. Upgrade a local installation with `uv tool install --reinstall /absolute/path/to/mindweft`;
+uninstall with `uv tool uninstall mindweft`.
+
+**Legacy executable conflicts:** Mindweft also installs compatibility commands named `minigent`.
+If `uv` reports that those executables already exist, check `uv tool list`. Uninstall an old
+`minigent` tool with `uv tool uninstall minigent`, then retry. Alternatively, add `--force` only
+if you intend to replace those executable links. Neither operation migrates your settings or
+conversation databases.
+
 This launches a **read-only, trusted-local** workspace and opens `/console/` after the API and
 workspace tools are ready. It does not load repository-local TOML/dotenv files, enable shell
-commands, or inherit custom MCP servers. Use `--demo` for an explicit mock-only trial without a
-provider; it does not produce real AI responses. Node/npm is still required for filesystem tools.
-See [the simple launcher](docs/coding-workspace.md#simple-read-only-launcher) for configuration,
-authentication, and troubleshooting. The existing advanced coding runner remains available.
+commands, or inherit custom MCP servers. See [the simple launcher](docs/coding-workspace.md#simple-read-only-launcher)
+for configuration, authentication, and troubleshooting. The existing advanced coding runner
+remains available and retains its configurable filesystem backend.
 
 ## Developer quickstart
 

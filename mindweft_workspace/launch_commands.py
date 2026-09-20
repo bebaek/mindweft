@@ -45,6 +45,7 @@ def build_builtin_mcp_server_specs(
     shell_bridge_name: str,
     shell_bridge_port: int,
     shell_bridge_url: str,
+    bundled_readonly: bool = False,
 ) -> list[CodingMCPServerSpec]:
     normalize_mindweft_env(env)
     filesystem_command = env.get("MINIGENT_CODING_FILESYSTEM_COMMAND")
@@ -58,6 +59,13 @@ def build_builtin_mcp_server_specs(
             *(str(workspace) for workspace in workspace_roots),
         ]
     )
+    if bundled_readonly:
+        fs_command = [
+            sys.executable,
+            "-m",
+            "mindweft_workspace.servers.filesystem",
+            *[arg for root in workspace_roots for arg in ("--workspace", str(root))],
+        ]
     specs = [
         CodingMCPServerSpec(
             name=bridge_name,
@@ -94,7 +102,8 @@ def build_builtin_mcp_server_specs(
             CodingMCPServerSpec(
                 name=text_bridge_name,
                 url=text_bridge_url,
-                command=build_text_mcp_server_command(workspace_roots),
+                command=build_text_mcp_server_command(workspace_roots)
+                + (["--safe-reads"] if bundled_readonly else []),
                 host=bridge_host,
                 port=text_bridge_port,
                 profiles=["inspect"],

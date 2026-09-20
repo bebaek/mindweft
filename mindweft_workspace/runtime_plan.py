@@ -33,6 +33,8 @@ class WorkspaceRuntimePlan:
 def prepare_workspace_runtime(
     args: argparse.Namespace,
     env: dict[str, str],
+    *,
+    bundled_readonly: bool = False,
 ) -> WorkspaceRuntimePlan:
     normalize_mindweft_env(env)
     tenant_id = args.tenant_id or env.get("MINIGENT_CODING_TENANT_ID") or DEFAULT_TENANT_ID
@@ -49,6 +51,7 @@ def prepare_workspace_runtime(
         tenant_id=tenant_id,
         workspace_roots=workspace_roots,
         settings=settings,
+        **({"bundled_readonly": True} if bundled_readonly else {}),
     )
     workspace_scope = active_workspace_scope.name if active_workspace_scope else None
     apply_tenant_runtime_environment(

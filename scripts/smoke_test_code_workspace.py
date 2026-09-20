@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Opt-in installed-wheel coding smoke test; needs Node/npm and filesystem npm access."""
+"""Installed-wheel coding smoke test with no Node/npm or external executables on PATH."""
 
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -45,14 +46,19 @@ def main() -> int:
         (workspace / ".git" / "blocked.txt").write_text("denied-fixture")
         outside = root / "outside.txt"
         outside.write_text("outside-fixture")
+        (workspace / "escaped-link").symlink_to(outside)
+        (workspace / "hidden-link").symlink_to(workspace / ".git" / "blocked.txt")
         (workspace / "mindweft.toml").write_text("deliberately invalid repository config")
         api_port = unused_port()
         gateway_port = unused_port()
         while gateway_port == api_port:
             gateway_port = unused_port()
-        env = {
-            key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "TMPDIR") if key in os.environ
-        }
+        env = {key: os.environ[key] for key in ("SYSTEMROOT", "TMPDIR") if key in os.environ}
+        empty_path = root / "empty-path"
+        empty_path.mkdir()
+        env["PATH"] = str(empty_path)
+        assert shutil.which("node", path=env["PATH"]) is None
+        assert shutil.which("npx", path=env["PATH"]) is None
         env.update(
             {
                 "HOME": str(root / "home"),
@@ -105,6 +111,19 @@ def main() -> int:
                             url, json=mcp_payload("tools/call", name=tool, arguments=arguments)
                         )
 
+                    if name == "fs-workspace":
+                        listed = client.post(
+                            url,
+                            json=mcp_payload(
+                                "tools/call",
+                                name="list_directory",
+                                arguments={"path": str(workspace)},
+                            ),
+                        ).json()
+                        assert "fixture.txt" in str(listed)
+                        assert "hidden-link" not in str(listed) and "escaped-link" not in str(
+                            listed
+                        )
                     result = call(arguments).json()
                     assert not result.get("error") and not result["result"].get("isError"), result
                     assert "coding-smoke-fixture" in str(result)
@@ -115,7 +134,12 @@ def main() -> int:
                         "isError"
                     ), second_result
                     assert "second-root-fixture" in str(second_result)
-                    for denied in (outside, workspace / ".git" / "blocked.txt"):
+                    for denied in (
+                        outside,
+                        workspace / ".git" / "blocked.txt",
+                        workspace / "escaped-link",
+                        workspace / "hidden-link",
+                    ):
                         assert_denied(call({**arguments, "path": str(denied)}))
                     tools = client.post(url, json=mcp_payload("tools/list")).json()["result"][
                         "tools"
@@ -153,7 +177,9 @@ def main() -> int:
         assert not (workspace / "unexpected").exists()
         assert sorted(p.name for p in workspace.iterdir()) == [
             ".git",
+            "escaped-link",
             "fixture.txt",
+            "hidden-link",
             "mindweft.toml",
         ]
         assert (root / "state" / "mindweft" / "threads.db").is_file()
