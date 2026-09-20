@@ -4,3 +4,4 @@ include docs/releasing.md
 include scripts/smoke_test_installed_distribution.py
 include scripts/verify_distribution_artifacts.py
 include scripts/smoke_test_code_workspace.py
+include scripts/smoke_test_local_instances.py

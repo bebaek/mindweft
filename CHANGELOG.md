@@ -10,6 +10,12 @@ package version is `0.1.0`.
 
 ### Added
 
+- Named local coding instances with isolated persistent state, lifetime/store locks, automatic
+  loopback-port allocation using inherited listening sockets, and readiness-gated local discovery.
+- CLI `--instance NAME`, `instances list`, and `instances open NAME`, with launch-identity checks
+  and stale-request rejection. Default/advanced runner behavior remains compatible; console
+  authentication bootstrap is deferred.
+
 - Bundled read-only filesystem MCP server for `mindweft code`: no Node/npm runtime dependency,
   multi-root resolved-path checks, symlink-safe POSIX reads, and bounded UTF-8 file/list output.
   The simple launcher's targeted-text tools use the same safe-read policy; the advanced runner

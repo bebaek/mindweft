@@ -38,6 +38,22 @@ mindweft code /path/to/repo1 /path/to/repo2
 # Headless: mindweft code . --no-open
 ```
 
+To test an updated checkout without stopping your installed instance:
+
+```bash
+# Run from the updated checkout/environment; do not reinstall over the running tool.
+uv run mindweft code /path/to/project --instance preview
+uv run mindweft --instance preview chat "Explain this repository"
+uv run mindweft instances list
+uv run mindweft instances open preview
+```
+
+Named instances get separate persistent state and automatically allocated loopback ports when
+preferred ports are busy. Omit `--instance` to retain the existing default state. See
+[multiple instances](docs/coding-workspace.md#multiple-local-instances) for storage overrides,
+legacy-instance safety, and client discovery. Console authentication still requires choosing
+Development headers (`demo-tenant` / `demo-user`) in Configure; automatic setup is a separate fix.
+
 **Building from source:** Node/npm is still needed to build the browser console, not to run the
 installed package. Before installing from a fresh checkout:
 

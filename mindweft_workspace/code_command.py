@@ -22,6 +22,7 @@ from mindweft_config.unified_config import (
 )
 from mindweft_workspace.cli import parse_args
 from mindweft_workspace.environment import apply_coding_workspace_state_defaults
+from mindweft_workspace.instances import InstanceLease, lock_storage, package_version, reserve_ports
 from mindweft_workspace.orchestration import run_workspace_processes
 from mindweft_workspace.readiness import wait_for_code_ready
 from mindweft_workspace.runtime_plan import prepare_workspace_runtime
@@ -199,73 +200,120 @@ def run_code_command(args: argparse.Namespace) -> int:
                 "mindweft code currently supports trusted-local development authentication only; use mindweft-coding-workspace for configured token/session/JWT authentication."
             )
         env["MINDWEFT_AUTH_MODE"] = "dev-headers"
-        check_port(args.port, "--port")
-        check_port(args.gateway_port, "--gateway-port")
-        if args.port == args.gateway_port:
+        if args.port is not None and args.port == args.gateway_port:
             raise RuntimeError("--port and --gateway-port must be different.")
-        apply_coding_workspace_state_defaults(env)
-        runner_args = parse_args(
-            [
-                "--no-env-file",
-                *[arg for workspace in workspaces for arg in ("--workspace", str(workspace))],
-                "--enable-text",
-                "--mcp-gateway",
-                "--api-host",
-                "127.0.0.1",
-                "--bridge-host",
-                "127.0.0.1",
-                "--api-port",
-                str(args.port),
-                "--mcp-gateway-port",
-                str(args.gateway_port),
-            ]
-        )
-        plan = prepare_workspace_runtime(runner_args, env, bundled_readonly=True)
-        url = f"http://127.0.0.1:{args.port}/console/"
-        print("Workspaces:", flush=True)
-        for workspace in workspaces:
-            print(f"  {workspace}", flush=True)
-        print("Access: inspect (read-only)", flush=True)
-        print("Trusted-local development mode; do not expose these ports to a network.", flush=True)
-        if args.demo:
-            print("Demo provider: mock (no real AI responses).", flush=True)
-        else:
-            print(
-                "Provider configuration checked locally; credentials have not been tested with the provider.",
-                flush=True,
-            )
-
-        def ready(processes):
-            wait_for_code_ready(processes, api_port=args.port, specs=plan.mcp_servers.tenant_specs)
-            print(f"Ready: {url}\nPress Ctrl+C to stop.", flush=True)
-            if not args.no_open:
-                open_console(url)
-
-        # Avoid importing workspace-local Python modules or picking up project npm config.
         with (
             shutdown_on_sigterm(),
-            tempfile.TemporaryDirectory(prefix="mindweft-code-") as process_dir,
+            InstanceLease(args.instance or "default", env) as instance,
+            reserve_ports(args.port, args.gateway_port) as (api_socket, gateway_socket),
         ):
-            return run_workspace_processes(
-                env=env,
-                mcp_server_specs=plan.mcp_servers.process_specs,
-                skip_bridge=False,
-                gateway_enabled=True,
-                bridge_host="127.0.0.1",
-                gateway_port=args.gateway_port,
-                skip_api=False,
-                api_host="127.0.0.1",
-                api_port=args.port,
-                tenant_id=plan.tenant_id,
-                workspace=workspaces[0],
-                bridge_name=plan.settings.bridge_name,
-                text_bridge_name=plan.settings.text_bridge_name,
-                shell_bridge_name=None,
-                on_started=ready,
-                process_cwd=Path(process_dir),
-            )
+            return run_code_instance(args, env, workspaces, instance, api_socket, gateway_socket)
     except KeyboardInterrupt:
         return 130
     except (RuntimeError, OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
+
+
+def run_code_instance(args, env, workspaces, instance, api_socket, gateway_socket) -> int:
+    api_port = api_socket.getsockname()[1]
+    if instance.name == "default" and args.port is None and api_port != 8000:
+        raise RuntimeError(
+            "Default port 8000 is occupied. Use --instance preview for isolated state; an older running launcher may still use the default databases."
+        )
+    gateway_port = gateway_socket.getsockname()[1]
+    if instance.name != "default":
+        for suffix, filename in (
+            ("THREAD_DB_PATH", "threads.db"),
+            ("ATTACHMENT_DB_PATH", "attachments.db"),
+            (
+                "OAUTH_STORE_PATH",
+                "oauth.db"
+                if env.get("MINIGENT_OAUTH_ENCRYPTION_KEYS")
+                or env.get("MINIGENT_OAUTH_ENCRYPTION_KEY")
+                else "oauth.json",
+            ),
+        ):
+            if preferred_mindweft_env(suffix, env):
+                print(
+                    f"Instance storage overrides configured {suffix} (no data copied).",
+                    file=sys.stderr,
+                )
+            env[f"MINDWEFT_{suffix}"] = str(instance.state_dir / filename)
+        env["XDG_STATE_HOME"] = str(instance.state_dir / "xdg")
+    env["MINDWEFT_LOCAL_INSTANCE_NAME"] = instance.name
+    env["MINDWEFT_LOCAL_LAUNCH_ID"] = instance.launch_id
+    env["MINDWEFT_LOCAL_INSTANCE_VERSION"] = package_version()
+    apply_coding_workspace_state_defaults(env)
+    runner_args = parse_args(
+        [
+            "--no-env-file",
+            *[arg for workspace in workspaces for arg in ("--workspace", str(workspace))],
+            "--enable-text",
+            "--mcp-gateway",
+            "--api-host",
+            "127.0.0.1",
+            "--bridge-host",
+            "127.0.0.1",
+            "--api-port",
+            str(api_port),
+            "--mcp-gateway-port",
+            str(gateway_port),
+        ]
+    )
+    plan = prepare_workspace_runtime(runner_args, env, bundled_readonly=True)
+    url = f"http://127.0.0.1:{api_port}/console/"
+    print(f"Instance: {instance.name} (Mindweft {package_version()})", flush=True)
+    print(f"Runtime: {sys.executable}\nCode: {Path(__file__).parent}", flush=True)
+    print(f"Instance state root: {instance.state_dir}", flush=True)
+    print("Workspaces:", flush=True)
+    for workspace in workspaces:
+        print(f"  {workspace}", flush=True)
+    print("Access: inspect (read-only)", flush=True)
+    print("Trusted-local development mode; do not expose these ports to a network.", flush=True)
+    if args.demo:
+        print("Demo provider: mock (no real AI responses).", flush=True)
+    else:
+        print(
+            "Provider configuration checked locally; credentials have not been tested with the provider.",
+            flush=True,
+        )
+
+    def ready(processes):
+        wait_for_code_ready(
+            processes,
+            api_port=api_port,
+            specs=plan.mcp_servers.tenant_specs,
+            expected_identity={"name": instance.name, "launch_id": instance.launch_id},
+        )
+        instance.publish(api_port, gateway_port)
+        print(f"Ready: {url}\nPress Ctrl+C to stop.", flush=True)
+        if not args.no_open:
+            open_console(url)
+
+    # Avoid importing workspace-local Python modules or picking up project npm config.
+    with (
+        tempfile.TemporaryDirectory(prefix="mindweft-code-") as process_dir,
+        lock_storage(env) as storage_fds,
+    ):
+        return run_workspace_processes(
+            env=env,
+            mcp_server_specs=plan.mcp_servers.process_specs,
+            skip_bridge=False,
+            gateway_enabled=True,
+            bridge_host="127.0.0.1",
+            gateway_port=gateway_port,
+            skip_api=False,
+            api_host="127.0.0.1",
+            api_port=api_port,
+            tenant_id=plan.tenant_id,
+            workspace=workspaces[0],
+            bridge_name=plan.settings.bridge_name,
+            text_bridge_name=plan.settings.text_bridge_name,
+            shell_bridge_name=None,
+            on_started=ready,
+            process_cwd=Path(process_dir),
+            api_fd=api_socket.fileno(),
+            gateway_fd=gateway_socket.fileno(),
+            inherited_fds=(instance.fd, *storage_fds),
+        )

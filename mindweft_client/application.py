@@ -61,12 +61,31 @@ def _apply_cli_env_file(args: argparse.Namespace) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    raw_args = list(argv) if argv is not None else sys.argv[1:]
+    args = parser.parse_args(raw_args)
+    if args.instance and any(
+        item == "--base-url" or item.startswith("--base-url=") for item in raw_args
+    ):
+        parser.error("--instance and --base-url cannot be combined")
     if args.command == "code":
         from mindweft_workspace.code_command import run_code_command
 
         return run_code_command(args)
+    if args.command == "instances":
+        from mindweft_client.instance_commands import run_instances_command
+
+        return run_instances_command(args)
     _apply_cli_env_file(args)
+    if args.instance:
+        from mindweft_workspace.instances import resolve_instance
+
+        try:
+            record = resolve_instance(args.instance)
+        except (RuntimeError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+        args.base_url = record.api_url
+        args.instance_launch_id = record.launch_id
 
     trace_id = secrets.token_hex(16) if args.trace else None
     if args.command == "run":

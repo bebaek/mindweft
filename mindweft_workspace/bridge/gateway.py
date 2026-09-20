@@ -195,6 +195,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Expose multiple stdio MCP servers as one local Streamable HTTP MCP gateway."
     )
     parser.add_argument("--config", required=True, help="JSON gateway config file.")
+    parser.add_argument(
+        "--fd", type=int, default=None, help="Inherited listening socket (local launcher)."
+    )
     parser.add_argument("--host", default=DEFAULT_HOST, help="Host to bind. Defaults to 127.0.0.1.")
     parser.add_argument(
         "--port", type=int, default=DEFAULT_PORT, help="Port to bind. Defaults to 8765."
@@ -209,7 +212,12 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     import uvicorn
 
-    uvicorn.run(create_gateway_app(settings), host=settings.host, port=settings.port)
+    uvicorn.run(
+        create_gateway_app(settings),
+        host=settings.host,
+        port=settings.port,
+        **({"fd": args.fd} if args.fd is not None else {}),
+    )
 
 
 def _normalize_path_prefix(path_prefix: str) -> str:

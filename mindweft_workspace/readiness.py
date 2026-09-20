@@ -33,6 +33,7 @@ def wait_for_code_ready(
     api_port: int,
     specs: list[CodingMCPServerSpec],
     timeout: float = 60,
+    expected_identity: dict[str, str] | None = None,
 ) -> None:
     deadline = time.monotonic() + timeout
     pending = "API"
@@ -51,6 +52,13 @@ def wait_for_code_ready(
                 response.raise_for_status()
                 if response.json().get("status") != "ready":
                     raise ValueError("not ready")
+                if expected_identity is not None:
+                    pending = "local instance identity"
+                    identity_response = client.get(f"http://127.0.0.1:{api_port}/local-instance")
+                    identity_response.raise_for_status()
+                    identity = identity_response.json()
+                    if any(identity.get(key) != value for key, value in expected_identity.items()):
+                        raise ValueError("instance identity mismatch")
                 pending = "packaged console"
                 client.get(f"http://127.0.0.1:{api_port}/console/").raise_for_status()
                 pending = "inspect execution profile"

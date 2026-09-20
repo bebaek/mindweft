@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from unittest.mock import Mock
 
 import httpx
@@ -24,7 +25,15 @@ def clean_environment(monkeypatch, tmp_path):
         if key.startswith(("MINDWEFT_", "MINIGENT_")):
             monkeypatch.delenv(key)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(code, "check_port", Mock())
+
+    @contextmanager
+    def fake_ports(api, gateway):
+        sockets = [Mock(), Mock()]
+        sockets[0].getsockname.return_value = ("127.0.0.1", api or 8000)
+        sockets[1].getsockname.return_value = ("127.0.0.1", gateway or 8765)
+        yield tuple(sockets)
+
+    monkeypatch.setattr(code, "reserve_ports", fake_ports)
 
 
 def test_cli_routes_before_loading_dotenv_or_building_client(monkeypatch):
@@ -166,7 +175,7 @@ def test_preflight_never_spawns(case, message, clean_environment, tmp_path, monk
     if case == "auth":
         monkeypatch.setenv("MINDWEFT_AUTH_MODE", "static-tokens")
     if case == "ports":
-        argv += ["--gateway-port", "8000"]
+        argv += ["--port", "8000", "--gateway-port", "8000"]
     run = Mock()
     monkeypatch.setattr(code, "run_workspace_processes", run)
     assert code.run_code_command(args(*argv)) == 2
@@ -369,3 +378,41 @@ def test_no_paths_defaults_to_cwd(clean_environment, tmp_path, monkeypatch):
     monkeypatch.setattr(code, "run_workspace_processes", run)
     assert code.run_code_command(args("--demo", "--no-open")) == 0
     assert run.call_args.kwargs["workspace"] == tmp_path
+
+
+def test_named_instance_isolates_inherited_storage(
+    clean_environment, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("MINDWEFT_THREAD_DB_PATH", str(tmp_path / "daily.db"))
+    monkeypatch.setenv("MINIGENT_ATTACHMENT_DB_PATH", str(tmp_path / "attachments.db"))
+    monkeypatch.setenv("MINDWEFT_OAUTH_STORE_PATH", str(tmp_path / "oauth.json"))
+    run = Mock(return_value=0)
+    monkeypatch.setattr(code, "run_workspace_processes", run)
+    assert code.run_code_command(args("--demo", "--instance", "preview")) == 0
+    env = run.call_args.kwargs["env"]
+    root = tmp_path / "home" / ".local" / "state" / "mindweft" / "instances" / "preview"
+    assert env["MINIGENT_THREAD_DB_PATH"] == str(root / "threads.db")
+    assert env["MINIGENT_ATTACHMENT_DB_PATH"] == str(root / "attachments.db")
+    assert env["MINIGENT_OAUTH_STORE_PATH"] == str(root / "oauth.json")
+    assert env["MINDWEFT_LOCAL_INSTANCE_NAME"] == "preview"
+    assert run.call_args.kwargs["inherited_fds"]
+    assert not (tmp_path / "daily.db").exists()
+    assert "overrides configured THREAD_DB_PATH" in capsys.readouterr().err
+
+
+def test_default_refuses_automatic_fallback_to_shared_legacy_state(
+    clean_environment, monkeypatch, capsys
+):
+    @contextmanager
+    def ports(*args):
+        first, second = Mock(), Mock()
+        first.getsockname.return_value = ("127.0.0.1", 8999)
+        second.getsockname.return_value = ("127.0.0.1", 8998)
+        yield first, second
+
+    monkeypatch.setattr(code, "reserve_ports", ports)
+    run = Mock()
+    monkeypatch.setattr(code, "run_workspace_processes", run)
+    assert code.run_code_command(args("--demo")) == 2
+    run.assert_not_called()
+    assert "--instance preview" in capsys.readouterr().err

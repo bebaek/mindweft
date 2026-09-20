@@ -15,9 +15,18 @@ _SENSITIVE_ARG_MARKERS = ("key", "token", "secret", "password", "authorization",
 
 
 def start_process(
-    command: list[str], *, env: dict[str, str], label: str, cwd: Path | None = None
+    command: list[str],
+    *,
+    env: dict[str, str],
+    label: str,
+    cwd: Path | None = None,
+    pass_fds: tuple[int, ...] = (),
 ) -> subprocess.Popen[str]:
     print(f"starting {label}: {redacted_command_for_log(command)}")
+    if pass_fds:
+        return subprocess.Popen(
+            command, env=env, text=True, start_new_session=True, cwd=cwd, pass_fds=pass_fds
+        )
     if cwd is not None:
         return subprocess.Popen(command, env=env, text=True, start_new_session=True, cwd=cwd)
     return subprocess.Popen(command, env=env, text=True, start_new_session=True)

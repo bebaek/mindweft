@@ -6,6 +6,7 @@ import binascii
 import hashlib
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -1490,6 +1491,34 @@ def create_app(
         )
     if WEB_CLIENT_DIR.exists():
         app.mount("/web", StaticFiles(directory=WEB_CLIENT_DIR, html=True), name="web")
+
+    local_instance = None
+    if os.environ.get("MINDWEFT_LOCAL_INSTANCE_NAME") and os.environ.get(
+        "MINDWEFT_LOCAL_LAUNCH_ID"
+    ):
+        local_instance = {
+            "name": os.environ["MINDWEFT_LOCAL_INSTANCE_NAME"],
+            "launch_id": os.environ["MINDWEFT_LOCAL_LAUNCH_ID"],
+            "version": os.environ.get("MINDWEFT_LOCAL_INSTANCE_VERSION", "unknown"),
+        }
+
+    @app.get("/local-instance")
+    async def local_instance_identity() -> Response:
+        if local_instance is None:
+            raise HTTPException(status_code=404, detail="Not a local coding instance")
+        return JSONResponse(local_instance, headers={"Cache-Control": "no-store"})
+
+    @app.middleware("http")
+    async def guard_local_launch(request: Request, call_next):
+        expected = request.headers.get("X-Mindweft-Launch-Id")
+        if expected is not None and (
+            local_instance is None or expected != local_instance["launch_id"]
+        ):
+            return JSONResponse(
+                {"detail": "Local instance identity changed; reconnect by instance name."},
+                status_code=409,
+            )
+        return await call_next(request)
 
     @app.get("/health")
     @app.get("/health/live")

@@ -14,6 +14,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Base URL for the running API service.",
     )
     parser.add_argument(
+        "--instance", default=None, help="Connect to a named local coding instance."
+    )
+    parser.add_argument(
         "--env-file",
         default=None,
         help="Dotenv file to load for this command. Also sets MINIGENT_DOTENV_FILE.",
@@ -60,18 +63,39 @@ def build_parser() -> argparse.ArgumentParser:
         "code", help="Start a trusted-local, read-only coding workspace."
     )
     code_parser.add_argument(
+        "--instance",
+        default=argparse.SUPPRESS,
+        help="Instance name (default: default); non-default names isolate runtime state.",
+    )
+    code_parser.add_argument(
         "paths", nargs="*", default=[], help="Workspace directories (default: cwd)."
     )
     code_parser.add_argument("--no-open", action="store_true", help="Do not open the browser.")
     code_parser.add_argument(
-        "--port", type=int, default=8000, help="Local API port (default: 8000)."
+        "--port",
+        type=int,
+        default=None,
+        help="Exact API port; omitted prefers 8000 then allocates a free port.",
     )
     code_parser.add_argument(
-        "--gateway-port", type=int, default=8765, help="Local MCP port (default: 8765)."
+        "--gateway-port",
+        type=int,
+        default=None,
+        help="Exact MCP port; omitted prefers 8765 then allocates a free port.",
     )
     code_parser.add_argument(
         "--demo", action="store_true", help="Use the mock provider; no real AI responses."
     )
+
+    instances_parser = subparsers.add_parser(
+        "instances", help="List or open local coding instances."
+    )
+    instance_commands = instances_parser.add_subparsers(dest="instances_command", required=True)
+    instance_commands.add_parser("list", help="List registered instances and their status.")
+    instance_open = instance_commands.add_parser(
+        "open", help="Verify and open an instance console."
+    )
+    instance_open.add_argument("name")
 
     chat_parser = subparsers.add_parser(
         "chat", help="Send a user message and print the assistant reply."

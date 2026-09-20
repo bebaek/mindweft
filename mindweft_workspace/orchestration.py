@@ -38,8 +38,17 @@ def run_workspace_processes(
     shell_bridge_name: str | None,
     on_started: Callable[[list[subprocess.Popen[str]]], None] | None = None,
     process_cwd: Path | None = None,
+    api_fd: int | None = None,
+    gateway_fd: int | None = None,
+    inherited_fds: tuple[int, ...] = (),
 ) -> int:
     launch = partial(start_process, cwd=process_cwd) if process_cwd is not None else start_process
+
+    def launch_reserved(command: list[str], *, env: dict[str, str], label: str, fd: int | None):
+        if fd is None:
+            return launch(command, env=env, label=label)
+        return launch(command, env=env, label=label, pass_fds=(*inherited_fds, fd))
+
     processes: list[subprocess.Popen[str]] = []
     managed_http_processes: list[tuple[CodingMCPServerSpec, subprocess.Popen[str]]] = []
     generated_files: list[Path] = []
@@ -49,14 +58,16 @@ def run_workspace_processes(
                 gateway_config_path = write_mcp_gateway_config(mcp_server_specs)
                 generated_files.append(gateway_config_path)
                 processes.append(
-                    launch(
+                    launch_reserved(
                         build_mcp_gateway_command(
                             gateway_config_path,
                             bridge_host,
                             gateway_port,
-                        ),
+                        )
+                        + (["--fd", str(gateway_fd)] if gateway_fd is not None else []),
                         env=env,
                         label="MCP stdio gateway",
+                        fd=gateway_fd,
                     )
                 )
             else:
@@ -88,7 +99,7 @@ def run_workspace_processes(
                 wait_for_managed_http_server(spec, process)
         if not skip_api:
             processes.append(
-                launch(
+                launch_reserved(
                     [
                         sys.executable,
                         "-m",
@@ -98,9 +109,11 @@ def run_workspace_processes(
                         api_host,
                         "--port",
                         str(api_port),
+                        *(["--fd", str(api_fd)] if api_fd is not None else []),
                     ],
                     env=env,
                     label="Mindweft API",
+                    fd=api_fd,
                 )
             )
             if on_started is None:
