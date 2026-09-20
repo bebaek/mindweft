@@ -10,7 +10,7 @@ package version is `0.1.0`.
 
 ### Added
 
-- `mindweft code [path]` starts a single-root, read-only local coding workspace with provider
+- `mindweft code [paths ...]` starts a explicit-root, read-only local coding workspace with provider
   preflight, bounded API/MCP readiness, browser opening, and explicit `--demo` support. It reuses
   the existing runner without inheriting repository configuration or custom tool permissions.
 - Package/release validation now builds the console and smoke-tests the installed coding launcher.

@@ -182,9 +182,12 @@ def run_code_command(args: argparse.Namespace) -> int:
             raise RuntimeError(
                 "mindweft code does not load dotenv files; use environment or user-level TOML settings."
             )
-        workspace = Path(args.path).expanduser().resolve()
-        if not workspace.is_dir() or not os.access(workspace, os.R_OK | os.X_OK):
-            raise RuntimeError(f"Workspace must be an accessible directory: {workspace}")
+        workspaces = list(
+            dict.fromkeys(Path(path).expanduser().resolve() for path in (args.paths or ["."]))
+        )
+        for workspace in workspaces:
+            if not workspace.is_dir() or not os.access(workspace, os.R_OK | os.X_OK):
+                raise RuntimeError(f"Workspace must be an accessible directory: {workspace}")
         env = load_code_environment(dict(os.environ))
         if not shutil.which("npx", path=env.get("PATH")):
             raise RuntimeError(
@@ -209,8 +212,7 @@ def run_code_command(args: argparse.Namespace) -> int:
         runner_args = parse_args(
             [
                 "--no-env-file",
-                "--workspace",
-                str(workspace),
+                *[arg for workspace in workspaces for arg in ("--workspace", str(workspace))],
                 "--enable-text",
                 "--mcp-gateway",
                 "--api-host",
@@ -225,7 +227,10 @@ def run_code_command(args: argparse.Namespace) -> int:
         )
         plan = prepare_workspace_runtime(runner_args, env)
         url = f"http://127.0.0.1:{args.port}/console/"
-        print(f"Workspace: {workspace}\nAccess: inspect (read-only)", flush=True)
+        print("Workspaces:", flush=True)
+        for workspace in workspaces:
+            print(f"  {workspace}", flush=True)
+        print("Access: inspect (read-only)", flush=True)
         print("Trusted-local development mode; do not expose these ports to a network.", flush=True)
         if args.demo:
             print("Demo provider: mock (no real AI responses).", flush=True)
@@ -257,7 +262,7 @@ def run_code_command(args: argparse.Namespace) -> int:
                 api_host="127.0.0.1",
                 api_port=args.port,
                 tenant_id=plan.tenant_id,
-                workspace=workspace,
+                workspace=workspaces[0],
                 bridge_name=plan.settings.bridge_name,
                 text_bridge_name=plan.settings.text_bridge_name,
                 shell_bridge_name=None,

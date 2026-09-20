@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
         "code", help="Start a trusted-local, read-only coding workspace."
     )
     code_parser.add_argument(
-        "path", nargs="?", default=".", help="Workspace directory (default: cwd)."
+        "paths", nargs="*", default=[], help="Workspace directories (default: cwd)."
     )
     code_parser.add_argument("--no-open", action="store_true", help="Do not open the browser.")
     code_parser.add_argument(

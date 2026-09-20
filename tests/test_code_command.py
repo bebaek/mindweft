@@ -311,3 +311,56 @@ def test_readiness_rejects_missing_or_unexpected_tools(monkeypatch, tmp_path, to
         readiness.wait_for_code_ready(
             [], api_port=8000, specs=plan.mcp_servers.tenant_specs, timeout=0.01
         )
+
+
+def test_multiple_roots_deduplicate_and_ignore_inherited_roots(
+    clean_environment, tmp_path, monkeypatch, capsys
+):
+    first = tmp_path / "first project"
+    second = tmp_path / "second project"
+    first.mkdir()
+    second.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(first, target_is_directory=True)
+    monkeypatch.setenv("MINDWEFT_CODING_WORKSPACES", "/")
+    monkeypatch.setenv("MINIGENT_CODING_WORKSPACE", "/")
+    monkeypatch.setenv("MINDWEFT_CODING_SHELL_ENABLED", "true")
+    run = Mock(return_value=0)
+    monkeypatch.setattr(code, "run_workspace_processes", run)
+    assert (
+        code.run_code_command(args(str(first), str(second), str(alias), str(second), "--demo")) == 0
+    )
+    options = run.call_args.kwargs
+    specs = options["mcp_server_specs"]
+    assert options["workspace"] == first
+    assert options["shell_bridge_name"] is None
+    assert len(specs) == 2
+    assert specs[0].command[-2:] == [str(first), str(second)]
+    assert specs[1].command.count(str(first)) == 1
+    assert specs[1].command.count(str(second)) == 1
+    assert "/" not in specs[0].command
+    tenant = json.loads(options["env"]["MINIGENT_TENANT_EXECUTION_CONFIGS"])["demo-tenant"]
+    prompt = tenant["skills"]["items"][0]["system_prompt"]
+    assert str(first) in prompt and str(second) in prompt
+    assert len(tenant["capability_profiles"]["items"]) == 1
+    output = capsys.readouterr().out
+    assert output.count(str(first)) == 1
+    assert output.count(str(second)) == 1
+    assert "read-only" in output
+
+
+def test_invalid_second_root_aborts_before_spawning(
+    clean_environment, tmp_path, monkeypatch, capsys
+):
+    run = Mock()
+    monkeypatch.setattr(code, "run_workspace_processes", run)
+    assert code.run_code_command(args(str(tmp_path), str(tmp_path / "missing"), "--demo")) == 2
+    run.assert_not_called()
+    assert "accessible directory" in capsys.readouterr().err
+
+
+def test_no_paths_defaults_to_cwd(clean_environment, tmp_path, monkeypatch):
+    run = Mock(return_value=0)
+    monkeypatch.setattr(code, "run_workspace_processes", run)
+    assert code.run_code_command(args("--demo", "--no-open")) == 0
+    assert run.call_args.kwargs["workspace"] == tmp_path

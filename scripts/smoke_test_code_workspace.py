@@ -36,6 +36,9 @@ def main() -> int:
         root = Path(directory)
         workspace = root / "project with spaces"
         workspace.mkdir()
+        second_workspace = root / "second project"
+        second_workspace.mkdir()
+        (second_workspace / "fixture.txt").write_text("second-root-fixture\n")
         (workspace / "fixture.txt").write_text("coding-smoke-fixture\n")
         # This is test data, not a credential file. The bridge must deny its path.
         (workspace / ".git").mkdir()
@@ -62,6 +65,7 @@ def main() -> int:
             str(Path(sys.executable).with_name("mindweft")),
             "code",
             str(workspace),
+            str(second_workspace),
             "--demo",
             "--no-open",
             "--port",
@@ -104,6 +108,13 @@ def main() -> int:
                     result = call(arguments).json()
                     assert not result.get("error") and not result["result"].get("isError"), result
                     assert "coding-smoke-fixture" in str(result)
+                    second_result = call(
+                        {**arguments, "path": str(second_workspace / "fixture.txt")}
+                    ).json()
+                    assert not second_result.get("error") and not second_result["result"].get(
+                        "isError"
+                    ), second_result
+                    assert "second-root-fixture" in str(second_result)
                     for denied in (outside, workspace / ".git" / "blocked.txt"):
                         assert_denied(call({**arguments, "path": str(denied)}))
                     tools = client.post(url, json=mcp_payload("tools/list")).json()["result"][

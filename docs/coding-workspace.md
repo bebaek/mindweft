@@ -11,6 +11,7 @@ trusted local workspaces.
 ```bash
 mindweft code                         # current directory
 mindweft code /absolute/path/to/repo
+mindweft code /path/to/repo1 /path/to/repo2
 mindweft code . --no-open             # headless / SSH
 mindweft code . --port 8080 --gateway-port 8768
 mindweft code . --demo                # explicit mock provider, no real AI responses
@@ -22,8 +23,10 @@ need npm network access. For a source checkout, use `uv run mindweft code ...` a
 and staging the console (`npm ci --prefix web`, `npm run build --prefix web`, then copy
 `web/dist` to `app/static/console`). End users of the built wheel do not build the frontend.
 
-The command resolves exactly one directory, enables only the built-in filesystem inspection
-and targeted text servers behind the shared gateway, and generates only an `inspect` profile.
+The command resolves and deduplicates the explicitly supplied directories (or cwd when omitted).
+Every directory must be accessible; one invalid root aborts startup before any child starts.
+All approved roots are printed and passed to both the built-in filesystem inspection
+and targeted text servers behind the shared gateway. The launcher generates only an `inspect` profile.
 Writes, shell, external MCP servers, peer backends, admin execution overlays, and inherited
 workspace scopes are not enabled. Existing path deny-glob defaults remain in force. This is
 not an OS sandbox or a guarantee that every possible secret filename is excluded.
@@ -67,7 +70,7 @@ and removes the temporary gateway configuration. Startup failure also triggers c
 - **Readiness failure:** inspect child startup output. A healthy API alone is not enough; npm/network
   problems, missing tools, or absent console assets prevent a ready announcement.
 
-For editing, shell, multiple roots, custom tools, or different authentication, continue using
+For editing, shell, custom tools, or different authentication, continue using
 `mindweft-coding-workspace`; its flags and configuration discovery behavior are unchanged.
 
 ## Tool boundary: local tools vs MCP tools

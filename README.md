@@ -24,6 +24,7 @@ With Mindweft installed, Node.js/npm available, and a provider configured in you
 
 ```bash
 mindweft code /absolute/path/to/project
+mindweft code /path/to/repo1 /path/to/repo2
 # From a project directory: mindweft code .
 # Headless: mindweft code . --no-open
 ```
