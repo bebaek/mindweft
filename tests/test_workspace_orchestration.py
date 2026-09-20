@@ -199,3 +199,22 @@ def test_run_workspace_processes_handles_interrupt_and_stops_reverse_order(
 
     assert stop.call_args_list == [call(second), call(first)]
     assert "Stopping coding workspace processes" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("not ready"), KeyboardInterrupt()])
+def test_startup_callback_failure_cleans_up(tmp_path, monkeypatch, failure):
+    config = tmp_path / "gateway.json"
+    config.write_text("{}")
+    processes = [Mock(), Mock()]
+    monkeypatch.setattr(orchestration, "write_mcp_gateway_config", Mock(return_value=config))
+    monkeypatch.setattr(orchestration, "start_process", Mock(side_effect=processes))
+    stop = Mock()
+    monkeypatch.setattr(orchestration, "stop_process", stop)
+    options = dict(gateway_enabled=True, skip_api=False, on_started=Mock(side_effect=failure))
+    if isinstance(failure, KeyboardInterrupt):
+        assert run_processes(tmp_path, [], **options) == 0
+    else:
+        with pytest.raises(RuntimeError, match="not ready"):
+            run_processes(tmp_path, [], **options)
+    assert stop.call_args_list == [call(processes[1]), call(processes[0])]
+    assert not config.exists()

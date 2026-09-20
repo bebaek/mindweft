@@ -53,6 +53,18 @@ jobs:
             exit 1
           fi
           printf 'Validated Mindweft %s from tag v%s.\n' "$package_version" "$tag_version"
+      - name: Set up Node.js for packaged console and coding smoke test
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build packaged console
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web
+          mkdir -p app/static/console
+          cp -R web/dist/. app/static/console/
       - name: Build source and wheel distributions
         run: uv build --out-dir dist
       - name: Validate distribution contents and metadata
@@ -79,6 +91,8 @@ jobs:
             "$smoke_dir/venv/bin/python" \
               "$GITHUB_WORKSPACE/scripts/smoke_test_installed_distribution.py" \
               --version "$version"
+            "$smoke_dir/venv/bin/python" \
+              "$GITHUB_WORKSPACE/scripts/smoke_test_code_workspace.py"
           )
       - name: Upload validated distributions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

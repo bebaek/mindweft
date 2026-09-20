@@ -17,7 +17,25 @@ and quality-review workflows.
 - Optional browser, CLI, and voice clients.
 - Optional privacy-preserving remote quality critique of sanitized local drafts.
 
-## Quickstart
+## Local coding workspace
+
+With Mindweft installed, Node.js/npm available, and a provider configured in your user-level
+`mindweft.toml` or environment:
+
+```bash
+mindweft code /absolute/path/to/project
+# From a project directory: mindweft code .
+# Headless: mindweft code . --no-open
+```
+
+This launches a **read-only, trusted-local** workspace and opens `/console/` after the API and
+workspace tools are ready. It does not load repository-local TOML/dotenv files, enable shell
+commands, or inherit custom MCP servers. Use `--demo` for an explicit mock-only trial without a
+provider; it does not produce real AI responses. Node/npm is still required for filesystem tools.
+See [the simple launcher](docs/coding-workspace.md#simple-read-only-launcher) for configuration,
+authentication, and troubleshooting. The existing advanced coding runner remains available.
+
+## Developer quickstart
 
 ```bash
 uv venv

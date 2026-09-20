@@ -51,7 +51,7 @@ jobs:
         working-directory: web
         run: npm ci && npm run build
       - name: Stage frontend for Python static-file tests
-        run: cp -R web/dist app/static/console
+        run: cp -R web/dist/. app/static/console/
       - name: Run tests
         run: uv run --no-sync pytest
 
@@ -73,6 +73,18 @@ jobs:
           version: "0.11.29"
           enable-cache: true
           cache-dependency-glob: uv.lock
+      - name: Set up Node.js for packaged console and coding smoke test
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build packaged console
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web
+          mkdir -p app/static/console
+          cp -R web/dist/. app/static/console/
       - name: Build source and wheel distributions
         run: uv build --out-dir dist
       - name: Validate distribution contents and metadata
@@ -92,6 +104,8 @@ jobs:
             "$smoke_dir/venv/bin/python" \
               "$GITHUB_WORKSPACE/scripts/smoke_test_installed_distribution.py" \
               --version "$version"
+            "$smoke_dir/venv/bin/python" \
+              "$GITHUB_WORKSPACE/scripts/smoke_test_code_workspace.py"
           )
 
   frontend:

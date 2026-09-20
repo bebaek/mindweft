@@ -33,9 +33,13 @@ Before the first public package release:
    uv run pytest
    ```
 
-5. Build and validate both distribution formats:
+5. Build the console, then build and validate both distribution formats:
 
    ```bash
+   npm ci --prefix web
+   npm run build --prefix web
+   mkdir -p app/static/console
+   cp -R web/dist/. app/static/console/
    rm -rf dist
    uv build --out-dir dist
    python scripts/verify_distribution_artifacts.py dist --version <version>
@@ -51,9 +55,15 @@ Before the first public package release:
      cd "$smoke_dir"
      "$smoke_dir/venv/bin/python" \
        "$OLDPWD/scripts/smoke_test_installed_distribution.py" --version <version>
+     "$smoke_dir/venv/bin/python" "$OLDPWD/scripts/smoke_test_code_workspace.py"
    )
    rm -rf "$smoke_dir"
    ```
+
+The coding smoke test requires Node/npm and npm network access. It uses isolated temporary
+   HOME/config/state directories, an explicit mock provider, and a workspace with spaces. It
+   checks console serving, MCP reads and policy denials, chat, and shutdown without real keys.
+   CI package validation and the release build job run this test against the installed wheel.
 
 7. Inspect the rendered package description and metadata on a staging index when available.
 8. Tag and publish only the exact artifacts that passed validation.

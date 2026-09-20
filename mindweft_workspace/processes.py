@@ -7,14 +7,19 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from mindweft_workspace.mcp_specs import CodingMCPServerSpec
 
 _SENSITIVE_ARG_MARKERS = ("key", "token", "secret", "password", "authorization", "credential")
 
 
-def start_process(command: list[str], *, env: dict[str, str], label: str) -> subprocess.Popen[str]:
+def start_process(
+    command: list[str], *, env: dict[str, str], label: str, cwd: Path | None = None
+) -> subprocess.Popen[str]:
     print(f"starting {label}: {redacted_command_for_log(command)}")
+    if cwd is not None:
+        return subprocess.Popen(command, env=env, text=True, start_new_session=True, cwd=cwd)
     return subprocess.Popen(command, env=env, text=True, start_new_session=True)
 
 
