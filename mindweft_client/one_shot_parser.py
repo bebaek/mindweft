@@ -56,6 +56,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    code_parser = subparsers.add_parser(
+        "code", help="Start a trusted-local, read-only coding workspace."
+    )
+    code_parser.add_argument(
+        "paths", nargs="*", default=[], help="Workspace directories (default: cwd)."
+    )
+    code_parser.add_argument("--no-open", action="store_true", help="Do not open the browser.")
+    code_parser.add_argument(
+        "--port", type=int, default=8000, help="Local API port (default: 8000)."
+    )
+    code_parser.add_argument(
+        "--gateway-port", type=int, default=8765, help="Local MCP port (default: 8765)."
+    )
+    code_parser.add_argument(
+        "--demo", action="store_true", help="Use the mock provider; no real AI responses."
+    )
+
     chat_parser = subparsers.add_parser(
         "chat", help="Send a user message and print the assistant reply."
     )

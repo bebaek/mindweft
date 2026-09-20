@@ -62,6 +62,10 @@ def _apply_cli_env_file(args: argparse.Namespace) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.command == "code":
+        from mindweft_workspace.code_command import run_code_command
+
+        return run_code_command(args)
     _apply_cli_env_file(args)
 
     trace_id = secrets.token_hex(16) if args.trace else None

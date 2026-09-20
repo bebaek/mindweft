@@ -10,6 +10,11 @@ package version is `0.1.0`.
 
 ### Added
 
+- `mindweft code [paths ...]` starts a explicit-root, read-only local coding workspace with provider
+  preflight, bounded API/MCP readiness, browser opening, and explicit `--demo` support. It reuses
+  the existing runner without inheriting repository configuration or custom tool permissions.
+- Package/release validation now builds the console and smoke-tests the installed coding launcher.
+
 - The production web console now provides confirmed conversation deletion, including imported-lineage
   scope detection and complete-lineage deletion when the server requires lineage members to be
   removed together.

@@ -4,6 +4,75 @@ Mindweft can run as a local coding assistant by combining tenant capability prof
 workspace-scoped MCP servers. The default stack is deliberately read-only; expand it only for
 trusted local workspaces.
 
+## Simple read-only launcher
+
+`mindweft code` is the small, trusted-local entry point for an already-configured user:
+
+```bash
+mindweft code                         # current directory
+mindweft code /absolute/path/to/repo
+mindweft code /path/to/repo1 /path/to/repo2
+mindweft code . --no-open             # headless / SSH
+mindweft code . --port 8080 --gateway-port 8768
+mindweft code . --demo                # explicit mock provider, no real AI responses
+```
+
+Requirements: the installed Mindweft package with its console assets, Node.js/npm (`npx` on
+PATH), and provider settings unless `--demo` is used. The first filesystem-server launch may
+need npm network access. For a source checkout, use `uv run mindweft code ...` after building
+and staging the console (`npm ci --prefix web`, `npm run build --prefix web`, then copy
+`web/dist` to `app/static/console`). End users of the built wheel do not build the frontend.
+
+The command resolves and deduplicates the explicitly supplied directories (or cwd when omitted).
+Every directory must be accessible; one invalid root aborts startup before any child starts.
+All approved roots are printed and passed to both the built-in filesystem inspection
+and targeted text servers behind the shared gateway. The launcher generates only an `inspect` profile.
+Writes, shell, external MCP servers, peer backends, admin execution overlays, and inherited
+workspace scopes are not enabled. Existing path deny-glob defaults remain in force. This is
+not an OS sandbox or a guarantee that every possible secret filename is excluded.
+
+### Configuration and authentication
+
+- Loads an explicitly selected `MINDWEFT_CONFIG_FILE` (legacy alias accepted), or the canonical
+  then legacy user-level TOML path. It does **not** discover cwd-local TOML files.
+- Environment overrides TOML. Only provider, authentication, and thread/attachment persistence
+  settings from the Mindweft configuration namespace are carried into this mode; tool, tenant,
+  skill, and workspace settings are intentionally not inherited.
+- Does not load `.env`, `.env.coding`, `--env-file`, or expand `*_FILE` secret references.
+  Export provider keys yourself. Child processes cannot rediscover these config files.
+- Configured relative database paths resolve against the TOML directory; environment-supplied
+  relative database paths resolve against the caller's cwd. Defaults use the existing durable
+  user state directory. No configuration is generated in the project.
+- A real provider is required unless `--demo` is explicit. Preflight checks configuration
+  prerequisites, **not** live credentials or model availability. Provider onboarding is deferred.
+- This slice supports the existing development-header authentication only. Token/JWT/session
+  configurations are rejected rather than silently weakened; use the advanced runner for those.
+  In the console connection settings, use development authentication with tenant `demo-tenant`
+  and user `demo-user`.
+
+Both services bind to `127.0.0.1`. Development-header authentication and the local MCP gateway
+are **trusted-local only**: do not forward their ports, expose them on a shared host, or treat
+loopback binding as an authentication boundary.
+
+### Startup and troubleshooting
+
+The launcher checks ports, starts the existing runner processes in a temporary working directory,
+and waits up to approximately 60 seconds for API readiness, console assets, the inspect profile,
+and exact expected MCP tool lists. Only then does it print `Ready` and open the browser. Browser
+failure is nonfatal; open the printed URL yourself. `Ctrl+C` or SIGTERM shuts down managed children
+and removes the temporary gateway configuration. Startup failure also triggers cleanup.
+
+- **Missing npx:** install Node.js/npm. Removing this prerequisite is a later slice.
+- **Missing provider:** use `mindweft config init --help` to create a user-level starter config,
+  then configure a real provider and export its credentials. `mindweft config doctor` can help,
+  but follows the advanced command's normal discovery rules; point it at the same explicit config.
+- **Port conflict:** select different `--port` / `--gateway-port` values; automatic allocation is deferred.
+- **Readiness failure:** inspect child startup output. A healthy API alone is not enough; npm/network
+  problems, missing tools, or absent console assets prevent a ready announcement.
+
+For editing, shell, custom tools, or different authentication, continue using
+`mindweft-coding-workspace`; its flags and configuration discovery behavior are unchanged.
+
 ## Tool boundary: local tools vs MCP tools
 
 Keep Mindweft's built-in local tools for low-risk, generic utilities such as `current_time`,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 from mindweft_workspace.launch_commands import (
@@ -34,7 +36,10 @@ def run_workspace_processes(
     bridge_name: str,
     text_bridge_name: str | None,
     shell_bridge_name: str | None,
+    on_started: Callable[[list[subprocess.Popen[str]]], None] | None = None,
+    process_cwd: Path | None = None,
 ) -> int:
+    launch = partial(start_process, cwd=process_cwd) if process_cwd is not None else start_process
     processes: list[subprocess.Popen[str]] = []
     managed_http_processes: list[tuple[CodingMCPServerSpec, subprocess.Popen[str]]] = []
     generated_files: list[Path] = []
@@ -44,7 +49,7 @@ def run_workspace_processes(
                 gateway_config_path = write_mcp_gateway_config(mcp_server_specs)
                 generated_files.append(gateway_config_path)
                 processes.append(
-                    start_process(
+                    launch(
                         build_mcp_gateway_command(
                             gateway_config_path,
                             bridge_host,
@@ -60,7 +65,7 @@ def run_workspace_processes(
                         continue
                     process_env = {**env, **spec.env}
                     processes.append(
-                        start_process(
+                        launch(
                             build_mcp_stdio_bridge_command(spec),
                             env=process_env,
                             label=f"{spec.name} MCP bridge",
@@ -72,7 +77,7 @@ def run_workspace_processes(
                 if spec.command is None:
                     raise RuntimeError(f"managed HTTP MCP server '{spec.name}' requires a command")
                 process_env = {**env, **spec.env}
-                process = start_process(
+                process = launch(
                     spec.command,
                     env=process_env,
                     label=f"{spec.name} MCP HTTP server",
@@ -83,7 +88,7 @@ def run_workspace_processes(
                 wait_for_managed_http_server(spec, process)
         if not skip_api:
             processes.append(
-                start_process(
+                launch(
                     [
                         sys.executable,
                         "-m",
@@ -98,16 +103,19 @@ def run_workspace_processes(
                     label="Mindweft API",
                 )
             )
-            print_demo_commands(
-                api_host,
-                api_port,
-                tenant_id,
-                workspace,
-                bridge_name,
-                text_bridge_name,
-                shell_bridge_name,
-            )
+            if on_started is None:
+                print_demo_commands(
+                    api_host,
+                    api_port,
+                    tenant_id,
+                    workspace,
+                    bridge_name,
+                    text_bridge_name,
+                    shell_bridge_name,
+                )
 
+        if on_started is not None:
+            on_started(processes)
         return wait_for_processes(processes)
     except KeyboardInterrupt:
         print("\nStopping coding workspace processes...")
