@@ -1,4 +1,4 @@
-"""Opinionated inspect-only front door; the advanced workspace runner stays configurable."""
+"""Trust-gated coding front door; the advanced workspace runner stays configurable."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from mindweft_workspace.local_credentials import issue_credential
 from mindweft_workspace.orchestration import run_workspace_processes
 from mindweft_workspace.readiness import wait_for_code_ready
 from mindweft_workspace.runtime_plan import prepare_workspace_runtime
+from mindweft_workspace.workspace_trust import choose_coding_access
 
 # Only provider, authentication, and persistence preferences belong in this launch mode.
 # In particular: no tenant overlays, local/peer backends, MCP specs, admin database, or skills.
@@ -223,6 +224,8 @@ def run_code_command(args: argparse.Namespace) -> int:
                 "mindweft code currently supports trusted-local development authentication only; use mindweft-coding-workspace for configured token/session/JWT authentication."
             )
         env["MINDWEFT_AUTH_MODE"] = "local-credential"
+        trusted = choose_coding_access(args, workspaces, env)
+        env["MINDWEFT_LOCAL_CODING_TRUSTED"] = "1" if trusted else "0"
         if args.port is not None and args.port == args.gateway_port:
             raise RuntimeError("--port and --gateway-port must be different.")
         with (
@@ -304,6 +307,7 @@ def run_code_instance(args, env, workspaces, instance, api_socket, gateway_socke
             str(gateway_port),
         ]
     )
+    env["MINDWEFT_ADMIN_DB_PATH"] = str(instance.state_dir / "personal-setup.db")
     plan = prepare_workspace_runtime(runner_args, env, bundled_readonly=True)
     url = f"http://127.0.0.1:{api_port}/console/"
     print(f"Instance: {instance.name} (Mindweft {package_version()})", flush=True)
@@ -312,7 +316,13 @@ def run_code_instance(args, env, workspaces, instance, api_socket, gateway_socke
     print("Workspaces:", flush=True)
     for workspace in workspaces:
         print(f"  {workspace}", flush=True)
-    print("Access: inspect (read-only)", flush=True)
+    print("Agent: coding", flush=True)
+    print(
+        "Access: coding (edit and shell; not a sandbox)"
+        if env["MINDWEFT_LOCAL_CODING_TRUSTED"] == "1"
+        else "Access: inspect (read-only)",
+        flush=True,
+    )
     print("Credential-protected local mode; do not expose these ports to a network.", flush=True)
     if args.demo:
         print("Demo provider: mock (no real AI responses).", flush=True)
@@ -327,6 +337,7 @@ def run_code_instance(args, env, workspaces, instance, api_socket, gateway_socke
             processes,
             api_port=api_port,
             specs=plan.mcp_servers.tenant_specs,
+            expected_profile="coding" if env["MINDWEFT_LOCAL_CODING_TRUSTED"] == "1" else "inspect",
             expected_identity={"name": instance.name, "launch_id": instance.launch_id},
             auth_headers={
                 "Authorization": f"Bearer {credentials['API'].token}",

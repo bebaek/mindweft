@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -71,6 +72,43 @@ def prepare_workspace_runtime(
         workspace_roots=workspace_roots,
         workspace_scope=workspace_scope,
     )
+    if bundled_readonly:
+        profile = "coding" if env.get("MINDWEFT_LOCAL_CODING_TRUSTED") == "1" else "inspect"
+        configured = json.loads(env["MINIGENT_TENANT_EXECUTION_CONFIGS"])
+        tenant = configured[tenant_id]
+        tenant["capability_profiles"]["default_profile"] = profile
+        if profile == "inspect":
+            # Keep personal copies referencing shared:coding valid when the same
+            # instance is restarted read-only. This alias cannot add any tools.
+            inspect = next(
+                item for item in tenant["capability_profiles"]["items"] if item["name"] == "inspect"
+            )
+            tenant["capability_profiles"]["items"].append({**inspect, "name": "coding"})
+
+        tenant["agents"] = {
+            "default_agent": "coding",
+            "items": [
+                {
+                    "name": "coding",
+                    "description": "Built-in coding assistant; duplicate in Personal setup to customize.",
+                    "skills": ["coding-workspace"],
+                    "capability_profile": "coding",
+                }
+            ],
+        }
+        for skill in tenant["skills"]["items"]:
+            if skill["name"] == "coding-workspace":
+                skill["system_prompt"] += (
+                    "\nUse the available filesystem, text, and shell tools to implement and verify requested changes. "
+                    "Read project instructions first; preserve unrelated work. Run targeted tests and inspect diffs. "
+                    "Ask before commits, pushes, dependency installation, or destructive operations unless explicitly requested. "
+                    "Never claim shell execution is sandboxed; do not access secrets without explicit permission. "
+                    if profile == "coding"
+                    else "\nThis launch is inspect-only: edits and shell execution are unavailable regardless of agent choice."
+                )
+        serialized = json.dumps(configured)
+        env["MINIGENT_TENANT_EXECUTION_CONFIGS"] = serialized
+        env["MINDWEFT_TENANT_EXECUTION_CONFIGS"] = serialized
     gateway_mismatches = (
         tenant_gateway_mcp_server_mismatches(
             env,

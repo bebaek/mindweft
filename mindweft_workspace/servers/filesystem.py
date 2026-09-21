@@ -1,4 +1,4 @@
-"""Packaged, read-only filesystem MCP server for local coding workspaces."""
+"""Packaged filesystem MCP server; mutations require explicit writable mode."""
 
 from __future__ import annotations
 
@@ -10,13 +10,16 @@ from typing import Any
 from mcp.server import MCPServer
 
 from mindweft_workspace.servers.readonly import WorkspaceReadPolicy
+from mindweft_workspace.servers.writable import WorkspaceWritePolicy
 
 MAX_READ_CHARS = 40_000
 
 
 class FilesystemMCPServer:
-    def __init__(self, workspaces: Sequence[Path]) -> None:
-        self.policy = WorkspaceReadPolicy(workspaces)
+    def __init__(self, workspaces: Sequence[Path], *, writable: bool = False) -> None:
+        self.policy = (
+            WorkspaceWritePolicy(workspaces) if writable else WorkspaceReadPolicy(workspaces)
+        )
 
     def list_allowed_directories(self) -> dict[str, object]:
         return {"directories": [str(root) for root in self.policy.roots]}
@@ -39,7 +42,9 @@ def build_filesystem_sdk_server(server: FilesystemMCPServer) -> MCPServer[Any]:
     sdk = MCPServer(
         "mindweft-filesystem-mcp",
         version="0.1.0",
-        instructions="Read-only workspace file inspection.",
+        instructions="Workspace inspection and bounded text editing."
+        if isinstance(server.policy, WorkspaceWritePolicy)
+        else "Read-only workspace file inspection.",
     )
 
     @sdk.tool(structured_output=True)
@@ -57,6 +62,21 @@ def build_filesystem_sdk_server(server: FilesystemMCPServer) -> MCPServer[Any]:
         """Read UTF-8 text (1 MiB file limit, up to 40000 characters returned)."""
         return server.read_file(path, max_chars)
 
+    if isinstance(server.policy, WorkspaceWritePolicy):
+        policy = server.policy
+
+        @sdk.tool(structured_output=True)
+        def write_file(path: str, content: str) -> dict[str, object]:
+            """Create/replace UTF-8 text within workspace roots (1 MiB maximum); parents must exist."""
+            return policy.write_text(path, content)
+
+        @sdk.tool(structured_output=True)
+        def edit_file(
+            path: str, old_text: str, new_text: str, dry_run: bool = False
+        ) -> dict[str, object]:
+            """Replace exactly one matching text block; return a bounded unified diff."""
+            return policy.edit_text(path, old_text, new_text, dry_run=dry_run)
+
     return sdk
 
 
@@ -68,10 +88,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         required=True,
         help="Allowed root; repeat for multiple directories.",
     )
-    args = parser.parse_args(argv)
-    build_filesystem_sdk_server(FilesystemMCPServer([Path(root) for root in args.workspace])).run(
-        transport="stdio"
+    parser.add_argument(
+        "--writable", action="store_true", help="Enable workspace file creation and editing."
     )
+    args = parser.parse_args(argv)
+    build_filesystem_sdk_server(
+        FilesystemMCPServer([Path(root) for root in args.workspace], writable=args.writable)
+    ).run(transport="stdio")
     return 0
 
 

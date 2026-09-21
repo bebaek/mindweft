@@ -3,6 +3,7 @@ export interface LocalInstance {
   launch_id: string;
   version: string;
   auth_mode: "local-credential";
+  workspace_access?: "coding" | "read-only";
 }
 
 let instance: LocalInstance | null = null;

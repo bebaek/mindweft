@@ -76,6 +76,7 @@ def main() -> int:
             str(workspace),
             str(second_workspace),
             "--demo",
+            "--read-only",
             "--no-open",
             "--port",
             str(api_port),
@@ -147,7 +148,10 @@ def main() -> int:
                 response = client.get(base + "/execution-options")
                 response.raise_for_status()
                 options = response.json()
-                assert len(options["capability_profiles"]["items"]) == 1
+                assert {item["name"] for item in options["capability_profiles"]["items"]} == {
+                    "inspect",
+                    "coding",
+                }
                 for name, tool, arguments in (
                     ("fs-workspace", "read_file", {"path": str(workspace / "fixture.txt")}),
                     (

@@ -82,7 +82,7 @@ export function App() {
     setMobileNavOpen(false);
   }
 
-  const brand = <div className="brand"><span className="brand-mark">M</span><div><strong>Mindweft</strong><small>{local ? `${local.name} · ${local.version}` : "Agent operations"}</small></div></div>;
+  const brand = <div className="brand"><span className="brand-mark">M</span><div><strong>Mindweft</strong><small>{local ? `${local.name} · ${local.version}${local.workspace_access === "read-only" ? " · read-only" : local.workspace_access === "coding" ? " · edit + shell" : ""}` : "Agent operations"}</small></div></div>;
   const navigation = (
     <nav aria-label="Primary navigation">
       {visiblePages.map((key) => (

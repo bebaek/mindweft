@@ -98,11 +98,18 @@ If `uv` reports that those executables already exist, check `uv tool list`. Unin
 if you intend to replace those executable links. Neither operation migrates your settings or
 conversation databases.
 
-This launches a **read-only, trusted-local** workspace and opens `/console/` after the API and
-workspace tools are ready. It does not load repository-local TOML/dotenv files, enable shell
-commands, or inherit custom MCP servers. See [the simple launcher](docs/coding-workspace.md#simple-read-only-launcher)
+This launches the built-in **coding** agent after a workspace trust decision and opens `/console/` after the API and
+workspace tools are ready. It does not load repository-local TOML/dotenv files or inherit custom MCP servers. Trusted
+workspaces get file editing and shell execution; `--read-only` keeps inspection-only access. See [the simple launcher](docs/coding-workspace.md#simple-read-only-launcher)
 for configuration, authentication, and troubleshooting. The existing advanced coding runner
 remains available and retains its configurable filesystem backend.
+
+The initial agent is visible through `/agent` and `/agent current`. In **Personal setup**, use
+**Customize coding** to create a personal copy with different skills, capabilities, or a model
+preference; select it with `/agent` and save it as your default. Customization never overrides a
+read-only launch. Trust is remembered per canonical workspace root; for noninteractive use,
+pass `--trust-workspace` explicitly or use `--read-only`. Shell execution runs as your OS user
+and is not workspace-sandboxed.
 
 ## Developer quickstart
 

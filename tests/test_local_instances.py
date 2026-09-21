@@ -206,7 +206,12 @@ def test_api_identity_and_stale_launch_guard(monkeypatch):
     monkeypatch.setenv("MINDWEFT_LOCAL_INSTANCE_VERSION", "test")
     with TestClient(create_app()) as client:
         response = client.get("/local-instance")
-        assert response.json() == {"name": "preview", "launch_id": "a" * 32, "version": "test"}
+        assert response.json() == {
+            "name": "preview",
+            "launch_id": "a" * 32,
+            "version": "test",
+            "workspace_access": "read-only",
+        }
         assert response.headers["cache-control"] == "no-store"
         assert client.post("/threads", headers={"X-Mindweft-Launch-Id": "stale"}).status_code == 409
         # Knowing a launch ID does not grant authentication.

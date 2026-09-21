@@ -16,7 +16,7 @@ from mindweft_workspace.runtime_plan import prepare_workspace_runtime
 
 
 def args(*argv):
-    return build_parser().parse_args(["code", *argv])
+    return build_parser().parse_args(["code", "--read-only", *argv])
 
 
 @pytest.fixture
@@ -362,7 +362,10 @@ def test_multiple_roots_deduplicate_and_ignore_inherited_roots(
     tenant = json.loads(options["env"]["MINIGENT_TENANT_EXECUTION_CONFIGS"])["demo-tenant"]
     prompt = tenant["skills"]["items"][0]["system_prompt"]
     assert str(first) in prompt and str(second) in prompt
-    assert len(tenant["capability_profiles"]["items"]) == 1
+    assert {item["name"] for item in tenant["capability_profiles"]["items"]} == {
+        "inspect",
+        "coding",
+    }
     output = capsys.readouterr().out
     assert output.count(str(first)) == 1
     assert output.count(str(second)) == 1

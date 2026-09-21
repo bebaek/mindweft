@@ -102,6 +102,8 @@ jobs:
               "$GITHUB_WORKSPACE/scripts/smoke_test_code_workspace.py"
             "$smoke_dir/venv/bin/python" \
               "$GITHUB_WORKSPACE/scripts/smoke_test_local_instances.py"
+            "$smoke_dir/venv/bin/python" \
+              "$GITHUB_WORKSPACE/scripts/smoke_test_default_coding_agent.py"
           )
 
   frontend:
