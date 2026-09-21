@@ -15,6 +15,9 @@ from pathlib import Path
 
 import httpx
 
+from mindweft_workspace.instances import InstanceRecord
+from mindweft_workspace.local_connection import credential_directory
+from mindweft_workspace.local_credentials import read_credential
 from mindweft_workspace.readiness import mcp_payload
 
 
@@ -80,7 +83,6 @@ def main() -> int:
             str(gateway_port),
         ]
         log = root / "startup.log"
-        headers = {"X-Mindweft-User-Id": "demo-user", "X-Mindweft-Tenant-Id": "demo-tenant"}
         with log.open("w") as output:
             process = subprocess.Popen(
                 command, env=env, cwd=workspace, stdout=output, stderr=subprocess.STDOUT
@@ -91,10 +93,60 @@ def main() -> int:
                 if process.poll() is not None or time.monotonic() > deadline:
                     raise RuntimeError("Coding launcher did not become ready:\n" + log.read_text())
                 time.sleep(0.2)
-            with httpx.Client(trust_env=False, timeout=10, headers=headers) as client:
+            registry = root / "state" / "mindweft" / "instances"
+            record = InstanceRecord.read(registry / "default.json")
+            credentials = {
+                role: read_credential(
+                    credential_directory(registry, "default", role), launch_id=record.launch_id
+                )
+                for role in ("api", "gateway")
+            }
+            headers = {
+                "Authorization": f"Bearer {credentials['api'].token}",
+                "X-Mindweft-Launch-Id": record.launch_id,
+            }
+            gateway_headers = {
+                "Authorization": f"Bearer {credentials['gateway'].token}",
+                "X-Mindweft-Launch-Id": record.launch_id,
+            }
+            with httpx.Client(trust_env=False, timeout=10, follow_redirects=False) as anonymous:
+                assert anonymous.get(record.api_url + "/threads").status_code == 401
+                assert (
+                    anonymous.get(
+                        record.api_url + "/execution-options",
+                        headers={
+                            "X-Mindweft-User-Id": "demo-user",
+                            "X-Mindweft-Tenant-Id": "demo-tenant",
+                        },
+                    ).status_code
+                    == 401
+                )
+                assert (
+                    anonymous.post(
+                        record.gateway_url + "/mcp/fs-workspace", json=mcp_payload("tools/list")
+                    ).status_code
+                    == 401
+                )
+                assert (
+                    anonymous.post(
+                        record.gateway_url + "/mcp/fs-workspace",
+                        headers=headers,
+                        json=mcp_payload("tools/list"),
+                    ).status_code
+                    == 401
+                )
+                assert (
+                    anonymous.get(record.api_url + "/threads", headers=gateway_headers).status_code
+                    == 401
+                )
+            with httpx.Client(
+                trust_env=False, timeout=10, follow_redirects=False, headers=headers
+            ) as client:
                 base = f"http://127.0.0.1:{api_port}"
                 assert client.get(base + "/console/").status_code == 200
-                options = client.get(base + "/execution-options").json()
+                response = client.get(base + "/execution-options")
+                response.raise_for_status()
+                options = response.json()
                 assert len(options["capability_profiles"]["items"]) == 1
                 for name, tool, arguments in (
                     ("fs-workspace", "read_file", {"path": str(workspace / "fixture.txt")}),
@@ -108,12 +160,15 @@ def main() -> int:
 
                     def call(arguments, url=url, tool=tool):
                         return client.post(
-                            url, json=mcp_payload("tools/call", name=tool, arguments=arguments)
+                            url,
+                            headers=gateway_headers,
+                            json=mcp_payload("tools/call", name=tool, arguments=arguments),
                         )
 
                     if name == "fs-workspace":
                         listed = client.post(
                             url,
+                            headers=gateway_headers,
                             json=mcp_payload(
                                 "tools/call",
                                 name="list_directory",
@@ -141,14 +196,15 @@ def main() -> int:
                         workspace / "hidden-link",
                     ):
                         assert_denied(call({**arguments, "path": str(denied)}))
-                    tools = client.post(url, json=mcp_payload("tools/list")).json()["result"][
-                        "tools"
-                    ]
+                    tools = client.post(
+                        url, headers=gateway_headers, json=mcp_payload("tools/list")
+                    ).json()["result"]["tools"]
                     assert not {"write_file", "edit_file", "run_command"} & {
                         t["name"] for t in tools
                     }
                     result = client.post(
                         url,
+                        headers=gateway_headers,
                         json=mcp_payload(
                             "tools/call",
                             name="write_file",

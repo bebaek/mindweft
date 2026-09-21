@@ -14,6 +14,8 @@ from pathlib import Path
 
 import httpx
 
+from mindweft_workspace.local_connection import credential_directory
+from mindweft_workspace.local_credentials import read_credential
 from mindweft_workspace.readiness import mcp_payload
 
 
@@ -75,6 +77,16 @@ def main() -> int:
                 time.sleep(0.1)
             return json.loads((registry / f"{name}.json").read_text())
 
+        def headers(name, role="api"):
+            record = records[name]
+            credential = read_credential(
+                credential_directory(registry, name, role), launch_id=record["launch_id"]
+            )
+            return {
+                "Authorization": f"Bearer {credential.token}",
+                "X-Mindweft-Launch-Id": record["launch_id"],
+            }
+
         try:
             records["daily"] = start("daily")
             records["preview"] = start("preview")
@@ -114,9 +126,30 @@ def main() -> int:
             with httpx.Client(
                 trust_env=False,
                 timeout=10,
-                headers={"X-Mindweft-User-Id": "demo-user", "X-Mindweft-Tenant-Id": "demo-tenant"},
+                follow_redirects=False,
             ) as client:
+
+                def api_get(name, path):
+                    response = client.get(records[name]["api_url"] + path, headers=headers(name))
+                    response.raise_for_status()
+                    return response
+
                 for name, record in records.items():
+                    assert client.get(record["api_url"] + "/threads").status_code == 401
+                    assert (
+                        client.post(
+                            record["gateway_url"] + "/mcp/fs-workspace",
+                            json=mcp_payload("tools/list"),
+                        ).status_code
+                        == 401
+                    )
+                    other = "preview" if name == "daily" else "daily"
+                    # Use this launch ID to prove token isolation, not just stale-launch rejection.
+                    wrong_token = {**headers(other), "X-Mindweft-Launch-Id": record["launch_id"]}
+                    assert (
+                        client.get(record["api_url"] + "/threads", headers=wrong_token).status_code
+                        == 401
+                    )
                     # Exercise the installed CLI's discovery, identity validation, and message routing.
                     subprocess.run(
                         [executable, "--instance", name, "chat", f"hello {name}"],
@@ -127,12 +160,13 @@ def main() -> int:
                         check=True,
                         timeout=20,
                     )
-                    threads = client.get(record["api_url"] + "/threads").json()["threads"]
+                    threads = api_get(name, "/threads").json()["threads"]
                     assert len(threads) == 1
                     thread_ids[name] = threads[0]["thread_id"]
                     url = record["gateway_url"] + "/mcp/fs-workspace"
                     result = client.post(
                         url,
+                        headers=headers(name, "gateway"),
                         json=mcp_payload(
                             "tools/call",
                             name="read_file",
@@ -143,6 +177,7 @@ def main() -> int:
                     other = "preview" if name == "daily" else "daily"
                     denied = client.post(
                         url,
+                        headers=headers(name, "gateway"),
                         json=mcp_payload(
                             "tools/call",
                             name="read_file",
@@ -152,20 +187,27 @@ def main() -> int:
                     assert denied.get("error") or denied.get("result", {}).get("isError")
                 assert thread_ids["daily"] != thread_ids["preview"]
                 old_preview = records["preview"]
+                old_headers = headers("preview")
                 stop("preview")
-                assert client.get(records["daily"]["api_url"] + "/health/ready").status_code == 200
+                assert api_get("daily", "/health/ready").status_code == 200
                 assert (
-                    client.get(records["daily"]["api_url"] + "/threads").json()["threads"][0][
-                        "thread_id"
-                    ]
+                    api_get("daily", "/threads").json()["threads"][0]["thread_id"]
                     == thread_ids["daily"]
                 )
                 records["preview"] = start("preview")
                 assert records["preview"]["launch_id"] != old_preview["launch_id"]
                 assert (
-                    client.get(records["preview"]["api_url"] + "/threads").json()["threads"][0][
-                        "thread_id"
-                    ]
+                    client.get(
+                        records["preview"]["api_url"] + "/threads",
+                        headers={
+                            **old_headers,
+                            "X-Mindweft-Launch-Id": records["preview"]["launch_id"],
+                        },
+                    ).status_code
+                    == 401
+                )
+                assert (
+                    api_get("preview", "/threads").json()["threads"][0]["thread_id"]
                     == thread_ids["preview"]
                 )
                 assert (
@@ -191,10 +233,7 @@ def main() -> int:
                 )
                 path.write_text(current)
                 assert failed.returncode != 0 and "stale" in failed.stderr
-                assert (
-                    len(client.get(records["preview"]["api_url"] + "/threads").json()["threads"])
-                    == 1
-                )
+                assert len(api_get("preview", "/threads").json()["threads"]) == 1
         finally:
             for name in list(processes):
                 stop(name)
