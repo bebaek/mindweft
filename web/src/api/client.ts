@@ -1,3 +1,5 @@
+import { connectionFetch, localHeaders } from "../auth/localConnection";
+
 export type Authentication =
   | { mode: "session" }
   | { mode: "development"; tenantId: string; userId: string; isAdmin: boolean }
@@ -1699,7 +1701,7 @@ export class MinigentApiClient {
   ): Promise<AttachmentMetadata> {
     const headers = this.#headers();
     headers.set("Content-Type", file.type);
-    const response = await fetch(
+    const response = await connectionFetch(
       `${this.#baseUrl}/threads/${encodeURIComponent(threadId)}/attachments/binary`,
       { method: "POST", headers, body: file, credentials: "include", signal },
     );
@@ -1715,7 +1717,7 @@ export class MinigentApiClient {
     attachmentId: string,
     signal?: AbortSignal,
   ): Promise<Blob> {
-    const response = await fetch(
+    const response = await connectionFetch(
       `${this.#baseUrl}/threads/${encodeURIComponent(threadId)}/attachments/${encodeURIComponent(attachmentId)}`,
       { headers: this.#headers(), credentials: "include", signal },
     );
@@ -1896,7 +1898,7 @@ export class MinigentApiClient {
   ): Promise<void> {
     const headers = this.#headers();
     headers.set("Accept", "application/x-ndjson");
-    const response = await fetch(
+    const response = await connectionFetch(
       `${this.#baseUrl}/threads/${encodeURIComponent(threadId)}/run/stream`,
       { method: "POST", headers, credentials: "include", signal },
     );
@@ -1923,6 +1925,7 @@ export class MinigentApiClient {
   #headers(init?: HeadersInit): Headers {
     const headers = new Headers(init);
     headers.set("Accept", "application/json");
+    for (const [key, value] of Object.entries(localHeaders())) headers.set(key, value);
     if (this.#authentication.mode === "bearer") {
       headers.set("Authorization", `Bearer ${this.#authentication.token}`);
     } else if (this.#authentication.mode === "development") {
@@ -1937,7 +1940,7 @@ export class MinigentApiClient {
     const headers = this.#headers(init.headers);
     if (init.body !== undefined) headers.set("Content-Type", "application/json");
 
-    const response = await fetch(`${this.#baseUrl}${path}`, {
+    const response = await connectionFetch(`${this.#baseUrl}${path}`, {
       ...init,
       headers,
       credentials: "include",

@@ -20,9 +20,14 @@ mindweft code . --demo                # explicit mock provider, no real AI respo
 Requirements: the installed Mindweft package with its console assets on macOS/Linux, and provider
 settings unless `--demo` is used. The filesystem and text servers ship in the Python package and
 run using the same interpreter as Mindweft; Node/npm is not required at runtime.
-For a source checkout, use `uv run mindweft code ...` after building
-and staging the console (`npm ci --prefix web`, `npm run build --prefix web`, then copy
-`web/dist` to `app/static/console`). End users of the built wheel do not build the frontend.
+For a source checkout, use `./scripts/dev.py code . --instance preview` to build and stage
+the console before launching the checkout. `./scripts/dev.py build` only builds/stages;
+`./scripts/dev.py install` reinstalls the uv tool (Python 3.12 by default); its wheel-build
+hook automatically compiles the console, as does `uv tool install --reinstall --python 3.12 .`.
+Source builds require Node.js/npm and fail rather than reuse stale assets.
+Build failures stop before launch/install; `code` does not modify the installed tool. Stop
+the target instance before restarting or reinstalling it. End users of the built wheel do
+not build the frontend.
 
 The command resolves and deduplicates the explicitly supplied directories (or cwd when omitted).
 Every directory must be accessible; one invalid root aborts startup before any child starts.
@@ -32,6 +37,42 @@ Writes, shell, external MCP servers, peer backends, admin execution overlays, an
 workspace scopes are not enabled. Existing path deny-glob defaults remain in force. This is
 not an OS sandbox or a guarantee that every possible secret filename is excluded.
 
+### Credential-backed local authentication
+
+`mindweft code` protects both the API and MCP gateway with separate 256-bit opaque bearer
+credentials, rotated on every launch. Credentials live under the selected state root's
+`instances/.credentials/<name>/{api,gateway}/credential`, separate from public discovery metadata.
+The credential directories/files must be owned by the current OS user with modes `0700`/`0600`.
+Unsafe ownership, writable ancestors, symlinks, hardlinks, and malformed files are rejected instead
+of repaired. Workspace tools deny `.credentials` paths. Development-header authentication is not
+a fallback in this launcher mode; ordinary deployed session/bearer authentication is unchanged.
+
+CLI `--instance NAME` reads the protected API credential and uses only the matching literal
+loopback origin, without proxies or redirects. The server maps it to the local `demo-tenant` /
+`demo-user` principal (not admin), regardless of caller-supplied principal headers. Server verifiers
+retain token digests. Replacing a credential file alone does not revoke a running verifier;
+restart the instance to rotate credentials and invalidate its browser sessions.
+
+The launcher opens `/console/` with a 30-second single-use ticket in the URL fragment. The console
+removes that fragment before other requests and exchanges the ticket for an HttpOnly, host-only,
+SameSite=Strict cookie plus an origin-scoped session key. Sessions expire after eight hours or
+on restart. Literal loopback HTTP does not use a Secure cookie. Because cookies are shared across
+ports, protected browser requests also require the session key and launch ID; the cookie alone
+is insufficient. The key is kept in tab session storage (memory only if storage is unavailable),
+scoped by instance name and launch ID. Cookies and session keys cannot mint new browser tickets.
+Host/Origin checks and same-origin write requirements guard browser requests.
+
+Use `mindweft instances open NAME` to open another authenticated browser session. Ticket URLs are
+not printed if opening the browser fails; retry from a desktop session. Expired sessions or
+restarted instances require reopening from the CLI. Anonymous direct visits show reconnect
+instructions, not a password form. The browser never receives the reusable local bearer token.
+No authentication downgrade is inferred from a 401.
+
+This protects the local service boundary from other unprivileged OS users under normal filesystem
+and browser-profile isolation, not root or malicious same-user processes. The CLI is a trusted
+bootstrapper and can recreate browser sessions with the same authority. Keep services loopback-only.
+Provider OAuth authentication is separate; new provider-login flows need follow-up work.
+
 ### Multiple local instances
 
 Use an explicit name when testing alongside an existing instance:
@@ -40,8 +81,8 @@ Use an explicit name when testing alongside an existing instance:
 # Keep the installed daily-use version running.
 mindweft code /path/to/project --instance daily
 
-# In a separate, updated checkout/environment (console assets built):
-uv run mindweft code /path/to/project --instance preview
+# In a separate, updated checkout/environment:
+./scripts/dev.py code /path/to/project --instance preview
 
 # Connect a CLI to the matching instance, without remembering its port:
 mindweft --instance preview chat "Explain this repository"
@@ -63,11 +104,21 @@ their descriptors to the child servers, avoiding a check-then-bind race. Explici
 actual API URL is printed/opened; actual gateway URLs are used by the generated tool configuration.
 
 **State:** omitting `--instance` selects `default` and preserves existing storage settings and
-legacy state-directory fallback. Other names store threads, attachments, and OAuth data under
+legacy state-directory fallback. Other names store threads and attachments under
 `$XDG_STATE_HOME/mindweft/instances/<name>` (normally `~/.local/state/mindweft/instances/<name>`).
-Named instances override inherited thread/attachment/OAuth storage paths, reporting the overridden
-setting names. No databases or credentials are copied. Provider API keys/configuration may be
-reused, but OAuth login may need to be completed separately for the named instance. Other default
+Named instances override inherited thread/attachment paths, reporting the overridden setting names.
+Provider configuration and an explicitly configured `MINDWEFT_OAUTH_STORE_PATH` (or legacy
+alias) are reused unchanged, including OAuth encryption settings. Credentials
+are not copied, migrated, or inspected by the launcher. Without a configured OAuth store, the named
+instance still gets an instance-local `oauth.json`/`oauth.db`; existing instance-local OAuth files
+are not merged into a configured shared store. Local API/gateway credentials remain instance-specific.
+
+An explicitly shared OAuth store is exempt from process-lifetime storage locks. Encrypted SQLite
+OAuth stores already coordinate refreshes. **JSON stores do not coordinate cross-process token
+refresh: avoid simultaneous provider runs across instances sharing a JSON store.** The launcher
+prints a warning for this case. Sharing a path does not validate or renew provider credentials;
+expired/revoked or missing credentials can still fail. The OAuth login flow is separate work.
+Other default
 XDG state is directed into the instance's own `xdg` subdirectory. Default in-memory stores remain
 in memory. Reusing a name after shutdown reuses its persistent data; do not run incompatible
 versions against the same named state.

@@ -20,7 +20,7 @@ and quality-review workflows.
 ## Local coding workspace
 
 Install from a local checkout using [uv](https://docs.astral.sh/uv/getting-started/installation/).
-For a fresh checkout, build the console first using the source-build steps below:
+Source installation automatically builds the console and requires Node.js/npm in addition to uv:
 
 ```bash
 uv tool install --python 3.12 /absolute/path/to/mindweft
@@ -42,29 +42,50 @@ To test an updated checkout without stopping your installed instance:
 
 ```bash
 # Run from the updated checkout/environment; do not reinstall over the running tool.
-uv run mindweft code /path/to/project --instance preview
+./scripts/dev.py code /path/to/project --instance preview
 uv run mindweft --instance preview chat "Explain this repository"
 uv run mindweft instances list
 uv run mindweft instances open preview
 ```
 
-Named instances get separate persistent state and automatically allocated loopback ports when
-preferred ports are busy. Omit `--instance` to retain the existing default state. See
+Named instances get separate conversation state and automatically allocated loopback ports when
+preferred ports are busy. They reuse an explicitly configured provider OAuth store; JSON stores
+do not coordinate concurrent refreshes, so avoid simultaneous provider runs against a shared JSON
+store. Local access credentials remain separate. Omit `--instance` to retain the existing default state. See
 [multiple instances](docs/coding-workspace.md#multiple-local-instances) for storage overrides,
-legacy-instance safety, and client discovery. Console authentication still requires choosing
-Development headers (`demo-tenant` / `demo-user`) in Configure; automatic setup is a separate fix.
+legacy-instance safety, and client discovery. The launcher opens an authenticated console using
+a one-time browser ticket; no development headers or username/password setup is needed. Use
+`mindweft instances open preview` to open a fresh authenticated browser session.
 
 **Building from source:** Node/npm is still needed to build the browser console, not to run the
-installed package. Before installing from a fresh checkout:
+installed package. Installing from a checkout or source archive automatically compiles a matching console:
 
 ```bash
 cd /absolute/path/to/mindweft
-npm ci --prefix web
-npm run build --prefix web
-mkdir -p app/static/console
-cp -R web/dist/. app/static/console/
 uv tool install --reinstall --python 3.12 .
 ```
+
+The Python wheel-build hook runs `npm ci --include=dev` and `npm run build` in a clean
+frontend build directory, then copies the resulting assets directly into the wheel build.
+Missing npm, missing frontend sources, or a failed console build aborts installation instead
+of reusing old staged assets. Source archives include the frontend inputs needed to rebuild;
+prebuilt wheels require neither Node.js nor npm at installation time.
+
+For checkout development, the helper builds/stages the console before launching:
+
+```bash
+./scripts/dev.py build                           # build/stage only
+./scripts/dev.py code . --instance preview       # build/stage, then run this checkout
+./scripts/dev.py code . --instance preview --demo # use the mock provider
+./scripts/dev.py install --python 3.12            # reinstall; wheel hook builds the console
+```
+
+`code` forwards its remaining arguments to `mindweft code` and keeps your calling directory
+as the workspace when using `.`. It does not replace your installed tool. Stop the target
+instance before restarting it; do not reinstall over an installed instance that is running.
+Build or staging failures stop the helper before launch. Requires Python 3, Node/npm, and `uv`.
+Editable installs do not automatically refresh source-tree console assets: use `build` or
+`code` after frontend changes.
 
 Published/built wheels include the console; their users skip that build. For an editable local
 installation, add `--editable`. If the command is not found, run `uv tool update-shell` and reopen

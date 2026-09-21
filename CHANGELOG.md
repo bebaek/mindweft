@@ -10,11 +10,20 @@ package version is `0.1.0`.
 
 ### Added
 
+- Credential-protected local API and MCP gateway, per-launch owner-only bearer files, CLI
+  discovery, and single-use browser handoff with launch-ID and origin-scoped session checks.
+- Automatic console compilation for source wheel builds, matching frontend inputs in sdists,
+  and a `scripts/dev.py` helper for checkout builds, launches, and installation. Source builds
+  fail rather than reuse stale console assets; published wheel installation needs no Node/npm.
+- Named coding instances reuse explicitly configured provider OAuth stores without copying
+  credentials. Conversation/local-access state stays isolated; shared JSON stores warn about
+  uncoordinated cross-process refresh. Provider login-flow integration remains separate work.
+
 - Named local coding instances with isolated persistent state, lifetime/store locks, automatic
   loopback-port allocation using inherited listening sockets, and readiness-gated local discovery.
 - CLI `--instance NAME`, `instances list`, and `instances open NAME`, with launch-identity checks
   and stale-request rejection. Default/advanced runner behavior remains compatible; console
-  authentication bootstrap is deferred.
+  authentication bootstrap uses credential-backed local sessions.
 
 - Coding launcher startup now reports the loaded configuration path, resolved symlink target,
   and limited configuration scope, or why no TOML file was loaded, without printing values.

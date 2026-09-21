@@ -34,10 +34,13 @@ def wait_for_code_ready(
     specs: list[CodingMCPServerSpec],
     timeout: float = 60,
     expected_identity: dict[str, str] | None = None,
+    auth_headers: dict[str, str] | None = None,
 ) -> None:
     deadline = time.monotonic() + timeout
     pending = "API"
     headers = {"X-Mindweft-User-Id": "demo-user", "X-Mindweft-Tenant-Id": "demo-tenant"}
+    if auth_headers is not None:
+        headers = auth_headers
     # Local probes must not route through an inherited HTTP proxy.
     with httpx.Client(trust_env=False, timeout=1) as client:
         while time.monotonic() < deadline:
@@ -48,7 +51,7 @@ def wait_for_code_ready(
                     )
             try:
                 pending = "API readiness"
-                response = client.get(f"http://127.0.0.1:{api_port}/health/ready")
+                response = client.get(f"http://127.0.0.1:{api_port}/health/ready", headers=headers)
                 response.raise_for_status()
                 if response.json().get("status") != "ready":
                     raise ValueError("not ready")
@@ -74,7 +77,10 @@ def wait_for_code_ready(
                     response = client.post(
                         spec.url,
                         json=mcp_payload("tools/list"),
-                        headers={"MCP-Protocol-Version": DEFAULT_MCP_PROTOCOL_VERSION},
+                        headers={
+                            **spec.headers,
+                            "MCP-Protocol-Version": DEFAULT_MCP_PROTOCOL_VERSION,
+                        },
                     )
                     response.raise_for_status()
                     tools = {item["name"] for item in response.json()["result"]["tools"]}

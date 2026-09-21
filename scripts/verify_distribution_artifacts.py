@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import configparser
 import email.parser
+import re
 import tarfile
 import zipfile
 from pathlib import Path
@@ -61,6 +62,17 @@ def _validate_wheel(wheel: Path, *, version: str) -> None:
         if missing:
             raise RuntimeError(f"wheel is missing package files: {sorted(missing)}")
 
+        console_index = "app/static/console/index.html"
+        if console_index not in names:
+            raise RuntimeError("wheel is missing the built console")
+        html = archive.read(console_index).decode("utf-8")
+        assets = re.findall(r'(?:src|href)="/console/(assets/[^"?#]+)"', html)
+        if not any(asset.endswith(".js") for asset in assets):
+            raise RuntimeError("console index does not reference a JavaScript bundle")
+        for asset in assets:
+            if f"app/static/console/{asset}" not in names:
+                raise RuntimeError(f"wheel is missing a referenced console asset: {asset}")
+
         metadata = email.parser.BytesParser().parsebytes(archive.read(f"{dist_info}/METADATA"))
         if metadata["Name"] != "mindweft":
             raise RuntimeError(f"unexpected distribution name: {metadata['Name']!r}")
@@ -107,10 +119,26 @@ def _validate_sdist(sdist: Path, *, version: str) -> None:
         f"{prefix}CHANGELOG.md",
         f"{prefix}LICENSE",
         f"{prefix}pyproject.toml",
+        f"{prefix}setup.py",
+        f"{prefix}_build_console.py",
+        f"{prefix}web/package.json",
+        f"{prefix}web/package-lock.json",
+        f"{prefix}web/src/main.tsx",
+        f"{prefix}web/vite.config.ts",
         *(f"{prefix}{path}" for path in REQUIRED_PACKAGE_FILES),
     }
     with tarfile.open(sdist, mode="r:gz") as archive:
         names = set(archive.getnames())
+    forbidden = [
+        name
+        for name in names
+        if any(
+            part in {"node_modules", "dist", ".npmrc"} or part.startswith(".env")
+            for part in name.removeprefix(prefix).split("/")
+        )
+    ]
+    if forbidden:
+        raise RuntimeError(f"source distribution contains unwanted build inputs: {forbidden}")
     missing = required.difference(names)
     if missing:
         raise RuntimeError(f"source distribution is missing files: {sorted(missing)}")

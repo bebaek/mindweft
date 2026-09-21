@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App";
+import { bootstrapLocalConnection } from "./auth/localConnection";
 import { AuthProvider } from "./auth/AuthProvider";
 import "@radix-ui/colors/sage.css";
 import "@radix-ui/colors/sage-dark.css";
@@ -30,10 +31,19 @@ const queryClient = new QueryClient({
 const root = document.getElementById("root");
 if (!root) throw new Error("Application root was not found");
 
-createRoot(root).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider><App /></AuthProvider>
-    </QueryClientProvider>
-  </StrictMode>,
-);
+async function start() {
+  try {
+    await bootstrapLocalConnection();
+  } catch (error) {
+    root!.textContent = error instanceof Error ? error.message : "Unable to connect. Reload to retry.";
+    return;
+  }
+  createRoot(root!).render(
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider><App /></AuthProvider>
+      </QueryClientProvider>
+    </StrictMode>,
+  );
+}
+void start();

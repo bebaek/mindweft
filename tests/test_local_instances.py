@@ -155,6 +155,14 @@ def test_client_routes_by_instance_and_guards_requests(monkeypatch):
         "preview", "a" * 32, "http://127.0.0.1:8123", "http://127.0.0.1:8870", 123, "test"
     )
     monkeypatch.setattr(instances, "resolve_instance", Mock(return_value=record))
+    from mindweft_workspace import local_connection
+    from mindweft_workspace.local_credentials import LocalCredential
+
+    monkeypatch.setattr(
+        local_connection,
+        "instance_credential",
+        lambda record: LocalCredential(record.launch_id, "x" * 43),
+    )
     monkeypatch.setattr(application, "build_client", Mock())
     dispatch = Mock(return_value=0)
     monkeypatch.setattr(application, "dispatch_command", dispatch)
@@ -214,3 +222,26 @@ def test_api_without_instance_does_not_advertise_identity(monkeypatch):
     monkeypatch.delenv("MINDWEFT_LOCAL_LAUNCH_ID", raising=False)
     with TestClient(create_app()) as client:
         assert client.get("/local-instance").status_code == 404
+
+
+def test_shared_oauth_does_not_hold_lifetime_lock(tmp_path):
+    oauth = {"MINDWEFT_OAUTH_STORE_PATH": str(tmp_path / "oauth.json")}
+    # Even an older instance's OAuth lifetime lock must not block deliberate sharing.
+    with instances.lock_storage(oauth):
+        with instances.lock_storage(oauth, shared_oauth=True) as descriptors:
+            assert descriptors == ()
+        with pytest.raises(RuntimeError, match="OAUTH_STORE_PATH"):
+            with instances.lock_storage(oauth):
+                pass
+    assert not (tmp_path / "oauth.json").exists()
+
+
+def test_shared_oauth_keeps_conversation_locks(tmp_path):
+    env = {
+        "MINDWEFT_OAUTH_STORE_PATH": str(tmp_path / "oauth.json"),
+        "MINDWEFT_THREAD_DB_PATH": str(tmp_path / "threads.db"),
+    }
+    with instances.lock_storage(env, shared_oauth=True):
+        with pytest.raises(RuntimeError, match="THREAD_DB_PATH"):
+            with instances.lock_storage(env, shared_oauth=True):
+                pass

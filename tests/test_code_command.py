@@ -25,6 +25,12 @@ def clean_environment(monkeypatch, tmp_path):
         if key.startswith(("MINDWEFT_", "MINIGENT_")):
             monkeypatch.delenv(key)
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        code,
+        "browser_url",
+        lambda record, credential: record.api_url + "/console/#local_ticket=test-ticket",
+    )
 
     @contextmanager
     def fake_ports(api, gateway):
@@ -136,7 +142,7 @@ def test_launch_uses_absolute_root_and_opens_only_after_readiness(
 
     monkeypatch.setattr(code, "run_workspace_processes", run)
     assert code.run_code_command(args(path, "--demo")) == 0
-    assert events == ["ready", "http://127.0.0.1:8000/console/"]
+    assert events == ["ready", "http://127.0.0.1:8000/console/#local_ticket=test-ticket"]
 
 
 def test_no_open(clean_environment, monkeypatch):
@@ -194,7 +200,7 @@ def test_provider_prerequisites_and_demo():
 def test_browser_failure_is_nonfatal(monkeypatch, capsys):
     monkeypatch.setattr(code.webbrowser, "open", Mock(side_effect=OSError))
     code.open_console("http://127.0.0.1:8000/console/")
-    assert "manually" in capsys.readouterr().err
+    assert "instances open" in capsys.readouterr().err
 
 
 def test_ready_requires_api_console_profile_and_exact_tools(monkeypatch, tmp_path):
@@ -380,7 +386,7 @@ def test_no_paths_defaults_to_cwd(clean_environment, tmp_path, monkeypatch):
     assert run.call_args.kwargs["workspace"] == tmp_path
 
 
-def test_named_instance_isolates_inherited_storage(
+def test_named_instance_isolates_conversations_but_reuses_configured_oauth(
     clean_environment, tmp_path, monkeypatch, capsys
 ):
     monkeypatch.setenv("MINDWEFT_THREAD_DB_PATH", str(tmp_path / "daily.db"))
@@ -390,14 +396,20 @@ def test_named_instance_isolates_inherited_storage(
     monkeypatch.setattr(code, "run_workspace_processes", run)
     assert code.run_code_command(args("--demo", "--instance", "preview")) == 0
     env = run.call_args.kwargs["env"]
-    root = tmp_path / "home" / ".local" / "state" / "mindweft" / "instances" / "preview"
+    root = tmp_path / "mindweft" / "instances" / "preview"
     assert env["MINIGENT_THREAD_DB_PATH"] == str(root / "threads.db")
     assert env["MINIGENT_ATTACHMENT_DB_PATH"] == str(root / "attachments.db")
-    assert env["MINIGENT_OAUTH_STORE_PATH"] == str(root / "oauth.json")
+    assert env["MINIGENT_OAUTH_STORE_PATH"] == str(tmp_path / "oauth.json")
+    assert env["MINDWEFT_OAUTH_STORE_PATH"] == str(tmp_path / "oauth.json")
+    assert not (root / "oauth.json").exists()
     assert env["MINDWEFT_LOCAL_INSTANCE_NAME"] == "preview"
     assert run.call_args.kwargs["inherited_fds"]
     assert not (tmp_path / "daily.db").exists()
-    assert "overrides configured THREAD_DB_PATH" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert "overrides configured THREAD_DB_PATH" in captured.err
+    assert "overrides configured OAUTH_STORE_PATH" not in captured.err
+    assert "reusing configured store" in captured.out
+    assert "without cross-process refresh coordination" in captured.err
 
 
 def test_default_refuses_automatic_fallback_to_shared_legacy_state(
@@ -491,3 +503,32 @@ def test_config_source_visible_before_provider_failure(
 def test_config_loader_remains_quiet_by_default(tmp_path, capsys):
     code.load_code_environment({"HOME": str(tmp_path)})
     assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("prefix", ["MINDWEFT", "MINIGENT"])
+def test_named_instance_preserves_oauth_alias_and_encryption_settings(
+    clean_environment, tmp_path, monkeypatch, capsys, prefix
+):
+    path = tmp_path / "shared-oauth.db"
+    monkeypatch.setenv(f"{prefix}_OAUTH_STORE_PATH", str(path))
+    monkeypatch.setenv(f"{prefix}_OAUTH_ENCRYPTION_KEY", "synthetic-test-key")
+    run = Mock(return_value=0)
+    monkeypatch.setattr(code, "run_workspace_processes", run)
+    assert code.run_code_command(args("--demo", "--instance", "preview")) == 0
+    env = run.call_args.kwargs["env"]
+    assert env["MINIGENT_OAUTH_STORE_PATH"] == str(path)
+    assert env["MINIGENT_OAUTH_ENCRYPTION_KEY"] == "synthetic-test-key"
+    assert not path.exists()  # No migration, credential read, or creation by the launcher.
+    captured = capsys.readouterr()
+    assert "without cross-process refresh coordination" not in captured.err
+    assert "synthetic-test-key" not in captured.out + captured.err
+
+
+def test_unconfigured_oauth_remains_instance_local(clean_environment, tmp_path, monkeypatch):
+    run = Mock(return_value=0)
+    monkeypatch.setattr(code, "run_workspace_processes", run)
+    assert code.run_code_command(args("--demo", "--instance", "preview")) == 0
+    env = run.call_args.kwargs["env"]
+    assert env["MINIGENT_OAUTH_STORE_PATH"] == str(
+        tmp_path / "mindweft" / "instances" / "preview" / "oauth.json"
+    )

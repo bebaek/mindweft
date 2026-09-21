@@ -60,6 +60,10 @@ def create_gateway_app(settings: GatewaySettings) -> FastAPI:
 
     app = FastAPI(title="Mindweft Stdio MCP Gateway", version="0.1.0", lifespan=lifespan)
 
+    from app.local_auth import install_local_auth
+
+    install_local_auth(app, gateway=True)
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}

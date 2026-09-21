@@ -112,6 +112,9 @@ async def require_principal(
     x_minigent_tenant_id: str | None = Header(default=None),
     x_minigent_admin: str | None = Header(default=None),
 ) -> Principal:
+    local_principal = getattr(request.state, "local_principal", None)
+    if local_principal is not None:
+        return local_principal
     settings = validate_auth_settings()
 
     if authorization is None and has_session_cookie(request):

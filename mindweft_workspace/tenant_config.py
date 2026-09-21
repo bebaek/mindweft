@@ -14,6 +14,7 @@ DEFAULT_BRIDGE_ALLOWED_TOOLS = (
 )
 DEFAULT_BRIDGE_DENY_GLOBS = (
     "**/.env*",
+    "**/.credentials/**",
     "**/.git/**",
     "**/.venv/**",
     "**/.pytest_cache/**",
@@ -159,6 +160,7 @@ def default_tenant_config(
             "path_policy": {
                 "deny_globs": [
                     "**/.env*",
+                    "**/.credentials/**",
                     "**/.git/**",
                     "**/.venv/**",
                     "**/.pytest_cache/**",
@@ -190,6 +192,7 @@ def default_tenant_config(
                 "path_policy": {
                     "deny_globs": [
                         "**/.env*",
+                        "**/.credentials/**",
                         "**/.git/**",
                         "**/.venv/**",
                         "**/.pytest_cache/**",

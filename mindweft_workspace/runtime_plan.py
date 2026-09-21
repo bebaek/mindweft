@@ -53,6 +53,16 @@ def prepare_workspace_runtime(
         settings=settings,
         **({"bundled_readonly": True} if bundled_readonly else {}),
     )
+    if bundled_readonly and env.get("MINDWEFT_LOCAL_GATEWAY_CREDENTIAL_DIR"):
+        from mindweft_workspace.local_credentials import read_credential
+
+        credential = read_credential(
+            Path(env["MINDWEFT_LOCAL_GATEWAY_CREDENTIAL_DIR"]),
+            launch_id=env["MINDWEFT_LOCAL_LAUNCH_ID"],
+        )
+        for spec in mcp_servers.tenant_specs:
+            spec.headers["Authorization"] = f"Bearer {credential.token}"
+            spec.headers["X-Mindweft-Launch-Id"] = credential.launch_id
     workspace_scope = active_workspace_scope.name if active_workspace_scope else None
     apply_tenant_runtime_environment(
         env,
