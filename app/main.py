@@ -1492,6 +1492,9 @@ def create_app(
     if WEB_CLIENT_DIR.exists():
         app.mount("/web", StaticFiles(directory=WEB_CLIENT_DIR, html=True), name="web")
 
+    from app.local_auth import install_local_auth
+
+    install_local_auth(app)
     local_instance = None
     if os.environ.get("MINDWEFT_LOCAL_INSTANCE_NAME") and os.environ.get(
         "MINDWEFT_LOCAL_LAUNCH_ID"
@@ -1500,6 +1503,11 @@ def create_app(
             "name": os.environ["MINDWEFT_LOCAL_INSTANCE_NAME"],
             "launch_id": os.environ["MINDWEFT_LOCAL_LAUNCH_ID"],
             "version": os.environ.get("MINDWEFT_LOCAL_INSTANCE_VERSION", "unknown"),
+            **(
+                {"auth_mode": "local-credential"}
+                if os.environ.get("MINDWEFT_LOCAL_API_CREDENTIAL_DIR")
+                else {}
+            ),
         }
 
     @app.get("/local-instance")

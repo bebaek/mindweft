@@ -23,6 +23,8 @@ from mindweft_config.unified_config import (
 from mindweft_workspace.cli import parse_args
 from mindweft_workspace.environment import apply_coding_workspace_state_defaults
 from mindweft_workspace.instances import InstanceLease, lock_storage, package_version, reserve_ports
+from mindweft_workspace.local_connection import browser_url, credential_directory
+from mindweft_workspace.local_credentials import issue_credential
 from mindweft_workspace.orchestration import run_workspace_processes
 from mindweft_workspace.readiness import wait_for_code_ready
 from mindweft_workspace.runtime_plan import prepare_workspace_runtime
@@ -179,7 +181,10 @@ def open_console(url: str) -> None:
     except Exception:
         opened = False
     if not opened:
-        print(f"Could not open a browser. Open {url} manually.", file=sys.stderr)
+        print(
+            "Could not open a browser. Retry with mindweft instances open NAME; authentication tickets are never printed.",
+            file=sys.stderr,
+        )
 
 
 @contextmanager
@@ -217,7 +222,7 @@ def run_code_command(args: argparse.Namespace) -> int:
             raise RuntimeError(
                 "mindweft code currently supports trusted-local development authentication only; use mindweft-coding-workspace for configured token/session/JWT authentication."
             )
-        env["MINDWEFT_AUTH_MODE"] = "dev-headers"
+        env["MINDWEFT_AUTH_MODE"] = "local-credential"
         if args.port is not None and args.port == args.gateway_port:
             raise RuntimeError("--port and --gateway-port must be different.")
         with (
@@ -240,6 +245,18 @@ def run_code_instance(args, env, workspaces, instance, api_socket, gateway_socke
             "Default port 8000 is occupied. Use --instance preview for isolated state; an older running launcher may still use the default databases."
         )
     gateway_port = gateway_socket.getsockname()[1]
+    shared_oauth = bool(preferred_mindweft_env("OAUTH_STORE_PATH", env))
+    if shared_oauth:
+        print("Provider OAuth: reusing configured store (no credentials copied).", flush=True)
+        if not (
+            preferred_mindweft_env("OAUTH_ENCRYPTION_KEYS", env)
+            or preferred_mindweft_env("OAUTH_ENCRYPTION_KEY", env)
+        ):
+            print(
+                "Provider OAuth uses a shared JSON store without cross-process refresh coordination; "
+                "avoid simultaneous provider runs in multiple instances. Encrypted SQLite stores coordinate refreshes.",
+                file=sys.stderr,
+            )
     if instance.name != "default":
         for suffix, filename in (
             ("THREAD_DB_PATH", "threads.db"),
@@ -252,6 +269,8 @@ def run_code_instance(args, env, workspaces, instance, api_socket, gateway_socke
                 else "oauth.json",
             ),
         ):
+            if suffix == "OAUTH_STORE_PATH" and shared_oauth:
+                continue
             if preferred_mindweft_env(suffix, env):
                 print(
                     f"Instance storage overrides configured {suffix} (no data copied).",
@@ -262,6 +281,12 @@ def run_code_instance(args, env, workspaces, instance, api_socket, gateway_socke
     env["MINDWEFT_LOCAL_INSTANCE_NAME"] = instance.name
     env["MINDWEFT_LOCAL_LAUNCH_ID"] = instance.launch_id
     env["MINDWEFT_LOCAL_INSTANCE_VERSION"] = package_version()
+    credentials = {}
+    for role, port in (("API", api_port), ("GATEWAY", gateway_port)):
+        directory = credential_directory(instance.root, instance.name, role.lower())
+        credentials[role] = issue_credential(directory, launch_id=instance.launch_id)
+        env[f"MINDWEFT_LOCAL_{role}_CREDENTIAL_DIR"] = str(directory)
+        env[f"MINDWEFT_LOCAL_{role}_ORIGIN"] = f"http://127.0.0.1:{port}"
     apply_coding_workspace_state_defaults(env)
     runner_args = parse_args(
         [
@@ -288,7 +313,7 @@ def run_code_instance(args, env, workspaces, instance, api_socket, gateway_socke
     for workspace in workspaces:
         print(f"  {workspace}", flush=True)
     print("Access: inspect (read-only)", flush=True)
-    print("Trusted-local development mode; do not expose these ports to a network.", flush=True)
+    print("Credential-protected local mode; do not expose these ports to a network.", flush=True)
     if args.demo:
         print("Demo provider: mock (no real AI responses).", flush=True)
     else:
@@ -303,16 +328,20 @@ def run_code_instance(args, env, workspaces, instance, api_socket, gateway_socke
             api_port=api_port,
             specs=plan.mcp_servers.tenant_specs,
             expected_identity={"name": instance.name, "launch_id": instance.launch_id},
+            auth_headers={
+                "Authorization": f"Bearer {credentials['API'].token}",
+                "X-Mindweft-Launch-Id": instance.launch_id,
+            },
         )
-        instance.publish(api_port, gateway_port)
+        record = instance.publish(api_port, gateway_port)
         print(f"Ready: {url}\nPress Ctrl+C to stop.", flush=True)
         if not args.no_open:
-            open_console(url)
+            open_console(browser_url(record, credentials["API"]))
 
     # Avoid importing workspace-local Python modules or picking up project npm config.
     with (
         tempfile.TemporaryDirectory(prefix="mindweft-code-") as process_dir,
-        lock_storage(env) as storage_fds,
+        lock_storage(env, shared_oauth=shared_oauth) as storage_fds,
     ):
         return run_workspace_processes(
             env=env,

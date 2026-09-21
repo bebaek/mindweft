@@ -78,9 +78,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     _apply_cli_env_file(args)
     if args.instance:
         from mindweft_workspace.instances import resolve_instance
+        from mindweft_workspace.local_connection import instance_credential
 
         try:
             record = resolve_instance(args.instance)
+            args.api_token = instance_credential(record).token
         except (RuntimeError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 2

@@ -1012,6 +1012,24 @@ class MindweftAPIClient:
             raise RuntimeError("Mindweft run stream ended without an assistant message")
         return reply, metadata
 
+    def _open_request(self, request):
+        if "X-Mindweft-Launch-Id" not in self._config.extra_headers:
+            return urllib.request.urlopen(request)
+        from mindweft_workspace.local_connection import validate_local_url
+
+        parsed = urllib.parse.urlsplit(request.full_url)
+        validate_local_url(f"{parsed.scheme}://{parsed.netloc}")
+        if f"{parsed.scheme}://{parsed.netloc}" != self._config.base_url.rstrip("/"):
+            raise RuntimeError("Refusing to send local credential to a different origin")
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open(
+            request
+        )
+
     def request_ndjson_events(
         self,
         method: str,
@@ -1024,7 +1042,7 @@ class MindweftAPIClient:
         }
         request = urllib.request.Request(url, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(request) as response:
+            with self._open_request(request) as response:
                 for raw_line in response:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line:
@@ -1068,7 +1086,7 @@ class MindweftAPIClient:
 
         request = urllib.request.Request(url, method=method, data=data, headers=headers)
         try:
-            with urllib.request.urlopen(request) as response:
+            with self._open_request(request) as response:
                 raw_body = response.read().decode("utf-8")
                 if not raw_body:
                     return None

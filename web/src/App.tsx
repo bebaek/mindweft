@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { localInstance } from "./auth/localConnection";
 import { useAuth } from "./auth/auth-context";
 import { ConnectionDialog } from "./components/ConnectionDialog";
 import { OverviewPage } from "./pages/OverviewPage";
@@ -24,12 +25,19 @@ const pages: Record<Page, { label: string; description: string }> = {
 };
 
 export function App() {
+  const local = localInstance();
+  const [disconnected, setDisconnected] = useState(false);
   const [page, setPage] = useState<Page>("workspace");
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const { api, authentication, setAuthentication, session, logout } = useAuth();
   const queryClient = useQueryClient();
+  useEffect(() => {
+    const disconnect = () => { setDisconnected(true); void queryClient.cancelQueries(); queryClient.clear(); };
+    window.addEventListener("mindweft-local-disconnected", disconnect);
+    return () => window.removeEventListener("mindweft-local-disconnected", disconnect);
+  }, [queryClient]);
   const setupToken = passwordSetupToken();
   const tenantContext = useQuery({
     queryKey: ["tenant-context", authentication],
@@ -58,6 +66,9 @@ export function App() {
     }
   }, [theme]);
 
+  if (local && (disconnected || (!session.loading && !session.authenticated))) {
+    return <main className="login-page"><section><h1>Reconnect to {local.name}</h1><p>Open a fresh authenticated session from your terminal:</p><code>mindweft instances open {local.name}</code><p>{session.error}</p></section></main>;
+  }
   if (setupToken) return <PasswordSetupPage token={setupToken} />;
   if (authentication.mode === "session" && session.loading) {
     return <main className="login-page"><p className="session-loading">Checking secure session…</p></main>;
@@ -71,7 +82,7 @@ export function App() {
     setMobileNavOpen(false);
   }
 
-  const brand = <div className="brand"><span className="brand-mark">M</span><div><strong>Mindweft</strong><small>Agent operations</small></div></div>;
+  const brand = <div className="brand"><span className="brand-mark">M</span><div><strong>Mindweft</strong><small>{local ? `${local.name} · ${local.version}` : "Agent operations"}</small></div></div>;
   const navigation = (
     <nav aria-label="Primary navigation">
       {visiblePages.map((key) => (

@@ -33,13 +33,10 @@ Before the first public package release:
    uv run pytest
    ```
 
-5. Build the console, then build and validate both distribution formats:
+5. With Node.js/npm available, build and validate both distribution formats. `uv build`
+   builds the source archive, then builds its wheel with automatic console compilation:
 
    ```bash
-   npm ci --prefix web
-   npm run build --prefix web
-   mkdir -p app/static/console
-   cp -R web/dist/. app/static/console/
    rm -rf dist
    uv build --out-dir dist
    python scripts/verify_distribution_artifacts.py dist --version <version>
@@ -119,3 +116,18 @@ must never be rebuilt between these stages.
 - Keep legacy import and command smoke tests until their removal is covered by an announced
   deprecation policy.
 - Do not publish a release while package-index ownership is unresolved.
+
+## Automatic console compilation
+
+Source wheel builds run the setuptools `build_py` console hook. Install Node.js/npm before
+`uv build`; both checkout-to-wheel and sdist-to-wheel builds run `npm ci --include=dev` followed
+by `npm run build`. The hook builds from allowlisted frontend inputs in an isolated directory
+and writes assets into the wheel build, not `app/static/console` in the checkout. It never
+falls back to old staged bundles. No Node/npm is needed to install a published wheel.
+
+`MANIFEST.in` includes frontend TypeScript/CSS, test sources used by TypeScript compilation,
+lockfile, and build configuration in sdists. It excludes staged console assets, frontend
+build output, node_modules, dotenv files, and project npm configuration. When adding a new
+frontend asset type or build input, update both `MANIFEST.in` and `_build_console.py`.
+Validate a wheel rebuilt from the sdist as well as a direct checkout wheel. Editable installs
+remain a developer workflow: use `scripts/dev.py build` to refresh source-tree assets.

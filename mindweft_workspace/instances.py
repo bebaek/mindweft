@@ -136,7 +136,13 @@ class InstanceLease:
         self.fd = -1
 
     def __enter__(self) -> InstanceLease:
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        missing = []
+        parent = self.root
+        while not parent.exists():
+            missing.append(parent)
+            parent = parent.parent
+        for parent in reversed(missing):
+            parent.mkdir(exist_ok=True, mode=0o700)
         self.fd = os.open(
             self.root / f"{self.name}.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
         )
@@ -225,12 +231,20 @@ def reserve_ports(
 
 
 @contextmanager
-def lock_storage(env: Mapping[str, str]) -> Iterator[tuple[int, ...]]:
-    """Prevent new launchers from concurrently opening explicitly shared store paths."""
+def lock_storage(
+    env: Mapping[str, str], *, shared_oauth: bool = False
+) -> Iterator[tuple[int, ...]]:
+    """Lock instance-owned stores; explicitly shared provider OAuth is exempt.
+
+    OAuth refresh coordination belongs to the credential-store implementation,
+    not a process-lifetime instance lock. JSON stores do not yet coordinate refresh.
+    """
     descriptors: list[int] = []
     paths: set[Path] = set()
     try:
         for suffix in ("THREAD_DB_PATH", "ATTACHMENT_DB_PATH", "OAUTH_STORE_PATH"):
+            if suffix == "OAUTH_STORE_PATH" and shared_oauth:
+                continue
             value = env.get(f"MINDWEFT_{suffix}", env.get(f"MINIGENT_{suffix}"))
             if not value:
                 continue

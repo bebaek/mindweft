@@ -5,3 +5,17 @@ include scripts/smoke_test_installed_distribution.py
 include scripts/verify_distribution_artifacts.py
 include scripts/smoke_test_code_workspace.py
 include scripts/smoke_test_local_instances.py
+include setup.py
+include _build_console.py
+include web/package.json web/package-lock.json web/index.html
+include web/tsconfig.json web/tsconfig.app.json web/tsconfig.node.json
+include web/vite.config.ts web/playwright.config.ts web/eslint.config.js
+recursive-include web/src *.ts *.tsx *.css
+recursive-include web/e2e *.ts
+prune web/node_modules
+prune web/dist
+prune web/test-results
+prune web/playwright-report
+prune app/static/console
+recursive-exclude web .env* .npmrc *.tsbuildinfo
+include scripts/dev.py
