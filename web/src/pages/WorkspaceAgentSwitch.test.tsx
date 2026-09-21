@@ -62,6 +62,14 @@ function expectNoRun() {
 }
 
 describe("/agent", () => {
+  it("reports the current agent without switching or sending a message", async () => {
+    const input = await setup();
+    command(input, "/agent current");
+    await screen.findByText("Current agent: shared:general.");
+    expect(input).toHaveValue("");
+    expect(api.forkThread).not.toHaveBeenCalled();
+    expectNoRun();
+  });
   it("confirms an agent-aware fork without sending the command or running", async () => {
     const input = await setup();
     command(input, "/agent coding");

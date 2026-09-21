@@ -10,6 +10,13 @@ package version is `0.1.0`.
 
 ### Added
 
+- Real default `coding` agent for the local launcher, `/agent` discovery/current selection,
+  persistent personal customization, and a console shortcut to create a personal coding agent.
+- Workspace trust with `--trust-workspace` and `--read-only`; trusted roots get bundled file
+  writes/edits and shell execution, while read-only launches omit those tools regardless of agent.
+- Installed-wheel smoke coverage for file edits, running tests through shell, environment
+  filtering, and explicit coding-agent selection.
+
 - Credential-protected local API and MCP gateway, per-launch owner-only bearer files, CLI
   discovery, and single-use browser handoff with launch-ID and origin-scoped session checks.
 - Automatic console compilation for source wheel builds, matching frontend inputs in sdists,

@@ -159,6 +159,17 @@ export function UserResourceEditors() {
       </ul>
       <form className="resource-skill-form resource-agent-form" onSubmit={submitAgent}>
         <h3>New agent</h3>
+        {executionOptions.data?.agents.items.filter((agent) => agent.name === "coding" && agent.source !== "user").map((agent) => (
+          <button key={agent.id ?? agent.name} type="button" onClick={() => {
+            const qualify = (ref: string) => ref.includes(":") ? ref : `shared:${ref}`;
+            setAgentName("My coding");
+            setAgentSkills((agent.skills ?? (agent.skill_name ? [agent.skill_name] : [])).map(qualify).join(", "));
+            setAgentProfile(agent.capability_profile ? qualify(agent.capability_profile) : "");
+            setAgentLlmProfile(agent.llm_profile ?? "");
+            setAgentFormError(null);
+          }}>Customize coding</button>
+        ))}
+
         <label>Agent name<input value={agentName} onChange={(event) => setAgentName(event.target.value)} placeholder="Release assistant" /></label>
         <label>Skill references<input value={agentSkills} onChange={(event) => setAgentSkills(event.target.value)} placeholder="user:reviewer, shared:coding-workspace" /><small>Comma-separated qualified references.</small></label>
         <label>Capability profile reference<input value={agentProfile} onChange={(event) => setAgentProfile(event.target.value)} placeholder="user:personal-tools or shared:workspace" /></label>

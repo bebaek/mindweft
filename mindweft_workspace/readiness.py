@@ -33,6 +33,7 @@ def wait_for_code_ready(
     api_port: int,
     specs: list[CodingMCPServerSpec],
     timeout: float = 60,
+    expected_profile: str = "inspect",
     expected_identity: dict[str, str] | None = None,
     auth_headers: dict[str, str] | None = None,
 ) -> None:
@@ -70,7 +71,7 @@ def wait_for_code_ready(
                 )
                 response.raise_for_status()
                 profiles = response.json()["capability_profiles"]
-                if profiles["default"] not in {"inspect", "shared:inspect"}:
+                if profiles["default"] not in {expected_profile, f"shared:{expected_profile}"}:
                     raise ValueError("inspect profile missing")
                 for spec in specs:
                     pending = f"{spec.name} tool discovery"

@@ -19,3 +19,4 @@ prune web/playwright-report
 prune app/static/console
 recursive-exclude web .env* .npmrc *.tsbuildinfo
 include scripts/dev.py
+include scripts/smoke_test_default_coding_agent.py

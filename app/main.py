@@ -1503,6 +1503,9 @@ def create_app(
             "name": os.environ["MINDWEFT_LOCAL_INSTANCE_NAME"],
             "launch_id": os.environ["MINDWEFT_LOCAL_LAUNCH_ID"],
             "version": os.environ.get("MINDWEFT_LOCAL_INSTANCE_VERSION", "unknown"),
+            "workspace_access": "coding"
+            if os.environ.get("MINDWEFT_LOCAL_CODING_TRUSTED") == "1"
+            else "read-only",
             **(
                 {"auth_mode": "local-credential"}
                 if os.environ.get("MINDWEFT_LOCAL_API_CREDENTIAL_DIR")

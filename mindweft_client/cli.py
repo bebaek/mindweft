@@ -1962,10 +1962,30 @@ def _write_current_agent(
     output_stream: ChatOutputStream,
 ) -> None:
     active = client.active_agent_preset
+    default_agent = None
+    thread_agent = None
+    if not active and not config.agent_name and client.thread_id:
+        try:
+            thread = client.get_thread_lineage(client.thread_id).get("thread")
+            if isinstance(thread, dict) and isinstance(thread.get("agent_ref"), str):
+                thread_agent = thread["agent_ref"]
+        except (AttributeError, RuntimeError):
+            pass
+    if not active and not config.agent_name and not config.skill_name and not client.thread_id:
+        try:
+            agents = client.execution_options().get("agents")
+            if isinstance(agents, dict) and isinstance(agents.get("default"), str):
+                default_agent = agents["default"]
+        except (AttributeError, RuntimeError):
+            pass
     if active:
         output_stream.write(f"[idle] current agent: {active}\n")
     elif config.agent_name:
         output_stream.write(f"[idle] current agent: {config.agent_name}\n")
+    elif thread_agent:
+        output_stream.write(f"[idle] current agent: {thread_agent} (thread)\n")
+    elif default_agent:
+        output_stream.write(f"[idle] current agent: {default_agent} (server default)\n")
     elif config.skill_name:
         output_stream.write(f"[idle] current agent: default skill={config.skill_name}\n")
     else:

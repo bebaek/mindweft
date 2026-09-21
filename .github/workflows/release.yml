@@ -89,6 +89,8 @@ jobs:
               "$GITHUB_WORKSPACE/scripts/smoke_test_code_workspace.py"
             "$smoke_dir/venv/bin/python" \
               "$GITHUB_WORKSPACE/scripts/smoke_test_local_instances.py"
+            "$smoke_dir/venv/bin/python" \
+              "$GITHUB_WORKSPACE/scripts/smoke_test_default_coding_agent.py"
           )
       - name: Upload validated distributions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

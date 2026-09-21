@@ -536,6 +536,11 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     if (agentSwitchBusy || agentSwitch) return;
     const agentCommand = /^\/agent(?:\s+([\s\S]*))?$/.exec(content);
     if (agentCommand) {
+      if (agentCommand[1]?.trim() === "current") {
+        setBranchNotice(`Current agent: ${effectiveAgent || "no explicit agent"}.`);
+        setDraft("");
+        return;
+      }
       openAgentSwitch(agentCommand[1]?.trim() ?? "", true);
       return;
     }

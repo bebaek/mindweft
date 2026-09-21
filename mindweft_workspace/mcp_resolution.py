@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import NamedTuple
 
@@ -69,6 +70,27 @@ def resolve_workspace_mcp_servers(
             shell_bridge_port=settings.shell_bridge_port,
             shell_bridge_url=settings.shell_bridge_url,
             **({"bundled_readonly": True} if bundled_readonly else {}),
+        )
+    if bundled_readonly and env.get("MINDWEFT_LOCAL_CODING_TRUSTED") == "1":
+        for spec in process_specs:
+            spec.profiles = ["coding"]
+            if spec.name == settings.bridge_name:
+                spec.command = [*(spec.command or []), "--writable"]
+                spec.allowed_tools = [*(spec.allowed_tools or []), "write_file", "edit_file"]
+        process_specs.append(
+            CodingMCPServerSpec(
+                name=settings.shell_bridge_name,
+                url=settings.shell_bridge_url,
+                command=[
+                    sys.executable,
+                    "-m",
+                    "mindweft_workspace.servers.shell",
+                    "--no-login-shell",
+                    *[arg for root in workspace_roots for arg in ("--workspace", str(root))],
+                ],
+                profiles=["coding"],
+                allowed_tools=["run_command"],
+            )
         )
     tenant_specs = (
         mcp_server_specs_for_gateway(process_specs, settings.gateway_url_prefix)

@@ -54,6 +54,7 @@ class ShellMCPServer:
         workspace: Path | None = None,
         workspaces: Sequence[Path] | None = None,
         shell: str = "/bin/sh",
+        login_shell: bool = True,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
         env_allowlist: Sequence[str] = DEFAULT_ENV_ALLOWLIST,
@@ -65,6 +66,7 @@ class ShellMCPServer:
         self.workspaces = tuple(path.expanduser().resolve() for path in raw_workspaces)
         self.workspace = self.workspaces[0]
         self.shell = shell
+        self.login_shell = login_shell
         self.timeout_seconds = timeout_seconds
         self.max_output_chars = max_output_chars
         self.env_allowlist = tuple(env_allowlist)
@@ -95,7 +97,7 @@ class ShellMCPServer:
         env = {key: os.environ[key] for key in self.env_allowlist if key in os.environ}
         started_at = time.perf_counter()
         process = subprocess.Popen(
-            [self.shell, "-lc", command],
+            [self.shell, "-lc" if self.login_shell else "-c", command],
             cwd=str(cwd),
             env=env,
             stdin=subprocess.DEVNULL,
@@ -247,6 +249,9 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Workspace root commands may run under. Repeat to allow multiple roots.",
     )
+    parser.add_argument(
+        "--no-login-shell", action="store_true", help="Do not source shell login profiles."
+    )
     parser.add_argument("--shell", default="/bin/sh", help="Shell executable.")
     parser.add_argument(
         "--timeout",
@@ -280,6 +285,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     server = ShellMCPServer(
         workspaces=[Path(workspace) for workspace in args.workspace],
         shell=args.shell,
+        login_shell=not args.no_login_shell,
         timeout_seconds=args.timeout,
         max_output_chars=args.max_output_chars,
         env_allowlist=args.env if args.env is not None else DEFAULT_ENV_ALLOWLIST,

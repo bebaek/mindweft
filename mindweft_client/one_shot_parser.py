@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     code_parser = subparsers.add_parser(
-        "code", help="Start a trusted-local, read-only coding workspace."
+        "code", help="Start a coding agent with workspace trust or read-only access."
     )
     code_parser.add_argument(
         "--instance",
@@ -69,6 +69,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     code_parser.add_argument(
         "paths", nargs="*", default=[], help="Workspace directories (default: cwd)."
+    )
+    access = code_parser.add_mutually_exclusive_group()
+    access.add_argument(
+        "--read-only", action="store_true", help="Inspect only; never start edit or shell tools."
+    )
+    access.add_argument(
+        "--trust-workspace",
+        action="store_true",
+        help="Trust and remember these roots for editing and shell execution as your OS user.",
     )
     code_parser.add_argument("--no-open", action="store_true", help="Do not open the browser.")
     code_parser.add_argument(

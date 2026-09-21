@@ -1,10 +1,12 @@
 # Coding workspace setup
 
 Mindweft can run as a local coding assistant by combining tenant capability profiles with
-workspace-scoped MCP servers. The default stack is deliberately read-only; expand it only for
-trusted local workspaces.
+workspace-scoped MCP servers. The default `coding` agent offers file editing and shell execution
+after an explicit workspace trust decision. Use `--read-only` for inspection without execution.
 
-## Simple read-only launcher
+<a id="simple-read-only-launcher"></a>
+
+## Simple coding launcher
 
 `mindweft code` is the small, trusted-local entry point for an already-configured user:
 
@@ -12,7 +14,8 @@ trusted local workspaces.
 mindweft code                         # current directory
 mindweft code /absolute/path/to/repo
 mindweft code /path/to/repo1 /path/to/repo2
-mindweft code . --no-open             # headless / SSH
+mindweft code . --trust-workspace --no-open # explicitly trust for headless use
+mindweft code . --read-only           # no edits or shell, even for trusted roots
 mindweft code . --port 8080 --gateway-port 8768
 mindweft code . --demo                # explicit mock provider, no real AI responses
 ```
@@ -31,11 +34,42 @@ not build the frontend.
 
 The command resolves and deduplicates the explicitly supplied directories (or cwd when omitted).
 Every directory must be accessible; one invalid root aborts startup before any child starts.
-All approved roots are printed and passed to both the built-in filesystem inspection
-and targeted text servers behind the shared gateway. The launcher generates only an `inspect` profile.
-Writes, shell, external MCP servers, peer backends, admin execution overlays, and inherited
-workspace scopes are not enabled. Existing path deny-glob defaults remain in force. This is
-not an OS sandbox or a guarantee that every possible secret filename is excluded.
+All selected roots are printed and passed to the bundled filesystem/text tools. On first use,
+the launcher asks `trust / inspect / cancel`. Trust enables file writes/edits and shell commands
+as the current OS user; commands may access files and the network outside the workspace. This
+is not a sandbox. `--trust-workspace` explicitly grants and remembers trust for every selected
+canonical root; noninteractive launches without existing trust must supply that flag or
+`--read-only`. Trust lives in user-owned state under `workspace-trust/<path-hash>.json`, not the
+repository. Remove that record to revoke future automatic trust; stop existing instances too.
+Trusting one root does not trust an additional root, even when both belong to the same instance.
+
+`--read-only` physically omits mutation tools and the shell service. Agent selection cannot
+restore them. Filesystem writes are bounded to 1 MiB, require existing parents, and reject
+escaping paths, denied paths, symlinks, and hardlinks. `edit_file` replaces one exact matching
+block and supports diff previews. Shell calls use the existing timeout, process-group cleanup,
+and bounded returned output; only the shell server's allowlisted environment is forwarded and
+the launcher uses a non-login shell. **Shell commands are not constrained by filesystem deny
+globs.** Trust authorizes command execution; instructions to ask before commits, pushes,
+installations, or destructive changes are agent behavior, not per-command approval enforcement.
+External MCP configuration, peer backends, and inherited workspace scopes remain disabled.
+
+### Default agent and personal customization
+
+The launcher registers a real shared `coding` agent, using the `coding-workspace` skill,
+the configured default model, and a stable `coding` capability profile that narrows to
+inspection tools in a read-only launch.
+It is selected by default through the same execution catalog as other agents. `/agent`,
+`/agent coding`, and `/agent current` work in the CLI and console; switching a nonempty
+conversation uses the existing branch-with-history behavior.
+
+In **Personal setup**, choose **Customize coding** to seed a personal copy, adjust its name,
+skill/profile references and model, then **Add agent**. Create personal skills to extend its
+instructions. Select the copy via `/agent` and use **Save as default** for future conversations.
+The original built-in stays unchanged. Personal setup is stored in `personal-setup.db` inside
+the instance state directory and survives restarts. This enables personal resources, not platform
+admin privileges or arbitrary personal MCP servers. Personal profiles/agents remain subject to
+the tools actually provided by the launch. Personal copies referencing `shared:coding` remain valid after a read-only restart, but the
+profile then provides inspection tools only; they cannot grant themselves shell access.
 
 ### Credential-backed local authentication
 
