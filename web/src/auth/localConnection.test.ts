@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-const metadata = { name: "preview", launch_id: "a".repeat(32), version: "test", auth_mode: "local-credential" };
+const metadata = { name: "preview", launch_id: "a".repeat(32), version: "test", auth_mode: "static-tokens", session_handoff: true };
 
 beforeEach(() => {
   vi.resetModules();

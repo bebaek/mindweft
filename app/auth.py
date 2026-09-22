@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -55,6 +57,7 @@ class AuthSettings:
     jwt_user_claim: str
     jwt_admin_claim: str
     jwt_jwks_cache_seconds: int
+    static_token_hashes: dict[str, Principal] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> AuthSettings:
@@ -68,6 +71,9 @@ class AuthSettings:
         return cls(
             mode=mode,
             static_tokens=static_tokens,
+            static_token_hashes=_load_token_principals(lookup, name="MINIGENT_AUTH_TOKEN_HASHES")
+            if mode == AUTH_MODE_STATIC_TOKENS
+            else {},
             jwt_issuer=_optional_env(JWT_ISSUER_ENV, lookup),
             jwt_audience=_optional_env(JWT_AUDIENCE_ENV, lookup),
             jwt_algorithms=jwt_algorithms or ["RS256"],
@@ -82,7 +88,9 @@ class AuthSettings:
 
 def validate_auth_settings() -> AuthSettings:
     settings = _load_auth_settings()
-    if settings.mode == AUTH_MODE_STATIC_TOKENS and not settings.static_tokens:
+    if settings.mode == AUTH_MODE_STATIC_TOKENS and not (
+        settings.static_tokens or settings.static_token_hashes
+    ):
         raise RuntimeError(
             f"{_canonical_env_name(AUTH_TOKENS_ENV)} is required when {_canonical_env_name(AUTH_MODE_ENV)}=static-tokens"
         )
@@ -112,9 +120,6 @@ async def require_principal(
     x_minigent_tenant_id: str | None = Header(default=None),
     x_minigent_admin: str | None = Header(default=None),
 ) -> Principal:
-    local_principal = getattr(request.state, "local_principal", None)
-    if local_principal is not None:
-        return local_principal
     settings = validate_auth_settings()
 
     if authorization is None and has_session_cookie(request):
@@ -131,7 +136,9 @@ async def require_principal(
             admin=x_mindweft_admin if x_mindweft_admin is not None else x_minigent_admin,
         )
     if settings.mode == AUTH_MODE_STATIC_TOKENS:
-        return _principal_from_static_token(authorization, settings)
+        return require_registered_principal(
+            request, _principal_from_static_token(authorization, settings)
+        )
     if settings.mode == AUTH_MODE_JWT:
         return await _principal_from_jwt(authorization, settings)
 
@@ -170,9 +177,11 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return token.strip()
 
 
-def _load_token_principals(env: Mapping[str, str] | None = None) -> dict[str, Principal]:
+def _load_token_principals(
+    env: Mapping[str, str] | None = None, *, name: str = AUTH_TOKENS_ENV
+) -> dict[str, Principal]:
     lookup = os.environ if env is None else env
-    raw = lookup.get(AUTH_TOKENS_ENV, "").strip()
+    raw = lookup.get(name, "").strip()
     if not raw:
         return {}
 
@@ -189,6 +198,10 @@ def _load_token_principals(env: Mapping[str, str] | None = None) -> dict[str, Pr
         if not isinstance(token, str) or not token:
             raise RuntimeError(
                 f"{_canonical_env_name(AUTH_TOKENS_ENV)} keys must be non-empty bearer tokens"
+            )
+        if name == "MINIGENT_AUTH_TOKEN_HASHES" and re.fullmatch(r"[0-9a-f]{64}", token) is None:
+            raise RuntimeError(
+                "MINDWEFT_AUTH_TOKEN_HASHES keys must be lowercase SHA-256 hex digests"
             )
         if not isinstance(value, dict):
             raise RuntimeError(
@@ -254,13 +267,15 @@ def _principal_from_headers(
 
 
 def _principal_from_static_token(authorization: str | None, settings: AuthSettings) -> Principal:
-    if not settings.static_tokens:
+    if not (settings.static_tokens or settings.static_token_hashes):
         raise RuntimeError(
             f"{_canonical_env_name(AUTH_TOKENS_ENV)} is required when {_canonical_env_name(AUTH_MODE_ENV)}=static-tokens"
         )
 
     bearer_token = _extract_bearer_token(authorization)
-    principal = settings.static_tokens.get(bearer_token)
+    principal = settings.static_tokens.get(bearer_token) or settings.static_token_hashes.get(
+        hashlib.sha256(bearer_token.encode()).hexdigest()
+    )
     if principal is None:
         raise HTTPException(status_code=401, detail="Invalid bearer token")
     return principal
@@ -388,3 +403,26 @@ async def _fetch_jwks_document(jwks_url: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError("JWKS response must be a JSON object")
     return payload
+
+
+def require_registered_principal(request: Request, principal: Principal) -> Principal:
+    """Apply configured registry lifecycle checks to credential authentication."""
+    from app.tenants import tenant_registry_settings_from_env
+
+    policy = tenant_registry_settings_from_env()
+    if principal.is_admin or not (
+        policy.tenant_registry_required or policy.tenant_user_registry_required
+    ):
+        return principal
+    store = getattr(request.app.state, "admin_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="Administration store is not configured")
+    tenant = store.get_tenant(principal.tenant_id)
+    membership = store.get_tenant_user_by_user_id(principal.tenant_id, principal.user_id)
+    if policy.tenant_registry_required and (tenant is None or tenant.status.value != "active"):
+        raise HTTPException(status_code=403, detail="Tenant is not active")
+    if policy.tenant_user_registry_required and (
+        membership is None or membership.status.value != "active"
+    ):
+        raise HTTPException(status_code=403, detail="User membership is not active")
+    return principal

@@ -79,18 +79,31 @@ credentials, rotated on every launch. Credentials live under the selected state 
 The credential directories/files must be owned by the current OS user with modes `0700`/`0600`.
 Unsafe ownership, writable ancestors, symlinks, hardlinks, and malformed files are rejected instead
 of repaired. Workspace tools deny `.credentials` paths. Development-header authentication is not
-a fallback in this launcher mode; ordinary deployed session/bearer authentication is unchanged.
+a fallback in this launcher mode. The API uses ordinary static-token and signed-session
+authentication, not a launcher-specific principal bypass.
 
 CLI `--instance NAME` reads the protected API credential and uses only the matching literal
-loopback origin, without proxies or redirects. The server maps it to the local `demo-tenant` /
-`demo-user` principal (not admin), regardless of caller-supplied principal headers. Server verifiers
-retain token digests. Replacing a credential file alone does not revoke a running verifier;
+loopback origin, without proxies or redirects. The launcher provisions a real active tenant and
+owner membership in `personal-setup.db`. It retains the historical `demo-tenant` / `demo-user`
+IDs so existing conversations and personal settings remain accessible; these are ordinary registry
+records, not a demo authentication mode. The user is a tenant owner, **not a platform admin**.
+Provisioning never resets an existing role or reactivates a suspended/deleted record. Tenant and
+user registry checks are required for the coding instance.
+
+The standard bearer authenticator maps a SHA-256 credential digest to that principal, ignoring
+caller-supplied identity headers. The gateway retains its independent service credential.
+Replacing a credential file alone does not revoke the running configuration;
 restart the instance to rotate credentials and invalidate its browser sessions.
 
-The launcher opens `/console/` with a 30-second single-use ticket in the URL fragment. The console
+The launcher uses the opt-in shared `POST /auth/session/ticket` and
+`POST /auth/session/exchange` endpoints, then the normal `/auth/session` status/logout routes.
+It opens `/console/` with a 30-second single-use ticket in the URL fragment. The console
 removes that fragment before other requests and exchanges the ticket for an HttpOnly, host-only,
 SameSite=Strict cookie plus an origin-scoped session key. Sessions expire after eight hours or
-on restart. Literal loopback HTTP does not use a Secure cookie. Because cookies are shared across
+on restart; logout revokes the handoff session even if its cookie is replayed. Credential removal
+and tenant/user suspension invalidate access and unredeemed tickets. Handoff state is bounded
+and process-local: it is intended for single-process servers, not multi-worker deployments.
+Literal loopback HTTP does not use a Secure cookie. Because cookies are shared across
 ports, protected browser requests also require the session key and launch ID; the cookie alone
 is insufficient. The key is kept in tab session storage (memory only if storage is unavailable),
 scoped by instance name and launch ID. Cookies and session keys cannot mint new browser tickets.
@@ -100,7 +113,8 @@ Use `mindweft instances open NAME` to open another authenticated browser session
 not printed if opening the browser fails; retry from a desktop session. Expired sessions or
 restarted instances require reopening from the CLI. Anonymous direct visits show reconnect
 instructions, not a password form. The browser never receives the reusable local bearer token.
-No authentication downgrade is inferred from a 401.
+No authentication downgrade is inferred from a 401. Use a matching updated launcher and console
+after this authentication refactor; restart the target instance to provision its registry records.
 
 This protects the local service boundary from other unprivileged OS users under normal filesystem
 and browser-profile isolation, not root or malicious same-user processes. The CLI is a trusted
