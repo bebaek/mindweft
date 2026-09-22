@@ -1,6 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol, cast
+
+
+class _SpeechProbability(Protocol):
+    def item(self) -> float: ...
+
+
+class _StreamingModel(Protocol):
+    def __call__(self, samples: object, sample_rate: int) -> _SpeechProbability: ...
 
 
 class VoiceActivityDependencyError(RuntimeError):
@@ -20,7 +29,14 @@ class SileroVoiceActivityDetector:
                 "silero-vad and torch are required for VAD. Install with `uv sync --extra voice`."
             ) from exc
         self._torch = torch
-        self._model = load_silero_vad()
+        model = load_silero_vad()
+        # Silero also supports non-callable sequence models; this adapter needs
+        # the callable streaming interface returned by the default loader.
+        if not callable(model):
+            raise VoiceActivityDependencyError(
+                "Silero VAD must provide a callable streaming model."
+            )
+        self._model = cast(_StreamingModel, model)
 
     def reset(self) -> None:
         reset_states = getattr(self._model, "reset_states", None)
