@@ -56,6 +56,8 @@ class SessionAuthSettings:
     cookie_secure: bool
     allowed_origins: tuple[str, ...]
     login_rate_limit: RateLimitPolicy
+    cookie_name: str = SESSION_COOKIE_NAME
+    handoff_only: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -65,6 +67,8 @@ class SessionAuthSettings:
     def from_env(cls, env: Mapping[str, str] | None = None) -> SessionAuthSettings:
         lookup = normalize_mindweft_env(dict(os.environ if env is None else env))
         return cls(
+            cookie_name=lookup.get("MINIGENT_SESSION_COOKIE_NAME", SESSION_COOKIE_NAME),
+            handoff_only=_bool_env("MINIGENT_SESSION_HANDOFF_ONLY", lookup, default=False),
             credentials=_load_credentials(lookup),
             secret=_optional_env(SESSION_SECRET_ENV, lookup),
             ttl_seconds=_positive_int_env(SESSION_TTL_SECONDS_ENV, lookup, default=28_800),
@@ -120,10 +124,14 @@ def validate_session_auth_settings(
 
 
 def build_session_auth_router() -> APIRouter:
+    from app.session_handoff import build_handoff_router
+
     router = APIRouter(prefix="/auth", tags=["authentication"])
+    router.include_router(build_handoff_router())
 
     @router.get("/session", response_model=SessionStatusResponse)
     async def session_status(request: Request, response: Response) -> SessionStatusResponse:
+        response.headers["Cache-Control"] = "no-store"
         settings = validate_session_auth_settings()
         principal = principal_from_session_request(
             request, settings=settings, required=False, response=response
@@ -139,8 +147,10 @@ def build_session_auth_router() -> APIRouter:
         body: SessionLoginRequest, request: Request, response: Response
     ) -> SessionStatusResponse:
         settings = validate_session_auth_settings()
-        if not settings.enabled:
-            raise HTTPException(status_code=404, detail="Session authentication is not configured")
+        if not settings.enabled or settings.handoff_only:
+            raise HTTPException(
+                status_code=404, detail="Password session authentication is not configured"
+            )
         require_same_origin(request, settings)
         _enforce_login_rate_limit(request, body.username, settings)
         environment_username = body.username
@@ -188,8 +198,10 @@ def build_session_auth_router() -> APIRouter:
         body: PasswordSetupRequest, request: Request
     ) -> PasswordSetupStatusResponse:
         settings = validate_session_auth_settings()
-        if not settings.enabled:
-            raise HTTPException(status_code=404, detail="Session authentication is not configured")
+        if not settings.enabled or settings.handoff_only:
+            raise HTTPException(
+                status_code=404, detail="Password session authentication is not configured"
+            )
         require_same_origin(request, settings)
         setup = _valid_password_setup(request, body.token)
         if setup is None:
@@ -205,8 +217,10 @@ def build_session_auth_router() -> APIRouter:
         body: PasswordSetupCompleteRequest, request: Request, response: Response
     ) -> SessionStatusResponse:
         settings = validate_session_auth_settings()
-        if not settings.enabled:
-            raise HTTPException(status_code=404, detail="Session authentication is not configured")
+        if not settings.enabled or settings.handoff_only:
+            raise HTTPException(
+                status_code=404, detail="Password session authentication is not configured"
+            )
         require_same_origin(request, settings)
         setup = _valid_password_setup(request, body.token)
         if setup is None:
@@ -237,8 +251,17 @@ def build_session_auth_router() -> APIRouter:
         settings = validate_session_auth_settings()
         if settings.enabled:
             require_same_origin(request, settings)
+        from app.session_handoff import digest
+
+        state = getattr(request.app.state, "session_handoff", None)
+        if state is not None:
+            token = request.cookies.get(settings.cookie_name, "")
+            # Do not let a cookie alone revoke another port's browser session.
+            principal_from_session_request(request, settings=settings)
+            state.sessions.pop(digest(token), None)
+        response.headers["Cache-Control"] = "no-store"
         response.delete_cookie(
-            SESSION_COOKIE_NAME,
+            settings.cookie_name,
             httponly=True,
             secure=settings.cookie_secure,
             samesite="strict",
@@ -256,7 +279,10 @@ def build_session_auth_router() -> APIRouter:
 
 
 def has_session_cookie(request: Request) -> bool:
-    return SESSION_COOKIE_NAME in request.cookies or LEGACY_SESSION_COOKIE_NAME in request.cookies
+    name = SessionAuthSettings.from_env().cookie_name
+    return name in request.cookies or (
+        name == SESSION_COOKIE_NAME and LEGACY_SESSION_COOKIE_NAME in request.cookies
+    )
 
 
 def principal_from_session_request(
@@ -267,8 +293,8 @@ def principal_from_session_request(
     response: Response | None = None,
 ) -> Principal | None:
     settings = settings or validate_session_auth_settings()
-    token = request.cookies.get(SESSION_COOKIE_NAME)
-    if token is None:
+    token = request.cookies.get(settings.cookie_name)
+    if token is None and settings.cookie_name == SESSION_COOKIE_NAME:
         token = request.cookies.get(LEGACY_SESSION_COOKIE_NAME)
     if not token:
         if required:
@@ -298,14 +324,29 @@ def principal_from_session_request(
                 ]
             },
         )
+        if settings.handoff_only and payload.get("source") != "static-token":
+            raise ValueError("A proof-bound handoff session is required")
+        if payload.get("source") == "static-token":
+            from app.session_handoff import validate_handoff_session
+
+            if not validate_handoff_session(request, token):
+                raise ValueError("Invalid session proof")
         principal = _principal_from_session_payload(request, payload, settings)
         if principal is None:
             raise ValueError("Session credential is no longer active")
+    except HTTPException:
+        if required:
+            raise
+        return None
     except (InvalidTokenError, KeyError, TypeError, ValueError):
         if required:
             raise HTTPException(status_code=401, detail="Invalid or expired session") from None
         return None
-    if response is not None and isinstance(payload.get("exp"), (int, float)):
+    if (
+        response is not None
+        and payload.get("source") != "static-token"
+        and isinstance(payload.get("exp"), (int, float))
+    ):
         # Keep an actively used browser session alive without making idle sessions
         # permanent. The browser periodically calls GET /auth/session, so this
         # renews the JWT and its cookie before the existing token expires.
@@ -407,6 +448,7 @@ def _encode_session(
     now = int(time.time())
     return jwt.encode(
         {
+            "jti": secrets.token_urlsafe(32),
             "iss": SESSION_TOKEN_ISSUER,
             "sub": principal.user_id,
             "tenant_id": principal.tenant_id,
@@ -424,7 +466,7 @@ def _encode_session(
 
 def _set_session_cookie(response: Response, token: str, settings: SessionAuthSettings) -> None:
     response.set_cookie(
-        SESSION_COOKIE_NAME,
+        settings.cookie_name,
         token,
         max_age=settings.ttl_seconds,
         httponly=True,
@@ -449,6 +491,14 @@ def _principal_from_session_payload(
         if credential is None or version != 0:
             return None
         principal = credential.principal
+    elif source == "static-token":
+        from app.session_handoff import credential_principal
+
+        if version != 0:
+            return None
+        principal = credential_principal(request, username)
+        if principal is None:
+            return None
     elif source == "local":
         store = getattr(request.app.state, "admin_store", None)
         identity = store.get_local_identity(username) if store is not None else None

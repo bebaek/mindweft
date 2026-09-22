@@ -54,7 +54,9 @@ do not coordinate concurrent refreshes, so avoid simultaneous provider runs agai
 store. Local access credentials remain separate. Omit `--instance` to retain the existing default state. See
 [multiple instances](docs/coding-workspace.md#multiple-local-instances) for storage overrides,
 legacy-instance safety, and client discovery. The launcher opens an authenticated console using
-a one-time browser ticket; no development headers or username/password setup is needed. Use
+a one-time browser ticket using the standard bearer/session authentication system. It automatically
+provisions a default tenant and tenant-owner user; no development headers or username/password
+setup is needed. Existing identity IDs and conversation ownership are preserved. Use
 `mindweft instances open preview` to open a fresh authenticated browser session.
 
 **Building from source:** Node/npm is still needed to build the browser console, not to run the

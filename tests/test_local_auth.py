@@ -19,12 +19,20 @@ ORIGIN = "http://127.0.0.1:8123"
 def local(monkeypatch, tmp_path):
     credential = issue_credential(tmp_path.resolve() / "api", launch_id=LAUNCH)
     monkeypatch.setenv("MINDWEFT_LOCAL_API_CREDENTIAL_DIR", str(tmp_path.resolve() / "api"))
+    monkeypatch.setenv("MINDWEFT_LOCAL_INSTANCE_NAME", "test")
     monkeypatch.setenv("MINDWEFT_LOCAL_API_ORIGIN", ORIGIN)
     monkeypatch.setenv("MINDWEFT_LOCAL_LAUNCH_ID", LAUNCH)
-    # Deliberately leave insecure underlying auth configured: middleware must
-    # block fallback even if someone misconfigures the environment.
-    monkeypatch.setenv("MINDWEFT_AUTH_MODE", "dev-headers")
+    from app.admin_store import SQLiteTenantConfigStore
+    from app.session_auth import build_session_auth_router
+    from mindweft_workspace.provisioning import provision_coding_user
+
+    env = {"MINDWEFT_ADMIN_DB_PATH": str(tmp_path / "admin.db")}
+    provision_coding_user(env, token=credential.token, origin=ORIGIN, binding=LAUNCH)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
     app = FastAPI()
+    app.state.admin_store = SQLiteTenantConfigStore(env["MINDWEFT_ADMIN_DB_PATH"])
+    app.include_router(build_session_auth_router())
 
     @app.api_route("/protected", methods=["GET", "POST"])
     def protected(principal: Annotated[Principal, Depends(require_principal)]):
@@ -39,18 +47,18 @@ def local(monkeypatch, tmp_path):
 
 
 def exchange(client, bearer):
-    ticket = client.post("/local-auth/ticket", headers=bearer).json()["ticket"]
+    ticket = client.post("/auth/session/ticket", headers=bearer).json()["ticket"]
     headers = {
         "Origin": ORIGIN,
         "X-Mindweft-Launch-Id": LAUNCH,
         "X-Mindweft-Browser-Ticket": ticket,
     }
-    result = client.post("/local-auth/exchange", headers=headers)
+    result = client.post("/auth/session/exchange", headers=headers)
     assert result.status_code == 200
     assert "HttpOnly" in result.headers["set-cookie"]
     assert "SameSite=strict" in result.headers["set-cookie"]
     assert "Domain=" not in result.headers["set-cookie"]
-    assert client.post("/local-auth/exchange", headers=headers).status_code == 401
+    assert client.post("/auth/session/exchange", headers=headers).status_code == 401
     return {
         "Origin": ORIGIN,
         "X-Mindweft-Launch-Id": LAUNCH,
@@ -71,7 +79,7 @@ def test_bearer_and_principal_cannot_be_overridden(local):
         "user_id": "demo-user",
         "is_admin": False,
     }
-    assert client.post("/local-auth/ticket").status_code == 401
+    assert client.post("/auth/session/ticket").status_code == 401
 
 
 def test_session_exchange_reload_logout_and_csrf(local):
@@ -92,8 +100,8 @@ def test_session_exchange_reload_logout_and_csrf(local):
         client.get("/protected", headers={**headers, "Origin": "http://127.0.0.1:9999"}).status_code
         == 403
     )
-    assert client.post("/local-auth/ticket", headers=headers).status_code == 401
-    assert client.delete("/auth/session", headers=headers).status_code == 200
+    assert client.post("/auth/session/ticket", headers=headers).status_code == 401
+    assert client.delete("/auth/session", headers=headers).status_code == 204
     assert not client.get("/auth/session", headers=headers).json()["authenticated"]
     assert client.get("/protected", headers=headers).status_code == 401
 
@@ -113,16 +121,16 @@ def test_dns_rebinding_cross_origin_and_stale_launch(local):
 
 
 def test_ticket_expiry_and_session_expiry(local, monkeypatch):
-    import app.local_auth as auth
+    import app.session_handoff as auth
 
     client, bearer = local
     headers = exchange(client, bearer)
-    ticket = client.post("/local-auth/ticket", headers=bearer).json()["ticket"]
+    ticket = client.post("/auth/session/ticket", headers=bearer).json()["ticket"]
     now = auth.time.monotonic()
-    monkeypatch.setattr(auth.time, "monotonic", lambda: now + auth.SESSION_SECONDS + 1)
+    monkeypatch.setattr(auth.time, "monotonic", lambda: now + 28801)
     assert (
         client.post(
-            "/local-auth/exchange",
+            "/auth/session/exchange",
             headers={
                 "Origin": ORIGIN,
                 "X-Mindweft-Launch-Id": LAUNCH,
@@ -144,7 +152,7 @@ def test_gateway_requires_separate_bearer(monkeypatch, tmp_path):
 
     with TestClient(create_gateway_app(GatewaySettings(bridges=[])), base_url=ORIGIN) as client:
         assert client.post("/mcp/fs-workspace", json={}).status_code == 401
-        assert client.post("/local-auth/ticket").status_code == 401
+        assert client.post("/auth/session/ticket").status_code == 401
         assert (
             client.post(
                 "/mcp/fs-workspace", headers={"Authorization": "Bearer " + "x" * 43}, json={}
@@ -172,4 +180,191 @@ def test_ordinary_deployment_unchanged(monkeypatch):
     install_local_auth(app)
     with TestClient(app) as client:
         assert client.get("/public").json() == {"ok": True}
-        assert client.get("/local-auth/ticket").status_code == 404
+        assert client.get("/auth/session/ticket").status_code == 404
+
+
+@pytest.mark.parametrize("target", ["tenant", "membership"])
+def test_suspension_blocks_bearer_session_and_pending_ticket(local, target):
+    from app.models import TenantStatus, TenantUserStatus
+
+    client, bearer = local
+    headers = exchange(client, bearer)
+    ticket = client.post("/auth/session/ticket", headers=bearer).json()["ticket"]
+    store = client.app.state.admin_store
+    if target == "tenant":
+        store.update_tenant("demo-tenant", status=TenantStatus.SUSPENDED)
+    else:
+        store.update_tenant_user("demo-tenant", "coding-owner", status=TenantUserStatus.SUSPENDED)
+    assert client.get("/protected", headers=bearer).status_code == 403
+    assert client.get("/protected", headers=headers).status_code == 403
+    assert not client.get("/auth/session", headers=headers).json()["authenticated"]
+    assert client.post("/auth/session/ticket", headers=bearer).status_code == 403
+    assert (
+        client.post(
+            "/auth/session/exchange", headers={**headers, "X-Mindweft-Browser-Ticket": ticket}
+        ).status_code
+        == 403
+    )
+
+
+def test_rotation_revokes_bearer_session_and_pending_ticket(local, monkeypatch):
+    import json
+
+    from app.session_handoff import digest
+
+    client, bearer = local
+    headers = exchange(client, bearer)
+    ticket = client.post("/auth/session/ticket", headers=bearer).json()["ticket"]
+    monkeypatch.setenv(
+        "MINDWEFT_AUTH_TOKEN_HASHES",
+        json.dumps(
+            {digest("replacement-credential"): {"tenant_id": "demo-tenant", "user_id": "demo-user"}}
+        ),
+    )
+    assert client.get("/protected", headers=bearer).status_code == 401
+    assert client.get("/protected", headers=headers).status_code == 401
+    assert not client.get("/auth/session", headers=headers).json()["authenticated"]
+    assert (
+        client.post(
+            "/auth/session/exchange", headers={**headers, "X-Mindweft-Browser-Ticket": ticket}
+        ).status_code
+        == 401
+    )
+
+
+def test_logout_revokes_replayed_cookie_and_keeps_other_session(local):
+    client, bearer = local
+    headers = exchange(client, bearer)
+    cookie = dict(client.cookies)
+    other_headers = exchange(client, bearer)
+    other_cookie = dict(client.cookies)
+    assert cookie != other_cookie
+    client.cookies.clear()
+    client.cookies.update(cookie)
+    assert client.delete("/auth/session", headers=headers).status_code == 204
+    client.cookies.update(cookie)
+    assert client.get("/protected", headers=headers).status_code == 401
+    client.cookies.clear()
+    client.cookies.update(other_cookie)
+    assert client.get("/protected", headers=other_headers).status_code == 200
+
+
+def test_normal_auth_works_without_local_middleware_and_ignores_injected_principal(local):
+    from app.session_auth import build_session_auth_router
+
+    local_client, bearer = local
+    app = FastAPI()
+    app.state.admin_store = local_client.app.state.admin_store
+    app.include_router(build_session_auth_router())
+
+    @app.middleware("http")
+    async def obsolete_shortcut(request, call_next):
+        request.state.local_principal = Principal(tenant_id="evil", user_id="evil", is_admin=True)
+        return await call_next(request)
+
+    @app.get("/protected")
+    async def protected(principal: Annotated[Principal, Depends(require_principal)]):
+        return principal.model_dump()
+
+    with TestClient(app, base_url=ORIGIN) as client:
+        assert client.get("/protected").status_code == 401
+        assert client.get("/protected", headers=bearer).json()["user_id"] == "demo-user"
+        headers = exchange(client, bearer)
+        assert client.get("/protected", headers=headers).json()["is_admin"] is False
+        assert client.get("/auth/session", headers=headers).json()["authenticated"]
+        assert client.get("/protected").status_code == 401
+        assert client.delete("/auth/session", headers=headers).status_code == 204
+
+
+def test_provisioning_preserves_membership_and_suspension(local, monkeypatch):
+    from app.models import TenantUserRole, TenantUserStatus
+    from mindweft_workspace.provisioning import provision_coding_user
+
+    client, _ = local
+    store = client.app.state.admin_store
+    store.update_tenant_user(
+        "demo-tenant", "coding-owner", role=TenantUserRole.MEMBER, status=TenantUserStatus.SUSPENDED
+    )
+    env = {"MINDWEFT_ADMIN_DB_PATH": str(store.db_path)}
+    provision_coding_user(env, token="new-credential", origin=ORIGIN, binding="b" * 32)
+    membership = store.get_tenant_user_by_user_id("demo-tenant", "demo-user")
+    assert membership.role == TenantUserRole.MEMBER
+    assert membership.status == TenantUserStatus.SUSPENDED
+    assert env["MINDWEFT_AUTH_MODE"] == "static-tokens"
+    assert "new-credential" not in env["MINDWEFT_AUTH_TOKEN_HASHES"]
+
+
+def test_new_server_rejects_old_browser_session(local):
+    from app.session_auth import build_session_auth_router
+
+    client, bearer = local
+    headers = exchange(client, bearer)
+    cookie = dict(client.cookies)
+    app = FastAPI()
+    app.state.admin_store = client.app.state.admin_store
+    app.include_router(build_session_auth_router())
+    with TestClient(app, base_url=ORIGIN) as restarted:
+        restarted.cookies.update(cookie)
+        assert not restarted.get("/auth/session", headers=headers).json()["authenticated"]
+        exchange(restarted, bearer)
+        # The old proof cannot authorize a newly issued session.
+        assert not restarted.get("/auth/session", headers=headers).json()["authenticated"]
+
+
+def test_provisioned_identity_uses_normal_application_routes(local):
+    from app.llm import MockLLMAdapter
+    from app.main import create_app
+    from app.tools import build_local_tool_registry
+
+    local_client, bearer = local
+    app = create_app(
+        llm_adapter=MockLLMAdapter(),
+        tool_registry=build_local_tool_registry(),
+        admin_store=local_client.app.state.admin_store,
+    )
+    with TestClient(app, base_url=ORIGIN) as client:
+        assert client.get("/threads").status_code == 401
+        assert client.get("/execution-options", headers=bearer).status_code == 200
+        created = client.post("/threads", headers=bearer)
+        assert created.status_code == 200
+        headers = exchange(client, bearer)
+        assert client.get("/threads", headers=headers).status_code == 200
+        assert client.get("/auth/session", headers=headers).json()["principal"] == {
+            "tenant_id": "demo-tenant",
+            "user_id": "demo-user",
+            "is_admin": False,
+        }
+
+
+def test_password_sessions_cannot_bypass_cross_port_proof(local, monkeypatch):
+    import json
+
+    from app.models import Principal
+    from app.session_auth import SessionAuthSettings, _encode_session, hash_password
+
+    client, _ = local
+    principal = Principal(user_id="demo-user", tenant_id="demo-tenant")
+    monkeypatch.setenv(
+        "MINDWEFT_SESSION_CREDENTIALS",
+        json.dumps(
+            {
+                "user": {
+                    "password_hash": hash_password("test-password"),
+                    "principal": principal.model_dump(),
+                }
+            }
+        ),
+    )
+    response = client.post(
+        "/auth/session",
+        headers={"Origin": ORIGIN},
+        json={"username": "user", "password": "test-password"},
+    )
+    assert response.status_code == 404
+    settings = SessionAuthSettings.from_env()
+    token = _encode_session(
+        principal, settings, username="user", source="environment", credential_version=0
+    )
+    client.cookies.set(settings.cookie_name, token)
+    assert not client.get("/auth/session").json()["authenticated"]
+    assert client.get("/protected").status_code == 401

@@ -165,7 +165,7 @@ def test_no_open(clean_environment, monkeypatch):
         ("missing", "accessible directory"),
         ("file", "accessible directory"),
         ("provider", "Configure a real provider"),
-        ("auth", "development authentication only"),
+        ("auth", "provisions its own user credentials"),
         ("ports", "must be different"),
     ],
 )

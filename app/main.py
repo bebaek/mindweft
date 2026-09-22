@@ -1507,7 +1507,7 @@ def create_app(
             if os.environ.get("MINDWEFT_LOCAL_CODING_TRUSTED") == "1"
             else "read-only",
             **(
-                {"auth_mode": "local-credential"}
+                {"auth_mode": "static-tokens", "session_handoff": True}
                 if os.environ.get("MINDWEFT_LOCAL_API_CREDENTIAL_DIR")
                 else {}
             ),

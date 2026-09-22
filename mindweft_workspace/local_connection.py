@@ -40,7 +40,7 @@ def browser_url(record: InstanceRecord, credential: LocalCredential) -> str:
     try:
         with httpx.Client(trust_env=False, follow_redirects=False, timeout=5) as client:
             response = client.post(
-                record.api_url + "/local-auth/ticket",
+                record.api_url + "/auth/session/ticket",
                 headers={
                     "Authorization": f"Bearer {credential.token}",
                     "X-Mindweft-Launch-Id": record.launch_id,

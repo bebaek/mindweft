@@ -2702,3 +2702,36 @@ changes neither credential resolution nor catalog fallback behavior.
 This is the inspection/testing increment of connection management. Guided first-time connection,
 disconnect with dependency checks and credential retention, and explicit tenant-credential
 provenance/migration remain separate work; existing connect/remove controls are unchanged.
+
+
+### Optional bearer-to-session handoff
+
+`MINDWEFT_AUTH_TOKEN_HASHES` accepts a JSON object mapping lowercase SHA-256 hex digests
+of high-entropy bearer credentials to ordinary principal objects (`tenant_id`, `user_id`,
+`is_admin`). It supplements `MINDWEFT_AUTH_TOKENS` in `static-tokens` mode. Prefer generated
+256-bit credentials; a fast digest is not suitable for human passwords. Registry-required
+settings enforce active tenant/membership checks for these bearer credentials and derived sessions.
+Removing a digest revokes both the credential and its derived sessions on subsequent requests.
+Changing an on-disk launcher credential without updating server configuration does not revoke it.
+
+Browser handoff is disabled unless `MINDWEFT_SESSION_HANDOFF_ORIGIN` is set. It requires a
+configured session secret and `MINDWEFT_SESSION_HANDOFF_BINDING`. The origin must be HTTPS or
+literal `http://127.0.0.1:<port>`; requests must match its Host/Origin. The binding is sent as
+`X-Mindweft-Launch-Id`. `POST /auth/session/ticket` requires a static bearer credential and
+returns a 30-second single-use ticket. `POST /auth/session/exchange` requires the exact Origin,
+binding and `X-Mindweft-Browser-Ticket`; it creates a standard signed session cookie and returns
+a `session_key`. Subsequent cookie requests must supply that key in `X-Mindweft-Session-Key`
+and the binding header. Mutation requests additionally require the exact Origin. No endpoint
+accepts a caller-selected user identity.
+
+`MINDWEFT_SESSION_COOKIE_NAME` optionally isolates cookies by instance; its default remains
+`mindweft_session`. Handoff sessions use the standard `/auth/session` status and logout
+endpoints, have a fixed `MINDWEFT_SESSION_TTL_SECONDS` lifetime (eight hours by default),
+and do not auto-renew. Tickets and proof/session digests are held in bounded process-local
+memory (128 outstanding tickets and 128 sessions). Restart revokes all handoffs. This
+implementation is for **single-process** servers; do not enable it across multiple workers.
+`MINDWEFT_SESSION_HANDOFF_ONLY=true` disables password-session issuance (including password
+setup) and rejects non-handoff cookies. The launcher enables this to prevent ordinary password
+cookies from bypassing its cross-port proof requirement; other deployments default to false.
+Ordinary password sessions retain their existing renewal behavior. Existing legacy environment
+variable aliases work for these settings. The coding launcher provisions these settings automatically.

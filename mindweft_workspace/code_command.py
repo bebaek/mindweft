@@ -221,9 +221,8 @@ def run_code_command(args: argparse.Namespace) -> int:
             or env.get("MINIGENT_SESSION_CREDENTIALS")
         ):
             raise RuntimeError(
-                "mindweft code currently supports trusted-local development authentication only; use mindweft-coding-workspace for configured token/session/JWT authentication."
+                "mindweft code provisions its own user credentials; use mindweft-coding-workspace for configured token/session/JWT authentication."
             )
-        env["MINDWEFT_AUTH_MODE"] = "local-credential"
         trusted = choose_coding_access(args, workspaces, env)
         env["MINDWEFT_LOCAL_CODING_TRUSTED"] = "1" if trusted else "0"
         if args.port is not None and args.port == args.gateway_port:
@@ -308,6 +307,14 @@ def run_code_instance(args, env, workspaces, instance, api_socket, gateway_socke
         ]
     )
     env["MINDWEFT_ADMIN_DB_PATH"] = str(instance.state_dir / "personal-setup.db")
+    from mindweft_workspace.provisioning import provision_coding_user
+
+    provision_coding_user(
+        env,
+        token=credentials["API"].token,
+        origin=env["MINDWEFT_LOCAL_API_ORIGIN"],
+        binding=instance.launch_id,
+    )
     plan = prepare_workspace_runtime(runner_args, env, bundled_readonly=True)
     url = f"http://127.0.0.1:{api_port}/console/"
     print(f"Instance: {instance.name} (Mindweft {package_version()})", flush=True)
