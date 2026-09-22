@@ -10,16 +10,18 @@ function matchingAgents(agents: ExecutionAgentOptionItem[], query: string) {
 interface Props {
   agents: ExecutionAgentOptionItem[];
   current: string;
+  currentModel?: string;
   initialQuery: string;
   branching: boolean;
   busy: boolean;
   error: string | null;
-  onConfirm: (agent: ExecutionAgentOptionItem) => void;
+  onConfirm: (agent: ExecutionAgentOptionItem, keepModel?: boolean) => void;
   onClose: () => void;
 }
 
-export function AgentSwitchDialog({ agents, current, initialQuery, branching, busy, error, onConfirm, onClose }: Props) {
+export function AgentSwitchDialog({ agents, current, currentModel, initialQuery, branching, busy, error, onConfirm, onClose }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const [keepModel, setKeepModel] = useState(false);
   const [query, setQuery] = useState(initialQuery);
   const matches = matchingAgents(agents, query);
   const target = matches.length === 1 ? matches[0] : undefined;
@@ -46,10 +48,12 @@ export function AgentSwitchDialog({ agents, current, initialQuery, branching, bu
         {query && !target && <p role="status">{matches.length > 1 ? "Choose a scoped reference to disambiguate this name." : "Choose an available agent above, or enter its exact reference."}</p>}
         {target && <p>Continue with <strong>{target.display_name ?? target.name}</strong>?</p>}
         {branching ? <p>Conversation history will be copied to a new branch. The original thread will remain unchanged. The target agent's model and tool permissions will apply; continuing may send this history to a different provider.</p> : <p>Select an agent for your next message. No run will start automatically.</p>}
+        {target && <p>Agent model preference: {target.llm_profile || "inherit default"}</p>}
+        {currentModel && <label><input type="checkbox" checked={keepModel} disabled={busy} onChange={(event) => setKeepModel(event.target.checked)} />Keep current model profile ({currentModel}) as an explicit override</label>}
         {error && <p role="alert">{error}</p>}
         <div className="context-actions">
           <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
-          <button type="button" disabled={busy || !target} onClick={() => target && onConfirm(target)}>{busy ? "Switching…" : "Continue"}</button>
+          <button type="button" disabled={busy || !target} onClick={() => target && onConfirm(target, keepModel)}>{busy ? "Switching…" : "Continue"}</button>
         </div>
       </div>
     </dialog>

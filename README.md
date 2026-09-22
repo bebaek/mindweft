@@ -152,6 +152,15 @@ client presets are supported; `/new` explicitly starts fresh with the selected a
 failed history read or fork leaves the original selected, rather than silently starting over.
 The legacy browser client is unchanged.
 
+Agents can optionally choose a named **Model profile**. In **Personal setup → Skills and
+agents**, create an agent or **Edit** an existing one and select a configured profile, or
+choose **Inherit default**. Selection precedence is explicit conversation/CLI override →
+agent preference → tenant/deployment default. The console shows the selected profile and
+configured provider/model; existing conversations keep their saved profile when an agent is
+edited. When switching agents, the target preference applies unless you explicitly choose
+**Keep current model profile**. Missing profiles fail rather than silently using another model.
+See [agent model selection](docs/user-execution-extensibility.md#agent-model-selection).
+
 The dependency-free development client remains available during migration:
 
 ```text

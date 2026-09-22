@@ -67,6 +67,8 @@ export interface ExecutionOptionSection {
 }
 
 export interface ExecutionLlmOptionItem extends ExecutionOptionItem {
+  provider?: string | null;
+  model?: string | null;
   input_modalities?: string[] | null;
   audio_input_allowed?: boolean;
   audio_input_reason?: "disabled" | "backend_unsupported" | "profile_unsupported" | null;
@@ -1801,12 +1803,12 @@ export class MinigentApiClient {
     });
   }
 
-  forkThread(threadId: string, messageId: string, agentName?: string): Promise<ForkThreadResponse> {
+  forkThread(threadId: string, messageId: string, agentName?: string, llmProfile?: string): Promise<ForkThreadResponse> {
     return this.#request<ForkThreadResponse>(
       `/threads/${encodeURIComponent(threadId)}/fork`,
       {
         method: "POST",
-        body: JSON.stringify({ at_message_id: messageId, ...(agentName ? { agent_name: agentName } : {}) }),
+        body: JSON.stringify({ at_message_id: messageId, ...(agentName ? { agent_name: agentName } : {}), ...(llmProfile ? { llm_profile: llmProfile } : {}) }),
       },
     );
   }

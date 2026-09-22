@@ -471,3 +471,10 @@ describe("MinigentApiClient", () => {
     );
   });
 });
+
+
+it("sends an explicit model override when branching to another agent", async () => {
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ thread_id: "child", parent_thread_id: "source", fork_message_id: "message" }), { status: 201 }));
+  await new MinigentApiClient({ mode: "session" }).forkThread("source", "message", "user:reviewer", "fast");
+  expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ body: JSON.stringify({ at_message_id: "message", agent_name: "user:reviewer", llm_profile: "fast" }) }));
+});

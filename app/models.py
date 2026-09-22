@@ -362,6 +362,8 @@ class ExecutionOptionSection(BaseModel):
 
 
 class ExecutionLLMOptionItem(ExecutionOptionItem):
+    provider: str | None = None
+    model: str | None = None
     input_modalities: list[str] | None = None
     audio_input_allowed: bool = False
     audio_input_reason: Literal["disabled", "backend_unsupported", "profile_unsupported"] | None = (
