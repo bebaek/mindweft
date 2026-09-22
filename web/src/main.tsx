@@ -1,3 +1,5 @@
+import { OAuthReturnBanner } from "./components/OAuthReturnBanner";
+import { captureOAuthReturn } from "./auth/oauthReturn";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -33,6 +35,7 @@ if (!root) throw new Error("Application root was not found");
 
 async function start() {
   try {
+    captureOAuthReturn();
     await bootstrapLocalConnection();
   } catch (error) {
     root!.textContent = error instanceof Error ? error.message : "Unable to connect. Reload to retry.";
@@ -41,7 +44,7 @@ async function start() {
   createRoot(root!).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <AuthProvider><App /></AuthProvider>
+        <AuthProvider><OAuthReturnBanner /><App /></AuthProvider>
       </QueryClientProvider>
     </StrictMode>,
   );

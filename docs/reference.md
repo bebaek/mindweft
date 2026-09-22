@@ -2735,3 +2735,10 @@ setup) and rejects non-handoff cookies. The launcher enables this to prevent ord
 cookies from bypassing its cross-port proof requirement; other deployments default to false.
 Ordinary password sessions retain their existing renewal behavior. Existing legacy environment
 variable aliases work for these settings. The coding launcher provisions these settings automatically.
+
+### Named provider OAuth connections
+
+`MINDWEFT_OAUTH_CONNECTIONS` defines a JSON map of named provider configurations. Generic
+OAuth LLM profiles optionally select one with `oauth_connection_ref`; the default environment
+profile uses `MINDWEFT_LLM_OAUTH_CONNECTION_REF`. Named connections require encrypted SQLite
+OAuth storage and use independent tenant credentials. See [the full guide](oauth-connections.md).

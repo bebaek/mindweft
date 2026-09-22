@@ -1480,6 +1480,9 @@ def create_app(
         principal_execution_resolver=resolve_principal_execution,
         principal_tool_registry_provider=principal_tool_registry_provider,
     )
+    from app.oauth_connections import build_oauth_connections_router
+
+    app.include_router(build_oauth_connections_router())
     app.include_router(build_session_auth_router())
     app.include_router(build_admin_router())
     app.include_router(build_user_execution_router())

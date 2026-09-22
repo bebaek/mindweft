@@ -368,3 +368,23 @@ def test_password_sessions_cannot_bypass_cross_port_proof(local, monkeypatch):
     client.cookies.set(settings.cookie_name, token)
     assert not client.get("/auth/session").json()["authenticated"]
     assert client.get("/protected").status_code == 401
+
+
+def test_callback_is_transport_only_for_local_launcher(local):
+    # The same callback may be reached cross-site, but never exchanges a token.
+    from app.oauth_connections import build_oauth_connections_router
+
+    client, _ = local
+    client.app.include_router(build_oauth_connections_router())
+    response = client.get(
+        "/oauth/connections" + "/callback?code=test&state=test",
+        headers={"Sec-Fetch-Site": "cross-site"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert (
+        client.post(
+            "/oauth/connections" + "/work/login", headers={"Sec-Fetch-Site": "cross-site"}
+        ).status_code
+        == 403
+    )
