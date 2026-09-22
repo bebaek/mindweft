@@ -1,3 +1,4 @@
+import { OAuthConnectionsPanel } from "../components/OAuthConnectionsPanel";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
@@ -246,7 +247,7 @@ export function AdminPage({ tenantId: scopedTenantId }: { tenantId?: string }) {
               <UserDeprovisioningPanel key={`deprovisioning-${tenant.id}`} tenantId={tenant.id} />
               <ExternalGrantPanel key={`external-grants-${tenant.id}`} tenantId={tenant.id} readOnly={tenantScoped} />
               <ExecutionConfigPanel key={`execution-${tenant.id}`} tenantId={tenant.id} />
-              {tenantScoped && <OAuthImportPanel key={`oauth-${tenant.id}`} tenantId={tenant.id} />}
+              {tenantScoped && <><OAuthConnectionsPanel /><OAuthImportPanel key={`oauth-${tenant.id}`} tenantId={tenant.id} /></>}
               {!tenantScoped && <TenantOperationsPanel key={`operations-${tenant.id}`} tenantId={tenant.id} />}
 
               {!tenantScoped && <section className="lifecycle-panel">

@@ -936,3 +936,7 @@ chore: redact secrets from MCP URL logging
 ## License
 
 Mindweft is licensed under the [Apache License 2.0](LICENSE).
+
+Named LLM profiles can reference independent tenant OAuth accounts. See
+[named OAuth connections](docs/oauth-connections.md) for multiple accounts, encrypted storage,
+connection-specific sign-in/import, and legacy compatibility.

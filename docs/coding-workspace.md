@@ -889,3 +889,10 @@ Tenant catalog cards also support explicit discovery-only connection tests. Read
 status does not contact MCP servers; last-check timestamps describe historical observations rather
 than continuous health. These controls do not alter workspace scopes, path restrictions, or tool
 allowlists. See **Inspecting and testing tenant catalog connections** in [Reference](reference.md).
+
+## Multiple provider OAuth accounts
+
+The coding app uses the same [named OAuth connections](oauth-connections.md) as other
+deployments. Configure definitions in user-level TOML and encrypted OAuth storage, connect
+accounts in tenant settings, and bind model profiles to `shared:CONNECTION`. Existing unnamed
+OAuth setup remains supported. Callback ports must match the running instance.

@@ -90,6 +90,7 @@ class PendingOAuthFlow:
     verifier: str
     redirect_uri: str
     created_at: float
+    context: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -346,6 +347,49 @@ class SQLiteEncryptedOAuthStore:
             )
             connection.commit()
 
+    def advance_connection_epoch(self, key: str, *, disconnect: bool = False) -> int:
+        """Invalidate earlier logins; retain tombstones after disconnect."""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO oauth_connection_epochs VALUES (?, 1) "
+                "ON CONFLICT(credential_key) DO UPDATE SET epoch = epoch + 1",
+                (key,),
+            )
+            epoch = connection.execute(
+                "SELECT epoch FROM oauth_connection_epochs WHERE credential_key = ?", (key,)
+            ).fetchone()[0]
+            if disconnect:
+                connection.execute("DELETE FROM oauth_credentials WHERE provider = ?", (key,))
+            connection.commit()
+        return int(epoch)
+
+    def set_for_connection_epoch(self, key: str, epoch: int, credentials: OAuthCredentials) -> bool:
+        ciphertext = self._encrypt_json(
+            credentials.to_json(), aad=f"oauth-credentials|{key}".encode()
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT epoch FROM oauth_connection_epochs WHERE credential_key = ?", (key,)
+            ).fetchone()
+            if row is None or row[0] != epoch:
+                return False
+            connection.execute(
+                "INSERT INTO oauth_credentials(provider, credentials_cipher, key_version, version, updated_at) "
+                "VALUES (?, ?, ?, 1, ?) ON CONFLICT(provider) DO UPDATE SET "
+                "credentials_cipher=excluded.credentials_cipher, key_version=excluded.key_version, "
+                "version=oauth_credentials.version+1, updated_at=excluded.updated_at, "
+                "refresh_owner=NULL, refresh_lease_expires_at=NULL",
+                (key, ciphertext, self._active_version, time.time()),
+            )
+            # Consuming the epoch also prevents a second completion from winning.
+            connection.execute(
+                "UPDATE oauth_connection_epochs SET epoch=epoch+1 WHERE credential_key=?", (key,)
+            )
+            connection.commit()
+        return True
+
     def put(self, state: str, flow: PendingOAuthFlow) -> None:
         state_hash = hashlib.sha256(state.encode()).hexdigest()
         ciphertext = self._encrypt_json(
@@ -354,6 +398,7 @@ class SQLiteEncryptedOAuthStore:
                 "verifier": flow.verifier,
                 "redirect_uri": flow.redirect_uri,
                 "created_at": flow.created_at,
+                "context": flow.context,
             },
             aad=f"oauth-flow|{state_hash}".encode(),
         )
@@ -405,7 +450,7 @@ class SQLiteEncryptedOAuthStore:
             or not isinstance(created_at, int | float)
         ):
             raise RuntimeError("Stored OAuth flow is invalid")
-        return PendingOAuthFlow(verifier, redirect_uri, float(created_at))
+        return PendingOAuthFlow(verifier, redirect_uri, float(created_at), payload.get("context"))
 
     def prune(self) -> None:
         with self._connect() as connection:
@@ -492,6 +537,9 @@ class SQLiteEncryptedOAuthStore:
                   refresh_owner TEXT,
                   refresh_lease_expires_at REAL,
                   updated_at REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS oauth_connection_epochs (
+                  credential_key TEXT PRIMARY KEY, epoch INTEGER NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS oauth_flows (
                   state_hash TEXT PRIMARY KEY,
@@ -660,8 +708,8 @@ class GenericOAuthProvider:
             ),
         )
 
-    async def complete_login(self, *, code: str, flow: PendingOAuthFlow) -> OAuthCredentials:
-        credentials = await self._exchange_token(
+    async def exchange_login(self, *, code: str, flow: PendingOAuthFlow) -> OAuthCredentials:
+        return await self._exchange_token(
             {
                 "grant_type": "authorization_code",
                 "client_id": self._config.client_id,
@@ -670,6 +718,11 @@ class GenericOAuthProvider:
                 "redirect_uri": flow.redirect_uri,
             }
         )
+
+    async def complete_login(self, *, code: str, flow: PendingOAuthFlow) -> OAuthCredentials:
+        if flow.context is not None:
+            raise ValueError("Bound OAuth flows require connection-specific completion")
+        credentials = await self.exchange_login(code=code, flow=flow)
         self._store.set(self._credential_key, credentials)
         return credentials
 

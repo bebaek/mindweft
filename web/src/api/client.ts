@@ -922,6 +922,12 @@ export class ApiError extends Error {
   }
 }
 
+export interface OAuthConnectionStatus {
+  name: string; ref: string; provider_id: string; connected: boolean;
+  expired: boolean | null; expires_at: number | null; account_id: string | null;
+  verification: "stored-credentials-only";
+}
+
 export class MinigentApiClient {
   readonly #baseUrl: string;
   readonly #authentication: Authentication;
@@ -1801,6 +1807,22 @@ export class MinigentApiClient {
       body: JSON.stringify(archive),
       signal,
     });
+  }
+
+  listOAuthConnections(): Promise<{ items: OAuthConnectionStatus[] }> {
+    return this.#request("/oauth/connections");
+  }
+  loginOAuthConnection(name: string): Promise<{ authorization_url: string }> {
+    return this.#request(`/oauth/connections/${encodeURIComponent(name)}/login`, { method: "POST" });
+  }
+  completeOAuthConnection(state: string, code: string): Promise<OAuthConnectionStatus> {
+    return this.#request("/oauth/connections/complete", { method: "POST", body: JSON.stringify({ state, code }) });
+  }
+  disconnectOAuthConnection(name: string): Promise<void> {
+    return this.#request(`/oauth/connections/${encodeURIComponent(name)}`, { method: "DELETE" });
+  }
+  importOAuthConnection(name: string, credential: Record<string, unknown>): Promise<OAuthConnectionStatus> {
+    return this.#request(`/oauth/connections/${encodeURIComponent(name)}/import/pi`, { method: "POST", body: JSON.stringify(credential) });
   }
 
   forkThread(threadId: string, messageId: string, agentName?: string, llmProfile?: string): Promise<ForkThreadResponse> {

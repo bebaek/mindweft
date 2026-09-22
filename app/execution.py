@@ -80,6 +80,7 @@ SUPPORTED_INPUT_MODALITIES = frozenset({"text", "image", "audio", "video", "docu
 
 @dataclass(frozen=True)
 class TenantLLMConfig:
+    oauth_connection_ref: str | None = None
     provider: str = "mock"
     model: str | None = None
     base_url: str | None = None
@@ -380,9 +381,26 @@ class FixedTenantExecutionResolver(TenantExecutionResolver):
         )
 
     def resolve(self, tenant_id: str) -> TenantExecutionContext:
-        _ = tenant_id
         self._refresh_context_if_needed()
-        return self._context
+        context = self._context
+        named = {
+            name: profile
+            for name, profile in context.config.llm_profiles.items()
+            if profile.oauth_connection_ref
+        }
+        if named or context.config.llm.oauth_connection_ref:
+            return replace(
+                context,
+                config=replace(context.config, tenant_id=tenant_id),
+                llm_adapter=_build_llm_adapter(context.config.llm, tenant_id=tenant_id)
+                if context.config.llm.oauth_connection_ref
+                else context.llm_adapter,
+                llm_adapters={
+                    **context.llm_adapters,
+                    **_build_llm_adapters(named, tenant_id=tenant_id),
+                },
+            )
+        return context
 
     def describe(
         self,
@@ -745,6 +763,8 @@ def _llm_export_public_dict(
         exported["url" if provider == GENERIC_OAUTH_PROVIDER else "base_url"] = url
     if config.extra_headers:
         exported["extra_headers"] = dict(config.extra_headers)
+    if config.oauth_connection_ref:
+        exported["oauth_connection_ref"] = config.oauth_connection_ref
     if config.input_modalities is not None:
         exported["input_modalities"] = sorted(config.input_modalities)
     return exported
@@ -1032,7 +1052,9 @@ def build_execution_resolver_from_env(
         )
         registry, generation = _build_registry_for_config(config, mcp_manager=mcp_manager)
         return FixedTenantExecutionResolver(
-            llm_adapter=build_llm_adapter_from_env(env),
+            llm_adapter=_build_llm_adapter(settings.default_llm)
+            if settings.default_llm.oauth_connection_ref
+            else build_llm_adapter_from_env(env),
             tool_registry=registry,
             config=config,
             mcp_manager=mcp_manager,
@@ -1278,6 +1300,7 @@ def _tenant_llm_config_from_env(env: Mapping[str, str] | None = None) -> TenantL
     input_modalities = _input_modalities_from_env(lookup)
     if provider == GENERIC_OAUTH_PROVIDER:
         return TenantLLMConfig(
+            oauth_connection_ref=_optional_str(lookup.get("MINIGENT_LLM_OAUTH_CONNECTION_REF")),
             provider=provider,
             model=_optional_str(lookup.get("MINIGENT_LLM_MODEL")),
             base_url=_optional_str(lookup.get("MINIGENT_LLM_URL")),
@@ -1434,7 +1457,20 @@ def _parse_tenant_llm_config(tenant_id: str, payload: dict[str, Any]) -> TenantL
         prompt_cache_enabled = _bool_config(
             tenant_id, cache_value, "Anthropic prompt_cache_enabled"
         )
+    connection_ref = _optional_str(
+        payload.get("oauth_connection_ref") or payload.get("oauthConnectionRef")
+    )
+    if connection_ref:
+        from app.oauth_connections import connection_config
+
+        if provider != "generic-oauth":
+            raise RuntimeError("oauth_connection_ref requires generic-oauth")
+        try:
+            connection_config(connection_ref)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from None
     return TenantLLMConfig(
+        oauth_connection_ref=connection_ref,
         provider=provider,
         model=_optional_str(payload.get("model")),
         base_url=_optional_str(payload.get("base_url") or payload.get("baseUrl")),
@@ -1984,10 +2020,17 @@ def _build_llm_adapter(
             and (preferred_mindweft_env("CODING_OAUTH_GLOBAL_FALLBACK") or "").strip().lower()
             in {"1", "true", "yes", "on"}
         )
-        oauth_provider = GenericOAuthProvider(
-            credential_tenant_id=tenant_id,
-            allow_global_credential_fallback=allow_global_credential_fallback,
-        )
+        if config.oauth_connection_ref:
+            from app.oauth_connections import named_provider
+
+            oauth_provider = named_provider(
+                tenant_id or DEFAULT_TENANT_KEY, config.oauth_connection_ref
+            )
+        else:
+            oauth_provider = GenericOAuthProvider(
+                credential_tenant_id=tenant_id,
+                allow_global_credential_fallback=allow_global_credential_fallback,
+            )
         return GenericOAuthResponsesAdapter(
             url=config.base_url,
             model=config.model,

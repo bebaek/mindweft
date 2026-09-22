@@ -32,6 +32,7 @@ class AuthConfig:
 
 @dataclass(frozen=True)
 class OAuthConfig:
+    connections: object = None
     store_path: object = None
     provider_id: object = None
     client_id: object = None
@@ -45,6 +46,8 @@ class OAuthConfig:
 
 @dataclass(frozen=True)
 class LLMConfig:
+    oauth_connection_ref: object = None
+    oauthConnectionRef: object = None
     default: object = None
     providers: object = None
     provider: object = None
@@ -302,6 +305,8 @@ _STRING_KEYS = {
     "llm.url",
     "llm.base_url",
     "llm.account_id_header",
+    "llm.oauth_connection_ref",
+    "llm.oauthConnectionRef",
     "llm.api_key_env",
     "llm.api_key",
     "llm.anthropic_version",
@@ -406,6 +411,7 @@ _STRING_LIST_KEYS = {
 _DICT_KEYS = {
     "auth.tokens",
     "oauth.auth_params",
+    "oauth.connections",
     "llm.extra_headers",
     "llm.providers",
     "coding.workspace_scopes",
@@ -512,6 +518,8 @@ def _validate_llm_providers(value: object) -> list[str]:
         "thinking_effort",
         "prompt_cache_enabled",
         "input_modalities",
+        "oauth_connection_ref",
+        "oauthConnectionRef",
         "timeout",
     }
     for name, provider in value.items():

@@ -42,10 +42,15 @@ def install_local_auth(app: FastAPI, *, gateway: bool = False) -> None:
     async def guard_local_transport(request: Request, call_next):
         if request.headers.get("host") != parsed.netloc:
             return denied(403)
+        callback = (
+            not gateway
+            and request.method == "GET"
+            and request.url.path == "/oauth/connections/callback"
+        )
         request_origin = request.headers.get("origin")
-        if request_origin is not None and request_origin != origin:
+        if not callback and request_origin is not None and request_origin != origin:
             return denied(403)
-        if request.headers.get("sec-fetch-site") == "cross-site":
+        if not callback and request.headers.get("sec-fetch-site") == "cross-site":
             return denied(403)
         expected = request.headers.get("x-mindweft-launch-id")
         if expected is not None and expected != launch_id:
@@ -53,7 +58,13 @@ def install_local_auth(app: FastAPI, *, gateway: bool = False) -> None:
         path = request.url.path
         public = request.method in {"GET", "HEAD"} and (
             path in {"/health", "/health/live"}
-            or (not gateway and (path == "/local-instance" or path.startswith("/console/")))
+            or (
+                not gateway
+                and (
+                    path in {"/local-instance", "/oauth/connections/callback"}
+                    or path.startswith("/console/")
+                )
+            )
         )
         # These endpoints perform their own shared authentication/CSRF checks.
         authentication = not gateway and path in {

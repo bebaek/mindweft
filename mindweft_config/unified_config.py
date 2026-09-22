@@ -123,6 +123,7 @@ _SIMPLE_SECTION_ENV_MAP: dict[str, dict[str, str]] = {
         "redirect_uri": "MINIGENT_OAUTH_REDIRECT_URI",
         "scope": "MINIGENT_OAUTH_SCOPE",
         "auth_params": "MINIGENT_OAUTH_AUTH_PARAMS",
+        "connections": "MINIGENT_OAUTH_CONNECTIONS",
         "account_id_jwt_claim": "MINIGENT_OAUTH_ACCOUNT_ID_JWT_CLAIM",
     },
     "audio_input": {
@@ -516,6 +517,9 @@ def _collect_llm_config(
             env["ANTHROPIC_PROMPT_CACHE_ENABLED"] = _format_env_value(
                 section["prompt_cache_enabled"]
             )
+    connection_ref = section.get("oauth_connection_ref", section.get("oauthConnectionRef"))
+    if connection_ref is not None:
+        env["MINIGENT_LLM_OAUTH_CONNECTION_REF"] = _format_env_value(connection_ref)
     if "account_id_header" in section:
         env["MINIGENT_LLM_ACCOUNT_ID_HEADER"] = _format_env_value(section["account_id_header"])
 
@@ -641,6 +645,8 @@ def _tenant_llm_from_unified_llm(
         "thinking_effort",
         "prompt_cache_enabled",
         "input_modalities",
+        "oauth_connection_ref",
+        "oauthConnectionRef",
     ):
         if key in section:
             tenant_llm[key] = copy.deepcopy(section[key])
