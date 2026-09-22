@@ -589,3 +589,57 @@ thread records, or API responses. Interactive OAuth connection and refresh flows
 - Should live resolution be configurable per thread before full immutable revision storage exists?
 - What import/export format should be portable across Mindweft installations without carrying
   credentials?
+
+
+## Agent model selection
+
+An agent may set `llm_profile` (`llmProfile` is also accepted) to the name of an existing
+LLM profile available in its tenant execution configuration. The profile owns provider,
+model and credential configuration; agent definitions contain only the reference.
+Selecting a profile does not expand tool or capability permissions, and does not grant
+access to another user's agents or another tenant's profiles.
+
+```json
+{
+  "id": "user:reviewer",
+  "name": "Reviewer",
+  "skill_refs": ["shared:coding-workspace"],
+  "llm_profile": "deep"
+}
+```
+
+Use `null` or omit `llm_profile` to inherit. New conversations resolve in this order:
+
+1. An explicit request `llm_profile`, browser Model profile choice, or CLI `--llm`.
+2. The selected agent's optional preference.
+3. The tenant/deployment default profile, or the legacy default provider when no named
+   default exists. There is not a separate personal default-model setting.
+
+The resolved named profile is saved on the conversation. Editing an agent changes future
+conversations, not existing ones. This pins the **profile reference**, not a copy of the
+provider configuration: changing the profile's model or credentials affects its users.
+Legacy/default conversations with no named profile still follow the default provider.
+
+In **Personal setup → Skills and agents**, use **Edit** to change an existing personal
+agent without changing its ID. The editor preserves its description and uses the version
+from when editing began to detect concurrent changes. **Inherit default** clears a preference;
+**Use as template** creates a separate copy. Shared agents remain managed through tenant
+execution configuration. Missing profiles remain visible as unavailable, not silently cleared.
+
+The console shows the effective profile, configured provider/model and whether a new
+conversation is using an override, agent preference, or inherited default. Loaded conversations
+show their saved selection; the original selection source is not persisted. These labels are
+configuration information, not live credential or provider availability checks.
+
+Switching agents branches conversation history and resolves the target agent's preference.
+The console's **Keep current model profile** checkbox explicitly retains the current named
+profile instead. API clients can send both `agent_name` and `llm_profile` to the existing fork
+endpoint. The interactive CLI's `/agent` command uses the target preference, while `/new`
+retains the selected agent. A plain fork without a new selection keeps the original settings.
+
+Unknown/deleted named profiles are errors at execution/selection time: there is no automatic
+provider fallback. The console blocks sending with a known missing selected profile and keeps
+the draft. Profile selection does not perform paid model requests to test credentials. Provider
+errors remain normal run errors. This feature uses the existing native runtime profile selection;
+remote peer-agent services control their own model selection. Automatic routing, fallback chains,
+per-step models and personal provider credential onboarding are not included.

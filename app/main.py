@@ -1641,6 +1641,8 @@ def create_app(
                 globally_enabled=document_settings.enabled,
             )
             return ExecutionLLMOptionItem(
+                provider=llm_config.provider,
+                model=llm_config.model,
                 name=name,
                 id=f"shared:{name}" if selectable else None,
                 display_name=name,

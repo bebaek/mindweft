@@ -174,3 +174,27 @@ describe("/agent", () => {
     expectNoRun();
   });
 });
+
+it("lets an agent switch explicitly retain the current conversation model", async () => {
+  const withModel = { ...thread, llm_profile: "fast" };
+  api.listThreads.mockResolvedValue({ threads: [withModel], total: 1, limit: 50, offset: 0 });
+  api.getThreadLineage.mockResolvedValue({ thread: withModel, parent: null, children: [], siblings: [] });
+  const input = await setup();
+  command(input, "/agent user:coding");
+  fireEvent.click(await screen.findByRole("checkbox", { name: /Keep current model profile/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(api.forkThread).toHaveBeenCalledWith("source", "answer-1", "user:coding", "fast"));
+  expectNoRun();
+});
+
+it("blocks sending with an unavailable persisted profile without clearing the draft", async () => {
+  const withModel = { ...thread, llm_profile: "removed" };
+  api.listThreads.mockResolvedValue({ threads: [withModel], total: 1, limit: 50, offset: 0 });
+  api.getThreadLineage.mockResolvedValue({ thread: withModel, parent: null, children: [], siblings: [] });
+  const input = await setup();
+  command(input, "Keep my draft");
+  expect(input).toHaveValue("Keep my draft");
+  expect(api.addMessage).not.toHaveBeenCalled();
+  expect(api.streamRun).not.toHaveBeenCalled();
+  expect(screen.getAllByText(/no fallback will be used/).length).toBeGreaterThan(0);
+});

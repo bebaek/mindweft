@@ -65,6 +65,10 @@ conversation uses the existing branch-with-history behavior.
 In **Personal setup**, choose **Customize coding** to seed a personal copy, adjust its name,
 skill/profile references and model, then **Add agent**. Create personal skills to extend its
 instructions. Select the copy via `/agent` and use **Save as default** for future conversations.
+Use **Edit** on a personal agent to change its optional **Model profile**, or choose **Inherit
+default**. New conversations use the agent preference unless explicitly overridden; editing an
+agent does not change the profile saved on existing conversations. Profiles are ordinary configured
+LLM profiles, not launcher-specific provider connections.
 The original built-in stays unchanged. Personal setup is stored in `personal-setup.db` inside
 the instance state directory and survives restarts. This enables personal resources, not platform
 admin privileges or arbitrary personal MCP servers. Personal profiles/agents remain subject to

@@ -5368,6 +5368,8 @@ def test_execution_options_lists_sanitized_skills_and_capability_profiles(
         "llm_profiles": {
             "default": None,
             "effective_default": {
+                "provider": "mock",
+                "model": None,
                 "name": "legacy/default",
                 "description": None,
                 "id": None,

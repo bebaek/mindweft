@@ -1,3 +1,4 @@
+import { resolveLlmSelection, llmOptionLabel } from "./llmSelection";
 import { lazy, Suspense, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -6,8 +7,8 @@ import {
   type AudioPart,
   type DocumentPart,
   type ExecutionLlmOptionItem,
-  type ExecutionAgentOptionItem,
   type ExecutionOptionsResponse,
+  type ExecutionAgentOptionItem,
   type ImagePart,
   type Message,
   type PrivateValueConsentRequest,
@@ -51,38 +52,6 @@ interface PendingImage {
   file: File;
   previewUrl: string;
   detail: "auto" | "low" | "high";
-}
-
-function normalizedProfileName(name: string | null | undefined): string | null {
-  return name?.replace(/^shared:/, "") || null;
-}
-
-function effectiveLlmOption(
-  options: ExecutionOptionsResponse | undefined,
-  thread: ThreadListItem | undefined,
-  selectedProfile: string,
-  effectiveAgent: string,
-): ExecutionLlmOptionItem | undefined {
-  if (!options) return undefined;
-  const findProfile = (name: string | null | undefined) => {
-    const normalized = normalizedProfileName(name);
-    return normalized
-      ? options.llm_profiles.items.find((profile) => profile.name === normalized)
-      : undefined;
-  };
-  if (thread) {
-    return findProfile(thread.llm_profile) ?? options.llm_profiles.effective_default;
-  }
-  const explicit = findProfile(selectedProfile);
-  if (explicit) return explicit;
-  const agent = options.agents.items.find(
-    (item) => (item.id ?? item.name) === effectiveAgent,
-  );
-  return (
-    findProfile(agent?.llm_profile) ??
-    findProfile(options.llm_profiles.default) ??
-    options.llm_profiles.effective_default
-  );
 }
 
 function audioInputUnavailableMessage(profile: ExecutionLlmOptionItem | undefined): string | null {
@@ -352,8 +321,9 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     setAgentSwitch({ query, command, messageId });
   }
 
-  async function confirmAgentSwitch(agent: ExecutionAgentOptionItem) {
+  async function confirmAgentSwitch(agent: ExecutionAgentOptionItem, keepModel = false) {
     if (threadRunning || agentSwitchBusy) return;
+    const retainedProfile = keepModel ? composerThread?.llm_profile || selectedLlmProfile : "";
     const ref = agent.id ?? agent.name;
     const name = agent.display_name ?? agent.name;
     if (ref === effectiveAgent && !agentSwitch?.messageId) {
@@ -369,7 +339,9 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
             : messages.data.at(-1);
           if (agentSwitch?.messageId && !last) throw new Error("The selected message is no longer available.");
           if (last) {
-            const result = await api.forkThread(selectedThreadId, last.id, ref);
+            const result = retainedProfile
+              ? await api.forkThread(selectedThreadId, last.id, ref, retainedProfile)
+              : await api.forkThread(selectedThreadId, last.id, ref);
             setSelectedThreadId(result.thread_id);
             setBranchNotice(`Switched to ${name} in a new branch. The original thread was preserved.`);
             setActivity([]);
@@ -387,7 +359,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
           setBranchNotice(`Selected ${name} for the next message.`);
         }
         setSelectedAgent(ref);
-        setSelectedLlmProfile("");
+        setSelectedLlmProfile(retainedProfile || "");
       } catch (caught) {
         setAgentSwitchError(caught instanceof Error ? caught.message : "Could not switch agent.");
         return;
@@ -400,12 +372,14 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
     setAgentSwitch(null);
   }
 
-  const composerLlmOption = effectiveLlmOption(
+  const llmSelection = resolveLlmSelection(
     executionOptions.data,
     composerThread,
     selectedLlmProfile,
     effectiveAgent,
   );
+  const composerLlmOption = llmSelection.option;
+  const unavailableLlmMessage = llmSelection.unavailable ? `Model profile "${llmSelection.name}" is unavailable. Choose an available profile for a new conversation or restore its configuration; no fallback will be used.` : null;
   const profileAudioUnavailable = audioInputUnavailableMessage(composerLlmOption);
   const audioInputAvailable = Boolean(config.data?.audio_input?.enabled) && !profileAudioUnavailable;
   const audioInputMessage = !config.data?.audio_input?.enabled
@@ -544,6 +518,7 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
       openAgentSwitch(agentCommand[1]?.trim() ?? "", true);
       return;
     }
+    if (unavailableLlmMessage) { setError(unavailableLlmMessage); return; }
     const queuedAudio = [...pendingAudio];
     const queuedDocuments = [...pendingDocuments];
     const queuedImages = [...pendingImages];
@@ -1234,21 +1209,23 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
               <span>Model profile</span>
               <select
                 aria-label="Model profile"
-                value={selectedLlmProfile}
+                value={composerThread ? composerThread.llm_profile ?? "" : selectedLlmProfile}
                 disabled={selectedThreadId !== null || isRunning || executionOptions.isPending}
                 onChange={(event) => setSelectedLlmProfile(event.target.value)}
               >
-                <option value="">Automatic</option>
+                <option value="">Automatic (agent or default)</option>
+                {llmSelection.unavailable && <option value={llmSelection.name}>{llmSelection.name} (unavailable)</option>}
                 {executionOptions.data?.llm_profiles.items.map((profile) => {
                   const value = profile.name;
                   const capability = profile.image_input_reason === "profile_unsupported"
                     ? " · text only"
                     : "";
-                  return <option key={value} value={value}>{profile.display_name ?? profile.name}{capability}</option>;
+                  return <option key={value} value={value}>{llmOptionLabel(profile)}{capability}</option>;
                 })}
               </select>
             </label>
           </div>
+          {unavailableLlmMessage ? <p className="composer-capability-warning" role="alert">{unavailableLlmMessage}</p> : composerLlmOption && <p className="composer-model-summary" aria-live="polite">Model: {llmOptionLabel(composerLlmOption)} · {llmSelection.source === "conversation" ? "saved conversation selection" : llmSelection.source === "override" ? "conversation override" : llmSelection.source === "agent" ? "agent preference" : "inherited default"}</p>}
           {queuedAudioBlocked && profileAudioUnavailable && (
             <p className="composer-capability-warning" role="alert">
               {profileAudioUnavailable} Remove the queued audio or choose an audio-capable profile.
@@ -1375,11 +1352,12 @@ export function WorkspacePage({ sidebarHeader, sidebarFooter }: WorkspacePagePro
       {agentSwitch && <AgentSwitchDialog
         agents={executionOptions.data?.agents.items ?? []}
         current={effectiveAgent}
+        currentModel={composerThread?.llm_profile || selectedLlmProfile || undefined}
         initialQuery={agentSwitch.query}
         branching={Boolean(selectedThreadId && (messages.data?.length ?? composerThread?.message_count))}
         busy={agentSwitchBusy}
         error={agentSwitchError}
-        onConfirm={(agent) => void confirmAgentSwitch(agent)}
+        onConfirm={(agent, keepModel) => void confirmAgentSwitch(agent, keepModel)}
         onClose={() => setAgentSwitch(null)}
       />}
       <ContextDialog
